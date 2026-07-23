@@ -4,7 +4,7 @@ import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { saveNormalized } from "./persistence";
 import {
   FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH,
-  clampFileBrowserSidebarWidth,
+  normalizeFileBrowserSidebarWidth,
 } from "@/panels/file-browser/sidebarWidth";
 
 type Set = PanelRegistryStoreApi["setState"];
@@ -42,12 +42,15 @@ export const createFileBrowserPanelActions = (
       if (!panel) return state;
       if (panel.kind !== "file-browser") return state;
 
-      // Clamp at the single write chokepoint so a continuous drag (or any
-      // programmatic caller) can never persist an out-of-range width.
+      // Normalize at the single write chokepoint so a continuous drag (or any
+      // programmatic caller) can never persist an out-of-range or non-finite
+      // width: a finite value is clamped into range, and `NaN`/`Infinity`
+      // (valid under TS's `number`) collapse to `undefined` and are ignored as
+      // a no-op rather than churning the store with an invalid value.
       const nextWidth =
         patch.browserSidebarWidth === undefined
           ? undefined
-          : clampFileBrowserSidebarWidth(patch.browserSidebarWidth);
+          : normalizeFileBrowserSidebarWidth(patch.browserSidebarWidth);
 
       const selectedUnchanged =
         patch.browserSelectedPath === undefined ||

@@ -213,6 +213,21 @@ describe("setFileBrowserView", () => {
     expect(store.get().panelsById["panel-1"]).toMatchObject({ browserSidebarWidth: 200 });
   });
 
+  it("ignores a non-finite width rather than storing NaN and churning", () => {
+    // NaN is valid under TS's `number`, but `NaN === NaN` is false, so storing it
+    // would re-create the panel object (and re-persist) on every write and render
+    // an invalid inline width. The chokepoint must treat it as a no-op.
+    setFileBrowserView("panel-1", { browserSidebarWidth: 400 });
+    const stored = store.get().panelsById["panel-1"];
+
+    setFileBrowserView("panel-1", { browserSidebarWidth: Number.NaN });
+    expect(store.get().panelsById["panel-1"]).toBe(stored);
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserSidebarWidth: 400 });
+
+    setFileBrowserView("panel-1", { browserSidebarWidth: Number.POSITIVE_INFINITY });
+    expect(store.get().panelsById["panel-1"]).toBe(stored);
+  });
+
   it("preserves selection and expansion when the width changes", () => {
     setFileBrowserView("panel-1", { browserSelectedPath: "src/app.ts" });
     setFileBrowserView("panel-1", { browserSidebarWidth: 400 });

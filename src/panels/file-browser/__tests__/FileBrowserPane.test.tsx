@@ -116,6 +116,13 @@ vi.mock("@/components/FileViewer/CodeViewer", () => ({
 vi.mock("@/components/Html/HtmlViewer", () => ({ HtmlViewer: () => null }));
 
 import { FileBrowserPane } from "../FileBrowserPane";
+import {
+  FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH as DEFAULT_W,
+  FILE_BROWSER_SIDEBAR_MIN_WIDTH as MIN_W,
+  FILE_BROWSER_SIDEBAR_MAX_WIDTH as MAX_W,
+  FILE_BROWSER_SIDEBAR_RESIZE_STEP as STEP_W,
+  FILE_BROWSER_SIDEBAR_RESIZE_STEP_COARSE as COARSE_W,
+} from "../sidebarWidth";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 function renderPane() {
@@ -447,57 +454,115 @@ describe("FileBrowserPane resizable sidebar (#11331)", () => {
     return screen.getByTestId("file-browser-sidebar-resize");
   }
 
+  // A width the store setter can't produce by default (min < X < max, not the
+  // default) so the assertion proves the wiring carried the stored value, not a
+  // coincidental default.
+  const STORED = MIN_W + 137;
+
+  // Make the (otherwise non-reactive) panel-store mock stateful, so a sequence
+  // of interactions reads the width the previous one wrote — the only way to
+  // test cumulative keyboard steps and a real collapse→reopen restore.
+  function makeStoreStateful() {
+    setFileBrowserViewMock.mockImplementation((_id: string, patch: Partial<MockPanel>) => {
+      Object.assign(mockPanel, patch);
+    });
+  }
+
   it("drives the tree column width and separator value from the stored width", () => {
-    mockPanel.browserSidebarWidth = 400;
+    mockPanel.browserSidebarWidth = STORED;
     renderPane();
 
-    expect(treeColumn().style.width).toBe("400px");
-    expect(separator().getAttribute("aria-valuenow")).toBe("400");
+    expect(treeColumn().style.width).toBe(`${STORED}px`);
+    expect(separator().getAttribute("aria-valuenow")).toBe(String(STORED));
   });
 
-  it("falls back to the 288px default when no width is stored", () => {
+  it("falls back to the default width when none is stored", () => {
     renderPane();
 
-    expect(treeColumn().style.width).toBe("288px");
-    expect(separator().getAttribute("aria-valuenow")).toBe("288");
+    // Wiring, not a copied literal: the rendered width tracks the module default,
+    // whatever it is, so changing the constant can't silently strand this.
+    expect(treeColumn().style.width).toBe(`${DEFAULT_W}px`);
+    expect(separator().getAttribute("aria-valuenow")).toBe(String(DEFAULT_W));
   });
 
-  it("exposes a focusable vertical separator with the bounds as ARIA values", () => {
+  it("names the separator and points aria-controls at the resolvable tree column", () => {
     renderPane();
-    const handle = separator();
+    // Query by the accessible role + name so a broken aria-label actually fails.
+    const handle = screen.getByRole("separator", { name: "Resize file tree" });
 
-    expect(handle.getAttribute("role")).toBe("separator");
     expect(handle.getAttribute("aria-orientation")).toBe("vertical");
-    expect(handle.getAttribute("aria-valuemin")).toBe("200");
-    expect(handle.getAttribute("aria-valuemax")).toBe("600");
-    expect(handle.getAttribute("tabindex")).toBe("0");
+    expect(handle.getAttribute("aria-valuemin")).toBe(String(MIN_W));
+    expect(handle.getAttribute("aria-valuemax")).toBe(String(MAX_W));
+    expect(handle.tabIndex).toBe(0);
+    // aria-controls resolves to the actual tree column, not a dangling id.
+    const controls = handle.getAttribute("aria-controls");
+    expect(controls).toBeTruthy();
+    expect(document.getElementById(controls!)).toBe(treeColumn());
   });
 
   it("widens on a rightward drag and narrows on a leftward drag, writing every move", () => {
-    renderPane(); // starts at 288
-    const handle = separator();
-
-    fireEvent.mouseDown(handle, { clientX: 100, detail: 1 });
-    fireEvent.mouseMove(document, { clientX: 150 }); // +50 → 338
-    fireEvent.mouseMove(document, { clientX: 120 }); // -20 vs start → 308
-    fireEvent.mouseUp(document);
-
-    // Continuous writes, one per move, delta from the mousedown-captured start.
-    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(1, "fb-1", { browserSidebarWidth: 338 });
-    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(2, "fb-1", { browserSidebarWidth: 308 });
-  });
-
-  it("clamps a drag past either bound to the min and max", () => {
+    mockPanel.browserSidebarWidth = STORED;
     renderPane();
     const handle = separator();
 
-    fireEvent.mouseDown(handle, { clientX: 100, detail: 1 });
-    fireEvent.mouseMove(document, { clientX: 1200 }); // +1100 → clamp 600
-    fireEvent.mouseMove(document, { clientX: 0 }); // -100 vs start → clamp 200
+    fireEvent.mouseDown(handle, { clientX: 100 });
+    fireEvent.mouseMove(document, { clientX: 150, buttons: 1 }); // +50
+    fireEvent.mouseMove(document, { clientX: 80, buttons: 1 }); // -20 vs start
     fireEvent.mouseUp(document);
 
-    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(1, "fb-1", { browserSidebarWidth: 600 });
-    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(2, "fb-1", { browserSidebarWidth: 200 });
+    // Continuous writes, one per move, delta derived from the mousedown-captured
+    // start — expectations computed from the inputs, not hard-coded pixels.
+    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(1, "fb-1", {
+      browserSidebarWidth: STORED + 50,
+    });
+    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(2, "fb-1", {
+      browserSidebarWidth: STORED - 20,
+    });
+
+    // Releasing ends the drag: a later move must not keep resizing.
+    setFileBrowserViewMock.mockClear();
+    fireEvent.mouseMove(document, { clientX: 500, buttons: 1 });
+    expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+  });
+
+  it("clamps a drag past either bound to the min and max", () => {
+    renderPane(); // default
+    const handle = separator();
+
+    fireEvent.mouseDown(handle, { clientX: 100 });
+    fireEvent.mouseMove(document, { clientX: 100 + (MAX_W - DEFAULT_W) + 500, buttons: 1 }); // past max
+    fireEvent.mouseMove(document, { clientX: 100 - (DEFAULT_W - MIN_W) - 500, buttons: 1 }); // past min
+    fireEvent.mouseUp(document);
+
+    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(1, "fb-1", { browserSidebarWidth: MAX_W });
+    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(2, "fb-1", { browserSidebarWidth: MIN_W });
+  });
+
+  it("mounts a drag shield only while resizing so a child iframe can't swallow the drag", () => {
+    renderPane();
+    expect(screen.queryByTestId("file-browser-resize-shield")).toBeNull();
+
+    fireEvent.mouseDown(separator(), { clientX: 100 });
+    expect(screen.getByTestId("file-browser-resize-shield")).toBeTruthy();
+
+    fireEvent.mouseUp(document);
+    expect(screen.queryByTestId("file-browser-resize-shield")).toBeNull();
+  });
+
+  it("ends the drag when the button is released off-document (buttons === 0)", () => {
+    renderPane();
+    const handle = separator();
+
+    fireEvent.mouseDown(handle, { clientX: 100 });
+    fireEvent.mouseMove(document, { clientX: 150, buttons: 1 }); // a real move writes
+    expect(setFileBrowserViewMock).toHaveBeenCalledTimes(1);
+
+    // Released over the iframe / outside the window: the next move reports no
+    // buttons, so the drag self-terminates instead of wedging.
+    fireEvent.mouseMove(document, { clientX: 200, buttons: 0 });
+    fireEvent.mouseMove(document, { clientX: 260, buttons: 1 });
+    expect(setFileBrowserViewMock).toHaveBeenCalledTimes(1); // no writes after recovery
+    expect(screen.queryByTestId("file-browser-resize-shield")).toBeNull();
   });
 
   it("ignores the second mousedown of a double-click so the reset doesn't jitter first", () => {
@@ -506,39 +571,73 @@ describe("FileBrowserPane resizable sidebar (#11331)", () => {
 
     // detail > 1 is the browser's synthetic second mousedown before dblclick.
     fireEvent.mouseDown(handle, { clientX: 100, detail: 2 });
-    fireEvent.mouseMove(document, { clientX: 300 });
+    fireEvent.mouseMove(document, { clientX: 300, buttons: 1 });
 
     // No drag listener was attached, so the move writes nothing.
     expect(setFileBrowserViewMock).not.toHaveBeenCalled();
   });
 
+  it("does not start a drag from a non-primary mouse button", () => {
+    renderPane();
+
+    fireEvent.mouseDown(separator(), { clientX: 100, button: 2 });
+    fireEvent.mouseMove(document, { clientX: 300, buttons: 2 });
+
+    expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+  });
+
   it("resets to the default width on double-click", () => {
-    mockPanel.browserSidebarWidth = 500;
+    mockPanel.browserSidebarWidth = MAX_W;
     renderPane();
 
     fireEvent.doubleClick(separator());
 
-    expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-1", { browserSidebarWidth: 288 });
+    expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-1", { browserSidebarWidth: DEFAULT_W });
   });
 
-  it("resizes from the keyboard: arrows step, Shift coarsens, Home/End jump to bounds", () => {
-    renderPane(); // 288
+  it("steps by the fine step, coarsens under Shift, and jumps to the bounds", () => {
+    renderPane(); // default
     const handle = separator();
 
     fireEvent.keyDown(handle, { key: "ArrowRight" });
-    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith("fb-1", { browserSidebarWidth: 298 });
+    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith("fb-1", {
+      browserSidebarWidth: DEFAULT_W + STEP_W,
+    });
 
     fireEvent.keyDown(handle, { key: "ArrowLeft" });
-    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith("fb-1", { browserSidebarWidth: 278 });
+    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith("fb-1", {
+      browserSidebarWidth: DEFAULT_W - STEP_W,
+    });
 
     fireEvent.keyDown(handle, { key: "ArrowRight", shiftKey: true });
-    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith("fb-1", { browserSidebarWidth: 338 });
+    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith("fb-1", {
+      browserSidebarWidth: DEFAULT_W + COARSE_W,
+    });
 
     fireEvent.keyDown(handle, { key: "Home" });
-    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith("fb-1", { browserSidebarWidth: 200 });
+    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith("fb-1", { browserSidebarWidth: MIN_W });
 
     fireEvent.keyDown(handle, { key: "End" });
-    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith("fb-1", { browserSidebarWidth: 600 });
+    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith("fb-1", { browserSidebarWidth: MAX_W });
+  });
+
+  it("accumulates keyboard steps against the live width, not a stale base", () => {
+    makeStoreStateful();
+    const { rerender } = renderPane(); // default
+
+    fireEvent.keyDown(separator(), { key: "ArrowRight" }); // +1 step
+    rerender(paneJsx());
+    fireEvent.keyDown(separator(), { key: "ArrowRight" }); // +2 steps, reading the live width
+    rerender(paneJsx());
+
+    // A handler reading a stale base would stall at +1 step; the width must
+    // compound across presses.
+    expect(mockPanel.browserSidebarWidth).toBe(DEFAULT_W + 2 * STEP_W);
+    expect(treeColumn().style.width).toBe(`${DEFAULT_W + 2 * STEP_W}px`);
+
+    fireEvent.keyDown(separator(), { key: "ArrowLeft" }); // back down one
+    rerender(paneJsx());
+    expect(mockPanel.browserSidebarWidth).toBe(DEFAULT_W + STEP_W);
   });
 
   it("ignores keys that aren't resize controls", () => {
@@ -556,30 +655,35 @@ describe("FileBrowserPane resizable sidebar (#11331)", () => {
     expect(screen.queryByTestId("file-browser-sidebar-resize")).toBeNull();
   });
 
-  it("restores the previously-dragged width after collapse and re-expand", () => {
-    mockPanel.browserSidebarWidth = 420;
+  it("keeps a resized width across a real collapse and reopen (driven through the store)", () => {
+    makeStoreStateful();
     const { rerender } = renderPane();
-    expect(treeColumn().style.width).toBe("420px");
 
-    mockPanel.browserSidebarCollapsed = true;
+    // Widen to the max via the keyboard; the stateful store now holds it.
+    fireEvent.keyDown(separator(), { key: "End" });
+    rerender(paneJsx());
+    expect(mockPanel.browserSidebarWidth).toBe(MAX_W);
+
+    // Collapse via the toggle — the pane writes only the collapsed flag, so a
+    // regression that also cleared the width here would strand the reopen.
+    fireEvent.click(screen.getByTestId("file-browser-sidebar-toggle"));
     rerender(paneJsx());
     expect(screen.queryByTestId("file-browser-sidebar-resize")).toBeNull();
+    expect(mockPanel.browserSidebarWidth).toBe(MAX_W);
 
-    // Width is decoupled from the collapsed flag, so re-opening comes back at the
-    // last-dragged width rather than the default.
-    mockPanel.browserSidebarCollapsed = false;
+    // Reopen — the width is restored from the store, not reset to default.
+    fireEvent.click(screen.getByTestId("file-browser-sidebar-toggle"));
     rerender(paneJsx());
-    expect(treeColumn().style.width).toBe("420px");
-    expect(separator().getAttribute("aria-valuenow")).toBe("420");
+    expect(treeColumn().style.width).toBe(`${MAX_W}px`);
   });
 
   it("drops the document listeners when the pane unmounts mid-drag", () => {
     const { unmount } = renderPane();
 
-    fireEvent.mouseDown(separator(), { clientX: 100, detail: 1 });
+    fireEvent.mouseDown(separator(), { clientX: 100 });
     unmount();
     // The unmount effect fired the drag cleanup, so this move reaches no listener.
-    fireEvent.mouseMove(document, { clientX: 400 });
+    fireEvent.mouseMove(document, { clientX: 400, buttons: 1 });
 
     expect(setFileBrowserViewMock).not.toHaveBeenCalled();
   });
@@ -587,12 +691,12 @@ describe("FileBrowserPane resizable sidebar (#11331)", () => {
   it("drops the document listeners when the sidebar collapses mid-drag", () => {
     const { rerender } = renderPane();
 
-    fireEvent.mouseDown(separator(), { clientX: 100, detail: 1 });
+    fireEvent.mouseDown(separator(), { clientX: 100 });
     // Collapse unmounts the grip but not the pane, so a dedicated effect must
     // fire the same cleanup — otherwise the document listeners keep writing.
     mockPanel.browserSidebarCollapsed = true;
     rerender(paneJsx());
-    fireEvent.mouseMove(document, { clientX: 400 });
+    fireEvent.mouseMove(document, { clientX: 400, buttons: 1 });
 
     expect(setFileBrowserViewMock).not.toHaveBeenCalled();
   });

@@ -301,6 +301,9 @@ export function FileBrowserPane({
 
   const handleResizeStart = useCallback(
     (e: React.MouseEvent) => {
+      // Only the primary button drags: a right/middle press must not start a
+      // resize (and can't overwrite an in-flight drag's cleanup ref).
+      if (e.button !== 0) return;
       // Skip the second mousedown of a double-click: the browser fires mousedown
       // twice before dblclick, so guarding inside the dblclick handler is too
       // late — the drag would already have jittered the width by a pixel.
@@ -311,6 +314,13 @@ export function FileBrowserPane({
       const startWidth = sidebarWidth;
 
       const handleMouseMove = (ev: MouseEvent) => {
+        // The button was released where we couldn't see the mouseup (over the
+        // HTML-preview iframe, or outside the window). Recover on the next move
+        // that reaches us rather than staying wedged in a resize.
+        if (ev.buttons === 0) {
+          cleanup();
+          return;
+        }
         const next = clampFileBrowserSidebarWidth(startWidth + (ev.clientX - startX));
         setFileBrowserView(id, { browserSidebarWidth: next });
       };
@@ -680,6 +690,14 @@ export function FileBrowserPane({
             treeSidebarId={treeSidebarId}
           />
         </div>
+        {isResizing && (
+          // Drag shield: while resizing, cover the surface so the HTML-preview
+          // iframe (which the divider drags straight over) can't swallow the
+          // mousemove/mouseup the document listeners depend on — without it a
+          // drag onto the viewer sticks. Events still bubble to `document`
+          // through this element; `fixed` keeps it out of the flex layout.
+          <div data-testid="file-browser-resize-shield" className="fixed inset-0 z-50 cursor-col-resize" />
+        )}
       </div>
     </ContentPanel>
   );
