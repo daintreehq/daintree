@@ -27,6 +27,7 @@ import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
+import { isRendererOwnedShortcut } from "../services/menuAccelerators.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import {
@@ -554,7 +555,12 @@ export function setupBrowserWindow(
       ((isMac && input.meta && !input.control) || (!isMac && input.control && !input.meta)) &&
       !input.alt;
 
-    appWebContents.setIgnoreMenuShortcuts(isCloseShortcut);
+    // Renderer-owned menu accelerators (derived from effective keybindings)
+    // are suppressed per-event on macOS so the renderer's KeybindingService —
+    // scopes, priorities, rebinds — owns keyboard execution; the native item
+    // stays clickable. Windows/Linux never registers them (registerAccelerator
+    // false), so this is a no-op there.
+    appWebContents.setIgnoreMenuShortcuts(isCloseShortcut || isRendererOwnedShortcut(input));
   });
 
   // Crash loop detection and renderer recovery

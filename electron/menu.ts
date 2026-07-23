@@ -27,6 +27,11 @@ import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/pr
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { isAppError } from "./utils/errorTypes.js";
 import { isWindowsStoreBuild, getBuildChannelLabel } from "../shared/config/distribution.js";
+import {
+  getMenuAccelerator,
+  rendererMenuAccelerator,
+  resetRendererOwnedAccelerators,
+} from "./services/menuAccelerators.js";
 
 // The About panel's build-version slot shows the release channel for
 // prerelease builds (Nightly/Beta/RC) and stays blank for stable releases —
@@ -100,6 +105,13 @@ export function createApplicationMenu(
   mainWindow: BrowserWindow,
   cliAvailabilityService?: CliAvailabilityService
 ): void {
+  // Accelerators for renderer-owned actions are derived from the effective
+  // keybindings (defaults + user overrides) and collected for macOS
+  // suppression — see electron/services/menuAccelerators.ts. Every such item
+  // passes registerAccelerator: false so Windows/Linux display without
+  // registering; the renderer's KeybindingService owns keyboard execution.
+  resetRendererOwnedAccelerators();
+
   const getTargetBrowserWindow = (
     browserWindow: Electron.BaseWindow | undefined
   ): BrowserWindow | null => {
@@ -136,9 +148,18 @@ export function createApplicationMenu(
       // Assistant-only agents are never offered as a launchable native menu item.
       if (isAssistantOnlyAgentId(agent.id)) return;
       if (isAgentInstalled(availability?.[agent.id])) {
+        // Built-in agents resolve through the keybinding system (agent.<id>
+        // defaults + user overrides) — renderer-owned, so rebinds show up
+        // here. Custom agents fall back to the registry's shortcut field,
+        // which the renderer doesn't bind; that accelerator stays natively
+        // registered and executing, or it would go dead.
+        const boundAccelerator = rendererMenuAccelerator(`agent.${agent.id}`);
         items.push({
           label: `New ${agent.name}`,
-          accelerator: agent.shortcut ? convertShortcutToAccelerator(agent.shortcut) : undefined,
+          accelerator:
+            boundAccelerator ??
+            (agent.shortcut ? convertShortcutToAccelerator(agent.shortcut) : undefined),
+          registerAccelerator: boundAccelerator ? false : undefined,
           click: (_item, browserWindow) =>
             sendAction("agent.launch", getTargetBrowserWindow(browserWindow), {
               agentId: agent.id,
@@ -212,13 +233,20 @@ export function createApplicationMenu(
         },
         {
           label: "New Window",
-          accelerator: "CommandOrControl+Shift+Alt+N",
+          accelerator: rendererMenuAccelerator("app.newWindow"),
+          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("app.newWindow", getTargetBrowserWindow(browserWindow)),
         },
         {
+          // No native accelerator: the default binding is the chord
+          // Cmd+K Cmd+N, which Electron accelerators can't express. The old
+          // hardcoded CommandOrControl+N silently swallowed the renderer's
+          // Cmd+N (panel palette) on macOS while Linux/Windows resolved it in
+          // the renderer — the same physical key did different things per OS.
           label: "New Worktree…",
-          accelerator: "CommandOrControl+N",
+          accelerator: rendererMenuAccelerator("worktree.createDialog.open"),
+          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("worktree.createDialog.open", getTargetBrowserWindow(browserWindow)),
         },
@@ -231,7 +259,8 @@ export function createApplicationMenu(
           ? [
               {
                 label: "Settings…",
-                accelerator: "CommandOrControl+,",
+                accelerator: rendererMenuAccelerator("app.settings"),
+                registerAccelerator: false,
                 click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) =>
                   sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
               },
@@ -270,10 +299,19 @@ export function createApplicationMenu(
     },
     {
       label: "Edit",
+      // registerAccelerator: false (Linux/Windows-only property, no-op on
+      // macOS): Ctrl+Z/X/C/V/A are terminal control keys (SIGINT, SIGTSTP,
+      // readline editing) — a registered accelerator would fire the menu item
+      // whenever xterm leaves the event uncanceled, stealing the key from the
+      // PTY. Chromium's native editing handles these keys in inputs without
+      // menu help; the items stay clickable and display the accelerator. On
+      // macOS the Cmd-based accelerators stay registered — the terminal paste
+      // path depends on the native Edit menu roles.
       submenu: [
         {
           label: "Undo",
           accelerator: "CommandOrControl+Z",
+          registerAccelerator: false,
           click: () => {
             const focused = webContents.getFocusedWebContents();
             if (focused && !focused.isDestroyed()) focused.undo();
@@ -282,6 +320,7 @@ export function createApplicationMenu(
         {
           label: "Redo",
           accelerator: "CommandOrControl+Shift+Z",
+          registerAccelerator: false,
           click: () => {
             const focused = webContents.getFocusedWebContents();
             if (focused && !focused.isDestroyed()) focused.redo();
@@ -291,6 +330,7 @@ export function createApplicationMenu(
         {
           label: "Cut",
           accelerator: "CommandOrControl+X",
+          registerAccelerator: false,
           click: () => {
             const focused = webContents.getFocusedWebContents();
             if (focused && !focused.isDestroyed()) focused.cut();
@@ -299,6 +339,7 @@ export function createApplicationMenu(
         {
           label: "Copy",
           accelerator: "CommandOrControl+C",
+          registerAccelerator: false,
           click: () => {
             const focused = webContents.getFocusedWebContents();
             if (focused && !focused.isDestroyed()) focused.copy();
@@ -307,6 +348,7 @@ export function createApplicationMenu(
         {
           label: "Paste",
           accelerator: "CommandOrControl+V",
+          registerAccelerator: false,
           click: () => {
             const focused = webContents.getFocusedWebContents();
             if (focused && !focused.isDestroyed()) focused.paste();
@@ -315,6 +357,7 @@ export function createApplicationMenu(
         {
           label: "Select All",
           accelerator: "CommandOrControl+A",
+          registerAccelerator: false,
           click: () => {
             const focused = webContents.getFocusedWebContents();
             if (focused && !focused.isDestroyed()) focused.selectAll();
@@ -327,12 +370,17 @@ export function createApplicationMenu(
       submenu: [
         {
           label: "Toggle Sidebar",
-          accelerator: "CommandOrControl+B",
+          accelerator: rendererMenuAccelerator("nav.toggleSidebar"),
+          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("nav.toggleSidebar", getTargetBrowserWindow(browserWindow)),
         },
         {
+          // Default binding is the chord Cmd+K Cmd+F → no native accelerator
+          // unless the user rebinds to a single stroke.
           label: "Toggle Focus Mode",
+          accelerator: rendererMenuAccelerator("nav.toggleFocusMode"),
+          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("nav.toggleFocusMode", getTargetBrowserWindow(browserWindow)),
         },
@@ -375,9 +423,14 @@ export function createApplicationMenu(
               },
             ]),
         { type: "separator" },
+        // Zoom accelerators display the effective window.zoom* bindings but
+        // stay natively registered (not renderer-owned): the menu clicks zoom
+        // the app shell view while the renderer IPC zooms the sender view —
+        // two deliberate implementations, so native registration preserves
+        // today's macOS behavior exactly.
         {
           label: "Actual Size",
-          accelerator: "CommandOrControl+0",
+          accelerator: getMenuAccelerator("window.zoomReset"),
           click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) => {
             const win = getTargetBrowserWindow(browserWindow);
             if (!win) return;
@@ -386,7 +439,7 @@ export function createApplicationMenu(
         },
         {
           label: "Zoom In",
-          accelerator: "CommandOrControl+=",
+          accelerator: getMenuAccelerator("window.zoomIn"),
           click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) => {
             const win = getTargetBrowserWindow(browserWindow);
             if (!win) return;
@@ -396,7 +449,7 @@ export function createApplicationMenu(
         },
         {
           label: "Zoom Out",
-          accelerator: "CommandOrControl+-",
+          accelerator: getMenuAccelerator("window.zoomOut"),
           click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) => {
             const win = getTargetBrowserWindow(browserWindow);
             if (!win) return;
@@ -421,14 +474,20 @@ export function createApplicationMenu(
       label: "Terminal",
       submenu: [
         {
+          // Renderer-owned so scoped bindings win: the portal binds
+          // portal.newTab on the same Cmd+T at higher priority — a natively
+          // registered accelerator would fire terminal.duplicate regardless
+          // of portal focus on macOS.
           label: "Duplicate Panel",
-          accelerator: "CommandOrControl+T",
+          accelerator: rendererMenuAccelerator("terminal.duplicate"),
+          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("terminal.duplicate", getTargetBrowserWindow(browserWindow)),
         },
         {
           label: "New Terminal",
-          accelerator: "CommandOrControl+Alt+T",
+          accelerator: rendererMenuAccelerator("terminal.new"),
+          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("terminal.new", getTargetBrowserWindow(browserWindow)),
         },
@@ -440,13 +499,15 @@ export function createApplicationMenu(
           : []),
         {
           label: "Quick Switcher…",
-          accelerator: "CommandOrControl+P",
+          accelerator: rendererMenuAccelerator("nav.quickSwitcher"),
+          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("nav.quickSwitcher", getTargetBrowserWindow(browserWindow)),
         },
         {
           label: "Command Palette…",
-          accelerator: "CommandOrControl+Shift+P",
+          accelerator: rendererMenuAccelerator("action.palette.open"),
+          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("action.palette.open", getTargetBrowserWindow(browserWindow)),
         },
@@ -501,9 +562,21 @@ export function createApplicationMenu(
           click: (_item, browserWindow) =>
             sendAction("help.gettingStarted.show", getTargetBrowserWindow(browserWindow)),
         },
+        {
+          // The searchable shortcut reference was previously reachable only
+          // via combos you'd already have to know (Cmd+/ or Cmd+K Cmd+S) or
+          // the command palette — the Help menu is where new users look.
+          label: "Keyboard Shortcuts",
+          accelerator: rendererMenuAccelerator("help.shortcutsAlt"),
+          registerAccelerator: false,
+          click: (_item, browserWindow) =>
+            sendAction("help.shortcutsAlt", getTargetBrowserWindow(browserWindow)),
+        },
         { type: "separator" },
         {
           label: "Launch Help Agent",
+          accelerator: rendererMenuAccelerator("help.launchAgent"),
+          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("help.launchAgent", getTargetBrowserWindow(browserWindow)),
         },
@@ -555,7 +628,8 @@ export function createApplicationMenu(
         { type: "separator" },
         {
           label: "Settings…",
-          accelerator: "CommandOrControl+,",
+          accelerator: rendererMenuAccelerator("app.settings"),
+          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
         },

@@ -351,7 +351,7 @@ Keybindings map a key combination to an action.
         "actionId": "acme.linear-planner.plan-from-issue",
         "combo": "Cmd+Shift+P",
         "scope": "global",
-        "when": "panel.focused"
+        "when": "!terminalFocused && !modalOpen"
       }
     ]
   }
@@ -364,9 +364,23 @@ Keybindings map a key combination to an action.
 | --- | --- | --- |
 | `actionId` | yes | Fully-qualified action ID, usually one your plugin declared. |
 | `combo` | yes | Normalized key combo string, same format as Daintree's default keybindings. Chords (`"Cmd+K Cmd+S"`) supported. |
-| `scope` | no | One of `"global"`, `"terminal"`, `"modal"`, `"worktreeList"`, `"portal"`, `"worktreeGrid"`, `"dev-preview"`. Defaults to `"global"`. An unknown scope is rejected at the manifest gate. |
+| `scope` | no | One of `"global"`, `"portal"`, `"worktreeGrid"`, `"dev-preview"`. Defaults to `"global"`. An unknown scope is rejected at the manifest gate. The former `"terminal"`, `"modal"`, and `"worktreeList"` scopes were removed — use `when` conditions instead (`"terminalFocused"`, `"modalOpen"`); worktree-list navigation keys are fixed and not bindable. |
 | `description` | no | Human-readable description of what the binding does. |
-| `when` | no | Context expression gating when the binding is active. |
+| `when` | no | Context expression gating when the binding is active. Evaluated live at each keydown against the context keys below; unknown identifiers evaluate falsy. Supports `&&`, `\|\|`, `!`, `==`, `!=`, and single-quoted string literals. |
+
+**`when` context keys:**
+
+| Key               | Type    | Meaning                                                        |
+| ----------------- | ------- | -------------------------------------------------------------- |
+| `terminalFocused` | boolean | Keyboard focus is inside an xterm terminal.                    |
+| `modalOpen`       | boolean | A modal dialog (`aria-modal`) is open.                         |
+| `paletteOpen`     | boolean | Any palette (command palette, quick switcher, …) is open.      |
+| `paletteId`       | string  | Identifier of the open palette, or `""` when none.             |
+| `fleetArmed`      | boolean | At least one terminal is armed for fleet broadcast.            |
+| `fleetWaiting`    | boolean | At least one armed terminal's agent is in the `waiting` state. |
+| `sidebarVisible`  | boolean | The worktree sidebar is currently visible.                     |
+
+Note: this context applies to keybinding `when` clauses, which resolve in the renderer. Native menu-item `when` clauses (the `menus` contribution) are evaluated once at menu build time against an empty context — only literal/negation expressions are useful there.
 
 Bindings register when the plugin loads and unregister on unload. Conflicts with user overrides or other plugins' bindings are resolved by Daintree's existing keybinding service — plugin bindings are low-priority and yield to user overrides. See `registerBinding` in `src/services/KeybindingService.ts` for the registration API.
 

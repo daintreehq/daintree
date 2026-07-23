@@ -96,17 +96,24 @@ export const KeybindingContributionSchema = z
     // Closed to the renderer's KeyScope union (src/services/keybindingUtils.ts).
     // An unknown scope would never match the active scope and silently produce an
     // inert binding, so reject it at the manifest gate instead. Defaults to
-    // "global" in the renderer hook when omitted.
+    // "global" in the renderer hook when omitted. The former "terminal",
+    // "modal", and "worktreeList" scopes were removed — they were never
+    // activated, so bindings declared under them could not fire.
     scope: z
-      .enum([
-        "global",
-        "terminal",
-        "modal",
-        "worktreeList",
-        "portal",
-        "worktreeGrid",
-        "dev-preview",
-      ])
+      .enum(["global", "portal", "worktreeGrid", "dev-preview"], {
+        error: (issue) => {
+          switch (issue.input) {
+            case "terminal":
+              return 'keybinding scope "terminal" was removed — use scope "global" with when: "terminalFocused"';
+            case "modal":
+              return 'keybinding scope "modal" was removed — use scope "global" with when: "modalOpen"';
+            case "worktreeList":
+              return 'keybinding scope "worktreeList" was removed — worktree-list navigation keys are fixed and not bindable';
+            default:
+              return undefined;
+          }
+        },
+      })
       .optional(),
     description: z.string().min(1).optional(),
     when: z.string().min(1).optional(),

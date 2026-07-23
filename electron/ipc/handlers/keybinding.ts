@@ -7,31 +7,25 @@ import type { HandlerDependencies } from "../types.js";
 import type { KeyAction } from "../../../shared/types/keymap.js";
 import { exportProfile, importProfile } from "../../utils/keybindingProfileIO.js";
 import type { ImportResult } from "../../utils/keybindingProfileIO.js";
+import { getValidatedOverrides } from "../../services/keybindingOverridesStore.js";
+import { createApplicationMenu } from "../../menu.js";
 import { typedHandle, typedHandleWithContext } from "../utils.js";
 
-export function getValidatedOverrides(): Record<string, string[]> {
-  const raw = store.get("keybindingOverrides.overrides");
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return {};
-  }
-  const validated: Record<string, string[]> = {};
-  for (const [key, value] of Object.entries(raw)) {
-    if (Array.isArray(value) && value.every((c) => typeof c === "string" && c.trim() !== "")) {
-      validated[key] = value;
-    } else {
-      // Surface malformed persisted entries so a hand-edited or corrupt store
-      // doesn't silently swallow a user's rebinds. typeof keeps the log small
-      // even if the raw value is large.
-      console.warn(
-        `[keybinding] Dropping malformed override "${key}": expected non-empty string[], got ${typeof value}`
-      );
-    }
-  }
-  return validated;
-}
+export { getValidatedOverrides };
 
-export function registerKeybindingHandlers(_deps: HandlerDependencies): () => void {
+export function registerKeybindingHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
+
+  // Native menu accelerators are derived from defaults + these overrides
+  // (electron/services/menuAccelerators.ts) — rebuild after every mutation so
+  // the menu can't drift from what the keyboard actually does. Writes are
+  // discrete (save/reset/import), so no debounce is needed.
+  const rebuildMenuForOverrides = () => {
+    const win = deps.mainWindow;
+    if (win && !win.isDestroyed()) {
+      createApplicationMenu(win, deps.cliAvailabilityService);
+    }
+  };
 
   handlers.push(
     typedHandle(CHANNELS.KEYBINDING_GET_OVERRIDES, async () => {
@@ -64,6 +58,7 @@ export function registerKeybindingHandlers(_deps: HandlerDependencies): () => vo
         const overrides = getValidatedOverrides();
         overrides[actionId] = combo;
         store.set("keybindingOverrides.overrides", overrides);
+        rebuildMenuForOverrides();
       }
     )
   );
@@ -77,12 +72,14 @@ export function registerKeybindingHandlers(_deps: HandlerDependencies): () => vo
       const overrides = getValidatedOverrides();
       delete overrides[actionId];
       store.set("keybindingOverrides.overrides", overrides);
+      rebuildMenuForOverrides();
     })
   );
 
   handlers.push(
     typedHandle(CHANNELS.KEYBINDING_RESET_ALL, async () => {
       store.set("keybindingOverrides.overrides", {});
+      rebuildMenuForOverrides();
     })
   );
 
@@ -134,6 +131,7 @@ export function registerKeybindingHandlers(_deps: HandlerDependencies): () => vo
           const existing = getValidatedOverrides();
           const merged = { ...existing, ...result.overrides };
           store.set("keybindingOverrides.overrides", merged);
+          rebuildMenuForOverrides();
         }
 
         return result;

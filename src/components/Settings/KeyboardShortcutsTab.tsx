@@ -440,6 +440,33 @@ export function KeyboardShortcutsTab() {
           </div>
         )}
 
+        {/* Worktree-list navigation lives in useWorktreeSidebarKeyboard's
+            roving-focus model, not the keybinding engine — document the keys
+            honestly as fixed instead of advertising rebindable rows that
+            never fire. */}
+        <div data-testid="worktree-list-keys-help">
+          <h4 className="text-xs font-semibold text-daintree-text/60 uppercase tracking-wider mb-2">
+            Worktree list
+          </h4>
+          <div className="space-y-0">
+            <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
+              <span className="text-sm text-daintree-text shrink-0">Move selection</span>
+              <span className="text-xs text-daintree-text/60 text-right">
+                Arrow keys or j / k; Home / End jump to first or last
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
+              <span className="text-sm text-daintree-text shrink-0">Open worktree</span>
+              <span className="text-xs text-daintree-text/60 text-right">
+                Enter or Space; e opens it in the editor
+              </span>
+            </div>
+          </div>
+          <p className="text-xs text-daintree-text/40 mt-2">
+            These shortcuts are fixed and can't be rebound
+          </p>
+        </div>
+
         {/* Keyboard drag-and-drop is otherwise only discoverable through
             screen-reader ARIA hints; surface it for sighted keyboard users.
             Static — dnd-kit sensor interactions, not rebindable actions. */}

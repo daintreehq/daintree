@@ -21,6 +21,7 @@ From there, follow the architecture doc nearest the surface you're changing. Eac
 | Doc | Purpose |
 | --- | --- |
 | [development.md](./development.md) | Commands, IPC pattern, debugging, compiler-bailout tooling — the practical on-ramp. |
+| [keyboard-shortcuts.md](./keyboard-shortcuts.md) | Default keyboard shortcuts (generated — `npm run codegen:keybindings`). |
 | [vision.md](./vision.md) | What Daintree is, the agent-orchestration workflow, and where it sits. |
 | [feature-curation.md](./feature-curation.md) | What Daintree is and isn't — the rubric for deciding what not to build. |
 
