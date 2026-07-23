@@ -4,7 +4,7 @@ import type { PanelInstance, PanelTitleMode } from "@shared/types/panel";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { panelKindHasPty, panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { isDevPreviewPanel } from "@shared/types/panel";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
@@ -490,6 +490,11 @@ export const createCorePanelActions = (
 
     // Single ungrouped panel - move just this panel
     const terminal = get().panelsById[id];
+
+    // Direct moves reject a non-dockable kind (#11375): the dock filters it out
+    // via `isDockPanel`, so committing `location:"dock"` would strand it
+    // invisibly. Leave the panel where it is rather than dock it.
+    if (terminal && !panelKindIsDockable(terminal.kind ?? "terminal")) return;
 
     set((state) => {
       if (!terminal || terminal.location === "dock") return state;

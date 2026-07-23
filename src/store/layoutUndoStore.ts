@@ -1,7 +1,13 @@
 import { create } from "zustand";
 import { usePanelStore } from "./panelStore";
-import type { TabGroup } from "@shared/types";
-import type { PanelLocation } from "@shared/types/panel";
+import type { TabGroup, TabGroupLocation } from "@shared/types";
+import type { PanelKind, PanelLocation } from "@shared/types/panel";
+import {
+  normalizeDockLocation,
+  normalizeGroupDockLocation,
+  panelKindIsDockable,
+} from "@shared/config/panelKindRegistry";
+import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { buildWorktreeIndex } from "@/store/slices/panelRegistry/worktreeIndex";
 
@@ -71,6 +77,7 @@ function captureCurrentLayout(): LayoutSnapshot {
 function applySnapshot(snapshot: LayoutSnapshot): boolean {
   const state = usePanelStore.getState();
   const { panelsById, panelIds } = state;
+  const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
 
   const snapshotIds = new Set(snapshot.terminals.map((t) => t.id));
 
@@ -78,6 +85,46 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
   for (const id of snapshotIds) {
     if (!panelsById[id]) {
       return false;
+    }
+  }
+
+  // Restore group metadata, but normalize any dock group whose live membership
+  // is no longer fully dockable back to grid (#11375). A tab group is atomic —
+  // it can't keep half its members in a dock the others can't render — so this
+  // is all-or-nothing. Members read their effective location from the (possibly
+  // rescued) group location below so a member and its group never disagree.
+  const restoredGroups = structuredClone(snapshot.tabGroups);
+  const groupOverrideByPanelId = new Map<
+    string,
+    { location: TabGroupLocation; worktreeId?: string }
+  >();
+  for (const [groupId, group] of restoredGroups) {
+    const memberKinds: (PanelKind | undefined)[] = [];
+    for (const pid of group.panelIds) {
+      const member = panelsById[pid];
+      if (member) memberKinds.push(member.kind);
+    }
+    const effectiveGroupLocation = normalizeGroupDockLocation(memberKinds, group.location);
+    // A worktree-less group rescued dock→grid adopts the active worktree — the
+    // group RECORD and every member together — so `getTabGroups` (which filters
+    // the group by worktree) and `getPanelGroup` never disagree (split-brain).
+    const rescuedToGrid = effectiveGroupLocation === "grid" && group.location === "dock";
+    const adoptedWorktreeId =
+      rescuedToGrid && group.worktreeId == null && activeWorktreeId !== null
+        ? activeWorktreeId
+        : null;
+    if (effectiveGroupLocation !== group.location || adoptedWorktreeId !== null) {
+      restoredGroups.set(groupId, {
+        ...group,
+        location: effectiveGroupLocation,
+        ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
+      });
+    }
+    for (const pid of group.panelIds) {
+      groupOverrideByPanelId.set(pid, {
+        location: effectiveGroupLocation,
+        ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
+      });
     }
   }
 
@@ -105,15 +152,39 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
   for (const entry of allEntries) {
     const current = panelsById[entry.id];
     if (!current) continue;
-    const restored: CarrierPanel = { ...current, location: entry.location };
-    if (entry.worktreeId !== undefined) {
+    // A grouped panel follows its group's (normalized) location and adopted
+    // worktree; an ungrouped panel normalizes its own entry location. Either way
+    // a non-dockable kind never lands back in the dock (#11375).
+    const groupOverride = groupOverrideByPanelId.get(entry.id);
+    const restoredLocation =
+      groupOverride?.location ?? normalizeDockLocation(current.kind, entry.location);
+    const restored: CarrierPanel = { ...current, location: restoredLocation };
+    // A worktree-less ungrouped panel rescued dock→grid adopts the active
+    // worktree, else it strands in the global-only bucket while a worktree is
+    // active (#11290). Grouped members take the group's adopted worktree.
+    const rescuedToGrid = restoredLocation === "grid" && entry.location === "dock";
+    if (groupOverride?.worktreeId !== undefined) {
+      restored.worktreeId = groupOverride.worktreeId;
+    } else if (entry.worktreeId !== undefined) {
       restored.worktreeId = entry.worktreeId;
+    } else if (!groupOverride && rescuedToGrid && activeWorktreeId !== null) {
+      restored.worktreeId = activeWorktreeId;
     } else {
       delete restored.worktreeId;
     }
     newTerminalsById[entry.id] = restored;
     newTerminalIds.push(entry.id);
   }
+
+  // A snapshot `activeDockTerminalId` that no longer points at a panel currently
+  // living (and renderable) in the dock would open the popover onto nothing —
+  // clear it (#11375).
+  const restoredActiveDock = snapshot.activeDockTerminalId;
+  const activeDockPanel = restoredActiveDock ? newTerminalsById[restoredActiveDock] : undefined;
+  const activeDockStillValid =
+    !!activeDockPanel &&
+    activeDockPanel.location === "dock" &&
+    panelKindIsDockable(activeDockPanel.kind ?? "terminal");
 
   usePanelStore.setState({
     panelsById: newTerminalsById,
@@ -122,10 +193,10 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     // index — sidebar summaries and worktree cycling read it and would
     // otherwise see stale buckets after an undo of a cross-worktree move.
     panelIdsByWorktreeId: buildWorktreeIndex(newTerminalIds, newTerminalsById),
-    tabGroups: structuredClone(snapshot.tabGroups),
+    tabGroups: restoredGroups,
     focusedId: snapshot.focusedId,
     maximizedId: snapshot.maximizedId,
-    activeDockTerminalId: snapshot.activeDockTerminalId,
+    activeDockTerminalId: activeDockStillValid ? restoredActiveDock : null,
   });
 
   return true;

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/controllers", () => ({
   terminalRegistryController: {
@@ -46,7 +46,9 @@ vi.mock("@/clients/appClient", () => ({
 import { useLayoutUndoStore } from "../layoutUndoStore";
 import { usePanelStore } from "../panelStore";
 import { useLayoutConfigStore } from "../layoutConfigStore";
+import { setWorktreeSelectionAccessor } from "@/store/storeAccessors";
 import type { PtyPanelData } from "@shared/types/panel";
+import type { TabGroup } from "@shared/types";
 
 let terminalCounter = 0;
 
@@ -622,6 +624,114 @@ describe("layoutUndoStore", () => {
       expect(state.panelsById["t1"]?.location).toBe("grid");
       expect(state.panelsById["t2"]?.location).toBe("grid");
       expect(state.panelsById["t3"]?.location).toBe("grid");
+    });
+  });
+
+  describe("dockability normalization on undo (#11375)", () => {
+    beforeEach(() => {
+      setWorktreeSelectionAccessor(() => ({
+        activeWorktreeId: "wt-active",
+        restoreWorktreeId: null,
+      }));
+    });
+
+    afterEach(() => {
+      setWorktreeSelectionAccessor(() => ({ activeWorktreeId: null, restoreWorktreeId: null }));
+    });
+
+    it("restores a now-non-dockable panel to the grid instead of the dock", () => {
+      // The panel was dockable when it was docked; its kind now reports
+      // non-dockable (a plugin re-registered as dockable:false). Undo must not
+      // write it back into the dock — the dock filters it out and the grid
+      // excludes it while location stays "dock", so it would strand invisibly.
+      const docked = makeTerminal({ id: "t1", location: "dock", worktreeId: "wt-1" });
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: a non-dockable kind on a PTY-shaped panel
+      (docked as { kind: string }).kind = "review";
+      seedTerminals([docked]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      // Move to grid so undo has something to revert to the dock.
+      usePanelStore.setState({
+        panelsById: { t1: { ...docked, location: "grid" } as PtyPanelData },
+      });
+
+      useLayoutUndoStore.getState().undo();
+
+      expect(usePanelStore.getState().panelsById["t1"]?.location).toBe("grid");
+    });
+
+    it("adopts the active worktree when a rescued dock panel is worktree-less", () => {
+      const docked = makeTerminal({ id: "t1", location: "dock" });
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: a non-dockable kind on a PTY-shaped panel
+      (docked as { kind: string }).kind = "review";
+      delete (docked as { worktreeId?: string }).worktreeId;
+      seedTerminals([docked]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      usePanelStore.setState({
+        panelsById: { t1: { ...docked, location: "grid" } as PtyPanelData },
+      });
+
+      useLayoutUndoStore.getState().undo();
+
+      const panel = usePanelStore.getState().panelsById["t1"];
+      expect(panel?.location).toBe("grid");
+      expect(panel?.worktreeId).toBe("wt-active");
+    });
+
+    it("clears a snapshot activeDockTerminalId that no longer identifies a dock panel", () => {
+      const docked = makeTerminal({ id: "t1", location: "dock", worktreeId: "wt-1" });
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: a non-dockable kind on a PTY-shaped panel
+      (docked as { kind: string }).kind = "review";
+      seedTerminals([docked]);
+      usePanelStore.setState({ activeDockTerminalId: "t1" });
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      usePanelStore.setState({
+        panelsById: { t1: { ...docked, location: "grid" } as PtyPanelData },
+        activeDockTerminalId: null,
+      });
+
+      useLayoutUndoStore.getState().undo();
+
+      // The snapshot pointed activeDockTerminalId at t1, but t1 rescued to grid —
+      // restoring the stale pointer would open the dock popover onto nothing.
+      expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
+    });
+
+    it("adopts the active worktree on the group RECORD and members when a global dock group is rescued", () => {
+      const a = makeTerminal({ id: "ga", location: "dock" });
+      const b = makeTerminal({ id: "gb", location: "dock" });
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: non-dockable kind on a PTY-shaped panel
+      (b as { kind: string }).kind = "review"; // one non-dockable member
+      delete (a as { worktreeId?: string }).worktreeId;
+      delete (b as { worktreeId?: string }).worktreeId;
+      seedTerminals([a, b]);
+      const dockGroup: TabGroup = {
+        id: "g1",
+        panelIds: ["ga", "gb"],
+        activeTabId: "ga",
+        location: "dock",
+      };
+      usePanelStore.setState({ tabGroups: new Map([["g1", dockGroup]]) });
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      // Flip group + members to grid so undo reverts to the dock snapshot.
+      usePanelStore.setState({
+        panelsById: {
+          ga: { ...a, location: "grid" } as PtyPanelData,
+          gb: { ...b, location: "grid" } as PtyPanelData,
+        },
+        tabGroups: new Map([["g1", { ...dockGroup, location: "grid" }]]),
+      });
+
+      useLayoutUndoStore.getState().undo();
+
+      const state = usePanelStore.getState();
+      const group = state.tabGroups.get("g1");
+      // Group and members agree on grid + the adopted worktree — no split-brain
+      // between getTabGroups (filters the group by worktree) and getPanelGroup.
+      expect(group?.location).toBe("grid");
+      expect(group?.worktreeId).toBe("wt-active");
+      expect(state.panelsById["ga"]?.location).toBe("grid");
+      expect(state.panelsById["ga"]?.worktreeId).toBe("wt-active");
+      expect(state.panelsById["gb"]?.worktreeId).toBe("wt-active");
     });
   });
 });

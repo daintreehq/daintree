@@ -459,6 +459,11 @@ export const usePanelStore = create<PanelGridState>()(
         const group = registrySlice.getPanelGroup(id);
         registrySlice.moveTerminalToDock(id);
 
+        // The registry slice rejects a non-dockable kind (and a grouped move can
+        // be rescued to the grid), leaving the panel out of the dock (#11375) —
+        // skip the moved-to-dock focus/maximize cleanup when nothing docked.
+        if (get().panelsById[id]?.location !== "dock") return;
+
         const updates: Partial<PanelGridState> = {};
 
         if (state.focusedId === id) {
@@ -507,7 +512,18 @@ export const usePanelStore = create<PanelGridState>()(
         const moved = registrySlice.moveTabGroupToLocation(groupId, location);
         if (!moved || !groupBeforeMove) return moved;
 
-        if (location === "grid") {
+        // The registry slice rescues a dock request to the grid when a member
+        // kind is non-dockable (#11375), so branch on the COMMITTED location —
+        // not the caller's requested one — or focus/dock cleanup would treat a
+        // grid-rescued group as if it had docked.
+        const committedLocation = get().tabGroups.get(groupId)?.location ?? location;
+
+        // A dock request rescued to the grid for a group already in the grid is a
+        // no-op — the group never moved, so running focus/maximize side effects
+        // (e.g. exiting fullscreen) would be a spurious change. Skip them.
+        if (committedLocation === groupBeforeMove.location) return moved;
+
+        if (committedLocation === "grid") {
           const activeDockTerminalId = get().activeDockTerminalId;
           const previousFocusedId = get().focusedId;
           const nextFocusedId = groupBeforeMove.panelIds.includes(groupBeforeMove.activeTabId)
@@ -1011,7 +1027,14 @@ export const usePanelStore = create<PanelGridState>()(
         const group = registrySlice.getPanelGroup(id);
         registrySlice.moveTerminalToPosition(id, toIndex, location, worktreeId);
 
-        if (location === "grid") {
+        // The ordering slice rescues a dock target to the grid for a non-dockable
+        // kind (#11375), so key the focus/maximize side effects off the COMMITTED
+        // location — branching on the raw request would run the dock
+        // focus-fallback + maximize-clear for a panel that actually landed in the
+        // grid.
+        const committedLocation = get().panelsById[id]?.location ?? location;
+
+        if (committedLocation === "grid") {
           const previousFocusedId = state.focusedId;
           set({
             focusedId: id,

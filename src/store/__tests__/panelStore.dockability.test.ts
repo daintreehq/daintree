@@ -80,6 +80,7 @@ Object.defineProperty(window, "electron", {
 });
 
 import { usePanelStore } from "../panelStore";
+import { setWorktreeSelectionAccessor } from "@/store/storeAccessors";
 import {
   clearPanelKindRegistry,
   registerPanelKind,
@@ -242,5 +243,53 @@ describe("panelStore.addPanel dockability for plugin kinds (#11332)", () => {
 
     expect(id).toBeTruthy();
     expect(usePanelStore.getState().panelsById[id!]?.location).toBe("grid");
+  });
+});
+
+describe("panelStore.addPanel worktree adoption on dock→grid rescue (#11375 point 3)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetState();
+    setWorktreeSelectionAccessor(() => ({
+      activeWorktreeId: "wt-active",
+      restoreWorktreeId: null,
+    }));
+  });
+
+  afterEach(() => {
+    resetState();
+    setWorktreeSelectionAccessor(() => ({ activeWorktreeId: null, restoreWorktreeId: null }));
+  });
+
+  it("a worktree-less dock request for a non-dockable kind adopts the active worktree", async () => {
+    // Without adoption the rescued panel lands worktree-less in the global-only
+    // grid bucket — invisible while a worktree is active (#11290), worse than
+    // the dock stranding the rescue fixes.
+    const id = await usePanelStore.getState().addPanel({ kind: "dev-preview", location: "dock" });
+
+    expect(id).toBeTruthy();
+    const panel = usePanelStore.getState().panelsById[id!];
+    expect(panel?.location).toBe("grid");
+    expect(panel?.worktreeId).toBe("wt-active");
+    // The adopted-worktree panel is treated as in the active worktree, so it
+    // renders (running), not backgrounded.
+    expect(panel?.isVisible).toBe(true);
+  });
+
+  it("does not override an explicit worktree when rescuing to the grid", async () => {
+    const id = await usePanelStore
+      .getState()
+      .addPanel({ kind: "dev-preview", location: "dock", worktreeId: "wt-explicit" });
+
+    expect(usePanelStore.getState().panelsById[id!]?.worktreeId).toBe("wt-explicit");
+  });
+
+  it("does not adopt a worktree for a dockable kind honored in the dock", async () => {
+    // No redirect happened, so no adoption — a global dock panel stays global.
+    const id = await usePanelStore.getState().addPanel({ kind: "file", location: "dock" });
+
+    const panel = usePanelStore.getState().panelsById[id!];
+    expect(panel?.location).toBe("dock");
+    expect(panel?.worktreeId).toBeUndefined();
   });
 });

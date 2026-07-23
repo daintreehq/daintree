@@ -1506,6 +1506,71 @@ describe("buildArgsForNonPtyRecreation", () => {
     );
     expect(result.extensionState).toBeUndefined();
   });
+
+  describe("dock→grid rescue on hydration (#11375 point 3)", () => {
+    it("keeps a dockable dock panel in the dock and stays global", () => {
+      // `browser` is dockable — a persisted global dock browser stays in the
+      // dock (visible in every worktree's dock); no worktree is stamped.
+      const result = buildArgsForNonPtyRecreation(
+        { id: "b1", kind: "browser", title: "Browser", location: "dock" },
+        "browser",
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("dock");
+      expect(result.worktreeId).toBeUndefined();
+    });
+
+    it("rescues a non-dockable dock panel to the grid and adopts the active worktree", () => {
+      // `dev-preview` is a non-dockable built-in. A persisted global dock
+      // dev-preview must land visibly in the active worktree's grid, not
+      // worktree-less in the global-only bucket.
+      const result = buildArgsForNonPtyRecreation(
+        { id: "d1", kind: "dev-preview", title: "Dev", location: "dock" },
+        "dev-preview",
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("grid");
+      expect(result.worktreeId).toBe("wt-active");
+    });
+
+    it("rescues an unregistered (not-yet-loaded plugin) dock kind to the grid and adopts", () => {
+      // At hydration a plugin kind may not be registered yet — treated as
+      // non-dockable — so a global dock panel of that kind is rescued to the
+      // grid with the active worktree, returning visibly rather than stranding.
+      const result = buildArgsForNonPtyRecreation(
+        { id: "p1", kind: "acme.viewer", title: "Plugin", location: "dock" },
+        "acme.viewer",
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("grid");
+      expect(result.worktreeId).toBe("wt-active");
+    });
+
+    it("does not override an explicit saved worktree when rescuing", () => {
+      const result = buildArgsForNonPtyRecreation(
+        { id: "d1", kind: "dev-preview", title: "Dev", location: "dock", worktreeId: "wt-saved" },
+        "dev-preview",
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("grid");
+      expect(result.worktreeId).toBe("wt-saved");
+    });
+
+    it("rescues to the grid worktree-less when no active worktree is known", () => {
+      const result = buildArgsForNonPtyRecreation(
+        { id: "d1", kind: "dev-preview", title: "Dev", location: "dock" },
+        "dev-preview",
+        "/project",
+        null
+      );
+      expect(result.location).toBe("grid");
+      expect(result.worktreeId).toBeUndefined();
+    });
+  });
 });
 
 describe("buildArgsForOrphanedTerminal", () => {

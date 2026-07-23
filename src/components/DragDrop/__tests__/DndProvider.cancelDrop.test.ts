@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import { shouldCancelDrop, type OverDropData } from "../dropResolution";
+import type { PanelInstance } from "@shared/types/panel";
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -14,13 +15,15 @@ function run(params: {
   activeData?: unknown;
   isWorktreeSort?: boolean;
   hasOver?: boolean;
+  panelsById?: Record<string, PanelInstance | undefined>;
 }): boolean {
-  const { overData = null, activeData, isWorktreeSort = false, hasOver } = params;
+  const { overData = null, activeData, isWorktreeSort = false, hasOver, panelsById = {} } = params;
   return shouldCancelDrop({
     hasOver: hasOver ?? overData != null,
     activeData,
     overData: overData ?? undefined,
     isWorktreeSort,
+    panelsById,
   });
 }
 
@@ -130,6 +133,9 @@ describe("shouldCancelDrop", () => {
         get isWorktreeSort(): never {
           throw new Error("boom");
         },
+        get panelsById(): never {
+          throw new Error("boom");
+        },
       };
       expect(() => shouldCancelDrop(hostile)).not.toThrow();
       expect(shouldCancelDrop(hostile)).toBe(true);
@@ -192,6 +198,72 @@ describe("shouldCancelDrop", () => {
     it("does not cancel a dev-preview panel dropped on the grid (dock guard is target-scoped)", () => {
       expect(
         run({ overData: { container: "grid" }, activeData: makeDragDataOfKind("dev-preview") })
+      ).toBe(false);
+    });
+  });
+
+  describe("non-dockable group dock drop (#11375)", () => {
+    const kindPanel = (id: string, kind: string) =>
+      ({ id, kind, location: "grid" }) as unknown as PanelInstance;
+    const panelsById: Record<string, PanelInstance | undefined> = {
+      "panel-1": kindPanel("panel-1", "terminal"),
+      "panel-2": kindPanel("panel-2", "review"), // non-dockable
+      "panel-3": kindPanel("panel-3", "browser"),
+    };
+    const groupDrag = (memberIds: string[], repKind = "terminal") =>
+      makeDragData({
+        terminal: { id: memberIds[0], title: "T", kind: repKind, location: "grid" },
+        groupId: "group-1",
+        groupPanelIds: memberIds,
+      });
+
+    it("cancels a group whose representative is dockable but a member is not", () => {
+      expect(
+        run({
+          overData: { container: "dock" },
+          activeData: groupDrag(["panel-1", "panel-2"]),
+          panelsById,
+        })
+      ).toBe(true);
+    });
+
+    it("cancels the same mixed group dropped on a dock chip (sortable container)", () => {
+      expect(
+        run({
+          overData: { sortable: { containerId: "dock-container", index: 0 } },
+          activeData: groupDrag(["panel-1", "panel-2"]),
+          panelsById,
+        })
+      ).toBe(true);
+    });
+
+    it("allows a group where every member is dockable", () => {
+      expect(
+        run({
+          overData: { container: "dock" },
+          activeData: groupDrag(["panel-1", "panel-3"]),
+          panelsById,
+        })
+      ).toBe(false);
+    });
+
+    it("fails closed when a group member is missing from the store", () => {
+      expect(
+        run({
+          overData: { container: "dock" },
+          activeData: groupDrag(["panel-1", "gone"]),
+          panelsById,
+        })
+      ).toBe(true);
+    });
+
+    it("allows a mixed group dropped on the grid (dock guard is target-scoped)", () => {
+      expect(
+        run({
+          overData: { container: "grid" },
+          activeData: groupDrag(["panel-1", "panel-2"]),
+          panelsById,
+        })
       ).toBe(false);
     });
   });

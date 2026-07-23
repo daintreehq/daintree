@@ -442,7 +442,7 @@ export async function restorePanelsPhase(
               }
               logHydrationInfo(`Recreating ${kind} panel: ${saved.id}`);
               const nonPtyId = await addPanel(
-                buildArgsForNonPtyRecreation(saved, kind, projectRoot || "")
+                buildArgsForNonPtyRecreation(saved, kind, projectRoot || "", activeWorktreeId)
               );
               restoredIdsByIndex.set(capturedIndex, nonPtyId);
             }

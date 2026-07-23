@@ -1,14 +1,19 @@
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import {
+  panelKindHasPty,
+  normalizeDockLocation,
+  normalizeGroupDockLocation,
+} from "@shared/config/panelKindRegistry";
 import { getNarrowPanel } from "./selectors";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
-import { isDevPreviewPanel } from "@shared/types/panel";
+import { isDevPreviewPanel, type PanelKind } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
+import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import {
   stopDevPreviewByPanelId,
   dissolvePanelFromGroup,
@@ -190,13 +195,24 @@ export const createBackgroundActions = (
       return;
     }
 
-    const restoreLocation = backgroundedInfo.originalLocation ?? "grid";
+    const rawRestoreLocation = backgroundedInfo.originalLocation ?? "grid";
     const terminal = get().panelsById[id];
+    // Normalize a persisted dock location to grid if the kind is no longer
+    // dockable (#11375); adopt the active worktree when a rescued worktree-less
+    // panel would otherwise strand in the global-only grid bucket (#11290).
+    const restoreLocation = normalizeDockLocation(terminal?.kind, rawRestoreLocation);
+    const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
 
     set((state) => {
       const t = state.panelsById[id];
       if (!t) return state;
-      const nextWorktreeId = targetWorktreeId !== undefined ? targetWorktreeId : t.worktreeId;
+      const rescuedToGrid = restoreLocation === "grid" && rawRestoreLocation === "dock";
+      const nextWorktreeId =
+        targetWorktreeId !== undefined
+          ? targetWorktreeId
+          : rescuedToGrid && t.worktreeId == null && activeWorktreeId !== null
+            ? activeWorktreeId
+            : t.worktreeId;
       const newById = {
         ...state.panelsById,
         [id]: {
@@ -252,14 +268,28 @@ export const createBackgroundActions = (
 
     if (groupPanels.length === 0) return;
 
-    const restoreLocation =
-      anchorPanel?.groupMetadata?.location ??
-      groupPanels[0]?.backgrounded?.originalLocation ??
-      "grid";
+    // A tab group is atomic — normalize a persisted dock location to grid when
+    // ANY live member's kind is no longer dockable (#11375), moving the whole
+    // group rather than splitting it, and adopt the active worktree for a
+    // rescued worktree-less group so it isn't stranded in the grid.
+    const rawGroupLocation: "grid" | "dock" =
+      (anchorPanel?.groupMetadata?.location ?? groupPanels[0]?.backgrounded?.originalLocation) ===
+      "dock"
+        ? "dock"
+        : "grid";
+    const groupMemberKinds: (PanelKind | undefined)[] = [];
+    for (const { id } of groupPanels) {
+      const t = get().panelsById[id];
+      if (t) groupMemberKinds.push(t.kind);
+    }
+    const restoreLocation = normalizeGroupDockLocation(groupMemberKinds, rawGroupLocation);
+    const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
+    const rescuedToGrid = restoreLocation === "grid" && rawGroupLocation === "dock";
     const worktreeId =
       targetWorktreeId !== undefined
         ? targetWorktreeId
-        : (anchorPanel?.groupMetadata?.worktreeId ?? undefined);
+        : (anchorPanel?.groupMetadata?.worktreeId ??
+          (rescuedToGrid && activeWorktreeId !== null ? activeWorktreeId : undefined));
 
     set((state) => {
       const panelIdsInGroup = new Set(groupPanels.map(({ id }) => id));
