@@ -31,6 +31,8 @@ vi.mock("@/store/projectStore", () => ({
     selector({ updateProject }),
 }));
 
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { MoveOrRenameProjectDialog } from "../MoveOrRenameProjectDialog";
 

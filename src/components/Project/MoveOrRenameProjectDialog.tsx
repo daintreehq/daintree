@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
+import { notify } from "@/lib/notify";
 import { useDohertyGate } from "@/hooks";
 import {
   useProjectRelocationStore,
@@ -153,6 +154,17 @@ function MoveOrRenameProjectDialogInner({
             pending.onDisplayNameCommitted?.(trimmedName);
           } catch (nameErr) {
             console.warn("[relocate] folder moved but display-name update failed:", nameErr);
+            // The move (the irreversible part) succeeded, so we still close — but
+            // the user couldn't otherwise observe that the rename half didn't
+            // land, so surface it with a manual-recovery hint.
+            // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+            notify({
+              type: "warning",
+              title: "Name not updated",
+              message:
+                "The project moved, but its display name couldn't be updated. Rename it from Project Settings.",
+              context: { eventKind: "settings", projectId: pending.projectId },
+            });
           }
         }
       }
