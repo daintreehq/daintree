@@ -480,6 +480,27 @@ export class WorkspaceHostPool {
     return true;
   }
 
+  /**
+   * Force-evict the workspace host for a project being RELOCATED, even while a
+   * window still holds it (`refCount > 0`). The normal {@link evictProject}
+   * refuses a held host; relocation is the one caller that must drop a live one —
+   * its folder is moving out from under it, so the process (and its watchers,
+   * rooted at the vanishing old path) has to be torn down and respawned at the
+   * new path by a subsequent `loadProject`. Reverse routing rooted at the old
+   * path is cleared here so a worktree lookup for a since-moved path can't match
+   * a stale entry; the reload repopulates it for the new root. Fire-and-forget
+   * dispose: a same-volume `fs.rename` doesn't require the host to have exited
+   * first (POSIX moves the inode; open handles follow it).
+   */
+  evictProjectForRelocation(projectPath: string): void {
+    const normalized = this.normalizeProjectPath(projectPath);
+    const entry = this.entries.get(normalized);
+    if (entry) this.evictEntry(normalized, entry);
+    for (const [worktreePath, rootPath] of this.worktreePathToProject) {
+      if (rootPath === normalized) this.worktreePathToProject.delete(worktreePath);
+    }
+  }
+
   private evictEntry(projectPath: string, entry: ProcessEntry): void {
     if (entry.cleanupTimeout) {
       clearTimeout(entry.cleanupTimeout);

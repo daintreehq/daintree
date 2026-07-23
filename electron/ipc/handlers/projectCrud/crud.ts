@@ -8,6 +8,7 @@ import {
   projectViewManagersFrom,
 } from "../../../window/activeProjectIds.js";
 import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../utils.js";
+import { projectRelocationCoordinator } from "../../../services/ProjectRelocationCoordinator.js";
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import type { HandlerDependencies } from "../../types.js";
@@ -302,11 +303,14 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     }
 
     const newPath = result.filePaths[0];
-    const relocated = await projectStore.relocateProject(projectId, newPath);
-    // Every cached view of this project replaces it by immutable id, so the new
-    // path reaches windows other than the one that ran the locate flow (#11282).
-    broadcastToRenderer(CHANNELS.PROJECT_UPDATED, relocated);
-    return relocated;
+    // Route through the relocation coordinator: it forks internally — an OPEN
+    // project (visible in any window) runs the phase-3 quiesce/rebind pipeline
+    // so the live view/host/PTYs are repointed rather than stranded; a closed
+    // reattach delegates to the phase-1/2 path. It broadcasts PROJECT_UPDATED to
+    // every cached view by immutable id, so the new path reaches windows other
+    // than the one that ran the locate flow (#11282).
+    projectRelocationCoordinator.configure(deps);
+    return projectRelocationCoordinator.relocate({ projectId, mode: "reattach", newPath });
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_LOCATE, handleProjectLocate));
 

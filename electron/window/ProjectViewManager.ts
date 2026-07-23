@@ -353,6 +353,37 @@ export class ProjectViewManager {
     return task;
   }
 
+  /**
+   * Repoint a project's cached view at its new folder after a phase-3 relocation
+   * (#11282). The view stays on-screen with its live React/xterm state intact —
+   * only `ViewEntry.projectPath` (consumed by the next `switchTo`, the
+   * swap-failure rollback and diagnostics) is stale after the move. Enqueued on
+   * the same `switchChain` as `switchTo`, so it can't interleave with a
+   * concurrent switch that would read or overwrite the entry mid-rebind
+   * (#10808/#10931). Resolves to the view's live `WebContents` (for the
+   * coordinator's targeted repoint send), or `null` when no cached view exists
+   * or it was torn down — the Electron 41+ `webContents` getter can be undefined
+   * for a destroyed view, so it is guarded before any read.
+   */
+  async rebindProjectPath(
+    projectId: string,
+    newPath: string
+  ): Promise<Electron.WebContents | null> {
+    const task = this.switchChain.then(() => {
+      const entry = this.views.get(projectId);
+      if (!entry) return null;
+      entry.projectPath = newPath;
+      const wc = entry.view?.webContents;
+      if (!wc || wc.isDestroyed()) return null;
+      return wc;
+    });
+    this.switchChain = task.then(
+      () => undefined,
+      () => undefined
+    );
+    return task;
+  }
+
   clearPaintGate(): void {
     PaintGateController.clearPaintGate(this);
   }

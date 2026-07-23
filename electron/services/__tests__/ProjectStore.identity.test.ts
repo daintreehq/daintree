@@ -155,6 +155,53 @@ describe("project identity across folder moves", () => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
+  describe("finalizeRelocatedPath (phase 3)", () => {
+    it("preserves the given status instead of forcing 'closed'", async () => {
+      const original = await makeDir("orig-active");
+      const registered = await store.addProject(original);
+      store.updateProject(registered.id, { status: "active" });
+      const moved = await makeDir("moved-active");
+
+      const result = await store.finalizeRelocatedPath({
+        projectId: registered.id,
+        expectedOldPath: registered.path,
+        newPath: moved,
+        status: "active",
+      });
+
+      expect(result.status).toBe("active");
+      expect(result.path).toBe(moved);
+      // The path changed, so the phase-2 migration + worktree repair ran.
+      expect(enqueueProjectStateUpdate).toHaveBeenCalled();
+      expect(repairWorktrees).toHaveBeenCalled();
+    });
+
+    it("closes the project when a plain relocateProject delegates", async () => {
+      const original = await makeDir("orig-closed");
+      const registered = await store.addProject(original);
+      store.updateProject(registered.id, { status: "active" });
+      const moved = await makeDir("moved-closed");
+
+      const result = await store.relocateProject(registered.id, moved);
+      expect(result.status).toBe("closed");
+    });
+
+    it("refuses to finalize when the row no longer points at the expected old path", async () => {
+      const original = await makeDir("orig-stale");
+      const registered = await store.addProject(original);
+      const moved = await makeDir("moved-stale");
+
+      await expect(
+        store.finalizeRelocatedPath({
+          projectId: registered.id,
+          expectedOldPath: path.join(tmpRoot, "somewhere-else"),
+          newPath: moved,
+          status: "active",
+        })
+      ).rejects.toThrow(/moved concurrently/);
+    });
+  });
+
   describe("addProject move detection", () => {
     it("keeps the original id when an anchored folder has moved", async () => {
       const original = await makeDir("original");

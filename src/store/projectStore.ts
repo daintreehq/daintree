@@ -1024,9 +1024,11 @@ if (typeof window !== "undefined" && window.electron?.project) {
   const listenerState = getProjectStoreListenerState();
   listenerState.applyUpdated = (updated) => {
     let priorPath: string | undefined;
+    let isCurrentView = false;
     useProjectStore.setState((state) => {
       const prior = state.projects.find((p) => p.id === updated.id);
       priorPath = prior?.path;
+      isCurrentView = state.currentProject?.id === updated.id;
       const projects = prior
         ? state.projects.map((p) => (p.id === updated.id ? updated : p))
         : [...state.projects, updated];
@@ -1037,7 +1039,19 @@ if (typeof window !== "undefined" && window.electron?.project) {
     // A folder move/reattach keeps the id but changes the path (#11282); repoint
     // the hibernated Assistant cwd so a later resume lands in the new folder.
     if (priorPath && priorPath !== updated.path) {
-      rebaseHibernateSessionCwd(updated.id, priorPath, updated.path);
+      const from = priorPath;
+      const to = updated.path;
+      rebaseHibernateSessionCwd(updated.id, from, to);
+      // Phase 3 relocates an OPEN project without reloading its view, so this
+      // view's LIVE panel/worktree stores still hold old-root paths. Rebase them
+      // in place so panels stay bound to their (renamed) worktrees. Lazily
+      // imported so the panel/worktree stores never enter this module's eval
+      // graph (store-init-order); only run for the view actually showing it.
+      if (isCurrentView) {
+        void import("./rebaseProjectViewRuntimePaths").then((m) =>
+          m.rebaseProjectViewRuntimePaths(from, to)
+        );
+      }
     }
   };
   listenerState.applyRemoved = (projectId) => {
