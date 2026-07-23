@@ -537,7 +537,9 @@ describe("FilePane reveal in file manager (#11386)", () => {
     });
     const { container } = renderFilePane();
     await click(findButton(container, "Open in editor"));
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("No editor configured");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "No editor configured"
+    );
 
     // Revealing the file did nothing to configure an editor, so the editor's
     // failure is still true and its banner must stand.
@@ -552,7 +554,9 @@ describe("FilePane reveal in file manager (#11386)", () => {
       { path: PATH },
       { source: "user" }
     );
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("No editor configured");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "No editor configured"
+    );
   });
 
   it("leaves a target's Retry usable while only a sibling target is pending", async () => {
@@ -571,9 +575,7 @@ describe("FilePane reveal in file manager (#11386)", () => {
       findButton(container, revealLabel).dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
-    expect(
-      findButton(container, "Retry opening in editor").hasAttribute("disabled")
-    ).toBe(false);
+    expect(findButton(container, "Retry opening in editor").hasAttribute("disabled")).toBe(false);
 
     await act(async () => {
       revealGate.resolve({ ok: true, result: undefined });
