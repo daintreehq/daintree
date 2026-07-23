@@ -74,6 +74,13 @@ function spawnMessages(
     .map((msg) => ({ id: msg.id!, options: msg.options! }));
 }
 
+function writeMessages(child: MockUtilityProcess): Array<{ id: string; data: string }> {
+  return child.postMessage.mock.calls
+    .map((call: unknown[]) => call[0] as { type?: string; id?: string; data?: string })
+    .filter((msg) => msg?.type === "write")
+    .map((msg) => ({ id: msg.id!, data: msg.data! }));
+}
+
 describe("PtyClient lifecycle ledger", () => {
   let mockChild: MockUtilityProcess;
   let PtyClientClass: typeof import("../PtyClient.js").PtyClient;
@@ -164,6 +171,63 @@ describe("PtyClient lifecycle ledger", () => {
     });
     expect(ledger.recordJournal("t1", 1, "sess-before-crash").accepted).toBe(true);
     expect(ledger.recordJournal("t1", 2, "sess-after-crash").accepted).toBe(true);
+  });
+
+  it("re-injects postSpawnInput on crash respawn so wrapper-less shells resume (#11339)", () => {
+    const client = createReadyClient();
+    // A command launch on a shell that can't host a startup wrapper (fish,
+    // nushell, unrecognized Windows shell): the IPC handler puts the launch
+    // command on `postSpawnInput` instead of in `args`.
+    client.spawn("t1", { ...baseOptions, postSpawnInput: "claude --resume s-1\r" });
+
+    // Initial spawn injects the command exactly once, right after the spawn.
+    expect(writeMessages(mockChild)).toEqual([{ id: "t1", data: "claude --resume s-1\r" }]);
+
+    const restartedChild = createMockChild();
+    shared.forkMock.mockReturnValue(restartedChild);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(200);
+    restartedChild.emit("message", { type: "ready" });
+
+    const replayed = spawnMessages(restartedChild);
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]!.options.postSpawnInput).toBe("claude --resume s-1\r");
+    // Re-injected exactly once on the fresh host — the terminal comes back
+    // running its command (here a resume), not as a bare prompt and not twice.
+    expect(writeMessages(restartedChild)).toEqual([{ id: "t1", data: "claude --resume s-1\r" }]);
+  });
+
+  it("replays wrapper args verbatim on crash respawn — a resume survives (#11339)", () => {
+    const client = createReadyClient();
+    // Wrapper-capable shells (zsh/bash/sh/pwsh/cmd) embed the launch command in
+    // `args`, so a resume launch already resumes on verbatim replay — no
+    // postSpawnInput and no separate write should appear.
+    const wrapperArgs = [
+      "-lic",
+      "trap : INT\nclaude --resume s-1\ntrap - INT\nexec '/bin/bash' -l",
+    ];
+    client.spawn("t1", {
+      ...baseOptions,
+      shell: "/bin/bash",
+      args: wrapperArgs,
+      command: "claude --resume s-1",
+    });
+
+    const restartedChild = createMockChild();
+    shared.forkMock.mockReturnValue(restartedChild);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(200);
+    restartedChild.emit("message", { type: "ready" });
+
+    const replayed = spawnMessages(restartedChild);
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]!.options.shell).toBe("/bin/bash");
+    expect(replayed[0]!.options.args).toEqual(wrapperArgs);
+    expect(replayed[0]!.options.postSpawnInput).toBeUndefined();
+    // No stray post-spawn write for a wrapper shell.
+    expect(writeMessages(restartedChild)).toHaveLength(0);
   });
 
   it("keeps the same generation for the initial-ready replay (nothing was delivered)", () => {
