@@ -16,6 +16,26 @@ import { flattenTree, pruneListings, refreshTargets, type FlatTreeRow } from "./
  */
 const MAX_CONCURRENT_LISTINGS = 6;
 
+/**
+ * Backoff schedule for silently retrying a failed *root* listing before
+ * surfacing an error. Switching back to an idle project reactivates its view
+ * and re-fetches the tree while the workspace host is still being repointed to
+ * this window — `activateProjectView` sends `PROJECT_ON_SWITCH` before it awaits
+ * `loadWorktrees` — so the first `listDirectory` can throw `Worktree not found`
+ * for a few hundred ms before self-healing. Retrying instead of immediately
+ * painting a red banner keeps that transient invisible; the banner is reserved
+ * for a failure that persists across the whole schedule.
+ *
+ * 150ms first, because `getAllStatesAsync` coalesces its result for 150ms
+ * (`STATES_INFLIGHT_COALESCE_WINDOW_MS`) — a sooner retry would only replay the
+ * same stale empty answer. Then 400ms and 800ms: `switch.ts`'s own comment puts
+ * the warm-`loadProject` window at "several hundred ms" (prune/list/status
+ * sync/LFS probe), and a reporter saw the banner outlast a shorter budget, so
+ * the schedule reaches ~1.35s of grace to clear that window with margin while
+ * still surfacing a genuinely broken worktree in under ~1.5s.
+ */
+const ROOT_RETRY_DELAYS_MS = [150, 400, 800] as const;
+
 export interface UseFileBrowserTreeArgs {
   worktreeId: string | undefined;
   expandedPaths: readonly string[];
@@ -50,6 +70,17 @@ export interface UseFileBrowserTreeResult {
 interface QueueEntry {
   dirPath: string;
   generation: number;
+}
+
+/**
+ * Tracks the current root-failure streak. Keyed by the generation that owns it
+ * so a retry scheduled under a previous identity can't consume the new one's
+ * budget; `nextDelayIndex` walks `ROOT_RETRY_DELAYS_MS` and is reset to 0 on any
+ * root success or identity reset.
+ */
+interface RootRetryState {
+  generation: number;
+  nextDelayIndex: number;
 }
 
 /**
@@ -98,6 +129,13 @@ export function useFileBrowserTree({
   // nobody is looking at, and racing the replacement panel's own requests.
   const disposedRef = useRef(false);
 
+  // Silent-retry bookkeeping for a failed *root* listing. The timer handle lets
+  // us both cancel a pending retry (unmount / identity reset) and detect on fire
+  // whether it was superseded; the state carries the streak's generation and its
+  // position in `ROOT_RETRY_DELAYS_MS`. See `fetchDirectory`'s root catch branch.
+  const rootRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rootRetryStateRef = useRef<RootRetryState>({ generation: 0, nextDelayIndex: 0 });
+
   const expandedSet = useMemo(() => new Set(expandedPaths), [expandedPaths]);
   const expandedSetRef = useRef(expandedSet);
 
@@ -112,6 +150,31 @@ export function useFileBrowserTree({
   // latest-value ref breaks the definition cycle without letting either side
   // capture a stale closure.
   const pumpRef = useRef<() => void>(() => {});
+
+  const clearRootRetryTimer = useCallback((): void => {
+    if (rootRetryTimerRef.current !== null) {
+      clearTimeout(rootRetryTimerRef.current);
+      rootRetryTimerRef.current = null;
+    }
+  }, []);
+
+  // Replenish the retry budget for a fresh streak under `generation` and drop
+  // any retry still pending from the old one.
+  const resetRootRetryState = useCallback(
+    (generation: number): void => {
+      clearRootRetryTimer();
+      rootRetryStateRef.current = { generation, nextDelayIndex: 0 };
+    },
+    [clearRootRetryTimer]
+  );
+
+  const enqueueTargets = useCallback((targets: readonly string[], generation: number): void => {
+    for (const dirPath of targets) {
+      if (inFlightRef.current.has(dirPath)) continue;
+      if (queueRef.current.some((entry) => entry.dirPath === dirPath)) continue;
+      queueRef.current.push({ dirPath, generation });
+    }
+  }, []);
 
   const fetchDirectory = useCallback(
     async (dirPath: string, generation: number): Promise<void> => {
@@ -144,6 +207,7 @@ export function useFileBrowserTree({
           return next;
         });
         if (dirPath === rootPath) {
+          resetRootRetryState(generation);
           setRootError(null);
           setHasLoadedRoot(true);
         }
@@ -154,6 +218,44 @@ export function useFileBrowserTree({
           // browser works" and "it doesn't". A single directory that failed
           // (deleted mid-expand, permissions) just stays unloaded, and the next
           // refresh retries it.
+          //
+          // But a root failure right after switching back to an idle project is
+          // usually transient — the workspace host is still being repointed to
+          // this window — so retry silently on a short backoff, staying in the
+          // skeleton, and only paint the banner once the budget is spent.
+          if (rootRetryStateRef.current.generation !== generation) {
+            rootRetryStateRef.current = { generation, nextDelayIndex: 0 };
+          }
+          const attempt = rootRetryStateRef.current.nextDelayIndex;
+          const delay = ROOT_RETRY_DELAYS_MS[attempt];
+          if (delay !== undefined) {
+            rootRetryStateRef.current.nextDelayIndex = attempt + 1;
+            clearRootRetryTimer();
+            const handle = setTimeout(() => {
+              // Guard on fire, not just via cleanup: `clearTimeout` can't recall
+              // a callback the event loop already dequeued, and a superseding
+              // success/refresh nulls the handle out from under it. The identity
+              // switch is covered separately by the layout-effect cancel below.
+              if (
+                generation !== generationRef.current ||
+                disposedRef.current ||
+                rootRetryTimerRef.current !== handle
+              ) {
+                return;
+              }
+              rootRetryTimerRef.current = null;
+              // Route the retry through the shared queue rather than calling
+              // fetchDirectory directly: it dedups against any root work a manual
+              // refresh already queued or put in flight, and honours the
+              // concurrency ceiling instead of firing a seventh request past it.
+              enqueueTargets([rootPath], generation);
+              pumpRef.current();
+            }, delay);
+            rootRetryTimerRef.current = handle;
+            return;
+          }
+          // Budget spent: the failure is real. Surface it exactly as before.
+          clearRootRetryTimer();
           setRootError(formatErrorMessage(error, "Couldn't read this worktree"));
           setHasLoadedRoot(true);
         } else {
@@ -177,16 +279,8 @@ export function useFileBrowserTree({
         pumpRef.current();
       }
     },
-    [worktreeId, showIgnored, rootPath]
+    [worktreeId, showIgnored, rootPath, clearRootRetryTimer, resetRootRetryState, enqueueTargets]
   );
-
-  const enqueueTargets = useCallback((targets: readonly string[], generation: number): void => {
-    for (const dirPath of targets) {
-      if (inFlightRef.current.has(dirPath)) continue;
-      if (queueRef.current.some((entry) => entry.dirPath === dirPath)) continue;
-      queueRef.current.push({ dirPath, generation });
-    }
-  }, []);
 
   const pump = useCallback((): void => {
     if (disposedRef.current) return;
@@ -228,17 +322,32 @@ export function useFileBrowserTree({
     pumpRef.current = pump;
   }, [listings, expandedSet, pump]);
 
+  // Cancel a pending root retry synchronously when the identity changes or the
+  // panel unmounts. The generation bump that would invalidate the retry lives in
+  // a *passive* effect, so between this commit and that effect there is a window
+  // where the old timer could still fire, pass its generation guard, and briefly
+  // repaint the previous worktree's error. A layout-effect cleanup runs during
+  // commit — before that passive effect and before the loop yields to any timer
+  // — closing the window. (Same reasoning as the ref publish above.)
+  useLayoutEffect(() => {
+    return () => {
+      clearRootRetryTimer();
+    };
+  }, [worktreeId, showIgnored, rootPath, clearRootRetryTimer]);
+
   useEffect(() => {
     disposedRef.current = false;
     return () => {
       disposedRef.current = true;
       queueRef.current = [];
       refreshPendingRef.current = false;
+      // Drop any pending root retry so it can't fire into an unmounted panel.
+      clearRootRetryTimer();
       // Invalidate everything still in the air so a late response can't commit
       // into a store the panel no longer owns.
       generationRef.current += 1;
     };
-  }, []);
+  }, [clearRootRetryTimer]);
 
   const ensureLoaded = useCallback(
     (dirPath: string): void => {
@@ -268,6 +377,9 @@ export function useFileBrowserTree({
   // happened to reload and hide them everywhere else.
   useEffect(() => {
     generationRef.current += 1;
+    // Fresh identity, fresh retry budget — and cancel any retry still pending
+    // for the previous one so it can't leak an error into this tree.
+    resetRootRetryState(generationRef.current);
     inFlightRef.current.clear();
     queueRef.current = [];
     refreshPendingRef.current = false;
@@ -277,7 +389,7 @@ export function useFileBrowserTree({
     setHasLoadedRoot(false);
     if (!worktreeId) return;
     void fetchDirectory(rootPath, generationRef.current);
-  }, [worktreeId, showIgnored, rootPath, fetchDirectory]);
+  }, [worktreeId, showIgnored, rootPath, fetchDirectory, resetRootRetryState]);
 
   // Expanding a directory is what triggers its fetch; a restored panel expands
   // several at once, and each is requested the first time it becomes visible.
