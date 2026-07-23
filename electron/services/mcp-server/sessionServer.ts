@@ -1526,7 +1526,7 @@ async function lookupManifestEntry(
     try {
       // Use the value returned directly — pinned sessions (#7002) deliberately
       // skip the shared `cachedManifest` so a re-read here would always return
-      // null and silently drop confirmation elicitation + structuredContent.
+      // null and silently drop host confirmation + structuredContent.
       manifest = await requestManifest();
     } catch {
       return undefined;

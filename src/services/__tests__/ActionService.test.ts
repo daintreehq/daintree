@@ -2325,6 +2325,9 @@ describe("ActionService", () => {
         title: "Test",
         description: expect.stringContaining("lazy JSON schema compilation"),
       });
+      // A safe action carries no rationale — the conditional spread must omit
+      // the property, not surface it as `dangerRationale: undefined`.
+      expect(meta).not.toHaveProperty("dangerRationale");
       expect(getSchemaCache(service).size).toBe(0);
       expect(service.getDispatchMeta("actions.unknown" as ActionId)).toBeNull();
     });

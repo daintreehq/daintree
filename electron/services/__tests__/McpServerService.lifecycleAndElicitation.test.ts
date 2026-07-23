@@ -761,9 +761,16 @@ describe("McpServerService", () => {
 
     await service.start(window);
     // Every `danger: "confirm"` call is dispatched UNCONFIRMED to the renderer
-    // bridge so the human approves it host-side — regardless of whether the
-    // client advertises `elicitation.form` (#11342).
-    const { client, transport } = await connectClient(service.currentPort!);
+    // bridge so the human approves it host-side — even for a client that
+    // advertises `elicitation.form` and would auto-accept (#11342). The
+    // capability + handler are installed precisely so `onElicit` being never
+    // called is a genuine regression guard: reintroducing the vulnerable branch
+    // would invoke it and flip the dispatch to confirmed:true.
+    const onElicit = vi.fn(async (): Promise<ElicitResult> => ({ action: "accept", content: {} }));
+    const { client, transport } = await connectClient(service.currentPort!, undefined, {
+      capabilities: { elicitation: { form: {} } },
+      onElicit,
+    });
     transports.push(transport);
 
     const unconfirmed = getTextResult(
@@ -773,6 +780,7 @@ describe("McpServerService", () => {
       })
     );
 
+    expect(onElicit).not.toHaveBeenCalled();
     expect(unconfirmed.isError).toBe(true);
     expect(unconfirmed.content[0]).toMatchObject({ type: "text" });
     expect(unconfirmed.content[0].text).toContain("CONFIRMATION_REQUIRED");
@@ -1065,11 +1073,13 @@ describe("McpServerService", () => {
       expect(records[0].confirmationDecision).toBe("rejected");
     });
 
-    it("returns CONFIRMATION_REQUIRED when no host window can show the dialog — never falls back to elicitation", async () => {
-      // No renderer approval available: the host confirmation surface returns
-      // CONFIRMATION_REQUIRED. The client advertises `elicitation.form` and
+    it("records confirmation-pending when the host returns CONFIRMATION_REQUIRED — never falls back to elicitation", async () => {
+      // The host confirmation surface returns CONFIRMATION_REQUIRED (the human
+      // was not reached). The client advertises `elicitation.form` and
       // auto-accepts, but the server must NOT fall back to it to self-approve —
       // that fallback would be the exact self-approval vulnerability (#11342).
+      // (The RendererBridgeUnavailableError no-window synthesis path itself is
+      // covered end-to-end in sessionServer.test.ts.)
       const dispatchMock = createDestructiveDispatchMock();
       const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
         action: "accept",
@@ -1162,6 +1172,12 @@ describe("McpServerService", () => {
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("EXECUTION_ERROR");
       expect(dispatchMock).toHaveBeenCalledTimes(1);
+      // The dispatch reached the renderer UNCONFIRMED — approval came from the
+      // host envelope, never a client-forged confirmed:true (#11342).
+      expect(dispatchMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ actionId: "worktree.delete", confirmed: false })
+      );
 
       const records = readAuditRecords(service);
       expect(records).toHaveLength(1);

@@ -290,6 +290,9 @@ export type ActionErrorCode =
   | "EXECUTION_ERROR"
   | "USER_REJECTED"
   | "CONFIRMATION_TIMEOUT"
+  // Legacy: no longer produced since the elicitation-confirm path was removed
+  // (#11342). Retained for compatibility so old persisted audit records still
+  // type-check and render; do not reuse for new outcomes.
   | "ELICITATION_FAILED"
   | "BINDING_STALE"
   | "PLUGIN_UNLOADED"
@@ -305,8 +308,13 @@ export interface ActionError {
 export interface ActionDispatchOptions {
   source?: ActionSource;
   /**
-   * For actions with danger: "confirm", this must be true to execute.
-   * Agent sources MUST explicitly set this flag to confirm destructive actions.
+   * Trusted host attestation that a `danger: "confirm"` action was approved —
+   * NOT a client/agent-supplied value. For MCP dispatch it is set true only by
+   * the renderer AFTER the user approves the native ConfirmDialog, or by a
+   * host-issued native automation grant. An external client's request always
+   * arrives unconfirmed; never forward a client field into this flag — doing so
+   * was the #11342 self-approval vulnerability. Absent/false ⇒ the action is
+   * routed through host confirmation before it can execute.
    */
   confirmed?: boolean;
   /**

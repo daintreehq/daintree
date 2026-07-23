@@ -1058,6 +1058,13 @@ describe("McpServerService", () => {
           title: "Delete Worktree",
           description: "Delete a worktree",
           danger: "confirm",
+          // A resolvable outputSchema makes structuredContent a
+          // manifest-dependent observable: it is emitted only when the pinned
+          // manifest ENTRY resolved (`buildStructuredContent(entry, …)`). This
+          // re-arms the original #7002 guard — if `lookupManifestEntry` regressed
+          // to re-reading the deliberately-empty shared cache, the entry would be
+          // undefined and structuredContent would silently drop.
+          outputSchema: { type: "object", properties: { deleted: { type: "boolean" } } },
         }),
       ],
       dispatchAction: dispatchMock,
@@ -1079,12 +1086,10 @@ describe("McpServerService", () => {
     );
     transports.push(transport);
 
-    const result = getTextResult(
-      await client.callTool({
-        name: "worktree.delete",
-        arguments: { worktreeId: "wt-123" },
-      })
-    );
+    const result = (await client.callTool({
+      name: "worktree.delete",
+      arguments: { worktreeId: "wt-123" },
+    })) as TextToolResult & { structuredContent?: Record<string, unknown> };
 
     // The client's elicitation handler is never consulted; the confirm is
     // resolved by the pinned renderer, which received an UNCONFIRMED dispatch.
@@ -1094,6 +1099,9 @@ describe("McpServerService", () => {
     expect(dispatchMock).toHaveBeenCalledWith(
       expect.objectContaining({ actionId: "worktree.delete", confirmed: false })
     );
+    // Proves the pinned manifest entry resolved (#7002) — not just that the
+    // dispatch was unconfirmed (#11342).
+    expect(result.structuredContent).toEqual({ deleted: true });
   });
 
   it("external (api-key) sessions keep most-recently-focused-view fallback even when help routing is wired (#7002)", async () => {

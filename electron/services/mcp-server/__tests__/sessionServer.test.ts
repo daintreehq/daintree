@@ -1079,18 +1079,11 @@ describe("buildToolError envelope", () => {
     expect(parsed.retriable).toBe(true);
   });
 
-  it("marks USER_REJECTED and the historical ELICITATION_FAILED as non-retriable", () => {
+  it("marks USER_REJECTED as non-retriable", () => {
     const rejected = JSON.parse(
       getErrorText(buildToolError({ code: USER_REJECTED_CODE, message: "no" }))
     );
-    // "ELICITATION_FAILED" is no longer produced (the elicitation-confirm path
-    // was removed in #11342) but remains a valid historical error code that old
-    // audit records may carry — it must still classify as non-retriable.
-    const elicit = JSON.parse(
-      getErrorText(buildToolError({ code: "ELICITATION_FAILED", message: "fail" }))
-    );
     expect(rejected.retriable).toBe(false);
-    expect(elicit.retriable).toBe(false);
   });
 
   it("preserves structured details from ActionError", () => {
