@@ -4,6 +4,8 @@ import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   resilientAtomicWriteFile,
+  resilientRename,
+  resilientRenameSync,
   tightenDirPermissions,
   OWNER_RW_FILE_MODE,
   OWNER_RWX_DIR_MODE,
@@ -108,6 +110,42 @@ function evictRecords(
 }
 
 /**
+ * Thrown by {@link normalizeRecords} when a readable, well-formed JSON document
+ * has a root that is not an array (e.g. `{}` or `null`). This is proven content
+ * corruption — bytes that can never yield records — so it routes through the
+ * same quarantine path as a `JSON.parse` `SyntaxError`, and is deliberately
+ * distinct from a transient filesystem error (EACCES/EIO/EMFILE), which must
+ * never trigger quarantine or an overwrite. Mirrors `GlobalFileStore.getRecipes`
+ * throwing on a non-array root rather than silently degrading to `[]`.
+ */
+class InvalidSessionHistoryShapeError extends Error {
+  constructor() {
+    super("session history root is not an array");
+    this.name = "InvalidSessionHistoryShapeError";
+  }
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    error != null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
+/**
+ * Proven corruption: a readable file whose bytes can never be valid journal
+ * content — malformed JSON (`SyntaxError`) or a well-formed non-array root. Only
+ * these are quarantined and treated as a fresh-but-empty journal. Every other
+ * read failure (EACCES/EIO/EMFILE/EBUSY/…) is transient/unknown: the file may be
+ * intact but temporarily unreadable, so it must NOT be quarantined or overwritten.
+ */
+function isCorruptionError(error: unknown): boolean {
+  return error instanceof SyntaxError || error instanceof InvalidSessionHistoryShapeError;
+}
+
+/**
  * Normalize parsed journal JSON into records, dropping the legacy `snapshot`
  * key. The exit-snapshot feature (#10850/#10855) was removed; journals written
  * while it was enabled still carry a `snapshot` tail on disk. Stripping it on
@@ -115,9 +153,14 @@ function evictRecords(
  * `agentSessionHistory.list` action, whose raw result is serialized without
  * `resultSchema` parsing — and the next `persistAgentSession`/`pruneAgentSessions`
  * rewrite purges it from disk, so the file self-heals without a versioned migration.
+ *
+ * Throws {@link InvalidSessionHistoryShapeError} on a non-array root so the
+ * caller can quarantine the corrupt file instead of silently overwriting it.
  */
 function normalizeRecords(parsed: unknown): AgentSessionRecord[] {
-  if (!Array.isArray(parsed)) return [];
+  if (!Array.isArray(parsed)) {
+    throw new InvalidSessionHistoryShapeError();
+  }
   return parsed.map((raw) => {
     if (raw && typeof raw === "object" && "snapshot" in raw) {
       const { snapshot: _snapshot, ...rest } = raw as Record<string, unknown>;
@@ -175,43 +218,152 @@ function refreshCacheAfterWrite(filePath: string, records: AgentSessionRecord[])
   }
 }
 
+/**
+ * Tri-state read outcome (per #11348 / lesson #11130 — an ambiguous read must
+ * never be treated as "safe to overwrite"):
+ * - `ok` with `records` — the journal was read (or is genuinely absent, or was
+ *   corrupt-and-successfully-quarantined). Safe to treat as ground truth.
+ * - `unreadable` — the file exists but could not be read (transient fs error,
+ *   or an unrecoverable failed quarantine). A read-modify-write MUST abort on
+ *   this rather than overwrite the still-present on-disk records with `[]`.
+ */
+type SessionHistoryReadResult =
+  { status: "ok"; records: AgentSessionRecord[] } | { status: "unreadable"; error: unknown };
+
+/**
+ * Best-effort archive of a corrupt journal to a timestamped sidecar, matching
+ * the sibling stores (`GlobalFileStore`/`ProjectFileStore`). Returns whether the
+ * rename succeeded: a FAILED quarantine must be surfaced as `unreadable` (never
+ * "empty and safe to overwrite"), so the caller preserves the corrupt bytes for
+ * a later retry instead of clobbering the file we failed to move aside.
+ */
+async function quarantineCorruptJournal(filePath: string, error: unknown): Promise<boolean> {
+  console.error("[agentSessionHistory] Corrupt session journal:", error);
+  try {
+    const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
+    await resilientRename(filePath, quarantinePath);
+    console.warn(`[agentSessionHistory] Corrupted session journal moved to ${quarantinePath}`);
+    return true;
+  } catch (renameError) {
+    if (isMissingPathError(renameError)) {
+      // The corrupt file is already gone — a concurrent read (listAgentSessions
+      // is not queued) quarantined it, or it was removed out-of-band. There's
+      // nothing left to preserve, so report success and let the caller start
+      // from a fresh empty journal rather than spuriously refusing to write.
+      return true;
+    }
+    console.error(
+      "[agentSessionHistory] Failed to quarantine corrupt session journal:",
+      renameError
+    );
+    return false;
+  }
+}
+
+function quarantineCorruptJournalSync(filePath: string, error: unknown): boolean {
+  console.error("[agentSessionHistory] Corrupt session journal:", error);
+  try {
+    const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
+    resilientRenameSync(filePath, quarantinePath);
+    console.warn(`[agentSessionHistory] Corrupted session journal moved to ${quarantinePath}`);
+    return true;
+  } catch (renameError) {
+    if (isMissingPathError(renameError)) {
+      // Already quarantined/removed by a concurrent path — treat as handled.
+      return true;
+    }
+    console.error(
+      "[agentSessionHistory] Failed to quarantine corrupt session journal:",
+      renameError
+    );
+    return false;
+  }
+}
+
+/**
+ * The error a read-modify-write raises when it refuses to overwrite a journal it
+ * could not read. Rejecting (rather than silently resolving) is load-bearing:
+ * `journalAgentSession` treats a resolved `persistAgentSession` as a completed
+ * write — it emits `agent-session:recorded` and consumes the lifecycle ledger's
+ * exactly-once reservation. A silent abort would fire that event and burn the
+ * reservation despite writing nothing, blocking any retry. Rejection instead
+ * rescinds the reservation and suppresses the event, so a later capture retries.
+ */
+function unreadableJournalError(error: unknown): Error {
+  return new Error(
+    "Refusing to overwrite the agent session journal: it exists but could not be read " +
+      "(transient filesystem error or unrecoverable quarantine); preserving on-disk records",
+    { cause: error }
+  );
+}
+
 // NOTE: on a cache hit these readers return the cached array BY REFERENCE (that
 // shared-instance reuse is the whole point — a copy on every read would defeat
 // the cache). Callers MUST treat the result as read-only; never sort/push/splice
 // it in place. The production caller, listAgentSessions(), is safe: evictRecords()
 // only reads the input and returns freshly-built arrays.
-export function readSessionHistorySync(userData?: string): AgentSessionRecord[] {
+function readSessionHistoryResultSync(userData?: string): SessionHistoryReadResult {
   const filePath = getSessionHistoryPath(userData);
-  if (!filePath) return [];
+  if (!filePath) return { status: "ok", records: [] };
   try {
     const s = statSync(filePath);
     const cached = readCache(filePath, s.size, s.mtimeMs);
-    if (cached) return cached;
+    if (cached) return { status: "ok", records: cached };
     const content = readFileSync(filePath, "utf8");
     const records = normalizeRecords(JSON.parse(content));
     writeCache(filePath, records, s.size, s.mtimeMs);
-    return records;
-  } catch {
+    return { status: "ok", records };
+  } catch (error) {
+    // Never let a failed read leave a `[]` cached as if it were the journal.
     historyCache.delete(filePath);
-    return [];
+    if (isMissingPathError(error)) return { status: "ok", records: [] };
+    if (isCorruptionError(error)) {
+      return quarantineCorruptJournalSync(filePath, error)
+        ? { status: "ok", records: [] }
+        : { status: "unreadable", error };
+    }
+    console.warn("[agentSessionHistory] Failed to read session journal:", error);
+    return { status: "unreadable", error };
   }
 }
 
-export async function readSessionHistory(userData?: string): Promise<AgentSessionRecord[]> {
+async function readSessionHistoryResult(userData?: string): Promise<SessionHistoryReadResult> {
   const filePath = getSessionHistoryPath(userData);
-  if (!filePath) return [];
+  if (!filePath) return { status: "ok", records: [] };
   try {
     const s = await stat(filePath);
     const cached = readCache(filePath, s.size, s.mtimeMs);
-    if (cached) return cached;
+    if (cached) return { status: "ok", records: cached };
     const content = await readFile(filePath, "utf8");
     const records = normalizeRecords(JSON.parse(content));
     writeCache(filePath, records, s.size, s.mtimeMs);
-    return records;
-  } catch {
+    return { status: "ok", records };
+  } catch (error) {
     historyCache.delete(filePath);
-    return [];
+    if (isMissingPathError(error)) return { status: "ok", records: [] };
+    if (isCorruptionError(error)) {
+      return (await quarantineCorruptJournal(filePath, error))
+        ? { status: "ok", records: [] }
+        : { status: "unreadable", error };
+    }
+    console.warn("[agentSessionHistory] Failed to read session journal:", error);
+    return { status: "unreadable", error };
   }
+}
+
+// Read-only consumers (listAgentSessions and the MCP list action) collapse an
+// unreadable journal to `[]` — a transient failure degrades the displayed list
+// for one read without touching disk. The `unreadable` outcome is never cached,
+// so the next read re-attempts the file. The read-modify-write paths use
+// readSessionHistoryResult directly and ABORT on `unreadable`.
+export function readSessionHistorySync(userData?: string): AgentSessionRecord[] {
+  const result = readSessionHistoryResultSync(userData);
+  return result.status === "ok" ? result.records : [];
+}
+
+export async function readSessionHistory(userData?: string): Promise<AgentSessionRecord[]> {
+  const result = await readSessionHistoryResult(userData);
+  return result.status === "ok" ? result.records : [];
 }
 
 export async function persistAgentSession(
@@ -230,8 +382,17 @@ export async function persistAgentSession(
     const now = Date.now();
     const fullRecord: AgentSessionRecord = { ...record, savedAt: now };
 
-    const existing = await readSessionHistory(userData);
-    const updated = evictRecords([fullRecord, ...existing], now, retentionDaysToMs(retentionDays));
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      // The journal exists but couldn't be read — overwriting now would destroy
+      // the on-disk records. Abort so a later capture retries once it's readable.
+      throw unreadableJournalError(existing.error);
+    }
+    const updated = evictRecords(
+      [fullRecord, ...existing.records],
+      now,
+      retentionDaysToMs(retentionDays)
+    );
 
     await resilientAtomicWriteFile(filePath, JSON.stringify(updated, null, 2), "utf-8", {
       mode: OWNER_RW_FILE_MODE,
@@ -268,8 +429,12 @@ export async function pruneAgentSessions(
   if (!filePath) return;
 
   await enqueueWrite(async () => {
-    const existing = await readSessionHistory(userData);
-    const pruned = evictRecords(existing, Date.now(), retentionDaysToMs(retentionDays));
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      // Don't prune to `[]` over a journal we couldn't read; abort and retry later.
+      throw unreadableJournalError(existing.error);
+    }
+    const pruned = evictRecords(existing.records, Date.now(), retentionDaysToMs(retentionDays));
     await resilientAtomicWriteFile(filePath, JSON.stringify(pruned, null, 2), "utf-8", {
       mode: OWNER_RW_FILE_MODE,
     });
@@ -296,9 +461,13 @@ export async function rewriteAgentSessionPathsForProject(
   if (!filePath || !projectId || !oldRoot || !newRoot || oldRoot === newRoot) return;
 
   await enqueueWrite(async () => {
-    const existing = await readSessionHistory(userData);
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      // Rebasing an unreadable journal would rewrite it from `[]`; abort instead.
+      throw unreadableJournalError(existing.error);
+    }
     let changed = false;
-    const rewritten = existing.map((r) => {
+    const rewritten = existing.records.map((r) => {
       if (r.projectId !== projectId) return r;
       const nextWorktreeId =
         r.worktreeId !== null ? rebaseAbsolutePath(r.worktreeId, oldRoot, newRoot) : r.worktreeId;
@@ -319,18 +488,32 @@ export async function clearAgentSessions(worktreeId?: string, userData?: string)
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return;
 
+  // Guard the destructive scope: ONLY an explicit `undefined` means "clear all".
+  // A provided-but-empty worktreeId is a malformed scope (e.g. from the
+  // unvalidated IPC/MCP boundary) — refuse it rather than let `!worktreeId`
+  // silently escalate a scoped clear into wiping every worktree's history
+  // (the #7880 "no silent fallback default on a destructive submit" rule).
+  if (worktreeId === "") {
+    throw new Error("clearAgentSessions: worktreeId must be a non-empty string or undefined");
+  }
+
   // Share the write queue with persistAgentSession so a clear can't interleave
   // with an in-flight persist's read-modify-write and resurrect a cleared record.
   await enqueueWrite(async () => {
-    if (!worktreeId) {
+    if (worktreeId === undefined) {
       // Clear all
       await resilientAtomicWriteFile(filePath, "[]", "utf-8", { mode: OWNER_RW_FILE_MODE });
       refreshCacheAfterWrite(filePath, []);
       return;
     }
 
-    const existing = await readSessionHistory(userData);
-    const filtered = existing.filter((r) => r.worktreeId !== worktreeId);
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      // Clearing one worktree must not wipe every other worktree's records when
+      // the read fails; abort so the untouched journal survives.
+      throw unreadableJournalError(existing.error);
+    }
+    const filtered = existing.records.filter((r) => r.worktreeId !== worktreeId);
     await resilientAtomicWriteFile(filePath, JSON.stringify(filtered, null, 2), "utf-8", {
       mode: OWNER_RW_FILE_MODE,
     });

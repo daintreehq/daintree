@@ -280,6 +280,31 @@ describe("agentSessionHistory", () => {
     expect(records).toEqual([]);
   });
 
+  it("clearAgentSessions rejects an empty-string worktreeId without wiping history", async () => {
+    const filePath = getSessionHistoryPath(userDataDir)!;
+    await persistAgentSession(
+      { sessionId: "s1", agentId: "claude", worktreeId: "wt-1", title: null, projectId: null },
+      userDataDir
+    );
+    await persistAgentSession(
+      { sessionId: "s2", agentId: "gemini", worktreeId: "wt-2", title: null, projectId: null },
+      userDataDir
+    );
+    const before = await fsp.readFile(filePath, "utf8");
+
+    // An empty scope must NOT escalate to clear-all (#7880 fallback-default rule).
+    await expect(clearAgentSessions("", userDataDir)).rejects.toThrow(
+      /non-empty string or undefined/
+    );
+
+    // Both records survive, byte-for-byte.
+    expect(await fsp.readFile(filePath, "utf8")).toBe(before);
+    expect((await readSessionHistory(userDataDir)).map((r) => r.sessionId).sort()).toEqual([
+      "s1",
+      "s2",
+    ]);
+  });
+
   it("clearAgentSessions clears only specified worktree", async () => {
     await persistAgentSession(
       { sessionId: "s1", agentId: "claude", worktreeId: "wt-1", title: null, projectId: null },
@@ -571,19 +596,85 @@ describe("agentSessionHistory", () => {
     });
   });
 
-  it("handles corrupt JSON gracefully", async () => {
+  async function quarantineSidecars(dir: string): Promise<string[]> {
+    const entries = await fsp.readdir(dir);
+    return entries.filter((f) => f.includes(".corrupted."));
+  }
+
+  it("quarantines corrupt JSON instead of silently dropping it, then recovers", async () => {
     const filePath = getSessionHistoryPath(userDataDir)!;
     await fsp.writeFile(filePath, "not json at all");
 
     const records = await readSessionHistory(userDataDir);
     expect(records).toEqual([]);
 
-    // Can still persist after corruption
+    // The corrupt bytes are preserved to a `.corrupted.<ts>` sidecar, not lost.
+    const sidecars = await quarantineSidecars(userDataDir);
+    expect(sidecars).toHaveLength(1);
+    expect(await fsp.readFile(path.join(userDataDir, sidecars[0]), "utf8")).toBe("not json at all");
+    // The original path was moved aside, so a fresh journal can be written.
+    await expect(fsp.access(filePath)).rejects.toThrow();
+
+    // Can still persist after corruption — a fresh single-record journal.
     await persistAgentSession(
       { sessionId: "recovery", agentId: "claude", worktreeId: null, title: null, projectId: null },
       userDataDir
     );
     const after = await readSessionHistory(userDataDir);
     expect(after).toHaveLength(1);
+    expect(after[0].sessionId).toBe("recovery");
+  });
+
+  it.each(["{}", "null", '{"records":[]}', '"a string"'])(
+    "quarantines a well-formed but non-array journal root: %s",
+    async (rootJson) => {
+      const filePath = getSessionHistoryPath(userDataDir)!;
+      await fsp.writeFile(filePath, rootJson);
+
+      expect(await readSessionHistory(userDataDir)).toEqual([]);
+      expect(await quarantineSidecars(userDataDir)).toHaveLength(1);
+      // Sync read path quarantines identically (the sidecar already exists, so a
+      // second read simply sees ENOENT and returns []).
+      expect(readSessionHistorySync(userDataDir)).toEqual([]);
+    }
+  );
+
+  it("returns [] for an absent journal without creating a quarantine sidecar (ENOENT)", async () => {
+    // No file written — a genuinely-empty history must never be quarantined.
+    expect(await readSessionHistory(userDataDir)).toEqual([]);
+    expect(readSessionHistorySync(userDataDir)).toEqual([]);
+    expect(await quarantineSidecars(userDataDir)).toEqual([]);
+  });
+
+  it.each(["sync not json", "{}", "null"])(
+    "readSessionHistorySync quarantines a corrupt/non-array journal (sync path): %s",
+    async (badContent) => {
+      // Drives the SYNC reader (readFileSync/normalizeRecords/resilientRenameSync)
+      // directly — no prior async read moves the file first.
+      const filePath = getSessionHistoryPath(userDataDir)!;
+      await fsp.writeFile(filePath, badContent);
+
+      expect(readSessionHistorySync(userDataDir)).toEqual([]);
+
+      const sidecars = await quarantineSidecars(userDataDir);
+      expect(sidecars).toHaveLength(1);
+      expect(await fsp.readFile(path.join(userDataDir, sidecars[0]), "utf8")).toBe(badContent);
+      await expect(fsp.access(filePath)).rejects.toThrow();
+    }
+  );
+
+  it("persistAgentSession quarantines a corrupt journal, then writes a fresh one", async () => {
+    const filePath = getSessionHistoryPath(userDataDir)!;
+    await fsp.writeFile(filePath, "}{ not json");
+
+    await persistAgentSession(
+      { sessionId: "fresh", agentId: "claude", worktreeId: "wt-1", title: null, projectId: null },
+      userDataDir
+    );
+
+    // Corrupt bytes preserved to a sidecar; the live journal holds only the new record.
+    expect(await quarantineSidecars(userDataDir)).toHaveLength(1);
+    const after = await readSessionHistory(userDataDir);
+    expect(after.map((r) => r.sessionId)).toEqual(["fresh"]);
   });
 });
