@@ -48,6 +48,10 @@ import { isInRepoRecipeId } from "../../shared/utils/recipeFilename.js";
 
 import { computeFrecencyScore, FRECENCY_COLD_START } from "./frecency.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
+import { rewriteProjectStatePaths } from "./projectPathStateRewrite.js";
+import { rewriteAgentSessionPathsForProject } from "./pty/agentSessionHistory.js";
+import { getPendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
+import { repairMovedSubmodulePaths } from "./git/submodulePathRepair.js";
 
 export const DEFAULT_PROJECT_EMOJI = "🌲";
 
@@ -74,12 +78,15 @@ function isEnoent(error: unknown): boolean {
  * a repair failure must not fail the relocation and strand the user with an
  * unregistered project.
  */
-async function repairLinkedWorktrees(projectPath: string): Promise<void> {
+async function repairLinkedWorktrees(oldPath: string, newPath: string): Promise<void> {
   try {
-    await new GitService(projectPath).repairWorktrees();
+    await new GitService(newPath).repairWorktrees();
   } catch (error) {
-    logError(`Failed to repair linked worktrees for ${projectPath}`, error);
+    logError(`Failed to repair linked worktrees for ${newPath}`, error);
   }
+  // `git worktree repair` ignores submodules; rebase any absolute submodule
+  // pointers the move left stale ourselves (#11282). Never throws.
+  await repairMovedSubmodulePaths(oldPath, newPath);
 }
 
 /**
@@ -506,7 +513,8 @@ export class ProjectStore {
     });
 
     this.pruneInRepoRecipeHashes(anchored.path);
-    await repairLinkedWorktrees(normalizedPath);
+    await this.migratePathBearingStateAfterMove(anchorId, anchored.path, normalizedPath);
+    await repairLinkedWorktrees(anchored.path, normalizedPath);
 
     return adopted;
   }
@@ -838,6 +846,52 @@ export class ProjectStore {
     return missingIds;
   }
 
+  /**
+   * Rebase every piece of Daintree-owned path-bearing state that a moved or
+   * renamed project folder leaves stale (#11282, phase 2). The project id is
+   * immutable (phase 1), so id-keyed files — the state dir, settings, secure
+   * env, hibernation token — stay reachable; but the absolute paths INSIDE them
+   * (panel cwds, worktree ids, file-panel paths, MRU entries, captured session
+   * dirs) and the path-KEYED window-state store still point at the old folder,
+   * and are rewritten here.
+   *
+   * Best-effort by design: the DB row has already moved and is authoritative, so
+   * a failure in any ancillary surface is logged rather than surfaced as a
+   * relocation error (reporting failure after the row moved would misrepresent
+   * the real state). Each surface is independent so one failure can't skip the
+   * others. Callers only reach here for a genuine move of a non-active project —
+   * both adoption and explicit relocation guard the current project.
+   */
+  private async migratePathBearingStateAfterMove(
+    projectId: string,
+    oldPath: string,
+    newPath: string
+  ): Promise<void> {
+    const surfaces: Array<Promise<unknown>> = [
+      this.enqueueProjectStateUpdate(projectId, (existing) => {
+        if (!existing) return null;
+        const rewritten = rewriteProjectStatePaths(existing, oldPath, newPath);
+        // Same object reference back ⇒ nothing rebased ⇒ skip the disk write.
+        return rewritten === existing ? null : rewritten;
+      }),
+      (async () => {
+        // Dynamic import breaks the ProjectStore ⇄ windowState cycle at module
+        // eval (windowState imports the projectStore singleton).
+        const { rekeyWindowStateForPath } = await import("../windowState.js");
+        rekeyWindowStateForPath(oldPath, newPath);
+      })(),
+      rewriteAgentSessionPathsForProject(projectId, oldPath, newPath),
+      getPendingHelpHibernationStore().rewriteProjectPath(projectId, oldPath, newPath),
+    ];
+
+    const results = await Promise.allSettled(surfaces);
+    for (const result of results) {
+      if (result.status === "rejected") {
+        logError(`Failed to migrate path-bearing state for ${projectId}`, result.reason);
+      }
+    }
+  }
+
   async relocateProject(projectId: string, newPath: string): Promise<Project> {
     const project = this.getProjectById(projectId);
     if (!project) {
@@ -853,9 +907,10 @@ export class ProjectStore {
     // A project id is immutable once registered, so reattaching a folder is a
     // path update on the existing row — not a new identity (#11282). Everything
     // keyed by the id (state dir, settings, secure env, panel/terminal ids,
-    // Assistant hibernation, session journal) therefore stays reachable with no
-    // copying, re-keying or cleanup at all, and there is no half-migrated state
-    // for a failure to strand.
+    // Assistant hibernation, session journal) stays reachable with no copying or
+    // re-keying of the containers. The absolute paths stored INSIDE that state,
+    // plus the path-keyed window-state store, are rebased separately by
+    // `migratePathBearingStateAfterMove` below (phase 2).
     const existingAtNewPath = await this.getProjectByPath(canonicalNewPath);
     if (existingAtNewPath && existingAtNewPath.id !== projectId) {
       throw new Error(`A project already exists at that location: ${existingAtNewPath.name}`);
@@ -871,7 +926,8 @@ export class ProjectStore {
       // The old path no longer backs this project — drop its cached recipe
       // hashes so they don't linger.
       this.pruneInRepoRecipeHashes(oldPath);
-      await repairLinkedWorktrees(canonicalNewPath);
+      await this.migratePathBearingStateAfterMove(projectId, oldPath, canonicalNewPath);
+      await repairLinkedWorktrees(oldPath, canonicalNewPath);
     }
 
     return updatedProject;

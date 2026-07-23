@@ -302,7 +302,11 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     }
 
     const newPath = result.filePaths[0];
-    return projectStore.relocateProject(projectId, newPath);
+    const relocated = await projectStore.relocateProject(projectId, newPath);
+    // Every cached view of this project replaces it by immutable id, so the new
+    // path reaches windows other than the one that ran the locate flow (#11282).
+    broadcastToRenderer(CHANNELS.PROJECT_UPDATED, relocated);
+    return relocated;
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_LOCATE, handleProjectLocate));
 

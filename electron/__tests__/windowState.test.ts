@@ -62,7 +62,11 @@ vi.mock("../services/ProjectStore.js", () => ({
   },
 }));
 
-import { createWindowWithState, pruneWindowStateForPath } from "../windowState.js";
+import {
+  createWindowWithState,
+  pruneWindowStateForPath,
+  rekeyWindowStateForPath,
+} from "../windowState.js";
 
 describe("createWindowWithState", () => {
   // Helper: fire the deferred 'show' handler (fullscreen is applied after show)
@@ -886,6 +890,47 @@ describe("createWindowWithState", () => {
       windowStatesStoreMock.set.mockClear();
 
       pruneWindowStateForPath("/missing");
+
+      expect(windowStatesStoreMock.set).not.toHaveBeenCalled();
+    });
+
+    it("rekeyWindowStateForPath moves bounds to the new key, preserving others and __legacy__", () => {
+      const oldEntry = { x: 1, y: 2, width: 800, height: 600, isMaximized: false };
+      const otherEntry = { x: 9, y: 9, width: 400, height: 300, isMaximized: false };
+      const getState = makeStateful({
+        "/old/project": oldEntry,
+        "/other": otherEntry,
+        __legacy__: otherEntry,
+      });
+
+      rekeyWindowStateForPath("/old/project", "/new/renamed");
+
+      const state = getState();
+      expect(state["/old/project"]).toBeUndefined();
+      expect(state["/new/renamed"]).toEqual(oldEntry);
+      expect(state["/other"]).toBeDefined();
+      expect(state["__legacy__"]).toBeDefined();
+      const lastSet = windowStatesStoreMock.set.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+      expect(Object.values(lastSet)).not.toContain(undefined);
+    });
+
+    it("rekeyWindowStateForPath lets the moved bounds win over a stale destination entry", () => {
+      const oldEntry = { x: 1, y: 2, width: 800, height: 600, isMaximized: false };
+      const staleAtNew = { x: 5, y: 5, width: 100, height: 100, isMaximized: false };
+      const getState = makeStateful({ "/old": oldEntry, "/new": staleAtNew });
+
+      rekeyWindowStateForPath("/old", "/new");
+
+      expect(getState()["/new"]).toEqual(oldEntry);
+      expect(getState()["/old"]).toBeUndefined();
+    });
+
+    it("rekeyWindowStateForPath is a no-op when the old path is absent or paths match", () => {
+      makeStateful({ "/b": { x: 0, y: 0, width: 800, height: 600 } });
+      windowStatesStoreMock.set.mockClear();
+
+      rekeyWindowStateForPath("/missing", "/new");
+      rekeyWindowStateForPath("/b", "/b");
 
       expect(windowStatesStoreMock.set).not.toHaveBeenCalled();
     });
