@@ -1245,9 +1245,6 @@ interface FileDecorationProviderDescriptor {
     scopes?: string[];
 }
 
-/** Notification type */
-type NotificationType = "info" | "success" | "error" | "warning";
-
 declare const BUILT_IN_AGENT_IDS: readonly ["claude", "opencode", "aider", "gemini", "antigravity", "codex", "grok", "cursor", "copilot", "goose", "amp", "crush", "qwen", "kimi", "interpreter", "mistral", "kiro", "daintree-assistant"];
 type BuiltInAgentId = (typeof BUILT_IN_AGENT_IDS)[number];
 type AgentKeyAction = `agent.${BuiltInAgentId}`;
@@ -1340,6 +1337,11 @@ interface PluginActionManifestEntry {
  *   not exposed to plugins; `dispatch()` would return `RESTRICTED` / `NOT_FOUND`.
  */
 type PluginCanDispatchResult = "ok" | "confirm" | "restricted";
+
+type KeyScope = "global" | "portal" | "worktreeGrid" | "dev-preview";
+
+/** Notification type */
+type NotificationType = "info" | "success" | "error" | "warning";
 
 /** Agent lifecycle state: idle | working | waiting | directing | completed | exited */
 type AgentState = "idle" | "working" | "waiting" | "directing" | "completed" | "exited";
@@ -1496,7 +1498,7 @@ interface MenuItemContribution {
 interface KeybindingContribution {
     actionId: ActionId;
     combo: string;
-    scope?: string;
+    scope?: KeyScope;
     description?: string;
     when?: string;
 }
