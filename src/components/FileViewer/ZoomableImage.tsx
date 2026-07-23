@@ -118,7 +118,9 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
         onDoubleClick={resetView}
         style={TRANSPARENCY_CHECKERBOARD_STYLE}
         className={cn(
-          "flex h-full min-h-0 w-full flex-1 items-center justify-center overflow-hidden",
+          // select-none so drag-panning never starts a text/image selection that
+          // would paint the selection highlight over the image (#11325).
+          "flex h-full min-h-0 w-full flex-1 select-none items-center justify-center overflow-hidden",
           isZoomed ? "cursor-grab" : "cursor-default"
         )}
       >
