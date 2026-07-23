@@ -105,6 +105,11 @@ function sanitizeExpandedPaths(value: unknown): string[] | undefined {
   return [...seen];
 }
 
+/** Plain-object guard so untrusted JSON can be field-checked without assertions. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** A snapshot directory key: "" is the worktree root; anything else must be safe. */
 function isSnapshotDirPath(value: unknown): value is string {
   return value === "" || isSafeRelativePath(value);
@@ -139,9 +144,8 @@ function isSnapshotNodeName(value: unknown): value is string {
  * keys (`FlatTreeRow.path` doubles as the key).
  */
 function sanitizeTreeSnapshot(value: unknown): FileBrowserTreeSnapshot | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const candidate = value as Record<string, unknown>;
-  const { worktreeId, rootPath, listings } = candidate;
+  if (!isRecord(value)) return undefined;
+  const { worktreeId, rootPath, listings } = value;
   if (
     typeof worktreeId !== "string" ||
     worktreeId.length === 0 ||
@@ -157,8 +161,8 @@ function sanitizeTreeSnapshot(value: unknown): FileBrowserTreeSnapshot | undefin
   const seenDirs = new Set<string>();
   const sanitizedListings: FileBrowserTreeSnapshot["listings"] = [];
   for (const entry of listings) {
-    if (typeof entry !== "object" || entry === null) return undefined;
-    const { dirPath, nodes } = entry as Record<string, unknown>;
+    if (!isRecord(entry)) return undefined;
+    const { dirPath, nodes } = entry;
     if (!isSnapshotDirPath(dirPath) || seenDirs.has(dirPath)) return undefined;
     seenDirs.add(dirPath);
     if (!Array.isArray(nodes)) return undefined;
@@ -170,8 +174,8 @@ function sanitizeTreeSnapshot(value: unknown): FileBrowserTreeSnapshot | undefin
     const seenNames = new Set<string>();
     const sanitizedNodes: FileBrowserTreeSnapshot["listings"][number]["nodes"] = [];
     for (const node of nodes) {
-      if (typeof node !== "object" || node === null) return undefined;
-      const { name, path, isDirectory } = node as Record<string, unknown>;
+      if (!isRecord(node)) return undefined;
+      const { name, path, isDirectory } = node;
       if (!isSnapshotNodeName(name) || seenNames.has(name)) return undefined;
       seenNames.add(name);
       if (path !== (dirPath === "" ? name : `${dirPath}/${name}`)) return undefined;
