@@ -12,6 +12,12 @@ export interface ProcessEntry {
   cleanupTimeout: NodeJS.Timeout | null;
   windowIds: Set<number>;
   projectPath: string;
+  /**
+   * Immutable project id (`resolveProjectIdForPath`), resolved once at entry
+   * construction. Sent on every `load-project` and used for id-keyed broadcasts
+   * so a relocated project's events aren't dropped by a stale path hash (#11282).
+   */
+  projectId: string;
   directPortViews: Map<number, WebContents>;
 }
 

@@ -302,4 +302,48 @@ describe("PendingHelpHibernationStore", () => {
     expect(entry).not.toBeNull();
     expect(entry?.panelWasOpen).toBeUndefined();
   });
+
+  describe("rewriteProjectPath", () => {
+    it("rebases only the matching project's cwd and persists it", async () => {
+      const store = new PendingHelpHibernationStore(filePath);
+      await store.load();
+      await store.set("proj-1", {
+        agentId: "claude",
+        agentSessionId: "id-1",
+        cwd: "/old/project/sub",
+        capturedAt: Date.now(),
+      });
+      await store.set("proj-2", {
+        agentId: "claude",
+        agentSessionId: "id-2",
+        cwd: "/old/project/sub",
+        capturedAt: Date.now(),
+      });
+
+      await store.rewriteProjectPath("proj-1", "/old/project", "/new/renamed");
+
+      expect(store.get("proj-1")?.cwd).toBe("/new/renamed/sub");
+      expect(store.get("proj-2")?.cwd).toBe("/old/project/sub");
+
+      const fresh = new PendingHelpHibernationStore(filePath);
+      await fresh.load();
+      expect(fresh.get("proj-1")?.cwd).toBe("/new/renamed/sub");
+    });
+
+    it("is a no-op for a missing project or a cwd outside the old root", async () => {
+      const store = new PendingHelpHibernationStore(filePath);
+      await store.load();
+      await store.set("proj-1", {
+        agentId: "claude",
+        agentSessionId: "id-1",
+        cwd: "/elsewhere/dir",
+        capturedAt: Date.now(),
+      });
+
+      await store.rewriteProjectPath("missing", "/old/project", "/new/renamed");
+      await store.rewriteProjectPath("proj-1", "/old/project", "/new/renamed");
+
+      expect(store.get("proj-1")?.cwd).toBe("/elsewhere/dir");
+    });
+  });
 });

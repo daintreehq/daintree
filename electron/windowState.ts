@@ -218,6 +218,33 @@ export function pruneWindowStateForPath(projectPath: string): void {
   }
 }
 
+/**
+ * Move a project's saved window bounds from `oldPath` to `newPath` after a
+ * folder move/rename (#11282, phase 2). Unlike {@link pruneWindowStateForPath}
+ * this preserves the bounds rather than dropping them, so a relocated project's
+ * window reopens where the user left it instead of reverting to defaults. The
+ * moved project's bounds win over any stale entry already sitting at `newPath`.
+ * No-op when the old path has no saved state. Routes through the same capped
+ * writer and never persists `undefined` (electron-store v11 rejects it).
+ */
+export function rekeyWindowStateForPath(oldPath: string, newPath: string): void {
+  if (!oldPath || !newPath || oldPath === newPath) return;
+  const windowStates: WindowStatesMap | undefined = windowStatesStore.get("windowStates");
+  if (!windowStates || !(oldPath in windowStates)) return;
+  const bounds = windowStates[oldPath];
+  delete windowStates[oldPath];
+  // Delete any stale entry already at the destination before reassigning, so the
+  // moved bounds take a FRESH (most-recent) insertion slot. Insertion order is
+  // the MRU-cap policy (see commitWindowStates); overwriting in place would leave
+  // the relocated project in the stale entry's old, possibly-evicted position.
+  delete windowStates[newPath];
+  windowStates[newPath] = bounds;
+  commitWindowStates(windowStates);
+  if (lastSavedProjectPath === oldPath) {
+    lastSavedProjectPath = newPath;
+  }
+}
+
 export function createWindowWithState(
   options: Electron.BrowserWindowConstructorOptions,
   projectPath?: string | null

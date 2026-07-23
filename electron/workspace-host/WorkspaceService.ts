@@ -5,7 +5,7 @@ import { existsSync } from "fs";
 import { stat, readFile, access, mkdir, realpath } from "fs/promises";
 import { resolve as pathResolve, isAbsolute, dirname } from "path";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
-import { generateProjectId, settingsFilePath } from "../services/projectStorePaths.js";
+import { settingsFilePath } from "../services/projectStorePaths.js";
 import { SimpleGit, BranchSummary } from "simple-git";
 import { createHardenedGit, createAuthenticatedGit } from "../utils/hardenedGit.js";
 import { classifyGitError, getGitRecoveryAction } from "../../shared/utils/gitOperationErrors.js";
@@ -214,6 +214,10 @@ export class WorkspaceService {
   private git: SimpleGit | null = null;
   private pollingEnabled: boolean = true;
   private projectRootPath: string | null = null;
+  // Immutable project id threaded from main via load-project (#11282). The host
+  // has no DB access, so it can never re-derive this from the path — hashing the
+  // path would mint a stale id for any relocated project.
+  private projectId: string | null = null;
   private projectEnvVars: Record<string, string> = {};
   private lifecycleService = new WorktreeLifecycleService();
   private listService = new WorktreeListService();
@@ -586,6 +590,7 @@ export class WorkspaceService {
   async loadProject(
     requestId: string,
     projectRootPath: string,
+    projectId: string,
     globalEnvVars?: Record<string, string>,
     wslGitByWorktree?: Record<string, { enabled: boolean; dismissed: boolean }>,
     forgeSettings?: {
@@ -614,6 +619,7 @@ export class WorkspaceService {
         throw new Error(`Project directory does not exist: ${projectRootPath}`);
       }
       this.projectRootPath = projectRootPath;
+      this.projectId = projectId;
       // Backstop for a disabled or silently-degraded git watcher (#11155).
       this.startForgeRemoteDetection();
       if (wslGitByWorktree && typeof wslGitByWorktree === "object") {
@@ -626,7 +632,7 @@ export class WorkspaceService {
         pullRequestService.setForgeSettings(forgeSettings);
       }
       // Merge: global (lowest priority) < project-level < DAINTREE_* (set in buildEnv)
-      const projectEnvVars = await this.loadProjectEnvVars(projectRootPath);
+      const projectEnvVars = await this.loadProjectEnvVars(projectId);
       this.projectEnvVars = { ...(globalEnvVars ?? {}), ...projectEnvVars };
       this.git = await createHardenedGit(projectRootPath, this._shutdownController.signal);
       this.listService.setGit(this.git, projectRootPath);
@@ -3317,7 +3323,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   }
 
   resetPRState(requestId: string): void {
-    this.prService.resetPRState(this.projectRootPath);
+    this.prService.resetPRState(this.projectRootPath, this.projectId);
     this.sendEvent({ type: "reset-pr-state-result", requestId, success: true });
   }
 
@@ -3344,7 +3350,12 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     providerId: string,
     credentials: import("../../shared/types/forge.js").Credentials | null
   ): void {
-    this.prService.updateForgeCredentials(providerId, credentials, this.projectRootPath);
+    this.prService.updateForgeCredentials(
+      providerId,
+      credentials,
+      this.projectRootPath,
+      this.projectId
+    );
     if (credentials) {
       // A new credential may resolve previously-failing auth — drop suspensions so
       // the next scheduled fetch retries. Network/transient entries stay so we
@@ -3384,11 +3395,11 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   }
 
   private initializePRService(): Promise<void> {
-    if (!this.projectRootPath) {
+    if (!this.projectRootPath || !this.projectId) {
       return Promise.resolve();
     }
 
-    return this.prService.initialize(this.projectRootPath, () => {
+    return this.prService.initialize(this.projectRootPath, this.projectId, () => {
       const candidates: Array<{
         worktreeId: string;
         branch?: string;
@@ -3441,6 +3452,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.mainBranch = "main";
     this.git = null;
     this.projectRootPath = null;
+    this.projectId = null;
     this.projectEnvVars = {};
     this.wslDefaultDistroPromise = null;
     this.wslLastKnownDefaultDistro = undefined;
@@ -3525,11 +3537,15 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     return envs !== null && Object.keys(envs).length > 0;
   }
 
-  private async loadProjectEnvVars(projectRootPath: string): Promise<Record<string, string>> {
+  private async loadProjectEnvVars(projectId: string): Promise<Record<string, string>> {
     try {
       const userDataDir = process.env.DAINTREE_USER_DATA ?? "";
-      const projectId = generateProjectId(projectRootPath);
-      const filePath = settingsFilePath(userDataDir, projectId);
+      if (!userDataDir) return {};
+      // Settings live under `<userData>/projects/<id>/settings.json` (see
+      // ProjectStore's `projectsConfigDir`). DAINTREE_USER_DATA is the bare
+      // userData root, so the `projects` segment must be added here — without it
+      // the read silently missed and env vars never reached the host (#11282).
+      const filePath = settingsFilePath(pathResolve(userDataDir, "projects"), projectId);
       if (!filePath) return {};
       const raw = await readFile(filePath, "utf8");
       const parsed: unknown = JSON.parse(raw);

@@ -12,6 +12,7 @@ import type {
   AgentSessionRecord,
   AgentSessionRetentionDays,
 } from "../../../shared/types/ipc/agentSessionHistory.js";
+import { rebaseAbsolutePath } from "../../../shared/utils/projectPathRelocation.js";
 
 export type { AgentSessionRecord };
 
@@ -273,6 +274,44 @@ export async function pruneAgentSessions(
       mode: OWNER_RW_FILE_MODE,
     });
     refreshCacheAfterWrite(filePath, pruned);
+  });
+}
+
+/**
+ * Rebase the absolute `worktreeId` and `cwd` of one project's records after a
+ * folder move/rename (#11282, phase 2), so a relocated project's captured agent
+ * sessions stay grouped under the moved worktrees and resume in the right place.
+ * Only records whose non-null `projectId` matches are touched — legacy
+ * `projectId: null` records are left alone rather than guessing their owner.
+ * Shares the write queue so it can't interleave with an in-flight persist, and
+ * skips the disk write entirely when nothing changed.
+ */
+export async function rewriteAgentSessionPathsForProject(
+  projectId: string,
+  oldRoot: string,
+  newRoot: string,
+  userData?: string
+): Promise<void> {
+  const filePath = getSessionHistoryPath(userData);
+  if (!filePath || !projectId || !oldRoot || !newRoot || oldRoot === newRoot) return;
+
+  await enqueueWrite(async () => {
+    const existing = await readSessionHistory(userData);
+    let changed = false;
+    const rewritten = existing.map((r) => {
+      if (r.projectId !== projectId) return r;
+      const nextWorktreeId =
+        r.worktreeId !== null ? rebaseAbsolutePath(r.worktreeId, oldRoot, newRoot) : r.worktreeId;
+      const nextCwd = r.cwd !== undefined ? rebaseAbsolutePath(r.cwd, oldRoot, newRoot) : r.cwd;
+      if (nextWorktreeId === r.worktreeId && nextCwd === r.cwd) return r;
+      changed = true;
+      return { ...r, worktreeId: nextWorktreeId, cwd: nextCwd };
+    });
+    if (!changed) return;
+    await resilientAtomicWriteFile(filePath, JSON.stringify(rewritten, null, 2), "utf-8", {
+      mode: OWNER_RW_FILE_MODE,
+    });
+    refreshCacheAfterWrite(filePath, rewritten);
   });
 }
 

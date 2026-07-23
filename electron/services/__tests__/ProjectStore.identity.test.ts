@@ -39,6 +39,30 @@ let tmpRoot: string;
 
 const repairWorktrees = vi.fn(async () => {});
 
+// Phase-2 path-bearing-state migration surfaces (#11282). Mocked so the identity
+// suite stays DB-focused and can assert the orchestration wiring directly. These
+// are referenced in vi.mock factories at hoist time, so they must be vi.hoisted.
+const {
+  enqueueProjectStateUpdate,
+  rekeyWindowStateForPath,
+  rewriteAgentSessionPathsForProject,
+  rewriteHibernationProjectPath,
+  repairMovedSubmodulePaths,
+} = vi.hoisted(() => ({
+  enqueueProjectStateUpdate: vi.fn(async () => {}),
+  rekeyWindowStateForPath: vi.fn(),
+  rewriteAgentSessionPathsForProject: vi.fn(async () => {}),
+  rewriteHibernationProjectPath: vi.fn(async () => {}),
+  repairMovedSubmodulePaths: vi.fn(async () => {}),
+}));
+
+vi.mock("../../windowState.js", () => ({ rekeyWindowStateForPath }));
+vi.mock("../pty/agentSessionHistory.js", () => ({ rewriteAgentSessionPathsForProject }));
+vi.mock("../PendingHelpHibernationStore.js", () => ({
+  getPendingHelpHibernationStore: () => ({ rewriteProjectPath: rewriteHibernationProjectPath }),
+}));
+vi.mock("../git/submodulePathRepair.js", () => ({ repairMovedSubmodulePaths }));
+
 vi.mock("../persistence/db.js", () => ({
   getSharedDb: () => db,
   openDb: vi.fn(),
@@ -76,6 +100,9 @@ vi.mock("../ProjectSettingsManager.js", () => ({
 vi.mock("../ProjectStateManager.js", () => ({
   ProjectStateManager: class {
     invalidateProjectStateCache() {}
+    enqueueProjectStateUpdate(...args: unknown[]) {
+      return enqueueProjectStateUpdate(...(args as []));
+    }
   },
 }));
 
@@ -115,6 +142,11 @@ describe("project identity across folder moves", () => {
     db = drizzle(sqlite, { schema });
     repairWorktrees.mockClear();
     migrateEnvForProject.mockClear();
+    enqueueProjectStateUpdate.mockClear();
+    rekeyWindowStateForPath.mockClear();
+    rewriteAgentSessionPathsForProject.mockClear();
+    rewriteHibernationProjectPath.mockClear();
+    repairMovedSubmodulePaths.mockClear();
     store = new ProjectStore();
   });
 
@@ -166,6 +198,64 @@ describe("project identity across folder moves", () => {
       await store.addProject(await fs.promises.realpath(moved));
 
       expect(repairWorktrees).toHaveBeenCalledTimes(1);
+    });
+
+    it("rewrites all path-bearing state surfaces after adopting a moved folder", async () => {
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+      await writeAnchor(original, registered.id);
+
+      const moved = path.join(tmpRoot, "renamed");
+      await fs.promises.rename(original, moved);
+      const canonicalMoved = await fs.promises.realpath(moved);
+      await store.addProject(canonicalMoved);
+
+      // Every ancillary surface is rebased with the immutable id and old→new roots.
+      expect(rekeyWindowStateForPath).toHaveBeenCalledWith(original, canonicalMoved);
+      expect(rewriteAgentSessionPathsForProject).toHaveBeenCalledWith(
+        registered.id,
+        original,
+        canonicalMoved
+      );
+      expect(rewriteHibernationProjectPath).toHaveBeenCalledWith(
+        registered.id,
+        original,
+        canonicalMoved
+      );
+      expect(repairMovedSubmodulePaths).toHaveBeenCalledWith(original, canonicalMoved);
+      // The per-project state write is queued (never a raw read-merge-write) with
+      // the immutable id and a path-rewriting updater.
+      expect(enqueueProjectStateUpdate).toHaveBeenCalledWith(registered.id, expect.any(Function));
+    });
+
+    it("does not rewrite path-bearing state when the current project is declined for adoption", async () => {
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+      await writeAnchor(original, registered.id);
+      db.insert(schema.appState).values({ key: "currentProjectId", value: registered.id }).run();
+
+      const moved = path.join(tmpRoot, "renamed");
+      await fs.promises.rename(original, moved);
+      await store.addProject(await fs.promises.realpath(moved));
+
+      expect(rekeyWindowStateForPath).not.toHaveBeenCalled();
+      expect(repairMovedSubmodulePaths).not.toHaveBeenCalled();
+    });
+
+    it("isolates a synchronously-throwing migration surface — the move still succeeds and repairs run", async () => {
+      rewriteHibernationProjectPath.mockImplementationOnce(() => {
+        throw new Error("app.getPath exploded");
+      });
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+      await writeAnchor(original, registered.id);
+      const moved = path.join(tmpRoot, "renamed");
+      await fs.promises.rename(original, moved);
+      const canonicalMoved = await fs.promises.realpath(moved);
+
+      // A sync throw while building a surface must NOT reject the adoption.
+      await expect(store.addProject(canonicalMoved)).resolves.toMatchObject({ id: registered.id });
+      expect(repairMovedSubmodulePaths).toHaveBeenCalledWith(original, canonicalMoved);
     });
 
     it("mints a distinct id for a copy whose original still exists", async () => {
@@ -335,6 +425,24 @@ describe("project identity across folder moves", () => {
 
       expect(relocated.path).toBe(dir);
       expect(repairWorktrees).not.toHaveBeenCalled();
+    });
+
+    it("stores a decomposed-Unicode destination in NFC so the immutable id still resolves", async () => {
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+
+      // A real destination whose name is NFD ("cafe" + combining acute U+0301).
+      // getGitRoot realpaths it (bytes preserved on APFS/ext4), and the store must
+      // persist and resolve the NFC ("é") form rather than the raw NFD spelling.
+      const nfdDir = await makeDir("relocated-cafe\u0301");
+      const nfc = nfdDir.normalize("NFC");
+      const relocated = await store.relocateProject(registered.id, nfdDir);
+
+      expect(relocated.id).toBe(registered.id);
+      expect(relocated.path).toBe(nfc);
+      expect(store.resolveProjectIdForPath(nfc)).toBe(registered.id);
+      // The raw NFD spelling resolves too, since lookups normalize.
+      expect(store.resolveProjectIdForPath(nfdDir)).toBe(registered.id);
     });
   });
 

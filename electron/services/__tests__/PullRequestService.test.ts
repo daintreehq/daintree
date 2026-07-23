@@ -161,9 +161,6 @@ function mockForgeProviderResolved(
     getForgeBridge: () => bridge,
     initForgeBridge: vi.fn(() => bridge),
   }));
-  vi.doMock("../projectStorePaths.js", () => ({
-    generateProjectId: vi.fn().mockReturnValue("test-project-id"),
-  }));
   vi.doMock("../../utils/hardenedGit.js", () => ({
     createHardenedGit: vi.fn().mockReturnValue({
       getConfig: vi.fn().mockResolvedValue("https://github.com/testowner/testrepo.git"),
@@ -191,9 +188,6 @@ function mockForgeProviderUnresolved(opts?: {
   vi.doMock("../../workspace-host/forgeBridge.js", () => ({
     getForgeBridge: () => bridge,
     initForgeBridge: vi.fn(() => bridge),
-  }));
-  vi.doMock("../projectStorePaths.js", () => ({
-    generateProjectId: vi.fn().mockReturnValue("test-project-id"),
   }));
   const getConfig =
     opts?.getConfig ?? vi.fn().mockResolvedValue("https://github.com/testowner/testrepo.git");
@@ -277,7 +271,7 @@ describe("PullRequestService", () => {
     const detected: DaintreeEventMap["sys:pr:detected"][] = [];
     const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
 
     events.emit(
       "sys:worktree:update",
@@ -322,7 +316,7 @@ describe("PullRequestService", () => {
     const detected: DaintreeEventMap["sys:pr:detected"][] = [];
     const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     events.emit(
       "sys:worktree:update",
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/declined" })
@@ -357,7 +351,7 @@ describe("PullRequestService", () => {
     const detected: DaintreeEventMap["sys:pr:detected"][] = [];
     const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     events.emit(
       "sys:worktree:update",
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -393,7 +387,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     events.emit(
       "sys:worktree:update",
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -423,7 +417,7 @@ describe("PullRequestService", () => {
     const issues: DaintreeEventMap["sys:issue:detected"][] = [];
     const unsubscribe = events.on("sys:issue:detected", (payload) => issues.push(payload));
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     events.emit(
       "sys:worktree:update",
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/widget", issueNumber: 88 })
@@ -456,7 +450,7 @@ describe("PullRequestService", () => {
 
     const { pullRequestService } = await import("../PullRequestService.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     pullRequestService.setForgeSettings({
       forgeProviderOverride: null,
       forgeDefaultProviderId: null,
@@ -482,7 +476,7 @@ describe("PullRequestService", () => {
 
     const { pullRequestService } = await import("../PullRequestService.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     pullRequestService.setForgeSettings({
       forgeProviderOverride: null,
       forgeDefaultProviderId: null,
@@ -504,7 +498,7 @@ describe("PullRequestService", () => {
 
     const { pullRequestService } = await import("../PullRequestService.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     await pullRequestService.refresh();
 
     expect(bridge.resolveProvider).toHaveBeenCalledWith(
@@ -540,7 +534,7 @@ describe("PullRequestService", () => {
 
     const { pullRequestService } = await import("../PullRequestService.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     await pullRequestService.refresh();
 
     expect(getConfig).toHaveBeenCalledWith("remote.origin.url");
@@ -557,7 +551,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
 
     events.emit(
       "sys:worktree:update",
@@ -589,7 +583,7 @@ describe("PullRequestService", () => {
     const unsubscribeCleared = events.on("sys:pr:cleared", (p) => cleared.push(p));
     const unsubscribeDetected = events.on("sys:pr:detected", (p) => detected.push(p));
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     events.emit(
       "sys:worktree:update",
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/no-pr" })
@@ -621,7 +615,7 @@ describe("PullRequestService", () => {
     const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
     const unsubscribeCleared = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
 
     events.emit(
       "sys:worktree:update",
@@ -672,7 +666,7 @@ describe("PullRequestService", () => {
     const detected: DaintreeEventMap["sys:pr:detected"][] = [];
     const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
 
     events.emit(
       "sys:worktree:update",
@@ -725,7 +719,7 @@ describe("PullRequestService", () => {
     const detected: DaintreeEventMap["sys:pr:detected"][] = [];
     const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
 
     events.emit(
       "sys:worktree:update",
@@ -781,7 +775,7 @@ describe("PullRequestService", () => {
     const detected: DaintreeEventMap["sys:pr:detected"][] = [];
     const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     events.emit(
       "sys:worktree:update",
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -833,7 +827,7 @@ describe("PullRequestService", () => {
     const detected: DaintreeEventMap["sys:pr:detected"][] = [];
     const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     events.emit(
       "sys:worktree:update",
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -880,7 +874,7 @@ describe("PullRequestService", () => {
     const detected: DaintreeEventMap["sys:pr:detected"][] = [];
     const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     events.emit(
       "sys:worktree:update",
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -921,7 +915,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     events.emit(
       "sys:worktree:update",
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -973,7 +967,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     events.emit(
       "sys:worktree:update",
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -1015,7 +1009,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     events.emit(
       "sys:worktree:update",
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -1065,7 +1059,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     events.emit(
       "sys:worktree:update",
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -1125,7 +1119,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     events.emit(
       "sys:worktree:update",
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -1188,7 +1182,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     events.emit(
       "sys:worktree:update",
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -1243,7 +1237,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
     events.emit(
       "sys:worktree:update",
       makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -1282,7 +1276,7 @@ describe("PullRequestService", () => {
     const detected: DaintreeEventMap["sys:pr:detected"][] = [];
     const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
 
     events.emit(
       "sys:worktree:update",
@@ -1320,7 +1314,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
 
     events.emit(
       "sys:worktree:update",
@@ -1356,7 +1350,7 @@ describe("PullRequestService", () => {
       const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
       const unsubscribe = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -1402,7 +1396,7 @@ describe("PullRequestService", () => {
       const notifications: DaintreeEventMap["ui:notify"][] = [];
       const unsubNotify = events.on("ui:notify", (payload) => notifications.push(payload));
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -1443,7 +1437,7 @@ describe("PullRequestService", () => {
       const detected: DaintreeEventMap["sys:pr:detected"][] = [];
       const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -1487,7 +1481,7 @@ describe("PullRequestService", () => {
       const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
       const unsubscribe = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -1522,7 +1516,7 @@ describe("PullRequestService", () => {
       const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
       const unsubscribe = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -1548,7 +1542,7 @@ describe("PullRequestService", () => {
       const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
       const unsubscribe = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -1592,7 +1586,7 @@ describe("PullRequestService", () => {
       const unsubDetected = events.on("sys:pr:detected", (payload) => detected.push(payload));
       const unsubCleared = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-a", branch: "feature/a" })
@@ -1665,7 +1659,7 @@ describe("PullRequestService", () => {
       const unsubCleared = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
       const unsubNotify = events.on("ui:notify", (payload) => notifications.push(payload));
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -1710,7 +1704,7 @@ describe("PullRequestService", () => {
     const detected: DaintreeEventMap["sys:pr:detected"][] = [];
     const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
 
     events.emit(
       "sys:worktree:update",
@@ -1734,7 +1728,7 @@ describe("PullRequestService", () => {
       const { pullRequestService } = await import("../PullRequestService.js");
       const { events } = await import("../events.js");
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
@@ -1761,7 +1755,7 @@ describe("PullRequestService", () => {
       const { pullRequestService } = await import("../PullRequestService.js");
       const { events } = await import("../events.js");
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
@@ -1786,7 +1780,7 @@ describe("PullRequestService", () => {
       const { pullRequestService } = await import("../PullRequestService.js");
       const { events } = await import("../events.js");
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
@@ -1828,7 +1822,7 @@ describe("PullRequestService", () => {
       const { pullRequestService } = await import("../PullRequestService.js");
       const { events } = await import("../events.js");
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
@@ -1862,7 +1856,7 @@ describe("PullRequestService", () => {
       const { pullRequestService } = await import("../PullRequestService.js");
       const { events } = await import("../events.js");
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
@@ -1891,7 +1885,7 @@ describe("PullRequestService", () => {
       const { pullRequestService } = await import("../PullRequestService.js");
       const { events } = await import("../events.js");
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       pullRequestService.notifyForgeProviderRegistryUpdated();
       await vi.advanceTimersByTimeAsync(1_000);
       expect(bridge.resolveProvider).not.toHaveBeenCalled();
@@ -1913,7 +1907,7 @@ describe("PullRequestService", () => {
       const { pullRequestService } = await import("../PullRequestService.js");
       const { events } = await import("../events.js");
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
@@ -1942,7 +1936,7 @@ describe("PullRequestService", () => {
       const { pullRequestService } = await import("../PullRequestService.js");
       const { events } = await import("../events.js");
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
@@ -1969,7 +1963,7 @@ describe("PullRequestService", () => {
       const { pullRequestService } = await import("../PullRequestService.js");
       const { events } = await import("../events.js");
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
@@ -1997,7 +1991,7 @@ describe("PullRequestService", () => {
       const { pullRequestService } = await import("../PullRequestService.js");
       const { events } = await import("../events.js");
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
@@ -2039,7 +2033,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
 
     events.emit(
       "sys:worktree:update",
@@ -2070,7 +2064,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
 
     events.emit(
       "sys:worktree:update",
@@ -2093,7 +2087,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
 
     events.emit(
       "sys:worktree:update",
@@ -2118,7 +2112,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
 
     events.emit(
       "sys:worktree:update",
@@ -2139,7 +2133,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
 
     events.emit(
       "sys:worktree:update",
@@ -2170,7 +2164,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    pullRequestService.initialize("/repo");
+    pullRequestService.initialize("/repo", "test-project-id");
 
     events.emit(
       "sys:worktree:update",
@@ -2214,7 +2208,7 @@ describe("PullRequestService", () => {
       const detected: DaintreeEventMap["sys:issue:detected"][] = [];
       const unsubscribe = events.on("sys:issue:detected", (payload) => detected.push(payload));
 
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
       events.emit(
         "sys:worktree:update",
         makeWorktreeSnapshot({
@@ -2294,7 +2288,7 @@ describe("PullRequestService", () => {
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
 
       const svc = pullRequestService as any;
       svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 0, ciStatus: "pending" }));
@@ -2307,7 +2301,7 @@ describe("PullRequestService", () => {
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
 
       const svc = pullRequestService as any;
       svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 10, ciStatus: "pending" }));
@@ -2320,7 +2314,7 @@ describe("PullRequestService", () => {
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
 
       const svc = pullRequestService as any;
       svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 20, ciStatus: "pending" }));
@@ -2333,7 +2327,7 @@ describe("PullRequestService", () => {
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
 
       const svc = pullRequestService as any;
       // SUCCESS PR with high count — should be ignored
@@ -2355,7 +2349,7 @@ describe("PullRequestService", () => {
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
 
       const svc = pullRequestService as any;
       svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 20, ciStatus: "success" }));
@@ -2368,7 +2362,7 @@ describe("PullRequestService", () => {
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
 
       const svc = pullRequestService as any;
       svc.detectedPRs.clear();
@@ -2381,7 +2375,7 @@ describe("PullRequestService", () => {
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
 
       const svc = pullRequestService as any;
       svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 5 }));
@@ -2399,7 +2393,7 @@ describe("PullRequestService", () => {
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
 
       const svc = pullRequestService as any;
       svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 8 }));
@@ -2416,7 +2410,7 @@ describe("PullRequestService", () => {
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
 
       const svc = pullRequestService as any;
       svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 8 }));
@@ -2435,7 +2429,7 @@ describe("PullRequestService", () => {
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
-      pullRequestService.initialize("/repo");
+      pullRequestService.initialize("/repo", "test-project-id");
 
       const svc = pullRequestService as any;
       svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 8 }));
@@ -2593,7 +2587,7 @@ describe("PullRequestService", () => {
         const detected: DaintreeEventMap["sys:pr:detected"][] = [];
         const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
 
-        pullRequestService.initialize("/repo");
+        pullRequestService.initialize("/repo", "test-project-id");
         events.emit(
           "sys:worktree:update",
           makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -2626,7 +2620,7 @@ describe("PullRequestService", () => {
         const { events } = await import("../events.js");
         const svc = pullRequestService as any;
 
-        pullRequestService.initialize("/repo");
+        pullRequestService.initialize("/repo", "test-project-id");
         svc.repoRef = makeMockRepoRef();
         svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "pending" }));
         svc.boostExpiresAt = Date.now() + 15 * 60 * 1000;
@@ -2662,7 +2656,7 @@ describe("PullRequestService", () => {
         const { events } = await import("../events.js");
         const svc = pullRequestService as any;
 
-        pullRequestService.initialize("/repo");
+        pullRequestService.initialize("/repo", "test-project-id");
         svc.repoRef = makeMockRepoRef();
         svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "success" }));
 
@@ -2688,7 +2682,7 @@ describe("PullRequestService", () => {
         const { events } = await import("../events.js");
         const svc = pullRequestService as any;
 
-        pullRequestService.initialize("/repo");
+        pullRequestService.initialize("/repo", "test-project-id");
         svc.repoRef = makeMockRepoRef();
         svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "pending" }));
 
@@ -2733,7 +2727,7 @@ describe("PullRequestService", () => {
         const { events } = await import("../events.js");
         const svc = pullRequestService as any;
 
-        pullRequestService.initialize("/repo");
+        pullRequestService.initialize("/repo", "test-project-id");
         events.emit(
           "sys:worktree:update",
           makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
@@ -2778,7 +2772,7 @@ describe("PullRequestService", () => {
         const { events } = await import("../events.js");
         const svc = pullRequestService as any;
 
-        pullRequestService.initialize("/repo");
+        pullRequestService.initialize("/repo", "test-project-id");
         svc.repoRef = makeMockRepoRef();
         // Two distinct PR objects coincidentally numbered 42: one PENDING (to be
         // swept), one SUCCESS (must survive untouched).
