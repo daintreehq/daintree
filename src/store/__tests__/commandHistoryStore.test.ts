@@ -186,4 +186,90 @@ describe("commandHistoryStore persistence migration", () => {
     expect(parsed.state.history["proj1"]!.some((e) => e.prompt === "old")).toBe(true);
     expect(parsed.state.history["proj1"]!.some((e) => e.prompt === "new")).toBe(true);
   });
+
+  it("a fresh view (null baseline) does not clobber a sibling's project bucket (#11351)", async () => {
+    const backing = installLocalStorage({});
+    const { useCommandHistoryStore: store } = await import("../commandHistoryStore");
+    // Store hydrated from empty (baseline null); a sibling then writes project B.
+    backing.set(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 0,
+        state: {
+          history: {
+            "proj-b": [{ id: "b-1", prompt: "sibling", agentId: "claude", addedAt: 1 }],
+          },
+        },
+      })
+    );
+
+    // This view's first write records project A — its default empty map must not
+    // clobber the sibling's bucket.
+    store.getState().recordPrompt("proj-a", "hello", "claude");
+
+    const written = JSON.parse(backing.get(STORAGE_KEY)!) as {
+      state: { history: Record<string, PromptHistoryEntry[]> };
+    };
+    expect(Object.keys(written.state.history).sort()).toEqual(["proj-a", "proj-b"]);
+    expect(written.state.history["proj-b"]).toEqual([
+      { id: "b-1", prompt: "sibling", agentId: "claude", addedAt: 1 },
+    ]);
+  });
+
+  it("does not drop another project's history a sibling view recorded (#11351)", async () => {
+    const backing = installLocalStorage({});
+    const { useCommandHistoryStore: store } = await import("../commandHistoryStore");
+
+    // This view records project A's prompt to the shared partition.
+    store.getState().recordPrompt("proj-a", "hello", "claude");
+
+    // A sibling view (project B) records its own history directly to the shared blob.
+    const disk = JSON.parse(backing.get(STORAGE_KEY)!) as {
+      version: number;
+      state: { history: Record<string, PromptHistoryEntry[]> };
+    };
+    disk.state.history["proj-b"] = [
+      { id: "b-1", prompt: "sibling", agentId: "claude", addedAt: 1 },
+    ];
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    // This stale view — which never learned about B — records another prompt for A.
+    store.getState().recordPrompt("proj-a", "world", "claude");
+
+    const written = JSON.parse(backing.get(STORAGE_KEY)!) as {
+      state: { history: Record<string, PromptHistoryEntry[]> };
+    };
+    expect(Object.keys(written.state.history).sort()).toEqual(["proj-a", "proj-b"]);
+    expect(written.state.history["proj-a"]!.map((e) => e.prompt)).toEqual(["world", "hello"]);
+    expect(written.state.history["proj-b"]).toEqual([
+      { id: "b-1", prompt: "sibling", agentId: "claude", addedAt: 1 },
+    ]);
+  });
+
+  it("does not resurrect a project's history this view removed (#11351)", async () => {
+    const backing = installLocalStorage({});
+    const { useCommandHistoryStore: store } = await import("../commandHistoryStore");
+
+    store.getState().recordPrompt("proj-a", "hello", "claude");
+
+    const disk = JSON.parse(backing.get(STORAGE_KEY)!) as {
+      version: number;
+      state: { history: Record<string, PromptHistoryEntry[]> };
+    };
+    disk.state.history["proj-b"] = [
+      { id: "b-1", prompt: "sibling", agentId: "claude", addedAt: 1 },
+    ];
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    // Removing this view's own project must not resurrect it, and must keep B.
+    store.getState().removeProjectHistory("proj-a");
+
+    const written = JSON.parse(backing.get(STORAGE_KEY)!) as {
+      state: { history: Record<string, PromptHistoryEntry[]> };
+    };
+    expect(written.state.history["proj-a"]).toBeUndefined();
+    expect(written.state.history["proj-b"]).toEqual([
+      { id: "b-1", prompt: "sibling", agentId: "claude", addedAt: 1 },
+    ]);
+  });
 });
