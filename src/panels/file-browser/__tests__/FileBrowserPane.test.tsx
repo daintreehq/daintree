@@ -395,7 +395,7 @@ describe("last-known tree capture (#11367)", () => {
     expect(flushPanelPersistenceMock).toHaveBeenCalled();
   });
 
-  it("captures on unmount so dialog → grid promotion re-seeds the same panel id", () => {
+  it("captures the outgoing tree on unmount for the next restore", () => {
     treeState.captureSnapshot = () => snapshot;
     const { unmount } = renderPane();
     unmount();

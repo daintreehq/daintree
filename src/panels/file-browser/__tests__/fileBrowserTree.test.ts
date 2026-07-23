@@ -9,6 +9,7 @@ import {
   listingsFromSnapshot,
   MAX_SNAPSHOT_LISTINGS,
   MAX_SNAPSHOT_NODES,
+  MAX_SNAPSHOT_TEXT_CHARS,
   parentRootPath,
   pruneListings,
   refreshTargets,
@@ -555,6 +556,16 @@ describe("snapshotFromListings", () => {
       ]),
     ]);
     expect(snapshotFromListings(manyListings, "wt-1", "")).toBeNull();
+  });
+
+  it("returns null when aggregate text exceeds the byte budget, independent of node count", () => {
+    // Counts alone don't bound serialized size — a few hundred long paths
+    // must trip the text budget well before the 10k-node cap.
+    const longName = "n".repeat(Math.ceil(MAX_SNAPSHOT_TEXT_CHARS / 100));
+    const listings = listingsOf({
+      "": Array.from({ length: 100 }, (_, i) => file(`${longName}-${i}`)),
+    });
+    expect(snapshotFromListings(listings, "wt-1", "")).toBeNull();
   });
 
   it("captures relative to a re-rooted browse root", () => {

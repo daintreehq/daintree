@@ -305,12 +305,17 @@ export function pruneListings(
  * Bounds on a persisted tree snapshot (#11367). Listings mirror
  * `MAX_RESTORED_EXPANDED_PATHS` (the snapshot only ever holds the root plus
  * expanded directories); the node cap keeps a pathologically wide tree from
- * bloating the panel record. Capture returns null rather than truncating —
- * a partial directory presented as complete would be a lie the refresh can't
- * distinguish from a deletion — leaving any previous snapshot in place.
+ * bloating the panel record, and the text budget bounds the *bytes* the
+ * counts alone would not — 10k nodes of 4k-character paths would be tens of
+ * megabytes serialized into every project-state save. Capture returns null
+ * rather than truncating — a partial directory presented as complete would
+ * be a lie the refresh can't distinguish from a deletion — leaving any
+ * previous snapshot in place.
  */
 export const MAX_SNAPSHOT_LISTINGS = 500;
 export const MAX_SNAPSHOT_NODES = 10_000;
+/** Aggregate cap on name+path characters across the whole snapshot (~1MB UTF-16). */
+export const MAX_SNAPSHOT_TEXT_CHARS = 512_000;
 
 /**
  * Structure-only snapshot of the current listings for persistence (#11367):
@@ -329,10 +334,15 @@ export function snapshotFromListings(
   if (!listings.has(rootPath)) return null;
   if (listings.size > MAX_SNAPSHOT_LISTINGS) return null;
   let totalNodes = 0;
+  let totalChars = 0;
   const entries: FileBrowserTreeSnapshot["listings"] = [];
   for (const [dirPath, nodes] of listings) {
     totalNodes += nodes.length;
     if (totalNodes > MAX_SNAPSHOT_NODES) return null;
+    for (const node of nodes) {
+      totalChars += node.name.length + node.path.length;
+    }
+    if (totalChars > MAX_SNAPSHOT_TEXT_CHARS) return null;
     entries.push({
       dirPath,
       nodes: nodes.map((node) => ({

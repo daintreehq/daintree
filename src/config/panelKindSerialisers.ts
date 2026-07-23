@@ -7,6 +7,7 @@ import {
   canonicalizeRootPath,
   MAX_SNAPSHOT_LISTINGS,
   MAX_SNAPSHOT_NODES,
+  MAX_SNAPSHOT_TEXT_CHARS,
 } from "@/panels/file-browser/fileBrowserTree";
 
 type PanelKindDeserializer = (saved: SavedTerminalData) => Partial<AddTerminalArgs>;
@@ -109,12 +110,14 @@ function isSnapshotDirPath(value: unknown): value is string {
   return value === "" || isSafeRelativePath(value);
 }
 
-/** An entry basename: plain, separator-free, and bounded. */
+/** An entry basename: plain, separator-free, non-traversal, and bounded. */
 function isSnapshotNodeName(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length > 0 &&
     value.length <= MAX_RESTORED_PATH_LENGTH &&
+    value !== "." &&
+    value !== ".." &&
     !value.includes("/") &&
     !value.includes("\\")
   );
@@ -124,18 +127,33 @@ function isSnapshotNodeName(value: unknown): value is string {
  * Coerce a persisted last-known tree snapshot (#11367), dropping the whole
  * value on any malformed element — a partially trusted snapshot could seed
  * rows for paths that were never listed, and the cost of dropping is only a
- * cold start. Bounds mirror the capture side's, so a snapshot that was legal
- * to write is legal to restore.
+ * cold start. Count and text bounds mirror the capture side's, so a snapshot
+ * that was legal to write is legal to restore.
+ *
+ * Every node must be a *canonical child edge*: `path` is exactly
+ * `dirPath/name`, unique within its listing. That is what the real listing
+ * service produces, and it structurally rules out the pathological shapes a
+ * hand-edited snapshot could otherwise smuggle in: self-cycles and duplicate
+ * edges (whose traversal is exponential under the depth guard), row paths
+ * that dodge the visibility filter's per-name checks, and duplicate React
+ * keys (`FlatTreeRow.path` doubles as the key).
  */
 function sanitizeTreeSnapshot(value: unknown): FileBrowserTreeSnapshot | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const candidate = value as Record<string, unknown>;
   const { worktreeId, rootPath, listings } = candidate;
-  if (typeof worktreeId !== "string" || worktreeId.length === 0) return undefined;
+  if (
+    typeof worktreeId !== "string" ||
+    worktreeId.length === 0 ||
+    worktreeId.length > MAX_RESTORED_PATH_LENGTH
+  ) {
+    return undefined;
+  }
   if (!isSnapshotDirPath(rootPath)) return undefined;
   if (!Array.isArray(listings) || listings.length > MAX_SNAPSHOT_LISTINGS) return undefined;
 
   let totalNodes = 0;
+  let totalChars = 0;
   const seenDirs = new Set<string>();
   const sanitizedListings: FileBrowserTreeSnapshot["listings"] = [];
   for (const entry of listings) {
@@ -146,13 +164,17 @@ function sanitizeTreeSnapshot(value: unknown): FileBrowserTreeSnapshot | undefin
     if (!Array.isArray(nodes)) return undefined;
     totalNodes += nodes.length;
     if (totalNodes > MAX_SNAPSHOT_NODES) return undefined;
+    const seenNames = new Set<string>();
     const sanitizedNodes: FileBrowserTreeSnapshot["listings"][number]["nodes"] = [];
     for (const node of nodes) {
       if (typeof node !== "object" || node === null) return undefined;
       const { name, path, isDirectory } = node as Record<string, unknown>;
-      if (!isSnapshotNodeName(name)) return undefined;
-      if (!isSafeRelativePath(path)) return undefined;
+      if (!isSnapshotNodeName(name) || seenNames.has(name)) return undefined;
+      seenNames.add(name);
+      if (path !== (dirPath === "" ? name : `${dirPath}/${name}`)) return undefined;
       if (typeof isDirectory !== "boolean") return undefined;
+      totalChars += name.length + path.length;
+      if (totalChars > MAX_SNAPSHOT_TEXT_CHARS) return undefined;
       sanitizedNodes.push({ name, path, isDirectory });
     }
     sanitizedListings.push({ dirPath, nodes: sanitizedNodes });

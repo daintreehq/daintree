@@ -1,4 +1,13 @@
 import { describe, it, expect } from "vitest";
+import type { FileTreeNode } from "@shared/types";
+import type { FileBrowserPanelData } from "@shared/types/panel";
+import {
+  flattenTree,
+  listingsFromSnapshot,
+  snapshotFromListings,
+} from "@/panels/file-browser/fileBrowserTree";
+import { serializeFileBrowser } from "@/panels/file-browser/serializer";
+import { createFileBrowserDefaults } from "@/panels/file-browser/defaults";
 import { getDeserializer } from "../panelKindSerialisers";
 
 describe("panelKindSerialisers", () => {
@@ -277,6 +286,54 @@ describe("panelKindSerialisers", () => {
             ...validSnapshot,
             listings: [{ dirPath: "", nodes: [{ name: "a", path: "a", isDirectory: "yes" }] }],
           },
+          // Non-canonical child edge: the node's path is not dirPath/name, so
+          // it could impersonate a row that was never listed under this parent
+          // (and dodge the per-name visibility filter).
+          {
+            ...validSnapshot,
+            listings: [
+              { dirPath: "", nodes: [{ name: "README.md", path: ".env", isDirectory: false }] },
+            ],
+          },
+          // Self-cycle with a duplicate edge: `a` listing `a` twice. Each
+          // traversal level would double until the depth guard — the
+          // canonical-edge rule (a child path is strictly longer than its
+          // parent's) is what rules this class out entirely.
+          {
+            worktreeId: "wt-1",
+            rootPath: "",
+            listings: [
+              { dirPath: "", nodes: [{ name: "a", path: "a", isDirectory: true }] },
+              {
+                dirPath: "a",
+                nodes: [
+                  { name: "a", path: "a", isDirectory: true },
+                  { name: "a", path: "a", isDirectory: true },
+                ],
+              },
+            ],
+          },
+          // Duplicate names within one listing → duplicate row paths, and
+          // FlatTreeRow.path doubles as the React key.
+          {
+            ...validSnapshot,
+            listings: [
+              {
+                dirPath: "",
+                nodes: [
+                  { name: "src", path: "src", isDirectory: true },
+                  { name: "src", path: "src", isDirectory: false },
+                ],
+              },
+            ],
+          },
+          // Traversal-shaped basenames.
+          {
+            ...validSnapshot,
+            listings: [{ dirPath: "", nodes: [{ name: "..", path: "..", isDirectory: true }] }],
+          },
+          // Unbounded worktree id.
+          { ...validSnapshot, worktreeId: "w".repeat(5000) },
         ];
         for (const value of malformed) {
           expect(
@@ -324,6 +381,68 @@ describe("panelKindSerialisers", () => {
         expect(
           deserialize()({ id: "fb1", browserTreeSnapshot: empty }).browserTreeSnapshot
         ).toEqual(empty);
+      });
+
+      it("drops a snapshot whose aggregate text exceeds the byte budget", () => {
+        // Node and listing counts alone don't bound serialized size; a few
+        // hundred long paths must trip the text budget instead.
+        const longName = "n".repeat(4000);
+        const oversizedText = {
+          worktreeId: "wt-1",
+          rootPath: "",
+          listings: [
+            {
+              dirPath: "",
+              nodes: Array.from({ length: 100 }, (_, i) => ({
+                name: `${longName}-${i}`,
+                path: `${longName}-${i}`,
+                isDirectory: false,
+              })),
+            },
+          ],
+        };
+        expect(
+          deserialize()({ id: "fb1", browserTreeSnapshot: oversizedText }).browserTreeSnapshot
+        ).toBeUndefined();
+      });
+
+      it("round-trips capture → serialize → JSON → sanitize → seed back to the same painted rows", () => {
+        // The full carrier chain a real restore takes. A break at any stage —
+        // capture shape, serializer omission, sanitizer over-strictness,
+        // seed decoding — fails here even if each stage's own tests pass.
+        const live = new Map<string, readonly FileTreeNode[]>([
+          [
+            "",
+            [
+              { name: "src", path: "src", isDirectory: true, size: 0 },
+              { name: "README.md", path: "README.md", isDirectory: false, size: 120 },
+            ],
+          ],
+          ["src", [{ name: "app.ts", path: "src/app.ts", isDirectory: false, size: 99 }]],
+        ]);
+        const captured = snapshotFromListings(live, "wt-1", "");
+        expect(captured).not.toBeNull();
+
+        const panel: FileBrowserPanelData = {
+          id: "fb1",
+          title: "Files",
+          location: "grid",
+          kind: "file-browser",
+          browserTreeSnapshot: captured!,
+        };
+        const persisted = JSON.parse(JSON.stringify(serializeFileBrowser(panel)));
+        const restoredArgs = deserialize()({ id: "fb1", ...persisted });
+        const defaults = createFileBrowserDefaults({
+          kind: "file-browser",
+          ...restoredArgs,
+        });
+        expect(defaults.browserTreeSnapshot).toBeDefined();
+
+        const seeded = listingsFromSnapshot(defaults.browserTreeSnapshot!);
+        const rows = flattenTree(seeded, new Set(["src"]), new Set());
+        expect(rows.map((row) => row.path)).toEqual(
+          flattenTree(live, new Set(["src"]), new Set()).map((row) => row.path)
+        );
       });
     });
   });

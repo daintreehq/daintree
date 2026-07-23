@@ -172,10 +172,12 @@ export function FileBrowserPane({
 
   // Persist the last-known tree at going-away points only (#11367): the view
   // being hidden (project switch, window close, app quit — `visibilitychange`
-  // is the reliable detach signal, see #9914 in `resource.ts`) and unmount
-  // (which covers dialog → grid promotion re-seeding the same panel id).
-  // Never on a change tick — the snapshot rides the panel record, and dirtying
-  // it on every filesystem tick would turn each into a layout write.
+  // is the reliable detach signal, see #9914 in `resource.ts`) and unmount,
+  // which records the outgoing tree (dialog close, re-root) for the *next*
+  // restore — a dialog → grid promotion's replacement pane mounts before this
+  // cleanup writes, so it still cold-fetches. Never on a change tick — the
+  // snapshot rides the panel record, and dirtying it on every filesystem tick
+  // would turn each into a layout write.
   useEffect(() => {
     const capture = () => {
       const snapshot = captureSnapshot();
