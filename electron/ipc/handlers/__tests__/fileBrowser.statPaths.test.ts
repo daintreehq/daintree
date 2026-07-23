@@ -7,18 +7,26 @@ vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
 }));
 
+const projectStoreMock = vi.hoisted(() => ({
+  getProjectById: vi.fn(),
+}));
+
+vi.mock("../../../services/ProjectStore.js", () => ({
+  projectStore: projectStoreMock,
+}));
+
 import { buildFileBrowserNamespace } from "../fileBrowser.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 
 describe("fileBrowser statPaths", () => {
   let root: string;
-  const ctx = { senderWindow: { id: 7 } } as unknown as IpcContext;
+  const ctx = { projectId: "project-a" } as unknown as IpcContext;
 
   function makeHandler(worktrees: Array<{ id: string; path: string }>) {
     const deps = {
       worktreeService: {
-        getAllStatesAsync: vi.fn(async () => worktrees),
+        getAllStatesForProjectAsync: vi.fn(async () => worktrees),
       },
     } as unknown as HandlerDependencies;
     const spec = buildFileBrowserNamespace(deps).ops.statPaths;
@@ -32,6 +40,8 @@ describe("fileBrowser statPaths", () => {
   beforeEach(async () => {
     _resetRateLimitQueuesForTest();
     root = await fs.mkdtemp(path.join(os.tmpdir(), "fb-statpaths-"));
+    projectStoreMock.getProjectById.mockReset();
+    projectStoreMock.getProjectById.mockReturnValue({ id: "project-a", path: root });
     await fs.mkdir(path.join(root, "src", "panels"), { recursive: true });
     await fs.writeFile(path.join(root, "src", "index.ts"), "export {}\n");
   });
@@ -54,24 +64,62 @@ describe("fileBrowser statPaths", () => {
     );
     // Validation failed before any worktree resolution happened.
     expect(
-      (deps.worktreeService as unknown as { getAllStatesAsync: ReturnType<typeof vi.fn> })
-        .getAllStatesAsync
+      (
+        deps.worktreeService as unknown as {
+          getAllStatesForProjectAsync: ReturnType<typeof vi.fn>;
+        }
+      ).getAllStatesForProjectAsync
     ).not.toHaveBeenCalled();
   });
 
-  it("refuses an unresolvable sender window", async () => {
-    const { invoke } = makeHandler([{ id: root, path: root }]);
-    const blindCtx = { senderWindow: undefined } as unknown as IpcContext;
-    await expect(invoke(blindCtx, { worktreeId: root, paths: ["src"] })).rejects.toThrow(
-      /requesting window/
+  it("refuses a sender with no project binding", async () => {
+    const { invoke, deps } = makeHandler([{ id: root, path: root }]);
+    const unboundCtx = { projectId: null } as unknown as IpcContext;
+    await expect(invoke(unboundCtx, { worktreeId: root, paths: ["src"] })).rejects.toThrow(
+      /requesting view's project/
     );
+    expect(
+      (
+        deps.worktreeService as unknown as {
+          getAllStatesForProjectAsync: ReturnType<typeof vi.fn>;
+        }
+      ).getAllStatesForProjectAsync
+    ).not.toHaveBeenCalled();
   });
 
-  it("rejects a worktree the sender's window does not own", async () => {
+  it("refuses a sender whose project no longer exists", async () => {
+    projectStoreMock.getProjectById.mockReturnValue(undefined);
+    const { invoke, deps } = makeHandler([{ id: root, path: root }]);
+    await expect(invoke(ctx, { worktreeId: root, paths: ["src"] })).rejects.toThrow(
+      /Unknown project/
+    );
+    expect(
+      (
+        deps.worktreeService as unknown as {
+          getAllStatesForProjectAsync: ReturnType<typeof vi.fn>;
+        }
+      ).getAllStatesForProjectAsync
+    ).not.toHaveBeenCalled();
+  });
+
+  it("rejects a worktree the sender's project does not own", async () => {
     const { invoke } = makeHandler([{ id: "other", path: "/somewhere/else" }]);
     await expect(invoke(ctx, { worktreeId: root, paths: ["src"] })).rejects.toThrow(
       /Worktree not found/
     );
+  });
+
+  it("scopes the state query to the sender's own project path", async () => {
+    const { invoke, deps } = makeHandler([{ id: root, path: root }]);
+    await invoke(ctx, { worktreeId: root, paths: ["src"] });
+    expect(projectStoreMock.getProjectById).toHaveBeenCalledWith("project-a");
+    expect(
+      (
+        deps.worktreeService as unknown as {
+          getAllStatesForProjectAsync: ReturnType<typeof vi.fn>;
+        }
+      ).getAllStatesForProjectAsync
+    ).toHaveBeenCalledWith(root);
   });
 
   it("never reports kinds through a symlink that escapes the root", async () => {

@@ -24,15 +24,14 @@ const MAX_CONCURRENT_LISTINGS = 6;
 
 /**
  * Backoff schedule for silently retrying a failed *root* listing before
- * surfacing an error. Switching back to an idle project reactivates its view
- * and re-fetches the tree while the workspace host is still being repointed to
- * this window — `activateProjectView` sends `PROJECT_ON_SWITCH` before it awaits
- * `loadWorktrees` — so the first `listDirectory` can throw `Worktree not found`
- * for a few hundred ms before self-healing. Retrying instead of immediately
- * painting a red banner keeps that transient invisible; the banner is reserved
- * for a failure that persists across the whole schedule.
+ * surfacing an error. Listings are routed to the sender view's own project
+ * host (#11366), so window repointing during a switch is no longer a failure
+ * source — the grace window covers what remains: a cold or restarting
+ * workspace host, eviction, and transient IPC failures. Retrying instead of
+ * immediately painting a red banner keeps those transients invisible; the
+ * banner is reserved for a failure that persists across the whole schedule.
  *
- * 150ms first, because `getAllStatesAsync` coalesces its result for 150ms
+ * 150ms first, because state queries coalesce their result for 150ms
  * (`STATES_INFLIGHT_COALESCE_WINDOW_MS`) — a sooner retry would only replay the
  * same stale empty answer. Then 400ms and 800ms: `switch.ts`'s own comment puts
  * the warm-`loadProject` window at "several hundred ms" (prune/list/status

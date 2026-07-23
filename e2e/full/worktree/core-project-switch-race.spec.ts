@@ -280,4 +280,78 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
       expect(t.projectId).toBe(projectA!.id);
     }
   });
+
+  test("backgrounded view's file browser queries its own project (#11366)", async () => {
+    test.slow();
+
+    // Start on Project A and capture its page + main worktree id while active.
+    await switchToProject(ctx.window, PROJECT_A_NAME);
+    const pageA = ctx.window;
+    await expect
+      .poll(
+        () =>
+          pageA
+            .evaluate(() => (window as any).electron.worktree.getAll())
+            .then((wts: Array<{ id: string }>) => wts.length),
+        { timeout: T_LONG }
+      )
+      .toBeGreaterThanOrEqual(1);
+    const worktreeA: string = await pageA.evaluate(async () => {
+      const wts = await (window as any).electron.worktree.getAll();
+      return wts[0].id;
+    });
+
+    // Switch to Project B — A's view is now cached in the same window, and
+    // windowToProject points at B. pageA keeps targeting the cached view.
+    const pageB = await switchToProject(ctx.window, PROJECT_B_NAME);
+    await expect
+      .poll(
+        () =>
+          pageB
+            .evaluate(() => (window as any).electron.worktree.getAll())
+            .then((wts: Array<{ id: string }>) => wts.length),
+        { timeout: T_LONG }
+      )
+      .toBeGreaterThanOrEqual(1);
+    const worktreeB: string = await pageB.evaluate(async () => {
+      const wts = await (window as any).electron.worktree.getAll();
+      return wts[0].id;
+    });
+    expect(worktreeB).not.toBe(worktreeA);
+
+    // The cached A view's listing must resolve against A's own workspace
+    // host — before #11366 this failed with "Worktree not found" because the
+    // request routed to the active project B's host.
+    const listingA = await pageA.evaluate(async (wtId: string) => {
+      try {
+        const entries = await (window as any).electron.fileBrowser.listDirectory({
+          worktreeId: wtId,
+        });
+        return { ok: true as const, names: entries.map((e: { name: string }) => e.name) };
+      } catch (error) {
+        return { ok: false as const, error: String(error) };
+      }
+    }, worktreeA);
+    expect(
+      listingA.ok,
+      `cached view listing failed: ${"error" in listingA ? listingA.error : ""}`
+    ).toBe(true);
+    expect((listingA as { names: string[] }).names).toContain("README.md");
+
+    // The scoping must be tighter than before, not looser: the cached A view
+    // must NOT be able to list the active project B's worktree.
+    const listingB = await pageA.evaluate(async (wtId: string) => {
+      try {
+        await (window as any).electron.fileBrowser.listDirectory({ worktreeId: wtId });
+        return { ok: true as const };
+      } catch (error) {
+        return { ok: false as const, error: String(error) };
+      }
+    }, worktreeB);
+    expect(listingB.ok).toBe(false);
+    expect((listingB as { error: string }).error).toMatch(/Worktree not found/);
+
+    // Restore the serial suite's baseline.
+    await switchToProject(ctx.window, PROJECT_A_NAME);
+  });
 });

@@ -442,6 +442,44 @@ export class WorkspaceClient extends EventEmitter {
     return promise;
   }
 
+  /**
+   * States for one project's host, keyed by project path rather than window.
+   * `windowToProject` is repointed to the incoming project the moment a switch
+   * starts, so window-scoped lookups from a backgrounded view resolve against
+   * the active project's host; this resolves the host from the pool's
+   * project-path entries, which stay bound to their project for the host's
+   * lifetime. No host for the path returns `[]` — never a wildcard scan.
+   */
+  getAllStatesForProjectAsync(projectPath: string): Promise<WorktreeSnapshot[]> {
+    const normalized = this.pool.normalizeProjectPath(projectPath);
+    const key = `p:${normalized}`;
+    const existing = this._statesInflight.get(key);
+    if (existing) return existing;
+
+    const host = this.pool.getHostForProject(normalized);
+    const promise = (
+      host === undefined
+        ? Promise.resolve([] as WorktreeSnapshot[])
+        : host
+            .sendWithResponse<{ states: WorktreeSnapshot[] }>({
+              type: "get-all-states",
+              requestId: host.generateRequestId(),
+            })
+            .then((result) => result.states)
+    ).then(
+      (result) => {
+        setTimeout(() => this._statesInflight.delete(key), STATES_INFLIGHT_COALESCE_WINDOW_MS);
+        return result;
+      },
+      (error) => {
+        this._statesInflight.delete(key);
+        throw error;
+      }
+    );
+    this._statesInflight.set(key, promise);
+    return promise;
+  }
+
   private async _doGetAllStates(windowId?: number): Promise<WorktreeSnapshot[]> {
     if (windowId !== undefined) {
       const host = this.pool.resolveHostForWindow(windowId);

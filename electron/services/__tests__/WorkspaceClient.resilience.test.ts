@@ -372,6 +372,79 @@ describe("WorkspaceClient multi-process manager", () => {
     });
   });
 
+  describe("getAllStatesForProjectAsync", () => {
+    it("routes to the project's own host even after its window was rebound (#11366)", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      // Window 1 switches to project B — windowToProject now points at B,
+      // exactly the state a backgrounded A view lives in.
+      const loadB = client.loadProject("/project-b", 1);
+      await readyAndResolveLoad(1);
+      await loadB;
+
+      const statesPromise = client.getAllStatesForProjectAsync("/project-a");
+      await tick();
+      const req = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      expect(req).toBeDefined();
+      h(0).resolveRequest(req.requestId, { states: [{ id: "wt-a", name: "A" }] });
+
+      const result = await statesPromise;
+      expect(result.map((s: any) => s.id)).toEqual(["wt-a"]);
+
+      // B's host never saw a state query — no cross-project fan-out.
+      const hostBStateReqs = h(1)
+        .getAllRequests()
+        .filter((r: any) => r.type === "get-all-states");
+      expect(hostBStateReqs).toHaveLength(0);
+    });
+
+    it("returns empty for an unknown project path without contacting any host", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const callsBefore = h(0).sendWithResponse.mock.calls.length;
+      const result = await client.getAllStatesForProjectAsync("/no-such-project");
+      expect(result).toEqual([]);
+      expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+
+    it("coalesces concurrent calls per project path, separately per project", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const loadB = client.loadProject("/project-b", 2);
+      await readyAndResolveLoad(1);
+      await loadB;
+
+      const p1 = client.getAllStatesForProjectAsync("/project-a");
+      const p2 = client.getAllStatesForProjectAsync("/project-a");
+      const p3 = client.getAllStatesForProjectAsync("/project-b");
+      expect(p1).toBe(p2);
+      expect(p3).not.toBe(p1);
+
+      await tick();
+      const reqA = h(0)
+        .getAllRequests()
+        .filter((r: any) => r.type === "get-all-states");
+      expect(reqA).toHaveLength(1);
+      h(0).resolveRequest(reqA[0].requestId, { states: [{ id: "wt-a" }] });
+      const reqB = h(1)
+        .getAllRequests()
+        .filter((r: any) => r.type === "get-all-states");
+      expect(reqB).toHaveLength(1);
+      h(1).resolveRequest(reqB[0].requestId, { states: [{ id: "wt-b" }] });
+
+      expect(await p1).toEqual([{ id: "wt-a" }]);
+      expect(await p3).toEqual([{ id: "wt-b" }]);
+    });
+  });
+
   describe("singleflight cache", () => {
     beforeEach(() => {
       vi.useFakeTimers();
