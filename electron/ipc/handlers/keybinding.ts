@@ -8,7 +8,6 @@ import type { KeyAction } from "../../../shared/types/keymap.js";
 import { exportProfile, importProfile } from "../../utils/keybindingProfileIO.js";
 import type { ImportResult } from "../../utils/keybindingProfileIO.js";
 import { getValidatedOverrides } from "../../services/keybindingOverridesStore.js";
-import { createApplicationMenu } from "../../menu.js";
 import { typedHandle, typedHandleWithContext } from "../utils.js";
 
 export { getValidatedOverrides };
@@ -21,15 +20,18 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
   // the menu can't drift from what the keyboard actually does. Writes are
   // discrete (save/reset/import), so no debounce is needed. deps.mainWindow is
   // captured at registration; fall back to any live window so mutations after
-  // the first window closes still rebuild (the menu is app-global).
-  const rebuildMenuForOverrides = () => {
+  // the first window closes still rebuild (the menu is app-global). menu.js is
+  // imported lazily: it transitively pulls the window-services graph
+  // (windowServices → perWindowInit → setup/environment), which must not load
+  // as a side effect of registering IPC handlers.
+  const rebuildMenuForOverrides = async () => {
     const win =
       deps.mainWindow && !deps.mainWindow.isDestroyed()
         ? deps.mainWindow
         : BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
-    if (win) {
-      createApplicationMenu(win, deps.cliAvailabilityService);
-    }
+    if (!win) return;
+    const { createApplicationMenu } = await import("../../menu.js");
+    createApplicationMenu(win, deps.cliAvailabilityService);
   };
 
   handlers.push(
@@ -63,7 +65,7 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
         const overrides = getValidatedOverrides();
         overrides[actionId] = combo;
         store.set("keybindingOverrides.overrides", overrides);
-        rebuildMenuForOverrides();
+        await rebuildMenuForOverrides();
       }
     )
   );
@@ -77,14 +79,14 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
       const overrides = getValidatedOverrides();
       delete overrides[actionId];
       store.set("keybindingOverrides.overrides", overrides);
-      rebuildMenuForOverrides();
+      await rebuildMenuForOverrides();
     })
   );
 
   handlers.push(
     typedHandle(CHANNELS.KEYBINDING_RESET_ALL, async () => {
       store.set("keybindingOverrides.overrides", {});
-      rebuildMenuForOverrides();
+      await rebuildMenuForOverrides();
     })
   );
 
@@ -136,7 +138,7 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
           const existing = getValidatedOverrides();
           const merged = { ...existing, ...result.overrides };
           store.set("keybindingOverrides.overrides", merged);
-          rebuildMenuForOverrides();
+          await rebuildMenuForOverrides();
         }
 
         return result;
