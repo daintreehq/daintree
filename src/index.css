@@ -2610,6 +2610,16 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     outline-offset: -2px;
   }
 
+  /* The file-browser row whose context menu is open marks its target with a
+     background tint via data-state="open", which is stripped here. Right-click
+     no longer moves the selection, so without this the targeted row would carry
+     no forced-colors cue at all. Scoped to [role="treeitem"] so it stays
+     independent of the menuitem fallback above. */
+  [role="treeitem"][data-state="open"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
   button,
   [role="button"],
   [type="button"],

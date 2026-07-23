@@ -4,6 +4,7 @@ import { act, fireEvent, render } from "@testing-library/react";
 import { forwardRef } from "react";
 import type { ReactNode } from "react";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
+import { ContextMenuItem } from "@/components/ui/context-menu";
 import { FileTreeView } from "../FileTreeView";
 import type { FlatTreeRow } from "../fileBrowserTree";
 
@@ -59,15 +60,29 @@ function renderTree(overrides: Partial<Parameters<typeof FileTreeView>[0]> = {})
 }
 
 describe("FileTreeView context-menu interactions", () => {
-  it("leaves the selection untouched on right-click", () => {
-    // Right-click must not swap the viewed file: the menu acts on the
-    // right-clicked row directly, so moving the selection would pull the
-    // viewer off the file the user was looking at mid-gesture. The open-state
-    // lift — not the selection — is what shows which row the menu targets.
-    const { onSelect, getByRole } = renderTree({ selectedPath: "README.md" });
+  it("opens the menu on the right-clicked row without moving the selection", async () => {
+    // Right-click must not swap the viewed file: the menu targets the
+    // right-clicked row directly (shown by that row's own open-state lift), so
+    // moving the selection would pull the viewer off the file the user was
+    // looking at mid-gesture. A row-specific menu item lets us prove the menu
+    // opened on the row that was clicked, not merely that something opened.
+    const onSelect = vi.fn();
+    const { getByRole, findByRole } = render(
+      <FileTreeView
+        rows={ROWS}
+        selectedPath="README.md"
+        onSelect={onSelect}
+        onToggleExpanded={vi.fn()}
+        rowContextMenu={(clicked) => <ContextMenuItem>Act on {clicked.name}</ContextMenuItem>}
+        label="Files"
+      />
+    );
 
     fireEvent.contextMenu(getByRole("treeitem", { name: "src" }));
 
+    // The menu opens on the row that was right-clicked...
+    expect(await findByRole("menuitem", { name: "Act on src" })).toBeTruthy();
+    // ...while the previously selected row — and thus the viewer — stays put.
     expect(onSelect).not.toHaveBeenCalled();
   });
 
