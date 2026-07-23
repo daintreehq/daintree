@@ -181,8 +181,10 @@ describe("FileBrowserViewer tree-sidebar toggle (#11328)", () => {
 
   it("is the first control in the toolbar in both the empty and file-selected states", async () => {
     const { rerender } = renderViewer(null);
+    // `?.` keeps the assertion honest under noUncheckedIndexedAccess: an empty
+    // button list yields undefined, which still fails the toBe below.
     const firstEmpty = screen.getAllByRole("button")[0];
-    expect(firstEmpty.getAttribute("data-testid")).toBe("file-browser-sidebar-toggle");
+    expect(firstEmpty?.getAttribute("data-testid")).toBe("file-browser-sidebar-toggle");
 
     rerender(
       <TooltipProvider>
@@ -202,7 +204,7 @@ describe("FileBrowserViewer tree-sidebar toggle (#11328)", () => {
     // Still first, ahead of the reveal/open-in-editor actions — the toggle
     // stays flush at the far left of the header per the issue.
     const firstWithFile = screen.getAllByRole("button")[0];
-    expect(firstWithFile.getAttribute("data-testid")).toBe("file-browser-sidebar-toggle");
+    expect(firstWithFile?.getAttribute("data-testid")).toBe("file-browser-sidebar-toggle");
   });
 
   it("exposes an inverse aria-expanded and names the tree region only while expanded", () => {
