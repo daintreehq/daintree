@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  rebaseAbsolutePath,
-  rebaseMruEntry,
-  isAbsoluteFsPath,
-} from "../projectPathRelocation.js";
+import { rebaseAbsolutePath, rebaseMruEntry, isAbsoluteFsPath } from "../projectPathRelocation.js";
 
 describe("isAbsoluteFsPath", () => {
   it("recognizes POSIX, drive-letter and UNC absolutes", () => {
@@ -32,9 +28,7 @@ describe("rebaseAbsolutePath", () => {
     expect(rebaseAbsolutePath("/old/project/src/a.ts", OLD, NEW)).toBe(
       "/new/renamed-project/src/a.ts"
     );
-    expect(rebaseAbsolutePath("/old/project/.git", OLD, NEW)).toBe(
-      "/new/renamed-project/.git"
-    );
+    expect(rebaseAbsolutePath("/old/project/.git", OLD, NEW)).toBe("/new/renamed-project/.git");
   });
 
   it("does NOT rewrite a sibling that merely shares a prefix", () => {
@@ -90,7 +84,11 @@ describe("rebaseAbsolutePath", () => {
 
   it("rebases UNC descendants", () => {
     expect(
-      rebaseAbsolutePath("\\\\server\\share\\proj\\a", "\\\\server\\share\\proj", "\\\\server\\share\\moved")
+      rebaseAbsolutePath(
+        "\\\\server\\share\\proj\\a",
+        "\\\\server\\share\\proj",
+        "\\\\server\\share\\moved"
+      )
     ).toBe("\\\\server\\share\\moved\\a");
   });
 
@@ -105,9 +103,7 @@ describe("rebaseMruEntry", () => {
   const NEW = "/new/renamed-project";
 
   it("rewrites the path inside a worktree: entry", () => {
-    expect(rebaseMruEntry("worktree:/old/project", OLD, NEW)).toBe(
-      "worktree:/new/renamed-project"
-    );
+    expect(rebaseMruEntry("worktree:/old/project", OLD, NEW)).toBe("worktree:/new/renamed-project");
     expect(rebaseMruEntry("worktree:/old/project/wt", OLD, NEW)).toBe(
       "worktree:/new/renamed-project/wt"
     );

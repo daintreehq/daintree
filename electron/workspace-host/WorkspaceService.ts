@@ -3350,7 +3350,12 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     providerId: string,
     credentials: import("../../shared/types/forge.js").Credentials | null
   ): void {
-    this.prService.updateForgeCredentials(providerId, credentials, this.projectRootPath, this.projectId);
+    this.prService.updateForgeCredentials(
+      providerId,
+      credentials,
+      this.projectRootPath,
+      this.projectId
+    );
     if (credentials) {
       // A new credential may resolve previously-failing auth — drop suspensions so
       // the next scheduled fetch retries. Network/transient entries stay so we

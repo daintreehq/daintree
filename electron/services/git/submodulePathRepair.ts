@@ -2,7 +2,10 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
 import { logError } from "../../utils/logger.js";
-import { rebaseAbsolutePath, isAbsoluteFsPath } from "../../../shared/utils/projectPathRelocation.js";
+import {
+  rebaseAbsolutePath,
+  isAbsoluteFsPath,
+} from "../../../shared/utils/projectPathRelocation.js";
 
 /**
  * Repair submodule metadata that a project-folder move/rename leaves stale
@@ -96,7 +99,11 @@ async function collectConfigFiles(dir: string, out: string[]): Promise<void> {
  * `oldRoot`. `moduleDir` is the config's directory — git resolves a relative
  * `core.worktree` against it.
  */
-async function repairOneModule(configFile: string, oldRoot: string, newRoot: string): Promise<void> {
+async function repairOneModule(
+  configFile: string,
+  oldRoot: string,
+  newRoot: string
+): Promise<void> {
   try {
     const moduleDir = path.dirname(configFile);
     const original = await safeReadFile(configFile);
@@ -197,7 +204,10 @@ function decodeConfigValue(raw: string): { value: string; quoted: boolean } {
 function encodeConfigValue(value: string, quoted: boolean): string {
   const needsQuote = quoted || /[\s"\\]/.test(value);
   if (!needsQuote) return value;
-  const escaped = value.replace(/(["\\])/g, "\\$1").replace(/\t/g, "\\t").replace(/\n/g, "\\n");
+  const escaped = value
+    .replace(/(["\\])/g, "\\$1")
+    .replace(/\t/g, "\\t")
+    .replace(/\n/g, "\\n");
   return `"${escaped}"`;
 }
 
