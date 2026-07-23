@@ -1,6 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
+import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import type { WorktreeState } from "@/types";
@@ -996,6 +997,30 @@ describe("WorktreeDeleteDialog — fresh status verification (#11343)", () => {
       expect(startDeleteMock).toHaveBeenCalledTimes(1);
     });
     expect(startDeleteMock).toHaveBeenCalledWith("wt-1", { force: true, deleteBranch: false });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("still dispatches a force-delete under StrictMode (mountedRef remount guard)", async () => {
+    // StrictMode runs mount effects setup→cleanup→setup; a mounted flag that
+    // only cleared would be false after remount and abort every force-delete.
+    buildPreviewMock.mockResolvedValue(makePreview([{ path: "new.txt", status: "untracked" }]));
+    const onClose = vi.fn();
+    const worktree = makeWorktree(makeChanges([]), { branch: "feature/x", name: "feature/x" });
+    render(
+      <StrictMode>
+        <WorktreeDeleteDialog isOpen={true} onClose={onClose} worktree={worktree} />
+      </StrictMode>
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    await waitFor(() => {
+      expect(buildPreviewMock).toHaveBeenCalled();
+    });
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+
+    await waitFor(() => {
+      expect(startDeleteMock).toHaveBeenCalledTimes(1);
+    });
     expect(onClose).toHaveBeenCalled();
   });
 });

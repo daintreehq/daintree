@@ -47,6 +47,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const sessionRef = useRef(0);
   const mountedRef = useRef(true);
   useEffect(() => {
+    // Set on SETUP as well as clearing on cleanup — under React StrictMode the
+    // mount effect runs setup → cleanup → setup, so a setup that only cleared
+    // would leave `mountedRef` false after remount and make every force-delete
+    // abort at the revalidation guard in dev.
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
