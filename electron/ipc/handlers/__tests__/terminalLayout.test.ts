@@ -265,4 +265,29 @@ describe("setDraftInputs merge (#11352)", () => {
     await setDraftInputs({ projectId: "p1", draftInputs: { t1: "new" } });
     expect(saved()?.draftInputs).toEqual({ t1: "new" });
   });
+
+  it("does not recreate a deleted state file for a pure-removal write", async () => {
+    // Project state was deleted (close-with-kill / removal); a late teardown
+    // flush emits only a tombstone. With no existing state and nothing left to
+    // persist, the updater returns null so the file stays deleted.
+    const saved = onDisk(null);
+    await setDraftInputs({
+      projectId: "p1",
+      draftInputs: {},
+      changedIds: [],
+      removedIds: ["t1"],
+    });
+    expect(saved()).toBeNull();
+  });
+
+  it("still persists a genuine first draft on a project with no prior state", async () => {
+    const saved = onDisk(null);
+    await setDraftInputs({
+      projectId: "p1",
+      draftInputs: { t1: "first draft" },
+      changedIds: ["t1"],
+      removedIds: [],
+    });
+    expect(saved()?.draftInputs).toEqual({ t1: "first draft" });
+  });
 });

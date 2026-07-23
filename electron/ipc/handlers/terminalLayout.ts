@@ -353,17 +353,8 @@ export const terminalLayoutNamespace = defineIpcNamespace({
         const changedIds = sanitizeIdList(payload.changedIds);
         const removedIds = sanitizeIdList(payload.removedIds);
 
-        await projectStore.enqueueProjectStateUpdate(projectId, (existingState) => ({
-          projectId,
-          activeWorktreeId: existingState?.activeWorktreeId,
-          sidebarWidth: existingState?.sidebarWidth ?? 350,
-          terminals: existingState?.terminals ?? [],
-          tabGroups: existingState?.tabGroups ?? [],
-          terminalLayout: existingState?.terminalLayout,
-          focusMode: existingState?.focusMode,
-          focusPanelState: existingState?.focusPanelState,
-          terminalSizes: existingState?.terminalSizes,
-          draftInputs:
+        await projectStore.enqueueProjectStateUpdate(projectId, (existingState) => {
+          const mergedDrafts =
             changedIds === undefined
               ? sanitized
               : mergeRecord(
@@ -371,8 +362,30 @@ export const terminalLayoutNamespace = defineIpcNamespace({
                   sanitized,
                   changedIds,
                   removedIds ?? []
-                ),
-        }));
+                );
+          // Don't recreate a project's deleted state file just to record draft
+          // removals. A teardown flush can fire after the project was closed
+          // (killTerminals) or removed — its persisted state gone — and emit a
+          // pure-removal tombstone. With no existing state and nothing left to
+          // persist, skip the write so a deleted state file stays deleted
+          // (#11352). A genuine first draft on a new project still persists,
+          // because mergedDrafts is non-empty there.
+          if (!existingState && Object.keys(mergedDrafts).length === 0) {
+            return null;
+          }
+          return {
+            projectId,
+            activeWorktreeId: existingState?.activeWorktreeId,
+            sidebarWidth: existingState?.sidebarWidth ?? 350,
+            terminals: existingState?.terminals ?? [],
+            tabGroups: existingState?.tabGroups ?? [],
+            terminalLayout: existingState?.terminalLayout,
+            focusMode: existingState?.focusMode,
+            focusPanelState: existingState?.focusPanelState,
+            terminalSizes: existingState?.terminalSizes,
+            draftInputs: mergedDrafts,
+          };
+        });
       }
     ),
   },

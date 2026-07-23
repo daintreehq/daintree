@@ -182,31 +182,17 @@ describe("draftInputPersistence.flushAll — close-time draft flush (#11352)", (
     expect(new Set(setDraftInputsMock.mock.calls[1]![2] as string[])).toEqual(new Set(["t1", "t2"]));
   });
 
-  it("clearProject stops a teardown flush from recreating a deleted project's state", async () => {
+  it("clearProject forgets a project's baseline so it is no longer enumerated", async () => {
     const projectId = freshProjectId();
-    // Hydrated draft on disk, then the close path wiped the live drafts.
     draftInputPersistence.primeProject(projectId, { t1: "on disk" });
     draftInputPersistence.clearProject(projectId);
 
+    // With the baseline forgotten and no live drafts, flushAll has nothing to
+    // enumerate for this project.
     draftInputPersistence.flushAll();
     await draftInputPersistence.whenIdle();
 
     expect(setDraftInputsMock).not.toHaveBeenCalled();
-  });
-
-  it("without clearProject a wiped-store project still tombstones from its baseline (the hazard)", async () => {
-    const projectId = freshProjectId();
-    // Baseline retained but live drafts wiped (e.g. clearAllDraftInputs on
-    // close) — flushAll enumerates the project via its baseline and emits a
-    // removal that would recreate the just-deleted state file. This is exactly
-    // what clearProject in the close/remove paths prevents.
-    draftInputPersistence.primeProject(projectId, { t1: "on disk" });
-
-    draftInputPersistence.flushAll();
-    await draftInputPersistence.whenIdle();
-
-    expect(setDraftInputsMock).toHaveBeenCalledTimes(1);
-    expect(setDraftInputsMock.mock.calls[0]![3]).toEqual(["t1"]); // removedIds tombstone
   });
 
   it("flushes each project independently", async () => {

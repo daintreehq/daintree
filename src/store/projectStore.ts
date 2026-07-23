@@ -845,11 +845,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       clearFleetArmingThroughAccessor();
       set({ currentProject: null, worktreeLoadError: null });
       clearPanelStoreForSwitchThroughAccessor();
-      // clearPanelStoreForSwitchThroughAccessor emptied the live drafts; drop
-      // the persisted baseline in the SAME synchronous step so a teardown
-      // visibility flush computes an empty delta instead of tombstoning the
-      // baseline and recreating the state file main just deleted (#11352).
-      draftInputPersistence.clearProject(projectId);
       await get().loadProjects();
 
       return result;
