@@ -12,6 +12,7 @@ import {
 import type { AgentAvailabilityState, AgentCliDetail } from "@shared/types";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, ExternalLink } from "lucide-react";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
 import { InstallBlock } from "@/components/Setup/InstallBlock";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -272,7 +273,7 @@ export function AgentInstallSection({
             disabled={isRefreshingCli}
             className="text-daintree-text/50 hover:text-daintree-text"
           >
-            <RefreshCw size={14} className={cn("mr-1.5", isRefreshingCli && "animate-spin")} />
+            <SpinningIcon icon={RefreshCw} active={isRefreshingCli} size={14} className="mr-1.5" />
             Re-check
           </Button>
         </div>

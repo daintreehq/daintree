@@ -21,6 +21,7 @@ import {
   WifiOff,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Activity } from "@/components/icons";
 import { PulseHeatmap, getPulseHeatmapRowWidth, getPulseHeatLevelBackground } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
@@ -611,9 +612,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             className="pulse-control rounded-md p-1.5 text-daintree-text/55 transition-colors hover:text-daintree-text/80 disabled:opacity-50 disabled:pointer-events-none"
             aria-label="Refresh"
           >
-            <RefreshCw
-              className={cn("w-3 h-3", isLoading && "animate-spin motion-reduce:animate-none")}
-            />
+            <SpinningIcon icon={RefreshCw} active={isLoading} className="w-3 h-3" />
           </button>
         </div>
       </div>

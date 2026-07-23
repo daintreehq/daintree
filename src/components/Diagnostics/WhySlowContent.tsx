@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Gauge, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { systemClient } from "@/clients/systemClient";
 import { logError } from "@/utils/logger";
 import type { WhySlowSnapshot } from "@shared/types/whySlow";
@@ -245,7 +246,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
             className="flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] text-xs text-daintree-text/70 hover:text-daintree-text hover:bg-tint/[0.06] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent disabled:opacity-50"
             aria-label="Refresh diagnostics snapshot"
           >
-            <RefreshCw className={cn("w-3.5 h-3.5", isRefreshing && "animate-spin")} />
+            <SpinningIcon icon={RefreshCw} active={isRefreshing} className="w-3.5 h-3.5" />
             Refresh
           </button>
         </div>

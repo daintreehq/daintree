@@ -9,6 +9,7 @@ import { CapabilityRow } from "./capabilityMeta";
 import { PluginMcpServersSection } from "./PluginMcpServersSection";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { Button } from "@/components/ui/button";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import {
   SettingsSubtabBar,
   type SettingsSubtabItem,
@@ -369,7 +370,7 @@ export function PluginDetailPane({
                   disabled={checkingUpdate}
                   aria-label={`Check ${label} for updates`}
                 >
-                  <RefreshCw className={checkingUpdate ? "animate-spin" : undefined} />
+                  <SpinningIcon icon={RefreshCw} active={checkingUpdate} />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">{updateTooltip}</TooltipContent>

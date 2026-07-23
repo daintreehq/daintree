@@ -69,12 +69,17 @@ describe("SidebarContent header reveal — issue #6964", () => {
     expect(source).toContain("motion-reduce:transition-none");
   });
 
-  it("gates the refresh spinner on useSkeletonDisplayFloor so a fast refresh stays perceptible", () => {
-    expect(source).toContain("useSkeletonDisplayFloor");
-    expect(source).toMatch(
-      /showRefreshSpinner\s*=\s*useSkeletonDisplayFloor\(\s*isRefreshing\s*\)/
-    );
-    expect(source).toMatch(/showRefreshSpinner\s*\?\s*"animate-spin"/);
+  it("delegates the refresh spin to SpinningIcon driven by the raw refresh flag (#11323)", () => {
+    // The refresh spin is owned by the shared SpinningIcon primitive, which
+    // finishes the current rotation before stopping instead of snapping back.
+    // It must be driven by the raw `isRefreshing` transition flag — the old
+    // `useSkeletonDisplayFloor` wall-clock floor gated duration, not rotation
+    // phase, so it snapped mid-turn and is deliberately gone from this button.
+    expect(source).toMatch(/<SpinningIcon\b[^>]*icon=\{RefreshCw\}[^>]*active=\{isRefreshing\}/);
+    expect(source).not.toContain("useSkeletonDisplayFloor");
+    expect(source).not.toContain("showRefreshSpinner");
+    // No hand-rolled conditional class toggle survives on the refresh icon.
+    expect(source).not.toMatch(/showRefreshSpinner\s*\?\s*"animate-spin"/);
     expect(source).not.toMatch(/isRefreshing\s*\?\s*"animate-spin"/);
   });
 });

@@ -1086,3 +1086,73 @@ describe("FilePane diff mode (#11274)", () => {
     });
   });
 });
+
+describe("FilePane toolbar refresh spin (#11323)", () => {
+  function deferredValue<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  function renderFilePane() {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/src/index.ts" };
+    return render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title="index.ts"
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  function refreshIcon(container: HTMLElement): SVGSVGElement {
+    const button = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.getAttribute("aria-label") === "Refresh"
+    );
+    if (!button) throw new Error("Refresh button not rendered");
+    const svg = button.querySelector("svg");
+    if (!svg) throw new Error("Refresh icon not rendered");
+    return svg;
+  }
+
+  it("spins while a source refresh is in flight, then finishes the rotation once it settles", async () => {
+    readMock.mockReset();
+    readMock.mockResolvedValueOnce({ content: "v1" });
+    const { container } = renderFilePane();
+
+    // Initial load settles with no refresh in progress — the icon is still.
+    await waitFor(() =>
+      expect(refreshIcon(container).classList.contains("animate-spin")).toBe(false)
+    );
+
+    // The refresh read is held open so the operation is observably "running".
+    const pending = deferredValue<{ content: string }>();
+    readMock.mockReturnValueOnce(pending.promise);
+    await act(async () => {
+      Array.from(container.querySelectorAll("button"))
+        .find((b) => b.getAttribute("aria-label") === "Refresh")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(refreshIcon(container).classList.contains("animate-spin")).toBe(true);
+
+    // The read settles: the spin request is released, but the class must remain
+    // until the rotation boundary rather than snapping back mid-turn.
+    await act(async () => {
+      pending.resolve({ content: "v2" });
+    });
+    expect(refreshIcon(container).classList.contains("animate-spin")).toBe(true);
+
+    // The rotation completes → the icon stops at 0°.
+    act(() => {
+      refreshIcon(container).dispatchEvent(new Event("animationiteration", { bubbles: true }));
+    });
+    expect(refreshIcon(container).classList.contains("animate-spin")).toBe(false);
+  });
+});
