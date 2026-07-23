@@ -196,7 +196,11 @@ export class WorkspaceHostPool {
 
   // ── Process lifecycle ──
 
-  private makeInitPromise(host: WorkspaceHostProcess, normalizedPath: string): Promise<void> {
+  private makeInitPromise(
+    host: WorkspaceHostProcess,
+    normalizedPath: string,
+    projectId: string
+  ): Promise<void> {
     return (async () => {
       const [, forgeSettings] = await Promise.all([
         host.waitForReady(),
@@ -207,6 +211,7 @@ export class WorkspaceHostPool {
         type: "load-project",
         requestId,
         rootPath: normalizedPath,
+        projectId,
         globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
         wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
         forgeProviderOverride: forgeSettings.forgeProviderOverride,
@@ -277,7 +282,8 @@ export class WorkspaceHostPool {
       host.updateMonitorConfig(this.monitorConfigCache);
     }
 
-    const initPromise = this.makeInitPromise(host, normalizedPath);
+    const projectId = projectStore.resolveProjectIdForPath(normalizedPath);
+    const initPromise = this.makeInitPromise(host, normalizedPath, projectId);
 
     const newEntry: ProcessEntry = {
       host,
@@ -287,6 +293,7 @@ export class WorkspaceHostPool {
       cleanupTimeout: null,
       windowIds: new Set([windowId]),
       projectPath: normalizedPath,
+      projectId,
       directPortViews: new Map(),
     };
 
@@ -348,7 +355,8 @@ export class WorkspaceHostPool {
       host.updateMonitorConfig(this.monitorConfigCache);
     }
 
-    const initPromise = this.makeInitPromise(host, normalizedPath);
+    const projectId = projectStore.resolveProjectIdForPath(normalizedPath);
+    const initPromise = this.makeInitPromise(host, normalizedPath, projectId);
 
     const entry: ProcessEntry = {
       host,
@@ -358,6 +366,7 @@ export class WorkspaceHostPool {
       cleanupTimeout: null,
       windowIds: new Set(),
       projectPath: normalizedPath,
+      projectId,
       directPortViews: new Map(),
     };
 
@@ -554,6 +563,7 @@ export class WorkspaceHostPool {
       type: "load-project",
       requestId,
       rootPath: entry.projectPath,
+      projectId: entry.projectId,
       globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
       wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
       forgeProviderOverride: forgeSettings.forgeProviderOverride,

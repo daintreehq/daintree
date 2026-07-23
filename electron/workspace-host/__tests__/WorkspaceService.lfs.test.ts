@@ -45,7 +45,6 @@ vi.mock("../../utils/gitUtils.js", () => ({
 }));
 vi.mock("../../utils/fs.js", () => ({ waitForPathExists: vi.fn() }));
 vi.mock("../../services/projectStorePaths.js", () => ({
-  generateProjectId: vi.fn(),
   settingsFilePath: vi.fn(),
 }));
 

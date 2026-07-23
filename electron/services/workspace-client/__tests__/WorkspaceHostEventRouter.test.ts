@@ -24,7 +24,6 @@ vi.mock("../../GitServiceCache.js", () => ({
 import { broadcastToRenderer } from "../../../ipc/utils.js";
 import { events } from "../../events.js";
 import { gitServiceCache } from "../../GitServiceCache.js";
-import { generateProjectId } from "../../projectStorePaths.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../../shared/utils/forgeProviderIds.js";
 import type { RateLimitInfo } from "../../../../shared/types/forge.js";
 
@@ -51,6 +50,7 @@ function makeEntry(overrides: Partial<ProcessEntry> = {}): ProcessEntry {
     cleanupTimeout: null,
     windowIds: new Set(),
     projectPath: "/project/test",
+    projectId: "test-project-id",
     directPortViews: new Map(),
     ...overrides,
   };
@@ -1030,27 +1030,28 @@ describe("WorkspaceHostEventRouter", () => {
 
   describe("forge-remote-changed (#11155)", () => {
     it("broadcasts a project-scoped signal so the renderer re-resolves its provider", () => {
-      const entry = makeEntry({ projectPath: "/project/test" });
+      const entry = makeEntry({ projectPath: "/project/test", projectId: "test-project-id" });
       router.routeHostEvent(entry, { type: "forge-remote-changed" });
 
       expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
       expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.EVENTS_PUSH, {
         name: "forge:remote-changed",
-        payload: { projectId: generateProjectId("/project/test") },
+        payload: { projectId: "test-project-id" },
       });
     });
 
     it("scopes the signal to the emitting host's project", () => {
-      router.routeHostEvent(makeEntry({ projectPath: "/a" }), { type: "forge-remote-changed" });
-      router.routeHostEvent(makeEntry({ projectPath: "/b" }), { type: "forge-remote-changed" });
+      router.routeHostEvent(makeEntry({ projectPath: "/a", projectId: "project-a-id" }), {
+        type: "forge-remote-changed",
+      });
+      router.routeHostEvent(makeEntry({ projectPath: "/b", projectId: "project-b-id" }), {
+        type: "forge-remote-changed",
+      });
 
       const projectIds = vi
         .mocked(broadcastToRenderer)
         .mock.calls.map(([, payload]) => (payload as { payload: { projectId: string } }).payload);
-      expect(projectIds).toEqual([
-        { projectId: generateProjectId("/a") },
-        { projectId: generateProjectId("/b") },
-      ]);
+      expect(projectIds).toEqual([{ projectId: "project-a-id" }, { projectId: "project-b-id" }]);
     });
 
     it("carries no remote URL — https remotes can embed credentials", () => {

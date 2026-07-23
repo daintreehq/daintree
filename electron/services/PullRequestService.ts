@@ -2,7 +2,6 @@ import { events } from "./events.js";
 import { logInfo, logWarn, logDebug } from "../utils/logger.js";
 import type { WorktreeSnapshot as WorktreeState } from "../../shared/types/workspace-host.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { generateProjectId } from "./projectStorePaths.js";
 import { createHardenedGit } from "../utils/hardenedGit.js";
 import { getForgeBridge } from "../workspace-host/forgeBridge.js";
 import { BatchLoader } from "../workspace-host/batchLoader.js";
@@ -374,9 +373,12 @@ class PullRequestService {
     return Math.max(0, FOCUS_CATCHUP_THROTTLE_MS - (Date.now() - this.lastCheckAt));
   }
 
-  public initialize(cwd: string): void {
+  public initialize(cwd: string, projectId: string): void {
     this.cwd = cwd;
-    this.projectId = generateProjectId(cwd);
+    // Immutable id threaded from main via load-project. The host has no DB
+    // access, so hashing `cwd` here (the old behaviour) would mint a stale id
+    // for any relocated project and detach every id-keyed lookup (#11282).
+    this.projectId = projectId;
     logInfo("PullRequestService initialized", { cwd, projectId: this.projectId });
   }
 

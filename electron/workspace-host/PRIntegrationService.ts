@@ -2,7 +2,7 @@ import type { TypedEventBus } from "../services/events.js";
 import type { PRServiceStatus, WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 
 interface PullRequestServiceLike {
-  initialize(rootPath: string): void;
+  initialize(rootPath: string, projectId: string): void;
   start(startupDelayMs?: number): Promise<void>;
   stop(): void;
   reset(): void;
@@ -107,6 +107,7 @@ export class PRIntegrationService {
 
   async initialize(
     projectRootPath: string,
+    projectId: string,
     getMonitorCandidates: () => Array<{
       worktreeId: string;
       branch?: string;
@@ -120,7 +121,7 @@ export class PRIntegrationService {
 
     this.cleanup();
 
-    this.prService.initialize(projectRootPath);
+    this.prService.initialize(projectRootPath, projectId);
     this.initializedForPath = projectRootPath;
 
     this.prEventUnsubscribers.push(
@@ -220,10 +221,10 @@ export class PRIntegrationService {
     return this.prService.getProviderContext();
   }
 
-  resetPRState(projectRootPath: string | null): void {
+  resetPRState(projectRootPath: string | null, projectId: string | null): void {
     this.prService.reset();
-    if (projectRootPath) {
-      this.prService.initialize(projectRootPath);
+    if (projectRootPath && projectId) {
+      this.prService.initialize(projectRootPath, projectId);
       void this.startPolling();
     }
   }
@@ -242,7 +243,8 @@ export class PRIntegrationService {
   updateForgeCredentials(
     _providerId: string,
     credentials: import("../../shared/types/forge.js").Credentials | null,
-    projectRootPath: string | null
+    projectRootPath: string | null,
+    projectId: string | null
   ): void {
     // Credential VALUES are not applied in this process — every forge call
     // from the host goes through the RPC bridge to main, where the provider
@@ -252,8 +254,8 @@ export class PRIntegrationService {
       void this.prService.refresh();
     } else {
       this.prService.reset();
-      if (projectRootPath) {
-        this.prService.initialize(projectRootPath);
+      if (projectRootPath && projectId) {
+        this.prService.initialize(projectRootPath, projectId);
         void this.startPolling();
       }
     }

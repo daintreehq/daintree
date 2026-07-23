@@ -1,4 +1,5 @@
-import type { ProjectState, PanelSnapshot, TabGroup } from "../../shared/types/project.js";
+import type { ProjectState, PanelSnapshot } from "../../shared/types/project.js";
+import type { TabGroup } from "../../shared/types/panel.js";
 import { rebaseAbsolutePath, rebaseMruEntry } from "../../shared/utils/projectPathRelocation.js";
 
 /**

@@ -637,4 +637,56 @@ describe("projectStore adversarial", () => {
 
     expect(clearHibernateSessionMock).not.toHaveBeenCalled();
   });
+
+  it("rebases the hibernated Assistant cwd when onUpdated changes the path (same id, #11282)", async () => {
+    const updatedCallbacks: Array<(project: ProjectShape) => void> = [];
+    installProjectApi({
+      onUpdated: (callback) => {
+        updatedCallbacks.push(callback);
+        return vi.fn();
+      },
+    });
+    installLocalStorage(createStorageMock());
+    hibernateSessionsMock[projectA.id] = {
+      sessionId: "session-1",
+      cwd: `${projectA.path}/sub`,
+      agentId: "claude",
+    };
+
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA], currentProject: projectA });
+
+    updatedCallbacks[0]!({ ...projectA, path: "/tmp/project-a-moved" });
+
+    // Same id, new folder: the resume pointer is repointed in place, never GC'd.
+    expect(setHibernateSessionMock).toHaveBeenCalledWith(projectA.id, {
+      sessionId: "session-1",
+      cwd: "/tmp/project-a-moved/sub",
+      agentId: "claude",
+    });
+    expect(clearHibernateSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves the hibernated cwd untouched when onUpdated does not change the path", async () => {
+    const updatedCallbacks: Array<(project: ProjectShape) => void> = [];
+    installProjectApi({
+      onUpdated: (callback) => {
+        updatedCallbacks.push(callback);
+        return vi.fn();
+      },
+    });
+    installLocalStorage(createStorageMock());
+    hibernateSessionsMock[projectA.id] = {
+      sessionId: "session-1",
+      cwd: projectA.path,
+      agentId: "claude",
+    };
+
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA], currentProject: projectA });
+
+    updatedCallbacks[0]!({ ...projectA, name: "Renamed only" });
+
+    expect(setHibernateSessionMock).not.toHaveBeenCalled();
+  });
 });

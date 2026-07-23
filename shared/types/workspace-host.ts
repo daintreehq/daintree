@@ -300,6 +300,13 @@ export type WorkspaceHostRequest =
       type: "load-project";
       requestId: string;
       rootPath: string;
+      /**
+       * Immutable project id resolved by main (`resolveProjectIdForPath`) and
+       * threaded in because the host has no DB access (#11282). The host must
+       * never hash `rootPath` for identity — a relocated project's id no longer
+       * equals `sha256(path)`, so hashing would read the wrong state directory.
+       */
+      projectId: string;
       globalEnvVars?: Record<string, string>;
       /**
        * Persisted per-worktree WSL git opt-in state (Windows only). Map key is

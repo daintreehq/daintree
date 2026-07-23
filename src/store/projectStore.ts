@@ -14,6 +14,7 @@ import { panelPersistence, panelToSnapshot } from "./persistence/panelPersistenc
 import { useTerminalInputStore } from "./terminalInputStore";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { rebaseAbsolutePath } from "@shared/utils/projectPathRelocation";
 import { isClientAppError } from "@/utils/clientAppError";
 import { getViewWorkspaceId } from "./viewWorkspaceId";
 import {
@@ -240,6 +241,31 @@ function migrateHibernateSession(fromProjectId: string, toProjectId: string, new
       operation: "migrate_hibernate_session",
       component: "projectStore",
       details: { fromProjectId, toProjectId },
+    });
+  }
+}
+
+/**
+ * Repoint a hibernated Assistant conversation's recorded working directory after
+ * its project folder moved (#11282, phase 2). Reattaching keeps the same project
+ * id, so — unlike {@link migrateHibernateSession} — this rewrites the cwd in
+ * place rather than moving between ids. No-op when there is no hibernated session
+ * or its cwd is unaffected by the move. Swallows failure: losing one resume
+ * pointer must never abort the project-list refresh that triggered it.
+ */
+function rebaseHibernateSessionCwd(projectId: string, oldPath: string, newPath: string): void {
+  try {
+    const helpPanel = useHelpPanelStore.getState();
+    const session = helpPanel.hibernateSessions?.[projectId];
+    if (!session) return;
+    const nextCwd = rebaseAbsolutePath(session.cwd, oldPath, newPath);
+    if (nextCwd === session.cwd) return;
+    helpPanel.setHibernateSession(projectId, { ...session, cwd: nextCwd });
+  } catch (error) {
+    logErrorWithContext(error, {
+      operation: "rebase_hibernate_session_cwd",
+      component: "projectStore",
+      details: { projectId },
     });
   }
 }
@@ -997,15 +1023,22 @@ panelPersistence.setProjectIdGetter(() => useProjectStore.getState().currentProj
 if (typeof window !== "undefined" && window.electron?.project) {
   const listenerState = getProjectStoreListenerState();
   listenerState.applyUpdated = (updated) => {
+    let priorPath: string | undefined;
     useProjectStore.setState((state) => {
-      const exists = state.projects.some((p) => p.id === updated.id);
-      const projects = exists
+      const prior = state.projects.find((p) => p.id === updated.id);
+      priorPath = prior?.path;
+      const projects = prior
         ? state.projects.map((p) => (p.id === updated.id ? updated : p))
         : [...state.projects, updated];
       const currentProject =
         state.currentProject?.id === updated.id ? updated : state.currentProject;
       return { projects, currentProject };
     });
+    // A folder move/reattach keeps the id but changes the path (#11282); repoint
+    // the hibernated Assistant cwd so a later resume lands in the new folder.
+    if (priorPath && priorPath !== updated.path) {
+      rebaseHibernateSessionCwd(updated.id, priorPath, updated.path);
+    }
   };
   listenerState.applyRemoved = (projectId) => {
     useProjectStore.setState((state) => {

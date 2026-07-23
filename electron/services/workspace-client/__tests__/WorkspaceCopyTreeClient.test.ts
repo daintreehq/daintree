@@ -22,6 +22,7 @@ function makeEntry(host: WorkspaceHostProcess, projectPath: string): ProcessEntr
     cleanupTimeout: null,
     windowIds: new Set(),
     projectPath,
+    projectId: `id:${projectPath}`,
     directPortViews: new Map(),
   };
 }

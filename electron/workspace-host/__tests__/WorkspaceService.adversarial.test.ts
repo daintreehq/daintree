@@ -114,7 +114,7 @@ describe("WorkspaceService adversarial", () => {
       throw new Error("Corrupted worktree metadata");
     });
 
-    await service.loadProject("req-load", "/repo");
+    await service.loadProject("req-load", "/repo", "ws-test-project-id");
 
     expect(sentEvents).toContainEqual(
       expect.objectContaining({
@@ -130,7 +130,7 @@ describe("WorkspaceService adversarial", () => {
     // The project directory was removed/moved externally before this load.
     vi.mocked(existsSync).mockReturnValueOnce(false);
 
-    await service.loadProject("req-missing", "/missing/path");
+    await service.loadProject("req-missing", "/missing/path", "ws-test-project-id");
 
     expect(sentEvents).toContainEqual(
       expect.objectContaining({

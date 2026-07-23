@@ -443,6 +443,7 @@ port.on("message", async (rawMsg: any) => {
         await workspaceService.loadProject(
           request.requestId,
           request.rootPath,
+          request.projectId,
           request.globalEnvVars,
           request.wslGitByWorktree,
           request.forgeProviderOverride !== undefined ||
