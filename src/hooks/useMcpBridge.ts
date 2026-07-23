@@ -48,10 +48,10 @@ function shouldTagMcpSpawn(actionId: string): boolean {
  */
 function worktreeDeleteTargetId(actionId: string, args: unknown): string | undefined {
   if (actionId !== "worktree.delete") return undefined;
-  const worktreeId =
-    args && typeof args === "object" && !Array.isArray(args)
-      ? (args as Record<string, unknown>).worktreeId
-      : undefined;
+  if (args === null || typeof args !== "object" || !("worktreeId" in args)) return undefined;
+  // `in` narrows `args.worktreeId` to `unknown` — no cast needed (and no
+  // no-unsafe-type-assertion warning).
+  const worktreeId = args.worktreeId;
   return typeof worktreeId === "string" && worktreeId.length > 0 ? worktreeId : undefined;
 }
 
