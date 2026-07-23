@@ -6143,8 +6143,8 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   {
     "category": "worktree",
     "danger": "confirm",
-    "dangerRationale": "Permanently deletes this worktree's recorded resumable-session history. Records can't be recovered.",
-    "description": "Permanently delete this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents. Open sessions are unaffected.",
+    "dangerRationale": "Permanently deletes this worktree's recorded resumable-session history, and those records can't be recovered. Bookmarked sessions are kept — deleting a bookmark is the only way to remove one.",
+    "description": "Permanently delete this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents. Open sessions are unaffected, and bookmarked sessions are exempt — \`session.bookmark.delete\` is the only way to remove one.",
     "examples": undefined,
     "id": "worktree.sessions.clearHistory",
     "keywords": undefined,
