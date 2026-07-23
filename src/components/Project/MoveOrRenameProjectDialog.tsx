@@ -178,7 +178,16 @@ function MoveOrRenameProjectDialogInner({
       );
       setIsApplying(false);
     }
-  }, [isMetadataOnly, isReattach, updateProject, pending, trimmedName, displayNameChanged, destinationPath, onClose]);
+  }, [
+    isMetadataOnly,
+    isReattach,
+    updateProject,
+    pending,
+    trimmedName,
+    displayNameChanged,
+    destinationPath,
+    onClose,
+  ]);
 
   const hasBlockers = (preview?.blockers.length ?? 0) > 0;
   const nothingToDo = !destinationChanged && !displayNameChanged;
@@ -234,12 +243,18 @@ function MoveOrRenameProjectDialogInner({
           <>
             <div className="space-y-1.5">
               <span className="text-sm font-medium text-daintree-text/80">Original location</span>
-              <p className="text-xs font-mono text-daintree-text/50 break-all" title={pending.oldPath}>
+              <p
+                className="text-xs font-mono text-daintree-text/50 break-all"
+                title={pending.oldPath}
+              >
                 {pending.oldPath}
               </p>
             </div>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-daintree-text/80" htmlFor="relocate-existing">
+              <label
+                className="text-sm font-medium text-daintree-text/80"
+                htmlFor="relocate-existing"
+              >
                 Where is the folder now?
               </label>
               <div className="flex gap-2">
@@ -269,7 +284,10 @@ function MoveOrRenameProjectDialogInner({
         ) : (
           <>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-daintree-text/80" htmlFor="relocate-parent">
+              <label
+                className="text-sm font-medium text-daintree-text/80"
+                htmlFor="relocate-parent"
+              >
                 Parent folder
               </label>
               <div className="flex gap-2">
@@ -296,7 +314,10 @@ function MoveOrRenameProjectDialogInner({
               </div>
             </div>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-daintree-text/80" htmlFor="relocate-folder">
+              <label
+                className="text-sm font-medium text-daintree-text/80"
+                htmlFor="relocate-folder"
+              >
                 Folder name
               </label>
               <input
@@ -430,7 +451,9 @@ function RelocationPreviewSection({
           {preview.runningTerminalCount === 0 &&
             preview.linkedWorktrees.length === 0 &&
             preview.affectedPanelCount === 0 && (
-              <li className="text-daintree-text/40">No running terminals, worktrees, or panels affected</li>
+              <li className="text-daintree-text/40">
+                No running terminals, worktrees, or panels affected
+              </li>
             )}
         </ul>
       )}

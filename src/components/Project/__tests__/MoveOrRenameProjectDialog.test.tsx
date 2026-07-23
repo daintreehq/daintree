@@ -17,9 +17,7 @@ const { previewRelocation, applyRelocation, openDialog, updateProject } = vi.hoi
   previewRelocation: vi.fn<(req: unknown) => Promise<RelocationPreview>>(),
   applyRelocation: vi.fn<(req: unknown) => Promise<unknown>>(() => Promise.resolve({})),
   openDialog: vi.fn<() => Promise<string | null>>(() => Promise.resolve(null)),
-  updateProject: vi.fn<(id: string, updates: unknown) => Promise<void>>(() =>
-    Promise.resolve()
-  ),
+  updateProject: vi.fn<(id: string, updates: unknown) => Promise<void>>(() => Promise.resolve()),
 }));
 
 vi.mock("@/clients", () => ({
