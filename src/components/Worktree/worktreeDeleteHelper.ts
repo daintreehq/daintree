@@ -47,13 +47,23 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export function getLiveTerminalIdsForWorktree(worktreeId: string): string[] {
+  const state = usePanelStore.getState();
+  return state.panelIds.filter((id) => {
+    const panel = state.panelsById[id];
+    return (
+      panel?.worktreeId === worktreeId &&
+      panel.location !== "trash" &&
+      (!isPtyPanel(panel) || panel.excludeFromPersistence !== true)
+    );
+  });
+}
+
 /**
- * The live PTY terminals of a worktree — the panels that hold the worktree
- * directory open and so must be killed before `git worktree remove`. Only PTY
- * ("terminal") panels are included: browser/review/file/dev-preview panels hold
- * no directory lock (dev servers are stopped separately), so they are left
- * untouched here and cleaned up when the worktree is actually removed. This
- * keeps a failed delete from destroying non-terminal panels it can't restore.
+ * The live PTY terminals of a worktree, for the rollback snapshot. Only PTY
+ * ("terminal") panels are captured: the restore relaunches terminals, and a dead
+ * PTY is the only thing a relaunch can recover. Browser/review/file panels are
+ * out of scope — restoring them is a separate concern from #11344.
  */
 function getLivePtyPanelsForWorktree(worktreeId: string): PtyPanelData[] {
   const state = usePanelStore.getState();
@@ -70,10 +80,6 @@ function getLivePtyPanelsForWorktree(worktreeId: string): PtyPanelData[] {
     }
   }
   return panels;
-}
-
-export function getLiveTerminalIdsForWorktree(worktreeId: string): string[] {
-  return getLivePtyPanelsForWorktree(worktreeId).map((panel) => panel.id);
 }
 
 /** Capture a relaunch snapshot for a single live PTY panel. */
@@ -142,11 +148,13 @@ export async function waitForTerminalsToClose(terminalIds: string[]): Promise<vo
 }
 
 /**
- * Hard-close every live PTY terminal in a worktree ahead of `git worktree
- * remove`. The kill is immediate (not the trash TTL) so the worktree directory
- * is unlocked before the removal — see {@link WorktreeTerminalRestoreSnapshot}
- * for why trash-routing isn't used. Capture a rollback snapshot with
- * {@link captureWorktreeTerminalSnapshot} BEFORE calling this.
+ * Hard-close every live panel in a worktree ahead of `git worktree remove`. The
+ * kill is immediate (not the trash TTL) so the worktree directory is unlocked
+ * before the removal — see {@link WorktreeTerminalRestoreSnapshot} for why
+ * trash-routing isn't used. Only reachable when the user opts into closing
+ * terminals; otherwise the worktree's panels survive the removal as a
+ * deleted-worktree ghost row (#11232). Capture a rollback snapshot of the PTY
+ * terminals with {@link captureWorktreeTerminalSnapshot} BEFORE calling this.
  */
 export async function closeTerminalsForWorktree(worktreeId: string): Promise<void> {
   const terminalIds = getLiveTerminalIdsForWorktree(worktreeId);

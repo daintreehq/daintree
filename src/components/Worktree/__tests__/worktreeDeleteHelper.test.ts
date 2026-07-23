@@ -75,18 +75,17 @@ beforeEach(() => {
 });
 
 describe("getLiveTerminalIdsForWorktree", () => {
-  it("returns only live PTY terminals — excludes trash, other worktrees, ephemeral, and non-PTY panels", () => {
+  it("returns the worktree's live panels — excludes trash, other worktrees, and ephemeral PTYs", () => {
     seed([
       ptyPanel({ id: "keep" }),
       ptyPanel({ id: "other-wt", worktreeId: "wt-2" }),
       ptyPanel({ id: "trashed", location: "trash" }),
       ptyPanel({ id: "ephemeral", excludeFromPersistence: true }),
-      // Non-PTY panels hold no directory lock, so they are NOT hard-closed for
-      // the delete (they would otherwise be lost with no restore) (#11344).
+      // Non-PTY panels are still closed with the worktree (unchanged behavior);
+      // only the rollback snapshot is terminal-only.
       { id: "browser", kind: "browser", worktreeId: "wt-1", location: "grid" },
-      { id: "review", kind: "review", worktreeId: "wt-1", location: "grid" },
     ]);
-    expect(getLiveTerminalIdsForWorktree("wt-1")).toEqual(["keep"]);
+    expect(getLiveTerminalIdsForWorktree("wt-1")).toEqual(["keep", "browser"]);
   });
 });
 
@@ -137,7 +136,7 @@ describe("captureWorktreeTerminalSnapshot", () => {
 });
 
 describe("closeTerminalsForWorktree", () => {
-  it("hard-removes each PTY terminal and waits for close, leaving non-PTY panels alone", async () => {
+  it("hard-removes each of the worktree's live panels and waits for close", async () => {
     seed([
       ptyPanel({ id: "plain" }),
       ptyPanel({ id: "agent", launchAgentId: "claude" }),
@@ -146,12 +145,11 @@ describe("closeTerminalsForWorktree", () => {
 
     await closeTerminalsForWorktree("wt-1");
 
-    // Only the two terminals are removed; the browser panel is untouched.
-    expect(removePanelMock.mock.calls.map((c) => c[0])).toEqual(["plain", "agent"]);
+    expect(removePanelMock.mock.calls.map((c) => c[0])).toEqual(["plain", "agent", "browser"]);
     expect(getInfoMock).toHaveBeenCalled();
   });
 
-  it("does nothing when the worktree has no terminals", async () => {
+  it("does nothing when the worktree has no panels", async () => {
     seed([ptyPanel({ id: "other", worktreeId: "wt-2" })]);
     await closeTerminalsForWorktree("wt-1");
     expect(removePanelMock).not.toHaveBeenCalled();

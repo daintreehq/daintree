@@ -710,21 +710,16 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       });
 
       if (hadWorktree) {
-        // The worktree is authoritatively gone (#11344). Drop its restore
+        // The worktree is authoritatively gone (#11344): drop its restore
         // bookkeeping so a snapshot from a since-superseded delete can't leak or
-        // replay, and remove any panels still pointing at it. PTY terminals were
-        // closed up front; this reaps the non-terminal panels (browser, review,
-        // …) that closeTerminalsForWorktree intentionally left alive because they
-        // hold no directory lock.
+        // replay. Do NOT touch the worktree's panels here — the deleted-worktree
+        // ghost row (#11232) deliberately leaves surviving panels alive (their
+        // agent processes keep running) until the user acts or the auto-cleanup
+        // TTL trashes them.
         discardTerminalRestores(
           worktreeId,
           outboxEntries.map((entry) => entry.mutationId)
         );
-        const panelStore = usePanelStore.getState();
-        const stalePanelIds = panelStore.panelIdsByWorktreeId[worktreeId];
-        if (stalePanelIds && stalePanelIds.length > 0) {
-          for (const panelId of [...stalePanelIds]) panelStore.removePanel(panelId);
-        }
       }
     },
 

@@ -549,21 +549,20 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
       expect(restoreClosedTerminalsMock).not.toHaveBeenCalled();
     });
 
-    it("removes the worktree's leftover non-terminal panels when it is authoritatively removed", () => {
-      // PTY terminals are closed up front; browser/review panels are left alive
-      // (no directory lock) and reaped here when the worktree is truly gone.
+    it("leaves the worktree's surviving panels untouched on removal (ghost-row contract #11232)", () => {
+      // applyRemove must NOT reap the worktree's panels — the deleted-worktree
+      // ghost row keeps them alive until the user acts or the TTL trashes them.
       const store = createWorktreeStore();
       store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
 
       const removeSpy = vi
         .spyOn(usePanelStore.getState(), "removePanel")
         .mockImplementation(() => {});
-      usePanelStore.setState({ panelIdsByWorktreeId: { "wt-1": ["browser-1", "review-1"] } });
+      usePanelStore.setState({ panelIdsByWorktreeId: { "wt-1": ["browser-1", "agent-1"] } });
 
       try {
         store.getState().applyRemove("wt-1", nextV());
-        expect(removeSpy).toHaveBeenCalledWith("browser-1");
-        expect(removeSpy).toHaveBeenCalledWith("review-1");
+        expect(removeSpy).not.toHaveBeenCalled();
       } finally {
         removeSpy.mockRestore();
         usePanelStore.setState({ panelIdsByWorktreeId: {} });
