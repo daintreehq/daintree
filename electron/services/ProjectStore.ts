@@ -1262,139 +1262,148 @@ export class ProjectStore {
     projectPath: string,
     projectId: string
   ): Promise<RecipeNameCollision[]> {
-    // Go through the cache-aware wrapper so the hash map is populated as a
-    // side effect — otherwise the first renderer-driven edit after a project
-    // load races the unrelated `getInRepoRecipes` call to populate the cache
-    // and may see a phantom RECIPE_STALE_CONFLICT. `dirExists` distinguishes an
-    // absent `.daintree/recipes/` directory from an authoritatively empty one;
-    // `scanComplete` is false when the directory existed but a recipe file
-    // couldn't be read (a partial snapshot, e.g. mid-checkout).
-    const {
-      recipes: inRepoRecipes,
-      dirExists,
-      scanComplete,
-    } = await this.readInRepoRecipesWithMeta(projectPath);
-    const fileStoreRecipes = await this.fileStore.getRecipes(projectId);
-
-    // #11347: When the in-repo recipe directory is absent (e.g. the user checked
-    // out a branch or commit that predates `.daintree/recipes/`), or the scan of
-    // it was incomplete (a file vanished/locked mid-read), we cannot tell a
-    // recipe that was deleted from one that merely lives on another checkout.
-    // If any project-local recipe is in-repo-scoped, pruning it would destroy
-    // local-only env values / usage metadata, and promoting a *sibling*
-    // local-only recipe would recreate the directory — making the very next
-    // reconcile observe `dirExists: true` and prune the recipe we just
-    // protected. So when the view isn't authoritative and there is anything to
-    // protect, make no filesystem changes at all and defer reconciliation until
-    // the directory is observable again. Projects with only promotable
-    // (non-in-repo) recipes still migrate/collision-check as before.
-    if ((!dirExists || !scanComplete) && fileStoreRecipes.some((r) => isInRepoRecipeId(r))) {
-      return [];
-    }
-
-    const inRepoById = new Map(inRepoRecipes.map((r) => [r.id, r]));
-    const fileStoreById = new Map(fileStoreRecipes.map((r) => [r.id, r]));
-
-    let promoted = false;
+    // Fold the whole read-compute-write into one queued turn so it can't
+    // interleave with concurrent add/update/delete on the same project — the
+    // reconcile-vs-CRUD TOCTOU a per-method queue would otherwise leave open.
+    // The collision list is captured via this closure and returned after the
+    // queued promise resolves. The updater calls only unqueued fileStore reads
+    // (getRecipes) and in-repo writes (writeInRepoRecipe), never a queued
+    // fileStore mutator, so it cannot self-deadlock behind its own turn.
     const collisions: RecipeNameCollision[] = [];
-    // Project-local recipes that couldn't be promoted (filename collision) but
-    // must survive in ProjectFileStore rather than being dropped.
-    const keptLocal: TerminalRecipe[] = [];
-    const seenFilenames = new Map<string, string>();
-    for (const recipe of inRepoById.values()) {
-      seenFilenames.set(safeRecipeFilename(recipe.name), recipe.id);
-    }
+    await this.fileStore.enqueueRecipesUpdate(projectId, async () => {
+      // Go through the cache-aware wrapper so the hash map is populated as a
+      // side effect — otherwise the first renderer-driven edit after a project
+      // load races the unrelated `getInRepoRecipes` call to populate the cache
+      // and may see a phantom RECIPE_STALE_CONFLICT. `dirExists` distinguishes
+      // an absent `.daintree/recipes/` directory from an authoritatively empty
+      // one; `scanComplete` is false when the directory existed but a recipe
+      // file couldn't be read (a partial snapshot, e.g. mid-checkout).
+      const {
+        recipes: inRepoRecipes,
+        dirExists,
+        scanComplete,
+      } = await this.readInRepoRecipesWithMeta(projectPath);
+      const fileStoreRecipes = await this.fileStore.getRecipes(projectId);
 
-    for (const recipe of fileStoreRecipes) {
-      if (inRepoById.has(recipe.id)) continue;
-      if (isInRepoRecipeId(recipe)) continue; // stale, removed below
-
-      const filename = safeRecipeFilename(recipe.name);
-      const ownerId = seenFilenames.get(filename);
-      if (ownerId !== undefined && ownerId !== recipe.id) {
-        // Can't promote: a different recipe already owns this filename. Keep
-        // it as a project-local recipe and report the collision upward.
-        collisions.push({
-          filename,
-          keptId: ownerId,
-          droppedId: recipe.id,
-          droppedName: recipe.name,
-        });
-        keptLocal.push(recipe);
-        continue;
+      // #11347: When the in-repo recipe directory is absent (e.g. the user checked
+      // out a branch or commit that predates `.daintree/recipes/`), or the scan of
+      // it was incomplete (a file vanished/locked mid-read), we cannot tell a
+      // recipe that was deleted from one that merely lives on another checkout.
+      // If any project-local recipe is in-repo-scoped, pruning it would destroy
+      // local-only env values / usage metadata, and promoting a *sibling*
+      // local-only recipe would recreate the directory — making the very next
+      // reconcile observe `dirExists: true` and prune the recipe we just
+      // protected. So when the view isn't authoritative and there is anything to
+      // protect, make no filesystem changes at all and defer reconciliation until
+      // the directory is observable again. Projects with only promotable
+      // (non-in-repo) recipes still migrate/collision-check as before.
+      if ((!dirExists || !scanComplete) && fileStoreRecipes.some((r) => isInRepoRecipeId(r))) {
+        return null;
       }
 
-      await this.writeInRepoRecipe(projectPath, recipe);
-      inRepoById.set(recipe.id, recipe);
-      seenFilenames.set(filename, recipe.id);
-      promoted = true;
-    }
+      const inRepoById = new Map(inRepoRecipes.map((r) => [r.id, r]));
+      const fileStoreById = new Map(fileStoreRecipes.map((r) => [r.id, r]));
 
-    const hasStale = fileStoreRecipes.some((r) => isInRepoRecipeId(r) && !inRepoById.has(r.id));
+      let promoted = false;
+      // Project-local recipes that couldn't be promoted (filename collision) but
+      // must survive in ProjectFileStore rather than being dropped.
+      const keptLocal: TerminalRecipe[] = [];
+      const seenFilenames = new Map<string, string>();
+      for (const recipe of inRepoById.values()) {
+        seenFilenames.set(safeRecipeFilename(recipe.name), recipe.id);
+      }
 
-    const reconciledIds = new Set(inRepoById.keys());
-    const sizeChanged = reconciledIds.size !== fileStoreById.size;
-    const idsChanged = ![...reconciledIds].every((id) => fileStoreById.has(id));
+      for (const recipe of fileStoreRecipes) {
+        if (inRepoById.has(recipe.id)) continue;
+        if (isInRepoRecipeId(recipe)) continue; // stale, removed below
 
-    if (!promoted && !hasStale && !sizeChanged && !idsChanged && collisions.length === 0) {
-      // IDs match perfectly — check content before skipping
-      let contentDiffers = false;
+        const filename = safeRecipeFilename(recipe.name);
+        const ownerId = seenFilenames.get(filename);
+        if (ownerId !== undefined && ownerId !== recipe.id) {
+          // Can't promote: a different recipe already owns this filename. Keep
+          // it as a project-local recipe and report the collision upward.
+          collisions.push({
+            filename,
+            keptId: ownerId,
+            droppedId: recipe.id,
+            droppedName: recipe.name,
+          });
+          keptLocal.push(recipe);
+          continue;
+        }
+
+        await this.writeInRepoRecipe(projectPath, recipe);
+        inRepoById.set(recipe.id, recipe);
+        seenFilenames.set(filename, recipe.id);
+        promoted = true;
+      }
+
+      const hasStale = fileStoreRecipes.some((r) => isInRepoRecipeId(r) && !inRepoById.has(r.id));
+
+      const reconciledIds = new Set(inRepoById.keys());
+      const sizeChanged = reconciledIds.size !== fileStoreById.size;
+      const idsChanged = ![...reconciledIds].every((id) => fileStoreById.has(id));
+
+      if (!promoted && !hasStale && !sizeChanged && !idsChanged && collisions.length === 0) {
+        // IDs match perfectly — check content before skipping
+        let contentDiffers = false;
+        for (const recipe of inRepoById.values()) {
+          const existing = fileStoreById.get(recipe.id);
+          if (!existing) continue;
+          const {
+            projectId: _p1,
+            worktreeId: _w1,
+            ...inRepoNorm
+          } = recipe as unknown as Record<string, unknown>;
+          const {
+            projectId: _p2,
+            worktreeId: _w2,
+            ...fsNorm
+          } = existing as unknown as Record<string, unknown>;
+          if (JSON.stringify(inRepoNorm) !== JSON.stringify(fsNorm)) {
+            contentDiffers = true;
+            break;
+          }
+        }
+        if (!contentDiffers) return null;
+      }
+
+      // Build reconciled list: start from in-repo canonical, merge fileStore-only
+      // fields (env values, metadata) so they survive the write-back.
+      const reconciled: TerminalRecipe[] = [];
       for (const recipe of inRepoById.values()) {
         const existing = fileStoreById.get(recipe.id);
-        if (!existing) continue;
-        const {
-          projectId: _p1,
-          worktreeId: _w1,
-          ...inRepoNorm
-        } = recipe as unknown as Record<string, unknown>;
-        const {
-          projectId: _p2,
-          worktreeId: _w2,
-          ...fsNorm
-        } = existing as unknown as Record<string, unknown>;
-        if (JSON.stringify(inRepoNorm) !== JSON.stringify(fsNorm)) {
-          contentDiffers = true;
-          break;
+        if (!existing) {
+          reconciled.push(recipe);
+          continue;
         }
-      }
-      if (!contentDiffers) return collisions;
-    }
 
-    // Build reconciled list: start from in-repo canonical, merge fileStore-only
-    // fields (env values, metadata) so they survive the write-back.
-    const reconciled: TerminalRecipe[] = [];
-    for (const recipe of inRepoById.values()) {
-      const existing = fileStoreById.get(recipe.id);
-      if (!existing) {
-        reconciled.push(recipe);
-        continue;
+        const mergedTerminals = recipe.terminals.map((inRepoT, i) => {
+          const existingT = existing.terminals[i];
+          if (!existingT?.env || Object.keys(existingT.env).length === 0) return inRepoT;
+          const env: Record<string, string> = {};
+          for (const key of Object.keys(inRepoT.env ?? {})) {
+            env[key] = existingT.env[key] ?? "";
+          }
+          return { ...inRepoT, env };
+        });
+
+        reconciled.push({
+          ...recipe,
+          terminals: mergedTerminals,
+          projectId: existing.projectId,
+          worktreeId: existing.worktreeId,
+          lastUsedAt: existing.lastUsedAt,
+          usageHistory: existing.usageHistory,
+        });
       }
 
-      const mergedTerminals = recipe.terminals.map((inRepoT, i) => {
-        const existingT = existing.terminals[i];
-        if (!existingT?.env || Object.keys(existingT.env).length === 0) return inRepoT;
-        const env: Record<string, string> = {};
-        for (const key of Object.keys(inRepoT.env ?? {})) {
-          env[key] = existingT.env[key] ?? "";
-        }
-        return { ...inRepoT, env };
-      });
+      // Keep project-local recipes that couldn't be promoted (filename collision)
+      // so they survive the write-back rather than being silently dropped.
+      reconciled.push(...keptLocal);
 
-      reconciled.push({
-        ...recipe,
-        terminals: mergedTerminals,
-        projectId: existing.projectId,
-        worktreeId: existing.worktreeId,
-        lastUsedAt: existing.lastUsedAt,
-        usageHistory: existing.usageHistory,
-      });
-    }
-
-    // Keep project-local recipes that couldn't be promoted (filename collision)
-    // so they survive the write-back rather than being silently dropped.
-    reconciled.push(...keptLocal);
-
-    await this.fileStore.saveRecipes(projectId, reconciled);
+      return reconciled;
+    });
     return collisions;
   }
 

@@ -456,8 +456,24 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         const metadataOnlyKeys = new Set(["lastUsedAt", "usageHistory"]);
         const updateKeys = Object.keys(updates);
         const isMetadataOnly = updateKeys.every((k) => metadataOnlyKeys.has(k));
-        if (!isMetadataOnly) {
-          const projectId = get().currentProjectId;
+        const projectId = get().currentProjectId;
+        if (isMetadataOnly) {
+          // Frecency-only edit (lastUsedAt / usageHistory). Persist it to the
+          // ProjectFileStore mirror — never the canonical git-tracked
+          // .daintree/recipes/*.json file (that's exactly what metadataOnlyKeys
+          // keeps out) — so in-repo usage metadata survives a reload the same
+          // way project and global recipes already do (#11354). Best-effort:
+          // the mirror entry only exists once reconcileProjectRecipes has
+          // backfilled it (after the first load), so a not-yet-reconciled
+          // "recipe not found" degrades to losing this one stamp rather than
+          // rolling back the optimistic update or surfacing a toast for a
+          // low-stakes write.
+          if (projectId) {
+            await projectClient.updateRecipe(projectId, id, sanitizedUpdates).catch((error) => {
+              logError("Failed to persist in-repo recipe usage metadata", error);
+            });
+          }
+        } else {
           if (!projectId) throw new Error("No current project");
           const previousName =
             updates.name && updates.name !== recipe.name ? recipe.name : undefined;

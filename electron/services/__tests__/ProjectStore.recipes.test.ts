@@ -563,6 +563,28 @@ describe("ProjectStore recipe reconciliation", () => {
     const inr = await readInRepo();
     expect(inr).toHaveLength(1);
   });
+
+  it("serializes reconcile against a concurrent addRecipe (neither clobbers the other)", async () => {
+    // Seed one in-repo recipe so reconcile has real write work (backfill it to
+    // the ProjectFileStore mirror). reconcile does a full read-compute-write of
+    // recipes.json; addRecipe does a read-modify-write of the same file. Run
+    // both at once: without per-project serialization, reconcile's full-list
+    // write (built from a pre-add snapshot) clobbers the freshly added recipe,
+    // or the add clobbers reconcile's backfill — one recipe is always lost.
+    const inRepo = makeRecipe({ id: "recipe-inrepo", name: "In Repo", scope: "inrepo" });
+    await seedInRepo(inRepo);
+
+    const added = makeRecipe({ id: "recipe-added", name: "Added", projectId });
+    await Promise.all([
+      store.reconcileProjectRecipes(projectPath, projectId),
+      store.addRecipe(projectId, added),
+    ]);
+
+    const ids = (await readFileStore()).map((r) => r.id).sort();
+    // Both survive regardless of which turn the queue ran first.
+    expect(ids).toContain("recipe-added");
+    expect(ids).toContain("recipe-inrepo");
+  });
 });
 
 describe("ProjectStore.writeInRepoRecipeChecked (in-repo recipe staleness guard, #9186)", () => {

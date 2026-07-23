@@ -9,8 +9,38 @@ const RECIPES_FILENAME = "recipes.json";
 export class GlobalFileStore {
   private recipesPath: string;
 
+  // Serialize read-modify-write cycles for the single global recipes file.
+  // ipcMain.handle runs handlers concurrently, so two unqueued mutations read
+  // the same snapshot and the last write clobbers the other. One file, so a
+  // single scalar tail (no per-key map) suffices.
+  private recipesWriteTail: Promise<void> = Promise.resolve();
+
   constructor(private globalConfigDir: string) {
     this.recipesPath = path.join(globalConfigDir, RECIPES_FILENAME);
+  }
+
+  /**
+   * Serialize recipe read-modify-write updates. Each queued updater runs after
+   * the previous has committed, so its reads see the prior write's result. The
+   * updater does its own reads (via {@link getRecipes}) and returns the list to
+   * persist, or `null` to skip the write. Updaters must not call another queued
+   * method (they would chain behind the awaiting outer turn and self-deadlock);
+   * the unqueued {@link getRecipes} is safe. `.catch(() => {})` keeps one failed
+   * update from poisoning the chain — the failure still reaches its own caller.
+   */
+  private enqueueRecipesUpdate(
+    updater: () => TerminalRecipe[] | null | Promise<TerminalRecipe[] | null>
+  ): Promise<void> {
+    const next = this.recipesWriteTail
+      .catch(() => {})
+      .then(async () => {
+        const updated = await updater();
+        if (updated !== null) {
+          await this.saveRecipesInner(updated);
+        }
+      });
+    this.recipesWriteTail = next;
+    return next;
   }
 
   async getRecipes(): Promise<TerminalRecipe[]> {
@@ -41,6 +71,12 @@ export class GlobalFileStore {
   }
 
   async saveRecipes(recipes: TerminalRecipe[]): Promise<void> {
+    // Blind full replacement. Takes a queue turn so it can't land between a
+    // competing update's read and write, but reads nothing itself.
+    await this.enqueueRecipesUpdate(() => recipes);
+  }
+
+  private async saveRecipesInner(recipes: TerminalRecipe[]): Promise<void> {
     const attemptSave = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {
         await fs.mkdir(this.globalConfigDir, { recursive: true });
@@ -67,36 +103,41 @@ export class GlobalFileStore {
   }
 
   async addRecipe(recipe: TerminalRecipe): Promise<void> {
-    const recipes = await this.getRecipes();
-    recipes.push(recipe);
-    await this.saveRecipes(recipes);
+    await this.enqueueRecipesUpdate(async () => {
+      const recipes = await this.getRecipes();
+      recipes.push(recipe);
+      return recipes;
+    });
   }
 
   async updateRecipe(
     recipeId: string,
     updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>
   ): Promise<void> {
-    const recipes = await this.getRecipes();
-    const index = recipes.findIndex((r) => r.id === recipeId);
-    if (index === -1) {
-      throw new Error(`Global recipe ${recipeId} not found`);
-    }
-    // Defense-in-depth: strip immutable fields even if a caller bypasses
-    // the compile-time Omit (e.g., via untyped bridge or JSON payload).
-    const {
-      id: _id,
-      projectId: _pid,
-      createdAt: _ca,
-      worktreeId: _wid,
-      ...safeUpdates
-    } = updates as Record<string, unknown>;
-    recipes[index] = { ...recipes[index], ...safeUpdates };
-    await this.saveRecipes(recipes);
+    await this.enqueueRecipesUpdate(async () => {
+      const recipes = await this.getRecipes();
+      const index = recipes.findIndex((r) => r.id === recipeId);
+      if (index === -1) {
+        throw new Error(`Global recipe ${recipeId} not found`);
+      }
+      // Defense-in-depth: strip immutable fields even if a caller bypasses
+      // the compile-time Omit (e.g., via untyped bridge or JSON payload).
+      const {
+        id: _id,
+        projectId: _pid,
+        createdAt: _ca,
+        worktreeId: _wid,
+        ...safeUpdates
+      } = updates as Record<string, unknown>;
+      recipes[index] = { ...recipes[index], ...safeUpdates };
+      return recipes;
+    });
   }
 
   async deleteRecipe(recipeId: string): Promise<void> {
-    const recipes = await this.getRecipes();
-    const filtered = recipes.filter((r) => r.id !== recipeId);
-    await this.saveRecipes(filtered);
+    await this.enqueueRecipesUpdate(async () => {
+      const recipes = await this.getRecipes();
+      return recipes.filter((r) => r.id !== recipeId);
+    });
   }
 }
