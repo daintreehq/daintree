@@ -346,6 +346,142 @@ describe("ImageDiffViewer", () => {
       expect(screen.queryByText("Couldn't load image versions")).toBeNull();
       expect(screen.getByRole("status", { name: "Loading image versions" })).toBeDefined();
     });
+
+    it("clears a stale failure when returning to a previously-failed file that now loads", async () => {
+      const aRevisit = createDeferred<DiffMediaFileVersions>();
+      mockReadFileVersions
+        .mockRejectedValueOnce(new Error("ipc down")) // a.png fails
+        .mockResolvedValueOnce(bothOk()) // b.png ok
+        .mockReturnValueOnce(aRevisit.promise); // a.png revisited, pending
+
+      const { rerender } = render(
+        <ImageDiffViewer relPath="a.png" worktreePath="/repo" status="modified" />
+      );
+      await screen.findByText("Couldn't load image versions");
+
+      rerender(<ImageDiffViewer relPath="b.png" worktreePath="/repo" status="modified" />);
+      await screen.findByAltText("HEAD version of b.png");
+
+      // Return to a.png (same target key, no Retry press). The stale error must
+      // not reappear; b holds while a refetches.
+      rerender(<ImageDiffViewer relPath="a.png" worktreePath="/repo" status="modified" />);
+      expect(screen.queryByText("Couldn't load image versions")).toBeNull();
+      expect(screen.getByAltText("HEAD version of b.png")).toBeDefined();
+
+      await act(async () => {
+        aRevisit.resolve(bothOk());
+      });
+      await screen.findByAltText("HEAD version of a.png");
+      expect(screen.queryByText("Couldn't load image versions")).toBeNull();
+    });
+
+    it("drops a resolution that lands after its decode was superseded", async () => {
+      const bDecode = createDeferred<void>();
+      HTMLImageElement.prototype.decode = function (this: HTMLImageElement): Promise<void> {
+        // b.png's decodes hang until released; a and c decode immediately.
+        return this.src.endsWith("QUFD") || this.src.endsWith("QUFE")
+          ? bDecode.promise
+          : Promise.resolve();
+      };
+
+      mockReadFileVersions
+        .mockResolvedValueOnce(bothOkWith(A_HEAD_URL, A_WORKING_URL)) // a
+        .mockResolvedValueOnce(bothOkWith(B_HEAD_URL, B_WORKING_URL)) // b: fetch ok, decode gated
+        .mockResolvedValueOnce(bothOk()); // c
+
+      const { rerender } = render(
+        <ImageDiffViewer relPath="a.png" worktreePath="/repo" status="modified" />
+      );
+      await screen.findByAltText("HEAD version of a.png");
+
+      // Switch to b: its fetch resolves but decode is pending — the effect is now
+      // parked at the *post-decode* staleness check, not the fetch one.
+      await act(async () => {
+        rerender(<ImageDiffViewer relPath="b.png" worktreePath="/repo" status="modified" />);
+      });
+
+      // Switch to c and let it commit.
+      rerender(<ImageDiffViewer relPath="c.png" worktreePath="/repo" status="modified" />);
+      await screen.findByAltText("HEAD version of c.png");
+
+      // Release b's decode. Its post-decode commit must be dropped — c wins.
+      await act(async () => {
+        bDecode.resolve();
+      });
+      expect(screen.getByAltText("HEAD version of c.png")).toBeDefined();
+      expect(screen.queryByAltText("HEAD version of b.png")).toBeNull();
+    });
+
+    it("recovers a decode-failed pane when the same file recommits after decoding cleanly", async () => {
+      let aHeadFails = true;
+      HTMLImageElement.prototype.decode = function (this: HTMLImageElement): Promise<void> {
+        // a.png's HEAD fails its first decode, then succeeds on the revisit.
+        if (this.src.endsWith("QUFB") && aHeadFails) {
+          aHeadFails = false;
+          return Promise.reject(new Error("bad"));
+        }
+        return Promise.resolve();
+      };
+      mockReadFileVersions
+        .mockResolvedValueOnce(bothOkWith(A_HEAD_URL, A_WORKING_URL)) // a: head decode fails
+        .mockResolvedValueOnce(bothOk()) // b: ok
+        .mockResolvedValueOnce(bothOkWith(A_HEAD_URL, A_WORKING_URL)); // a again: head ok
+
+      const { rerender } = render(
+        <ImageDiffViewer relPath="a.png" worktreePath="/repo" status="modified" />
+      );
+      // First a: HEAD failed to decode → fallback, no HEAD img.
+      expect(await screen.findByText("Couldn't display this version")).toBeDefined();
+      expect(screen.queryByAltText("HEAD version of a.png")).toBeNull();
+
+      rerender(<ImageDiffViewer relPath="b.png" worktreePath="/repo" status="modified" />);
+      await screen.findByAltText("HEAD version of b.png");
+
+      // Return to a — its HEAD now decodes cleanly, so the pane must remount and
+      // recover (the same requestKey would otherwise keep the stale failure).
+      rerender(<ImageDiffViewer relPath="a.png" worktreePath="/repo" status="modified" />);
+      await screen.findByAltText("HEAD version of a.png");
+      expect(screen.queryByText("Couldn't display this version")).toBeNull();
+    });
+
+    it("marks the held frame aria-busy while loading and clears it after the swap", async () => {
+      const next = createDeferred<DiffMediaFileVersions>();
+      mockReadFileVersions.mockResolvedValueOnce(bothOk()).mockReturnValueOnce(next.promise);
+
+      const { container, rerender } = render(
+        <ImageDiffViewer relPath="a.png" worktreePath="/repo" status="modified" />
+      );
+      await screen.findByAltText("HEAD version of a.png");
+      expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+
+      // Holding a while b loads → the frame is busy.
+      rerender(<ImageDiffViewer relPath="b.png" worktreePath="/repo" status="modified" />);
+      expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+
+      await act(async () => {
+        next.resolve(bothOk());
+      });
+      await screen.findByAltText("HEAD version of b.png");
+      expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+    });
+
+    it("shows the single-pane fallback when the only side of an added file fails to decode", async () => {
+      HTMLImageElement.prototype.decode = function (this: HTMLImageElement): Promise<void> {
+        return this.src.endsWith("QUFC") ? Promise.reject(new Error("bad")) : Promise.resolve();
+      };
+      mockReadFileVersions.mockResolvedValue({
+        head: { ok: false, error: "NOT_FOUND" },
+        working: { ok: true, dataUrl: A_WORKING_URL, byteSize: 7 },
+      } satisfies DiffMediaFileVersions);
+
+      render(<ImageDiffViewer relPath="new.png" worktreePath="/repo" status="added" />);
+
+      // The working side (the only visible one) failed to decode → fallback text,
+      // its <img> is not rendered, and the single-pane layout is intact.
+      expect(await screen.findByText("Couldn't display this version")).toBeDefined();
+      expect(screen.queryByAltText("Working tree version of new.png")).toBeNull();
+      expect(screen.getByText("Added — no previous version")).toBeDefined();
+    });
   });
 
   describe("isImageDiffCandidate", () => {
