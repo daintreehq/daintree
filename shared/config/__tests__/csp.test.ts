@@ -124,6 +124,22 @@ describe("Daintree app CSP", () => {
     });
   });
 
+  describe("daintree-file: scheme in media-src (#11382)", () => {
+    // The file viewer plays videos via <video src="daintree-file://…">, Range-
+    // streamed by the protocol handler. media-src is the directive that governs
+    // that load; without the scheme the element is silently blocked with only a
+    // devtools warning — every protocol/MIME fix upstream still fails.
+    it("allows daintree-file: in media-src in production", () => {
+      const mediaSrc = getDaintreeAppProdCSP().match(/media-src ([^;]*);/)?.[1];
+      expect(mediaSrc).toContain("daintree-file:");
+    });
+
+    it("allows daintree-file: in media-src in development", () => {
+      const mediaSrc = getDaintreeAppDevCSP().match(/media-src ([^;]*);/)?.[1];
+      expect(mediaSrc).toContain("daintree-file:");
+    });
+  });
+
   describe("daintree.org doc images in img-src (#9828)", () => {
     // The `help.displayImage` MCP tool surfaces documentation images served
     // from daintree.org. Chromium 148 does not match the apex against a

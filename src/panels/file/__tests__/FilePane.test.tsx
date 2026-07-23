@@ -752,6 +752,27 @@ describe("FilePane diff mode (#11274)", () => {
     });
   });
 
+  describe("video preview (#11382)", () => {
+    it("renders a <video> for a playable container without reading the file as text", async () => {
+      const { container } = await renderPane({ filePath: "/repo/media/demo.mp4" });
+
+      const video = container.querySelector("video");
+      expect(video).not.toBeNull();
+      expect(video?.getAttribute("src")).toContain("daintree-file://");
+      // The bytes stream through the protocol handler; the text-read IPC path
+      // (whose 500 KB cap produced the misleading error) must never run.
+      expect(readMock).not.toHaveBeenCalled();
+    });
+
+    it("shows a format message for a container Chromium can't demux, not the size cap", async () => {
+      const { container } = await renderPane({ filePath: "/repo/media/demo.mov" });
+
+      expect(container.querySelector("video")).toBeNull();
+      expect(readMock).not.toHaveBeenCalled();
+      expect(screen.getByText(/Can't play this video format/)).toBeTruthy();
+    });
+  });
+
   describe("change lookup", () => {
     it("matches a change stored as an absolute path", async () => {
       seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);

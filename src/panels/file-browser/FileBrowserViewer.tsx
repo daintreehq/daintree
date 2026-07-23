@@ -15,7 +15,14 @@ import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
 import { ZoomableImage } from "@/components/FileViewer/ZoomableImage";
-import { isImageFilePath, isSvgFilePath } from "@/components/FileViewer/filePreviewKinds";
+import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
+import {
+  isImageFilePath,
+  isSvgFilePath,
+  isUnsupportedVideoFilePath,
+  isVideoFilePath,
+  UNSUPPORTED_VIDEO_MESSAGE,
+} from "@/components/FileViewer/filePreviewKinds";
 import { MarkdownViewer } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
@@ -70,6 +77,7 @@ type ViewerState =
   | { status: "html"; content: string; previewUrl: string | null }
   | { status: "svg"; markup: string | null }
   | { status: "image" }
+  | { status: "video" }
   | { status: "error"; message: string };
 
 // Markdown gets a Source/Rendered switch mirroring FilePane's toggle. Typed at
@@ -130,6 +138,20 @@ export function FileBrowserViewer({
     // `daintree-file://` protocol serves them straight to the <img>.
     if (isImage && !isSvg) {
       setState({ status: "image" });
+      return;
+    }
+
+    // Videos stream from the same protocol into a <video> element; the text
+    // path would reject them with a misleading size/binary error.
+    if (isVideoFilePath(filePath)) {
+      setState({ status: "video" });
+      return;
+    }
+
+    // Containers Chromium can't demux get a truthful "can't play" message
+    // instead of falling through to the text path's size cap.
+    if (isUnsupportedVideoFilePath(filePath)) {
+      setState({ status: "error", message: UNSUPPORTED_VIDEO_MESSAGE });
       return;
     }
 
@@ -435,6 +457,22 @@ export function FileBrowserViewer({
               rootPath={rootPath}
               alt={fileName}
               sanitizedSvg={state.markup}
+              maxHeightClassName="max-h-full"
+            />
+          </div>
+        );
+
+      case "video":
+        return (
+          <div className="h-full w-full overflow-auto">
+            <FileVideoPreview
+              filePath={filePath}
+              rootPath={rootPath}
+              label={fileName}
+              reloadKey={revision}
+              onError={() =>
+                setState({ status: "error", message: "This video couldn't be played" })
+              }
               maxHeightClassName="max-h-full"
             />
           </div>

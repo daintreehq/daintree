@@ -559,3 +559,45 @@ describe("DiffPane — unresolvable subject", () => {
     expect(screen.queryByTestId("empty-state-mock")).toBeNull();
   });
 });
+
+describe("DiffPane — video current-version mode (#11382)", () => {
+  it("plays the working-tree version instead of rendering a diff", () => {
+    const changeSet = [entry("media/demo.mp4")];
+    seedPanel({ filePath: "media/demo.mp4", fileStatus: "modified", changeSet });
+    const { container } = renderPane();
+
+    const video = container.querySelector("video");
+    expect(video).not.toBeNull();
+    // The absolute working-tree path rides the protocol URL — no diff content,
+    // no base64 diffMedia IPC (8 MB cap, unsuited to video).
+    expect(video?.getAttribute("src")).toContain(encodeURIComponent("/repo/media/demo.mp4"));
+    expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+  });
+
+  it("hides the text-diff layout controls in video mode", () => {
+    seedPanel({
+      filePath: "media/demo.mp4",
+      fileStatus: "modified",
+      changeSet: [entry("media/demo.mp4")],
+    });
+    renderPane();
+
+    expect(screen.queryByRole("button", { name: "Unified" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
+  });
+
+  it("shows a quiet empty state for a deleted video (no working-tree bytes to play)", () => {
+    seedPanel({
+      filePath: "media/demo.mp4",
+      fileStatus: "deleted",
+      changeSet: [entry("media/demo.mp4", "deleted")],
+    });
+    const { container } = renderPane();
+
+    expect(container.querySelector("video")).toBeNull();
+    const titles = Array.from(container.querySelectorAll('[data-testid="empty-state-mock"]')).map(
+      (el) => el.getAttribute("data-title")
+    );
+    expect(titles).toContain("No working-tree version to play");
+  });
+});

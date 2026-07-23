@@ -24,7 +24,14 @@ import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
-import { isImageFilePath, isSvgFilePath } from "@/components/FileViewer/filePreviewKinds";
+import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
+import {
+  isImageFilePath,
+  isSvgFilePath,
+  isUnsupportedVideoFilePath,
+  isVideoFilePath,
+  UNSUPPORTED_VIDEO_MESSAGE,
+} from "@/components/FileViewer/filePreviewKinds";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
 import { formatBytes } from "@/lib/formatBytes";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
@@ -100,10 +107,11 @@ function isUnderRoot(filePath: string, rootPath: string): boolean {
   return toForwardSlashes(filePath).startsWith(root);
 }
 
-// "image" and "svg" are terminal preview states: an image is handed to the
-// `daintree-file://` protocol as an <img> src, and an SVG is read as text,
-// sanitized, then inlined. Neither has readable text content.
-type LoadState = "idle" | "loading" | "loaded" | "error" | "image" | "svg";
+// "image", "svg", and "video" are terminal preview states: an image is handed
+// to the `daintree-file://` protocol as an <img> src, an SVG is read as text,
+// sanitized, then inlined, and a video streams from the same protocol into a
+// <video> element. None has readable text content.
+type LoadState = "idle" | "loading" | "loaded" | "error" | "image" | "svg" | "video";
 
 const SEARCH_DEBOUNCE_MS = 150;
 const COPY_FEEDBACK_MS = 2000;
@@ -406,6 +414,29 @@ export function FilePane({
         setLoadState("image");
         setErrorCode(null);
         setErrorMessage(null);
+        return;
+      }
+
+      // Videos stream from the protocol handler into a <video> element; the
+      // text path would reject them with a misleading size/binary error.
+      if (isVideoFilePath(filePath)) {
+        setContent(null);
+        setSanitizedSvg(null);
+        setReloadNonce((nonce) => nonce + 1);
+        setLoadState("video");
+        setErrorCode(null);
+        setErrorMessage(null);
+        return;
+      }
+
+      // Containers Chromium can't demux get a truthful "can't play" message
+      // instead of falling through to the text path's size cap.
+      if (isUnsupportedVideoFilePath(filePath)) {
+        setContent(null);
+        setSanitizedSvg(null);
+        setErrorCode("BINARY_FILE");
+        setErrorMessage(UNSUPPORTED_VIDEO_MESSAGE);
+        setLoadState("error");
         return;
       }
 
@@ -825,6 +856,23 @@ export function FilePane({
             sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
             onError={() => {
               setErrorCode("NOT_FOUND");
+              setLoadState("error");
+            }}
+            maxHeightClassName="max-h-full"
+          />
+        )}
+
+        {filePath && viewMode !== "diff" && loadState === "video" && (
+          <FileVideoPreview
+            filePath={filePath}
+            rootPath={effectiveRootPath}
+            label={fileName ?? filePath}
+            reloadKey={reloadNonce}
+            onError={() => {
+              // An allowlisted container can still hold a codec Chromium lacks;
+              // name that instead of implying the file is missing.
+              setErrorCode("BINARY_FILE");
+              setErrorMessage("This video couldn't be played");
               setLoadState("error");
             }}
             maxHeightClassName="max-h-full"
