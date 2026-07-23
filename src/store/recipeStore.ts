@@ -280,7 +280,12 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     });
     try {
       const [globalRecipesRaw, projectRecipesResult, inRepoRecipesRaw] = await Promise.all([
-        globalRecipesClient.getRecipes(),
+        // Degrade each source independently: a transient read failure in one
+        // store (e.g. GlobalFileStore.getRecipes now rethrows non-ENOENT read
+        // errors) must not clear the other two. The global read previously
+        // swallowed errors itself; keep loadRecipes resilient now that it does
+        // not.
+        globalRecipesClient.getRecipes().catch(() => [] as TerminalRecipe[]),
         projectClient
           .getRecipes(projectId)
           .catch(() => ({ recipes: [] as TerminalRecipe[], collisions: [] })),
@@ -291,7 +296,19 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       }
       const globalRecipes = globalRecipesRaw.map(stripSessionOverridesFromRecipe);
       const projectRecipes = projectRecipesResult.recipes.map(stripSessionOverridesFromRecipe);
-      const inRepoRecipes = inRepoRecipesRaw.map(stripSessionOverridesFromRecipe);
+      // The canonical .daintree/recipes/*.json files intentionally omit
+      // machine-local frecency (lastUsedAt/usageHistory) — it lives only in the
+      // ProjectFileStore mirror (#11354). RecipeManager renders inRepoRecipes
+      // directly, so hydrate those fields from the mirror; otherwise team
+      // recipes read "Never used" after every reload despite being persisted.
+      const inRepoMirrorMeta = new Map(
+        projectRecipes.filter((r) => isInRepoRecipeId(r)).map((r) => [r.id, r] as const)
+      );
+      const inRepoRecipes = inRepoRecipesRaw.map(stripSessionOverridesFromRecipe).map((r) => {
+        const mirror = inRepoMirrorMeta.get(r.id);
+        if (!mirror) return r;
+        return { ...r, lastUsedAt: mirror.lastUsedAt, usageHistory: mirror.usageHistory };
+      });
       set({
         globalRecipes,
         projectRecipes,

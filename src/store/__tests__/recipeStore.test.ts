@@ -1847,6 +1847,67 @@ describe("recipeStore", () => {
       expect(state.recipes[0]?.terminals[0]?.env).toEqual({ TOKEN: "" });
     });
 
+    it("loadRecipes hydrates in-repo usage metadata into inRepoRecipes so the UI shows persisted frecency (#11354)", async () => {
+      const inRepoRecipe = {
+        id: "recipe-opaque-abc",
+        name: "Team Recipe",
+        scope: "inrepo" as const,
+        terminals: [{ type: "terminal" as const, title: "Shell" }],
+        createdAt: 500,
+      };
+      // The canonical read carries NO usage (stripped from the git-tracked file);
+      // the mirror does.
+      const projectMirror = {
+        ...inRepoRecipe,
+        projectId: "project-1",
+        lastUsedAt: 900,
+        usageHistory: [800, 900],
+      };
+      globalGetRecipesMock.mockResolvedValueOnce([]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [projectMirror], collisions: [] });
+      getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
+
+      await useRecipeStore.getState().loadRecipes("project-1");
+
+      // RecipeManager renders inRepoRecipes directly, so the raw list must carry
+      // the mirror's frecency after reload — otherwise team recipes read "Never
+      // used" even though usage was persisted.
+      const state = useRecipeStore.getState();
+      expect(state.inRepoRecipes[0]?.lastUsedAt).toBe(900);
+      expect(state.inRepoRecipes[0]?.usageHistory).toEqual([800, 900]);
+    });
+
+    it("loadRecipes keeps project and in-repo recipes when the global read fails", async () => {
+      const inRepoRecipe = {
+        id: "recipe-opaque-abc",
+        name: "Team Recipe",
+        scope: "inrepo" as const,
+        terminals: [{ type: "terminal" as const, title: "Shell" }],
+        createdAt: 500,
+      };
+      const projectRecipe = {
+        id: "proj-recipe-1",
+        name: "Proj",
+        projectId: "project-1",
+        terminals: [{ type: "terminal" as const, title: "Shell" }],
+        createdAt: 600,
+      };
+      // GlobalFileStore.getRecipes now rethrows non-ENOENT read errors; a global
+      // read failure must degrade global to [] rather than clearing every store.
+      globalGetRecipesMock.mockRejectedValueOnce(
+        Object.assign(new Error("EACCES"), { code: "EACCES" })
+      );
+      getRecipesMock.mockResolvedValueOnce({ recipes: [projectRecipe], collisions: [] });
+      getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
+
+      await useRecipeStore.getState().loadRecipes("project-1");
+
+      const state = useRecipeStore.getState();
+      expect(state.globalRecipes).toEqual([]);
+      expect(state.projectRecipes).toHaveLength(1);
+      expect(state.inRepoRecipes).toHaveLength(1);
+    });
+
     it("createRecipe assigns an opaque UUID id (not name-derived) and inrepo scope", async () => {
       await useRecipeStore
         .getState()
