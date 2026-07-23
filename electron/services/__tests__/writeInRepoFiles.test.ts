@@ -510,6 +510,16 @@ describe("writeInRepoRecipe", () => {
     expect(payload).not.toContain("wt-1");
   });
 
+  it("buildInRepoRecipePayloadString strips lastUsedAt and usageHistory (frecency stays out of git)", () => {
+    const recipe = makeRecipe({ lastUsedAt: 1717171717, usageHistory: [1000, 2000, 3000] });
+    const payload = buildInRepoRecipePayloadString(recipe);
+    const parsed = JSON.parse(payload);
+    expect(parsed.lastUsedAt).toBeUndefined();
+    expect(parsed.usageHistory).toBeUndefined();
+    expect(payload).not.toContain("1717171717");
+    expect(payload).not.toContain("usageHistory");
+  });
+
   it("hashRecipePayload is deterministic and produces a 64-char hex digest", () => {
     const a = hashRecipePayload("hello");
     const b = hashRecipePayload("hello");

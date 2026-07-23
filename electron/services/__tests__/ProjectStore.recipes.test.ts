@@ -563,6 +563,27 @@ describe("ProjectStore recipe reconciliation", () => {
     const inr = await readInRepo();
     expect(inr).toHaveLength(1);
   });
+
+  it("reconcile and a concurrent addRecipe are serialized — the mirror ends with the exact expected set", async () => {
+    // Integration check that reconcile shares the ProjectFileStore write queue
+    // with CRUD: reconcile does a full read-compute-write of recipes.json and
+    // addRecipe a read-modify-write of the same file. Because they serialize,
+    // the mirror ends with EXACTLY both recipes for either enqueue order — no
+    // lost update, no duplicate. (The deterministic proof that the queue kills
+    // an unserialized implementation lives in the ProjectFileStore/GlobalFileStore
+    // serialization unit tests; this asserts reconcile is wired into it.)
+    const inRepo = makeRecipe({ id: "recipe-inrepo", name: "In Repo", scope: "inrepo" });
+    await seedInRepo(inRepo);
+
+    const added = makeRecipe({ id: "recipe-added", name: "Added", projectId });
+    await Promise.all([
+      store.reconcileProjectRecipes(projectPath, projectId),
+      store.addRecipe(projectId, added),
+    ]);
+
+    const ids = (await readFileStore()).map((r) => r.id).sort();
+    expect(ids).toEqual(["recipe-added", "recipe-inrepo"]);
+  });
 });
 
 describe("ProjectStore.writeInRepoRecipeChecked (in-repo recipe staleness guard, #9186)", () => {
