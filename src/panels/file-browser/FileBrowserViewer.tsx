@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ExternalLink, FileText, PanelLeftClose, PanelLeftOpen, RefreshCw, XCircle } from "lucide-react";
+import {
+  ExternalLink,
+  FileText,
+  PanelLeftClose,
+  PanelLeftOpen,
+  RefreshCw,
+  XCircle,
+} from "lucide-react";
 import { FolderOpen } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
 import { CodeViewer } from "@/components/FileViewer/CodeViewer";
@@ -372,8 +379,9 @@ export function FileBrowserViewer({
   );
 
   function renderBody() {
-    // Narrows `filePath` for this closure — the early return above already
-    // guarantees it, but that narrowing doesn't flow into a nested function.
+    // Narrows `filePath` for this closure — the caller only reaches here through
+    // the truthy `filePath` branch above, but that narrowing doesn't flow into a
+    // nested function.
     if (!filePath) return null;
     switch (state.status) {
       case "idle":

@@ -185,9 +185,9 @@ describe("panelKindSerialisers", () => {
     it("restores a collapsed sidebar only from a literal true", () => {
       // Only `true` collapses; `false` and absent are the open default, and a
       // corrupted string/object must fall back to open rather than crash the pane.
-      expect(deserialize()({ id: "fb1", browserSidebarCollapsed: true }).browserSidebarCollapsed).toBe(
-        true
-      );
+      expect(
+        deserialize()({ id: "fb1", browserSidebarCollapsed: true }).browserSidebarCollapsed
+      ).toBe(true);
       expect(
         deserialize()({ id: "fb1", browserSidebarCollapsed: false }).browserSidebarCollapsed
       ).toBeUndefined();

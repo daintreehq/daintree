@@ -228,16 +228,28 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(sidebarBlock![0]).toContain("aria-pressed={!isFocusMode}");
     });
 
-    it("carves the sidebar toggle out of the armed aria-pressed rule in toolbar.css", async () => {
+    it("carves both sidebar toggles out of the armed rules in toolbar.css (#8357, #11328)", async () => {
       const css = await fs.readFile(TOOLBAR_CSS_PATH, "utf-8");
-      expect(css).toContain(
-        '.toolbar-icon-button[aria-pressed="true"]:where(:not([data-sidebar-toggle]))'
+      // The app sidebar toggle uses aria-pressed; the file-browser tree toggle
+      // uses aria-expanded (a disclosure). Both carry data-sidebar-toggle and
+      // must be excluded so neither shows a persistent armed chip.
+      const pressedOptOut = css.match(
+        /\.toolbar-icon-button\[aria-pressed="true"\]:where\(:not\(\[data-sidebar-toggle\]\)\)/g
       );
-      // The carve-out must not regress to an un-excluded standalone selector.
+      const expandedOptOut = css.match(
+        /\.toolbar-icon-button\[aria-expanded="true"\]:where\(:not\(\[data-sidebar-toggle\]\)\)/g
+      );
+      // Relational invariant: wherever the pressed rule is carved out (base,
+      // light, forced-colors), the expanded rule is too — so reverting one
+      // block's aria-expanded selector to the un-excluded form fails here.
+      expect(expandedOptOut?.length ?? 0).toBeGreaterThan(0);
+      expect(expandedOptOut?.length).toBe(pressedOptOut?.length);
+      // Neither icon-button carve-out may regress to an un-excluded standalone selector.
       expect(css).not.toMatch(/\.toolbar-icon-button\[aria-pressed="true"\],/);
-      // Other armed selectors stay intact so dropdowns/agent buttons keep the highlight.
-      expect(css).toContain('.toolbar-icon-button[aria-expanded="true"]');
+      expect(css).not.toMatch(/\.toolbar-icon-button\[aria-expanded="true"\],/);
+      // Agent-button armed selectors stay intact so dropdowns keep the highlight.
       expect(css).toContain('.toolbar-agent-button[aria-pressed="true"]');
+      expect(css).toContain('.toolbar-agent-button[aria-expanded="true"]');
     });
   });
 

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, act, screen } from "@testing-library/react";
+import { render, act, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // FileBrowserPane hosts the tree column beside the viewer. #11328 adds a
@@ -9,7 +9,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // FileBrowserViewer so the toggle and the shared toolbar `Root` actually render
 // — that's what makes the aria-controls and header-alignment invariants real.
 
-const { setFileBrowserViewMock } = vi.hoisted(() => ({ setFileBrowserViewMock: vi.fn() }));
+const { setFileBrowserViewMock, readMock } = vi.hoisted(() => ({
+  setFileBrowserViewMock: vi.fn(),
+  readMock: vi.fn(),
+}));
 
 interface MockPanel {
   id: string;
@@ -49,6 +52,16 @@ vi.mock("../useFileBrowserTree", () => ({
         name: "src",
         isDirectory: true,
         depth: 0,
+        isExpanded: true,
+        isLoading: false,
+        isIgnored: false,
+      },
+      // A file row so a selection can resolve a real viewer path.
+      {
+        path: "src/app.ts",
+        name: "app.ts",
+        isDirectory: false,
+        depth: 1,
         isExpanded: false,
         isLoading: false,
         isIgnored: false,
@@ -71,12 +84,15 @@ vi.mock("@/components/Panel/ContentPanel", () => ({
   ContentPanel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-// Viewer leaf modules the real FileBrowserViewer imports — never reached with no
-// file selected, but stubbed so their heavy renderers stay out of the suite.
-vi.mock("@/clients/filesClient", () => ({ filesClient: { read: vi.fn() } }));
+// Viewer leaf modules the real FileBrowserViewer imports. Stubbed so their heavy
+// renderers stay out of the suite; CodeViewer surfaces a marker so a selected
+// file's viewer is observable across a collapse.
+vi.mock("@/clients/filesClient", () => ({ filesClient: { read: readMock } }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({ MarkdownViewer: () => null }));
-vi.mock("@/components/FileViewer/CodeViewer", () => ({ CodeViewer: () => null }));
+vi.mock("@/components/FileViewer/CodeViewer", () => ({
+  CodeViewer: () => <div data-testid="code-viewer" />,
+}));
 vi.mock("@/components/Html/HtmlViewer", () => ({ HtmlViewer: () => null }));
 
 import { FileBrowserPane } from "../FileBrowserPane";
@@ -104,6 +120,8 @@ function classToken(el: Element, predicate: (cls: string) => boolean): string | 
 
 beforeEach(() => {
   setFileBrowserViewMock.mockReset();
+  readMock.mockReset();
+  readMock.mockResolvedValue({ content: "hello" });
   mockPanel.browserSidebarCollapsed = undefined;
   mockPanel.browserSelectedPath = undefined;
   mockPanel.browserRootPath = undefined;
@@ -194,13 +212,21 @@ describe("FileBrowserPane collapsible sidebar (#11328)", () => {
     const vPad = (el: Element) => classToken(el, (c) => /^py-/.test(c));
     const borderColor = (el: Element) =>
       classToken(el, (c) => c === "border-overlay" || c === "border-daintree-border");
+    const iconSize = (el: Element) => classToken(el.querySelector("svg")!, (c) => /^h-/.test(c));
+
+    // Guard against a vacuous undefined === undefined pass.
+    expect(sidebarHeader).not.toBe(toolbarRoot);
+    expect(vPad(sidebarHeader)).toBeDefined();
+    expect(borderColor(sidebarHeader)).toBeDefined();
+    expect(iconSize(sidebarHeader)).toBeDefined();
 
     // Relational invariant: whatever the shared toolbar uses, the sidebar header
     // matches it — so the line under the two bars reads continuous. A regression
-    // that reverts one side (py-1 / border-daintree-border) fails here.
-    expect(sidebarHeader).not.toBe(toolbarRoot);
+    // that reverts one side (py-1 / border-daintree-border / h-3.5 icons) fails
+    // here. Icon height is the row's tallest child, so it drives the height parity.
     expect(vPad(sidebarHeader)).toBe(vPad(toolbarRoot));
     expect(borderColor(sidebarHeader)).toBe(borderColor(toolbarRoot));
+    expect(iconSize(sidebarHeader)).toBe(iconSize(toolbarRoot));
   });
 
   it("toggles the persisted collapsed state on click, inverting the current value", () => {
@@ -215,6 +241,51 @@ describe("FileBrowserPane collapsible sidebar (#11328)", () => {
     expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-1", {
       browserSidebarCollapsed: true,
     });
+  });
+
+  it("re-opens from the collapsed state, so the toggle inverts rather than always collapsing", () => {
+    // Without this, a handler hardcoded to always write `true` would pass every
+    // other test while stranding the user in a collapsed tree they can't reopen.
+    mockPanel.browserSidebarCollapsed = true;
+    renderPane();
+
+    act(() => {
+      screen
+        .getByTestId("file-browser-sidebar-toggle")
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-1", {
+      browserSidebarCollapsed: false,
+    });
+  });
+
+  it("keeps the selected file's viewer mounted when the sidebar collapses", async () => {
+    mockPanel.browserSelectedPath = "src/app.ts";
+    const { rerender } = renderPane();
+    // The viewer resolves and renders the (stubbed) code viewer for the selection.
+    await waitFor(() => expect(screen.getByTestId("code-viewer")).toBeTruthy());
+    expect(screen.getByTestId("file-tree-view")).toBeTruthy();
+
+    mockPanel.browserSidebarCollapsed = true;
+    rerender(
+      <TooltipProvider>
+        <FileBrowserPane
+          id="fb-1"
+          title="Files"
+          worktreeId="wt-1"
+          isFocused
+          location="grid"
+          onFocus={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+
+    // The viewer lives in the non-collapsing column, so collapsing the tree must
+    // not blank or reload it — only the tree column disappears.
+    expect(screen.queryByTestId("file-tree-view")).toBeNull();
+    expect(screen.getByTestId("code-viewer")).toBeTruthy();
   });
 
   it("keeps keyboard focus on the toggle across a collapse", () => {
