@@ -716,6 +716,8 @@ describe("helpPanelStore persistence migration", () => {
       state: {
         width: number;
         preferredAgentId: string | null;
+        autoLaunchEnabled: boolean;
+        introDismissed: boolean;
         hibernateSessions: Record<string, unknown>;
       };
     };
@@ -770,7 +772,8 @@ describe("helpPanelStore persistence migration", () => {
         const mod = await import("../helpPanelStore");
 
         // Before this freshly-hydrated view writes anything, a sibling view has
-        // already populated the shared blob (a session and a non-default width).
+        // already populated the shared blob with a session and NON-DEFAULT
+        // preferences (so a defaults-clobbering merge would be caught).
         backing.set(
           STORAGE_KEY,
           JSON.stringify({
@@ -778,8 +781,8 @@ describe("helpPanelStore persistence migration", () => {
             state: {
               width: 500,
               preferredAgentId: null,
-              autoLaunchEnabled: false,
-              introDismissed: false,
+              autoLaunchEnabled: true,
+              introDismissed: true,
               hibernateSessions: {
                 "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
               },
@@ -795,6 +798,8 @@ describe("helpPanelStore persistence migration", () => {
 
         const written = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
         expect(written.state.width).toBe(600);
+        expect(written.state.autoLaunchEnabled).toBe(true);
+        expect(written.state.introDismissed).toBe(true);
         expect(written.state.hibernateSessions).toEqual({
           "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
         });
