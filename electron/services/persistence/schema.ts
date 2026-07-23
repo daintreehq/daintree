@@ -55,10 +55,12 @@ export const scratches = sqliteTable("scratches", {
   name: text("name").notNull(),
   createdAt: integer("created_at").notNull(),
   lastOpened: integer("last_opened").notNull(),
-  // Set when the auto-cleanup sweep tombstones a stale scratch. The DB row is
-  // retained as crash-safe state so a partially-deleted directory can be
-  // re-attempted on the next startup; rows with `deletedAt` set are filtered
-  // out of all renderer-facing queries.
+  // Millisecond timestamp set when the auto-cleanup sweep tombstones a stale
+  // scratch. The DB row is retained as crash-safe state: the directory is only
+  // physically reaped on a later sweep once this timestamp is older than the
+  // grace window (SCRATCH_CLEANUP_GRACE_MS), which also covers re-attempting a
+  // partially-deleted directory. Rows with `deletedAt` set are filtered out of
+  // all renderer-facing queries.
   deletedAt: integer("deleted_at"),
 });
 

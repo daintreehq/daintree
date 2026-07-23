@@ -341,8 +341,10 @@ export async function initGlobalServices(
               // space instead of waiting for the next boot or idle sweep
               // (#9537). This callback runs synchronously on the event loop, so
               // every reclamation routine is fire-and-forget and must never
-              // block or throw. The scratch sweep checks `getWritesSuppressed()`
-              // internally, so it deletes directories without writing the DB.
+              // block or throw. The scratch sweep reclaims mature tombstones
+              // immediately (its hard-delete DB write is what `getWritesSuppressed()`
+              // defers); newly-stale scratches are tombstoned now and reaped on a
+              // later sweep once past the grace window (#11353).
               runScratchCleanup().catch((err) => {
                 logError("[DiskSpaceMonitor] scratch cleanup threw", err);
               });
