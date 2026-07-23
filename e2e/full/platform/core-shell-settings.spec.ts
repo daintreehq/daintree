@@ -134,6 +134,9 @@ test.describe.serial("Core: Shell & Settings", () => {
       const { window } = ctx;
       const before = await getGridPanelCount(window);
       expect(before).toBeGreaterThanOrEqual(1);
+      await window.locator(SEL.panel.gridPanel).first().click();
+      await window.waitForTimeout(T_SETTLE);
+      await window.locator(SEL.panel.gridPanel).first().locator(SEL.panel.close).first().focus();
       await window.keyboard.press(`${mod}+w`);
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before - 1);
     });
@@ -144,6 +147,7 @@ test.describe.serial("Core: Shell & Settings", () => {
       const aside = window.locator(SEL.sidebar.aside);
       await expect(aside).toHaveAttribute("aria-hidden", "false", { timeout: T_SHORT });
 
+      await window.locator(SEL.toolbar.projectSwitcherTrigger).focus();
       await window.keyboard.press(`${mod}+b`);
       await expect(aside).toHaveAttribute("aria-hidden", "true", { timeout: T_SHORT });
 
@@ -211,6 +215,7 @@ test.describe.serial("Core: Shell & Settings", () => {
         const panel = window.locator(SEL.panel.gridPanel).first();
         await panel.click();
         await window.waitForTimeout(T_SETTLE);
+        await panel.locator(SEL.panel.close).first().focus();
 
         await window.keyboard.press(`${mod}+w`);
         await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before - 1);

@@ -14,7 +14,6 @@
  */
 
 import { test, expect, type Locator } from "@playwright/test";
-import { execSync } from "child_process";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
@@ -58,23 +57,6 @@ const clickReviewHubSetupButton = async (locator: Locator) => {
 let ctx: AppContext;
 let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
-
-const resetFixtureIndexToUnstaged = async () => {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 10; attempt++) {
-    try {
-      execSync("git reset --mixed HEAD -- .", { cwd: fixtureDir, stdio: "pipe" });
-      return;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
-    }
-  }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("Failed to reset fixture index to unstaged state");
-};
 
 test.describe.serial("Core: List Mount Perf Budget", () => {
   test.beforeAll(async () => {
@@ -120,16 +102,19 @@ test.describe.serial("Core: List Mount Perf Budget", () => {
         timeout: T_MEDIUM,
       });
 
-      await window.waitForTimeout(T_SETTLE);
-      await resetFixtureIndexToUnstaged();
+      await clickReviewHubSetupButton(fileListToggle);
+      await expect(fileListToggle).toHaveAttribute("aria-expanded", "true", {
+        timeout: T_MEDIUM,
+      });
+      const unstageAllButton = hub.locator(SEL.reviewHub.unstageAllButton);
+      await expect(unstageAllButton).toBeVisible({ timeout: T_LIST_MOUNT });
+      await unstageAllButton.click();
+      await expect(hub.locator(SEL.reviewHub.noStagedFiles)).toBeVisible({ timeout: T_LONG });
 
-      // Ensure the measurement starts from a collapsed list.
-      if ((await fileListToggle.getAttribute("aria-expanded")) === "true") {
-        await clickReviewHubSetupButton(fileListToggle);
-        await expect(fileListToggle).toHaveAttribute("aria-expanded", "false", {
-          timeout: T_MEDIUM,
-        });
-      }
+      await clickReviewHubSetupButton(fileListToggle);
+      await expect(fileListToggle).toHaveAttribute("aria-expanded", "false", {
+        timeout: T_MEDIUM,
+      });
       await window.waitForTimeout(T_SETTLE);
     });
 

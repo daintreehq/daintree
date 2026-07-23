@@ -154,12 +154,23 @@ async function requestSavedFleetDelete(page: Page, fleetName: string): Promise<v
   throw new Error(`Could not request delete for saved fleet "${fleetName}"`);
 }
 
-// The pending-action confirm and bare-Escape cancel both rely on global
-// document listeners that bail when focus sits inside an input / xterm /
-// contentEditable. Blur to <body> first so a synthetic Enter / Escape lands
-// on the global handler rather than being swallowed by a focused terminal.
-async function blurActiveElement(page: Page): Promise<void> {
-  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.());
+// These confirmation keys belong to window-level listeners. Dispatch from
+// body so Electron's asynchronous xterm refocus cannot retarget the synthetic
+// key into the terminal-only guard between blur and keyboard.press().
+async function dispatchGlobalKey(page: Page, key: "Enter" | "Escape"): Promise<void> {
+  await page.evaluate(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  });
+  await page.evaluate((value) => {
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: value,
+        code: value,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+  }, key);
 }
 
 test.describe.serial("Fleet broadcast: confirm and lifecycle paths", () => {
@@ -194,8 +205,7 @@ test.describe.serial("Fleet broadcast: confirm and lifecycle paths", () => {
     });
 
     await test.step("Escape cancels the confirm — terminals survive, fleet stays armed", async () => {
-      await blurActiveElement(window);
-      await window.keyboard.press("Escape");
+      await dispatchGlobalKey(window, "Escape");
       await expect(window.locator(`${SEL.fleet.ribbon}[data-pending-action]`)).toBeHidden({
         timeout: T_MEDIUM,
       });
@@ -221,8 +231,7 @@ test.describe.serial("Fleet broadcast: confirm and lifecycle paths", () => {
       timeout: T_MEDIUM,
     });
 
-    await blurActiveElement(window);
-    await window.keyboard.press("Enter");
+    await dispatchGlobalKey(window, "Enter");
 
     await test.step("Both armed panels are removed and the ribbon clears", async () => {
       for (const id of ids) {

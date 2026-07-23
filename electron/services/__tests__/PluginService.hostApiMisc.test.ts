@@ -672,7 +672,9 @@ describe("Plugin worktree host API", () => {
       }
     ).storage;
 
-    expect(await storage.resolveStorageFilePath("acme.wt-host", "worktree")).toContain("/tmp/b");
+    expect(await storage.resolveStorageFilePath("acme.wt-host", "worktree")).toBe(
+      path.join("/tmp/b", ".daintree", "plugin-storage", "acme.wt-host.json")
+    );
 
     windowRefMock.getProjectViewManager.mockReturnValue(null);
     // No target at all — `set` throws on undefined rather than picking a file.

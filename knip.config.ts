@@ -129,10 +129,26 @@ const config: KnipConfig = {
   ],
 
   ignoreBinaries: [
-    // why: Windows system command used for process-tree cleanup. It is not an
-    // npm-provided binary and must not be declared as a package dependency.
-    "taskkill",
+    // why: Host OS commands invoked directly by platform-specific runtime,
+    // installer, and E2E paths. They are not npm-provided binaries and must
+    // not be declared as package dependencies.
+    "ditto",
+    "du",
+    "gnome-control-center",
+    "osascript",
+    "pgrep",
+    "pkill",
+    "reg",
+    "top",
+    "where",
+    "wsl.exe",
   ],
+
+  ignoreIssues: {
+    // The macOS Focus probe invokes an absolute system executable. On Linux,
+    // Knip cannot resolve that platform-only path and reports it as an import.
+    "electron/services/OsDndService.ts": ["unresolved"],
+  },
 
   // why: these packages are consumed via mechanisms Knip can't trace:
   //   - tailwindcss / @tailwindcss/typography / tw-animate-css: loaded through
@@ -153,6 +169,14 @@ const config: KnipConfig = {
     "wait-on",
     "fast-check",
     "conf",
+    // Sample-plugin contract tests deliberately resolve the local workspaces
+    // by their public package names, while the rich sample's standalone Vite
+    // config exercises the same package boundary as third-party authors.
+    // The samples are not npm workspaces and therefore cannot declare these
+    // host-repository development dependencies themselves.
+    "@daintreehq/plugin-sdk",
+    "@daintreehq/plugin-testing",
+    "@daintreehq/plugin-vite",
     // scripts/ci/electron-builder-config.test.mjs reads the installed
     // electron-builder schema from node_modules/app-builder-lib/scheme.json.
     // electron-builder owns that transitive package; the test must validate
@@ -170,7 +194,6 @@ const config: KnipConfig = {
     // package-local source only, so these bundled runtime dependencies look
     // unused from that workspace.
     "archiver",
-    "semver",
     "yauzl",
     "zod",
     // Native addon support, consumed only from electron/native/win-job-object/

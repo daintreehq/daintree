@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
@@ -43,13 +44,19 @@ describe("repairMovedSubmodulePaths", () => {
     return file;
   }
 
+  function readCoreWorktree(config: string): string {
+    return execFileSync("git", ["config", "--file", config, "--get", "core.worktree"], {
+      encoding: "utf-8",
+    }).trimEnd();
+  }
+
   it("rebases an absolute core.worktree and absolute gitlink pointer under the old root", async () => {
     const config = await writeModuleConfig("modules/lib", "/old/project/vendor/lib");
     const gitlink = await writeGitlink("vendor/lib", "/old/project/.git/modules/lib");
 
     await repairMovedSubmodulePaths(OLD, newRoot);
 
-    expect(await readFile(config, "utf-8")).toContain(`worktree = ${newRoot}/vendor/lib`);
+    expect(readCoreWorktree(config)).toBe(`${newRoot}/vendor/lib`);
     expect(await readFile(gitlink, "utf-8")).toBe(`gitdir: ${newRoot}/.git/modules/lib\n`);
   });
 
@@ -79,7 +86,8 @@ describe("repairMovedSubmodulePaths", () => {
 
     await repairMovedSubmodulePaths(OLD, newRoot);
 
-    expect(await readFile(config, "utf-8")).toContain(`worktree = "${newRoot}/my vendor/lib"`);
+    expect(readCoreWorktree(config)).toBe(`${newRoot}/my vendor/lib`);
+    expect(await readFile(config, "utf-8")).toMatch(/\tworktree = "/);
   });
 
   it("repairs a submodule owned by a linked worktree (worktrees/<id>/modules)", async () => {
@@ -87,7 +95,7 @@ describe("repairMovedSubmodulePaths", () => {
 
     await repairMovedSubmodulePaths(OLD, newRoot);
 
-    expect(await readFile(config, "utf-8")).toContain(`worktree = ${newRoot}/vendor/lib`);
+    expect(readCoreWorktree(config)).toBe(`${newRoot}/vendor/lib`);
   });
 
   it("keeps repairing other modules when one config is malformed, and never throws", async () => {
@@ -102,7 +110,7 @@ describe("repairMovedSubmodulePaths", () => {
 
     await expect(repairMovedSubmodulePaths(OLD, newRoot)).resolves.toBeUndefined();
 
-    expect(await readFile(good, "utf-8")).toContain(`worktree = ${newRoot}/vendor/good`);
+    expect(readCoreWorktree(good)).toBe(`${newRoot}/vendor/good`);
   });
 
   it("preserves CRLF line endings when rewriting the config", async () => {
@@ -113,7 +121,9 @@ describe("repairMovedSubmodulePaths", () => {
     await repairMovedSubmodulePaths(OLD, newRoot);
 
     const out = await readFile(file, "utf-8");
-    expect(out).toBe(`[core]\r\n\tworktree = ${newRoot}/vendor/lib\r\n`);
+    expect(out.match(/\r\n/g)).toHaveLength(2);
+    expect(out.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(readCoreWorktree(file)).toBe(`${newRoot}/vendor/lib`);
   });
 
   it("is a no-op when old and new roots are equal or empty", async () => {

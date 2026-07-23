@@ -659,6 +659,7 @@ describe("projectStore adversarial", () => {
     useProjectStore.setState({ projects: [projectA], currentProject: projectA });
 
     updatedCallbacks[0]!({ ...projectA, path: "/tmp/project-a-moved" });
+    await vi.dynamicImportSettled();
 
     // Same id, new folder: the resume pointer is repointed in place, never GC'd.
     expect(setHibernateSessionMock).toHaveBeenCalledWith(projectA.id, {

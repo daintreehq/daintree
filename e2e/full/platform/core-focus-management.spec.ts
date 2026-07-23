@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
@@ -16,6 +16,20 @@ import { expectTerminalFocused, ensureWindowFocused } from "../../helpers/focus"
 let ctx: AppContext;
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 let fixtureCleanup: (() => void) | undefined;
+
+async function openQuickSwitcher(window: Page): Promise<void> {
+  if (process.platform === "darwin") {
+    await window.keyboard.press(`${mod}+P`);
+    return;
+  }
+  await window.evaluate(() =>
+    (
+      window as unknown as {
+        __daintreeDispatchAction: (actionId: string) => Promise<unknown>;
+      }
+    ).__daintreeDispatchAction("nav.quickSwitcher")
+  );
+}
 
 test.describe.serial("Core: Focus Management", () => {
   test.beforeAll(async () => {
@@ -85,7 +99,7 @@ test.describe.serial("Core: Focus Management", () => {
     });
 
     await test.step("Open quick switcher and verify search input is focused", async () => {
-      await window.keyboard.press(`${mod}+P`);
+      await openQuickSwitcher(window);
       await expect(window.locator(SEL.quickSwitcher.dialog)).toBeVisible({ timeout: T_MEDIUM });
       await expect(window.locator(SEL.quickSwitcher.searchInput)).toBeFocused({ timeout: T_SHORT });
       // Settle to let any delayed menu IPC arrive before dismissing

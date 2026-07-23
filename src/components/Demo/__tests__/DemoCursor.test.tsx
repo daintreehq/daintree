@@ -1361,9 +1361,9 @@ describe("DemoCursor", () => {
       render(<DemoCursor />);
       emit("demo:exec-wait-for-idle", { requestId: "req-idle-empty", settleMs: 30, timeoutMs: 2000 });
 
-      await new Promise((r) => setTimeout(r, 150));
-
-      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-empty", undefined);
+      await vi.waitFor(() =>
+        expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-empty", undefined)
+      );
     });
 
     it("delays idle while a terminal is still writing, then resolves once it stops", async () => {

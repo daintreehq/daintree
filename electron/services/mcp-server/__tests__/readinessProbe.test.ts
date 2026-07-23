@@ -254,11 +254,11 @@ describe("probeMcpServer", () => {
     });
 
     await probeMcpServer(fake.port, "test-api-key");
-    // DELETE is fire-and-forget — give it time to complete and log.
-    await new Promise((r) => setTimeout(r, 100));
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("Readiness probe cleanup DELETE failed"),
-      expect.objectContaining({ message: expect.stringContaining("status 404") })
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Readiness probe cleanup DELETE failed"),
+        expect.objectContaining({ message: expect.stringContaining("status 404") })
+      )
     );
     warn.mockRestore();
   });
