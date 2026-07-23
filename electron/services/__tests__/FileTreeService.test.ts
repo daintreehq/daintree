@@ -55,6 +55,78 @@ describe("FileTreeService", () => {
     ]);
   });
 
+  it("sorts sibling names in natural numeric order", async () => {
+    // Deliberately non-natural creation order so a plain lexicographic sort
+    // (which would place version_10 between version_1 and version_2) fails.
+    const names = [
+      "version_10",
+      "version_1",
+      "version_9",
+      "version_2",
+      "version_8",
+      "version_3",
+      "version_7",
+      "version_4",
+      "version_6",
+      "version_5",
+    ];
+    for (const name of names) {
+      await fs.writeFile(path.join(tempDir, name), "");
+    }
+
+    const result = await service.getFileTree(tempDir);
+
+    expect(result.map((node) => node.name)).toEqual([
+      "version_1",
+      "version_2",
+      "version_3",
+      "version_4",
+      "version_5",
+      "version_6",
+      "version_7",
+      "version_8",
+      "version_9",
+      "version_10",
+    ]);
+  });
+
+  it("orders bare numeric names numerically and before alphanumeric names", async () => {
+    for (const name of ["file2", "10", "2"]) {
+      await fs.writeFile(path.join(tempDir, name), "");
+    }
+
+    const result = await service.getFileTree(tempDir);
+
+    expect(result.map((node) => node.name)).toEqual(["2", "10", "file2"]);
+  });
+
+  it("keeps directories before files regardless of name order", async () => {
+    await fs.mkdir(path.join(tempDir, "z"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "a"), "");
+
+    const result = await service.getFileTree(tempDir);
+
+    expect(result.map(({ name, isDirectory }) => ({ name, isDirectory }))).toEqual([
+      { name: "z", isDirectory: true },
+      { name: "a", isDirectory: false },
+    ]);
+  });
+
+  it("places leading-zero forms before the next numeric value", async () => {
+    // Leading-zero variants share the same numeric value, so ICU numeric
+    // collation compares them equal — their relative order is undefined. Assert
+    // only the defined behavior: the whole 1-valued group sorts before file2.
+    for (const name of ["file2", "file1", "file01", "file001"]) {
+      await fs.writeFile(path.join(tempDir, name), "");
+    }
+
+    const result = await service.getFileTree(tempDir);
+    const names = result.map((node) => node.name);
+
+    expect(names.slice(0, 3)).toEqual(expect.arrayContaining(["file1", "file01", "file001"]));
+    expect(names[3]).toBe("file2");
+  });
+
   it("blocks dirPath values that resolve through symlinks outside base path", async () => {
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-file-tree-outside-"));
     await fs.writeFile(path.join(outsideDir, "outside.txt"), "outside");

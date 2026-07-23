@@ -4,6 +4,14 @@ import { checkIgnoredPaths } from "../utils/gitCheckIgnore.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { FileTreeNode } from "../../shared/types/ipc.js";
 
+// Natural-numeric name ordering so `version_10` sorts after `version_9`
+// instead of between `version_1` and `version_2`. Locale is pinned to "en"
+// for cross-platform/CI determinism; default "variant" sensitivity keeps the
+// case tie-break of the plain `localeCompare` it replaces. Constructed once at
+// module scope — `getFileTree` runs on every directory read and bulk scan, and
+// per-call collator construction is costly.
+const NAME_COLLATOR = new Intl.Collator("en", { numeric: true });
+
 const _baseRealpathCache = new Map<string, Promise<string>>();
 
 // Throttle for the fail-closed warn so a sustained git failure (e.g. a
@@ -185,7 +193,7 @@ export class FileTreeService {
       nodes.sort((a, b) => {
         if (a.isDirectory && !b.isDirectory) return -1;
         if (!a.isDirectory && b.isDirectory) return 1;
-        return a.name.localeCompare(b.name);
+        return NAME_COLLATOR.compare(a.name, b.name);
       });
 
       return nodes;
