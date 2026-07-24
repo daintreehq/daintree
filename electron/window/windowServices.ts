@@ -32,6 +32,7 @@ import { shouldDeferRendererLoadForE2E } from "./earlyRenderer.js";
 import { isE2EFaultMode } from "../setup/runtimeFlags.js";
 import {
   extractCliPath,
+  hasCliPathFlag,
   getPendingCliPath,
   setPendingCliPath,
   extractDntrPaths,
@@ -714,7 +715,10 @@ export async function setupWindowServices(
     const firstLaunchCliPath = !getProcessArgvCliHandled()
       ? extractCliPath(process.argv, process.cwd())
       : null;
-    if (firstLaunchCliPath) setProcessArgvCliHandled(true);
+    // Retire the one-shot read whenever argv asked for a path at all, not only
+    // when it resolved: an unresolvable `--cli-path` is still consumed, so it
+    // isn't re-parsed (and re-reported) by every window created afterwards.
+    if (firstLaunchCliPath || hasCliPathFlag(process.argv)) setProcessArgvCliHandled(true);
     const cliPath = firstLaunchCliPath ?? getPendingCliPath();
     if (cliPath) {
       setPendingCliPath(null);

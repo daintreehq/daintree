@@ -27,18 +27,28 @@ export function setPendingCliPath(p: string | null): void {
 const CLI_PATH_FLAG = "--cli-path";
 const CLI_PATH_PREFIX = `${CLI_PATH_FLAG}=`;
 
-// Shared normalization for every path-shaped argv token, used by both
-// `extractCliPath` and `extractDntrPaths` so the two can't drift (#11283).
-// Returns null for anything that isn't a usable path candidate.
-function normalizeArgPath(arg: string | undefined, workingDirectory: string): string | null {
-  // A `--`-prefixed token is a switch, never a path. Chromium injects its own
-  // switches into the reconstructed `second-instance` command line, so this is
-  // the guard that stops one being mistaken for a project directory (#11410).
-  if (!arg || arg.startsWith("--")) return null;
+// `\` separates path segments only on Windows; on POSIX it is a legal filename
+// character, so `~\foo` there names a file and must not be home-expanded.
+const TILDE_PREFIX = process.platform === "win32" ? /^~(?=[/\\]|$)/ : /^~(?=\/|$)/;
+
+// A `--`-prefixed token is a switch, never a path. Chromium injects its own
+// switches into the reconstructed `second-instance` command line, so this is
+// the guard that stops one being mistaken for a project directory (#11410).
+// Bare argv tokens only — the value of `--cli-path=<path>` is unambiguous even
+// when the directory is itself named `--something`.
+function isSwitchToken(arg: string | undefined): arg is undefined | string {
+  return !arg || arg.startsWith("--");
+}
+
+// Decode an argv token to an OS path, without resolving it. Callers that care
+// about the literal filename see it before `path.resolve` collapses a trailing
+// `.`/`..` into an ancestor directory's name.
+function decodeArgPath(arg: string | undefined): string | null {
+  if (!arg) return null;
 
   // XDG file managers pass `file://` URIs because electron-builder appends
   // `%U` to the Linux .desktop Exec line, and macOS Shortcuts/Automator produce
-  // them by default. Decode to an OS path before resolution.
+  // them by default.
   let candidate = arg;
   if (candidate.startsWith("file://")) {
     try {
@@ -51,11 +61,16 @@ function normalizeArgPath(arg: string | undefined, workingDirectory: string): st
   // Only the current user's own `~` — `~other` would need an account lookup.
   // The function replacer keeps a `$` in the home path from being read as a
   // replacement pattern.
-  candidate = candidate.replace(/^~(?=[/\\]|$)/, () => os.homedir());
+  return candidate.replace(TILDE_PREFIX, () => os.homedir());
+}
 
-  // The OS may supply a path relative to the launching shell's cwd, so resolve
-  // against the launching instance's `workingDirectory`.
-  return path.resolve(workingDirectory, candidate);
+// Shared normalization for every path-shaped argv token, used by both
+// `extractCliPath` and `extractDntrPaths` so the two can't drift (#11283). The
+// OS may supply a path relative to the launching shell's cwd, so it resolves
+// against the launching instance's `workingDirectory`.
+function normalizeArgPath(arg: string | undefined, workingDirectory: string): string | null {
+  const decoded = decodeArgPath(arg);
+  return decoded === null ? null : path.resolve(workingDirectory, decoded);
 }
 
 // As `normalizeArgPath`, but only returns candidates that are an existing
@@ -110,14 +125,22 @@ export function extractCliPath(argv: string[], workingDirectory: string): string
     if (arg !== CLI_PATH_FLAG) continue;
 
     const adjacent = argv[i + 1];
-    const adjacentPath = normalizeArgDirectory(adjacent, workingDirectory);
-    if (adjacentPath) return adjacentPath;
+    if (adjacent !== undefined && !adjacent.startsWith("--")) {
+      // Nothing displaced the value — this token is what the launcher passed.
+      // If it doesn't name a directory the request has failed; substituting
+      // some other positional would open a project the user never asked for.
+      const adjacentPath = normalizeArgDirectory(adjacent, workingDirectory);
+      if (!adjacentPath) reportUnresolvedCliPath(adjacent, workingDirectory);
+      return adjacentPath;
+    }
 
-    // The value was displaced. Scan the other positionals for it, skipping
-    // argv[0] (the executable) and the token we already rejected. A `.dntr`
-    // archive is a file, so the directory check keeps it out of the running.
-    for (let j = 1; j < argv.length; j++) {
-      if (j === i || j === i + 1) continue;
+    // An injected switch sits where the value should be (#11410). Chromium
+    // orders positionals after the switches, so the displaced path is further
+    // along — never behind the flag. Take the first token past the displaced
+    // slot that names a directory; a `.dntr` archive is a file, so the
+    // directory check keeps it out of the running.
+    for (let j = i + 2; j < argv.length; j++) {
+      if (isSwitchToken(argv[j])) continue;
       const fallback = normalizeArgDirectory(argv[j], workingDirectory);
       if (fallback) return fallback;
     }
@@ -131,6 +154,13 @@ export function extractCliPath(argv: string[], workingDirectory: string): string
   return null;
 }
 
+// True when argv asks for a project directory at all, whether or not it
+// resolves. Lets a caller retire a one-shot `process.argv` read even when the
+// request failed, instead of re-parsing — and re-reporting — it per window.
+export function hasCliPathFlag(argv: string[]): boolean {
+  return argv.some((arg) => arg === CLI_PATH_FLAG || arg.startsWith(CLI_PATH_PREFIX));
+}
+
 // `.dntr` plugin archives double-clicked on Windows/Linux arrive as bare argv
 // entries (no `--flag`) on the `second-instance` event. Extension matching is
 // case-insensitive for Windows. No existence check: the archive-preview
@@ -138,9 +168,12 @@ export function extractCliPath(argv: string[], workingDirectory: string): string
 export function extractDntrPaths(argv: string[], workingDirectory: string): string[] {
   const paths: string[] = [];
   for (const arg of argv) {
-    const candidate = normalizeArgPath(arg, workingDirectory);
-    if (!candidate?.toLowerCase().endsWith(".dntr")) continue;
-    paths.push(candidate);
+    if (isSwitchToken(arg)) continue;
+    const decoded = decodeArgPath(arg);
+    // Match the literal filename: resolving first would collapse a trailing
+    // `.`/`..` and route `some.dntr/..` to an ancestor named `*.dntr`.
+    if (!decoded || !path.basename(decoded).toLowerCase().endsWith(".dntr")) continue;
+    paths.push(path.resolve(workingDirectory, decoded));
   }
   return paths;
 }
