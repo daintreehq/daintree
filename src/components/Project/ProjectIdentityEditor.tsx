@@ -125,7 +125,8 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
     (type: string, init: MouseEventInit) => {
       const pill = findPill();
       if (!pill) return;
-      const Ctor: typeof MouseEvent = typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
+      const Ctor: typeof MouseEvent =
+        typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
       pill.dispatchEvent(new Ctor(type, { bubbles: true, ...init }));
     },
     [findPill]
