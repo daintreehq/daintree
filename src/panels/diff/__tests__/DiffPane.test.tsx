@@ -44,8 +44,12 @@ vi.mock("@/components/FileViewer/ImageDiffViewer", () => ({
   isImageDiffCandidate: isImageDiffCandidateMock,
 }));
 vi.mock("@/components/ui/EmptyState", () => ({
-  EmptyState: (props: { title: string }) => (
-    <div data-testid="empty-state-mock" data-title={props.title} />
+  EmptyState: (props: { title: string; description?: string }) => (
+    <div
+      data-testid="empty-state-mock"
+      data-title={props.title}
+      data-description={props.description}
+    />
   ),
 }));
 
@@ -650,6 +654,33 @@ describe("DiffPane — video current-version mode (#11382)", () => {
       (el) => el.getAttribute("data-title")
     );
     expect(titles).toContain("This video couldn't be played");
+  });
+
+  it("headlines the preview's own reason rather than repeating it under a generic title", async () => {
+    videoFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-length": String(2 * 1024 * 1024 * 1024) }),
+      blob: () => Promise.resolve(new Blob(["x"])),
+    });
+    seedPanel({
+      filePath: "media/demo.mp4",
+      fileStatus: "modified",
+      changeSet: [entry("media/demo.mp4")],
+    });
+    const { container } = renderPane();
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="empty-state-mock"]')).not.toBeNull()
+    );
+    const state = container.querySelector('[data-testid="empty-state-mock"]')!;
+    const title = state.getAttribute("data-title") ?? "";
+    const description = state.getAttribute("data-description") ?? "";
+    // The refusal is its own headline — the generic playback-failure title would
+    // be wrong (nothing failed to play) and would restate the description.
+    expect(title).not.toBe("This video couldn't be played");
+    expect(description).toBeTruthy();
+    expect(description).not.toContain(title);
   });
 
   it("shows a quiet empty state for a deleted video (no working-tree bytes to play)", () => {

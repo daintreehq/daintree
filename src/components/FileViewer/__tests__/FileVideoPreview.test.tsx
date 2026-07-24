@@ -61,6 +61,19 @@ describe("FileVideoPreview", () => {
     expect(video?.getAttribute("aria-label")).toBe("demo.mp4");
   });
 
+  it("holds a skeleton surface while the whole file downloads", () => {
+    // Never settles: the download of a large recording is exactly the wait the
+    // skeleton exists for, so the surface must be an aria-busy status region
+    // rather than an ungated spinner.
+    fetchMock.mockImplementation(() => new Promise(() => {}));
+    const { container, getByRole } = render(
+      <FileVideoPreview filePath="/repo/demo.mp4" rootPath="/repo" label="demo.mp4" />
+    );
+
+    expect(getByRole("status").getAttribute("aria-busy")).toBe("true");
+    expect(container.querySelector("video")).toBeNull();
+  });
+
   it("refetches with the cache-busting param when the reload key changes", async () => {
     respondWith(new Blob(["x"]));
     const { rerender, container } = render(
@@ -129,9 +142,14 @@ describe("FileVideoPreview", () => {
       />
     );
 
-    // A distinct message (not the callers' generic "couldn't be played" copy)
-    // — the exact wording is the component's own to choose.
-    await waitFor(() => expect(onError).toHaveBeenCalledWith(expect.any(String)));
+    // A distinct titled reason (not the callers' generic "couldn't be played"
+    // copy) — the exact wording is the component's own to choose. The
+    // description carries the next action so a titled surface can show both.
+    await waitFor(() =>
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({ title: expect.any(String), description: expect.any(String) })
+      )
+    );
     expect(blobSpy).not.toHaveBeenCalled();
   });
 
@@ -154,7 +172,9 @@ describe("FileVideoPreview", () => {
       />
     );
 
-    await waitFor(() => expect(onError).toHaveBeenCalledWith(expect.any(String)));
+    await waitFor(() =>
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({ title: expect.any(String) }))
+    );
   });
 
   it("does not report an error when unmounted mid-fetch", async () => {

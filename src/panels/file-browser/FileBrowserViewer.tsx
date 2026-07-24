@@ -473,8 +473,11 @@ export function FileBrowserViewer({
               filePath={filePath}
               rootPath={rootPath}
               label={fileName}
-              onError={(message) =>
-                setState({ status: "error", message: message ?? "This video couldn't be played" })
+              onError={(error) =>
+                setState({
+                  status: "error",
+                  message: error?.title ?? "This video couldn't be played",
+                })
               }
               maxHeightClassName="max-h-full"
             />

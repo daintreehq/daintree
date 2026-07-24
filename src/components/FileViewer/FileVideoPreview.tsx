@@ -1,7 +1,6 @@
 import { useEffect, useEffectEvent, useMemo, useState } from "react";
-import { Spinner } from "@/components/ui/Spinner";
-import { useDeferredLoading } from "@/hooks";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import type { FileReadErrorCode } from "@shared/types/ipc/files";
+import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { buildDaintreeFileUrl } from "./filePreviewKinds";
 
 // Blob previews hold the whole file in Chromium's blob storage (memory, then
@@ -9,7 +8,21 @@ import { buildDaintreeFileUrl } from "./filePreviewKinds";
 // runs ~10MB/min; 1GiB covers over an hour before the viewer says no.
 const VIDEO_PREVIEW_MAX_BYTES = 1024 * 1024 * 1024;
 
-const VIDEO_TOO_LARGE_MESSAGE = "This video is too large to preview";
+/** Why a preview couldn't play, split so callers can render a headline and a way forward. */
+export interface VideoPreviewError {
+  /** Names what happened. Callers with a titled error surface use it as the title. */
+  title: string;
+  /** Second line naming the next action. */
+  description?: string;
+  /** Read-error code for panes that gate their error surface on one. */
+  code?: FileReadErrorCode;
+}
+
+const VIDEO_TOO_LARGE_ERROR: VideoPreviewError = {
+  title: "This video is too large to preview",
+  description: "Open it outside Daintree to watch it.",
+  code: "FILE_TOO_LARGE",
+};
 
 interface FileVideoPreviewProps {
   /** Absolute path of the video being previewed. */
@@ -24,8 +37,8 @@ interface FileVideoPreviewProps {
    * rewritten file needs a new URL to show new bytes.
    */
   reloadKey?: string | number;
-  /** Called when the video can't be fetched or played; a message overrides the caller's generic copy. */
-  onError?: (message?: string) => void;
+  /** Called when the video can't be fetched or played; an error overrides the caller's generic copy. */
+  onError?: (error?: VideoPreviewError) => void;
   /** Height cap for the preview surface — dialogs and panes want different ones. */
   maxHeightClassName?: string;
 }
@@ -63,12 +76,11 @@ export function FileVideoPreview({
 
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [fetching, setFetching] = useState(true);
-  const showSpinner = useDeferredLoading(fetching, UI_DOHERTY_THRESHOLD);
 
   // Effect events so the fetch effect keys on `src` alone — callers pass
   // inline closures, and refetching the file on every parent render would
   // discard playback position each time anything else in the pane changes.
-  const reportError = useEffectEvent((message?: string) => onError?.(message));
+  const reportError = useEffectEvent((error?: VideoPreviewError) => onError?.(error));
 
   useEffect(() => {
     const controller = new AbortController();
@@ -80,7 +92,7 @@ export function FileVideoPreview({
       .then(async (response) => {
         // Guarded before any state write: an already-settled fetch promise can
         // run this reaction after cleanup aborted it, and reporting then would
-        // clear the spinner / flag an error on the file shown NEXT.
+        // clear the skeleton / flag an error on the file shown NEXT.
         if (controller.signal.aborted) return;
         if (!response.ok) throw new Error(`daintree-file responded ${response.status}`);
         const declaredLength = Number(response.headers.get("content-length"));
@@ -89,14 +101,14 @@ export function FileVideoPreview({
           // now rather than when the response gets collected.
           void response.body?.cancel().catch(() => {});
           setFetching(false);
-          reportError(VIDEO_TOO_LARGE_MESSAGE);
+          reportError(VIDEO_TOO_LARGE_ERROR);
           return;
         }
         const blob = await response.blob();
         if (controller.signal.aborted) return;
         if (blob.size > VIDEO_PREVIEW_MAX_BYTES) {
           setFetching(false);
-          reportError(VIDEO_TOO_LARGE_MESSAGE);
+          reportError(VIDEO_TOO_LARGE_ERROR);
           return;
         }
         url = URL.createObjectURL(blob);
@@ -135,8 +147,19 @@ export function FileVideoPreview({
           className={`max-w-full ${maxHeightClassName} rounded`}
           onError={() => onError?.()}
         />
-      ) : showSpinner ? (
-        <Spinner size="xl" className="text-text-secondary" />
+      ) : fetching ? (
+        // The whole file downloads before playback starts, so this wait is
+        // routinely past a second and, on a long recording, past five — a
+        // skeleton in the player's shape, not a spinner. `SkeletonBone` carries
+        // the 400ms anti-flicker gate.
+        <div className="flex w-full max-w-md flex-col items-center gap-3">
+          <Skeleton label="Loading video" className="w-full">
+            <SkeletonBone className="aspect-video w-full" />
+          </Skeleton>
+          {/* Sibling, never nested: the wrapper's aria-busy silences mutations
+              inside its own subtree. */}
+          <SkeletonHint />
+        </div>
       ) : null}
     </div>
   );
