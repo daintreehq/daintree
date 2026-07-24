@@ -917,6 +917,12 @@ describe("tree-header root path copy (#11407)", () => {
     expect(payload?.action?.label).toBe("Retry");
     // The inbox drops onClick actions, so a demoted toast would lose the Retry.
     expect(payload?.priority).toBe("high");
+    expect(payload?.context?.eventKind).toBe("uiFeedback");
+    // Naming the origin surface marks the failure as already visible there and
+    // suppresses the toast — but this label shows nothing when a write fails,
+    // so the Retry would become unreachable.
+    expect(payload?.context?.panelId).toBeUndefined();
+    expect(payload?.context?.worktreeId).toBeUndefined();
     // Nothing claims success: no announcement, no lit label.
     expect(lastAnnouncement()?.id).toBe(announcedBefore?.id);
     expect(copyButton().className).toBe(idle);

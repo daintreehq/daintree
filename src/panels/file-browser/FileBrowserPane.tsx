@@ -500,14 +500,17 @@ export function FileBrowserPane({
           message: "The clipboard rejected the write.",
           // uiFeedback is passive, and the inbox keeps only actionId actions —
           // resolving to "low" would strip the Retry this toast exists for.
+          // No panelId/worktreeId: those mark the origin surface as already
+          // showing the failure, which suppresses the toast outright — and this
+          // label renders nothing when a write fails.
           priority: "high",
-          context: { eventKind: "uiFeedback", panelId: id, worktreeId },
+          context: { eventKind: "uiFeedback" },
           action: { label: "Retry", onClick: attempt },
         });
       });
     };
     attempt();
-  }, [rootAbsolutePath, copyRootPath, id, worktreeId]);
+  }, [rootAbsolutePath, copyRootPath]);
 
   const reveal = useMemo(() => revealCopy(), []);
   const handleReveal = useCallback(
