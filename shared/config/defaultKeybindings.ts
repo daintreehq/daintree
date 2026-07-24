@@ -669,7 +669,12 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "panel.toggleDiagnostics",
-    combo: "Cmd+Shift+D",
+    // Ctrl+Shift+J, not Ctrl+Shift+D: `Cmd+Shift+D` (now worktree.openChanges)
+    // folds onto the physical Ctrl+Shift+D on Windows/Linux, so a D here would
+    // silently shadow one of the two there. J is unclaimed in that folded space
+    // and keeps the diagnostics family literal-Ctrl alongside L (Logs) and
+    // M (Problems). Shifted, so the terminal never claims it.
+    combo: "Ctrl+Shift+J",
     scope: "global",
     priority: 0,
     description: "Toggle diagnostics dock",
@@ -1017,6 +1022,14 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Copy tree context for active worktree",
+    category: "Worktrees",
+  },
+  {
+    actionId: "worktree.openChanges",
+    combo: "Cmd+Shift+D",
+    scope: "global",
+    priority: 0,
+    description: "Open changes for focused worktree",
     category: "Worktrees",
   },
   {

@@ -9,6 +9,8 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
+import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
+import { basename } from "@shared/utils/path";
 import {
   deriveReviewReadiness,
   REVIEW_READINESS_ITEM_IDS,
@@ -36,6 +38,21 @@ type ReadinessActionSuggestion =
       actionArgs: { worktreeId: string };
     }
   | { actionId: "git.pullRebase"; actionArgs: { cwd: string } };
+
+/**
+ * Whether the context's worktree has anything `worktree.openChanges` could show.
+ * Reads the live store rather than the context because `ActionContext` carries
+ * no change data — a synchronous, side-effect-free Map lookup.
+ */
+function hasOpenableChanges(ctx: ActionContext): boolean {
+  const targetWorktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+  if (!targetWorktreeId) return false;
+
+  const worktreeChanges = getCurrentViewStore().getState().worktrees.get(targetWorktreeId)
+    ?.worktreeChanges;
+
+  return (worktreeChanges?.changes.length ?? 0) > 0;
+}
 
 /**
  * Args always target the inspected worktree explicitly — the suggested
@@ -301,6 +318,71 @@ export function registerWorktreeContextActions(
           // to a shared branch (#7884).
           initialCommitMessage: deriveCommitMessageSeed(worktree, Date.now()),
           autoStageOnOpen: true,
+        });
+      },
+    })
+  );
+
+  actions.set("worktree.openChanges", () =>
+    defineAction({
+      id: "worktree.openChanges",
+      title: "Open changes",
+      description:
+        "Open the working-tree diff for a worktree on its highest-churn changed file, seeded with the full change set so the diff sidebar can step between every changed file",
+      category: "worktree",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+      // Context-only, like every isEnabled — it cannot see args, so it answers
+      // for the target the palette and the keybinding would resolve. Menu
+      // callers dispatch for a specific card and align focus to it first
+      // (WorktreeCard), keeping this verdict and their args the same worktree.
+      isEnabled: (ctx: ActionContext) => hasOpenableChanges(ctx),
+      disabledReason: (ctx: ActionContext) => {
+        const targetWorktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        if (!targetWorktreeId) return "No worktree selected";
+
+        const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
+        if (!worktree) return "Worktree is unavailable";
+        // Null is "the poll hasn't reported yet", empty is "reported, clean" —
+        // worth distinguishing here because the first resolves on its own.
+        if (!worktree.worktreeChanges) return "Changes are still loading";
+        if (worktree.worktreeChanges.changes.length === 0) return "No changes to open";
+
+        return undefined;
+      },
+      run: async (args, ctx: ActionContext) => {
+        const worktreeId = args?.worktreeId;
+        const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        if (!targetWorktreeId) return;
+
+        // Read straight from the store: WorktreeMonitor keeps `worktreeChanges`
+        // current with no component mounted, so this opens a fresh set even from
+        // a collapsed card, where the Changed Files list does not exist.
+        const worktreeChanges = getCurrentViewStore().getState().worktrees.get(targetWorktreeId)
+          ?.worktreeChanges;
+        if (!worktreeChanges || worktreeChanges.changes.length === 0) return;
+
+        const { diffChangeSet } = buildWorkingTreeDiffModel(
+          worktreeChanges.changes,
+          worktreeChanges.rootPath
+        );
+        const firstChange = diffChangeSet[0];
+        if (!firstChange) return;
+
+        // Lazily imported for the same reason as the review hub below.
+        const { usePanelDialogStore } = await import("@/store/panelDialogStore");
+
+        await usePanelDialogStore.getState().openPanelDialog({
+          kind: "diff",
+          filePath: firstChange.path,
+          fileStatus: firstChange.status,
+          diffSource: "working-tree",
+          changeSet: diffChangeSet,
+          viewedKey: firstChange.viewedKey,
+          title: basename(firstChange.path),
+          worktreeId: targetWorktreeId,
         });
       },
     })

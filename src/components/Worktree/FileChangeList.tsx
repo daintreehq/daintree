@@ -9,11 +9,15 @@ import {
   useState,
 } from "react";
 import type { FileChangeDetail, GitStatus } from "../../types";
-import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import { cn } from "../../lib/utils";
 import { Folder } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { isAbsolute, basename, dirname, normalize, join } from "@shared/utils/path";
+import { basename, dirname, isAbsolute, join } from "@shared/utils/path";
+import {
+  buildWorkingTreeDiffModel,
+  getWorkingTreeChangeKey,
+  type WorkingTreeFileChange,
+} from "@/lib/workingTreeDiff";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
@@ -22,17 +26,6 @@ import { usePanelDialogStore } from "@/store/panelDialogStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
 import { FileDecorationBadge } from "@/components/Plugin/FileDecorationBadge";
-
-function getRelativePath(from: string, to: string): string {
-  const normalizedFrom = normalize(from);
-  const normalizedTo = normalize(to);
-
-  if (normalizedTo.startsWith(normalizedFrom + "/")) {
-    return normalizedTo.slice(normalizedFrom.length + 1);
-  }
-
-  return normalizedTo;
-}
 
 const STATUS_CONFIG: Record<GitStatus, { label: string; color: string }> = {
   modified: { label: "M", color: "text-status-warning" },
@@ -43,17 +36,6 @@ const STATUS_CONFIG: Record<GitStatus, { label: string; color: string }> = {
   copied: { label: "C", color: "text-status-info" },
   ignored: { label: "I", color: "text-daintree-text/40" },
   conflicted: { label: "!", color: "text-status-error" },
-};
-
-const STATUS_PRIORITY: Record<GitStatus, number> = {
-  modified: 0,
-  added: 1,
-  deleted: 2,
-  renamed: 3,
-  copied: 4,
-  untracked: 5,
-  ignored: 6,
-  conflicted: 7,
 };
 
 interface FileChangeListProps {
@@ -84,18 +66,10 @@ function formatDirForDisplay(dir: string, maxSegments = 2): string {
   return "…/" + segments.slice(-maxSegments).join("/");
 }
 
-interface FileChangeWithRelativePath extends FileChangeDetail {
-  relativePath: string;
-}
-
 interface FolderGroup {
   dir: string;
   displayDir: string;
-  files: FileChangeWithRelativePath[];
-}
-
-function rowKey(change: { path: string; status: GitStatus }): string {
-  return `${change.path}-${change.status}`;
+  files: WorkingTreeFileChange[];
 }
 
 export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListProps>(
@@ -114,30 +88,13 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
     // spuriously re-fire (the ref is the fallback for an unmounted trigger).
     const triggerElementRef = useRef<HTMLElement | null>(null);
 
-    const sortedChanges = useMemo(() => {
-      return [...changes]
-        .map((change) => ({
-          ...change,
-          relativePath: isAbsolute(change.path)
-            ? getRelativePath(rootPath, change.path)
-            : change.path,
-        }))
-        .sort((a, b) => {
-          const churnA = (a.insertions ?? 0) + (a.deletions ?? 0);
-          const churnB = (b.insertions ?? 0) + (b.deletions ?? 0);
-          if (churnA !== churnB) {
-            return churnB - churnA;
-          }
-
-          const priorityA = STATUS_PRIORITY[a.status] ?? 99;
-          const priorityB = STATUS_PRIORITY[b.status] ?? 99;
-          if (priorityA !== priorityB) {
-            return priorityA - priorityB;
-          }
-
-          return a.path.localeCompare(b.path);
-        });
-    }, [changes, rootPath]);
+    // Shared with `worktree.openChanges` (src/lib/workingTreeDiff.ts) so a diff
+    // opened from the context menu or a keybinding lands on the same first file,
+    // in the same order, as one opened from this list.
+    const { sortedChanges, diffChangeSet, indexByKey } = useMemo(
+      () => buildWorkingTreeDiffModel(changes, rootPath),
+      [changes, rootPath]
+    );
 
     // Plugin-contributed file decorations for the local worktree file list. Pulled
     // once for the whole list under a `worktree-files:<root>` scope — distinct from
@@ -148,15 +105,6 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
     // costs nothing on a zero-plugin file list.
     const decorationPaths = useMemo(() => sortedChanges.map((c) => c.path), [sortedChanges]);
     const decorations = useFileTreeDecorations(`worktree-files:${rootPath}`, decorationPaths);
-
-    // Map each row key to its position in `sortedChanges` so file stepping spans
-    // the whole change set (not just the visible cap) and grouped rows resolve to
-    // the same deterministic order as the flat list.
-    const indexByKey = useMemo(() => {
-      const map = new Map<string, number>();
-      sortedChanges.forEach((change, index) => map.set(rowKey(change), index));
-      return map;
-    }, [sortedChanges]);
 
     const visibleChanges = useMemo(
       () => sortedChanges.slice(0, maxVisible),
@@ -171,7 +119,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
     const [newRowKeys, setNewRowKeys] = useState<Set<string>>(() => new Set());
 
     useLayoutEffect(() => {
-      const currentKeys = sortedChanges.map(rowKey);
+      const currentKeys = sortedChanges.map(getWorkingTreeChangeKey);
       if (prevKeysRef.current === null) {
         prevKeysRef.current = new Set(currentKeys);
         return;
@@ -190,28 +138,11 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
       [sortedChanges, maxVisible]
     );
 
-    // Change set handed to the diff panel so it can render the review
-    // workspace sidebar and step between files. Viewed
-    // keys are status-scoped (this list mixes staged and unstaged changes, so
-    // it can't use the Review Hub's `section:path` namespace); markers are
-    // invalidated wholesale when the hub commits (diffViewedStore.clearWorktree).
-    const diffChangeSet = useMemo(
-      (): DiffChangeSetEntry[] =>
-        sortedChanges.map((change) => ({
-          path: change.relativePath,
-          status: change.status,
-          insertions: change.insertions,
-          deletions: change.deletions,
-          viewedKey: `${change.status}:${change.relativePath}`,
-        })),
-      [sortedChanges]
-    );
-
     // The diff panel steps through files itself, so this list only has to open
     // it and keep its change set current. `openPanelDialog` supersedes any
     // panel already showing, which is why re-opening needs no explicit close.
     const openDiffPanel = useCallback(
-      (change: FileChangeWithRelativePath) => {
+      (change: WorkingTreeFileChange) => {
         void usePanelDialogStore
           .getState()
           .openPanelDialog({
@@ -257,7 +188,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
     const groupedChanges = useMemo((): FolderGroup[] => {
       if (!groupByFolder) return [];
 
-      const groups = new Map<string, FileChangeWithRelativePath[]>();
+      const groups = new Map<string, WorkingTreeFileChange[]>();
 
       visibleChanges.forEach((change) => {
         const { dir } = splitPath(change.relativePath);
@@ -306,11 +237,11 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
       return null;
     }
 
-    const renderFileItem = (change: FileChangeWithRelativePath, showDir: boolean) => {
+    const renderFileItem = (change: WorkingTreeFileChange, showDir: boolean) => {
       const config = STATUS_CONFIG[change.status] || STATUS_CONFIG.untracked;
       const { dir, base } = splitPath(change.relativePath);
       const displayDir = formatDirForDisplay(dir);
-      const key = rowKey(change);
+      const key = getWorkingTreeChangeKey(change);
       const isNew = newRowKeys.has(key);
       const index = indexByKey.get(key) ?? 0;
 

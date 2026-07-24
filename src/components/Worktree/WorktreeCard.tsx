@@ -503,6 +503,15 @@ export function WorktreeCard({
     void actionService.dispatch("worktree.openReviewHub", { worktreeId: worktree.id });
   };
 
+  // Focus has to move first: the action's isEnabled gate only sees ActionContext
+  // (never args), so without this a right-click on a changed card would be
+  // refused whenever some *other*, clean worktree held focus. The set is
+  // synchronous, so the dispatch below reads the aligned context.
+  const openChangesForThisWorktree = () => {
+    useWorktreeSelectionStore.getState().setFocusedWorktree(worktree.id);
+    void actionService.dispatch("worktree.openChanges", { worktreeId: worktree.id });
+  };
+
   // Same shape as the Review Hub entry point: the action owns which surface the
   // browser is presented on (dialog first, promotable to the grid), so the card
   // only names the worktree.
@@ -728,6 +737,7 @@ export function WorktreeCard({
     onOpenPRExternal: worktree.linked?.pr?.url ? handleOpenPRExternal : undefined,
     onAttachIssue: () => setShowIssuePicker(true),
     onViewPlan: () => setShowPlanViewer(true),
+    onOpenChanges: hasChanges ? openChangesForThisWorktree : undefined,
     onOpenReviewHub: openReviewHubForThisWorktree,
     onOpenFileBrowser: openFileBrowserForThisWorktree,
     onCompareDiff: () => useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),
