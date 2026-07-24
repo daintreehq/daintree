@@ -26,7 +26,7 @@ import { getAppWebContents } from "./window/webContentsRegistry.js";
 import { PROJECT_MENU_ITEM_IDS, resolveProjectIdForApplicationMenu } from "./projectMenuState.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
-import { isAppError } from "./utils/errorTypes.js";
+import { getUserMessage, isAppError } from "./utils/errorTypes.js";
 import {
   getProjectOpenFailure,
   withRemoveFromRecent,
@@ -817,7 +817,12 @@ async function showProjectOpenFailure(
     type: "error",
     title: failure.title,
     message: failure.title,
-    detail: failure.message,
+    // Removal deletes the project's saved state, so the dialog says so rather
+    // than presenting it as a tidy-up of the list.
+    detail:
+      failure.recovery === "remove-from-recent"
+        ? `${failure.message}\n\nRemoving it forgets this project's saved settings and session history. The folder itself isn't touched.`
+        : failure.message,
     buttons: [PROJECT_OPEN_RECOVERY_LABELS[failure.recovery], "Cancel"],
     defaultId: 1,
     cancelId: 1,
@@ -828,15 +833,40 @@ async function showProjectOpenFailure(
   switch (failure.recovery) {
     case "remove-from-recent":
       if (deadProjectId) {
-        await removeProjectWithCleanup(deadProjectId, {
-          ptyClient: getPtyClient() ?? undefined,
-          worktreeService: getWorkspaceClientRef() ?? undefined,
-        });
+        try {
+          await removeProjectWithCleanup(deadProjectId, {
+            ptyClient: getPtyClient() ?? undefined,
+            worktreeService: getWorkspaceClientRef() ?? undefined,
+          });
+        } catch (removalError) {
+          // Removal can refuse — it fails closed when the pty-host can't confirm
+          // the project's terminals stopped. Silently logging that would leave
+          // the row in place with no explanation.
+          console.error("Failed to remove project from recent:", removalError);
+          if (!targetWindow.isDestroyed()) {
+            await dialog.showMessageBox(targetWindow, {
+              type: "error",
+              title: "Couldn't remove project",
+              message: "Couldn't remove project",
+              detail: getUserMessage(removalError),
+              buttons: ["OK"],
+              defaultId: 0,
+              cancelId: 0,
+            });
+          }
+          break;
+        }
         // Recent Projects is a static submenu built at menu-construction time,
         // so the removed row lingers until the whole menu is rebuilt —
         // refreshProjectMenuState only toggles the project-gated item states.
-        if (!targetWindow.isDestroyed()) {
-          createApplicationMenu(targetWindow, cliAvailabilityService);
+        // Rebuilt in its own try so a menu failure can't look like the removal
+        // failed; by here it has already committed.
+        try {
+          if (!targetWindow.isDestroyed()) {
+            createApplicationMenu(targetWindow, cliAvailabilityService);
+          }
+        } catch (menuError) {
+          console.error("Failed to rebuild menu after removing project:", menuError);
         }
       }
       break;

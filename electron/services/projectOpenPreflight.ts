@@ -1,5 +1,5 @@
 import fs from "fs/promises";
-import { constants as fsConstants, type Stats } from "fs";
+import { constants as fsConstants } from "fs";
 import { AppError } from "../utils/errorTypes.js";
 import { TimeoutError, withTimeout } from "../utils/withTimeout.js";
 
@@ -35,16 +35,39 @@ export const PROJECT_DIRECTORY_STAT_TIMEOUT_MS = 5_000;
  * would never take effect and the path would stay broken until the app
  * restarted.
  */
-const inFlightStats = new Map<string, Promise<Stats>>();
+const inFlightProbes = new Map<string, Promise<DirectoryProbe>>();
 
-function statOnce(directoryPath: string): Promise<Stats> {
-  const pending = inFlightStats.get(directoryPath);
+interface DirectoryProbe {
+  isDirectory: boolean;
+}
+
+/**
+ * Stat the path and, when it is a directory, confirm we can actually read and
+ * traverse it.
+ *
+ * Both syscalls live behind one shared entry so a dead mount can occupy at most
+ * one worker per path, and so they share a single deadline rather than each
+ * getting their own.
+ */
+function probeOnce(directoryPath: string): Promise<DirectoryProbe> {
+  const pending = inFlightProbes.get(directoryPath);
   if (pending) return pending;
 
-  const started = fs.stat(directoryPath).finally(() => {
-    releaseStat(directoryPath, started);
+  const started = (async (): Promise<DirectoryProbe> => {
+    const stats = await fs.stat(directoryPath);
+    if (!stats.isDirectory()) return { isDirectory: false };
+    // A successful stat says nothing about our access to the directory itself —
+    // it only needs execute permission on the *parent*. A folder with its own
+    // permission bits cleared stats fine and then fails when git tries to enter
+    // it, which is precisely the "permission denied" case this classifier owes
+    // an answer for.
+    await fs.access(directoryPath, fsConstants.R_OK | fsConstants.X_OK);
+    return { isDirectory: true };
+  })().finally(() => {
+    releaseProbe(directoryPath, started);
   });
-  inFlightStats.set(directoryPath, started);
+
+  inFlightProbes.set(directoryPath, started);
   return started;
 }
 
@@ -53,9 +76,9 @@ function statOnce(directoryPath: string): Promise<Stats> {
  * there — a later attempt may have already replaced it, and evicting that one
  * would let a third caller start yet another syscall against the same path.
  */
-function releaseStat(directoryPath: string, promise: Promise<Stats>): void {
-  if (inFlightStats.get(directoryPath) === promise) {
-    inFlightStats.delete(directoryPath);
+function releaseProbe(directoryPath: string, promise: Promise<DirectoryProbe>): void {
+  if (inFlightProbes.get(directoryPath) === promise) {
+    inFlightProbes.delete(directoryPath);
   }
 }
 
@@ -70,42 +93,27 @@ function releaseStat(directoryPath: string, promise: Promise<Stats>): void {
  * destructive recovery ("remove from recent") off `NOT_FOUND`.
  */
 export async function assertProjectDirectory(directoryPath: string): Promise<void> {
-  const pending = statOnce(directoryPath);
+  const pending = probeOnce(directoryPath);
 
-  let stats: Stats;
+  let probe: DirectoryProbe;
   try {
-    stats = await withTimeout(
+    probe = await withTimeout(
       pending,
       PROJECT_DIRECTORY_STAT_TIMEOUT_MS,
       `Timed out reading ${directoryPath}`
     );
   } catch (error) {
     // A timed-out call never settles, so nothing else will clear it.
-    if (error instanceof TimeoutError) releaseStat(directoryPath, pending);
+    if (error instanceof TimeoutError) releaseProbe(directoryPath, pending);
     throw classifyStatFailure(directoryPath, error);
   }
 
-  if (!stats.isDirectory()) {
+  if (!probe.isDirectory) {
     throw new AppError({
       code: "NOT_A_DIRECTORY",
       message: `Not a directory: ${directoryPath}`,
       context: { directoryPath },
     });
-  }
-
-  // A successful stat says nothing about our access to the directory itself —
-  // it only needs execute permission on the *parent*. A folder with its own
-  // permissions cleared stats fine and then fails when git tries to enter it,
-  // which is precisely the "permission denied" case this classifier owes an
-  // answer for.
-  try {
-    await withTimeout(
-      fs.access(directoryPath, fsConstants.R_OK | fsConstants.X_OK),
-      PROJECT_DIRECTORY_STAT_TIMEOUT_MS,
-      `Timed out reading ${directoryPath}`
-    );
-  } catch (error) {
-    throw classifyStatFailure(directoryPath, error);
   }
 }
 
@@ -159,11 +167,13 @@ function classifyStatFailure(directoryPath: string, error: unknown): AppError {
 }
 
 /**
- * Matches the spawn failure Node reports for a binary that isn't on PATH, e.g.
- * `Error: spawn git ENOENT`. The binary name is whatever simple-git was
- * configured with, so it isn't pinned here.
+ * Matches the spawn failure Node reports for a binary that isn't on PATH, as
+ * simple-git stringifies it: `Error: spawn git ENOENT`. The binary name isn't
+ * pinned (simple-git can be configured with another), but the shape is anchored
+ * to the whole message — an unanchored search would also match git's own stderr
+ * quoting a repository path that happens to contain those words.
  */
-const SPAWN_ENOENT_PATTERN = /\bspawn\b[^\n]*\bENOENT\b/;
+const SPAWN_ENOENT_PATTERN = /^(?:Error: )?spawn [^\r\n]+ ENOENT$/;
 
 /**
  * True when `error` is a failed *spawn* of a missing executable.

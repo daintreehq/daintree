@@ -166,6 +166,26 @@ describe("assertProjectDirectory under a hung filesystem", () => {
     expect(statMock).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds a hang in the access check too, sharing one probe", async () => {
+    // stat succeeding but access hanging is the stale-mount case: without the
+    // access call living inside the same shared probe and deadline, concurrent
+    // opens would each burn a worker and a caller could wait out two timeouts.
+    statMock.mockResolvedValue(statsFor(true));
+    accessMock.mockReturnValue(new Promise<void>(() => {}));
+
+    const calls = Promise.allSettled([
+      assertProjectDirectory(FOLDER),
+      assertProjectDirectory(FOLDER),
+    ]);
+
+    await vi.advanceTimersByTimeAsync(PROJECT_DIRECTORY_STAT_TIMEOUT_MS + 1);
+    const results = await calls;
+
+    expect(results.map((r) => r.status)).toEqual(["rejected", "rejected"]);
+    expect(accessMock).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("issues separate syscalls for different paths", async () => {
     statMock.mockReturnValue(new Promise<Stats>(() => {}));
 
@@ -226,6 +246,16 @@ describe("isMissingExecutableError", () => {
     });
 
     expect(isMissingExecutableError(wrapped)).toBe(true);
+  });
+
+  it("does not match a git error that merely quotes those words", () => {
+    // An unanchored search would classify a repository living at a path like
+    // this as "git isn't installed", hijacking the real failure.
+    const gitStderr = new Error(
+      "fatal: detected dubious ownership in repository at '/repos/spawn git ENOENT'"
+    );
+
+    expect(isMissingExecutableError(gitStderr)).toBe(false);
   });
 
   it("does not mistake a missing directory for a missing binary", () => {

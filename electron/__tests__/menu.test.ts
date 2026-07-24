@@ -1362,6 +1362,7 @@ describe("handleDirectoryOpen failure dialogs", () => {
       projectStoreMock.addProject.mockRejectedValue(
         new AppError({ code: "NOT_FOUND", message: "gone" })
       );
+      removeProjectWithCleanupMock.mockResolvedValue(undefined);
     });
 
     it("offers to remove the dead row instead of a folder picker", async () => {
@@ -1408,6 +1409,39 @@ describe("handleDirectoryOpen failure dialogs", () => {
       await handleDirectoryOpen(FOLDER, targetWindowStub());
 
       expect(shownDialog().buttons[0]).toBe("Choose another folder");
+    });
+
+    it("says what removing the project actually discards", async () => {
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      // Removal drops saved state, so the dialog must not present it as merely
+      // tidying up a list.
+      expect(shownDialog().detail).toContain("settings");
+    });
+
+    it("tells the user when the removal is refused", async () => {
+      // Removal fails closed when the pty-host can't confirm the project's
+      // terminals stopped; logging that alone leaves the row with no
+      // explanation.
+      vi.mocked(dialog.showMessageBox).mockResolvedValue({
+        response: 0,
+        checkboxChecked: false,
+      });
+      removeProjectWithCleanupMock.mockRejectedValue(
+        new AppError({ code: "INTERNAL", message: "Couldn't confirm the terminals stopped" })
+      );
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      const calls: unknown[][] = vi.mocked(dialog.showMessageBox).mock.calls;
+      expect(calls).toHaveLength(2);
+      const followUp = calls[1]?.[1];
+      if (typeof followUp !== "object" || followUp === null) {
+        throw new Error("expected a follow-up dialog");
+      }
+      expect(String(Reflect.get(followUp, "detail"))).toContain(
+        "Couldn't confirm the terminals stopped"
+      );
     });
 
     it("still shows the failure when the project lookup itself fails", async () => {
