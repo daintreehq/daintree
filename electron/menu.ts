@@ -27,6 +27,12 @@ import { PROJECT_MENU_ITEM_IDS, resolveProjectIdForApplicationMenu } from "./pro
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { isAppError } from "./utils/errorTypes.js";
+import {
+  getProjectOpenFailure,
+  withRemoveFromRecent,
+  PROJECT_OPEN_RECOVERY_LABELS,
+} from "../shared/utils/projectOpenErrors.js";
+import { removeProjectWithCleanup } from "./ipc/handlers/projectCrud/crud.js";
 import { isWindowsStoreBuild, getBuildChannelLabel } from "../shared/config/distribution.js";
 import {
   getMenuAccelerator,
@@ -222,15 +228,7 @@ export function createApplicationMenu(
           click: async (_item, browserWindow) => {
             const win = getTargetBrowserWindow(browserWindow);
             if (!win) return;
-            const result = await dialog.showOpenDialog(win, {
-              properties: ["openDirectory", "createDirectory"],
-              title: "Open Git Repository",
-            });
-
-            if (!result.canceled && result.filePaths.length > 0) {
-              const directoryPath = result.filePaths[0];
-              await handleDirectoryOpen(directoryPath, win, cliAvailabilityService);
-            }
+            await promptForDirectoryOpen(win, cliAvailabilityService);
           },
         },
         {
@@ -759,6 +757,89 @@ function buildRecentProjectsMenu(
   return menuItems;
 }
 
+/**
+ * Show the folder picker and open whatever the user chooses. Shared by the File
+ * menu's Open Directory… item and the "Choose another folder" recovery on a
+ * failed open (#11409), so both configure the dialog identically.
+ */
+async function promptForDirectoryOpen(
+  targetWindow: BrowserWindow,
+  cliAvailabilityService?: CliAvailabilityService
+): Promise<void> {
+  if (targetWindow.isDestroyed()) return;
+
+  const result = await dialog.showOpenDialog(targetWindow, {
+    properties: ["openDirectory", "createDirectory"],
+    title: "Open Git Repository",
+  });
+
+  if (result.canceled || result.filePaths.length === 0) return;
+  await handleDirectoryOpen(result.filePaths[0], targetWindow, cliAvailabilityService);
+}
+
+/**
+ * Render a classified open failure as a native dialog with a single recovery
+ * action, and run that action if the user picks it.
+ *
+ * Copy comes from the shared presentation table keyed on the `AppError` code —
+ * never from `error.message`, so an internal method or library name can't reach
+ * the dialog the way "Git operation failed: getRepositoryRoot" once did.
+ */
+async function showProjectOpenFailure(
+  error: unknown,
+  directoryPath: string,
+  targetWindow: BrowserWindow,
+  cliAvailabilityService?: CliAvailabilityService
+): Promise<void> {
+  let failure = (isAppError(error) && getProjectOpenFailure(error.code, directoryPath)) || {
+    title: "Couldn't open folder",
+    message: `Something went wrong opening "${directoryPath}".`,
+    recovery: "retry" as const,
+  };
+
+  // A dead Recent Projects entry is the case worth acting on: the row itself is
+  // the problem, so offer to drop it rather than sending the user to a picker.
+  if (
+    failure.recovery === "choose-folder" &&
+    (await projectStore.getProjectByPath(directoryPath))
+  ) {
+    failure = withRemoveFromRecent(failure);
+  }
+
+  if (targetWindow.isDestroyed()) return;
+
+  const { response } = await dialog.showMessageBox(targetWindow, {
+    type: "error",
+    title: failure.title,
+    message: failure.title,
+    detail: failure.message,
+    buttons: [PROJECT_OPEN_RECOVERY_LABELS[failure.recovery], "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+  });
+
+  if (response !== 0 || targetWindow.isDestroyed()) return;
+
+  switch (failure.recovery) {
+    case "remove-from-recent": {
+      const project = await projectStore.getProjectByPath(directoryPath);
+      if (project) {
+        await removeProjectWithCleanup(project.id, {
+          ptyClient: getPtyClient() ?? undefined,
+          worktreeService: getWorkspaceClientRef() ?? undefined,
+        });
+      }
+      break;
+    }
+    case "choose-folder":
+      await promptForDirectoryOpen(targetWindow, cliAvailabilityService);
+      break;
+    case "retry":
+      await handleDirectoryOpen(directoryPath, targetWindow, cliAvailabilityService);
+      break;
+  }
+}
+
 export async function handleDirectoryOpen(
   directoryPath: string,
   targetWindow: BrowserWindow,
@@ -877,26 +958,10 @@ export async function handleDirectoryOpen(
     // needs initializing is an expected user choice, not a failure.
     console.error("Failed to open project:", error);
 
-    let errorMessage = "An unknown error occurred";
-    if (error instanceof Error) {
-      if (error.message.includes("Not a git repository")) {
-        errorMessage = "The selected directory is not a Git repository.";
-      } else if (error.message.includes("ENOENT")) {
-        errorMessage = "The selected directory does not exist.";
-      } else if (error.message.includes("EACCES")) {
-        errorMessage = "Permission denied. You don't have access to this directory.";
-      } else {
-        errorMessage = error.message;
-      }
+    try {
+      await showProjectOpenFailure(error, directoryPath, targetWindow, cliAvailabilityService);
+    } catch (dialogError) {
+      console.error("Failed to surface project open error:", dialogError);
     }
-
-    dialog
-      .showMessageBox(targetWindow, {
-        type: "error",
-        title: "Failed to Open Project",
-        message: errorMessage,
-        buttons: ["OK"],
-      })
-      .catch(console.error);
   }
 }

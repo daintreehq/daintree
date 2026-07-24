@@ -23,6 +23,7 @@ import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { rebaseAbsolutePath } from "@shared/utils/projectPathRelocation";
 import { isClientAppError } from "@/utils/clientAppError";
+import { getProjectOpenFailure } from "@shared/utils/projectOpenErrors";
 import { getViewWorkspaceId } from "./viewWorkspaceId";
 import {
   clearPanelStoreForSwitchThroughAccessor,
@@ -379,9 +380,25 @@ function isDubiousOwnershipError(error: unknown): boolean {
   return lower.includes("dubious ownership") || lower.includes("safe.directory");
 }
 
-function getProjectOpenErrorMessage(error: unknown): string {
-  if (isClientAppError(error) && error.code === "NOT_A_GIT_REPO") {
-    return "The selected directory is not a Git repository.";
+/**
+ * Copy for a failed project open.
+ *
+ * Classified failures come back from the main process as `AppError` codes and
+ * are rendered from the shared table, so this surface and the native menu
+ * dialog can't drift the way three independent message matchers did (#11409).
+ * `directoryPath` must come from the caller's own state: `sanitizeErrorForRenderer`
+ * scrubs absolute paths out of every error message crossing IPC.
+ *
+ * The substring checks below remain for the switch/reopen callers, whose
+ * failures originate outside `addProject`'s classified path.
+ */
+function getProjectOpenErrorMessage(error: unknown, directoryPath?: string): string {
+  if (isClientAppError(error)) {
+    if (error.code === "NOT_A_GIT_REPO") {
+      return "The selected directory is not a Git repository.";
+    }
+    const failure = getProjectOpenFailure(error.code, directoryPath);
+    if (failure) return failure.message;
   }
 
   const message = formatErrorMessage(error, "");
@@ -404,14 +421,6 @@ function getProjectOpenErrorMessage(error: unknown): string {
 
   if (message.includes("Project path must be absolute")) {
     return "Project path must be an absolute path.";
-  }
-
-  if (message.includes("ELOOP")) {
-    return "The selected directory contains a symbolic link loop and cannot be opened.";
-  }
-
-  if (message.includes("ENAMETOOLONG")) {
-    return "The path is too long. Shorten the directory name or move it closer to the filesystem root.";
   }
 
   if (message.includes("ENOENT")) {
@@ -563,11 +572,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         }
       }
 
-      const message = getProjectOpenErrorMessage(error);
       // Capture a frozen snapshot of the actually-resolved path so the retry
       // re-attempts the directory the user picked, not the empty argument
       // value the dialog flow was originally invoked with.
       const retryPath = resolvedPath ?? path.trim();
+      const message = getProjectOpenErrorMessage(error, retryPath || undefined);
       notify({
         type: "error",
         title: "Couldn't add project",

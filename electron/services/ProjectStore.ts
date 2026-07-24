@@ -17,6 +17,7 @@ import { existsSync } from "fs";
 import { app } from "electron";
 import { GitService } from "./GitService.js";
 import { AppError, isDaintreeError } from "../utils/errorTypes.js";
+import { assertProjectDirectory, isMissingExecutableError } from "./projectOpenPreflight.js";
 import { logError } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { store } from "../store.js";
@@ -391,6 +392,11 @@ export class ProjectStore {
    * identity never implies a mode.
    */
   async addProject(projectPath: string, options?: ProjectAddOptions): Promise<Project> {
+    // Classify the path before git ever sees it. simple-git's own synchronous
+    // baseDir check throws first otherwise, and its error can't distinguish a
+    // missing folder from a file — the root cause of #11409.
+    await assertProjectDirectory(projectPath);
+
     const creationIdentity = options?.identity;
     let gitRoot: string;
     try {
@@ -403,16 +409,15 @@ export class ProjectStore {
       const combined = [message, causeMessage].filter(Boolean).join("\n");
       const lower = combined.toLowerCase();
 
-      if (lower.includes("spawn git enoent") || lower.includes("git: not found")) {
-        throw new Error(
-          "Git executable not found. Install Git and ensure it is available on your PATH."
-        );
-      }
-
       if (lower.includes("dubious ownership") || lower.includes("safe.directory")) {
-        throw new Error(
-          "Git refused to open this repository due to 'dubious ownership'. Mark it as safe.directory and try again."
-        );
+        // Message text preserved verbatim: the renderer's dedicated
+        // dubious-ownership retry flow still recognizes it by substring.
+        throw new AppError({
+          code: "DUBIOUS_OWNERSHIP",
+          message:
+            "Git refused to open this repository due to 'dubious ownership'. Mark it as safe.directory and try again.",
+          context: { projectPath },
+        });
       }
 
       if (lower.includes("not a git repository")) {
@@ -446,7 +451,35 @@ export class ProjectStore {
         });
       }
 
-      throw new Error(combined || "Failed to open project");
+      // Re-check the directory: several awaits have passed since the pre-flight,
+      // and a folder deleted or replaced in that window is what actually failed
+      // here, not git. Rethrows a classified AppError when so.
+      await assertProjectDirectory(projectPath);
+
+      // The directory is fine, so a failed *spawn* of a missing executable can
+      // only be git itself.
+      if (isMissingExecutableError(error)) {
+        throw new AppError({
+          code: "GIT_NOT_INSTALLED",
+          message: "Git executable not found",
+          context: { projectPath },
+          cause: error instanceof Error ? error : undefined,
+        });
+      }
+
+      // Everything unrecognized becomes one opaque code, and the raw text is
+      // demoted to diagnostics. The old fallback rethrew `combined` as the
+      // message, which is how "Git operation failed: getRepositoryRoot" and
+      // simple-git's own wording reached the user (#11409) — keeping it out of
+      // `message` means even a surface that naively renders `error.message`
+      // can't leak it.
+      logError("Failed to open project", error, { projectPath });
+      throw new AppError({
+        code: "PROJECT_OPEN_FAILED",
+        message: `Failed to open project: ${projectPath}`,
+        context: { projectPath, detail: combined },
+        cause: error instanceof Error ? error : undefined,
+      });
     }
 
     // NFC-normalize for dedup so a Finder-dragged NFD path and a typed NFC

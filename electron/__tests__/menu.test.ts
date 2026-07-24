@@ -76,7 +76,10 @@ vi.mock("electron", () => ({
   },
   dialog: {
     showOpenDialog: vi.fn(),
-    showMessageBox: vi.fn(() => Promise.resolve({ response: 0, checkboxChecked: false })),
+    // Default to the Cancel index. A failed open now offers a recovery action
+    // at index 0, so defaulting to 0 would silently fire removals and reopens
+    // inside tests that only mean to assert the dialog appeared.
+    showMessageBox: vi.fn(() => Promise.resolve({ response: 1, checkboxChecked: false })),
   },
   BrowserWindow: vi.fn(),
   shell: { openExternal: vi.fn() },
@@ -106,10 +109,21 @@ const projectStoreMock = vi.hoisted(() => ({
   getProjectById: vi.fn<(id: string) => { id: string; path: string; status?: string } | null>(
     () => null
   ),
+  getProjectByPath: vi.fn<(path: string) => Promise<{ id: string; path: string } | null>>(
+    async () => null
+  ),
 }));
 
 vi.mock("../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
+}));
+
+const removeProjectWithCleanupMock = vi.hoisted(() =>
+  vi.fn<(projectId: string, deps: unknown) => Promise<void>>(async () => {})
+);
+
+vi.mock("../ipc/handlers/projectCrud/crud.js", () => ({
+  removeProjectWithCleanup: removeProjectWithCleanupMock,
 }));
 
 vi.mock("../ipc/projectSwitchBroadcast.js", () => ({
@@ -1218,5 +1232,212 @@ describe("Finder Quick Action menu item (#11406)", () => {
 
     expect(lastToast()).toMatchObject({ type: "error" });
     expect(lastToast()?.message).toContain("not permitted");
+  });
+});
+
+// #11409: a failed open must explain itself in plain language, name the folder,
+// and offer a way out — never hand the user simple-git's or GitService's
+// internal wording in a dead-end OK box.
+describe("handleDirectoryOpen failure dialogs", () => {
+  const FOLDER = "/Volumes/Archive/repos/alpha";
+
+  function targetWindowStub(): Electron.BrowserWindow {
+    return { id: 3, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
+  }
+
+  /**
+   * Read the options of the single dialog shown. Fields are pulled reflectively
+   * because the mocked `showMessageBox` resolves to the one-argument overload,
+   * so the window-plus-options call this code makes isn't indexable as a tuple.
+   */
+  function shownDialog(): {
+    title: string;
+    message: string;
+    detail: string;
+    buttons: string[];
+    defaultId: number;
+    cancelId: number;
+  } {
+    const calls: unknown[][] = vi.mocked(dialog.showMessageBox).mock.calls;
+    expect(calls).toHaveLength(1);
+    const options = calls[0]?.[1];
+    if (typeof options !== "object" || options === null) {
+      throw new Error("expected showMessageBox to receive options");
+    }
+    const buttons: unknown = Reflect.get(options, "buttons");
+    return {
+      title: String(Reflect.get(options, "title")),
+      message: String(Reflect.get(options, "message")),
+      detail: String(Reflect.get(options, "detail")),
+      buttons: Array.isArray(buttons) ? buttons.map(String) : [],
+      defaultId: Number(Reflect.get(options, "defaultId")),
+      cancelId: Number(Reflect.get(options, "cancelId")),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWebContents.isDestroyed.mockReturnValue(false);
+    mockWebContents.isLoadingMainFrame.mockReturnValue(false);
+    getAppWebContentsMock.mockImplementation(() => mockWebContents);
+    windowRefMock.getWindowRegistry.mockReturnValue(undefined);
+    projectStoreMock.getProjectByPath.mockResolvedValue(null);
+    vi.mocked(dialog.showMessageBox).mockResolvedValue({
+      response: 1,
+      checkboxChecked: false,
+    });
+  });
+
+  it.each([
+    ["NOT_FOUND"],
+    ["NOT_A_DIRECTORY"],
+    ["PERMISSION"],
+    ["GIT_NOT_INSTALLED"],
+    ["PROJECT_OPEN_FAILED"],
+    ["INVALID_PATH"],
+  ] as const)("never leaks internals when the open fails with %s", async (code) => {
+    projectStoreMock.addProject.mockRejectedValue(
+      new AppError({
+        code,
+        // Whatever internal wording rides along on the error must not reach the
+        // dialog — this string is exactly what #11409 reported seeing.
+        message: "Git operation failed: getRepositoryRoot\nCannot use simple-git on a directory",
+      })
+    );
+
+    await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+    const opts = shownDialog();
+    const shown = `${opts.title} ${opts.message} ${opts.detail}`;
+    for (const banned of ["simple-git", "getRepositoryRoot", "Git operation failed"]) {
+      expect(shown).not.toContain(banned);
+    }
+  });
+
+  it("names the folder that failed", async () => {
+    projectStoreMock.addProject.mockRejectedValue(
+      new AppError({ code: "NOT_FOUND", message: "gone" })
+    );
+
+    await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+    expect(shownDialog().detail).toContain(FOLDER);
+  });
+
+  it("offers one recovery action and a way out, defaulting to the way out", async () => {
+    projectStoreMock.addProject.mockRejectedValue(
+      new AppError({ code: "PERMISSION", message: "denied" })
+    );
+
+    await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+    const opts = shownDialog();
+    expect(opts.buttons).toHaveLength(2);
+    expect(opts.buttons[1]).toBe("Cancel");
+    // Never a dead-end OK box, and never a destructive default.
+    expect(opts.buttons[0]).not.toBe("OK");
+    expect(opts.defaultId).toBe(1);
+    expect(opts.cancelId).toBe(1);
+  });
+
+  it("keeps a raw error from reaching the dialog even when it isn't classified", async () => {
+    // The pre-#11409 fallback assigned `error.message` straight to the dialog,
+    // so an unclassified failure was the leak. It must now render safe copy.
+    projectStoreMock.addProject.mockRejectedValue(
+      new Error("Git operation failed: getRepositoryRoot")
+    );
+
+    await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+    const opts = shownDialog();
+    expect(`${opts.message} ${opts.detail}`).not.toContain("getRepositoryRoot");
+    expect(opts.buttons[0]).toBe("Try again");
+  });
+
+  describe("a missing Recent Projects entry", () => {
+    const PROJECT = { id: "project-a", path: FOLDER };
+
+    beforeEach(() => {
+      projectStoreMock.getProjectByPath.mockResolvedValue(PROJECT);
+      projectStoreMock.addProject.mockRejectedValue(
+        new AppError({ code: "NOT_FOUND", message: "gone" })
+      );
+    });
+
+    it("offers to remove the dead row instead of a folder picker", async () => {
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      expect(shownDialog().buttons[0]).toBe("Remove from recent");
+    });
+
+    it("removes it through the full teardown when confirmed", async () => {
+      vi.mocked(dialog.showMessageBox).mockResolvedValue({
+        response: 0,
+        checkboxChecked: false,
+      });
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      // Must go through the shared cleanup (PTY journal, window-state prune,
+      // broadcast, menu refresh), not a bare row delete that orphans them.
+      expect(removeProjectWithCleanupMock).toHaveBeenCalledTimes(1);
+      expect(removeProjectWithCleanupMock.mock.calls[0][0]).toBe(PROJECT.id);
+    });
+
+    it("removes nothing when the user cancels", async () => {
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      expect(removeProjectWithCleanupMock).not.toHaveBeenCalled();
+    });
+
+    it("does not offer removal for a folder that is only unreachable", async () => {
+      // A timeout or an I/O error proves the path didn't respond, not that it's
+      // gone — deleting the project row on that evidence would destroy state.
+      projectStoreMock.addProject.mockRejectedValue(
+        new AppError({ code: "PROJECT_OPEN_FAILED", message: "timed out" })
+      );
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      expect(shownDialog().buttons[0]).toBe("Try again");
+    });
+
+    it("does not offer removal for a path that isn't a known project", async () => {
+      projectStoreMock.getProjectByPath.mockResolvedValue(null);
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      expect(shownDialog().buttons[0]).toBe("Choose another folder");
+    });
+  });
+
+  it("retries the same folder when the user asks to try again", async () => {
+    vi.mocked(dialog.showMessageBox).mockResolvedValue({
+      response: 0,
+      checkboxChecked: false,
+    });
+    projectStoreMock.addProject
+      .mockRejectedValueOnce(new AppError({ code: "PERMISSION", message: "denied" }))
+      .mockResolvedValueOnce({ id: "project-a", path: FOLDER });
+
+    await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+    expect(projectStoreMock.addProject).toHaveBeenCalledTimes(2);
+    expect(projectStoreMock.addProject.mock.calls[1][0]).toBe(FOLDER);
+  });
+
+  it("shows nothing if the window closed while the failure was being classified", async () => {
+    let destroyed = false;
+    projectStoreMock.addProject.mockImplementation(() => {
+      destroyed = true;
+      return Promise.reject(new AppError({ code: "NOT_FOUND", message: "gone" }));
+    });
+
+    await handleDirectoryOpen(FOLDER, {
+      id: 3,
+      isDestroyed: () => destroyed,
+    } as unknown as Electron.BrowserWindow);
+
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
   });
 });

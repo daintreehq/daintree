@@ -454,4 +454,113 @@ describe("projectStore addProject", () => {
       expect(worktreeClientMock.retryProjectLoad).not.toHaveBeenCalled();
     });
   });
+
+  // #11409: classified open failures arrive as AppError codes and must render
+  // the shared plain-language copy — not the raw internal text that used to
+  // fall through the message matchers.
+  describe("classified open failures", () => {
+    const FOLDER = "/Volumes/Archive/repos/alpha";
+
+    /**
+     * Errors reach the renderer through the preload, which strips custom
+     * properties at the contextBridge boundary and re-encodes the code into the
+     * message. Rejecting with that exact shape is the only way this asserts the
+     * production path rather than a same-realm convenience object.
+     */
+    function preloadError(code: string, message: string): Error {
+      return new Error(`[AppError|${code}] ${message}`);
+    }
+
+    function toastPayload(): {
+      title: string;
+      message: string;
+      actions?: Array<{ label: string }>;
+    } {
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const payload: unknown = notifyMock.mock.calls[0]?.[0];
+      if (typeof payload !== "object" || payload === null) {
+        throw new Error("expected notify to receive a toast payload");
+      }
+      const actions: unknown = Reflect.get(payload, "actions");
+      return {
+        title: String(Reflect.get(payload, "title")),
+        message: String(Reflect.get(payload, "message")),
+        actions: Array.isArray(actions)
+          ? actions.map((action: object) => ({ label: String(Reflect.get(action, "label")) }))
+          : undefined,
+      };
+    }
+
+    it.each([
+      ["NOT_FOUND"],
+      ["NOT_A_DIRECTORY"],
+      ["PERMISSION"],
+      ["GIT_NOT_INSTALLED"],
+      ["PROJECT_OPEN_FAILED"],
+      ["INVALID_PATH"],
+    ])("renders plain language instead of internals for %s", async (code) => {
+      projectClientMock.add.mockRejectedValueOnce(
+        preloadError(code, "Git operation failed: getRepositoryRoot")
+      );
+
+      await useProjectStore.getState().addProjectByPath(FOLDER);
+
+      const { message } = toastPayload();
+      for (const banned of [
+        "simple-git",
+        "getRepositoryRoot",
+        "AppError",
+        "[",
+        "Git operation failed",
+      ]) {
+        expect(message).not.toContain(banned);
+      }
+    });
+
+    it("names the folder the user tried to open", async () => {
+      // IPC sanitization scrubs absolute paths out of error messages, so the
+      // path has to come from the renderer's own state.
+      projectClientMock.add.mockRejectedValueOnce(preloadError("NOT_FOUND", "not found"));
+
+      await useProjectStore.getState().addProjectByPath(FOLDER);
+
+      expect(toastPayload().message).toContain(FOLDER);
+    });
+
+    it("distinguishes a missing folder from one that is a file", async () => {
+      projectClientMock.add.mockRejectedValueOnce(preloadError("NOT_FOUND", "x"));
+      await useProjectStore.getState().addProjectByPath(FOLDER);
+      const missing = toastPayload().message;
+
+      notifyMock.mockClear();
+      projectClientMock.add.mockRejectedValueOnce(preloadError("NOT_A_DIRECTORY", "x"));
+      await useProjectStore.getState().addProjectByPath(FOLDER);
+      const notADirectory = toastPayload().message;
+
+      // simple-git reports these two identically; the whole fix is that we no
+      // longer do.
+      expect(missing).not.toBe(notADirectory);
+    });
+
+    it("still offers a recovery action", async () => {
+      projectClientMock.add.mockRejectedValueOnce(preloadError("PERMISSION", "denied"));
+
+      await useProjectStore.getState().addProjectByPath(FOLDER);
+
+      const { actions } = toastPayload();
+      expect(actions).toHaveLength(1);
+      expect(actions?.[0]?.label).toBe("Try again");
+    });
+
+    it("leaves the guided git-init path alone", async () => {
+      projectClientMock.add.mockRejectedValueOnce(
+        preloadError("NOT_A_GIT_REPO", "Not a git repository")
+      );
+
+      await useProjectStore.getState().addProjectByPath(FOLDER);
+
+      expect(notifyMock).not.toHaveBeenCalled();
+      expect(useProjectStore.getState().gitInitDialogOpen).toBe(true);
+    });
+  });
 });

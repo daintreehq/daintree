@@ -12,6 +12,13 @@ export type AppErrorCode =
   | "LFS_POINTER"
   | "NOT_FOUND"
   | "NOT_A_GIT_REPO"
+  // Folder-open failures classified by a pre-flight stat rather than by
+  // pattern-matching library error text after the fact (#11409). `NOT_FOUND`
+  // and `PERMISSION` cover the rest of that set.
+  | "NOT_A_DIRECTORY"
+  | "GIT_NOT_INSTALLED"
+  | "DUBIOUS_OWNERSHIP"
+  | "PROJECT_OPEN_FAILED"
   | "CLIPBOARD_EMPTY"
   | "CLIPBOARD_INVALID"
   | "UNSUPPORTED"
