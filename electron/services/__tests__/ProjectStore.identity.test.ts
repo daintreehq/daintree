@@ -241,14 +241,18 @@ describe("project identity across folder moves", () => {
 
     it("cannot rename an adopted moved project by supplying an identity", async () => {
       const original = await makeDir("original");
-      const registered = await store.addProject(original, { identity: { name: "Original", emoji: "🚀" } });
+      const registered = await store.addProject(original, {
+        identity: { name: "Original", emoji: "🚀" },
+      });
       await writeAnchor(original, registered.id);
 
       const moved = path.join(tmpRoot, "renamed");
       await fs.promises.rename(original, moved);
       const canonicalMoved = await fs.promises.realpath(moved);
 
-      const reopened = await store.addProject(canonicalMoved, { identity: { name: "Hijacked", emoji: "💀" } });
+      const reopened = await store.addProject(canonicalMoved, {
+        identity: { name: "Hijacked", emoji: "💀" },
+      });
 
       expect(reopened.id).toBe(registered.id);
       expect(reopened.emoji).not.toBe("💀");

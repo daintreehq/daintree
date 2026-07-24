@@ -3486,6 +3486,11 @@ ${lines.map((l) => "+" + l).join("\n")}`;
    * fingerprint and signature gates: neither moved, only the choice did.
    */
   private scheduleForgeReselect(): void {
+    // A folder with no repository has no remotes to reselect from, and
+    // `forgeProbeCwd` falls back to the project root — so without this the
+    // matcher relay would spawn `git remote -v` there and, on its bounded
+    // re-arm, up to three more times per registry change (#11405 × #11408).
+    if (this.gitBacked === false) return;
     if (this._shutdownController.signal.aborted) return;
     if (this.forgeReselectTimer) return;
     this.forgeReselectTimer = setTimeout(() => {
@@ -3495,6 +3500,9 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   }
 
   private async reselectForgeRemote(): Promise<void> {
+    // Guarded here as well as in `scheduleForgeReselect`: `updateForgeSettings`
+    // calls this one directly, so the debounced path is not the only way in.
+    if (this.gitBacked === false) return;
     const cwd = this.forgeProbeCwd();
     if (!cwd) return;
     // Its OWN sequence — it only makes two rapid setting changes land in order.
