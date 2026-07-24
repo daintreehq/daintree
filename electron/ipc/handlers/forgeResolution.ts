@@ -10,6 +10,7 @@ import { resolveForgeRemote } from "../../../shared/utils/forgeRemoteSelection.j
 import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import type { ForgeProviderImpl, RepoRef } from "../../../shared/types/forge.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   makeForgeProviderId,
   normalizeProviderId,
@@ -145,7 +146,8 @@ export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> 
       settings = await projectStore.getProjectSettings(project.id);
     } catch (error) {
       throw new Error(
-        `Couldn't read this project's forge settings, so the remote to use is unknown: ${error instanceof Error ? error.message : String(error)}`
+        `Couldn't read this project's forge settings, so the remote to use is unknown: ${formatErrorMessage(error, "settings read failed")}`,
+        { cause: error }
       );
     }
   }
