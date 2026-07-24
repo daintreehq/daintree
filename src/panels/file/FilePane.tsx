@@ -496,13 +496,16 @@ export function FilePane({
 
       // Formats Chromium can't decode get a truthful "can't play" message
       // instead of falling through to the text path's size cap.
-      if (isUnsupportedVideoFilePath(filePath) || isUnsupportedAudioFilePath(filePath)) {
+      const unsupportedMediaMessage = isUnsupportedVideoFilePath(filePath)
+        ? UNSUPPORTED_VIDEO_MESSAGE
+        : isUnsupportedAudioFilePath(filePath)
+          ? UNSUPPORTED_AUDIO_MESSAGE
+          : null;
+      if (unsupportedMediaMessage) {
         setContent(null);
         setSanitizedSvg(null);
         setErrorCode("BINARY_FILE");
-        setErrorMessage(
-          isUnsupportedVideoFilePath(filePath) ? UNSUPPORTED_VIDEO_MESSAGE : UNSUPPORTED_AUDIO_MESSAGE
-        );
+        setErrorMessage(unsupportedMediaMessage);
         setLoadState("error");
         return;
       }

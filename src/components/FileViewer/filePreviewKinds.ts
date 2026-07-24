@@ -86,7 +86,11 @@ export function isUnsupportedAudioFilePath(filePath: string): boolean {
   return UNSUPPORTED_AUDIO_EXTENSIONS.has(extensionOf(filePath));
 }
 
-/** Copy for audio in the unsupported set — shared so every pane says the same thing. */
+/**
+ * Copy for audio in the unsupported set, shared by the panes that classify it.
+ * DiffPane deliberately doesn't: like unsupported video, it leaves these to the
+ * diff view's own binary fallback rather than claiming a player it won't show.
+ */
 export const UNSUPPORTED_AUDIO_MESSAGE =
   "Can't play this audio format — only MP3, WAV, FLAC, Ogg, Opus, M4A, and AAC are supported";
 

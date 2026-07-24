@@ -790,6 +790,44 @@ describe("DiffPane — audio current-version mode (#11425)", () => {
     expect(titles).not.toContain("This video couldn't be played");
   });
 
+  it("headlines the preview's own refusal rather than the generic playback title", async () => {
+    audioFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-length": String(2 * 1024 * 1024 * 1024) }),
+      blob: () => Promise.resolve(new Blob(["x"])),
+    });
+    seedPanel({
+      filePath: "media/track.wav",
+      fileStatus: "modified",
+      changeSet: [entry("media/track.wav")],
+    });
+    const { container } = renderPane();
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="empty-state-mock"]')).not.toBeNull()
+    );
+    const state = container.querySelector('[data-testid="empty-state-mock"]')!;
+    const title = state.getAttribute("data-title") ?? "";
+    const description = state.getAttribute("data-description") ?? "";
+    // Nothing failed to play, so the generic title would be wrong — and the
+    // description carries the way forward instead of restating the headline.
+    expect(title).not.toBe("This audio file couldn't be played");
+    expect(description).toBeTruthy();
+    expect(description).not.toContain(title);
+  });
+
+  it("keeps Full file visible but disabled, explaining audio already shows it all", () => {
+    seedPanel({
+      filePath: "media/track.mp3",
+      fileStatus: "modified",
+      changeSet: [entry("media/track.mp3")],
+    });
+    renderPane();
+
+    expect(screen.getByText(/already shows the whole audio file/i)).toBeTruthy();
+  });
+
   it("shows a quiet empty state for a deleted audio file", () => {
     seedPanel({
       filePath: "media/track.mp3",

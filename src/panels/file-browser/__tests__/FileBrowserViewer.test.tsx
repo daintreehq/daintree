@@ -326,22 +326,39 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
     expect(screen.getByText(/Can't play this audio format/)).toBeTruthy();
   });
 
-  it("keeps playing across a revision tick rather than refetching", async () => {
+  it("keeps the same player across a revision tick rather than refetching", async () => {
     // `revision` bumps on every worktree write; keying the player on it would
-    // restart the track whenever an agent touches an unrelated file.
-    const { container, unmount } = renderViewer("/repo/media/track.mp3", { revision: "r1" });
+    // restart the track whenever an agent touches an unrelated file. Object
+    // URLs are unique here so a remount can't masquerade as continuity.
+    let objectUrlSequence = 0;
+    URL.createObjectURL = vi.fn(() => `blob:app://daintree/audio-${objectUrlSequence++}`);
+
+    const { container, rerender } = renderViewer("/repo/media/track.mp3", { revision: "r1" });
     await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
-    const firstSrc = container.querySelector("audio")?.getAttribute("src");
+    const firstNode = container.querySelector("audio");
+    const firstSrc = firstNode?.getAttribute("src");
     expect(audioFetchMock).toHaveBeenCalledTimes(1);
-    unmount();
-    audioFetchMock.mockClear();
 
-    const bumped = renderViewer("/repo/media/track.mp3", { revision: "r2" });
-    await waitFor(() => expect(bumped.container.querySelector("audio")).not.toBeNull());
+    rerender(
+      <TooltipProvider>
+        <FileBrowserViewer
+          filePath="/repo/media/track.mp3"
+          rootPath="/repo"
+          fileName="track.mp3"
+          relativePath="track.mp3"
+          revision="r2"
+          sidebarCollapsed={false}
+          onToggleSidebar={vi.fn()}
+          treeSidebarId="file-tree-column"
+        />
+      </TooltipProvider>
+    );
+    await act(async () => {});
 
-    // A different revision must not change the media URL the player is given:
-    // the object URL is a snapshot of the fetch, not a function of revision.
-    expect(bumped.container.querySelector("audio")?.getAttribute("src")).toBe(firstSrc);
-    expect(String(audioFetchMock.mock.calls[0]?.[0])).not.toContain("r2");
+    // The very same element, still on its original blob — not a fresh one that
+    // happens to look alike.
+    expect(container.querySelector("audio")).toBe(firstNode);
+    expect(container.querySelector("audio")?.getAttribute("src")).toBe(firstSrc);
+    expect(audioFetchMock).toHaveBeenCalledTimes(1);
   });
 });

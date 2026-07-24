@@ -148,16 +148,33 @@ describe("filePreviewKinds", () => {
   });
 
   describe("isUnsupportedAudioFilePath", () => {
-    it.each(["track.wma", "track.aiff", "track.aif", "track.mid", "track.midi", "TRACK.WMA"])(
-      "accepts %s",
-      (path) => {
-        expect(isUnsupportedAudioFilePath(path)).toBe(true);
-      }
-    );
+    it.each([
+      "track.wma",
+      "track.aiff",
+      "track.aif",
+      "track.mid",
+      "track.midi",
+      "track.amr",
+      "TRACK.WMA",
+    ])("accepts %s", (path) => {
+      expect(isUnsupportedAudioFilePath(path)).toBe(true);
+    });
 
-    it("is disjoint from the playable set", () => {
+    it("is disjoint from the playable set in both directions", () => {
+      // An extension in both sets would make the pane's branch order decide
+      // between a working player and a "can't play" message.
       for (const path of ["track.mp3", "track.wav", "track.flac", "track.m4a", "track.aac"]) {
         expect(isUnsupportedAudioFilePath(path)).toBe(false);
+      }
+      for (const path of [
+        "track.wma",
+        "track.aiff",
+        "track.aif",
+        "track.mid",
+        "track.midi",
+        "track.amr",
+      ]) {
+        expect(isAudioFilePath(path)).toBe(false);
       }
     });
 

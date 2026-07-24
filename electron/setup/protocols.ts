@@ -522,7 +522,7 @@ async function readContainedDaintreeFile(
 /**
  * The origin allowed to read this daintree-file:// response via cross-origin
  * fetch(), or null for everyone else. The scheme is corsEnabled so the file
- * viewer can fetch() video bytes for blob-URL playback, but eligibility alone
+ * viewer can fetch() media bytes for blob-URL playback, but eligibility alone
  * must not grant reads: a browser panel hosting an arbitrary remote site
  * shares the scheme registration, and echoing its origin here would hand it
  * the user's local files. Only the trusted app document qualifies — app:// in

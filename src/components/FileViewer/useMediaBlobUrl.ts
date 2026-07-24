@@ -66,9 +66,10 @@ export function useMediaBlobUrl({
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [fetching, setFetching] = useState(true);
 
-  // Effect events so the fetch effect keys on `src` alone — callers pass
-  // inline closures, and refetching the file on every parent render would
-  // discard playback position each time anything else in the pane changes.
+  // Effect events so the fetch effect keys on the source and cap alone (both
+  // stable) — callers pass inline closures, and refetching the file on every
+  // parent render would discard playback position each time anything else in
+  // the pane changes.
   const reportError = useEffectEvent(() => onError?.());
   const reportTooLarge = useEffectEvent(() => onError?.(tooLargeError));
 

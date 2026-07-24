@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from "react";
-import { render, act, screen, waitFor } from "@testing-library/react";
+import { render, act, screen, waitFor, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // FilePane forwards a fixed prop list to ContentPanel; #10991 was a dropped
@@ -1057,6 +1057,8 @@ describe("FilePane diff mode (#11274)", () => {
     // Same fetch-to-blob boundary as video above: audio rides the identical
     // protocol path because electron#51442 covers <audio> too.
     const audioFetchMock = vi.fn();
+    let createObjectUrlSpy: ReturnType<typeof vi.spyOn<typeof URL, "createObjectURL">>;
+    let revokeObjectUrlSpy: ReturnType<typeof vi.spyOn<typeof URL, "revokeObjectURL">>;
     beforeEach(() => {
       audioFetchMock.mockResolvedValue({
         ok: true,
@@ -1065,11 +1067,17 @@ describe("FilePane diff mode (#11274)", () => {
         blob: () => Promise.resolve(new Blob(["x"])),
       });
       vi.stubGlobal("fetch", audioFetchMock);
-      URL.createObjectURL = vi.fn(() => "blob:app://daintree/audio-preview");
-      URL.revokeObjectURL = vi.fn();
+      // spyOn, not assignment: unstubAllGlobals doesn't restore a directly
+      // assigned URL method, and later describes in this file would inherit it.
+      createObjectUrlSpy = vi
+        .spyOn(URL, "createObjectURL")
+        .mockReturnValue("blob:app://daintree/audio-preview");
+      revokeObjectUrlSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     });
     afterEach(() => {
       vi.unstubAllGlobals();
+      createObjectUrlSpy.mockRestore();
+      revokeObjectUrlSpy.mockRestore();
       audioFetchMock.mockReset();
     });
 
@@ -1096,6 +1104,23 @@ describe("FilePane diff mode (#11274)", () => {
 
       expect(screen.getByText(/Can't play this audio format/)).toBeTruthy();
       expect(screen.queryByText("Retry")).toBeNull();
+    });
+
+    it("names a decode failure and offers Retry, which reloads the player", async () => {
+      const { container } = await renderPane({ filePath: "/repo/media/track.mp3" });
+      await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+
+      // A playable extension can still hold a codec Chromium lacks; that's a
+      // real failure the pane must name rather than leaving a dead control.
+      fireEvent.error(container.querySelector("audio")!);
+
+      expect(container.querySelector("audio")).toBeNull();
+      expect(screen.getByText(/audio file couldn't be played/i)).toBeTruthy();
+
+      // Unlike an unsupported extension, this one CAN succeed on a retry.
+      fireEvent.click(screen.getByText("Retry"));
+      await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+      expect(audioFetchMock.mock.calls.length).toBeGreaterThan(1);
     });
   });
 
