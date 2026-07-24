@@ -43,15 +43,26 @@ function Probe({
   );
 }
 
+const realCreateObjectURL = URL.createObjectURL;
+const realRevokeObjectURL = URL.revokeObjectURL;
+
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
-  URL.createObjectURL = vi.fn(() => "blob:app://daintree/0");
+  // Unique per call, never a constant: the stale-response tests below assert
+  // that an abandoned request can't replace the current URL, and a fixed
+  // return value would make an overwrite indistinguishable from the guard
+  // working.
+  let nextUrl = 0;
+  URL.createObjectURL = vi.fn(() => `blob:app://daintree/${nextUrl++}`);
   URL.revokeObjectURL = vi.fn();
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  // unstubAllGlobals doesn't restore a directly assigned method.
+  URL.createObjectURL = realCreateObjectURL;
+  URL.revokeObjectURL = realRevokeObjectURL;
   fetchMock.mockReset();
 });
 
@@ -133,17 +144,13 @@ describe("useMediaBlobUrl", () => {
     expect(getByTestId("probe").dataset.fetching).toBe("false");
   });
 
-  it("lets a superseded request neither overwrite nor error over the current one", async () => {
-    // The stale-response race: switching files while the first fetch is in
-    // flight must not let the old bytes land on the new source.
+  it("drops a superseded response that settles after its request was abandoned", async () => {
+    // The stale-response race the guards exist for: a fetch that had already
+    // settled runs its reaction AFTER cleanup aborted it. Deliberately no
+    // abort listener — a rejecting promise would short-circuit to the catch
+    // path and never reach the guard on the fulfilled path.
     const deferred: Array<(value: unknown) => void> = [];
-    fetchMock.mockImplementation(
-      (_url: string, opts: { signal: AbortSignal }) =>
-        new Promise((resolve, reject) => {
-          deferred.push(resolve);
-          opts.signal.addEventListener("abort", () => reject(new DOMException("", "AbortError")));
-        })
-    );
+    fetchMock.mockImplementation(() => new Promise((resolve) => deferred.push(resolve)));
     const onError = vi.fn();
     const { rerender, getByTestId } = render(
       <Probe onError={onError} label="first" reloadKey={1} />
@@ -153,23 +160,62 @@ describe("useMediaBlobUrl", () => {
     rerender(<Probe onError={onError} label="second" reloadKey={2} />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 
-    // Settle the SECOND request, then the abandoned first one.
-    const secondBlob = new Blob(["new"]);
     deferred[1]?.({
       ok: true,
       status: 200,
       headers: new Headers(),
-      blob: () => Promise.resolve(secondBlob),
+      blob: () => Promise.resolve(new Blob(["new"])),
     });
     await waitFor(() => expect(getByTestId("probe").dataset.url).toMatch(/^blob:/));
     const currentUrl = getByTestId("probe").dataset.url;
+    const staleBlob = vi.fn(() => Promise.resolve(new Blob(["stale"])));
 
-    deferred[0]?.({
+    deferred[0]?.({ ok: true, status: 200, headers: new Headers(), blob: staleBlob });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The guard returns before the body is even read, so the stale bytes never
+    // become a URL and can't replace what is playing.
+    expect(staleBlob).not.toHaveBeenCalled();
+    expect(getByTestId("probe").dataset.url).toBe(currentUrl);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("drops a superseded response abandoned while its body was being read", async () => {
+    // The second guard: abort lands during `await response.blob()`, so the
+    // reaction resumes past the first check with a blob nothing wants.
+    let resolveFirstFetch: (value: unknown) => void = () => {};
+    let resolveFirstBlob: (value: Blob) => void = () => {};
+    let call = 0;
+    fetchMock.mockImplementation(() => {
+      call += 1;
+      if (call === 1) return new Promise((resolve) => (resolveFirstFetch = resolve));
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        blob: () => Promise.resolve(new Blob(["new"])),
+      });
+    });
+    const onError = vi.fn();
+    const { rerender, getByTestId } = render(
+      <Probe onError={onError} label="first" reloadKey={1} />
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    // Let the first request get past the ok/length checks and into blob().
+    resolveFirstFetch({
       ok: true,
       status: 200,
       headers: new Headers(),
-      blob: () => Promise.resolve(new Blob(["stale"])),
+      blob: () => new Promise<Blob>((resolve) => (resolveFirstBlob = resolve)),
     });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    rerender(<Probe onError={onError} label="second" reloadKey={2} />);
+    await waitFor(() => expect(getByTestId("probe").dataset.url).toMatch(/^blob:/));
+    const currentUrl = getByTestId("probe").dataset.url;
+
+    resolveFirstBlob(new Blob(["stale"]));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(getByTestId("probe").dataset.url).toBe(currentUrl);

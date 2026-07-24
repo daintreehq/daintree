@@ -1057,8 +1057,11 @@ describe("FilePane diff mode (#11274)", () => {
     // Same fetch-to-blob boundary as video above: audio rides the identical
     // protocol path because electron#51442 covers <audio> too.
     const audioFetchMock = vi.fn();
-    let createObjectUrlSpy: ReturnType<typeof vi.spyOn<typeof URL, "createObjectURL">>;
-    let revokeObjectUrlSpy: ReturnType<typeof vi.spyOn<typeof URL, "revokeObjectURL">>;
+    // Captured while the describe body runs, before any beforeEach has swapped
+    // them — vi.spyOn would hand back the video suite's own unrestored mock,
+    // and unstubAllGlobals never restores a directly assigned URL method.
+    const realCreateObjectURL = URL.createObjectURL;
+    const realRevokeObjectURL = URL.revokeObjectURL;
     beforeEach(() => {
       audioFetchMock.mockResolvedValue({
         ok: true,
@@ -1067,17 +1070,13 @@ describe("FilePane diff mode (#11274)", () => {
         blob: () => Promise.resolve(new Blob(["x"])),
       });
       vi.stubGlobal("fetch", audioFetchMock);
-      // spyOn, not assignment: unstubAllGlobals doesn't restore a directly
-      // assigned URL method, and later describes in this file would inherit it.
-      createObjectUrlSpy = vi
-        .spyOn(URL, "createObjectURL")
-        .mockReturnValue("blob:app://daintree/audio-preview");
-      revokeObjectUrlSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+      URL.createObjectURL = vi.fn(() => "blob:app://daintree/audio-preview");
+      URL.revokeObjectURL = vi.fn();
     });
     afterEach(() => {
       vi.unstubAllGlobals();
-      createObjectUrlSpy.mockRestore();
-      revokeObjectUrlSpy.mockRestore();
+      URL.createObjectURL = realCreateObjectURL;
+      URL.revokeObjectURL = realRevokeObjectURL;
       audioFetchMock.mockReset();
     });
 
