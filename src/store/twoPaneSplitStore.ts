@@ -126,7 +126,11 @@ function mergeTwoPaneSplitPersistedWrite({
     version: incoming.version,
     state: {
       config: {
-        enabled: pickFieldByWriterDelta(base.config.enabled, inc.config.enabled, disk.config.enabled),
+        enabled: pickFieldByWriterDelta(
+          base.config.enabled,
+          inc.config.enabled,
+          disk.config.enabled
+        ),
         defaultRatio: pickFieldByWriterDelta(
           base.config.defaultRatio,
           inc.config.defaultRatio,

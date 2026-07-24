@@ -114,7 +114,8 @@ function toPanelLimitPersisted(
   const raw = (state ?? {}) as Record<string, unknown>;
   const d = PANEL_LIMIT_PERSISTED_DEFAULTS;
   return {
-    softWarningLimit: typeof raw.softWarningLimit === "number" ? raw.softWarningLimit : d.softWarningLimit,
+    softWarningLimit:
+      typeof raw.softWarningLimit === "number" ? raw.softWarningLimit : d.softWarningLimit,
     confirmationLimit:
       typeof raw.confirmationLimit === "number" ? raw.confirmationLimit : d.confirmationLimit,
     hardLimit: typeof raw.hardLimit === "number" ? raw.hardLimit : d.hardLimit,

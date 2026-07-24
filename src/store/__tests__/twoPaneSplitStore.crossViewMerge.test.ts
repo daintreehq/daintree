@@ -82,7 +82,11 @@ describe("twoPaneSplitStore cross-view write merge (#11351)", () => {
     const written = readBlob(backing);
     expect(Object.keys(written.state.ratioByWorktreeId).sort()).toEqual(["wt-a", "wt-b"]);
     expect(written.state.ratioByWorktreeId["wt-b"]).toEqual(siblingRatio);
-    expect(written.state.config).toEqual({ enabled: false, defaultRatio: 0.3, preferPreview: true });
+    expect(written.state.config).toEqual({
+      enabled: false,
+      defaultRatio: 0.3,
+      preferPreview: true,
+    });
   });
 
   it("independent config and ratio changes from two views both survive", async () => {

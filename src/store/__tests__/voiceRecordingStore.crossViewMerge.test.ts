@@ -70,7 +70,9 @@ describe("voiceRecordingStore cross-view write merge (#11351)", () => {
     vi.setSystemTime(5000);
     writeDisk(backing, [{ panelTitle: "Sib", worktreeId: "wt-sib", lastUsedAt: 1000 }]);
 
-    store.getState().recordRecentTarget({ panelId: "p1", panelTitle: "Mine", worktreeId: "wt-mine" });
+    store
+      .getState()
+      .recordRecentTarget({ panelId: "p1", panelTitle: "Mine", worktreeId: "wt-mine" });
     vi.advanceTimersByTime(400);
 
     const written = readTargets(backing);
@@ -87,7 +89,9 @@ describe("voiceRecordingStore cross-view write merge (#11351)", () => {
     vi.setSystemTime(2000);
     writeDisk(backing, [{ panelTitle: "Sib", worktreeId: "wt-sib", lastUsedAt: 8000 }]);
 
-    store.getState().recordRecentTarget({ panelId: "p1", panelTitle: "Mine", worktreeId: "wt-mine" });
+    store
+      .getState()
+      .recordRecentTarget({ panelId: "p1", panelTitle: "Mine", worktreeId: "wt-mine" });
     vi.advanceTimersByTime(400);
 
     const written = readTargets(backing);

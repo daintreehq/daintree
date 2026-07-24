@@ -467,7 +467,11 @@ function mergeProjectFiltersPersistedWrite({
         inc.statusFilters,
         disk.statusFilters
       ),
-      typeFilters: pickFieldByWriterDelta(base?.typeFilters ?? [], inc.typeFilters, disk.typeFilters),
+      typeFilters: pickFieldByWriterDelta(
+        base?.typeFilters ?? [],
+        inc.typeFilters,
+        disk.typeFilters
+      ),
       prIssueFilters: pickFieldByWriterDelta(
         base?.prIssueFilters ?? [],
         inc.prIssueFilters,
@@ -493,7 +497,11 @@ function mergeProjectFiltersPersistedWrite({
         inc.collapsedWorktrees,
         disk.collapsedWorktrees
       ),
-      manualOrder: pickFieldByWriterDelta(base?.manualOrder ?? [], inc.manualOrder, disk.manualOrder),
+      manualOrder: pickFieldByWriterDelta(
+        base?.manualOrder ?? [],
+        inc.manualOrder,
+        disk.manualOrder
+      ),
     },
   };
 }

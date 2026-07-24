@@ -297,7 +297,9 @@ function toPreferencesPersisted(
     diffFullFile: coerceBool(raw.diffFullFile, d.diffFullFile),
     diffFontSize: isDiffFontSize(raw.diffFontSize) ? raw.diffFontSize : d.diffFontSize,
     markdownWrapLines: coerceBool(raw.markdownWrapLines, d.markdownWrapLines),
-    deletedWorktreeCleanupSeconds: isDeletedWorktreeCleanupSeconds(raw.deletedWorktreeCleanupSeconds)
+    deletedWorktreeCleanupSeconds: isDeletedWorktreeCleanupSeconds(
+      raw.deletedWorktreeCleanupSeconds
+    )
       ? raw.deletedWorktreeCleanupSeconds
       : d.deletedWorktreeCleanupSeconds,
     lastSelectedWorktreeRecipeIdByProject: normalizeRecipeMap(
