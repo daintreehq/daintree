@@ -68,13 +68,18 @@ describe("buildWorkingTreeDiffModel — ordering", () => {
     expect(pathsOf(sortedChanges)).toEqual(["a.ts", "b.ts"]);
   });
 
-  it("does not mutate or reorder the caller's array", () => {
-    const input = [change("b.ts", "modified", 1, 0), change("a.ts", "modified", 9, 0)];
-    const originalOrder = input.map((c) => c.path);
+  it("does not mutate the caller's array or the rows inside it", () => {
+    // Frozen rather than order-compared: reordering is only one way to mutate,
+    // and writing `relativePath` onto a caller's row would slip past a check
+    // that only looks at ordering.
+    const input = Object.freeze([
+      Object.freeze(change("b.ts", "modified", 1, 0)),
+      Object.freeze(change("a.ts", "modified", 9, 0)),
+    ]) as readonly FileChangeDetail[];
 
-    buildWorkingTreeDiffModel(input, ROOT);
-
-    expect(input.map((c) => c.path)).toEqual(originalOrder);
+    expect(() => buildWorkingTreeDiffModel(input, ROOT)).not.toThrow();
+    expect(input.map((c) => c.path)).toEqual(["b.ts", "a.ts"]);
+    expect(input.every((c) => !("relativePath" in c))).toBe(true);
   });
 });
 
@@ -148,7 +153,22 @@ describe("buildWorkingTreeDiffModel — change set", () => {
     expect(diffChangeSet[0]!.path).toBe("src/file.ts");
   });
 
-  it("scopes viewed keys by status so a staged and unstaged copy stay distinct", () => {
+  it("varies the viewed key with both status and path, and with nothing else", () => {
+    // Uniqueness alone would also hold for index-based or random keys, which
+    // would break viewed-marker persistence across polls. Pin what it varies on.
+    const keyFor = (path: string, status: GitStatus, insertions: number) =>
+      buildWorkingTreeDiffModel([change(path, status, insertions, 0)], ROOT)[
+        "diffChangeSet"
+      ][0]!.viewedKey;
+
+    const base = keyFor("a.ts", "modified", 1);
+    expect(keyFor("a.ts", "added", 1)).not.toBe(base);
+    expect(keyFor("b.ts", "modified", 1)).not.toBe(base);
+    // Churn changes every poll; a key that moved with it would lose the marker.
+    expect(keyFor("a.ts", "modified", 999)).toBe(base);
+  });
+
+  it("keeps a staged and an unstaged copy of one path separately addressable", () => {
     const { diffChangeSet } = buildWorkingTreeDiffModel(
       [change("same.ts", "modified", 4, 0), change("same.ts", "added", 4, 0)],
       ROOT
@@ -203,12 +223,32 @@ describe("buildWorkingTreeDiffModel — index lookup", () => {
     expect(indexByKey.get(getWorkingTreeChangeKey({ path: "same.ts", status: "added" }))).toBe(1);
   });
 
-  it("keys on the original path, not the root-relative one", () => {
+  it("keys on the original path only, never additionally on the relative one", () => {
     const absolute = `${ROOT}/src/file.ts`;
     const { indexByKey } = buildWorkingTreeDiffModel([change(absolute, "modified", 1, 0)], ROOT);
 
     expect(indexByKey.has(getWorkingTreeChangeKey({ path: absolute, status: "modified" }))).toBe(
       true
     );
+    // Cardinality proves no second, relative-path key was also registered —
+    // row lookups pass the original path, so a stray one would mask a mismatch.
+    expect(indexByKey.size).toBe(1);
+    expect(
+      indexByKey.has(getWorkingTreeChangeKey({ path: "src/file.ts", status: "modified" }))
+    ).toBe(false);
+  });
+
+  it("ranks an unrecognised status after every known one instead of dropping it", () => {
+    // Statuses arrive from git over IPC, so a value outside the table is
+    // reachable at runtime even though the type forbids it.
+    const { sortedChanges } = buildWorkingTreeDiffModel(
+      [
+        change("unknown.ts", "something-new" as GitStatus, 5, 0),
+        change("known.ts", "conflicted", 5, 0),
+      ],
+      ROOT
+    );
+
+    expect(pathsOf(sortedChanges)).toEqual(["known.ts", "unknown.ts"]);
   });
 });

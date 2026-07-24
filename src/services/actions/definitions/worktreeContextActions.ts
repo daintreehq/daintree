@@ -333,25 +333,19 @@ export function registerWorktreeContextActions(
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
-      // Context-only, like every isEnabled — it cannot see args, so it answers
-      // for the target the palette and the keybinding would resolve. Menu
-      // callers dispatch for a specific card and align focus to it first
-      // (WorktreeCard), keeping this verdict and their args the same worktree.
-      isEnabled: (ctx: ActionContext) => hasOpenableChanges(ctx),
-      disabledReason: (ctx: ActionContext) => {
-        const targetWorktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
-        if (!targetWorktreeId) return "No worktree selected";
-
-        const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
-        if (!worktree) return "Worktree is unavailable";
-        // Null is "the poll hasn't reported yet", empty is "reported, clean" —
-        // worth distinguishing here because the first resolves on its own.
-        if (!worktree.worktreeChanges) return "Changes are still loading";
-        if (worktree.worktreeChanges.changes.length === 0) return "No changes to open";
-
-        return undefined;
+      // Deliberately a palette gate, not `isEnabled`. `isEnabled` gates dispatch
+      // on ActionContext alone — it never sees args — so on an explicit
+      // `worktreeId` it would answer for the *focused* worktree instead: it
+      // would refuse a dirty target while a clean one held focus, and, worse,
+      // pass for a clean target while a dirty one held focus, letting dispatch
+      // report ok for a run() that opened nothing. Gating only the palette row
+      // keeps the disabled-with-reason affordance where context IS the target.
+      palette: {
+        mode: "requireContext",
+        isReady: (ctx: ActionContext) => hasOpenableChanges(ctx),
+        reason: "No changes in the focused worktree",
       },
+      argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;

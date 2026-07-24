@@ -503,12 +503,12 @@ export function WorktreeCard({
     void actionService.dispatch("worktree.openReviewHub", { worktreeId: worktree.id });
   };
 
-  // Focus has to move first: the action's isEnabled gate only sees ActionContext
-  // (never args), so without this a right-click on a changed card would be
-  // refused whenever some *other*, clean worktree held focus. The set is
-  // synchronous, so the dispatch below reads the aligned context.
+  const hasOpenableChanges = (worktree.worktreeChanges?.changes.length ?? 0) > 0;
+
+  // Names the card outright, like the Review Hub entry point. No focus nudge is
+  // needed: the action gates only its palette row on context, so an explicit
+  // worktreeId is always honoured whatever else holds focus.
   const openChangesForThisWorktree = () => {
-    useWorktreeSelectionStore.getState().setFocusedWorktree(worktree.id);
     void actionService.dispatch("worktree.openChanges", { worktreeId: worktree.id });
   };
 
@@ -737,7 +737,11 @@ export function WorktreeCard({
     onOpenPRExternal: worktree.linked?.pr?.url ? handleOpenPRExternal : undefined,
     onAttachIssue: () => setShowIssuePicker(true),
     onViewPlan: () => setShowPlanViewer(true),
-    onOpenChanges: hasChanges ? openChangesForThisWorktree : undefined,
+    // Gated on the change list, not `hasChanges` (a `changedFileCount` read):
+    // an external git provider may report a count with no per-file entries, and
+    // the action has nothing to open then. Same guard the Changed Files header
+    // button uses.
+    onOpenChanges: hasOpenableChanges ? openChangesForThisWorktree : undefined,
     onOpenReviewHub: openReviewHubForThisWorktree,
     onOpenFileBrowser: openFileBrowserForThisWorktree,
     onCompareDiff: () => useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),

@@ -75,6 +75,13 @@ function dialogOptions() {
   return openPanelDialogMock.mock.calls[0]![0];
 }
 
+/** The same options narrowed to the diff panel, which owns `changeSet`. */
+function diffDialogOptions() {
+  const options = dialogOptions();
+  if (options.kind !== "diff") throw new Error(`expected a diff panel, got "${options.kind}"`);
+  return options;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   worktreesMock.current = new Map();
@@ -82,84 +89,108 @@ beforeEach(() => {
 });
 
 describe("worktree.openChanges — registration", () => {
-  it("registers a safe renderer command", () => {
-    const action = getAction();
-    expect(action.kind).toBe("command");
-    expect(action.danger).toBe("safe");
-    expect(action.scope).toBe("renderer");
-  });
-
   it("accepts an optional worktreeId and rejects a non-string one", () => {
     const action = getAction();
-    expect(action.argsSchema).toBeDefined();
     expect(() => action.argsSchema!.parse({ worktreeId: "wt-1" })).not.toThrow();
     expect(() => action.argsSchema!.parse({})).not.toThrow();
     expect(() => action.argsSchema!.parse(undefined)).not.toThrow();
     expect(() => action.argsSchema!.parse({ worktreeId: 7 })).toThrow();
   });
 
-  it("pairs isEnabled with a disabledReason so a disabled row can explain itself", () => {
+  it("never gates dispatch, so an explicit target is honoured whatever holds focus", () => {
+    // The gate lives on the palette row only. isEnabled would answer for the
+    // focused worktree even when args name a different one — refusing a dirty
+    // target, or passing a clean one and reporting ok for a run() that opened
+    // nothing.
     const action = getAction();
-    expect(action.isEnabled).toBeDefined();
-    expect(action.disabledReason).toBeDefined();
+    expect(action.isEnabled).toBeUndefined();
   });
 });
 
-describe("worktree.openChanges — enablement", () => {
-  it("is enabled when the focused worktree has changes", () => {
+describe("worktree.openChanges — palette readiness", () => {
+  function isReady(ctx: ActionContext): boolean {
+    const palette = getAction().palette;
+    if (palette?.mode !== "requireContext") throw new Error("expected a requireContext palette");
+    return palette.isReady(ctx);
+  }
+
+  it("offers a reason for the disabled row", () => {
+    const palette = getAction().palette;
+    expect(palette?.mode).toBe("requireContext");
+    if (palette?.mode !== "requireContext") throw new Error("expected a requireContext palette");
+    expect(palette.reason.length).toBeGreaterThan(0);
+  });
+
+  it("is ready when the focused worktree has changes", () => {
     seedWorktree("wt-1", [change("a.ts", "modified", 1, 0)]);
-    expect(getAction().isEnabled!({ focusedWorktreeId: "wt-1" })).toBe(true);
+    expect(isReady({ focusedWorktreeId: "wt-1" })).toBe(true);
   });
 
-  it("is disabled when the focused worktree reported no changes", () => {
+  it("is not ready when the focused worktree reported no changes", () => {
     seedWorktree("wt-1", []);
-    const action = getAction();
-    expect(action.isEnabled!({ focusedWorktreeId: "wt-1" })).toBe(false);
-    expect(action.disabledReason!({ focusedWorktreeId: "wt-1" })).toBeTruthy();
+    expect(isReady({ focusedWorktreeId: "wt-1" })).toBe(false);
   });
 
-  it("is disabled while the worktree poll has not reported yet", () => {
-    seedUnpolledWorktree("wt-unpolled");
-    seedWorktree("wt-clean", []);
-    const action = getAction();
-
-    expect(action.isEnabled!({ focusedWorktreeId: "wt-unpolled" })).toBe(false);
-    // A not-yet-polled worktree explains itself differently from a clean one:
-    // one resolves on its own, the other needs the user to make an edit.
-    expect(action.disabledReason!({ focusedWorktreeId: "wt-unpolled" })).not.toBe(
-      action.disabledReason!({ focusedWorktreeId: "wt-clean" })
-    );
+  it("is not ready while the worktree poll has not reported yet", () => {
+    seedUnpolledWorktree("wt-1");
+    expect(isReady({ focusedWorktreeId: "wt-1" })).toBe(false);
   });
 
-  it("is disabled when no worktree is focused or active", () => {
-    const action = getAction();
-    expect(action.isEnabled!({})).toBe(false);
-    expect(action.disabledReason!({})).toBeTruthy();
+  it("is not ready when no worktree is focused or active", () => {
+    expect(isReady({})).toBe(false);
   });
 
-  it("is disabled when the focused id resolves to no worktree", () => {
-    const action = getAction();
-    expect(action.isEnabled!({ focusedWorktreeId: "gone" })).toBe(false);
-    expect(action.disabledReason!({ focusedWorktreeId: "gone" })).toBeTruthy();
+  it("is not ready when the focused id resolves to no worktree", () => {
+    expect(isReady({ focusedWorktreeId: "gone" })).toBe(false);
   });
 
   it("falls back to the active worktree when none is focused", () => {
     seedWorktree("wt-active", [change("a.ts", "modified", 1, 0)]);
-    expect(getAction().isEnabled!({ activeWorktreeId: "wt-active" })).toBe(true);
+    expect(isReady({ activeWorktreeId: "wt-active" })).toBe(true);
   });
 
   it("prefers the focused worktree over the active one", () => {
     seedWorktree("wt-focus", []);
     seedWorktree("wt-active", [change("a.ts", "modified", 1, 0)]);
 
-    expect(
-      getAction().isEnabled!({ focusedWorktreeId: "wt-focus", activeWorktreeId: "wt-active" })
-    ).toBe(false);
+    expect(isReady({ focusedWorktreeId: "wt-focus", activeWorktreeId: "wt-active" })).toBe(false);
   });
 
-  it("gives no disabledReason when the action is enabled", () => {
+  it("tracks the live store rather than readiness at registration time", () => {
+    seedWorktree("wt-1", []);
+    const action = getAction();
+    const palette = action.palette;
+    if (palette?.mode !== "requireContext") throw new Error("expected a requireContext palette");
+    expect(palette.isReady({ focusedWorktreeId: "wt-1" })).toBe(false);
+
     seedWorktree("wt-1", [change("a.ts", "modified", 1, 0)]);
-    expect(getAction().disabledReason!({ focusedWorktreeId: "wt-1" })).toBeUndefined();
+    expect(palette.isReady({ focusedWorktreeId: "wt-1" })).toBe(true);
+  });
+});
+
+describe("worktree.openChanges — explicit target beats context", () => {
+  it("opens a dirty target named in args while a clean worktree holds focus", async () => {
+    seedWorktree("wt-clean", []);
+    seedWorktree("wt-dirty", [change("dirty.ts", "modified", 1, 0)], "/repo/wt-dirty");
+
+    await getAction().run(
+      { worktreeId: "wt-dirty" },
+      { focusedWorktreeId: "wt-clean" } as ActionContext
+    );
+
+    expect(dialogOptions()).toMatchObject({ worktreeId: "wt-dirty", filePath: "dirty.ts" });
+  });
+
+  it("opens nothing for a clean target named in args while a dirty worktree holds focus", async () => {
+    seedWorktree("wt-clean", []);
+    seedWorktree("wt-dirty", [change("dirty.ts", "modified", 1, 0)], "/repo/wt-dirty");
+
+    await getAction().run(
+      { worktreeId: "wt-clean" },
+      { focusedWorktreeId: "wt-dirty" } as ActionContext
+    );
+
+    expect(openPanelDialogMock).not.toHaveBeenCalled();
   });
 });
 
@@ -186,19 +217,35 @@ describe("worktree.openChanges — opening the diff", () => {
     expect(dialogOptions()).toMatchObject({ filePath: "biggest.ts", fileStatus: "modified" });
   });
 
-  it("hands over the whole change set, not just the opened file", async () => {
-    seedWorktree("wt-1", [
+  it("hands over every seeded change, not just the opened file", async () => {
+    const seeded = [
       change("a.ts", "modified", 1, 0),
       change("b.ts", "added", 2, 0),
+      change("c.ts", "deleted", 3, 0),
+    ];
+    seedWorktree("wt-1", seeded);
+    await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
+
+    // Compare as multisets: order is the helper's business, membership is this
+    // action's. A length check alone would pass on `[x, x, x]`.
+    const delivered = diffDialogOptions().changeSet!.map((e) => `${e.status}:${e.path}`);
+    expect([...delivered].sort()).toEqual(
+      seeded.map((c) => `${c.status}:${c.path}`).sort()
+    );
+  });
+
+  it("opens the file that is the change set's first entry", async () => {
+    // Otherwise the sidebar highlights a different row than the pane shows.
+    seedWorktree("wt-1", [
+      change("a.ts", "modified", 1, 0),
+      change("b.ts", "added", 40, 0),
       change("c.ts", "deleted", 3, 0),
     ]);
     await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
 
-    const options = dialogOptions();
-    expect(options.changeSet).toHaveLength(3);
-    // The opened file must be the set's first entry, or the sidebar opens
-    // highlighting a different row than the pane is showing.
-    expect(options.changeSet![0]!.path).toBe(options.filePath);
+    const options = diffDialogOptions();
+    expect(options.filePath).toBe(options.changeSet![0]!.path);
+    expect(options.fileStatus).toBe(options.changeSet![0]!.status);
   });
 
   it("addresses the opened file by a root-relative path", async () => {
@@ -212,7 +259,7 @@ describe("worktree.openChanges — opening the diff", () => {
     seedWorktree("wt-1", [change("a.ts", "modified", 1, 0)]);
     await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
 
-    const options = dialogOptions();
+    const options = diffDialogOptions();
     expect(options.viewedKey).toBe(options.changeSet![0]!.viewedKey);
   });
 
