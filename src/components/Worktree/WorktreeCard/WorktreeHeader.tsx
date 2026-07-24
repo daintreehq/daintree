@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AgentState, TerminalRecipe, WorktreeState } from "@/types";
+import { useEffect, useMemo, useState } from "react";
+import type { AgentState, WorktreeState } from "@/types";
+import type { WorktreeMenuActions } from "../WorktreeMenuItems";
 import type { GitStateIndicator } from "./hooks/useWorktreeStatus";
 import { cn } from "@/lib/utils";
 import { STATE_LABELS, STATE_PRIORITY } from "../terminalStateConfig";
@@ -59,66 +60,7 @@ export interface WorktreeHeaderProps {
 
   gitStateIndicator: GitStateIndicator | null;
 
-  menu: {
-    launchAgents: import("../WorktreeMenuItems").WorktreeLaunchAgentItem[];
-    recipes: TerminalRecipe[];
-    runningRecipeId: string | null;
-    counts: {
-      grid: number;
-      dock: number;
-      active: number;
-      completed: number;
-      all: number;
-      waiting: number;
-      working: number;
-    };
-    onCopyContextFull: () => void;
-    onCopyContextModified: () => void;
-    onCopyPath: () => void;
-    onOpenEditor: () => void;
-    onRevealInFinder: () => void;
-    onOpenIssueExternal?: () => void;
-    onOpenPRExternal?: () => void;
-    onRunRecipe: (recipeId: string) => void;
-    onSaveLayout?: () => void;
-    onTogglePin?: () => void;
-    onToggleCollapse?: () => void;
-    isCollapsed?: boolean;
-    onLaunchAgent?: (agentId: string) => void;
-    onMoveUp?: () => void;
-    onMoveDown?: () => void;
-    canMoveUp?: boolean;
-    canMoveDown?: boolean;
-    onDockAll: () => void;
-    onMaximizeAll: () => void;
-    onCloseAll: () => void;
-    onTerminateAll: () => void;
-    onClearHistory: () => void;
-    onResetRenderers: () => void;
-    onSelectAllAgents: () => void;
-    onSelectWaitingAgents: () => void;
-    onSelectWorkingAgents: () => void;
-    onAttachIssue?: () => void;
-    onViewPlan?: () => void;
-    onOpenReviewHub?: () => void;
-    onOpenFileBrowser?: () => void;
-    onCompareDiff?: () => void;
-    onOpenPanelPalette?: () => void;
-    onDeleteWorktree?: () => void;
-    hasResourceConfig?: boolean;
-    worktreeMode?: string;
-    resourceEnvironmentKeys?: string[];
-    onSwitchEnvironment?: (envKey: string) => void;
-    resourceStatus?: string;
-    onResourceProvision?: () => void;
-    onResourceResume?: () => void;
-    onResourcePause?: () => void;
-    onResourceConnect?: () => void;
-    onResourceStatus?: () => void;
-    onResourceTeardown?: () => void;
-    onStopDevServer?: (worktreeId: string) => void;
-    onRestartDevServer?: (worktreeId: string) => void;
-  };
+  menu: WorktreeMenuActions;
 }
 
 function formatGitAge(ageMs: number): string {
@@ -246,18 +188,6 @@ export function WorktreeHeader({
   gitStateIndicator,
   menu,
 }: WorktreeHeaderProps) {
-  const recipeOptions = useMemo(
-    () => menu.recipes.map((r) => ({ id: r.id, name: r.name })),
-    [menu.recipes]
-  );
-
-  const handleLaunchAgent = useCallback(
-    (agentId: string) => {
-      menu.onLaunchAgent?.(agentId);
-    },
-    [menu]
-  );
-
   // PR-originated worktrees (created from the PR dropdown, #8888) invert the
   // default issue-first headline: the PR title leads, with the linked issue
   // shown underneath. `sourcePrNumber` is the in-memory discriminator seeded at
@@ -448,13 +378,9 @@ export function WorktreeHeader({
           canCollapse={canCollapse ?? false}
           onToggleCollapse={onToggleCollapse}
           contentId={contentId}
-          menu={{
-            ...menu,
-            recipes: recipeOptions,
-          }}
+          menu={menu}
           worktree={worktree}
           isPinned={isPinned}
-          handleLaunchAgent={handleLaunchAgent}
         />
       </div>
 

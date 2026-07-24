@@ -54,9 +54,12 @@ import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
-import { CONTEXT_COMPONENTS, WorktreeMenuItems } from "./WorktreeMenuItems";
+import {
+  CONTEXT_COMPONENTS,
+  WorktreeMenuItems,
+  type WorktreeMenuActions,
+} from "./WorktreeMenuItems";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
-import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
 import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { isAgentFleetActionEligible, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
@@ -700,6 +703,71 @@ export function WorktreeCard({
     });
   };
 
+  // One action set drives both menu surfaces — the card's right-click menu and
+  // the ⋯ toolbar dropdown — so they can't drift apart (they did: Browse Files
+  // was wired into the dropdown only).
+  const menuActions: WorktreeMenuActions = {
+    launchAgents,
+    recipes: recipes.map((r) => ({ id: r.id, name: r.name })),
+    runningRecipeId,
+    counts: {
+      grid: gridCount,
+      dock: dockCount,
+      active: totalTerminalCount,
+      completed: completedCount,
+      all: eligibleTerminalCount,
+      waiting: waitingAgentCount,
+      working: workingAgentCount,
+    },
+    onCopyContextFull: handleCopyContextFull,
+    onCopyContextModified: handleCopyContextModified,
+    onCopyPath: handleCopyPath,
+    onOpenEditor,
+    onRevealInFinder: handlePathClick,
+    onOpenIssueExternal: worktree.issueNumber ? handleOpenIssueExternal : undefined,
+    onOpenPRExternal: worktree.linked?.pr?.url ? handleOpenPRExternal : undefined,
+    onAttachIssue: () => setShowIssuePicker(true),
+    onViewPlan: () => setShowPlanViewer(true),
+    onOpenReviewHub: openReviewHubForThisWorktree,
+    onOpenFileBrowser: openFileBrowserForThisWorktree,
+    onCompareDiff: () => useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),
+    onRunRecipe: (recipeId) => void handleRunRecipe(recipeId),
+    onSaveLayout,
+    onTogglePin: handleTogglePin,
+    onToggleCollapse: canCollapse ? () => toggleWorktreeCollapsed(worktree.id) : undefined,
+    isCollapsed: effectiveIsCollapsed,
+    onLaunchAgent,
+    onMoveUp,
+    onMoveDown,
+    canMoveUp,
+    canMoveDown,
+    onOpenPanelPalette: handleOpenPanelPalette,
+    onDockAll: handleDockAll,
+    onMaximizeAll: handleMaximizeAll,
+    onCloseAll: handleCloseAll,
+    onTerminateAll: handleTerminateAll,
+    onClearHistory: handleClearHistory,
+    onResetRenderers: handleResetRenderers,
+    onSelectAllAgents: handleSelectAllAgents,
+    onSelectWaitingAgents: handleSelectWaitingAgents,
+    onSelectWorkingAgents: handleSelectWorkingAgents,
+    onDeleteWorktree: !isMainWorktree ? () => setShowDeleteDialog(true) : undefined,
+    hasResourceConfig,
+    worktreeMode: worktree.worktreeMode,
+    resourceEnvironmentKeys,
+    onSwitchEnvironment: handleSwitchEnvironment,
+    resourceStatus: worktree.resourceStatus?.lastStatus,
+    onResourceProvision: hasProvisionCommand ? handleResourceProvision : undefined,
+    onResourceResume: hasResumeCommand ? handleResourceResume : undefined,
+    onResourcePause: hasPauseCommand ? handleResourcePause : undefined,
+    onResourceConnect: worktree.resourceConnectCommand ? handleResourceConnect : undefined,
+    onResourceStatus: hasStatusCommand ? handleResourceStatus : undefined,
+    onResourceTeardown: hasTeardownCommand ? handleResourceTeardown : undefined,
+    onStopDevServer: handleStopDevServer,
+    onRestartDevServer: handleRestartDevServer,
+    pluginItems,
+  };
+
   const ariaStatusParts: string[] = [spineState];
   if (gitStateIndicator) {
     ariaStatusParts.push(gitStateIndicator.label);
@@ -952,77 +1020,7 @@ export function WorktreeCard({
                   onOpenPlan: worktree.hasPlanFile ? () => setShowPlanViewer(true) : undefined,
                 }}
                 gitStateIndicator={gitStateIndicator}
-                menu={{
-                  launchAgents,
-                  recipes,
-                  runningRecipeId,
-                  counts: {
-                    grid: gridCount,
-                    dock: dockCount,
-                    active: totalTerminalCount,
-                    completed: completedCount,
-                    all: eligibleTerminalCount,
-                    waiting: waitingAgentCount,
-                    working: workingAgentCount,
-                  },
-                  onCopyContextFull: handleCopyContextFull,
-                  onCopyContextModified: handleCopyContextModified,
-                  onCopyPath: handleCopyPath,
-                  onOpenEditor,
-                  onRevealInFinder: handlePathClick,
-                  onOpenIssueExternal: worktree.issueNumber ? handleOpenIssueExternal : undefined,
-                  onOpenPRExternal: worktree.linked?.pr?.url ? handleOpenPRExternal : undefined,
-                  onAttachIssue: () => setShowIssuePicker(true),
-                  onViewPlan: () => setShowPlanViewer(true),
-                  onOpenReviewHub: openReviewHubForThisWorktree,
-                  onOpenFileBrowser: openFileBrowserForThisWorktree,
-                  onCompareDiff: () =>
-                    useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),
-                  onRunRecipe: (recipeId) => void handleRunRecipe(recipeId),
-                  onSaveLayout,
-                  onTogglePin: handleTogglePin,
-                  onToggleCollapse: canCollapse
-                    ? () => toggleWorktreeCollapsed(worktree.id)
-                    : undefined,
-                  isCollapsed: effectiveIsCollapsed,
-                  onLaunchAgent,
-                  onMoveUp,
-                  onMoveDown,
-                  canMoveUp,
-                  canMoveDown,
-                  onOpenPanelPalette: () => {
-                    useWorktreeSelectionStore.getState().setActiveWorktree(worktree.id);
-                    void actionService.dispatch("panel.palette", undefined, {
-                      // eslint-disable-next-line no-restricted-syntax -- context-menu-source: hardcoded because callback lives outside the ContextMenu Root (see #8322)
-                      source: "context-menu",
-                    });
-                  },
-                  onDockAll: handleDockAll,
-                  onMaximizeAll: handleMaximizeAll,
-                  onCloseAll: handleCloseAll,
-                  onTerminateAll: handleTerminateAll,
-                  onClearHistory: handleClearHistory,
-                  onResetRenderers: handleResetRenderers,
-                  onSelectAllAgents: handleSelectAllAgents,
-                  onSelectWaitingAgents: handleSelectWaitingAgents,
-                  onSelectWorkingAgents: handleSelectWorkingAgents,
-                  onDeleteWorktree: !isMainWorktree ? () => setShowDeleteDialog(true) : undefined,
-                  hasResourceConfig,
-                  worktreeMode: worktree.worktreeMode,
-                  resourceEnvironmentKeys,
-                  onSwitchEnvironment: handleSwitchEnvironment,
-                  resourceStatus: worktree.resourceStatus?.lastStatus,
-                  onResourceProvision: hasProvisionCommand ? handleResourceProvision : undefined,
-                  onResourceResume: hasResumeCommand ? handleResourceResume : undefined,
-                  onResourcePause: hasPauseCommand ? handleResourcePause : undefined,
-                  onResourceConnect: worktree.resourceConnectCommand
-                    ? handleResourceConnect
-                    : undefined,
-                  onResourceStatus: hasStatusCommand ? handleResourceStatus : undefined,
-                  onResourceTeardown: hasTeardownCommand ? handleResourceTeardown : undefined,
-                  onStopDevServer: handleStopDevServer,
-                  onRestartDevServer: handleRestartDevServer,
-                }}
+                menu={menuActions}
               />
 
               <FocusedSubLine
@@ -1125,67 +1123,9 @@ export function WorktreeCard({
         <WorktreeMenuItems
           worktree={worktree}
           components={CONTEXT_COMPONENTS}
-          launchAgents={launchAgents}
-          recipes={recipes.map((r) => ({ id: r.id, name: r.name }))}
-          runningRecipeId={runningRecipeId}
           isPinned={isPinned}
-          counts={{
-            grid: gridCount,
-            dock: dockCount,
-            active: totalTerminalCount,
-            completed: completedCount,
-            all: eligibleTerminalCount,
-            waiting: waitingAgentCount,
-            working: workingAgentCount,
-          }}
-          onLaunchAgent={onLaunchAgent}
-          onMoveUp={onMoveUp}
-          onMoveDown={onMoveDown}
-          canMoveUp={canMoveUp}
-          canMoveDown={canMoveDown}
-          onCopyContextFull={handleCopyContextFull}
-          onCopyContextModified={handleCopyContextModified}
-          onCopyPath={handleCopyPath}
-          onOpenEditor={onOpenEditor}
-          onRevealInFinder={handlePathClick}
-          onOpenIssueExternal={worktree.issueNumber ? handleOpenIssueExternal : undefined}
-          onOpenPRExternal={worktree.linked?.pr?.url ? handleOpenPRExternal : undefined}
-          onAttachIssue={() => setShowIssuePicker(true)}
-          onViewPlan={() => setShowPlanViewer(true)}
-          onOpenReviewHub={openReviewHubForThisWorktree}
-          onCompareDiff={() =>
-            useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id)
-          }
-          onRunRecipe={(recipeId) => void handleRunRecipe(recipeId)}
-          onSaveLayout={onSaveLayout}
-          onTogglePin={handleTogglePin}
-          onToggleCollapse={canCollapse ? () => toggleWorktreeCollapsed(worktree.id) : undefined}
-          isCollapsed={effectiveIsCollapsed}
-          onDockAll={handleDockAll}
-          onMaximizeAll={handleMaximizeAll}
-          onCloseAll={handleCloseAll}
-          onTerminateAll={handleTerminateAll}
-          onClearHistory={handleClearHistory}
-          onResetRenderers={handleResetRenderers}
-          onSelectAllAgents={handleSelectAllAgents}
-          onSelectWaitingAgents={handleSelectWaitingAgents}
-          onSelectWorkingAgents={handleSelectWorkingAgents}
-          onOpenPanelPalette={handleOpenPanelPalette}
-          onDeleteWorktree={!isMainWorktree ? () => setShowDeleteDialog(true) : undefined}
-          hasResourceConfig={hasResourceConfig}
-          worktreeMode={worktree.worktreeMode}
-          resourceEnvironmentKeys={resourceEnvironmentKeys}
-          onSwitchEnvironment={handleSwitchEnvironment}
-          onResourceProvision={hasProvisionCommand ? handleResourceProvision : undefined}
-          onResourceResume={hasResumeCommand ? handleResourceResume : undefined}
-          onResourcePause={hasPauseCommand ? handleResourcePause : undefined}
-          onResourceConnect={worktree.resourceConnectCommand ? handleResourceConnect : undefined}
-          onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
-          onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
-          onStopDevServer={handleStopDevServer}
-          onRestartDevServer={handleRestartDevServer}
+          {...menuActions}
         />
-        <PluginContextMenuSection items={pluginItems} />
       </ContextMenuContent>
     </ContextMenu>
   );

@@ -86,6 +86,36 @@ describe("PluginContextMenuSection", () => {
     expect(dispatchMock.mock.calls[0]![1]).not.toBeUndefined();
   });
 
+  it("renders through injected components so a dropdown surface gets the same section", () => {
+    const DropdownItem = ({
+      children,
+      onSelect,
+    }: {
+      children: React.ReactNode;
+      onSelect: () => void;
+    }) => (
+      <button type="button" data-surface="dropdown" onClick={onSelect}>
+        {children}
+      </button>
+    );
+    const DropdownSeparator = () => <hr data-testid="dropdown-separator" />;
+    render(
+      <MenuActionSourceContext.Provider value="menu">
+        <PluginContextMenuSection
+          items={[entry("acme", "Do A", "acme.a")]}
+          components={{ Item: DropdownItem, Separator: DropdownSeparator }}
+        />
+      </MenuActionSourceContext.Provider>
+    );
+    // The default context-menu primitives (stubbed above as `separator`) must
+    // not appear — the injected pair replaces both item and separator.
+    expect(screen.getByTestId("dropdown-separator")).toBeTruthy();
+    expect(screen.queryByTestId("separator")).toBeNull();
+    expect(screen.getByText("Do A").getAttribute("data-surface")).toBe("dropdown");
+    fireEvent.click(screen.getByText("Do A"));
+    expect(dispatchMock).toHaveBeenCalledWith("acme.a", undefined, { source: "menu" });
+  });
+
   it("omits the leading separator when leadingSeparator is false", () => {
     render(
       <PluginContextMenuSection

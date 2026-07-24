@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type React from "react";
-import { CornerLeftUp, EyeOff, FolderRoot, FolderTree, RefreshCw } from "lucide-react";
+import { Copy, CornerLeftUp, EyeOff, FolderRoot, FolderTree, RefreshCw } from "lucide-react";
+import { FolderOpen, Folders } from "@/components/icons";
 import { basename, join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
@@ -501,28 +502,38 @@ export function FileBrowserPane({
       <>
         {row.isDirectory && (
           <>
-            <ContextMenuItem onSelect={() => handleSetRoot(row.path)}>Set as root</ContextMenuItem>
+            <ContextMenuItem onSelect={() => handleSetRoot(row.path)}>
+              <FolderRoot className="w-3.5 h-3.5 mr-2" />
+              Set as root
+            </ContextMenuItem>
             {/* Always enabled: the browser no longer knows a folder's gitignore
                 status, and CopyTree still applies its own .gitignore-aware
                 discovery (reporting when nothing was eligible), so this stays
                 safe for a gitignored folder. */}
             <ContextMenuItem onSelect={() => handleCopyFolderContext(row.path)}>
+              <Folders className="w-3.5 h-3.5 mr-2" />
               Copy context
             </ContextMenuItem>
             <ContextMenuSeparator />
           </>
         )}
         <ContextMenuItem onSelect={() => handleCopyFullPath(row.path)}>
+          <Copy className="w-3.5 h-3.5 mr-2" />
           Copy full path
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => handleCopyRelativePath(row.path)}>
+          <Copy className="w-3.5 h-3.5 mr-2" />
           Copy relative path
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => handleCopyFileName(row.name)}>
+          <Copy className="w-3.5 h-3.5 mr-2" />
           Copy file name
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => handleReveal(row.path)}>{reveal.label}</ContextMenuItem>
+        <ContextMenuItem onSelect={() => handleReveal(row.path)}>
+          <FolderOpen className="w-3.5 h-3.5 mr-2" />
+          {reveal.label}
+        </ContextMenuItem>
       </>
     ),
     [

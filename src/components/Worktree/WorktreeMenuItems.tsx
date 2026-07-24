@@ -49,6 +49,8 @@ import {
   Zap,
 } from "lucide-react";
 import { Folders, Workflow } from "@/components/icons";
+import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
+import type { PluginContextMenuItemEntry } from "@/hooks/usePluginContextMenuItems";
 
 type MenuComponent = React.ElementType;
 type LaunchAgentIcon = React.ComponentType<{ className?: string }>;
@@ -142,7 +144,18 @@ export interface WorktreeMenuItemsProps {
   onResourceTeardown?: () => void;
   onStopDevServer?: (worktreeId: string) => void;
   onRestartDevServer?: (worktreeId: string) => void;
+  pluginItems?: PluginContextMenuItemEntry[];
 }
+
+/**
+ * The action/state half of the menu — everything except which menu primitives
+ * render it. Both surfaces (card right-click and the ⋯ toolbar dropdown) take
+ * this one shape so an item can never be wired into one and missed in the other.
+ */
+export type WorktreeMenuActions = Omit<
+  WorktreeMenuItemsProps,
+  "components" | "worktree" | "isPinned"
+>;
 
 export function WorktreeMenuItems({
   worktree,
@@ -197,6 +210,7 @@ export function WorktreeMenuItems({
   onResourceTeardown,
   onStopDevServer,
   onRestartDevServer,
+  pluginItems,
 }: WorktreeMenuItemsProps) {
   const hasIssueItem = Boolean(worktree.issueNumber && onOpenIssueExternal);
   const hasPRItem = Boolean(worktree.linked?.pr && onOpenPRExternal);
@@ -331,6 +345,20 @@ export function WorktreeMenuItems({
 
       <C.Separator />
 
+      {/* File access */}
+      {onOpenFileBrowser && (
+        <C.Item onSelect={onOpenFileBrowser}>
+          <FolderTree className="w-3.5 h-3.5 mr-2" />
+          Browse Files
+        </C.Item>
+      )}
+      <C.Item onSelect={onOpenEditor}>
+        <Code className="w-3.5 h-3.5 mr-2" />
+        Open in Editor
+      </C.Item>
+
+      <C.Separator />
+
       {(onStopDevServer || onRestartDevServer) && (
         <>
           {onStopDevServer && (
@@ -437,7 +465,9 @@ export function WorktreeMenuItems({
         </C.Sub>
       )}
 
-      <C.Separator />
+      {/* Each optional group above closes with its own separator, so a card
+          without resource config doesn't stack two rules on top of each other. */}
+      {hasResourceConfig && <C.Separator />}
 
       {/* Worktree actions (flat) */}
       {onAttachIssue && (
@@ -480,16 +510,6 @@ export function WorktreeMenuItems({
         </C.SubContent>
       </C.Sub>
 
-      <C.Item onSelect={onOpenEditor}>
-        <Code className="w-3.5 h-3.5 mr-2" />
-        Open in Editor
-      </C.Item>
-      {onOpenFileBrowser && (
-        <C.Item onSelect={onOpenFileBrowser}>
-          <FolderTree className="w-3.5 h-3.5 mr-2" />
-          Browse Files
-        </C.Item>
-      )}
       <C.Item onSelect={onRevealInFinder}>
         <Folder className="w-3.5 h-3.5 mr-2" />
         Reveal in Finder
@@ -583,6 +603,13 @@ export function WorktreeMenuItems({
             Delete Worktree...
           </C.Item>
         </>
+      )}
+
+      {pluginItems && (
+        <PluginContextMenuSection
+          items={pluginItems}
+          components={{ Item: C.Item, Separator: C.Separator }}
+        />
       )}
     </>
   );

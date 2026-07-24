@@ -62,7 +62,6 @@ function renderToolbar() {
         menu={baseMenu}
         worktree={baseWorktree}
         isPinned={false}
-        handleLaunchAgent={noop}
       />
     </TooltipProvider>
   );
@@ -127,7 +126,6 @@ describe("WorktreeActionsToolbar keyboard navigation", () => {
             menu={baseMenu}
             worktree={baseWorktree}
             isPinned={false}
-            handleLaunchAgent={noop}
           />
         </div>
       </TooltipProvider>
@@ -157,7 +155,6 @@ describe("WorktreeActionsToolbar keyboard navigation", () => {
             menu={baseMenu}
             worktree={baseWorktree}
             isPinned={false}
-            handleLaunchAgent={noop}
           />
         </div>
       </TooltipProvider>

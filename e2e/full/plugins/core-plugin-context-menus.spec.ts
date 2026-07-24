@@ -1,6 +1,8 @@
 import { test, expect } from "@playwright/test";
 import { closeApp, type AppContext } from "../../helpers/launch";
 import { launchWithSamplePlugin, waitForRichPluginReady } from "../../helpers/plugins";
+import { SEL } from "../../helpers/selectors";
+import { T_SHORT, T_LONG } from "../../helpers/timeouts";
 
 /**
  * Plugin `contextMenus` contribution (#10473). The `rich-daintree` sample
@@ -38,6 +40,33 @@ test.describe.serial("Core: Plugin context menus contribution", () => {
         location: "worktree",
         label: "Rich sample action",
       },
+    });
+  });
+
+  // A worktree card exposes the same item list through two surfaces, so a
+  // contributed item has to reach both. It reached only the right-click menu
+  // until the section moved inside the shared item list.
+  test("surfaces the contributed item in both worktree menus", async () => {
+    const { window } = ctx;
+    const card = window.locator(SEL.worktree.mainCard);
+    await expect(card).toBeVisible({ timeout: T_LONG });
+
+    const pluginItem = window.getByRole("menuitem", { name: "Rich sample action" });
+    const closeMenu = async () => {
+      await window.keyboard.press("Escape");
+      await expect(window.locator('[role="menu"]')).toHaveCount(0, { timeout: T_SHORT });
+    };
+
+    await test.step("Actions dropdown lists the plugin item", async () => {
+      await card.locator(SEL.worktree.actionsMenu).click();
+      await expect(pluginItem).toBeVisible({ timeout: T_SHORT });
+      await closeMenu();
+    });
+
+    await test.step("Right-click menu lists the plugin item", async () => {
+      await card.click({ button: "right", position: { x: 40, y: 12 } });
+      await expect(pluginItem).toBeVisible({ timeout: T_SHORT });
+      await closeMenu();
     });
   });
 });

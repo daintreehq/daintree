@@ -6,6 +6,15 @@ import type { PluginContextMenuItemEntry } from "@/hooks/usePluginContextMenuIte
 interface PluginContextMenuSectionProps {
   items: PluginContextMenuItemEntry[];
   /**
+   * Menu primitives to render with. Defaults to the context-menu pair; a
+   * dropdown surface passes its own so the same section can trail both menus
+   * (`useMenuActionSource()` resolves the source from whichever Root wraps it).
+   */
+  components?: {
+    Item: React.ElementType;
+    Separator: React.ElementType;
+  };
+  /**
    * Args handed to every item's `actionService.dispatch` for this surface — the
    * surface's clicked subject (e.g. `{ path }` for a file row). Captured at
    * menu-open time by the mounting component. Undefined for surfaces whose
@@ -22,9 +31,11 @@ interface PluginContextMenuSectionProps {
 }
 
 /**
- * Renders plugin-contributed context-menu items as a trailing section, preceded
- * by a separator. Must be rendered inside a `ContextMenuContent` so
- * `useMenuActionSource()` resolves to `"context-menu"`. Renders nothing when
+ * Renders plugin-contributed menu items as a trailing section, preceded by a
+ * separator. Must be rendered inside a `ContextMenuContent` or
+ * `DropdownMenuContent` so `useMenuActionSource()` resolves to the real surface
+ * (`"context-menu"` / `"menu"`) rather than falling back to `"user"`; a dropdown
+ * surface also passes its own primitives via `components`. Renders nothing when
  * there are no items, so a zero-plugin menu produces no DOM diff.
  *
  * `dispatchArgs` lets a surface pass the clicked subject (a file path, a
@@ -34,23 +45,26 @@ interface PluginContextMenuSectionProps {
  */
 export function PluginContextMenuSection({
   items,
+  components,
   dispatchArgs,
   leadingSeparator = true,
 }: PluginContextMenuSectionProps) {
   const source = useMenuActionSource();
+  const Item = components?.Item ?? ContextMenuItem;
+  const Separator = components?.Separator ?? ContextMenuSeparator;
   if (items.length === 0) return null;
   return (
     <>
-      {leadingSeparator && <ContextMenuSeparator />}
+      {leadingSeparator && <Separator />}
       {items.map((entry) => (
-        <ContextMenuItem
+        <Item
           key={`${entry.pluginId}:${entry.item.actionId}`}
           onSelect={() =>
             void actionService.dispatch(entry.item.actionId, dispatchArgs, { source })
           }
         >
           {entry.item.label}
-        </ContextMenuItem>
+        </Item>
       ))}
     </>
   );
