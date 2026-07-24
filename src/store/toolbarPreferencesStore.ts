@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { StorageValue } from "zustand/middleware";
 import type {
   ToolbarPreferences,
   ToolbarButtonId,
@@ -8,6 +9,11 @@ import type {
   ToolbarPinnedState,
 } from "@/../../shared/types/toolbar";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import {
+  mergeRecordByWriterDelta,
+  pickFieldByWriterDelta,
+  type PersistWriteMergeContext,
+} from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { BUILT_IN_AGENT_IDS, LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 
@@ -83,6 +89,129 @@ function mergeButtonList(
   }
 
   return sanitizeButtonList(result);
+}
+
+/**
+ * The exact subset persisted by `partialize` (note: the launcher's `defaultAgent`
+ * is deliberately not persisted). The write merge (#11351) reconciles against
+ * this shape, not the full runtime state.
+ */
+type ToolbarPreferencesPersistedState = {
+  layout: ToolbarPreferences["layout"];
+  launcher: Pick<ToolbarPreferences["launcher"], "alwaysShowDevServer" | "defaultSelection">;
+};
+
+function asButtonList(value: unknown): AnyToolbarButtonId[] | undefined {
+  return Array.isArray(value)
+    ? value.filter((id): id is AnyToolbarButtonId => typeof id === "string")
+    : undefined;
+}
+
+function normalizePinnedButtons(value: unknown): ToolbarPinnedState {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: ToolbarPinnedState = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === "boolean") result[key as AnyToolbarButtonId] = entry;
+  }
+  return result;
+}
+
+/**
+ * Coerce a persisted (or in-memory) snapshot into the canonical persisted shape.
+ * Button lists route through `mergeButtonList` — the same normalization the
+ * hydration `merge()` applies — so the baseline (raw from disk) compares equal to
+ * the in-memory snapshot (which already carries the defaults `merge()` folded in);
+ * otherwise every write would read as a list edit. A null/malformed blob maps to
+ * defaults (issue #11351).
+ */
+function toToolbarPersisted(
+  state: Partial<ToolbarPreferencesState> | null | undefined
+): ToolbarPreferencesPersistedState {
+  const layout = state?.layout;
+  const launcher = state?.launcher;
+  return {
+    layout: {
+      leftButtons: mergeButtonList(asButtonList(layout?.leftButtons), DEFAULT_LEFT_BUTTONS),
+      rightButtons: mergeButtonList(asButtonList(layout?.rightButtons), DEFAULT_RIGHT_BUTTONS),
+      pinnedButtons: normalizePinnedButtons(layout?.pinnedButtons),
+    },
+    launcher: {
+      alwaysShowDevServer:
+        typeof launcher?.alwaysShowDevServer === "boolean" ? launcher.alwaysShowDevServer : false,
+      defaultSelection: launcher?.defaultSelection,
+    },
+  };
+}
+
+/**
+ * Baseline-aware three-way merge for toolbar-preferences writes across project
+ * views (issue #11351). Button orderings and launcher scalars defer to a
+ * sibling's on-disk value unless this writer changed them (two divergent
+ * orderings can't be meaningfully merged, so it's whole-list-if-changed);
+ * `pinnedButtons` merges per button id so a stale view neither drops nor
+ * resurrects a sibling's plugin pin/hide.
+ *
+ * Migration coexistence: `onDisk` is read raw (no `migrate`), so the reconciler
+ * must never diff against a foreign schema version — the 11-step migrate chain
+ * reshapes the persisted blob (e.g. v7 `hiddenButtons` array → v8 `pinnedButtons`
+ * map, v10 `github-stats` → `forge-stats`). Two guards cover the app-upgrade
+ * window: a foreign on-disk version skips the merge outright; a foreign
+ * *baseline* version (this writer's first post-migrate write, before any user
+ * edit) defers wholesale to the sibling's already-current disk value rather than
+ * mistaking the migration for an edit.
+ */
+function mergeToolbarPreferencesPersistedWrite({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<ToolbarPreferencesPersistedState>): StorageValue<ToolbarPreferencesPersistedState> {
+  // Disk absent, or disk is a foreign (unmigrated) schema version we can't safely
+  // diff against → take this writer's already-migrated snapshot.
+  if (!onDisk || onDisk.version !== incoming.version) return incoming;
+  const disk = toToolbarPersisted(onDisk.state);
+  const inc = toToolbarPersisted(incoming.state);
+  // This writer's baseline predates a migration: its first post-migrate write
+  // carries no user edit yet, so defer to the sibling's already-current value
+  // instead of reading the migration as an edit. (`migrate` runs only on the
+  // numeric-version branch, so an unversioned baseline is not "foreign".)
+  if (baseline && typeof baseline.version === "number" && baseline.version !== incoming.version) {
+    return { version: incoming.version, state: disk };
+  }
+  const base = toToolbarPersisted(baseline?.state);
+  return {
+    version: incoming.version,
+    state: {
+      layout: {
+        leftButtons: pickFieldByWriterDelta(
+          base.layout.leftButtons,
+          inc.layout.leftButtons,
+          disk.layout.leftButtons
+        ),
+        rightButtons: pickFieldByWriterDelta(
+          base.layout.rightButtons,
+          inc.layout.rightButtons,
+          disk.layout.rightButtons
+        ),
+        pinnedButtons: mergeRecordByWriterDelta(
+          base.layout.pinnedButtons,
+          inc.layout.pinnedButtons,
+          disk.layout.pinnedButtons
+        ),
+      },
+      launcher: {
+        alwaysShowDevServer: pickFieldByWriterDelta(
+          base.launcher.alwaysShowDevServer,
+          inc.launcher.alwaysShowDevServer,
+          disk.launcher.alwaysShowDevServer
+        ),
+        defaultSelection: pickFieldByWriterDelta(
+          base.launcher.defaultSelection,
+          inc.launcher.defaultSelection,
+          disk.launcher.defaultSelection
+        ),
+      },
+    },
+  };
 }
 
 interface ToolbarPreferencesState extends ToolbarPreferences {
@@ -246,7 +375,9 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     {
       name: "daintree-toolbar-preferences",
       version: 11,
-      storage: createSafeJSONStorage(),
+      storage: createSafeJSONStorage<ToolbarPreferencesPersistedState>({
+        mergeOnWrite: mergeToolbarPreferencesPersistedWrite,
+      }),
       migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>;
         if (version < 1) {

@@ -1,6 +1,12 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { StorageValue } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import {
+  mergeRecordByWriterDelta,
+  pickFieldByWriterDelta,
+  type PersistWriteMergeContext,
+} from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 export type DockDensity = "compact" | "normal" | "comfortable";
@@ -192,6 +198,226 @@ function sanitizePersistedPreferences(
   return sanitized;
 }
 
+type PreferencesPersistedState = Pick<
+  PreferencesState,
+  | "showProjectPulse"
+  | "showDeveloperTools"
+  | "showGridAgentHighlights"
+  | "showAgentTaskTitles"
+  | "showDockAgentHighlights"
+  | "dockDensity"
+  | "assignWorktreeToSelf"
+  | "reduceAnimations"
+  | "diffViewType"
+  | "diffWrapLines"
+  | "diffIgnoreWhitespace"
+  | "diffShowFileList"
+  | "diffFullFile"
+  | "diffFontSize"
+  | "markdownWrapLines"
+  | "deletedWorktreeCleanupSeconds"
+  | "lastSelectedWorktreeRecipeIdByProject"
+  | "skipPushConfirmByWorktreePath"
+  | "fileBrowserAlwaysHiddenPatterns"
+>;
+
+const PREFERENCES_PERSISTED_DEFAULTS: PreferencesPersistedState = {
+  showProjectPulse: true,
+  showDeveloperTools: false,
+  showGridAgentHighlights: false,
+  showAgentTaskTitles: true,
+  showDockAgentHighlights: false,
+  dockDensity: "normal",
+  assignWorktreeToSelf: false,
+  reduceAnimations: false,
+  diffViewType: "split",
+  diffWrapLines: false,
+  diffIgnoreWhitespace: false,
+  diffShowFileList: true,
+  diffFullFile: false,
+  diffFontSize: "m",
+  markdownWrapLines: true,
+  deletedWorktreeCleanupSeconds: DELETED_WORKTREE_CLEANUP_DEFAULT,
+  lastSelectedWorktreeRecipeIdByProject: {},
+  skipPushConfirmByWorktreePath: {},
+  fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN],
+};
+
+function coerceBool(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+/**
+ * Coerce the per-project recipe map, dropping `undefined` values: JSON omits them
+ * on disk, and `mergeRecordByWriterDelta` reads `undefined` as "key absent", so an
+ * explicit `undefined` (a cleared selection — semantically a deletion) must not
+ * reach the diff as a live value.
+ */
+function normalizeRecipeMap(value: unknown): Record<string, string | null> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<string, string | null> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry === null || typeof entry === "string") result[key] = entry;
+  }
+  return result;
+}
+
+function normalizeSkipMap(value: unknown): Record<string, boolean> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<string, boolean> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === "boolean") result[key] = entry;
+  }
+  return result;
+}
+
+/**
+ * Coerce a persisted (or in-memory) snapshot into a fully-defined persisted shape
+ * so the write merge compares canonical values (issue #11351). Reuses the store's
+ * closed-set guards and the pattern sanitizers.
+ */
+function toPreferencesPersisted(
+  state: Partial<PreferencesState> | null | undefined
+): PreferencesPersistedState {
+  const raw = (state ?? {}) as Record<string, unknown>;
+  const d = PREFERENCES_PERSISTED_DEFAULTS;
+  return {
+    showProjectPulse: coerceBool(raw.showProjectPulse, d.showProjectPulse),
+    showDeveloperTools: coerceBool(raw.showDeveloperTools, d.showDeveloperTools),
+    showGridAgentHighlights: coerceBool(raw.showGridAgentHighlights, d.showGridAgentHighlights),
+    showAgentTaskTitles: coerceBool(raw.showAgentTaskTitles, d.showAgentTaskTitles),
+    showDockAgentHighlights: coerceBool(raw.showDockAgentHighlights, d.showDockAgentHighlights),
+    dockDensity: isDockDensity(raw.dockDensity) ? raw.dockDensity : d.dockDensity,
+    assignWorktreeToSelf: coerceBool(raw.assignWorktreeToSelf, d.assignWorktreeToSelf),
+    reduceAnimations: coerceBool(raw.reduceAnimations, d.reduceAnimations),
+    diffViewType: isDiffViewType(raw.diffViewType) ? raw.diffViewType : d.diffViewType,
+    diffWrapLines: coerceBool(raw.diffWrapLines, d.diffWrapLines),
+    diffIgnoreWhitespace: coerceBool(raw.diffIgnoreWhitespace, d.diffIgnoreWhitespace),
+    diffShowFileList: coerceBool(raw.diffShowFileList, d.diffShowFileList),
+    diffFullFile: coerceBool(raw.diffFullFile, d.diffFullFile),
+    diffFontSize: isDiffFontSize(raw.diffFontSize) ? raw.diffFontSize : d.diffFontSize,
+    markdownWrapLines: coerceBool(raw.markdownWrapLines, d.markdownWrapLines),
+    deletedWorktreeCleanupSeconds: isDeletedWorktreeCleanupSeconds(raw.deletedWorktreeCleanupSeconds)
+      ? raw.deletedWorktreeCleanupSeconds
+      : d.deletedWorktreeCleanupSeconds,
+    lastSelectedWorktreeRecipeIdByProject: normalizeRecipeMap(
+      raw.lastSelectedWorktreeRecipeIdByProject
+    ),
+    skipPushConfirmByWorktreePath: normalizeSkipMap(raw.skipPushConfirmByWorktreePath),
+    fileBrowserAlwaysHiddenPatterns: sanitizeAlwaysHiddenPatterns(
+      raw.fileBrowserAlwaysHiddenPatterns
+    ),
+  };
+}
+
+/**
+ * Baseline-aware three-way merge for preferences writes across project views
+ * (issue #11351). The two id-keyed maps are the primary victims —
+ * `lastSelectedWorktreeRecipeIdByProject` (per project) and
+ * `skipPushConfirmByWorktreePath` (per worktree path): each view writes its own
+ * keys, so a stale whole-snapshot write must not wipe a sibling's entries. Every
+ * scalar (and the Settings-edited hidden-patterns list) defers to a sibling's
+ * on-disk value unless this writer changed it. Version guards keep the raw
+ * (un-migrated) reads from diffing a foreign schema across the v13 migrate chain.
+ */
+function mergePreferencesPersistedWrite({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<PreferencesPersistedState>): StorageValue<PreferencesPersistedState> {
+  if (!onDisk || onDisk.version !== incoming.version) return incoming;
+  const disk = toPreferencesPersisted(onDisk.state);
+  const inc = toPreferencesPersisted(incoming.state);
+  if (baseline && typeof baseline.version === "number" && baseline.version !== incoming.version) {
+    return { version: incoming.version, state: disk };
+  }
+  const base = toPreferencesPersisted(baseline?.state);
+  return {
+    version: incoming.version,
+    state: {
+      showProjectPulse: pickFieldByWriterDelta(
+        base.showProjectPulse,
+        inc.showProjectPulse,
+        disk.showProjectPulse
+      ),
+      showDeveloperTools: pickFieldByWriterDelta(
+        base.showDeveloperTools,
+        inc.showDeveloperTools,
+        disk.showDeveloperTools
+      ),
+      showGridAgentHighlights: pickFieldByWriterDelta(
+        base.showGridAgentHighlights,
+        inc.showGridAgentHighlights,
+        disk.showGridAgentHighlights
+      ),
+      showAgentTaskTitles: pickFieldByWriterDelta(
+        base.showAgentTaskTitles,
+        inc.showAgentTaskTitles,
+        disk.showAgentTaskTitles
+      ),
+      showDockAgentHighlights: pickFieldByWriterDelta(
+        base.showDockAgentHighlights,
+        inc.showDockAgentHighlights,
+        disk.showDockAgentHighlights
+      ),
+      dockDensity: pickFieldByWriterDelta(base.dockDensity, inc.dockDensity, disk.dockDensity),
+      assignWorktreeToSelf: pickFieldByWriterDelta(
+        base.assignWorktreeToSelf,
+        inc.assignWorktreeToSelf,
+        disk.assignWorktreeToSelf
+      ),
+      reduceAnimations: pickFieldByWriterDelta(
+        base.reduceAnimations,
+        inc.reduceAnimations,
+        disk.reduceAnimations
+      ),
+      diffViewType: pickFieldByWriterDelta(base.diffViewType, inc.diffViewType, disk.diffViewType),
+      diffWrapLines: pickFieldByWriterDelta(
+        base.diffWrapLines,
+        inc.diffWrapLines,
+        disk.diffWrapLines
+      ),
+      diffIgnoreWhitespace: pickFieldByWriterDelta(
+        base.diffIgnoreWhitespace,
+        inc.diffIgnoreWhitespace,
+        disk.diffIgnoreWhitespace
+      ),
+      diffShowFileList: pickFieldByWriterDelta(
+        base.diffShowFileList,
+        inc.diffShowFileList,
+        disk.diffShowFileList
+      ),
+      diffFullFile: pickFieldByWriterDelta(base.diffFullFile, inc.diffFullFile, disk.diffFullFile),
+      diffFontSize: pickFieldByWriterDelta(base.diffFontSize, inc.diffFontSize, disk.diffFontSize),
+      markdownWrapLines: pickFieldByWriterDelta(
+        base.markdownWrapLines,
+        inc.markdownWrapLines,
+        disk.markdownWrapLines
+      ),
+      deletedWorktreeCleanupSeconds: pickFieldByWriterDelta(
+        base.deletedWorktreeCleanupSeconds,
+        inc.deletedWorktreeCleanupSeconds,
+        disk.deletedWorktreeCleanupSeconds
+      ),
+      lastSelectedWorktreeRecipeIdByProject: mergeRecordByWriterDelta(
+        base.lastSelectedWorktreeRecipeIdByProject,
+        inc.lastSelectedWorktreeRecipeIdByProject,
+        disk.lastSelectedWorktreeRecipeIdByProject
+      ),
+      skipPushConfirmByWorktreePath: mergeRecordByWriterDelta(
+        base.skipPushConfirmByWorktreePath,
+        inc.skipPushConfirmByWorktreePath,
+        disk.skipPushConfirmByWorktreePath
+      ),
+      fileBrowserAlwaysHiddenPatterns: pickFieldByWriterDelta(
+        base.fileBrowserAlwaysHiddenPatterns,
+        inc.fileBrowserAlwaysHiddenPatterns,
+        disk.fileBrowserAlwaysHiddenPatterns
+      ),
+    },
+  };
+}
+
 export const usePreferencesStore = create<PreferencesState>()(
   persist(
     (set) => ({
@@ -262,8 +488,34 @@ export const usePreferencesStore = create<PreferencesState>()(
     }),
     {
       name: "daintree-preferences",
-      storage: createSafeJSONStorage(),
+      storage: createSafeJSONStorage<PreferencesPersistedState>({
+        mergeOnWrite: mergePreferencesPersistedWrite,
+      }),
       version: 13,
+      // Explicit persisted subset — matches the pre-existing default (setters are
+      // dropped by JSON serialization); named so the write merge (#11351) has a
+      // typed persisted shape to reconcile.
+      partialize: (state): PreferencesPersistedState => ({
+        showProjectPulse: state.showProjectPulse,
+        showDeveloperTools: state.showDeveloperTools,
+        showGridAgentHighlights: state.showGridAgentHighlights,
+        showAgentTaskTitles: state.showAgentTaskTitles,
+        showDockAgentHighlights: state.showDockAgentHighlights,
+        dockDensity: state.dockDensity,
+        assignWorktreeToSelf: state.assignWorktreeToSelf,
+        reduceAnimations: state.reduceAnimations,
+        diffViewType: state.diffViewType,
+        diffWrapLines: state.diffWrapLines,
+        diffIgnoreWhitespace: state.diffIgnoreWhitespace,
+        diffShowFileList: state.diffShowFileList,
+        diffFullFile: state.diffFullFile,
+        diffFontSize: state.diffFontSize,
+        markdownWrapLines: state.markdownWrapLines,
+        deletedWorktreeCleanupSeconds: state.deletedWorktreeCleanupSeconds,
+        lastSelectedWorktreeRecipeIdByProject: state.lastSelectedWorktreeRecipeIdByProject,
+        skipPushConfirmByWorktreePath: state.skipPushConfirmByWorktreePath,
+        fileBrowserAlwaysHiddenPatterns: state.fileBrowserAlwaysHiddenPatterns,
+      }),
       // Runs on every hydration (unlike `migrate`, which Zustand skips when the
       // persisted version matches). Closed-set normalisation lives here so a
       // corrupt-but-parseable value is clamped even at the current version.

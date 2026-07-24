@@ -1,11 +1,16 @@
 import { create, useStore } from "zustand";
 import { persist } from "zustand/middleware";
+import type { StorageValue } from "zustand/middleware";
 import {
   createSafeJSONStorage,
   createDebouncedSafeJSONStorage,
   readLocalStorageItemSafely,
   safeJSONParse,
 } from "./persistence/safeStorage";
+import {
+  pickFieldByWriterDelta,
+  type PersistWriteMergeContext,
+} from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import type { QuickStateFilter } from "@/lib/worktreeFilters";
 
@@ -294,6 +299,84 @@ function loadLegacySeedForProject(): Partial<ProjectPersistedShape> {
 
 const _legacySeed = loadLegacySeedForProject();
 
+const GLOBAL_PREFS_PERSISTED_DEFAULTS: GlobalPersistedShape = {
+  orderBy: "created",
+  groupByType: false,
+  alwaysShowActive: true,
+  alwaysShowWaiting: true,
+  hideMainWorktree: false,
+};
+
+function isOrderBy(value: unknown): value is OrderBy {
+  return value === "recent" || value === "created" || value === "alpha" || value === "manual";
+}
+
+function toGlobalPrefsPersisted(
+  state: Partial<GlobalPrefsState> | null | undefined
+): GlobalPersistedShape {
+  const raw = (state ?? {}) as Record<string, unknown>;
+  const d = GLOBAL_PREFS_PERSISTED_DEFAULTS;
+  return {
+    orderBy: isOrderBy(raw.orderBy) ? raw.orderBy : d.orderBy,
+    groupByType: typeof raw.groupByType === "boolean" ? raw.groupByType : d.groupByType,
+    alwaysShowActive:
+      typeof raw.alwaysShowActive === "boolean" ? raw.alwaysShowActive : d.alwaysShowActive,
+    alwaysShowWaiting:
+      typeof raw.alwaysShowWaiting === "boolean" ? raw.alwaysShowWaiting : d.alwaysShowWaiting,
+    hideMainWorktree:
+      typeof raw.hideMainWorktree === "boolean" ? raw.hideMainWorktree : d.hideMainWorktree,
+  };
+}
+
+/**
+ * Baseline-aware three-way merge for the GLOBAL worktree-filter prefs across
+ * project views (issue #11351). These five fields share one literal key
+ * (`daintree-worktree-filters`) and are set independently, so each defers to a
+ * sibling's on-disk value unless this writer changed it. The per-project store
+ * (`_projectStore`) needs no merge — its key already embeds the project id
+ * (`…:{projectId}`), so each project view writes a disjoint key. After merging,
+ * we reapply the `merge()`-time invariant that `manual` order is invalid while
+ * grouping (a cross-view merge could otherwise recombine them).
+ */
+function mergeGlobalPrefsPersistedWrite({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<GlobalPersistedShape>): StorageValue<GlobalPersistedShape> {
+  if (!onDisk || onDisk.version !== incoming.version) return incoming;
+  const disk = toGlobalPrefsPersisted(onDisk.state);
+  const inc = toGlobalPrefsPersisted(incoming.state);
+  if (baseline && typeof baseline.version === "number" && baseline.version !== incoming.version) {
+    return { version: incoming.version, state: disk };
+  }
+  const base = toGlobalPrefsPersisted(baseline?.state);
+  const groupByType = pickFieldByWriterDelta(base.groupByType, inc.groupByType, disk.groupByType);
+  const rawOrderBy = pickFieldByWriterDelta(base.orderBy, inc.orderBy, disk.orderBy);
+  const orderBy: OrderBy = groupByType && rawOrderBy === "manual" ? "created" : rawOrderBy;
+  return {
+    version: incoming.version,
+    state: {
+      orderBy,
+      groupByType,
+      alwaysShowActive: pickFieldByWriterDelta(
+        base.alwaysShowActive,
+        inc.alwaysShowActive,
+        disk.alwaysShowActive
+      ),
+      alwaysShowWaiting: pickFieldByWriterDelta(
+        base.alwaysShowWaiting,
+        inc.alwaysShowWaiting,
+        disk.alwaysShowWaiting
+      ),
+      hideMainWorktree: pickFieldByWriterDelta(
+        base.hideMainWorktree,
+        inc.hideMainWorktree,
+        disk.hideMainWorktree
+      ),
+    },
+  };
+}
+
 const _globalPrefsStore = create<GlobalPrefsState>()(
   persist(
     (): GlobalPrefsState => ({
@@ -306,7 +389,9 @@ const _globalPrefsStore = create<GlobalPrefsState>()(
     {
       name: GLOBAL_KEY,
       version: 1,
-      storage: createSafeJSONStorage(),
+      storage: createSafeJSONStorage<GlobalPersistedShape>({
+        mergeOnWrite: mergeGlobalPrefsPersistedWrite,
+      }),
       partialize: (state): GlobalPersistedShape => ({
         orderBy: state.orderBy,
         groupByType: state.groupByType,

@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { StorageValue } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import {
+  pickFieldByWriterDelta,
+  type PersistWriteMergeContext,
+} from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { notify } from "@/lib/notify";
 
@@ -83,6 +88,101 @@ export function shouldShowSoftWarning(
 }
 
 let _initPromise: Promise<void> | null = null;
+
+type PanelLimitPersistedState = Pick<
+  PanelLimitState,
+  | "softWarningLimit"
+  | "confirmationLimit"
+  | "hardLimit"
+  | "warningsDisabled"
+  | "hardwareDefaultsApplied"
+  | "lastSoftWarningDismissedAt"
+>;
+
+const PANEL_LIMIT_PERSISTED_DEFAULTS: PanelLimitPersistedState = {
+  softWarningLimit: DEFAULT_SOFT_WARNING_LIMIT,
+  confirmationLimit: DEFAULT_CONFIRMATION_LIMIT,
+  hardLimit: DEFAULT_HARD_LIMIT,
+  warningsDisabled: false,
+  hardwareDefaultsApplied: false,
+  lastSoftWarningDismissedAt: null,
+};
+
+function toPanelLimitPersisted(
+  state: Partial<PanelLimitState> | null | undefined
+): PanelLimitPersistedState {
+  const raw = (state ?? {}) as Record<string, unknown>;
+  const d = PANEL_LIMIT_PERSISTED_DEFAULTS;
+  return {
+    softWarningLimit: typeof raw.softWarningLimit === "number" ? raw.softWarningLimit : d.softWarningLimit,
+    confirmationLimit:
+      typeof raw.confirmationLimit === "number" ? raw.confirmationLimit : d.confirmationLimit,
+    hardLimit: typeof raw.hardLimit === "number" ? raw.hardLimit : d.hardLimit,
+    warningsDisabled:
+      typeof raw.warningsDisabled === "boolean" ? raw.warningsDisabled : d.warningsDisabled,
+    hardwareDefaultsApplied:
+      typeof raw.hardwareDefaultsApplied === "boolean"
+        ? raw.hardwareDefaultsApplied
+        : d.hardwareDefaultsApplied,
+    lastSoftWarningDismissedAt:
+      typeof raw.lastSoftWarningDismissedAt === "number" ? raw.lastSoftWarningDismissedAt : null,
+  };
+}
+
+/**
+ * Baseline-aware three-way merge for panel-limit writes across project views
+ * (issue #11351). Every persisted field is an independently-set scalar, so a
+ * field defers to a sibling's on-disk value unless this writer changed it. This
+ * matters even though the fields aren't project-scoped: the store's transient
+ * setters (`requestConfirmation` bumping `requestSeq`, `resolveConfirmation`
+ * clearing `pendingConfirm`) trigger a persist write of the *unchanged*
+ * partialized limits, so without the merge a stale view's first such write
+ * reserializes and clobbers a sibling's just-edited limit.
+ */
+function mergePanelLimitPersistedWrite({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<PanelLimitPersistedState>): StorageValue<PanelLimitPersistedState> {
+  if (!onDisk || onDisk.version !== incoming.version) return incoming;
+  const disk = toPanelLimitPersisted(onDisk.state);
+  const inc = toPanelLimitPersisted(incoming.state);
+  if (baseline && typeof baseline.version === "number" && baseline.version !== incoming.version) {
+    return { version: incoming.version, state: disk };
+  }
+  const base = toPanelLimitPersisted(baseline?.state);
+  return {
+    version: incoming.version,
+    state: {
+      softWarningLimit: pickFieldByWriterDelta(
+        base.softWarningLimit,
+        inc.softWarningLimit,
+        disk.softWarningLimit
+      ),
+      confirmationLimit: pickFieldByWriterDelta(
+        base.confirmationLimit,
+        inc.confirmationLimit,
+        disk.confirmationLimit
+      ),
+      hardLimit: pickFieldByWriterDelta(base.hardLimit, inc.hardLimit, disk.hardLimit),
+      warningsDisabled: pickFieldByWriterDelta(
+        base.warningsDisabled,
+        inc.warningsDisabled,
+        disk.warningsDisabled
+      ),
+      hardwareDefaultsApplied: pickFieldByWriterDelta(
+        base.hardwareDefaultsApplied,
+        inc.hardwareDefaultsApplied,
+        disk.hardwareDefaultsApplied
+      ),
+      lastSoftWarningDismissedAt: pickFieldByWriterDelta(
+        base.lastSoftWarningDismissedAt,
+        inc.lastSoftWarningDismissedAt,
+        disk.lastSoftWarningDismissedAt
+      ),
+    },
+  };
+}
 
 export const usePanelLimitStore = create<PanelLimitState>()(
   persist(
@@ -184,7 +284,9 @@ export const usePanelLimitStore = create<PanelLimitState>()(
     {
       name: STORAGE_KEY,
       version: 1,
-      storage: createSafeJSONStorage(),
+      storage: createSafeJSONStorage<PanelLimitPersistedState>({
+        mergeOnWrite: mergePanelLimitPersistedWrite,
+      }),
       migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>;
         if (version === 0) {

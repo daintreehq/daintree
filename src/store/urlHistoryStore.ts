@@ -1,8 +1,13 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { StorageValue } from "zustand/middleware";
 import type { UrlHistoryEntry } from "@shared/types/browser";
 import { sanitizeUrlForHistory } from "@shared/utils/urlHistory";
 import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
+import {
+  mergeRecordByWriterDelta,
+  type PersistWriteMergeContext,
+} from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 const MAX_ENTRIES_PER_PROJECT = 500;
@@ -56,6 +61,38 @@ interface UrlHistoryState {
   updateFavicon: (projectId: string, url: string, favicon: string) => void;
   removeUrl: (projectId: string, url: string) => void;
   removeProjectHistory: (projectId: string) => void;
+}
+
+type UrlHistoryPersistedState = Pick<UrlHistoryState, "entries">;
+
+function entriesOf(
+  value: StorageValue<UrlHistoryPersistedState> | null
+): Record<string, UrlHistoryEntry[]> {
+  const entries = value?.state?.entries;
+  return entries !== null && typeof entries === "object" ? entries : {};
+}
+
+/**
+ * Baseline-aware three-way merge for URL-history writes across project views
+ * (issue #11351). Each project's entry list is one record value keyed by project
+ * id, so a stale view writing its own project no longer wipes another project's
+ * history a sibling view recorded, and a `removeProjectHistory` isn't
+ * resurrected. Concurrent writes to the *same* project bucket stay
+ * last-writer-wins (the separate same-project multi-window case).
+ */
+function mergeUrlHistoryPersistedWrite({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<UrlHistoryPersistedState>): StorageValue<UrlHistoryPersistedState> {
+  // No shared value on disk yet → nothing to reconcile against.
+  if (!onDisk) return incoming;
+  return {
+    version: incoming.version,
+    state: {
+      entries: mergeRecordByWriterDelta(entriesOf(baseline), entriesOf(incoming), entriesOf(onDisk)),
+    },
+  };
 }
 
 function pruneStaleEntries(entries: UrlHistoryEntry[], now: number): UrlHistoryEntry[] {
@@ -183,7 +220,9 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
     }),
     {
       name: "daintree-url-history",
-      storage: createDebouncedSafeJSONStorage(300),
+      storage: createDebouncedSafeJSONStorage<UrlHistoryPersistedState>(300, {
+        mergeOnWrite: mergeUrlHistoryPersistedWrite,
+      }),
       version: 1,
       migrate: (persistedState) => persistedState as UrlHistoryState,
       merge: (persistedState, currentState) => {

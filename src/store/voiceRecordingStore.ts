@@ -1,7 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { StorageValue } from "zustand/middleware";
 import type { VoiceInputError, VoiceInputStatus, VoiceTranscriptPhase } from "@shared/types";
 import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
+import type { PersistWriteMergeContext } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 export interface VoiceRecordingTarget {
@@ -33,6 +35,66 @@ export interface RecentDictationTarget {
 }
 
 const MAX_RECENT_TARGETS = 3;
+
+type VoiceRecordingPersistedState = { recentTargets: RecentDictationTarget[] };
+
+function toRecentTargets(
+  value: StorageValue<VoiceRecordingPersistedState> | null
+): RecentDictationTarget[] {
+  const list = value?.state?.recentTargets;
+  if (!Array.isArray(list)) return [];
+  return list.filter(
+    (entry): entry is RecentDictationTarget =>
+      entry !== null && typeof entry === "object" && typeof entry.lastUsedAt === "number"
+  );
+}
+
+/**
+ * Logical identity of a persisted recent target. Persisted entries have `panelId`
+ * stripped (partialize), so identity is the `(worktreeId, panelTitle)` tuple the
+ * store uses to resolve a rehydrated entry back to a live panel. An entry with
+ * neither has no stable identity (`null`) and is kept as-is rather than merged.
+ */
+function recentTargetIdentity(target: RecentDictationTarget): string | null {
+  if (!target.worktreeId && !target.panelTitle) return null;
+  return `wt:${target.worktreeId ?? ""}|pt:${target.panelTitle ?? ""}`;
+}
+
+/**
+ * Baseline-aware three-way merge for voice-recording writes across project views
+ * (issue #11351). `recentTargets` is one global MRU list (cap 3) that any view
+ * appends to, and the store's high-frequency transient setters (`setAudioLevel`,
+ * `setElapsedSeconds`) trigger debounced persist writes of it — so a stale view's
+ * flush would otherwise drop a sibling's just-recorded target. We union this
+ * writer's list with the freshest on-disk list by logical identity, keep the
+ * more-recently-used entry on collision, and re-sort/cap to the globally three
+ * most-recent — the same recency semantics the store's own `recordRecentTarget`
+ * applies within a single view.
+ */
+function mergeVoiceRecordingPersistedWrite({
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<VoiceRecordingPersistedState>): StorageValue<VoiceRecordingPersistedState> {
+  // No shared value on disk yet → nothing to reconcile against.
+  if (!onDisk) return incoming;
+  const byIdentity = new Map<string, RecentDictationTarget>();
+  const anonymous: RecentDictationTarget[] = [];
+  for (const target of [...toRecentTargets(incoming), ...toRecentTargets(onDisk)]) {
+    const identity = recentTargetIdentity(target);
+    if (identity === null) {
+      anonymous.push(target);
+      continue;
+    }
+    const existing = byIdentity.get(identity);
+    if (!existing || target.lastUsedAt > existing.lastUsedAt) {
+      byIdentity.set(identity, target);
+    }
+  }
+  const merged = [...byIdentity.values(), ...anonymous]
+    .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+    .slice(0, MAX_RECENT_TARGETS);
+  return { version: incoming.version, state: { recentTargets: merged } };
+}
 
 interface VoiceTranscriptBuffer {
   liveText: string;
@@ -458,7 +520,9 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       // `setElapsedSeconds` per second) trigger persist writes regardless of
       // whether the partialized output changed. Coalescing to a trailing-edge
       // 300ms write avoids burning the localStorage write queue mid-session.
-      storage: createDebouncedSafeJSONStorage(300),
+      storage: createDebouncedSafeJSONStorage<VoiceRecordingPersistedState>(300, {
+        mergeOnWrite: mergeVoiceRecordingPersistedWrite,
+      }),
       version: 0,
       // No structural migration yet — at v0 the persisted blob is a
       // forward-compatible subset of the current shape (only `recentTargets`),
