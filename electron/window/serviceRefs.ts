@@ -24,6 +24,9 @@ let processArgvCliHandled = false;
 // Guard: process.argv `.dntr` archives should only be consumed by the first window
 let processArgvDntrHandled = false;
 
+// Guard: process.argv `file://` folder URIs should only be consumed by the first window
+let processArgvDirectoryHandled = false;
+
 // Guard: IPC handlers are globally scoped (ipcMain.handle throws on re-registration)
 let ipcHandlersRegistered = false;
 
@@ -135,6 +138,12 @@ export function getProcessArgvDntrHandled(): boolean {
 }
 export function setProcessArgvDntrHandled(v: boolean): void {
   processArgvDntrHandled = v;
+}
+export function getProcessArgvDirectoryHandled(): boolean {
+  return processArgvDirectoryHandled;
+}
+export function setProcessArgvDirectoryHandled(v: boolean): void {
+  processArgvDirectoryHandled = v;
 }
 export function getIpcHandlersRegistered(): boolean {
   return ipcHandlersRegistered;

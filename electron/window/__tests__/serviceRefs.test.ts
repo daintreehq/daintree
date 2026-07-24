@@ -36,6 +36,8 @@ import {
   setAgentUpdateHandler,
   getProcessArgvCliHandled,
   setProcessArgvCliHandled,
+  getProcessArgvDirectoryHandled,
+  setProcessArgvDirectoryHandled,
   getIpcHandlersRegistered,
   setIpcHandlersRegistered,
   getGlobalServicesInitialized,
@@ -64,6 +66,7 @@ describe("serviceRefs", () => {
     setAgentVersionService(null);
     setAgentUpdateHandler(null);
     setProcessArgvCliHandled(false);
+    setProcessArgvDirectoryHandled(false);
     setIpcHandlersRegistered(false);
     setGlobalServicesInitialized(false);
   });
@@ -90,6 +93,7 @@ describe("serviceRefs", () => {
 
   it("returns false for guard flags by default", () => {
     expect(getProcessArgvCliHandled()).toBe(false);
+    expect(getProcessArgvDirectoryHandled()).toBe(false);
     expect(getIpcHandlersRegistered()).toBe(false);
     expect(getGlobalServicesInitialized()).toBe(false);
   });
@@ -119,6 +123,9 @@ describe("serviceRefs", () => {
 
     setProcessArgvCliHandled(true);
     expect(getProcessArgvCliHandled()).toBe(true);
+
+    setProcessArgvDirectoryHandled(true);
+    expect(getProcessArgvDirectoryHandled()).toBe(true);
   });
 
   it("round-trips object refs (PtyClient, WorkspaceClient stand-ins)", () => {
