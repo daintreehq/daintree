@@ -5,6 +5,7 @@ import os from "os";
 import { execFile } from "child_process";
 import { app } from "electron";
 import { resilientRenameSync } from "../utils/fs.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 // A Finder Quick Action cannot be declared by the app bundle itself: macOS
 // routes a Services selection to a compiled `NSApp setServicesProvider:`
@@ -51,10 +52,6 @@ function isInstallUpToDate(sourcePath: string, targetPath: string): boolean {
     const targetContent = readFileIfExists(path.join(targetPath, relativePath));
     return sourceContent !== null && sourceContent === targetContent;
   });
-}
-
-function asErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 function removeQuietly(targetPath: string): void {
@@ -128,7 +125,7 @@ export async function install(): Promise<string> {
         // location is surfaced so the previous Quick Action is recoverable by
         // hand rather than silently stranded under a random suffix.
         throw new Error(
-          `Failed to install the Quick Action and could not restore the previous one. It is preserved at ${backupPath}. Original error: ${asErrorMessage(err)}`
+          `Failed to install the Quick Action and could not restore the previous one. It is preserved at ${backupPath}. Original error: ${formatErrorMessage(err, "unknown error")}`
         );
       }
     }
