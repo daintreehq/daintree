@@ -1143,7 +1143,11 @@ describe("paired screen-mode polarities (#11423)", () => {
 
   it("never lets both polarities coexist after reconciliation", () => {
     for (const effectiveInline of [true, false]) {
-      const reconciled = reconcileInlineModeFlag([INLINE, "--model", ALT], "both-modes", effectiveInline);
+      const reconciled = reconcileInlineModeFlag(
+        [INLINE, "--model", ALT],
+        "both-modes",
+        effectiveInline
+      );
       expect(reconciled).toEqual([effectiveInline ? INLINE : ALT, "--model"]);
     }
   });
@@ -1175,9 +1179,10 @@ describe("paired screen-mode polarities (#11423)", () => {
   });
 
   it("dedupes repeated managed tokens down to the wanted one", () => {
-    expect(
-      reconcileInlineModeFlag([INLINE, "--keep", INLINE, ALT], "both-modes", true)
-    ).toEqual([INLINE, "--keep"]);
+    expect(reconcileInlineModeFlag([INLINE, "--keep", INLINE, ALT], "both-modes", true)).toEqual([
+      INLINE,
+      "--keep",
+    ]);
   });
 
   it("strips the only declared token when the other direction has none", () => {

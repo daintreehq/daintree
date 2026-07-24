@@ -125,7 +125,10 @@ describe("useAgentScope — inline-mode inherit origin label (#10894)", () => {
 });
 
 describe("useAgentScope — screen-mode control gating (#11423)", () => {
-  const withCapabilities = (id: string, capabilities: AgentConfig["capabilities"]): AgentConfig => ({
+  const withCapabilities = (
+    id: string,
+    capabilities: AgentConfig["capabilities"]
+  ): AgentConfig => ({
     id,
     name: id,
     command: id,

@@ -1011,8 +1011,7 @@ describe("screen-mode flag capabilities (#11423)", () => {
     .map((id) => ({ id, capabilities: getAgentConfig(id)?.capabilities }))
     .filter(
       (a) =>
-        a.capabilities?.inlineModeFlag !== undefined ||
-        a.capabilities?.altScreenFlag !== undefined
+        a.capabilities?.inlineModeFlag !== undefined || a.capabilities?.altScreenFlag !== undefined
     );
 
   it("declares every screen-mode flag as a single non-empty token", () => {
