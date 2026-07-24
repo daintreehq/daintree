@@ -92,8 +92,9 @@ describe("resolveSelectedFilePath", () => {
     expect(resolveSelectedFilePath("a/one.ts b/two.ts", "/p")).toBeNull();
   });
 
-  it("rejects a URL that looks path-like", () => {
+  it("rejects a non-file URL that looks path-like", () => {
     expect(resolveSelectedFilePath("https://example.com/a/b.ts", "/p")).toBeNull();
+    expect(resolveSelectedFilePath("ssh://host/a/b.ts", "/p")).toBeNull();
   });
 
   it("rejects slash-commands with no extension", () => {
@@ -121,7 +122,9 @@ describe("resolveSelectedFilePath", () => {
 
   it("resolves a selected file:// URL the same way a click on it would", () => {
     const url = "file:///tmp/my%20render.png";
-    expect(resolveSelectedFilePath(url, "/p")).toEqual(resolveFileUrlCandidate(url));
+    const viaSelection = resolveSelectedFilePath(url, "/p");
+    expect(viaSelection?.absolutePath).toBe("/tmp/my render.png");
+    expect(viaSelection).toEqual(resolveFileUrlCandidate(url));
   });
 
   it("rejects a file:// URL embedded in prose or paired with another", () => {
@@ -207,8 +210,25 @@ describe("resolveFileUrlCandidate", () => {
   });
 
   it("rejects a malformed percent escape instead of throwing", () => {
-    expect(() => resolveFileUrlCandidate("file:///tmp/a%zz.png")).not.toThrow();
     expect(resolveFileUrlCandidate("file:///tmp/a%zz.png")).toBeNull();
+  });
+
+  it("rejects a decoded NUL byte", () => {
+    expect(resolveFileUrlCandidate("file:///tmp/a%00.png")).toBeNull();
+  });
+
+  it("resolves an encoded drive letter and colon like their literal spellings", () => {
+    const literal = resolveFileUrlCandidate("file:///C:/Users/me/x.png")?.absolutePath;
+    expect(resolveFileUrlCandidate("file:///C%3A/Users/me/x.png")?.absolutePath).toBe(literal);
+    expect(resolveFileUrlCandidate("file:///%43:/Users/me/x.png")?.absolutePath).toBe(literal);
+  });
+
+  it("keeps a drive-relative pathname absolute rather than joining it to a cwd", () => {
+    // `/C:foo.png` has no slash after the colon, so it isn't a drive-absolute
+    // path — it's a POSIX file literally named `C:foo.png` at the root.
+    // Stripping the slash would hand `file.view` a relative path to join.
+    expect(resolveFileUrlCandidate("file:///C:foo.png")?.absolutePath).toBe("/C:foo.png");
+    expect(resolveFileUrlCandidate("file:///%43:")).toBeNull();
   });
 
   it("rejects roots and directory-shaped URLs", () => {
@@ -260,6 +280,20 @@ describe("FILE_URL_REGEX (terminal line scanning)", () => {
 
   it("requires a boundary before the scheme", () => {
     expect(scan("xfile:///tmp/a.png")).toEqual([]);
+  });
+
+  it("unwraps the delimiters agent output puts around a URL", () => {
+    // Symmetry matters: the closing side already terminated on these, so a
+    // one-sided set would linkify on click but not on selection, or vice versa.
+    for (const [open, close] of [
+      ["`", "`"],
+      ['"', '"'],
+      ["'", "'"],
+      ["<", ">"],
+      ["[", "]"],
+    ]) {
+      expect(scan(`saved to ${open}file:///tmp/a.png${close}`)).toEqual(["file:///tmp/a.png"]);
+    }
   });
 
   it("matches an uppercase scheme", () => {

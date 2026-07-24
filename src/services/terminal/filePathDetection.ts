@@ -25,12 +25,20 @@ const WINDOWS_ABS = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 // still parses as a URL and would link somewhere else entirely. Trailing
 // sentence punctuation is consumed OUTSIDE group 1, and the lookahead demands
 // a real token terminator so a partial match can never pose as the whole URL.
+//
+// The opening and closing delimiter sets are deliberately symmetric: a URL in
+// backticks or quotes has to linkify the same way the selection path resolves
+// it, or right-click "View file" and a click disagree about the same token.
+// `$`/`^` mean logical-line ends, so callers scanning a terminal buffer must
+// rejoin soft-wrapped rows first — a row boundary is not a token boundary.
 export const FILE_URL_REGEX =
-  /(?:^|[\s(])(file:\/\/[^\s<>"'`]*[^\s<>"'`:,.!?;)\]}])[,:.;!?)\]}]*(?=$|[\s<>"'`])/gi;
+  /(?:^|[\s("'`<[])(file:\/\/[^\s<>"'`]*[^\s<>"'`:,.!?;)\]}])[,:.;!?)\]}]*(?=$|[\s<>"'`])/gi;
 
-// A `file:` pathname carrying a Windows drive arrives as `/C:/…`. Positional,
-// not a WINDOWS_ABS reuse: that regex expects the leading slash already gone.
-const WINDOWS_DRIVE_PATHNAME = /^\/[A-Za-z]:/;
+// A `file:` pathname carrying a Windows drive arrives as `/C:/…`. Matched
+// against the DECODED path so `%43`/`%3A` spellings resolve identically, and
+// the trailing `/`-or-end keeps drive-relative `/C:foo.png` (a legitimate
+// POSIX path, not a drive) from losing its leading slash.
+const WINDOWS_DRIVE_PATHNAME = /^\/[A-Za-z]:(?:\/|$)/;
 const WINDOWS_DRIVE_ONLY = /^[A-Za-z]:$/;
 
 // Directory-shaped tokens: multi-segment paths with NO extension requirement,
@@ -150,10 +158,13 @@ export function resolveFileUrlCandidate(text: string): ResolvedFilePath | null {
     // link on the line, so a bad token simply isn't a link.
     return null;
   }
+  // No filesystem accepts a NUL, and the files IPC rejects one at its schema —
+  // a link that can only ever fail is worse than no link.
+  if (decoded.includes("\0")) return null;
 
   // Strip the drive's leading slash by position, never touching the letter's
   // case — Node doesn't either, and callers on case-sensitive volumes care.
-  const absolutePath = WINDOWS_DRIVE_PATHNAME.test(encodedPath) ? decoded.slice(1) : decoded;
+  const absolutePath = WINDOWS_DRIVE_PATHNAME.test(decoded) ? decoded.slice(1) : decoded;
 
   // File-only feature: a root, a drive root, or a trailing-slash directory URL
   // has no file to view, and `file:///` would otherwise link the filesystem
@@ -162,6 +173,11 @@ export function resolveFileUrlCandidate(text: string): ResolvedFilePath | null {
   if (!absolutePath || absolutePath.endsWith("/") || WINDOWS_DRIVE_ONLY.test(absolutePath)) {
     return null;
   }
+  // Last gate before the path reaches `file.view`, which joins anything
+  // relative onto the terminal's cwd — silently opening a file the URL never
+  // named. Nothing that survives the steps above should be relative, so this
+  // is the backstop for a spelling none of them anticipated.
+  if (!isAbsolute(absolutePath)) return null;
 
   return { absolutePath };
 }

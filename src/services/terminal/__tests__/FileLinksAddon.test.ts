@@ -262,7 +262,7 @@ describe("FileLinksAddon", () => {
   });
 
   describe("exclusions", () => {
-    it("should not match URLs with protocols", () => {
+    it("should not match non-file protocol URLs", () => {
       return new Promise<void>((resolve) => {
         const terminal = createMockTerminal();
         const getCwd = () => "/home/user/project";
@@ -306,6 +306,21 @@ describe("FileLinksAddon", () => {
         new FileLinksAddon(terminal, () => cwd).provideLinks(1, resolve);
       });
 
+    /** Rows as xterm stores them: row 0 plus soft-wrapped continuations. */
+    const linksForWrapped = (rows: string[], hoveredRow: number): Promise<ILink[] | undefined> =>
+      new Promise((resolve) => {
+        const terminal = createMockTerminal();
+        vi.mocked(terminal.buffer.active.getLine).mockImplementation((index: number) => {
+          const text = rows[index];
+          if (text === undefined) return undefined;
+          return { translateToString: () => text, isWrapped: index > 0 } as IBufferLine;
+        });
+        new FileLinksAddon(terminal, () => "/home/user/project").provideLinks(
+          hoveredRow + 1,
+          resolve
+        );
+      });
+
     const readLink = (link: ILink) =>
       link as unknown as { kind: string; text: string; absolutePath: string };
 
@@ -331,6 +346,57 @@ describe("FileLinksAddon", () => {
         start: { x: prefix.length + 1, y: 1 },
         end: { x: prefix.length + url.length, y: 1 },
       });
+      expect(readLink(links![0]!).absolutePath).toBe("/tmp/a.png");
+    });
+
+    it("links a URL that fills the whole line", async () => {
+      const links = await linksFor("file:///tmp/a.png");
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).absolutePath).toBe("/tmp/a.png");
+    });
+
+    it("links a URL delimited by backticks or angle brackets", async () => {
+      for (const line of ["saved to `file:///tmp/a.png`", "saved to <file:///tmp/a.png>"]) {
+        const links = await linksFor(line);
+        expect(links).toHaveLength(1);
+        expect(readLink(links![0]!).text).toBe("file:///tmp/a.png");
+      }
+    });
+
+    it("accepts a mixed-case scheme and a localhost authority", async () => {
+      for (const url of ["FILE:///tmp/a.png", "file://localhost/tmp/a.png"]) {
+        const links = await linksFor(`saved to ${url}`);
+        expect(links).toHaveLength(1);
+        expect(readLink(links![0]!).absolutePath).toBe("/tmp/a.png");
+      }
+    });
+
+    it("rejoins a soft-wrapped URL instead of linking the truncated prefix", async () => {
+      // The motivating URL is 116 chars, so it wraps in any tiled terminal. The
+      // prefix ending at the margin still parses as a valid URL — linking it
+      // would silently open a real-but-wrong path.
+      const rows = ["Saved image to file:///Users/gpriday/.codex/generated_", "images/shot.png"];
+      for (const hoveredRow of [0, 1]) {
+        const links = await linksForWrapped(rows, hoveredRow);
+        expect(links).toHaveLength(1);
+        const link = links![0]!;
+        expect(readLink(link).absolutePath).toBe("/Users/gpriday/.codex/generated_images/shot.png");
+        // One link spanning both rows — 1-based rows, inclusive end column.
+        expect(link.range.start).toEqual({ x: "Saved image to ".length + 1, y: 1 });
+        expect(link.range.end).toEqual({ x: "images/shot.png".length, y: 2 });
+      }
+    });
+
+    it("does not let a literal ( in a URL leak a bare-path link", async () => {
+      // `(` is legal in a file URL and is also FILE_PATH_REGEX's boundary
+      // character, so the tail would otherwise resolve against the cwd.
+      const links = await linksFor("open file:///tmp/(src/foo.ts");
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).absolutePath).toBe("/tmp/(src/foo.ts");
+    });
+
+    it("does not let a rejected remote URL leak a bare-path link", async () => {
+      expect(await linksFor("open file://someserver/(share/x.png")).toBeUndefined();
     });
 
     it("keeps query and fragment in the link text but out of the resolved path", async () => {
@@ -374,28 +440,63 @@ describe("FileLinksAddon", () => {
       expect(first!.range.end.x).toBeLessThan(second!.range.start.x);
     });
 
-    it("opens in the in-app viewer rather than the OS default app", async () => {
-      vi.mocked(actionService.dispatch).mockReset();
-      vi.mocked(systemClient.openPath).mockReset();
-      vi.mocked(actionService.dispatch).mockResolvedValue({ ok: true, value: { panelId: "p1" } });
-
-      const links = await linksFor(`Saved image to ${CODEX_URL}`);
-      links![0]!.activate(
-        { metaKey: false, ctrlKey: false } as unknown as MouseEvent,
-        links![0]!.text
+    it("reports hover and leave like any other file link", async () => {
+      const terminal = createMockTerminal();
+      vi.mocked(terminal.buffer.active.getLine).mockReturnValue(
+        createMockLine(`Saved image to ${CODEX_URL}`)
       );
-      await vi.waitFor(() => expect(actionService.dispatch).toHaveBeenCalledTimes(1));
+      const seen: Array<unknown> = [];
+      const addon = new FileLinksAddon(terminal, () => "/p", (link) => seen.push(link));
 
-      expect(actionService.dispatch).toHaveBeenCalledWith(
-        "file.view",
-        expect.objectContaining({
-          path: "/Users/gpriday/.codex/generated_images/019f92d9-d4b8-7de3-b1c3-56ce778ef00b/call_H5WWfuc4aUo8pAYO4a5eYRZ5.png",
-          line: undefined,
-          col: undefined,
-        }),
-        { source: "user" }
+      const link = await new Promise<ILink>((resolve) =>
+        addon.provideLinks(1, (links) => resolve(links![0]!))
       );
-      expect(systemClient.openPath).not.toHaveBeenCalled();
+      const event = new Event("mousemove") as unknown as MouseEvent;
+      link.hover?.(event, link.text);
+      link.leave?.(event, link.text);
+      expect(seen).toEqual([link, null]);
+    });
+
+    describe("activation", () => {
+      const DECODED =
+        "/Users/gpriday/.codex/generated_images/019f92d9-d4b8-7de3-b1c3-56ce778ef00b/call_H5WWfuc4aUo8pAYO4a5eYRZ5.png";
+
+      beforeEach(() => {
+        vi.mocked(actionService.dispatch).mockReset();
+        vi.mocked(systemClient.openPath).mockReset();
+        vi.mocked(systemClient.openInEditor).mockReset();
+        vi.mocked(actionService.dispatch).mockResolvedValue({
+          ok: true,
+          result: { panelId: "p1" },
+        });
+      });
+
+      const activateUrlLink = async (modifiers: MouseEventInit) => {
+        const links = await linksFor(`Saved image to ${CODEX_URL}`);
+        const link = links![0]!;
+        link.activate({ metaKey: false, ctrlKey: false, ...modifiers } as MouseEvent, link.text);
+        await vi.waitFor(() => expect(actionService.dispatch).toHaveBeenCalledTimes(1));
+      };
+
+      it("opens in the in-app viewer rather than the OS default app", async () => {
+        await activateUrlLink({});
+        expect(actionService.dispatch).toHaveBeenCalledWith(
+          "file.view",
+          expect.objectContaining({ path: DECODED, line: undefined, col: undefined }),
+          { source: "user" }
+        );
+        expect(systemClient.openPath).not.toHaveBeenCalled();
+      });
+
+      it("sends the decoded path to the external editor on a modified click", async () => {
+        await activateUrlLink({ metaKey: true });
+        expect(actionService.dispatch).toHaveBeenCalledWith(
+          "file.openInEditor",
+          expect.objectContaining({ path: DECODED, line: undefined, col: undefined }),
+          { source: "user" }
+        );
+        expect(systemClient.openInEditor).not.toHaveBeenCalled();
+      });
     });
   });
 

@@ -150,6 +150,42 @@ interface ScopedDirCandidate extends DirCandidate {
   relativePath: string;
 }
 
+/** A soft-wrapped run of buffer rows, rejoined into the line the user sees. */
+interface LogicalLine {
+  text: string;
+  /** 0-based buffer index of the first row in the run. */
+  startRow: number;
+  /** Where each row's text begins in `text`, indexed from `startRow`. */
+  rowOffsets: number[];
+}
+
+// Matches xterm's own web-link provider: a rejoin budget that keeps a pathological
+// unwrapped paste from turning every hover into a megabyte of string building.
+const MAX_LOGICAL_LINE_LENGTH = 2048;
+
+function overlapsClaimed(
+  claimed: ReadonlyArray<[number, number]>,
+  startIndex: number,
+  endIndex: number
+): boolean {
+  return claimed.some(([start, end]) => startIndex < end && endIndex > start);
+}
+
+/** Map an index in a rejoined logical line back to its buffer row and column. */
+function mapToRow(logical: LogicalLine, index: number): { row: number; column: number } {
+  let offsetIndex = 0;
+  while (
+    offsetIndex + 1 < logical.rowOffsets.length &&
+    logical.rowOffsets[offsetIndex + 1]! <= index
+  ) {
+    offsetIndex++;
+  }
+  return {
+    row: logical.startRow + offsetIndex,
+    column: index - logical.rowOffsets[offsetIndex]!,
+  };
+}
+
 /**
  * Cheap validation memo for directory candidates, keyed
  * `worktreeId\nrelativePath`. Hover re-fires for the same line constantly, so
@@ -211,44 +247,17 @@ export class FileLinksAddon implements ILinkProvider {
     // dropped instead of stacking a second link on the same characters.
     const claimed: Array<[number, number]> = [];
 
-    // `file://` URLs are scanned first so their ranges are claimed before the
-    // bare-path and directory passes. Gated on a substring test rather than
-    // run unconditionally: provideLinks is pointer-driven across every visible
-    // terminal, and virtually no line carries a scheme at all. `://` (not
-    // `file://`) keeps the guard case-insensitive without a lowercase copy.
-    if (lineText.includes("://")) {
-      for (const match of lineText.matchAll(FILE_URL_REGEX)) {
-        const url = match[1];
-        if (url === undefined) continue;
-
-        const resolved = resolveFileUrlCandidate(url);
-        if (!resolved) continue;
-
-        // Indexed off the capture, not `match[0]`: the match also spans the
-        // leading boundary character and any trailing sentence punctuation,
-        // neither of which the link should underline or own.
-        const startIndex = match.index + match[0]!.indexOf(url);
-        claimed.push([startIndex, startIndex + url.length]);
-
-        const range: IBufferRange = {
-          start: { x: startIndex + 1, y: bufferLineNumber },
-          end: { x: startIndex + url.length, y: bufferLineNumber },
-        };
-
-        // No line/col: `resolveFileUrlCandidate` deliberately doesn't peel a
-        // `:line` suffix off a URL, so there is none to forward.
-        links.push(
-          new FileLink(
-            range,
-            url,
-            resolved.absolutePath,
-            undefined,
-            undefined,
-            this._getCwd(),
-            this._onHover
-          )
-        );
-      }
+    // `file://` URLs are scanned first so their spans are claimed before the
+    // bare-path and directory passes. Two gates, both O(1)-ish: a line with no
+    // scheme can't start a URL, and a line that neither continues nor is
+    // continued can't be hiding the rest of one. provideLinks is pointer-driven
+    // across every visible terminal, so the common line still does no work.
+    // `://` (not `file://`) keeps the guard case-insensitive without a copy.
+    const partOfWrappedLine =
+      line.isWrapped === true ||
+      this._terminal.buffer.active.getLine(bufferLineNumber)?.isWrapped === true;
+    if (lineText.includes("://") || partOfWrappedLine) {
+      this._collectUrlLinks(bufferLineNumber, lineText, links, claimed);
     }
 
     // matchAll on the module-scope global regex clones it internally (per spec)
@@ -267,6 +276,14 @@ export class FileLinksAddon implements ILinkProvider {
       }
 
       const startIndex = match.index + match[0]!.indexOf(fullMatch);
+      // A `(` is legal inside a file URL and is also this regex's boundary
+      // character, so `file:///tmp/(src/foo.ts` offers `src/foo.ts` as a bare
+      // path — which would resolve against the cwd and link a different file
+      // than the URL names. Every URL span is claimed whether or not it
+      // resolved, so a rejected remote URL can't leak a local link either.
+      if (overlapsClaimed(claimed, startIndex, startIndex + fullMatch.length)) {
+        continue;
+      }
       claimed.push([startIndex, startIndex + fullMatch.length]);
 
       const range: IBufferRange = {
@@ -345,6 +362,105 @@ export class FileLinksAddon implements ILinkProvider {
     );
   }
 
+  /**
+   * Scan the logical line for `file://` URLs, appending links and claiming the
+   * spans they occupy on `bufferLineNumber`'s own row.
+   *
+   * Rows are rejoined first because xterm soft-wraps mid-token and the
+   * motivating URL — an agent's generated-image path — is long enough to wrap
+   * in any tiled terminal. Scanning one row would capture the prefix that
+   * happens to end at the margin, and a truncated `file://` URL still parses,
+   * so it would link to a real-but-wrong path instead of failing.
+   *
+   * Spans are claimed for every syntactic match, resolved or not: a rejected
+   * remote URL must still shield its own characters from the bare-path pass.
+   */
+  private _collectUrlLinks(
+    bufferLineNumber: number,
+    lineText: string,
+    links: ILink[],
+    claimed: Array<[number, number]>
+  ): void {
+    const logical = this._readLogicalLine(bufferLineNumber - 1);
+    if (!logical) return;
+    // The current row's offset into the joined text, for translating a match
+    // back into `lineText` coordinates — that's the space `claimed` and the
+    // single-row bare-path and directory passes all speak.
+    const rowOffset = logical.rowOffsets[bufferLineNumber - 1 - logical.startRow];
+    if (rowOffset === undefined) return;
+
+    for (const match of logical.text.matchAll(FILE_URL_REGEX)) {
+      const url = match[1];
+      if (url === undefined) continue;
+
+      // Indexed off the capture, not `match[0]`: the match also spans the
+      // leading boundary character and any trailing sentence punctuation,
+      // neither of which the link should underline or own.
+      const startIndex = match.index + match[0]!.indexOf(url);
+      const endIndex = startIndex + url.length;
+
+      const localStart = startIndex - rowOffset;
+      const localEnd = endIndex - rowOffset;
+      // A URL wholly on a sibling row still surfaces here (xterm's own web-link
+      // provider behaves the same way, and its range keeps it inert until the
+      // pointer reaches it) — but it owns no characters on this row to claim.
+      if (localEnd > 0 && localStart < lineText.length) {
+        claimed.push([Math.max(0, localStart), Math.min(lineText.length, localEnd)]);
+      }
+
+      const resolved = resolveFileUrlCandidate(url);
+      if (!resolved) continue;
+
+      const start = mapToRow(logical, startIndex);
+      const end = mapToRow(logical, endIndex - 1);
+      const range: IBufferRange = {
+        // xterm rows are 1-based and the end column is inclusive, so `end`
+        // addresses the URL's last character rather than the one past it.
+        start: { x: start.column + 1, y: start.row + 1 },
+        end: { x: end.column + 1, y: end.row + 1 },
+      };
+
+      // No line/col: `resolveFileUrlCandidate` deliberately doesn't peel a
+      // `:line` suffix off a URL, so there is none to forward.
+      links.push(
+        new FileLink(
+          range,
+          url,
+          resolved.absolutePath,
+          undefined,
+          undefined,
+          this._getCwd(),
+          this._onHover
+        )
+      );
+    }
+  }
+
+  /**
+   * Rejoin the soft-wrapped rows around `rowIndex` into the logical line the
+   * user actually sees, remembering where each row's text starts so matches
+   * can be mapped back to buffer coordinates.
+   */
+  private _readLogicalLine(rowIndex: number): LogicalLine | null {
+    const buffer = this._terminal.buffer.active;
+    let startRow = rowIndex;
+    // `isWrapped` marks a row as the CONTINUATION of the one above it, so walk
+    // up while that holds to find where the logical line begins.
+    while (startRow > 0 && buffer.getLine(startRow)?.isWrapped === true) startRow--;
+
+    const rowOffsets: number[] = [];
+    let text = "";
+    for (let row = startRow; text.length < MAX_LOGICAL_LINE_LENGTH; row++) {
+      const line = buffer.getLine(row);
+      if (!line) break;
+      if (row > startRow && line.isWrapped !== true) break;
+      rowOffsets.push(text.length);
+      text += line.translateToString(true);
+    }
+    if (rowOffsets.length === 0) return null;
+    return { text, startRow, rowOffsets };
+  }
+
   private _collectDirCandidates(
     lineText: string,
     claimed: Array<[number, number]>
@@ -356,7 +472,7 @@ export class FileLinksAddon implements ILinkProvider {
 
       const startIndex = match.index + match[0]!.indexOf(fullMatch);
       const endIndex = startIndex + fullMatch.length;
-      if (claimed.some(([start, end]) => startIndex < end && endIndex > start)) continue;
+      if (overlapsClaimed(claimed, startIndex, endIndex)) continue;
 
       const absolutePath = resolveDirPathCandidate(fullMatch, this._getCwd());
       if (!absolutePath) continue;

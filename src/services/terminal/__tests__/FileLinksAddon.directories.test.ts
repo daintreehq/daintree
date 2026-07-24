@@ -106,6 +106,46 @@ describe("FileLinksAddon directory links", () => {
     expect(fileBrowserClient.statPaths).not.toHaveBeenCalled();
   });
 
+  it("ships a file:// link alongside a stat-validated directory on one line", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    vi.mocked(fileBrowserClient.statPaths).mockResolvedValue(["directory"]);
+
+    // The URL resolves synchronously but the directory doesn't, so delivery of
+    // both moves behind the deferred validation callback.
+    const addon = new FileLinksAddon(
+      makeTerminal(["wrote file:///tmp/a.png under src/generated"]),
+      () => root
+    );
+    const links = await provide(addon);
+
+    expect(links).toHaveLength(2);
+    expect(links!.map((link) => (link as ILink & { kind: string }).kind)).toEqual([
+      "file",
+      "directory",
+    ]);
+    expect((links![0] as ILink & { absolutePath: string }).absolutePath).toBe("/tmp/a.png");
+    expect(fileBrowserClient.statPaths).toHaveBeenCalledWith({
+      worktreeId: root,
+      paths: ["src/generated"],
+    });
+  });
+
+  it("keeps the file:// link when directory validation fails", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    vi.mocked(fileBrowserClient.statPaths).mockRejectedValue(new Error("view evicted"));
+
+    const addon = new FileLinksAddon(
+      makeTerminal(["wrote file:///tmp/a.png under src/generated"]),
+      () => root
+    );
+    const links = await provide(addon);
+
+    expect(links).toHaveLength(1);
+    expect((links![0] as ILink & { absolutePath: string }).absolutePath).toBe("/tmp/a.png");
+  });
+
   it("keeps file links when validation fails", async () => {
     const root = nextRoot();
     bindWorktrees(new Map([[root, { id: root, path: root }]]));
