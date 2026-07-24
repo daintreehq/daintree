@@ -241,11 +241,12 @@ describe("computeMissingTemplateEntries", () => {
   });
 
   it("keeps every shipped template's missing count free of negations", () => {
-    for (const id of LANGUAGE_IDS.concat("minimal")) {
+    for (const id of TEMPLATE_IDS.filter((candidate) => candidate !== "none")) {
       const missing = computeMissingTemplateEntries("", resolve(id));
-      expect(missing.filter((entry) => entry.startsWith("!")), `${id} reported negations`).toEqual(
-        []
-      );
+      expect(
+        missing.filter((entry) => entry.startsWith("!")),
+        `${id} reported negations`
+      ).toEqual([]);
       expect(missing.length, `${id} reported no entries`).toBeGreaterThan(0);
       expect(missing.length, `${id} counted every active line`).toBeLessThan(
         activeLines(resolve(id)).length
