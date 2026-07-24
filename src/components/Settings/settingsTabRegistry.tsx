@@ -1044,9 +1044,9 @@ export const SETTINGS_REGISTRY = [
         subtab: "claude",
         subtabLabel: "Claude",
         section: "Agent runtime settings",
-        title: "Inline mode",
-        description: "Disable fullscreen TUI for better resize handling and scrollback",
-        keywords: ["inline", "mode", "tui", "fullscreen", "resize", "tty"],
+        title: "Alt-screen mode",
+        description: "Choose inline rendering or the CLI's full-screen TUI per agent",
+        keywords: ["inline", "mode", "tui", "fullscreen", "alt screen", "resize", "tty"],
       },
       {
         id: "agents-clipboard",

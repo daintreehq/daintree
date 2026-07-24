@@ -80,14 +80,28 @@ export const config: AgentConfig = {
   capabilities: {
     scrollback: 10000,
     resizeStrategy: "default",
-    // Rust TUI that would otherwise take over the alternate screen. We default
-    // it inline (`--no-alt-screen`, grok's scrollback-native mode) so output
-    // flows into Daintree's own WebGL scrollback and stays selectable with our
-    // native text-selection layer instead of grok's mouse-grabbing full-screen
-    // TUI. No `defaultInlineMode` override: inline follows the global
-    // "Use alt-screen mode by default" switch (off ⇒ inline), so users can still
-    // flip back to alt-screen globally or per-agent.
+    // Rust TUI that would otherwise take over the alternate screen. Default it
+    // inline (`--no-alt-screen`) so output flows into Daintree's own WebGL
+    // scrollback and stays selectable with the native text-selection layer
+    // instead of grok's mouse-grabbing full-screen TUI. No `defaultInlineMode`
+    // override: inline follows the global "Use alt-screen mode by default"
+    // switch (off ⇒ inline), so users can still flip back globally or per-agent.
+    //
+    // Two axes: `--no-alt-screen` / `[terminal] alt_screen` pick the buffer,
+    // `--minimal` / `[ui] screen_mode` trim the chrome. Both polarities need an
+    // explicit flag here because grok also goes inline on its own whenever
+    // `~/.grok/config.toml` or terminal auto-detection says so, which made "Alt
+    // screen" a no-op when it merely omitted the inline flag (#11423).
+    //
+    // `--fullscreen` is the chrome-axis opposite of `--minimal`. Per `grok --help`
+    // (0.2.111) it is session-scoped — never writes config — but it overrides only
+    // `[ui] screen_mode = "minimal"`; the buffer still follows `[terminal]
+    // alt_screen` and auto-detection, so someone who set `alt_screen = false`
+    // stays inline even on "Alt screen". Collapsing both axes onto one flag pair
+    // is a deliberate simplification; older builds may not accept `--fullscreen`,
+    // and only users who actively pick "Alt screen" are exposed.
     inlineModeFlag: "--no-alt-screen",
+    altScreenFlag: "--fullscreen",
     supportsBracketedPaste: true,
     // Rust TUI reads the PTY buffer atomically, so the quit-command body and
     // Enter must be sent as separate writes (same rationale as Codex).

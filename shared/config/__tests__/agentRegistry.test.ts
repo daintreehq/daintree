@@ -1003,6 +1003,62 @@ describe("blockAltScreen capabilities", () => {
   });
 });
 
+describe("screen-mode flag capabilities (#11423)", () => {
+  // Select by property PRESENCE, not truthiness — filtering on the flag value
+  // would drop an agent declaring `""`, which is exactly what the non-empty
+  // assertion below exists to catch.
+  const screenModeAgents = getAgentIds()
+    .map((id) => ({ id, capabilities: getAgentConfig(id)?.capabilities }))
+    .filter(
+      (a) =>
+        a.capabilities?.inlineModeFlag !== undefined || a.capabilities?.altScreenFlag !== undefined
+    );
+
+  it("declares every screen-mode flag as a single non-empty token", () => {
+    // The launch path matches these by whole-token equality, so an empty or
+    // whitespace-bearing value could never be stripped and would leak into
+    // every persisted snapshot.
+    expect(screenModeAgents.length).toBeGreaterThan(0);
+    for (const { id, capabilities } of screenModeAgents) {
+      for (const flag of [capabilities?.inlineModeFlag, capabilities?.altScreenFlag]) {
+        if (flag === undefined) continue;
+        expect(flag.length, `${id} declares an empty screen-mode flag`).toBeGreaterThan(0);
+        expect(flag, `${id} declares a multi-token screen-mode flag`).not.toMatch(/\s/);
+      }
+    }
+  });
+
+  it("still ships at least one agent able to force alt screen", () => {
+    // Non-vacuity guard: every assertion in this block passes trivially if no
+    // agent declares `altScreenFlag`, which would mean #11423's fix went dead.
+    expect(
+      screenModeAgents.filter((a) => a.capabilities?.altScreenFlag !== undefined).length
+    ).toBeGreaterThan(0);
+  });
+
+  it("keeps the two polarities distinct for any agent declaring both", () => {
+    for (const { id, capabilities } of screenModeAgents) {
+      if (!capabilities?.inlineModeFlag || !capabilities?.altScreenFlag) continue;
+      expect(
+        capabilities.altScreenFlag,
+        `${id} declares the same token for both screen-mode polarities`
+      ).not.toBe(capabilities.inlineModeFlag);
+    }
+  });
+
+  it("never pairs a force-alt-screen flag with blockAltScreen", () => {
+    // Forcing the CLI into its full-screen TUI while the terminal strips the
+    // alt-screen escape sequences leaves the agent unusable.
+    for (const { id, capabilities } of screenModeAgents) {
+      if (!capabilities?.altScreenFlag) continue;
+      expect(
+        capabilities.blockAltScreen ?? false,
+        `${id} forces alt screen but also blocks it`
+      ).toBe(false);
+    }
+  });
+});
+
 describe("resume configuration", () => {
   it("session-id agents have a quitCommand and a sessionIdPattern", () => {
     const ids = getAgentIds();
