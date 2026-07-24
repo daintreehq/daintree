@@ -12,6 +12,7 @@ import type {
   FileBrowserTreeSnapshot,
 } from "./panel.js";
 import type { CommandOverride } from "./commands.js";
+import type { GitignoreTemplateId } from "../config/gitignoreTemplates.js";
 import type { GitStatus } from "./git.js";
 import type { EditorConfig } from "./editor.js";
 import type { NotificationSettings } from "./ipc/api.js";
@@ -538,8 +539,8 @@ export interface ProjectSettings {
     initialCommitMessage?: string;
     /** Create a .gitignore file (default: true) */
     createGitignore?: boolean;
-    /** Gitignore template to use (default: "node") */
-    gitignoreTemplate?: "node" | "python" | "minimal" | "none";
+    /** Gitignore template to use (default: "minimal") */
+    gitignoreTemplate?: GitignoreTemplateId;
   };
   /** Preferred external editor for this project */
   preferredEditor?: EditorConfig;
