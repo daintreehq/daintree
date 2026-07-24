@@ -9,6 +9,7 @@ const projectClientMock = {
   update: vi.fn().mockResolvedValue(undefined),
   switch: vi.fn().mockResolvedValue(null),
   openDialog: vi.fn(),
+  createFolder: vi.fn(),
   onSwitch: vi.fn(() => () => {}),
   onWorktreeLoadStatus: vi.fn(() => () => {}),
   getSettings: vi.fn(),
@@ -87,9 +88,45 @@ describe("projectStore addProject", () => {
       error: null,
       gitInitDialogOpen: false,
       gitInitDirectoryPath: null,
+      gitInitIdentity: null,
       addProjectByPath: originalAddProjectByPath,
       addProject: originalAddProject,
     });
+  });
+
+  it("carries the create-flow identity into the git-init dialog it always chains through", async () => {
+    projectClientMock.createFolder.mockResolvedValueOnce("/tmp/new-folder");
+    projectClientMock.add.mockRejectedValueOnce(new Error("Not a git repository: /tmp/new-folder"));
+
+    await useProjectStore.getState().createProjectFolder("/tmp", "new-folder", "🚀");
+
+    expect(useProjectStore.getState().gitInitDialogOpen).toBe(true);
+    expect(useProjectStore.getState().gitInitIdentity).toEqual({
+      name: "new-folder",
+      emoji: "🚀",
+    });
+  });
+
+  it("forwards the clone dialog's identity to the add call", async () => {
+    projectClientMock.add.mockResolvedValueOnce({ id: "p1", path: "/tmp/cloned" });
+
+    await useProjectStore
+      .getState()
+      .handleCloneSuccess("/tmp/cloned", { name: "cloned", emoji: "📦" });
+
+    expect(projectClientMock.add).toHaveBeenCalledWith("/tmp/cloned", {
+      name: "cloned",
+      emoji: "📦",
+    });
+  });
+
+  it("adds an existing repo with no identity argument", async () => {
+    projectClientMock.openDialog.mockResolvedValueOnce("/tmp/existing-repo");
+    projectClientMock.add.mockResolvedValueOnce({ id: "p2", path: "/tmp/existing-repo" });
+
+    await useProjectStore.getState().addProject();
+
+    expect(projectClientMock.add).toHaveBeenCalledWith("/tmp/existing-repo", undefined);
   });
 
   it("opens the guided git init dialog when add fails for non-git directories", async () => {
@@ -151,9 +188,56 @@ describe("projectStore addProject", () => {
 
     await useProjectStore.getState().handleGitInitSuccess();
 
-    expect(addProjectByPathMock).toHaveBeenCalledWith("/tmp/repo");
+    expect(addProjectByPathMock).toHaveBeenCalledWith("/tmp/repo", { identity: undefined });
     expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
     expect(useProjectStore.getState().gitInitDirectoryPath).toBeNull();
+  });
+
+  it("passes the identity supplied at git-init completion through to the add", async () => {
+    const addProjectByPathMock = vi.fn().mockResolvedValue(undefined);
+    useProjectStore.setState({
+      gitInitDialogOpen: true,
+      gitInitDirectoryPath: "/tmp/repo",
+      addProjectByPath: addProjectByPathMock as (path: string) => Promise<void>,
+    });
+
+    await useProjectStore.getState().handleGitInitSuccess({ name: "Edited", emoji: "🚀" });
+
+    expect(addProjectByPathMock).toHaveBeenCalledWith("/tmp/repo", {
+      identity: { name: "Edited", emoji: "🚀" },
+    });
+  });
+
+  it("falls back to the identity carried in from the create-project dialog", async () => {
+    const addProjectByPathMock = vi.fn().mockResolvedValue(undefined);
+    useProjectStore.setState({
+      gitInitDialogOpen: true,
+      gitInitDirectoryPath: "/tmp/repo",
+      gitInitIdentity: { name: "Carried", emoji: "📦" },
+      addProjectByPath: addProjectByPathMock as (path: string) => Promise<void>,
+    });
+
+    await useProjectStore.getState().handleGitInitSuccess();
+
+    expect(addProjectByPathMock).toHaveBeenCalledWith("/tmp/repo", {
+      identity: { name: "Carried", emoji: "📦" },
+    });
+  });
+
+  it("clears the carried identity together with the path on close", () => {
+    useProjectStore.getState().openGitInitDialog("/tmp/repo", { name: "N", emoji: "🚀" });
+    expect(useProjectStore.getState().gitInitIdentity).toEqual({ name: "N", emoji: "🚀" });
+
+    useProjectStore.getState().closeGitInitDialog();
+
+    expect(useProjectStore.getState().gitInitDirectoryPath).toBeNull();
+    expect(useProjectStore.getState().gitInitIdentity).toBeNull();
+  });
+
+  it("opens git-init with no identity when the folder was merely opened", () => {
+    useProjectStore.getState().openGitInitDialog("/tmp/plain-folder");
+
+    expect(useProjectStore.getState().gitInitIdentity).toBeNull();
   });
 
   describe("dubious ownership handling", () => {
@@ -219,7 +303,7 @@ describe("projectStore addProject", () => {
 
       expect(markSafeDirectoryMock).toHaveBeenCalledWith("/tmp/dubious-repo");
       expect(projectClientMock.add).toHaveBeenCalledTimes(2);
-      expect(projectClientMock.add).toHaveBeenLastCalledWith("/tmp/dubious-repo");
+      expect(projectClientMock.add).toHaveBeenLastCalledWith("/tmp/dubious-repo", undefined);
     });
 
     it("secondary action dispatches the errors.openLogs action", async () => {

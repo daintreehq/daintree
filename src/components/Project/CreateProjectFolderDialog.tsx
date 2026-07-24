@@ -7,6 +7,8 @@ import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { validateFolderName } from "@shared/utils/folderName";
+import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
+import { ProjectEmojiButton } from "./ProjectEmojiButton";
 
 interface CreateProjectFolderDialogProps {
   isOpen: boolean;
@@ -16,6 +18,9 @@ interface CreateProjectFolderDialogProps {
 export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFolderDialogProps) {
   const [parentPath, setParentPath] = useState("");
   const [folderName, setFolderName] = useState("");
+  // Until the user opens the picker, the emoji tracks the folder name. After an
+  // explicit pick it stops moving — typing shouldn't undo a deliberate choice.
+  const [pickedEmoji, setPickedEmoji] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const folderNameInputRef = useRef<HTMLInputElement>(null);
@@ -27,6 +32,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
   useEffect(() => {
     if (!isOpen) {
       setFolderName("");
+      setPickedEmoji(null);
       setParentPath("");
       setError(null);
       setIsCreating(false);
@@ -69,6 +75,12 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
     }
   }, []);
 
+  const suggestedEmoji = useMemo(() => {
+    const trimmed = folderName.trim();
+    return trimmed ? suggestProjectEmoji(trimmed) : DEFAULT_PROJECT_EMOJI;
+  }, [folderName]);
+  const effectiveEmoji = pickedEmoji ?? suggestedEmoji;
+
   const handleCreate = useCallback(async () => {
     const validationError = validateFolderName(folderName);
     if (validationError) {
@@ -84,7 +96,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
     setError(null);
 
     try {
-      await createProjectFolder(parentPath, folderName.trim());
+      await createProjectFolder(parentPath, folderName.trim(), effectiveEmoji);
       // Close only after the folder is created (but addProjectByPath runs in the background)
       onClose();
     } catch (err) {
@@ -93,7 +105,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
     } finally {
       setIsCreating(false);
     }
-  }, [parentPath, folderName, createProjectFolder, onClose]);
+  }, [parentPath, folderName, effectiveEmoji, createProjectFolder, onClose]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -155,22 +167,30 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
           <label className="text-sm font-medium text-daintree-text/80" htmlFor="create-folder-name">
             Folder Name
           </label>
-          <input
-            ref={folderNameInputRef}
-            id="create-folder-name"
-            type="text"
-            value={folderName}
-            onChange={(e) => {
-              setFolderName(e.target.value);
-              setError(null);
-            }}
-            onKeyDown={handleKeyDown}
-            aria-invalid={error != null}
-            aria-describedby={error ? errorId : undefined}
-            className="w-full rounded-[var(--radius-md)] border border-daintree-border bg-muted/50 px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 focus:border-daintree-accent aria-invalid:border-status-error"
-            placeholder="my-project"
-            disabled={isCreating}
-          />
+          <div className="flex items-center gap-2">
+            <ProjectEmojiButton
+              emoji={effectiveEmoji}
+              onEmojiChange={setPickedEmoji}
+              disabled={isCreating}
+              ariaLabel="Choose project emoji"
+            />
+            <input
+              ref={folderNameInputRef}
+              id="create-folder-name"
+              type="text"
+              value={folderName}
+              onChange={(e) => {
+                setFolderName(e.target.value);
+                setError(null);
+              }}
+              onKeyDown={handleKeyDown}
+              aria-invalid={error != null}
+              aria-describedby={error ? errorId : undefined}
+              className="w-full rounded-[var(--radius-md)] border border-daintree-border bg-muted/50 px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 focus:border-daintree-accent aria-invalid:border-status-error"
+              placeholder="my-project"
+              disabled={isCreating}
+            />
+          </div>
           {error && (
             <p id={errorId} role="alert" className="text-xs text-status-error">
               {error}

@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import type { WorktreeState, Project } from "@shared/types";
+import type { WorktreeState, Project, ProjectCreationIdentity } from "@shared/types";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import type { UseQuickSwitcherReturn } from "./hooks/useQuickSwitcher";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
@@ -137,14 +137,15 @@ interface ModalHostLayerProps {
   gitInitDialogOpen: boolean;
   shouldMountGitInitDialog: boolean;
   effectiveGitInitPath: string | null;
-  handleGitInitSuccess: () => Promise<void>;
+  effectiveGitInitIdentity: ProjectCreationIdentity | null;
+  handleGitInitSuccess: (identity?: ProjectCreationIdentity) => Promise<void>;
   closeGitInitDialog: () => void;
   createFolderDialogOpen: boolean;
   shouldMountCreateFolderDialog: boolean;
   closeCreateFolderDialog: () => void;
   cloneRepoDialogOpen: boolean;
   shouldMountCloneRepoDialog: boolean;
-  handleCloneSuccess: (clonedPath: string) => Promise<void>;
+  handleCloneSuccess: (clonedPath: string, identity?: ProjectCreationIdentity) => Promise<void>;
   closeCloneRepoDialog: () => void;
   reEntrySummary: ReEntrySummaryState;
   gettingStarted: GettingStartedChecklistState;
@@ -228,6 +229,7 @@ export function ModalHostLayer({
   gitInitDialogOpen,
   shouldMountGitInitDialog,
   effectiveGitInitPath,
+  effectiveGitInitIdentity,
   handleGitInitSuccess,
   closeGitInitDialog,
   createFolderDialogOpen,
@@ -767,6 +769,7 @@ export function ModalHostLayer({
             <LazyGitInitDialog
               isOpen={gitInitDialogOpen}
               directoryPath={effectiveGitInitPath}
+              initialIdentity={effectiveGitInitIdentity}
               onSuccess={handleGitInitSuccess}
               onCancel={closeGitInitDialog}
             />

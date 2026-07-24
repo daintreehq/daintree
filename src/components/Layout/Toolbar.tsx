@@ -98,6 +98,7 @@ import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { LazyProjectSwitcherPalette } from "@/lazyPanels";
+import { ProjectIdentityEditor } from "@/components/Project/ProjectIdentityEditor";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
@@ -1583,8 +1584,10 @@ export function Toolbar({
         <div
           role="group"
           aria-label="Project"
-          className="app-no-drag flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
+          className="app-no-drag relative flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
         >
+          {/* Sibling of the pill, not a child — see ProjectIdentityEditor. */}
+          {currentProject && <ProjectIdentityEditor project={currentProject} />}
           <Tooltip
             open={workspaceIdentity.kind !== "none" ? pillTooltipOpen : false}
             onOpenChange={

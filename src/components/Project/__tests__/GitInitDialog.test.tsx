@@ -541,4 +541,64 @@ describe("GitInitDialog", () => {
 
     await waitFor(() => expect(initGitGuidedMock).toHaveBeenCalledTimes(1));
   });
+
+  describe("project identity row", () => {
+    function nameInput() {
+      return screen.getByLabelText(/project name/i) as HTMLInputElement;
+    }
+
+    it("derives the name from the folder when reached without a carried identity", () => {
+      renderDialog();
+      expect(nameInput().value).toBe("new-repo");
+    });
+
+    it("prefills from the identity chosen one dialog earlier instead of re-deriving", () => {
+      render(
+        <GitInitDialog
+          isOpen={true}
+          directoryPath="/tmp/new-repo"
+          initialIdentity={{ name: "Chosen Name", emoji: "🚀" }}
+          onSuccess={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      );
+      expect(nameInput().value).toBe("Chosen Name");
+      expect(screen.getByRole("button", { name: /choose project emoji/i }).textContent).toBe("🚀");
+    });
+
+    it("blocks initialization while the name is empty", () => {
+      renderDialog();
+      fireEvent.change(nameInput(), { target: { value: "   " } });
+
+      const start = screen.getByRole("button", { name: /initialize repository/i });
+      expect((start as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it("reports the edited identity on success", async () => {
+      const onSuccess = vi.fn();
+      renderDialog({ onSuccess });
+
+      fireEvent.change(nameInput(), { target: { value: "  Renamed  " } });
+      fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+
+      await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1), { timeout: 3000 });
+      expect(onSuccess).toHaveBeenCalledWith({
+        name: "Renamed",
+        emoji: expect.any(String) as unknown as string,
+      });
+    });
+
+    it("re-seeds the identity when reopened for a different folder", () => {
+      const props = { onSuccess: vi.fn(), onCancel: vi.fn() };
+      const { rerender } = render(
+        <GitInitDialog isOpen={true} directoryPath="/tmp/first-folder" {...props} />
+      );
+      expect(nameInput().value).toBe("first-folder");
+
+      rerender(<GitInitDialog isOpen={false} directoryPath="/tmp/first-folder" {...props} />);
+      rerender(<GitInitDialog isOpen={true} directoryPath="/tmp/second-folder" {...props} />);
+
+      expect(nameInput().value).toBe("second-folder");
+    });
+  });
 });

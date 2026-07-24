@@ -1,6 +1,6 @@
 import { create, type StateCreator } from "zustand";
 import { persist, subscribeWithSelector } from "zustand/middleware";
-import type { Project, ProjectCloseResult } from "@shared/types";
+import type { Project, ProjectCloseResult, ProjectCreationIdentity } from "@shared/types";
 import { projectClient } from "@/clients";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
@@ -159,6 +159,13 @@ interface ProjectState {
   worktreeLoadError: string | null;
   gitInitDialogOpen: boolean;
   gitInitDirectoryPath: string | null;
+  /**
+   * Identity carried in from the create-project dialog so the git-init step it
+   * always chains into prefills instead of asking a second time. Null when
+   * git-init was reached directly by opening a non-repo folder — that case
+   * derives its own suggestion. Cleared with the path, in the same set().
+   */
+  gitInitIdentity: ProjectCreationIdentity | null;
   createFolderDialogOpen: boolean;
   cloneRepoDialogOpen: boolean;
 
@@ -167,9 +174,9 @@ interface ProjectState {
   addProject: () => Promise<void>;
   addProjectByPath: (
     path: string,
-    options?: { skipDubiousOwnershipRetry?: boolean }
+    options?: { skipDubiousOwnershipRetry?: boolean; identity?: ProjectCreationIdentity }
   ) => Promise<void>;
-  createProjectFolder: (parentPath: string, folderName: string) => Promise<void>;
+  createProjectFolder: (parentPath: string, folderName: string, emoji?: string) => Promise<void>;
   switchProject: (
     projectId: string,
     options?: { focusIntent?: "focus-next-waiting" }
@@ -188,14 +195,14 @@ interface ProjectState {
   reopenProject: (projectId: string) => Promise<void>;
   checkMissingProjects: () => Promise<void>;
   locateProject: (projectId: string) => Promise<void>;
-  openGitInitDialog: (directoryPath: string) => void;
+  openGitInitDialog: (directoryPath: string, identity?: ProjectCreationIdentity) => void;
   closeGitInitDialog: () => void;
-  handleGitInitSuccess: () => Promise<void>;
+  handleGitInitSuccess: (identity?: ProjectCreationIdentity) => Promise<void>;
   openCreateFolderDialog: () => void;
   closeCreateFolderDialog: () => void;
   openCloneRepoDialog: () => void;
   closeCloneRepoDialog: () => void;
-  handleCloneSuccess: (clonedPath: string) => Promise<void>;
+  handleCloneSuccess: (clonedPath: string, identity?: ProjectCreationIdentity) => Promise<void>;
 }
 
 /**
@@ -423,6 +430,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   isBootstrapped: false,
   gitInitDialogOpen: false,
   gitInitDirectoryPath: null,
+  gitInitIdentity: null,
   createFolderDialogOpen: false,
   cloneRepoDialogOpen: false,
   error: null,
@@ -438,7 +446,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         return;
       }
 
-      const newProject = await projectClient.add(resolvedPath);
+      const newProject = await projectClient.add(resolvedPath, options?.identity);
 
       await get().loadProjects();
       await get().switchProject(newProject.id);
@@ -463,7 +471,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           resolvedPath || path.trim() || errorMessage.match(/Not a git repository: (.+)/)?.[1];
         if (gitInitPath && isAbsolutePath(gitInitPath)) {
           set({ isLoading: false });
-          get().openGitInitDialog(gitInitPath);
+          get().openGitInitDialog(gitInitPath, options?.identity);
           return;
         }
       }
@@ -505,6 +513,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
                   // error toast instead of showing the same CTA indefinitely.
                   await get().addProjectByPath(targetPath, {
                     skipDubiousOwnershipRetry: true,
+                    identity: options?.identity,
                   });
                 },
               },
@@ -540,7 +549,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
             label: "Try again",
             variant: "primary",
             onClick: () => {
-              void get().addProjectByPath(retryPath);
+              void get().addProjectByPath(retryPath, { identity: options?.identity });
             },
           },
         ],
@@ -964,19 +973,26 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     }
   },
 
-  openGitInitDialog: (directoryPath: string) => {
-    set({ gitInitDialogOpen: true, gitInitDirectoryPath: directoryPath });
+  openGitInitDialog: (directoryPath: string, identity?: ProjectCreationIdentity) => {
+    set({
+      gitInitDialogOpen: true,
+      gitInitDirectoryPath: directoryPath,
+      gitInitIdentity: identity ?? null,
+    });
   },
 
   closeGitInitDialog: () => {
-    set({ gitInitDialogOpen: false, gitInitDirectoryPath: null });
+    set({ gitInitDialogOpen: false, gitInitDirectoryPath: null, gitInitIdentity: null });
   },
 
-  handleGitInitSuccess: async () => {
+  handleGitInitSuccess: async (identity) => {
+    // Snapshot before closing — closeGitInitDialog() clears path and identity
+    // together, so anything read afterwards is already null.
     const directoryPath = get().gitInitDirectoryPath;
+    const carried = identity ?? get().gitInitIdentity ?? undefined;
     get().closeGitInitDialog();
     if (directoryPath) {
-      await get().addProjectByPath(directoryPath);
+      await get().addProjectByPath(directoryPath, { identity: carried });
     }
   },
 
@@ -988,9 +1004,14 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     set({ createFolderDialogOpen: false });
   },
 
-  createProjectFolder: async (parentPath, folderName) => {
+  createProjectFolder: async (parentPath, folderName, emoji) => {
     const newFolderPath = await projectClient.createFolder(parentPath, folderName);
-    await get().addProjectByPath(newFolderPath);
+    // A brand-new folder is never a repo, so this always lands in the
+    // NOT_A_GIT_REPO branch below and re-emerges in the git-init dialog — the
+    // identity rides along so that dialog prefills instead of re-asking.
+    await get().addProjectByPath(newFolderPath, {
+      identity: emoji ? { name: folderName, emoji } : undefined,
+    });
   },
 
   openCloneRepoDialog: () => {
@@ -1001,9 +1022,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     set({ cloneRepoDialogOpen: false });
   },
 
-  handleCloneSuccess: async (clonedPath: string) => {
+  handleCloneSuccess: async (clonedPath: string, identity?: ProjectCreationIdentity) => {
     get().closeCloneRepoDialog();
-    await get().addProjectByPath(clonedPath);
+    await get().addProjectByPath(clonedPath, { identity });
   },
 });
 

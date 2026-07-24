@@ -7,23 +7,42 @@ import { FolderGit2 } from "@/components/icons";
 import { projectClient } from "@/clients";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { basename } from "@shared/utils/path";
+import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
+import { ProjectEmojiButton } from "./ProjectEmojiButton";
 import {
   GITIGNORE_TEMPLATE_OPTIONS,
   DEFAULT_GITIGNORE_TEMPLATE_ID,
   isGitignoreTemplateId,
 } from "@shared/config/gitignoreTemplates";
 import type { GitInitProgressEvent } from "@shared/types/ipc/gitInit";
+import type { ProjectCreationIdentity } from "@shared/types";
 
 interface GitInitDialogProps {
   isOpen: boolean;
   directoryPath: string;
-  onSuccess: () => void;
+  /**
+   * Identity chosen one dialog earlier in the create-project flow. Present
+   * means "don't ask again, just show what they picked"; absent means this
+   * dialog was reached directly by opening a non-repo folder, so it derives a
+   * fresh suggestion from the folder name.
+   */
+  initialIdentity?: ProjectCreationIdentity | null;
+  onSuccess: (identity: ProjectCreationIdentity) => void;
   onCancel: () => void;
 }
 
 const AUTO_CLOSE_DELAY_MS = 2000;
 
-export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: GitInitDialogProps) {
+export function GitInitDialog({
+  isOpen,
+  directoryPath,
+  initialIdentity,
+  onSuccess,
+  onCancel,
+}: GitInitDialogProps) {
+  const [projectName, setProjectName] = useState("");
+  const [emoji, setEmoji] = useState(DEFAULT_PROJECT_EMOJI);
   const [gitignoreTemplate, setGitignoreTemplate] = useState(DEFAULT_GITIGNORE_TEMPLATE_ID);
   const [createInitialCommit, setCreateInitialCommit] = useState(true);
   const [initialCommitMessage, setInitialCommitMessage] = useState("Initial commit");
@@ -37,13 +56,29 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
   const sawTerminalEventRef = useRef(false);
   const sawErrorEventRef = useRef(false);
 
+  const trimmedProjectName = projectName.trim();
+
   const finalizeSuccess = useCallback(() => {
     if (hasFinalizedSuccessRef.current) {
       return;
     }
     hasFinalizedSuccessRef.current = true;
-    onSuccess();
-  }, [onSuccess]);
+    onSuccess({ name: trimmedProjectName, emoji });
+  }, [onSuccess, trimmedProjectName, emoji]);
+
+  // Seed the identity row on open: the create-project flow already asked, so
+  // reuse what it carried; reaching this dialog directly (opening a non-repo
+  // folder) derives a fresh suggestion from the folder name instead.
+  const seededName = initialIdentity?.name ?? basename(directoryPath);
+  const seededEmoji = initialIdentity?.emoji ?? suggestProjectEmoji(basename(directoryPath));
+  useEffect(() => {
+    if (!isOpen) return;
+    setProjectName(seededName);
+    setEmoji(seededEmoji);
+    // Seeds only on the open transition — re-seeding while open would discard
+    // edits the user is in the middle of making.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -164,20 +199,47 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
   const showConnecting = useDohertyGate(isInitializing && progressEvents.length === 0);
   const showProgress = showConnecting || progressEvents.length > 0;
   const configDisabled = isInitializing || isComplete;
-  const canStart = !createInitialCommit || initialCommitMessage.trim() !== "";
+  const canStart =
+    trimmedProjectName !== "" && (!createInitialCommit || initialCommitMessage.trim() !== "");
 
   return (
     <AppDialog isOpen={isOpen} onClose={handleClose} size="md" dismissible={!isInitializing}>
       <AppDialog.Header>
         <AppDialog.Title icon={<FolderGit2 className="h-5 w-5 text-daintree-accent" />}>
-          Initialize Git Repository
+          Set up project
         </AppDialog.Title>
         {!isInitializing && <AppDialog.CloseButton />}
       </AppDialog.Header>
 
       <AppDialog.Body className="space-y-4">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span className="truncate">{directoryPath}</span>
+        <div className="space-y-1.5">
+          <label
+            htmlFor="git-init-project-name"
+            className="text-sm font-medium text-daintree-text/70"
+          >
+            Project name
+          </label>
+          <div className="flex items-center gap-2">
+            <ProjectEmojiButton
+              emoji={emoji}
+              onEmojiChange={setEmoji}
+              disabled={configDisabled}
+              ariaLabel="Choose project emoji"
+            />
+            <input
+              id="git-init-project-name"
+              type="text"
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              disabled={configDisabled}
+              aria-invalid={trimmedProjectName === ""}
+              className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50 aria-invalid:border-status-error"
+              placeholder="My project"
+            />
+          </div>
+          <p className="truncate text-xs font-mono text-daintree-text/40" title={directoryPath}>
+            {directoryPath}
+          </p>
         </div>
 
         <div className="space-y-1.5">

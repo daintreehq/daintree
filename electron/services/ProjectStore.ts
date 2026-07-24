@@ -8,6 +8,7 @@ import type {
   TerminalRecipe,
   RecipeNameCollision,
 } from "../types/index.js";
+import type { ProjectCreationIdentity } from "../../shared/types/project.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import type { AgentPreset } from "../../shared/config/agentRegistry.js";
 import path from "path";
@@ -53,7 +54,8 @@ import { rewriteAgentSessionPathsForProject } from "./pty/agentSessionHistory.js
 import { getPendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
 import { repairMovedSubmodulePaths } from "./git/submodulePathRepair.js";
 
-export const DEFAULT_PROJECT_EMOJI = "🌲";
+export { DEFAULT_PROJECT_EMOJI } from "../../shared/utils/projectEmoji.js";
+import { DEFAULT_PROJECT_EMOJI } from "../../shared/utils/projectEmoji.js";
 
 /**
  * The single spelling of a project path used for identity comparisons. Separator
@@ -360,7 +362,17 @@ export class ProjectStore {
     return canonical;
   }
 
-  async addProject(projectPath: string): Promise<Project> {
+  /**
+   * `creationIdentity` is the name/emoji chosen in a creation dialog. It is
+   * consulted only where a brand-new row is minted below — every earlier return
+   * (already-registered path, adopted move, lost insert race) keeps the
+   * identity it already has, so re-adding a folder can never rename it.
+   * In-repo `.daintree/project.json` still wins field-wise.
+   */
+  async addProject(
+    projectPath: string,
+    creationIdentity?: ProjectCreationIdentity
+  ): Promise<Project> {
     let gitRoot: string;
     try {
       gitRoot = await this.getGitRoot(projectPath);
@@ -443,8 +455,8 @@ export class ProjectStore {
     const project: Project = {
       id: mintProjectId(normalizedPath, (candidate) => this.isProjectIdTaken(candidate)),
       path: normalizedPath,
-      name: inRepo.name ?? path.basename(normalizedPath),
-      emoji: inRepo.emoji ?? DEFAULT_PROJECT_EMOJI,
+      name: inRepo.name ?? creationIdentity?.name ?? path.basename(normalizedPath),
+      emoji: inRepo.emoji ?? creationIdentity?.emoji ?? DEFAULT_PROJECT_EMOJI,
       lastOpened: now,
       status: "closed",
       frecencyScore: FRECENCY_COLD_START,

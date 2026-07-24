@@ -201,7 +201,7 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
 
     it("marks the whole project switcher grid cell as no-drag", () => {
       expect(source).toContain(
-        "app-no-drag flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
+        "app-no-drag relative flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
       );
     });
 

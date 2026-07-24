@@ -1340,7 +1340,13 @@ function DropdownContent({
         }}
         onInteractOutside={(event) => {
           const target = event.target;
-          if (target instanceof HTMLElement && target.closest('[role="menu"]')) {
+          // The identity picker portals to the body, so Radix reads it as
+          // "outside" even though it belongs to the same pill. Keep the
+          // switcher open rather than dismissing it out from under an edit.
+          if (
+            target instanceof HTMLElement &&
+            target.closest('[role="menu"], [data-project-identity-popover]')
+          ) {
             event.preventDefault();
           }
         }}

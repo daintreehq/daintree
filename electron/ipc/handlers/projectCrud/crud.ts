@@ -13,6 +13,7 @@ import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { Project } from "../../../types/index.js";
+import type { ProjectCreationIdentity } from "../../../../shared/types/project.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { pruneWindowStateForPath } from "../../../windowState.js";
@@ -39,20 +40,42 @@ const PROJECT_VISIBLE_MESSAGE =
  * Extracted from `handleProjectAdd` so other handlers (e.g. scratch
  * Save-as-Project) can register a path as a project without going through IPC.
  */
-export async function addProjectByPath(projectPath: string): Promise<Project> {
+export async function addProjectByPath(
+  projectPath: string,
+  identity?: ProjectCreationIdentity
+): Promise<Project> {
   if (typeof projectPath !== "string" || !projectPath) {
     throw new Error("Invalid project path");
   }
   if (!path.isAbsolute(projectPath)) {
     throw new Error("Project path must be absolute");
   }
-  const project = await projectStore.addProject(projectPath);
+  const project = await projectStore.addProject(projectPath, normalizeCreationIdentity(identity));
   broadcastToRenderer(CHANNELS.PROJECT_UPDATED, project);
   return project;
 }
 
+/**
+ * Creation identity arrives from the renderer, so treat it as untrusted: keep
+ * it only when both halves are non-empty strings. A partial or malformed
+ * payload is dropped whole rather than half-applied, leaving `addProject` on
+ * its normal basename + default-emoji path.
+ */
+function normalizeCreationIdentity(
+  identity: ProjectCreationIdentity | undefined
+): ProjectCreationIdentity | undefined {
+  if (!identity || typeof identity !== "object") return undefined;
+  const { name, emoji } = identity;
+  if (typeof name !== "string" || typeof emoji !== "string") return undefined;
+  const trimmedName = name.trim();
+  const trimmedEmoji = emoji.trim();
+  if (!trimmedName || !trimmedEmoji) return undefined;
+  return { name: trimmedName, emoji: trimmedEmoji };
+}
+
 export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () => void {
-  const handleProjectAdd = async (projectPath: string) => addProjectByPath(projectPath);
+  const handleProjectAdd = async (projectPath: string, identity?: ProjectCreationIdentity) =>
+    addProjectByPath(projectPath, identity);
 
   const handlers: Array<() => void> = [];
 

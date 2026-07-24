@@ -292,9 +292,16 @@ describe("CloneRepoDialog", () => {
 
     // Auto-close runs after AUTO_CLOSE_DELAY_MS (2s) — extend the waitFor
     // timeout so the assertion outlives the dialog's read-the-log delay.
-    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith("/tmp/my-repo"), {
-      timeout: 3000,
-    });
+    await waitFor(
+      () =>
+        expect(onSuccess).toHaveBeenCalledWith("/tmp/my-repo", {
+          name: "my-repo",
+          emoji: expect.any(String) as unknown as string,
+        }),
+      {
+        timeout: 3000,
+      }
+    );
   });
 
   it("shows error and retry button on clone failure", async () => {
