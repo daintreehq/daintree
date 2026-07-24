@@ -197,12 +197,9 @@ describe("filePreviewKinds", () => {
       }
     );
 
-    it.each(["spec.pdf.txt", "spec", "notes.md", "photo.png", "clip.mp4"])(
-      "rejects %s",
-      (path) => {
-        expect(isPdfFilePath(path)).toBe(false);
-      }
-    );
+    it.each(["spec.pdf.txt", "spec", "notes.md", "photo.png", "clip.mp4"])("rejects %s", (path) => {
+      expect(isPdfFilePath(path)).toBe(false);
+    });
 
     it("is disjoint from every other preview classifier", () => {
       // A PDF must not also route to the image/video branches — the panes check
@@ -231,13 +228,15 @@ describe("filePreviewKinds", () => {
       expect(url.searchParams.get("root")).toBe("/a dir");
     });
 
-    it("uses a different scheme than the general file URL for the same input", () => {
+    it("differs from the general file URL only by scheme", () => {
       // The PDF scheme is the only one allowed in frame-src, so routing a PDF
-      // through daintree-file:// would make the iframe fail CSP.
-      const pdf = buildDaintreePdfUrl("/repo/spec.pdf", "/repo");
-      const file = buildDaintreeFileUrl("/repo/spec.pdf", "/repo");
-      expect(pdf).not.toBe(file);
-      expect(pdf.startsWith("daintree-pdf://")).toBe(true);
+      // through daintree-file:// would make the iframe fail CSP. The rest of
+      // the URL must stay identical so both resolve the same file.
+      const pdf = new URL(buildDaintreePdfUrl("/repo/spec.pdf", "/repo"));
+      const file = new URL(buildDaintreeFileUrl("/repo/spec.pdf", "/repo"));
+
+      expect(pdf.protocol).not.toBe(file.protocol);
+      expect(pdf.search).toBe(file.search);
     });
   });
 });

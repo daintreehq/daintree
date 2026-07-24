@@ -52,19 +52,38 @@ describe("FilePdfPreview", () => {
   });
 
   it("re-navigates to a new URL when the reload key changes", () => {
-    const first = renderPreview({ reloadKey: 1 }).getAttribute("src");
-    cleanup();
-    const second = renderPreview({ reloadKey: 2 }).getAttribute("src");
-    expect(second).not.toBe(first);
+    const { container, rerender } = render(
+      <FilePdfPreview filePath="/repo/spec.pdf" rootPath="/repo" label="spec.pdf" reloadKey={1} />
+    );
+    const before = container.querySelector("iframe")?.getAttribute("src");
+
+    rerender(
+      <FilePdfPreview filePath="/repo/spec.pdf" rootPath="/repo" label="spec.pdf" reloadKey={2} />
+    );
+
+    expect(container.querySelector("iframe")?.getAttribute("src")).not.toBe(before);
   });
 
-  it("keeps the same URL across renders when the reload key does not change", () => {
-    // The protocol serves no-store, so a stable URL is what preserves the
-    // reader's page and zoom across an unrelated re-render.
-    const first = renderPreview({ reloadKey: 7 }).getAttribute("src");
-    cleanup();
-    const second = renderPreview({ reloadKey: 7 }).getAttribute("src");
-    expect(second).toBe(first);
+  it("keeps the same frame and URL when an unrelated prop changes", () => {
+    // The reader's page and zoom live in the frame. A re-render that changed
+    // the src — or remounted the element — would silently reset both.
+    const { container, rerender } = render(
+      <FilePdfPreview filePath="/repo/spec.pdf" rootPath="/repo" label="spec.pdf" reloadKey={7} />
+    );
+    const frame = container.querySelector("iframe");
+    const before = frame?.getAttribute("src");
+
+    rerender(
+      <FilePdfPreview
+        filePath="/repo/spec.pdf"
+        rootPath="/repo"
+        label="renamed.pdf"
+        reloadKey={7}
+      />
+    );
+
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(container.querySelector("iframe")?.getAttribute("src")).toBe(before);
   });
 
   it("treats a zero reload key as a real value rather than an absent one", () => {

@@ -362,3 +362,28 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
     expect(audioFetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("FileBrowserViewer PDF preview (#11427)", () => {
+  it("frames the PDF scheme without reading the file as text", async () => {
+    const { container } = renderViewer("/repo/docs/spec.pdf");
+    await act(async () => {});
+
+    const src = new URL(container.querySelector("iframe")?.getAttribute("src") ?? "");
+    expect(src.protocol).toBe("daintree-pdf:");
+    expect(src.searchParams.get("path")).toBe("/repo/docs/spec.pdf");
+    expect(src.searchParams.get("root")).toBe("/repo");
+    // The text-read IPC path is what produced "Binary file — cannot display".
+    expect(readMock).not.toHaveBeenCalled();
+  });
+
+  it("mounts the frame credentialless and unsandboxed", async () => {
+    const { container } = renderViewer("/repo/docs/spec.pdf");
+    await act(async () => {});
+
+    const frame = container.querySelector("iframe");
+    // Without credentialless the COEP shell blocks the document; with a sandbox
+    // attribute PDFium refuses to install its viewer frame.
+    expect(frame?.hasAttribute("credentialless")).toBe(true);
+    expect(frame?.hasAttribute("sandbox")).toBe(false);
+  });
+});

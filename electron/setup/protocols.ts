@@ -882,8 +882,18 @@ function shouldPreservePreviewResponseHeaders(url: string | undefined): boolean 
  */
 function buildPdfContentDisposition(realFile: string): string {
   const base = path.basename(realFile);
+  // Drop everything outside printable ASCII (control chars, CR/LF) before
+  // neutralizing the quote and backslash that would otherwise escape the
+  // quoted-string.
   const ascii = base.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
-  return `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(base)}`;
+  // encodeURIComponent leaves ' ( ) * unescaped, but RFC 8187 `attr-char`
+  // excludes them, so a conforming parser would reject the extended value and
+  // silently fall back to the lossy ASCII one.
+  const encoded = encodeURIComponent(base).replace(
+    /['()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+  return `inline; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
 /**
@@ -962,9 +972,13 @@ function createDaintreePdfProtocolHandler() {
       );
       if (result instanceof Response) return result;
 
-      return new Response(result.buffer, {
+      const headers = buildDaintreePdfHeaders(result.realFile, result.buffer.length);
+      // HEAD answers with the metadata only. The bytes were already read to
+      // size the response honestly, but attaching a body up to the PDF cap to
+      // a request that discards it is pure waste.
+      return new Response(request.method === "HEAD" ? null : result.buffer, {
         status: 200,
-        headers: buildDaintreePdfHeaders(result.realFile, result.buffer.length),
+        headers,
       });
     } catch (err) {
       console.error("[MAIN] daintree-pdf protocol error:", err);

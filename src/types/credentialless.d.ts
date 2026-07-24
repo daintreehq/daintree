@@ -12,6 +12,9 @@
 import "react";
 
 declare module "react" {
+  // The type parameter is unused here but must match React's own declaration
+  // exactly — TypeScript rejects an interface merge whose type parameters differ.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface IframeHTMLAttributes<T> {
     credentialless?: "";
   }

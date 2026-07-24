@@ -124,15 +124,7 @@ function isUnderRoot(filePath: string, rootPath: string): boolean {
 // `daintree-pdf://` into Chromium's built-in viewer. None has readable text
 // content.
 type LoadState =
-  | "idle"
-  | "loading"
-  | "loaded"
-  | "error"
-  | "image"
-  | "svg"
-  | "video"
-  | "audio"
-  | "pdf";
+  "idle" | "loading" | "loaded" | "error" | "image" | "svg" | "video" | "audio" | "pdf";
 
 // Which external surface a toolbar action aims the current file at. `reveal` is
 // always offered; `browser`/`editor` is the mode-dependent open button.

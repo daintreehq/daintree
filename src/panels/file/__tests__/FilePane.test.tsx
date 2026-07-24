@@ -1152,9 +1152,17 @@ describe("FilePane diff mode (#11274)", () => {
       expect(frame.hasAttribute("sandbox")).toBe(false);
     });
 
-    it("never shows the binary-file error for a PDF", async () => {
-      await renderPane({ filePath: "/repo/docs/spec.pdf" });
+    it("never shows the binary-file error even when a text read would reject the file", async () => {
+      // Arm the read path with the exact rejection PDFs used to hit. If the
+      // classifier were removed the file would fall through and surface it, so
+      // this fails loudly rather than passing on an empty default read.
+      readMock.mockRejectedValueOnce(Object.assign(new Error("binary"), { code: "BINARY_FILE" }));
+
+      const { container } = await renderPane({ filePath: "/repo/docs/spec.pdf" });
+
+      await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
       expect(screen.queryByText(/Binary file/)).toBeNull();
+      expect(readMock).not.toHaveBeenCalled();
     });
   });
 
