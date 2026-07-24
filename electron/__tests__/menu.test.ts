@@ -134,6 +134,9 @@ vi.mock("../../shared/config/agentRegistry.js", () => ({
 
 vi.mock("../services/CliAvailabilityService.js", () => ({}));
 vi.mock("../services/CliInstallService.js", () => ({}));
+vi.mock("../services/FinderQuickActionService.js", () => ({
+  install: vi.fn<() => Promise<string>>(),
+}));
 vi.mock("../window/windowServices.js", () => ({
   getPtyClient: vi.fn(),
   getWorkspaceClientRef: vi.fn(),

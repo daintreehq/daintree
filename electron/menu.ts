@@ -9,6 +9,7 @@ import { isAssistantOnlyAgentId } from "../shared/config/agentIds.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
 import { isAgentInstalled } from "../shared/utils/agentAvailability.js";
 import * as CliInstallService from "./services/CliInstallService.js";
+import * as FinderQuickActionService from "./services/FinderQuickActionService.js";
 import { getWindowRegistry } from "./window/windowRef.js";
 import { toggleWindowFullscreen } from "./window/fullscreen.js";
 import {
@@ -535,6 +536,38 @@ export function createApplicationMenu(
                   wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
                     type: "error",
                     title: "CLI installation failed",
+                    message,
+                  });
+                }
+              }
+            }
+          },
+        },
+        {
+          label: `Install "Open in ${PRODUCT_NAME}" Quick Action`,
+          enabled: process.platform === "darwin",
+          click: async (_item, browserWindow) => {
+            const targetWin = getTargetBrowserWindow(browserWindow);
+            try {
+              const installPath = await FinderQuickActionService.install();
+              if (targetWin && !targetWin.isDestroyed()) {
+                const wc = getAppWebContents(targetWin);
+                if (!wc.isDestroyed()) {
+                  wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+                    type: "success",
+                    title: "Quick Action installed",
+                    message: `Right-click a folder in Finder and choose "Open in ${PRODUCT_NAME}". Installed at ${installPath}`,
+                  });
+                }
+              }
+            } catch (err) {
+              const message = formatErrorMessage(err, "Failed to install Quick Action");
+              if (targetWin && !targetWin.isDestroyed()) {
+                const wc = getAppWebContents(targetWin);
+                if (!wc.isDestroyed()) {
+                  wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+                    type: "error",
+                    title: "Quick Action installation failed",
                     message,
                   });
                 }

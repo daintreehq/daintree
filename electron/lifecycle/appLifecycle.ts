@@ -13,6 +13,7 @@ import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js"
 import { isWindowRecreating } from "./windowRecreationState.js";
 import { SAFETY_BELT_TIMEOUT_MS } from "./shutdownConfig.js";
 import { extractDaintreeUrl, handleDaintreeUrl } from "../setup/deepLinkInstall.js";
+import { queuePendingOpenDirPath } from "../setup/environment.js";
 
 let pendingCliPath: string | null = null;
 
@@ -180,6 +181,59 @@ export function extractDntrPaths(argv: string[], workingDirectory: string): stri
   return paths;
 }
 
+// "Open in Daintree" on a Linux folder arrives as a `file://` directory URI:
+// `linux.mimeTypes` claims `inode/directory`, and electron-builder appends `%U`
+// to the .desktop Exec line, so the file manager hands us a URI rather than a
+// path. Only `file://` arguments are considered — matching bare positional
+// paths would also claim Electron's own executable and the dev app path on an
+// ordinary launch. Windows folder verbs pass `--cli-path` instead and never
+// reach here.
+export function extractDirectoryPaths(argv: string[]): string[] {
+  const paths: string[] = [];
+  for (const arg of argv) {
+    if (!arg || !arg.startsWith("file://")) continue;
+    // A bare `file://` carries no path and decodes to the filesystem root,
+    // which stats as a directory and would otherwise be opened as a project.
+    if (arg.length <= "file://".length) continue;
+    let candidate: string;
+    try {
+      candidate = fileURLToPath(arg);
+    } catch {
+      continue;
+    }
+    try {
+      if (!fs.statSync(candidate).isDirectory()) continue;
+    } catch {
+      // Missing path or stat failure — not a directory we can open.
+      continue;
+    }
+    if (!paths.includes(candidate)) paths.push(candidate);
+  }
+  return paths;
+}
+
+// Open each folder in its own window when the app can make one, mirroring the
+// `--cli-path` branch. With no live window the folder joins the same pre-window
+// queue the macOS `open-file` drop path uses, so `openDirHandler`'s drain owns
+// the windowless case for every ingress.
+async function openDirectoryPaths(
+  paths: readonly string[],
+  liveWindow: BrowserWindow | null,
+  opts: AppLifecycleOptions
+): Promise<void> {
+  for (const dirPath of paths) {
+    if (!liveWindow) {
+      queuePendingOpenDirPath(dirPath);
+      continue;
+    }
+    if (opts.onCreateWindowForPath) {
+      await opts.onCreateWindowForPath(dirPath);
+    } else {
+      await handleDirectoryOpen(dirPath, liveWindow, opts.getCliAvailabilityService() ?? undefined);
+    }
+  }
+}
+
 // Queue a `.dntr` archive for install confirmation (#11280). The archive is
 // never installed here: `archiveInstallIntent` reads its manifest without
 // extracting, then prompts the user in the primary window, and only an approved
@@ -262,7 +316,19 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
     const mainWindow = opts.windowRegistry?.getPrimary()?.browserWindow ?? opts.getMainWindow();
     const liveWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
     const cliPath = extractCliPath(commandLine, workingDirectory);
-    const dntrPaths = extractDntrPaths(commandLine, workingDirectory);
+    // An explicit `--cli-path` already names the folder to open, so the URI
+    // scan is skipped rather than routing the same launch twice. Gated on the
+    // flag, not the resolved path: an unresolvable `--cli-path` is a failed
+    // request, and opening a positional URI instead would substitute a folder
+    // the user never named (#11410).
+    const directoryPaths = hasCliPathFlag(commandLine) ? [] : extractDirectoryPaths(commandLine);
+    // A directory whose name ends in `.dntr` would otherwise be claimed as a
+    // plugin archive as well; the stat-backed directory list wins. Filtering
+    // here keeps `extractDntrPaths` free of filesystem access, so a missing
+    // `.dntr` file still reaches the installer's error reporting.
+    const dntrPaths = extractDntrPaths(commandLine, workingDirectory).filter(
+      (dntrPath) => !directoryPaths.includes(dntrPath)
+    );
     // Windows/Linux: a warm `daintree://` deep link arrives as an argv entry on
     // the relaunched second instance. Route it through the same handler as the
     // macOS `open-url` path — it targets the primary window itself.
@@ -288,6 +354,13 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
       }
     }
 
+    if (directoryPaths.length > 0) {
+      console.log("[MAIN] Opening folder(s) from OS context menu:", directoryPaths);
+      void openDirectoryPaths(directoryPaths, liveWindow, opts).catch((err) =>
+        console.error("[MAIN] Failed to open folder(s):", err)
+      );
+    }
+
     if (dntrPaths.length > 0) {
       // Enqueued whether or not a window is live: the intent queue holds each
       // preview until the primary window paints, so there is no separate
@@ -300,8 +373,9 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
 
     // Bring the primary window to the front for `.dntr` installs and for plain
     // re-launches (no path argument). The CLI-path branch manages its own
-    // window via onCreateWindowForPath / handleDirectoryOpen, so it is excluded.
-    if (liveWindow && (dntrPaths.length > 0 || !cliPath)) {
+    // window via onCreateWindowForPath / handleDirectoryOpen, so it is excluded
+    // — and so is a folder open, which raises the window it opens into.
+    if (liveWindow && (dntrPaths.length > 0 || (!cliPath && directoryPaths.length === 0))) {
       if (liveWindow.isMinimized()) liveWindow.restore();
       liveWindow.focus();
     }

@@ -27,6 +27,8 @@ import {
   smokeTestStart,
   getEarlyPathRefreshPromise,
   kickOffEarlyPathRefresh,
+  getPendingOpenDirPaths,
+  queuePendingOpenDirPath,
 } from "../setup/environment.js";
 import { shouldDeferRendererLoadForE2E } from "./earlyRenderer.js";
 import { isE2EFaultMode } from "../setup/runtimeFlags.js";
@@ -36,6 +38,7 @@ import {
   getPendingCliPath,
   setPendingCliPath,
   extractDntrPaths,
+  extractDirectoryPaths,
   queueDntrPaths,
 } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
@@ -59,6 +62,8 @@ import {
   getProcessArgvCliHandled,
   setProcessArgvCliHandled,
   getProcessArgvDntrHandled,
+  getProcessArgvDirectoryHandled,
+  setProcessArgvDirectoryHandled,
   setProcessArgvDntrHandled,
   getIpcHandlersRegistered,
   setIpcHandlersRegistered,
@@ -557,8 +562,22 @@ export async function setupWindowServices(
     const processArgvCli = !getProcessArgvCliHandled()
       ? extractCliPath(process.argv, process.cwd())
       : null;
+    // A Linux file manager launching a cold Daintree via "Open With" on a
+    // folder puts a `file://` directory URI in argv. Queue it into the same
+    // pre-window store the macOS `open-file` drops use, so `drainPendingOpenDirs`
+    // below opens it and there is no second cold-start path to keep in sync.
+    if (!getProcessArgvDirectoryHandled()) {
+      setProcessArgvDirectoryHandled(true);
+      for (const dirPath of extractDirectoryPaths(process.argv)) {
+        queuePendingOpenDirPath(dirPath);
+      }
+    }
     const skipDefaultSpawn =
-      opts.initialProjectPath || processArgvCli || getPendingCliPath() || restoreProject;
+      opts.initialProjectPath ||
+      processArgvCli ||
+      getPendingCliPath() ||
+      restoreProject ||
+      getPendingOpenDirPaths().length > 0;
     if (skipDefaultSpawn) {
       console.log(
         "[MAIN] CLI path, initial project path, or existing project set, skipping default terminal spawn"

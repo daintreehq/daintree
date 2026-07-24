@@ -178,7 +178,17 @@ module.exports = async function () {
     afterPack: "./scripts/afterPack.cjs",
     afterSign: "./scripts/notarize-macos.cjs",
     mac: {
-      extraResources: [{ from: "scripts/daintree-cli.sh", to: "daintree-cli.sh" }],
+      extraResources: [
+        { from: "scripts/daintree-cli.sh", to: "daintree-cli.sh" },
+        // Finder "Open in Daintree" Quick Action. Rides in the sealed bundle as
+        // an inert resource and becomes user data only once the user installs
+        // it into ~/Library/Services from the app menu, so it carries no
+        // signing or notarization impact and needs no CSC_LINK gate.
+        {
+          from: "build/macos/Open in Daintree.workflow",
+          to: "Open in Daintree.workflow",
+        },
+      ],
       // better-sqlite3 v13 ships prebuilds for every OS in one package; drop
       // the foreign-platform binaries (~12MB). Both darwin arches stay — the
       // universal build merges x64 and arm64 app trees, and the identical
@@ -321,6 +331,14 @@ module.exports = async function () {
       target: ["AppImage", "deb"],
       category: "Development",
       desktop: { entry: { StartupWMClass: "daintree" } },
+      // Puts Daintree in the "Open With" menu for folders on desktops that
+      // honour `inode/directory` (GNOME/Nautilus). electron-builder merges this
+      // with the `fileAssociations` mime types and the `daintree://` scheme
+      // handler into one semicolon-joined MimeType line, so it does not clobber
+      // them. The folder arrives as a `file://` URI via the `%U` field code
+      // electron-builder appends to Exec — `extractDirectoryPaths` in
+      // electron/lifecycle/appLifecycle.ts decodes it.
+      mimeTypes: ["inode/directory"],
       // `.dntr` plugin-archive association. electron-builder generates the XDG
       // mime-type XML and adds `MimeType=application/x-dntr` to the .desktop
       // entry; double-clicking then launches Daintree with the path in argv.

@@ -60,10 +60,17 @@ const installPluginMock = vi.hoisted(() => vi.fn());
 vi.mock("../../services/PluginService.js", () => ({
   pluginService: { installPlugin: installPluginMock },
 }));
+// environment.ts registers real `open-file` listeners and calls enableSandbox()
+// at import time; only the pre-window folder queue is needed here.
+const queuePendingOpenDirPathMock = vi.hoisted(() => vi.fn<(dirPath: string) => void>());
+vi.mock("../../setup/environment.js", () => ({
+  queuePendingOpenDirPath: queuePendingOpenDirPathMock,
+}));
 
 import fs from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
+import { pathToFileURL } from "node:url";
 import type { AppLifecycleOptions } from "../appLifecycle.js";
 import { handleDirectoryOpen } from "../../menu.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
@@ -1155,5 +1162,204 @@ describe("registerAppLifecycleHandlers – second-instance .dntr handling", () =
 
     expect(onCreateWindowForPath).toHaveBeenCalledWith(cliDir);
     expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalledWith([dntrFile]);
+  });
+});
+
+describe("extractDirectoryPaths", () => {
+  let dirPath: string;
+  let filePath: string;
+
+  beforeEach(() => {
+    dirPath = fs.mkdtempSync(nodePath.join(os.tmpdir(), "dt-dir-"));
+    filePath = nodePath.join(dirPath, "file.txt");
+    fs.writeFileSync(filePath, "x");
+  });
+
+  afterEach(() => {
+    fs.rmSync(dirPath, { recursive: true, force: true });
+  });
+
+  it("decodes a file:// URI pointing at a directory", async () => {
+    const { extractDirectoryPaths } = await import("../appLifecycle.js");
+    expect(extractDirectoryPaths(["daintree", pathToFileURL(dirPath).href])).toEqual([dirPath]);
+  });
+
+  it("decodes percent-encoded URIs", async () => {
+    const { extractDirectoryPaths } = await import("../appLifecycle.js");
+    const spaced = nodePath.join(dirPath, "my project");
+    fs.mkdirSync(spaced);
+    const href = pathToFileURL(spaced).href;
+    expect(href).toContain("%20");
+    expect(extractDirectoryPaths(["daintree", href])).toEqual([spaced]);
+  });
+
+  it("ignores a file:// URI that resolves to a regular file", async () => {
+    const { extractDirectoryPaths } = await import("../appLifecycle.js");
+    expect(extractDirectoryPaths(["daintree", pathToFileURL(filePath).href])).toEqual([]);
+  });
+
+  it("ignores a file:// URI for a path that does not exist", async () => {
+    const { extractDirectoryPaths } = await import("../appLifecycle.js");
+    const missing = pathToFileURL(nodePath.join(dirPath, "gone")).href;
+    expect(extractDirectoryPaths(["daintree", missing])).toEqual([]);
+  });
+
+  it("ignores bare paths so a normal launch never claims argv entries", async () => {
+    const { extractDirectoryPaths } = await import("../appLifecycle.js");
+    // A plain launch carries the executable path and cwd-ish arguments; only a
+    // file:// URI signals an OS folder-open intent.
+    expect(extractDirectoryPaths(["/usr/lib/daintree/daintree", dirPath, os.tmpdir()])).toEqual([]);
+  });
+
+  it("ignores malformed file URIs without throwing", async () => {
+    const { extractDirectoryPaths } = await import("../appLifecycle.js");
+    expect(extractDirectoryPaths(["daintree", "file://", "file://%%%"])).toEqual([]);
+  });
+
+  it("deduplicates repeated URIs while preserving argv order", async () => {
+    const { extractDirectoryPaths } = await import("../appLifecycle.js");
+    const second = nodePath.join(dirPath, "second");
+    fs.mkdirSync(second);
+    const result = extractDirectoryPaths([
+      "daintree",
+      pathToFileURL(second).href,
+      pathToFileURL(dirPath).href,
+      pathToFileURL(second).href,
+    ]);
+    expect(result).toEqual([second, dirPath]);
+  });
+});
+
+describe("registerAppLifecycleHandlers – second-instance folder handling", () => {
+  function makeBrowserWindow() {
+    return {
+      isMinimized: vi.fn(() => false),
+      isDestroyed: vi.fn(() => false),
+      restore: vi.fn(),
+      focus: vi.fn(),
+    };
+  }
+
+  let dirPath: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(process, "on").mockImplementation(() => process);
+    vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    dirPath = fs.mkdtempSync(nodePath.join(os.tmpdir(), "dt-second-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dirPath, { recursive: true, force: true });
+  });
+
+  function getHandler() {
+    const call = appMock.on.mock.calls.find(([event]: string[]) => event === "second-instance");
+    return call![1] as (event: unknown, commandLine: string[], workingDirectory: string) => void;
+  }
+
+  it("opens a folder URI in a new window and leaves the old window unfocused", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const mainWindow = makeBrowserWindow();
+    const onCreateWindowForPath = vi.fn();
+    registerAppLifecycleHandlers(
+      makeOpts({
+        getMainWindow: vi.fn(() => mainWindow as unknown as import("electron").BrowserWindow),
+        onCreateWindowForPath,
+      })
+    );
+
+    getHandler()({}, ["daintree", pathToFileURL(dirPath).href], "/work");
+    await vi.waitFor(() => expect(onCreateWindowForPath).toHaveBeenCalledWith(dirPath));
+
+    expect(mainWindow.focus).not.toHaveBeenCalled();
+  });
+
+  it("falls back to handleDirectoryOpen when onCreateWindowForPath is absent", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const mainWindow = makeBrowserWindow();
+    registerAppLifecycleHandlers(
+      makeOpts({
+        getMainWindow: vi.fn(() => mainWindow as unknown as import("electron").BrowserWindow),
+      })
+    );
+
+    getHandler()({}, ["daintree", pathToFileURL(dirPath).href], "/work");
+    await vi.waitFor(() =>
+      expect(handleDirectoryOpen).toHaveBeenCalledWith(dirPath, mainWindow, undefined)
+    );
+  });
+
+  it("queues the folder for the pre-window drain when no window is live", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts({ onCreateWindowForPath: vi.fn() }));
+
+    getHandler()({}, ["daintree", pathToFileURL(dirPath).href], "/work");
+    await vi.waitFor(() => expect(queuePendingOpenDirPathMock).toHaveBeenCalledWith(dirPath));
+
+    expect(handleDirectoryOpen).not.toHaveBeenCalled();
+  });
+
+  it("opens multiple folders in argv order", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const mainWindow = makeBrowserWindow();
+    const onCreateWindowForPath = vi.fn();
+    registerAppLifecycleHandlers(
+      makeOpts({
+        getMainWindow: vi.fn(() => mainWindow as unknown as import("electron").BrowserWindow),
+        onCreateWindowForPath,
+      })
+    );
+
+    const second = nodePath.join(dirPath, "second");
+    fs.mkdirSync(second);
+    getHandler()(
+      {},
+      ["daintree", pathToFileURL(dirPath).href, pathToFileURL(second).href],
+      "/work"
+    );
+    await vi.waitFor(() => expect(onCreateWindowForPath).toHaveBeenCalledTimes(2));
+
+    expect(onCreateWindowForPath.mock.calls.map(([p]) => p)).toEqual([dirPath, second]);
+  });
+
+  it("lets an explicit --cli-path win so the launch is not routed twice", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const mainWindow = makeBrowserWindow();
+    const onCreateWindowForPath = vi.fn();
+    registerAppLifecycleHandlers(
+      makeOpts({
+        getMainWindow: vi.fn(() => mainWindow as unknown as import("electron").BrowserWindow),
+        onCreateWindowForPath,
+      })
+    );
+
+    getHandler()(
+      {},
+      ["daintree", "--cli-path", "/explicit/repo", pathToFileURL(dirPath).href],
+      "/work"
+    );
+    await vi.waitFor(() => expect(onCreateWindowForPath).toHaveBeenCalled());
+
+    expect(onCreateWindowForPath).toHaveBeenCalledExactlyOnceWith("/explicit/repo");
+  });
+
+  it("treats a directory named like an archive as a folder, not a .dntr install", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const mainWindow = makeBrowserWindow();
+    const onCreateWindowForPath = vi.fn();
+    registerAppLifecycleHandlers(
+      makeOpts({
+        getMainWindow: vi.fn(() => mainWindow as unknown as import("electron").BrowserWindow),
+        onCreateWindowForPath,
+      })
+    );
+
+    const archiveNamed = nodePath.join(dirPath, "looks-like.dntr");
+    fs.mkdirSync(archiveNamed);
+    getHandler()({}, ["daintree", pathToFileURL(archiveNamed).href], "/work");
+    await vi.waitFor(() => expect(onCreateWindowForPath).toHaveBeenCalledWith(archiveNamed));
+
+    expect(enqueueArchiveInstallIntentsMock).not.toHaveBeenCalled();
   });
 });
