@@ -220,19 +220,18 @@ function buildDaintreeFileErrorHeaders(): Record<string, string> {
 // Videos are streamed, not buffered, so the whole-file caps above don't apply —
 // no response ever holds more than a stream chunk in memory (the caps exist to
 // bound buffered bytes reaching the renderer, a model that doesn't fit ranged
-// streaming; see maxBytesForFile). A per-range clamp still bounds any single
-// response body: an open-ended `Range: bytes=0-` on a multi-GB file is served
-// in successive bounded chunks that Chromium re-requests as playback advances.
-// An un-ranged GET does stream the whole file in one 200 — required for a
-// spec-correct response, and accepted: <video> always issues ranged requests,
-// and main-process memory stays chunk-bounded regardless of response size.
-const DAINTREE_VIDEO_RANGE_MAX_BYTES = 8 * 1024 * 1024;
-
+// streaming; see maxBytesForFile). Every range form is served exactly as
+// requested, to EOF for `bytes=N-`. Chromium treats a custom-scheme media load
+// as single-shot: a 206 shorter than the requested range is taken as the whole
+// resource and never re-requested (unlike http(s), where the multibuffer loader
+// issues follow-up ranges), so a server-side chunk clamp truncates playback at
+// the clamp — verified against Electron 42 / Chromium 148. Backpressure on the
+// response stream keeps main-process memory chunk-bounded regardless of size.
 function isVideoMimeType(mimeType: string): boolean {
   return mimeType.startsWith("video/");
 }
 
-type ParsedByteRange = { start: number; end: number; openEnded: boolean } | "unsatisfiable" | null;
+type ParsedByteRange = { start: number; end: number } | "unsatisfiable" | null;
 
 /**
  * Parse a single-range `Range: bytes=…` header against a known file size.
@@ -240,8 +239,6 @@ type ParsedByteRange = { start: number; end: number; openEnded: boolean } | "uns
  * syntactically malformed, multi-range, or inverted — RFC 9110 permits
  * ignoring all of these, and Chromium's <video> only sends single ranges.
  * "unsatisfiable" means a well-formed range no byte can satisfy (416).
- * `openEnded` marks `bytes=N-`, the only form whose extent the client didn't
- * bound — the caller clamps just that one.
  */
 function parseByteRange(rangeHeader: string | null, size: number): ParsedByteRange {
   if (!rangeHeader) return null;
@@ -257,7 +254,7 @@ function parseByteRange(rangeHeader: string | null, size: number): ParsedByteRan
     const suffix = Number(endRaw);
     if (suffix === 0) return "unsatisfiable";
     const start = Number.isSafeInteger(suffix) ? Math.max(0, size - suffix) : 0;
-    return { start, end: size - 1, openEnded: false };
+    return { start, end: size - 1 };
   }
 
   const start = Number(startRaw);
@@ -273,7 +270,6 @@ function parseByteRange(rangeHeader: string | null, size: number): ParsedByteRan
   return {
     start,
     end: end !== null && Number.isSafeInteger(end) ? Math.min(end, size - 1) : size - 1,
-    openEnded: end === null,
   };
 }
 
@@ -367,19 +363,13 @@ async function streamContainedVideoFile(
     });
   }
 
+  // Serve the requested range in full — never a shorter chunk. Chromium's
+  // custom-scheme media loader is single-shot: it treats a response body that
+  // ends before the requested range as the entire resource (the Content-Range
+  // total is not consulted for a re-request), so a truncated 206 silently cuts
+  // the video off at the truncation point (#11382 follow-up).
   const start = range ? range.start : 0;
-  // Clamp only open-ended ranges: explicit and suffix ranges are already
-  // bounded by what the client asked for (clamping a suffix would drop the
-  // file tail — exactly what an mp4 with trailing moov metadata needs), but
-  // `bytes=N-` requests "everything from N". Serving that in bounded chunks is
-  // safe: the Content-Range total tells Chromium more remains and it
-  // re-requests as playback advances.
-  const end =
-    range && range.openEnded
-      ? Math.min(range.end, range.start + DAINTREE_VIDEO_RANGE_MAX_BYTES - 1)
-      : range
-        ? range.end
-        : size - 1;
+  const end = range ? range.end : size - 1;
   const contentLength = end - start + 1;
 
   // autoClose ties the fd's lifetime to the stream: it closes on end, error,

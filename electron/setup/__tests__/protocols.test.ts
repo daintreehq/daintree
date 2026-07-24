@@ -2141,27 +2141,28 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
     expect(response.headers.get("Content-Range")).toBe("bytes 10-15/16");
   });
 
-  it("bounds an open-ended range on a huge file to a partial chunk", async () => {
-    // `bytes=N-` asks for "everything from N"; the handler must not stream the
-    // whole remainder in one response — Chromium re-requests successive chunks.
+  it("serves an open-ended range on a huge file to EOF, never a shorter chunk", async () => {
+    // Chromium's custom-scheme media loader is single-shot: a 206 that ends
+    // before the requested range is treated as the whole resource and never
+    // re-requested, so serving `bytes=N-` in bounded chunks truncates playback
+    // at the first chunk. The full remainder must stream in one response.
     const size = 100 * 1024 * 1024;
     const handle = makeVideoHandle(VIDEO_BYTES, { size });
     await installHandle(handle);
 
     const handler = await captureHandler();
     const response = await handler(
-      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=0-" })
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=4-" })
     );
 
     expect(response.status).toBe(206);
-    // Invariants, not the clamp constant: the response covers a strict prefix
-    // of the file, and headers agree with the stream bounds actually used.
-    const args = handle.createReadStream.mock.calls[0][0] as { start: number; end: number };
-    expect(args.start).toBe(0);
-    expect(args.end).toBeLessThan(size - 1);
-    const length = args.end - args.start + 1;
-    expect(response.headers.get("Content-Length")).toBe(String(length));
-    expect(response.headers.get("Content-Range")).toBe(`bytes ${args.start}-${args.end}/${size}`);
+    expect(handle.createReadStream).toHaveBeenCalledWith({
+      start: 4,
+      end: size - 1,
+      autoClose: true,
+    });
+    expect(response.headers.get("Content-Length")).toBe(String(size - 4));
+    expect(response.headers.get("Content-Range")).toBe(`bytes 4-${size - 1}/${size}`);
   });
 
   it("serves an over-cap suffix range exactly (the tail carries mp4 moov metadata)", async () => {

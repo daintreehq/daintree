@@ -51,6 +51,10 @@ export function FileVideoPreview({
         key={src}
         src={src}
         controls
+        // No fullscreen or PiP: both detach playback from the pane into
+        // window-level surfaces the IDE's window/view management doesn't own.
+        controlsList="nofullscreen"
+        disablePictureInPicture
         preload="metadata"
         aria-label={label}
         className={`max-w-full ${maxHeightClassName} rounded`}
