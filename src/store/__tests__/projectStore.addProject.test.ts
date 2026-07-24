@@ -566,7 +566,7 @@ describe("projectStore addProject", () => {
       projectClientMock.add.mockResolvedValueOnce({ id: "p1", path: FOLDER });
       await actions?.[0]?.onClick();
 
-      expect(projectClientMock.add).toHaveBeenLastCalledWith(FOLDER);
+      expect(projectClientMock.add.mock.lastCall?.[0]).toBe(FOLDER);
       expect(projectClientMock.openDialog).not.toHaveBeenCalled();
     });
 
@@ -587,21 +587,35 @@ describe("projectStore addProject", () => {
       expect(projectClientMock.openDialog).toHaveBeenCalledTimes(1);
     });
 
-    it("keeps the dedicated dubious-ownership flow working across the typed boundary", async () => {
-      // Main now throws this as an AppError rather than a plain Error; the
-      // renderer's ownership branch still recognizes it by substring, and that
-      // coupling is only load-bearing because the message text was preserved.
+    it("routes the dubious-ownership flow on the code, not the message text", async () => {
+      // The message is deliberately reworded past every substring the old
+      // matcher keyed on ("dubious ownership" / "safe.directory"), so this only
+      // passes if the code alone drives the dedicated ownership toast. A future
+      // microcopy edit in main must not be able to kill the retry.
       projectClientMock.openDialog.mockResolvedValueOnce("/tmp/dubious-repo");
       projectClientMock.add.mockRejectedValueOnce(
-        preloadError(
-          "DUBIOUS_OWNERSHIP",
-          "Git refused to open this repository due to 'dubious ownership'. Mark it as safe.directory and try again."
-        )
+        preloadError("DUBIOUS_OWNERSHIP", "reworded in main, nothing to match on")
       );
 
       await useProjectStore.getState().addProject();
 
       expect(notifyMock).toHaveBeenCalledTimes(1);
+      const { title, actions } = toastPayload();
+      expect(title).toBe("Repository ownership issue");
+      expect(actions?.[0]?.label).toBe("Mark as safe");
+    });
+
+    it("still recognizes raw git stderr from the unclassified switch/reopen callers", async () => {
+      // Those failures never pass through `addProject`'s classification, so they
+      // arrive as plain errors carrying git's own wording — the substring
+      // fallback is what keeps them on the ownership flow.
+      projectClientMock.openDialog.mockResolvedValueOnce("/tmp/dubious-repo");
+      projectClientMock.add.mockRejectedValueOnce(
+        new Error("fatal: detected dubious ownership in repository at '/tmp/dubious-repo'")
+      );
+
+      await useProjectStore.getState().addProject();
+
       expect(toastPayload().title).toBe("Repository ownership issue");
     });
 

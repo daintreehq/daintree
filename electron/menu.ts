@@ -770,7 +770,9 @@ async function promptForDirectoryOpen(
 
   const result = await dialog.showOpenDialog(targetWindow, {
     properties: ["openDirectory", "createDirectory"],
-    title: "Open Git Repository",
+    // Matches the IPC picker: a folder without a repository is openable too, so
+    // the title mustn't imply a requirement it no longer has (#11405).
+    title: "Open Folder",
   });
 
   if (result.canceled || result.filePaths.length === 0) return;

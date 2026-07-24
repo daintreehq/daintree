@@ -377,7 +377,17 @@ function getProjectStoreListenerState(): ProjectStoreListenerState {
   return created;
 }
 
+/**
+ * `addProject` classifies this in main and throws `AppError{DUBIOUS_OWNERSHIP}`,
+ * so the code is the primary signal — matching on it is what frees main's copy
+ * to be reworded without silently killing the "Mark as safe" retry (#11409).
+ *
+ * The substring fallback stays for the switch/reopen callers, whose git failures
+ * come from `GitService` rather than the classified open path and so still
+ * arrive as plain errors carrying git's own stderr.
+ */
 function isDubiousOwnershipError(error: unknown): boolean {
+  if (isClientAppError(error) && error.code === "DUBIOUS_OWNERSHIP") return true;
   const message = formatErrorMessage(error, "");
   const lower = message.toLowerCase();
   return lower.includes("dubious ownership") || lower.includes("safe.directory");

@@ -423,8 +423,9 @@ export class ProjectStore {
       }
 
       if (lower.includes("dubious ownership") || lower.includes("safe.directory")) {
-        // Message text preserved verbatim: the renderer's dedicated
-        // dubious-ownership retry flow still recognizes it by substring.
+        // The substring match is against git's own stderr, which git genuinely
+        // emits. What the renderer keys on is the code, so this message is
+        // diagnostic copy and free to be reworded.
         throw new AppError({
           code: "DUBIOUS_OWNERSHIP",
           message:
