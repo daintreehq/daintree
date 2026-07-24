@@ -577,6 +577,17 @@ describe("GitInitDialog", () => {
       expect(start.disabled).toBe(true);
     });
 
+    it("says why the button went dead instead of only painting the field red", () => {
+      renderDialog();
+      // Seeded from the folder, so nothing is wrong until the user clears it.
+      expect(screen.queryByRole("alert")).toBeNull();
+
+      fireEvent.change(nameInput(), { target: { value: "   " } });
+
+      const message = screen.getByRole("alert");
+      expect(nameInput().getAttribute("aria-describedby")).toBe(message.id);
+    });
+
     it("reports the edited identity on success", async () => {
       const onSuccess = vi.fn();
       renderDialog({ onSuccess });

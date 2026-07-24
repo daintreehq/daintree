@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { useProjectStore } from "@/store/projectStore";
@@ -8,6 +8,8 @@ import type { Project } from "@shared/types";
 interface ProjectIdentityEditorProps {
   project: Project;
 }
+
+const PILL_SELECTOR = '[data-testid="project-switcher-trigger"]';
 
 /**
  * One-click identity editing for the toolbar project pill: the emoji becomes
@@ -20,9 +22,15 @@ interface ProjectIdentityEditorProps {
  * nested-button markup and fires both handlers on one click (#6928). The
  * transparent overlay sits exactly over the pill's own emoji glyph, so the
  * pill's layout and styling are untouched.
+ *
+ * Being a sibling means the pill's Radix triggers never see pointer activity
+ * over this region, so right-click and hover are replayed onto the pill below
+ * (see `replayOnPill`) to keep the project context menu and the identity
+ * tooltip alive across the whole pill.
  */
 export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
   const updateProject = useProjectStore((state) => state.updateProject);
+  const overlayRef = useRef<HTMLButtonElement>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [draftName, setDraftName] = useState(project.name);
   // Only a name the user actually typed is worth writing back. Without this,
@@ -102,6 +110,27 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
       ? suggestProjectEmoji(draftName.trim() || project.name)
       : null;
 
+  // The pill renders alongside this overlay inside the toolbar's project group.
+  const findPill = useCallback(
+    () => overlayRef.current?.parentElement?.querySelector<HTMLElement>(PILL_SELECTOR) ?? null,
+    []
+  );
+
+  /**
+   * Re-fire a native event on the pill so its Radix triggers react as if the
+   * pointer had reached them. `PointerEvent` is not constructible in every test
+   * environment; `MouseEvent` carries everything these triggers read.
+   */
+  const replayOnPill = useCallback(
+    (type: string, init: MouseEventInit) => {
+      const pill = findPill();
+      if (!pill) return;
+      const Ctor: typeof MouseEvent = typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
+      pill.dispatchEvent(new Ctor(type, { bubbles: true, ...init }));
+    },
+    [findPill]
+  );
+
   return (
     <Popover
       open={isOpen}
@@ -112,6 +141,7 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
     >
       <PopoverTrigger asChild>
         <button
+          ref={overlayRef}
           type="button"
           // Joins the toolbar's roving-tabindex domain in DOM order (it renders
           // just before the pill), so it is one arrow stop rather than a stray
@@ -119,6 +149,35 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
           data-toolbar-item=""
           data-project-identity-trigger=""
           aria-label={`Edit identity for ${project.name}, currently ${project.emoji}`}
+          // The pill owns the project context menu (pin, copy path, locate,
+          // settings, close); this overlay has none of its own, so hand the
+          // right-click straight down to it.
+          onContextMenu={(event) => {
+            event.preventDefault();
+            replayOnPill("contextmenu", {
+              cancelable: true,
+              clientX: event.clientX,
+              clientY: event.clientY,
+            });
+          }}
+          // Radix's tooltip trigger opens on `pointermove`, so one replayed
+          // move per entry is enough to raise the pill's identity tooltip.
+          onPointerEnter={(event) => {
+            if (event.pointerType === "touch") return;
+            replayOnPill("pointermove", {});
+          }}
+          onPointerLeave={(event) => {
+            const pill = findPill();
+            const next = event.relatedTarget;
+            // Sliding onto the rest of the pill leaves it natively hovered;
+            // closing here would blink the tooltip shut and straight back open.
+            if (!pill || (next instanceof Node && pill.contains(next))) return;
+            // React synthesises `onPointerLeave` from `pointerout`, so a raw
+            // `pointerleave` dispatch would never reach the trigger's handler.
+            // It also reports `window` when the pointer left the React tree
+            // entirely, which is not a valid `relatedTarget` to construct with.
+            replayOnPill("pointerout", { relatedTarget: next instanceof Element ? next : null });
+          }}
           className="pointer-events-auto absolute left-1.5 top-1/2 z-10 h-7 w-7 -translate-y-1/2 rounded-[var(--radius-md)] bg-transparent transition-colors hover:bg-overlay-subtle focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
         />
       </PopoverTrigger>

@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
-import type { ReactNode } from "react";
+import type { MouseEventHandler, PointerEventHandler, ReactNode } from "react";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import type { Project } from "@shared/types";
 
@@ -22,7 +22,10 @@ vi.mock("@/store/projectStore", () => ({
 let escapeKeyDownHandler: ((event: { preventDefault: () => void }) => void) | null = null;
 
 vi.mock("@/components/ui/popover", () => ({
-  Popover: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  // Radix's Popover root renders no DOM of its own, and neither can this mock:
+  // the trigger locates the toolbar pill through its own parentElement, so an
+  // extra wrapper would hide the pill from it.
+  Popover: ({ children }: { children: ReactNode }) => <>{children}</>,
   PopoverTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
   PopoverContent: ({
     children,
@@ -96,6 +99,74 @@ describe("ProjectIdentityEditor", () => {
     it("names the popover so it is not announced as a bare dialog", () => {
       render(<ProjectIdentityEditor project={makeProject()} />);
       expect(screen.getByLabelText("Edit project identity")).not.toBeNull();
+    });
+  });
+
+  describe("pill event forwarding", () => {
+    /**
+     * Mirrors the toolbar layout: the overlay is painted on top of the pill but
+     * is a DOM sibling, so events landing on it never reach the pill's Radix
+     * context-menu and tooltip triggers unless the overlay replays them.
+     */
+    function renderOverPill() {
+      const pillHandlers = {
+        onContextMenu: vi.fn<MouseEventHandler<HTMLButtonElement>>(),
+        onPointerMove: vi.fn<PointerEventHandler<HTMLButtonElement>>(),
+        onPointerLeave: vi.fn<PointerEventHandler<HTMLButtonElement>>(),
+      };
+      render(
+        <div>
+          <ProjectIdentityEditor project={makeProject()} />
+          <button type="button" data-testid="project-switcher-trigger" {...pillHandlers}>
+            <span data-testid="pill-label">my-api</span>
+          </button>
+        </div>
+      );
+      return {
+        overlay: screen.getByRole("button", { name: /edit identity/i }),
+        pill: screen.getByTestId("project-switcher-trigger"),
+        pillHandlers,
+      };
+    }
+
+    it("replays right-click onto the pill so the project context menu still opens", () => {
+      const { overlay, pillHandlers } = renderOverPill();
+
+      fireEvent.contextMenu(overlay, { clientX: 42, clientY: 7 });
+
+      expect(pillHandlers.onContextMenu).toHaveBeenCalledTimes(1);
+      // Radix anchors the context menu at the pointer, so the coordinates have
+      // to survive the replay or the menu lands in the corner.
+      const replayed = pillHandlers.onContextMenu.mock.calls[0]![0];
+      expect([replayed.clientX, replayed.clientY]).toEqual([42, 7]);
+    });
+
+    it("replays hover onto the pill so the identity tooltip still opens", () => {
+      const { overlay, pillHandlers } = renderOverPill();
+
+      fireEvent.pointerOver(overlay);
+
+      expect(pillHandlers.onPointerMove).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes the pill's tooltip when the pointer leaves the pill entirely", () => {
+      const { overlay, pillHandlers } = renderOverPill();
+      fireEvent.pointerOver(overlay);
+
+      fireEvent.pointerOut(overlay, { relatedTarget: document.body });
+
+      expect(pillHandlers.onPointerLeave).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the tooltip up when the pointer slides from the overlay onto the pill", () => {
+      const { overlay, pillHandlers } = renderOverPill();
+      fireEvent.pointerOver(overlay);
+
+      // The pill is natively hovered from here on, so forwarding a leave would
+      // blink the tooltip shut and straight back open.
+      fireEvent.pointerOut(overlay, { relatedTarget: screen.getByTestId("pill-label") });
+
+      expect(pillHandlers.onPointerLeave).not.toHaveBeenCalled();
     });
   });
 

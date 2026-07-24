@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Check, AlertCircle } from "lucide-react";
@@ -55,8 +55,12 @@ export function GitInitDialog({
   const inFlightRef = useRef(false);
   const sawTerminalEventRef = useRef(false);
   const sawErrorEventRef = useRef(false);
+  const nameErrorId = useId();
 
   const trimmedProjectName = projectName.trim();
+  // The name is seeded from the folder, so this only ever fires after the user
+  // clears the field — the one state where the start button silently disables.
+  const isNameMissing = trimmedProjectName === "";
 
   const finalizeSuccess = useCallback(() => {
     if (hasFinalizedSuccessRef.current) {
@@ -235,11 +239,17 @@ export function GitInitDialog({
               value={projectName}
               onChange={(e) => setProjectName(e.target.value)}
               disabled={configDisabled}
-              aria-invalid={trimmedProjectName === ""}
+              aria-invalid={isNameMissing}
+              aria-describedby={isNameMissing ? nameErrorId : undefined}
               className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50 aria-invalid:border-status-error"
               placeholder="My project"
             />
           </div>
+          {isNameMissing && (
+            <p id={nameErrorId} role="alert" className="text-xs text-status-error">
+              Enter a project name
+            </p>
+          )}
           <p className="truncate text-xs font-mono text-daintree-text/40" title={directoryPath}>
             {directoryPath}
           </p>
