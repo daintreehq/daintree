@@ -5,6 +5,7 @@ import type { WorkspaceService } from "../WorkspaceService.js";
 
 const mockSimpleGit = {
   raw: vi.fn().mockResolvedValue(undefined),
+  checkIsRepo: vi.fn().mockResolvedValue(true),
   branch: vi.fn().mockResolvedValue({ current: "main" }),
   branchLocal: vi.fn().mockResolvedValue({ all: [], current: "", branches: {}, detached: false }),
 };
@@ -175,6 +176,7 @@ describe("WorkspaceService.createWorktree", () => {
     // the second test onwards, which the createWorktree pre-flight handles
     // via try/catch — but the fallback masks real test failures.
     mockSimpleGit.raw.mockResolvedValue(undefined);
+    mockSimpleGit.checkIsRepo.mockResolvedValue(true);
     mockSimpleGit.branch.mockResolvedValue({ current: "main" });
     mockSimpleGit.branchLocal.mockResolvedValue({
       all: [],
@@ -1456,6 +1458,8 @@ describe("WorkspaceService.loadProject performance behavior", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockSimpleGit.raw.mockResolvedValue(undefined);
+    mockSimpleGit.checkIsRepo.mockResolvedValue(true);
     mockSendEvent = vi.fn();
     const WorkspaceServiceModule = await import("../WorkspaceService.js");
     service = new WorkspaceServiceModule.WorkspaceService(

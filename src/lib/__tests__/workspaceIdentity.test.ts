@@ -84,6 +84,22 @@ describe("branchChipState", () => {
     expect(branchChipState("none", "feature/x")).toBe("reserved");
   });
 
+  it("drops the chip for a project opened without git — issue #11405", () => {
+    // Same reasoning as a scratch: no repository means no branch is ever coming,
+    // so holding the width would leave a permanently blank chip.
+    expect(branchChipState("project", undefined, false)).toBe("hidden");
+  });
+
+  it("drops the chip for a git-free project even if a stale branch is selected", () => {
+    expect(branchChipState("project", "feature/x", false)).toBe("hidden");
+  });
+
+  it("treats an unspecified mode as git-backed, preserving existing callers", () => {
+    expect(branchChipState("project", "feature/x")).toBe(
+      branchChipState("project", "feature/x", true)
+    );
+  });
+
   it("never shows a branch outside a project", () => {
     const outsideProject = (["scratch", "none"] as const).map((kind) =>
       branchChipState(kind, "feature/x")

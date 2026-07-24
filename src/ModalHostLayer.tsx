@@ -15,6 +15,7 @@ import type { ReEntrySummaryState } from "./hooks/useReEntrySummary";
 import type { UseAgentLauncherReturn } from "./hooks/useAgentLauncher";
 import type { PluginDeepLinkState } from "./hooks/app";
 import type { SettingsTab } from "./components/Settings";
+import type { NonGitFolderStep } from "./components/Project/NonGitFolderDialog";
 import type { BuiltInPanelKind } from "./types";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
@@ -138,7 +139,9 @@ interface ModalHostLayerProps {
   shouldMountGitInitDialog: boolean;
   effectiveGitInitPath: string | null;
   effectiveGitInitIdentity: ProjectCreationIdentity | null;
+  gitInitDialogStep: NonGitFolderStep;
   handleGitInitSuccess: (identity?: ProjectCreationIdentity) => Promise<void>;
+  openWithoutGit: () => Promise<void>;
   closeGitInitDialog: () => void;
   createFolderDialogOpen: boolean;
   shouldMountCreateFolderDialog: boolean;
@@ -230,7 +233,9 @@ export function ModalHostLayer({
   shouldMountGitInitDialog,
   effectiveGitInitPath,
   effectiveGitInitIdentity,
+  gitInitDialogStep,
   handleGitInitSuccess,
+  openWithoutGit,
   closeGitInitDialog,
   createFolderDialogOpen,
   shouldMountCreateFolderDialog,
@@ -761,7 +766,7 @@ export function ModalHostLayer({
 
       <ErrorBoundary
         variant="component"
-        componentName="GitInitDialog"
+        componentName="NonGitFolderDialog"
         resetKeys={[Number(gitInitDialogOpen)]}
       >
         {shouldMountGitInitDialog && effectiveGitInitPath && (
@@ -769,8 +774,10 @@ export function ModalHostLayer({
             <LazyGitInitDialog
               isOpen={gitInitDialogOpen}
               directoryPath={effectiveGitInitPath}
+              initialStep={gitInitDialogStep}
               initialIdentity={effectiveGitInitIdentity}
-              onSuccess={handleGitInitSuccess}
+              onOpenWithoutGit={openWithoutGit}
+              onInitSuccess={handleGitInitSuccess}
               onCancel={closeGitInitDialog}
             />
           </Suspense>

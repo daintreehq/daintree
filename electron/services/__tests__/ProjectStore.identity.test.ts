@@ -25,7 +25,8 @@ const CREATE_TABLES_SQL = `
     stats_issue_count INTEGER,
     stats_pr_count INTEGER,
     stats_provider_id TEXT,
-    stats_last_updated INTEGER
+    stats_last_updated INTEGER,
+    git_backed INTEGER
   );
   CREATE TABLE IF NOT EXISTS app_state (
     key TEXT PRIMARY KEY,
@@ -211,7 +212,7 @@ describe("project identity across folder moves", () => {
     it("applies the chosen name and emoji when a new row is minted", async () => {
       const dir = await makeDir("fresh");
 
-      const created = await store.addProject(dir, { name: "Chosen", emoji: "🚀" });
+      const created = await store.addProject(dir, { identity: { name: "Chosen", emoji: "🚀" } });
 
       expect(created.name).toBe("Chosen");
       expect(created.emoji).toBe("🚀");
@@ -228,9 +229,9 @@ describe("project identity across folder moves", () => {
 
     it("cannot rename an already-registered project by re-adding it", async () => {
       const dir = await makeDir("existing");
-      const first = await store.addProject(dir, { name: "First", emoji: "🚀" });
+      const first = await store.addProject(dir, { identity: { name: "First", emoji: "🚀" } });
 
-      const second = await store.addProject(dir, { name: "Hijacked", emoji: "💀" });
+      const second = await store.addProject(dir, { identity: { name: "Hijacked", emoji: "💀" } });
 
       expect(second.id).toBe(first.id);
       expect(second.name).toBe("First");
@@ -240,14 +241,14 @@ describe("project identity across folder moves", () => {
 
     it("cannot rename an adopted moved project by supplying an identity", async () => {
       const original = await makeDir("original");
-      const registered = await store.addProject(original, { name: "Original", emoji: "🚀" });
+      const registered = await store.addProject(original, { identity: { name: "Original", emoji: "🚀" } });
       await writeAnchor(original, registered.id);
 
       const moved = path.join(tmpRoot, "renamed");
       await fs.promises.rename(original, moved);
       const canonicalMoved = await fs.promises.realpath(moved);
 
-      const reopened = await store.addProject(canonicalMoved, { name: "Hijacked", emoji: "💀" });
+      const reopened = await store.addProject(canonicalMoved, { identity: { name: "Hijacked", emoji: "💀" } });
 
       expect(reopened.id).toBe(registered.id);
       expect(reopened.emoji).not.toBe("💀");
@@ -261,7 +262,7 @@ describe("project identity across folder moves", () => {
       const link = path.join(tmpRoot, "linked-repo");
       await fs.promises.symlink(real, link);
 
-      const created = await store.addProject(link, { name: "Chosen", emoji: "🚀" });
+      const created = await store.addProject(link, { identity: { name: "Chosen", emoji: "🚀" } });
 
       expect(created.path).toBe(real);
       expect(created.name).toBe("Chosen");
@@ -272,8 +273,7 @@ describe("project identity across folder moves", () => {
       const dir = await makeDir("trailing");
 
       const created = await store.addProject(`${dir}${path.sep}`, {
-        name: "Chosen",
-        emoji: "🚀",
+        identity: { name: "Chosen", emoji: "🚀" },
       });
 
       expect(created.name).toBe("Chosen");
@@ -288,7 +288,7 @@ describe("project identity across folder moves", () => {
       const child = await makeDir("repo-root/child");
       repositoryRootOverride = root;
 
-      const created = await store.addProject(child, { name: "Child", emoji: "🚀" });
+      const created = await store.addProject(child, { identity: { name: "Child", emoji: "🚀" } });
 
       expect(created.path).toBe(root);
       expect(created.name).toBe(path.basename(root));

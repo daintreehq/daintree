@@ -93,6 +93,7 @@ import { useNotificationHistoryStore } from "@/store/slices/notificationHistoryS
 import { agentStateDotColor } from "@/components/Worktree/AgentStatusIndicator";
 import { notify } from "@/lib/notify";
 import type { CliAvailability, AgentSettings, AgentState } from "@shared/types";
+import { isGitBackedProject } from "@shared/types";
 import type { ForgeRepositoryStats } from "@shared/types/ipc/forge";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { projectClient } from "@/clients";
@@ -971,8 +972,11 @@ export function Toolbar({
         // local git data). Placeholder (not removal) when no project: the
         // slot's no-drag rectangle must exist on first paint regardless
         // (PROJECT_SCOPED_TOOLBAR_IDS).
+        // A workspace with no repository has no commits, issues or PRs to
+        // report, so it takes the placeholder too — which also keeps the
+        // button's stats polling from ever starting for it (#11405).
         render: () =>
-          currentProject ? (
+          currentProject && isGitBackedProject(currentProject) ? (
             <ForgeStatsToolbarButton
               key="forge-stats"
               ref={forgeStatsRef}
@@ -1470,7 +1474,11 @@ export function Toolbar({
 
   const activeSearchableProject = projectSwitcher.activeProject;
   const truncatedBranchName = branchName ? middleTruncate(branchName, 24) : undefined;
-  const chipState = branchChipState(workspaceIdentity.kind, branchName);
+  const chipState = branchChipState(
+    workspaceIdentity.kind,
+    branchName,
+    isGitBackedProject(currentProject)
+  );
   const { copy: copyPillPath } = useCopyWithFeedback({ announcement: "Path copied" });
   const handleCopyProjectPath = useCallback(() => {
     if (!currentProject) return;

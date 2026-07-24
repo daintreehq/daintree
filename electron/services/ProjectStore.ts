@@ -1,6 +1,7 @@
 // eager-import-allow: reads/writes the project list via sync fs during startup
 import type {
   Project,
+  ProjectAddOptions,
   ProjectRepoStats,
   ProjectState,
   ProjectSettings,
@@ -8,7 +9,6 @@ import type {
   TerminalRecipe,
   RecipeNameCollision,
 } from "../types/index.js";
-import type { ProjectCreationIdentity } from "../../shared/types/project.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import type { AgentPreset } from "../../shared/config/agentRegistry.js";
 import path from "path";
@@ -137,6 +137,8 @@ function rowToProject(row: ProjectRow): Project {
     typeof row.frecencyScore === "number" ? row.frecencyScore : FRECENCY_COLD_START;
   project.lastAccessedAt = typeof row.lastAccessedAt === "number" ? row.lastAccessedAt : 0;
   if (typeof row.autoParkedAt === "number") project.autoParkedAt = row.autoParkedAt;
+  // Only `false` is carried: null means git-backed, and so does absence.
+  if (row.gitBacked === false) project.gitBacked = false;
   const lastKnownStats = rowToRepoStats(row);
   if (lastKnownStats) project.lastKnownStats = lastKnownStats;
   return project;
@@ -377,16 +379,19 @@ export class ProjectStore {
   }
 
   /**
-   * `creationIdentity` is the name/emoji chosen in a creation dialog. It is
+   * `options.identity` is the name/emoji chosen in a creation dialog. It is
    * consulted only where a brand-new row is minted below — every earlier return
    * (already-registered path, adopted move, lost insert race) keeps the
    * identity it already has, so re-adding a folder can never rename it.
    * In-repo `.daintree/project.json` still wins field-wise.
+   *
+   * `options.gitBacked === false` adopts a folder that has no repository at
+   * all; anything else keeps the strict git-root requirement. The two options
+   * are read independently — a lightweight open carries no identity, and an
+   * identity never implies a mode.
    */
-  async addProject(
-    projectPath: string,
-    creationIdentity?: ProjectCreationIdentity
-  ): Promise<Project> {
+  async addProject(projectPath: string, options?: ProjectAddOptions): Promise<Project> {
+    const creationIdentity = options?.identity;
     let gitRoot: string;
     try {
       gitRoot = await this.getGitRoot(projectPath);
@@ -411,6 +416,18 @@ export class ProjectStore {
       }
 
       if (lower.includes("not a git repository")) {
+        // The folder has no repository. Adopt it as a lightweight workspace when
+        // the caller asked for that explicitly, or when it is already registered
+        // as one — the latter is what lets Recents, Dock drops, Open With and the
+        // CLI reopen it without re-prompting (#11405). Anything else keeps
+        // today's behavior and drives the choice dialog.
+        const lightweight = await this.resolveLightweightPath(projectPath);
+        if (lightweight) {
+          const existing = await this.getProjectByPath(lightweight);
+          if (existing) return this.touchExistingProject(existing, { gitBacked: false });
+          if (options?.gitBacked === false) return this.insertLightweightProject(lightweight);
+        }
+
         throw new AppError({
           code: "NOT_A_GIT_REPO",
           message: `Not a git repository: ${projectPath}`,
@@ -443,23 +460,9 @@ export class ProjectStore {
 
     const existing = await this.getProjectByPath(normalizedPath);
     if (existing) {
-      const now = Date.now();
-      // Skip frecency churn under disk pressure — these are non-critical
-      // ranking-signal writes. `lastOpened` is also non-critical here (the
-      // existing project row is unchanged for the user's purposes).
-      if (getWritesSuppressed()) {
-        return existing;
-      }
-      const newScore = computeFrecencyScore(
-        existing.frecencyScore ?? FRECENCY_COLD_START,
-        existing.lastAccessedAt ?? 0,
-        now
-      );
-      return this.updateProject(existing.id, {
-        lastOpened: now,
-        frecencyScore: newScore,
-        lastAccessedAt: now,
-      });
+      // A git root resolved, so promote a row that was adopted without one —
+      // this is what `git init` on a lightweight workspace lands on (#11405).
+      return this.touchExistingProject(existing, { gitBacked: true });
     }
 
     const inRepo = await this.readInRepoProjectIdentity(normalizedPath);
@@ -508,6 +511,100 @@ export class ProjectStore {
         inRepoSettings: project.inRepoSettings ?? null,
         frecencyScore: FRECENCY_COLD_START,
         lastAccessedAt: now,
+      })
+      .run();
+
+    return project;
+  }
+
+  /**
+   * Reopen an already-registered project: bump its ranking signals and reconcile
+   * its git-backed mode.
+   *
+   * The mode flip is written even while disk-pressure suppression is on. Frecency
+   * and `lastOpened` are non-critical ranking churn and are rightly dropped under
+   * pressure, but the mode decides whether the workspace host enumerates
+   * worktrees at all — losing it would leave the row describing the wrong kind of
+   * workspace until the next uncontended open.
+   */
+  private touchExistingProject(existing: Project, mode: { gitBacked: boolean }): Project {
+    // Stored as null rather than 1 for a repository, so a git-backed row is
+    // indistinguishable from every row predating the column.
+    const nextGitBacked = mode.gitBacked ? undefined : false;
+    const modeChanged = existing.gitBacked !== nextGitBacked;
+
+    const now = Date.now();
+    if (getWritesSuppressed()) {
+      return modeChanged ? this.updateProject(existing.id, { gitBacked: nextGitBacked }) : existing;
+    }
+
+    const newScore = computeFrecencyScore(
+      existing.frecencyScore ?? FRECENCY_COLD_START,
+      existing.lastAccessedAt ?? 0,
+      now
+    );
+    return this.updateProject(existing.id, {
+      lastOpened: now,
+      frecencyScore: newScore,
+      lastAccessedAt: now,
+      ...(modeChanged ? { gitBacked: nextGitBacked } : {}),
+    });
+  }
+
+  /**
+   * Canonical registry path for a folder with no repository, or `null` when it
+   * isn't a usable directory.
+   *
+   * Git-backed projects register their repository root; a lightweight workspace
+   * has none, so the adopted folder itself is the identity. Symlinks are resolved
+   * and the result NFC-normalized to match {@link addProject}'s dedup rules.
+   */
+  private async resolveLightweightPath(projectPath: string): Promise<string | null> {
+    try {
+      const canonical = await fs.realpath(projectPath);
+      const stats = await fs.stat(canonical);
+      if (!stats.isDirectory()) return null;
+      return path.normalize(canonical).normalize("NFC");
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Register a folder that has no repository.
+   *
+   * Deliberately skips `.daintree/project.json`: reading identity from an
+   * arbitrary folder would let a downloaded archive carrying a stray anchor
+   * either rename itself after an unrelated project or, through
+   * {@link tryAdoptMovedProject}, take over that project's id and inherit its
+   * panels, settings and Assistant history.
+   */
+  private insertLightweightProject(normalizedPath: string): Project {
+    const now = Date.now();
+    const project: Project = {
+      id: mintProjectId(normalizedPath, (candidate) => this.isProjectIdTaken(candidate)),
+      path: normalizedPath,
+      name: path.basename(normalizedPath),
+      emoji: DEFAULT_PROJECT_EMOJI,
+      lastOpened: now,
+      status: "closed",
+      frecencyScore: FRECENCY_COLD_START,
+      lastAccessedAt: now,
+      gitBacked: false,
+    };
+
+    getSharedDb()
+      .insert(projectsTable)
+      .values({
+        id: project.id,
+        path: project.path,
+        name: project.name,
+        emoji: project.emoji,
+        lastOpened: project.lastOpened,
+        status: project.status ?? null,
+        frecencyScore: FRECENCY_COLD_START,
+        lastAccessedAt: now,
+        gitBacked: false,
       })
       .run();
 
@@ -647,6 +744,7 @@ export class ProjectStore {
       frecencyScore: number;
       lastAccessedAt: number;
       autoParkedAt: number | null;
+      gitBacked: boolean | null;
     }> = {};
     if (updates.name !== undefined) set.name = updates.name;
     if (updates.path !== undefined) set.path = updates.path;
@@ -661,6 +759,10 @@ export class ProjectStore {
     if (updates.frecencyScore !== undefined) set.frecencyScore = updates.frecencyScore;
     if (updates.lastAccessedAt !== undefined) set.lastAccessedAt = updates.lastAccessedAt;
     if ("autoParkedAt" in updates) set.autoParkedAt = updates.autoParkedAt ?? null;
+    // Keyed on presence, not on `!== undefined`: promoting a lightweight
+    // workspace clears the flag by passing `undefined`, which an existence-blind
+    // check would silently drop and leave the row lightweight forever.
+    if ("gitBacked" in updates) set.gitBacked = updates.gitBacked ?? null;
 
     if (Object.keys(set).length > 0) {
       db.update(projectsTable).set(set).where(eq(projectsTable.id, projectId)).run();

@@ -226,6 +226,12 @@ export class WorkspaceService {
   private forgeConfigPollTimer: NodeJS.Timeout | null = null;
   private forgeConfigFingerprint: string | null = null;
   private git: SimpleGit | null = null;
+  /**
+   * Whether the loaded folder is a git repository, as observed by `loadProject`.
+   * `null` before the first load. `false` keeps every worktree monitor, the
+   * topology watcher and forge detection permanently off for this host (#11405).
+   */
+  private gitBacked: boolean | null = null;
   private pollingEnabled: boolean = true;
   private projectRootPath: string | null = null;
   // Immutable project id threaded from main via load-project (#11282). The host
@@ -634,8 +640,6 @@ export class WorkspaceService {
       }
       this.projectRootPath = projectRootPath;
       this.projectId = projectId;
-      // Backstop for a disabled or silently-degraded git watcher (#11155).
-      this.startForgeRemoteDetection();
       if (wslGitByWorktree && typeof wslGitByWorktree === "object") {
         // Merge instead of replacing: a `set-wsl-opt-in` message arriving
         // during this load-project's async work would otherwise be silently
@@ -650,6 +654,28 @@ export class WorkspaceService {
       const projectEnvVars = await this.loadProjectEnvVars(projectId);
       this.projectEnvVars = { ...(globalEnvVars ?? {}), ...projectEnvVars };
       this.git = await createHardenedGit(projectRootPath, this._shutdownController.signal);
+
+      // A folder opened without git has no worktrees to enumerate and must never
+      // be polled: `getWorktreeChangesWithStats` turns "not a git repository"
+      // into a `WorktreeRemovedError`, which `GitStatusPass` reads as an external
+      // deletion and answers by removing the workspace from the sidebar. So the
+      // gate has to be here — ahead of prune, list, syncMonitors, the topology
+      // watcher and forge detection — because the hazard is a monitor *existing*,
+      // not a monitor misbehaving (#11405).
+      //
+      // Probed rather than passed in: the folder is the authority. A project
+      // registered as a repository whose `.git` was since deleted reaches this
+      // same branch and is spared the self-deletion too, which trusting a
+      // persisted flag would not do.
+      if (!(await this.isGitRepository())) {
+        this.gitBacked = false;
+        this.sendEvent({ type: "load-project-result", requestId, success: true });
+        return;
+      }
+      this.gitBacked = true;
+
+      // Backstop for a disabled or silently-degraded git watcher (#11155).
+      this.startForgeRemoteDetection();
       this.listService.setGit(this.git, projectRootPath);
 
       // #6669: prune at startup so externally-deleted worktrees (kept in
@@ -2276,8 +2302,29 @@ export class WorkspaceService {
     }
   }
 
+  /**
+   * Whether the loaded folder is a git repository.
+   *
+   * `checkIsRepo` rejects rather than returning false for permission denials,
+   * a missing git binary and other environment faults, so every failure is
+   * treated as "no repository" — the conservative answer, since it only ever
+   * withholds git features rather than pointing the status poller at a path
+   * that cannot serve it.
+   */
+  private async isGitRepository(): Promise<boolean> {
+    if (!this.git) return false;
+    try {
+      return await this.git.checkIsRepo();
+    } catch {
+      return false;
+    }
+  }
+
   private async discoverAndSyncWorktrees(): Promise<void> {
-    if (!this.git) {
+    // Backstop for the `loadProject` gate: a topology reconcile or an explicit
+    // refresh must not be the thing that mints the first monitor for a folder
+    // with no repository (#11405).
+    if (!this.git || this.gitBacked === false) {
       return;
     }
 
@@ -3358,6 +3405,10 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       for (const monitor of this.monitors.values()) {
         monitor.pausePolling();
       }
+    } else if (this.gitBacked === false) {
+      // Foregrounding must not start the topology watcher for a workspace with
+      // no repository — `loadProject` deliberately never started it, and this is
+      // the one path that would otherwise revive it (#11405).
     } else {
       for (const monitor of this.monitors.values()) {
         monitor.resumePolling();

@@ -1,7 +1,13 @@
 import { create, type StateCreator } from "zustand";
 import { persist, subscribeWithSelector } from "zustand/middleware";
-import type { Project, ProjectCloseResult, ProjectCreationIdentity } from "@shared/types";
-import { projectClient } from "@/clients";
+import type {
+  Project,
+  ProjectAddOptions,
+  ProjectCloseResult,
+  ProjectCreationIdentity,
+} from "@shared/types";
+import { projectClient, worktreeClient } from "@/clients";
+import type { NonGitFolderStep } from "@/components/Project/NonGitFolderDialog";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { logErrorWithContext } from "@/utils/errorContext";
@@ -166,6 +172,8 @@ interface ProjectState {
    * derives its own suggestion. Cleared with the path, in the same set().
    */
   gitInitIdentity: ProjectCreationIdentity | null;
+  /** Which screen the non-git folder dialog opens on. */
+  gitInitDialogStep: NonGitFolderStep;
   createFolderDialogOpen: boolean;
   cloneRepoDialogOpen: boolean;
 
@@ -174,7 +182,11 @@ interface ProjectState {
   addProject: () => Promise<void>;
   addProjectByPath: (
     path: string,
-    options?: { skipDubiousOwnershipRetry?: boolean; identity?: ProjectCreationIdentity }
+    options?: {
+      skipDubiousOwnershipRetry?: boolean;
+      gitBacked?: boolean;
+      identity?: ProjectCreationIdentity;
+    }
   ) => Promise<void>;
   createProjectFolder: (parentPath: string, folderName: string, emoji?: string) => Promise<void>;
   switchProject: (
@@ -195,9 +207,13 @@ interface ProjectState {
   reopenProject: (projectId: string) => Promise<void>;
   checkMissingProjects: () => Promise<void>;
   locateProject: (projectId: string) => Promise<void>;
-  openGitInitDialog: (directoryPath: string, identity?: ProjectCreationIdentity) => void;
+  openGitInitDialog: (
+    directoryPath: string,
+    options?: { step?: NonGitFolderStep; identity?: ProjectCreationIdentity }
+  ) => void;
   closeGitInitDialog: () => void;
   handleGitInitSuccess: (identity?: ProjectCreationIdentity) => Promise<void>;
+  openWithoutGit: () => Promise<void>;
   openCreateFolderDialog: () => void;
   closeCreateFolderDialog: () => void;
   openCloneRepoDialog: () => void;
@@ -431,6 +447,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   gitInitDialogOpen: false,
   gitInitDirectoryPath: null,
   gitInitIdentity: null,
+  gitInitDialogStep: "choice",
   createFolderDialogOpen: false,
   cloneRepoDialogOpen: false,
   error: null,
@@ -446,7 +463,18 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         return;
       }
 
-      const newProject = await projectClient.add(resolvedPath, options?.identity);
+      // Built as two independent keys rather than one flattened payload: main
+      // validates the creation identity as a whole and drops it unless both
+      // halves are present, so a lightweight open carrying only `gitBacked`
+      // must not be routed through that gate.
+      const addOptions: ProjectAddOptions = {
+        ...(options?.gitBacked === false ? { gitBacked: false } : {}),
+        ...(options?.identity ? { identity: options.identity } : {}),
+      };
+      const newProject = await projectClient.add(
+        resolvedPath,
+        Object.keys(addOptions).length > 0 ? addOptions : undefined
+      );
 
       await get().loadProjects();
       await get().switchProject(newProject.id);
@@ -471,7 +499,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           resolvedPath || path.trim() || errorMessage.match(/Not a git repository: (.+)/)?.[1];
         if (gitInitPath && isAbsolutePath(gitInitPath)) {
           set({ isLoading: false });
-          get().openGitInitDialog(gitInitPath, options?.identity);
+          get().openGitInitDialog(gitInitPath, { identity: options?.identity });
           return;
         }
       }
@@ -973,11 +1001,15 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     }
   },
 
-  openGitInitDialog: (directoryPath: string, identity?: ProjectCreationIdentity) => {
+  openGitInitDialog: (
+    directoryPath: string,
+    options?: { step?: NonGitFolderStep; identity?: ProjectCreationIdentity }
+  ) => {
     set({
       gitInitDialogOpen: true,
       gitInitDirectoryPath: directoryPath,
-      gitInitIdentity: identity ?? null,
+      gitInitDialogStep: options?.step ?? "choice",
+      gitInitIdentity: options?.identity ?? null,
     });
   },
 
@@ -991,8 +1023,31 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     const directoryPath = get().gitInitDirectoryPath;
     const carried = identity ?? get().gitInitIdentity ?? undefined;
     get().closeGitInitDialog();
+    if (!directoryPath) return;
+    // The folder is a repository now, so this add resolves a git root and clears
+    // any lightweight flag the row was carrying. A workspace host already loaded
+    // for it enumerated no worktrees, so it needs a reload to pick the new
+    // repository up (#11405).
+    const wasCurrent = get().currentProject?.path === directoryPath;
+    await get().addProjectByPath(directoryPath, { identity: carried });
+    if (wasCurrent) {
+      try {
+        await worktreeClient.retryProjectLoad();
+      } catch (error) {
+        logErrorWithContext(error, {
+          operation: "reload_after_git_init",
+          component: "projectStore",
+          details: { path: directoryPath },
+        });
+      }
+    }
+  },
+
+  openWithoutGit: async () => {
+    const directoryPath = get().gitInitDirectoryPath;
+    get().closeGitInitDialog();
     if (directoryPath) {
-      await get().addProjectByPath(directoryPath, { identity: carried });
+      await get().addProjectByPath(directoryPath, { gitBacked: false });
     }
   },
 

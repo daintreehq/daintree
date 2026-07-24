@@ -20,6 +20,10 @@ export const projects = sqliteTable(
     // "Suspended to free memory" label in the project switcher. Cleared when the
     // project is reopened (`setCurrentProject`).
     autoParkedAt: integer("auto_parked_at"),
+    // False for a folder adopted without git (issue #11405). Null for every
+    // legacy row and every repository-backed project — absence means
+    // git-backed, so no backfill is needed.
+    gitBacked: integer("git_backed", { mode: "boolean" }),
     // Last-known repository counts (issue #11078), so switch-back can seed the
     // toolbar pills from real numbers instead of em-dashes that resize once a
     // poll lands. All nullable: absent until the project's first clean stats
