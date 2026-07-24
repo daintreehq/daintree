@@ -253,6 +253,33 @@ describe("project identity across folder moves", () => {
       expect(reopened.emoji).not.toBe("💀");
     });
 
+    it("keeps the identity when the requested path is a symlink to the repo root", async () => {
+      // The ancestor guard compares canonical paths. Comparing the raw request
+      // instead would treat a symlink as "not the root" and silently drop an
+      // identity the user actually chose.
+      const real = await makeDir("real-repo");
+      const link = path.join(tmpRoot, "linked-repo");
+      await fs.promises.symlink(real, link);
+
+      const created = await store.addProject(link, { name: "Chosen", emoji: "🚀" });
+
+      expect(created.path).toBe(real);
+      expect(created.name).toBe("Chosen");
+      expect(created.emoji).toBe("🚀");
+    });
+
+    it("keeps the identity when the requested path has a trailing separator", async () => {
+      const dir = await makeDir("trailing");
+
+      const created = await store.addProject(`${dir}${path.sep}`, {
+        name: "Chosen",
+        emoji: "🚀",
+      });
+
+      expect(created.name).toBe("Chosen");
+      expect(created.emoji).toBe("🚀");
+    });
+
     it("does not stamp a child folder's identity onto its ancestor repository", async () => {
       // Creating `<root>/child` inside an existing repo resolves the git root
       // back to `<root>`, so the row minted is the ANCESTOR — the child's

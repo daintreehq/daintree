@@ -93,9 +93,9 @@ describe("ProjectIdentityEditor", () => {
       expect(container.querySelector("button button")).toBeNull();
     });
 
-    it("stamps the popover content so the switcher's outside-click guard can spot it", () => {
-      const { container } = render(<ProjectIdentityEditor project={makeProject()} />);
-      expect(container.querySelector("[data-project-identity-popover]")).not.toBeNull();
+    it("names the popover so it is not announced as a bare dialog", () => {
+      render(<ProjectIdentityEditor project={makeProject()} />);
+      expect(screen.getByLabelText("Edit project identity")).not.toBeNull();
     });
   });
 

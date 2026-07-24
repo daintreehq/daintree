@@ -355,6 +355,20 @@ export class ProjectStore {
 
   // --- DB CRUD ---
 
+  /**
+   * Canonical spelling of a path for comparison against a resolved git root:
+   * realpath (resolving symlinks and case) then the same separator + NFC
+   * normalization the root gets. Returns null if the path can't be resolved,
+   * which compares unequal to every root — the safe direction.
+   */
+  private async canonicalizeForCompare(input: string): Promise<string | null> {
+    try {
+      return normalizeProjectPath(await fs.realpath(input));
+    } catch {
+      return null;
+    }
+  }
+
   private async getGitRoot(projectPath: string): Promise<string> {
     const gitService = new GitService(projectPath);
     const root = await gitService.getRepositoryRoot(projectPath);
@@ -416,9 +430,16 @@ export class ProjectStore {
     // caller handed us: creating `/repo/child` inside an existing repository
     // resolves back to `/repo`. Identity chosen for the child must not be
     // stamped onto the ancestor, so it only survives when the two agree.
-    const identityTargetsResolvedRoot =
-      normalizedPath === path.normalize(projectPath).normalize("NFC");
-    const mintIdentity = identityTargetsResolvedRoot ? creationIdentity : undefined;
+    //
+    // Both sides are canonicalized the same way (`normalizedPath` already comes
+    // from a realpath'd git root). A lexical-only comparison here would treat a
+    // symlinked path, a trailing separator, or different casing on a
+    // case-insensitive volume as a mismatch and silently discard an identity
+    // the user actually chose.
+    const mintIdentity =
+      (await this.canonicalizeForCompare(projectPath)) === normalizedPath
+        ? creationIdentity
+        : undefined;
 
     const existing = await this.getProjectByPath(normalizedPath);
     if (existing) {

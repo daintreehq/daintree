@@ -71,17 +71,17 @@ export function GitInitDialog({
   // folder) derives a fresh suggestion from the folder name instead.
   const seededName = initialIdentity?.name ?? basename(directoryPath);
   const seededEmoji = initialIdentity?.emoji ?? suggestProjectEmoji(basename(directoryPath));
+  // Keyed on the folder as well as the open transition: a second git-init
+  // request arriving while this one is open swaps `directoryPath` under us, and
+  // leaving the identity behind would save folder B under folder A's name. The
+  // seeds are plain strings, so they only differ when their inputs actually
+  // change — depending on them costs no spurious re-seeds and keeps the
+  // component eligible for the React Compiler.
   useEffect(() => {
     if (!isOpen) return;
     setProjectName(seededName);
     setEmoji(seededEmoji);
-    // Keyed on the folder as well as the open transition: a second git-init
-    // request arriving while this one is open swaps `directoryPath` under us,
-    // and leaving the identity behind would save folder B under folder A's
-    // name. Not keyed on the seed values themselves — that would re-seed on
-    // every render and discard edits in progress.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, directoryPath]);
+  }, [isOpen, directoryPath, seededName, seededEmoji]);
 
   useEffect(() => {
     if (!isOpen) {

@@ -592,17 +592,27 @@ describe("GitInitDialog", () => {
       });
     });
 
-    it("re-seeds the identity when reopened for a different folder", () => {
+    it("re-seeds when a second request swaps the folder while still open", () => {
+      // Deliberately never closes: a request arriving on top of an open dialog
+      // swaps directoryPath in place. Seeding only on the open transition would
+      // leave folder A's identity attached to folder B's path.
       const props = { onSuccess: vi.fn(), onCancel: vi.fn() };
       const { rerender } = render(
         <GitInitDialog isOpen={true} directoryPath="/tmp/first-folder" {...props} />
       );
       expect(nameInput().value).toBe("first-folder");
 
-      rerender(<GitInitDialog isOpen={false} directoryPath="/tmp/first-folder" {...props} />);
-      rerender(<GitInitDialog isOpen={true} directoryPath="/tmp/second-folder" {...props} />);
+      rerender(
+        <GitInitDialog
+          isOpen={true}
+          directoryPath="/tmp/second-folder"
+          initialIdentity={{ name: "Second", emoji: "📦" }}
+          {...props}
+        />
+      );
 
-      expect(nameInput().value).toBe("second-folder");
+      expect(nameInput().value).toBe("Second");
+      expect(screen.getByRole("button", { name: /choose project emoji/i }).textContent).toBe("📦");
     });
   });
 });

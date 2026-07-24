@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { useProjectStore } from "@/store/projectStore";
@@ -126,7 +126,6 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
         className="w-auto p-0"
         align="start"
         aria-label="Edit project identity"
-        data-project-identity-popover=""
         // Hand focus to the name field instead of letting Radix park it on the
         // popover container.
         onOpenAutoFocus={(event) => {
