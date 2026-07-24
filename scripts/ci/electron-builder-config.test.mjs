@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import buildConfig from "../../electron-builder.config.cjs";
 
@@ -141,16 +142,55 @@ describe("electron-builder config — OS folder context menus (#11406)", () => {
 });
 
 describe("NSIS installer — folder context-menu verbs (#11406)", () => {
+  const SELECTED_VERB = "Directory\\shell";
+  const BACKGROUND_VERB = "Directory\\Background\\shell";
+
+  /** The single-quoted command string a verb's `command` subkey is set to. */
+  const verbCommand = (nsh, verbKey) =>
+    nsh.match(
+      new RegExp(
+        `WriteRegStr HKCU "Software\\\\Classes\\\\${verbKey.replace(/\\/g, "\\\\")}\\\\Daintree\\\\command" "" '([^']*)'`
+      )
+    )?.[1];
+
+  /** The value the app would receive as `--cli-path`, for a given %-expansion. */
+  const cliPathOperand = (command, folder) =>
+    command.replace(/%[1V]/g, folder).match(/--cli-path="([^"]*)"/)?.[1];
+
   it("passes the selected folder as %1 and the background folder as %V", async () => {
     const nsh = await repoFile("build/installer.nsh");
-    expect(nsh).toContain(
-      `WriteRegStr HKCU "Software\\Classes\\Directory\\shell\\Daintree\\command" "" '"$INSTDIR\\\${APP_EXECUTABLE_FILENAME}" --cli-path "%1"'`
-    );
+    expect(verbCommand(nsh, SELECTED_VERB)).toContain("%1");
     // Right-clicking empty space inside a folder has no selection, so %1 would
     // expand to nothing — %V carries the folder being viewed.
-    expect(nsh).toContain(
-      `WriteRegStr HKCU "Software\\Classes\\Directory\\Background\\shell\\Daintree\\command" "" '"$INSTDIR\\\${APP_EXECUTABLE_FILENAME}" --cli-path "%V"'`
-    );
+    expect(verbCommand(nsh, BACKGROUND_VERB)).toContain("%V");
+  });
+
+  it("joins the folder to --cli-path so a warm launch can't lose the operand", async () => {
+    const nsh = await repoFile("build/installer.nsh");
+    for (const verbKey of [SELECTED_VERB, BACKGROUND_VERB]) {
+      const command = verbCommand(nsh, verbKey);
+      // `second-instance` reports Chromium's argv reconstruction, which groups
+      // switches ahead of positionals: with the two-token `--cli-path <path>`
+      // form an injected Chromium switch lands in the operand slot and is read
+      // as the folder (#11410). Joined-and-quoted survives the reshuffle and
+      // still tolerates spaces in the path.
+      expect(command).toMatch(/--cli-path="%[1V]/);
+      expect(command).not.toMatch(/--cli-path\s/);
+    }
+  });
+
+  it("keeps a drive root from escaping its own closing quote", async () => {
+    const nsh = await repoFile("build/installer.nsh");
+    const command = verbCommand(nsh, BACKGROUND_VERB);
+    // At a drive root %V expands to `D:\`. CommandLineToArgvW reads an odd run
+    // of backslashes before a quote as escaping it, so an operand ending in a
+    // backslash never closes and swallows the rest of the command line.
+    const atDriveRoot = cliPathOperand(command, "D:\\");
+    expect(atDriveRoot.endsWith("\\")).toBe(false);
+    // Whatever guards the quote may only add syntax that normalizes away —
+    // both the drive root and an ordinary folder must survive intact.
+    expect(path.win32.normalize(atDriveRoot)).toBe("D:\\");
+    expect(path.win32.normalize(cliPathOperand(command, "C:\\src\\app"))).toBe("C:\\src\\app");
   });
 
   it("removes exactly its own verbs on uninstall", async () => {

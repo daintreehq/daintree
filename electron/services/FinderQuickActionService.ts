@@ -26,6 +26,17 @@ const MANAGED_BUNDLE_FILES = [
 const PBS_PATH = "/System/Library/CoreServices/pbs";
 const PBS_FLUSH_TIMEOUT_MS = 5000;
 
+const LSREGISTER_PATH =
+  "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+const LSREGISTER_TIMEOUT_MS = 5000;
+
+export interface QuickActionRemoval {
+  /** False when nothing was installed at `path`. */
+  removed: boolean;
+  /** The location the Quick Action lives at, installed or not. */
+  path: string;
+}
+
 function getTargetPath(): string {
   return path.join(os.homedir(), "Library", "Services", WORKFLOW_BUNDLE_NAME);
 }
@@ -62,18 +73,36 @@ function removeQuietly(targetPath: string): void {
   }
 }
 
-// Finder caches the Services menu, so a freshly copied workflow stays invisible
-// until the cache is rebuilt. Best-effort: the Quick Action is on disk either
-// way, and a failed flush only delays it until the next login.
-async function flushServicesCache(): Promise<void> {
+// Every subprocess here only nudges a system cache — the bundle's presence on
+// disk is the real state. A failure is logged and swallowed so it can never
+// take down an install or a removal.
+async function runQuietly(file: string, args: string[], timeoutMs: number): Promise<void> {
   await new Promise<void>((resolve) => {
-    execFile(PBS_PATH, ["-flush"], { timeout: PBS_FLUSH_TIMEOUT_MS }, (err) => {
+    execFile(file, args, { timeout: timeoutMs }, (err) => {
       if (err) {
-        console.warn("[FinderQuickActionService] pbs -flush failed:", err.message);
+        console.warn(
+          `[FinderQuickActionService] ${path.basename(file)} ${args.join(" ")} failed:`,
+          err.message
+        );
       }
       resolve();
     });
   });
+}
+
+// Finder caches the Services menu, so a freshly copied workflow stays invisible
+// until the cache is rebuilt — and a removed one stays visible, failing through
+// Launch Services when picked.
+async function flushServicesCache(): Promise<void> {
+  await runQuietly(PBS_PATH, ["-flush"], PBS_FLUSH_TIMEOUT_MS);
+}
+
+// Launch Services keeps its own record of the bundle keyed by path. Without an
+// explicit unregister it can keep dispatching to a workflow that no longer
+// exists; `-u` targets exactly this path (never the whole database — a `-kill`
+// rebuild is deprecated and corrupts unrelated system state).
+async function unregisterFromLaunchServices(targetPath: string): Promise<void> {
+  await runQuietly(LSREGISTER_PATH, ["-u", targetPath], LSREGISTER_TIMEOUT_MS);
 }
 
 /** Install the Finder Quick Action, returning the path it now lives at. */
@@ -136,4 +165,29 @@ export async function install(): Promise<string> {
   await flushServicesCache();
 
   return targetPath;
+}
+
+/**
+ * Remove the Finder Quick Action. Uninstalling Daintree cannot do this — the
+ * bundle lives in the user's home, outside anything the app installer owns — so
+ * without this inverse a stale Quick Action keeps appearing in Finder and fails
+ * through Launch Services with an Automator error for good.
+ */
+export async function remove(): Promise<QuickActionRemoval> {
+  if (process.platform !== "darwin") {
+    throw new Error("The Finder Quick Action is only available on macOS.");
+  }
+
+  const targetPath = getTargetPath();
+  if (!fs.existsSync(targetPath)) {
+    return { removed: false, path: targetPath };
+  }
+
+  // Unregister first: once the bundle is deleted there is no longer anything
+  // at that path for Launch Services to be told about.
+  await unregisterFromLaunchServices(targetPath);
+  fs.rmSync(targetPath, { recursive: true, force: true });
+  await flushServicesCache();
+
+  return { removed: true, path: targetPath };
 }

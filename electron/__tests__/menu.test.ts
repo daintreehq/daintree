@@ -136,8 +136,12 @@ vi.mock("../../shared/config/agentRegistry.js", () => ({
 vi.mock("../services/CliAvailabilityService.js", () => ({}));
 vi.mock("../services/CliInstallService.js", () => ({}));
 const finderQuickActionInstallMock = vi.hoisted(() => vi.fn<() => Promise<string>>());
+const finderQuickActionRemoveMock = vi.hoisted(() =>
+  vi.fn<() => Promise<{ removed: boolean; path: string }>>()
+);
 vi.mock("../services/FinderQuickActionService.js", () => ({
   install: finderQuickActionInstallMock,
+  remove: finderQuickActionRemoveMock,
 }));
 vi.mock("../window/windowServices.js", () => ({
   getPtyClient: vi.fn(),
@@ -1081,15 +1085,36 @@ describe("Finder Quick Action menu item (#11406)", () => {
     Object.defineProperty(process, "platform", { value: platform, configurable: true });
   }
 
-  function buildAndFind(): Electron.MenuItemConstructorOptions | undefined {
+  const REMOVE_ITEM_LABEL = 'Remove "Open in Daintree" Quick Action';
+
+  function buildAndFind(
+    label: string = ITEM_LABEL
+  ): Electron.MenuItemConstructorOptions | undefined {
     capturedTemplate = [];
     createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
-    return findMenuItem(capturedTemplate, "Terminal", ITEM_LABEL);
+    return findMenuItem(capturedTemplate, "Terminal", label);
+  }
+
+  async function clickItem(label: string): Promise<void> {
+    const item = buildAndFind(label);
+    await item!.click!(
+      {} as Electron.MenuItem,
+      mockBrowserWindow as unknown as Electron.BaseWindow,
+      {} as Electron.KeyboardEvent
+    );
+  }
+
+  function lastToast(): { type: string; title: string; message: string } | undefined {
+    const call = mockWebContents.send.mock.calls.find(
+      ([channel]) => channel === "notification:show-toast"
+    );
+    return call?.[1] as { type: string; title: string; message: string } | undefined;
   }
 
   beforeEach(() => {
     vi.clearAllMocks();
     finderQuickActionInstallMock.mockReset();
+    finderQuickActionRemoveMock.mockReset();
   });
 
   afterEach(() => {
@@ -1146,5 +1171,52 @@ describe("Finder Quick Action menu item (#11406)", () => {
     expect(toast?.[1]).toMatchObject({ type: "error" });
     // The underlying reason must reach the user, not just a generic failure.
     expect((toast?.[1] as { message: string }).message).toContain("read-only");
+  });
+
+  it("offers removal alongside the install, on macOS only", () => {
+    // Nothing else uninstalls the bundle: it lives in ~/Library/Services, which
+    // the app installer never owns, so this menu item is the only inverse.
+    setPlatform("darwin");
+    expect(buildAndFind(REMOVE_ITEM_LABEL)?.enabled).toBe(true);
+
+    for (const platform of ["win32", "linux"]) {
+      setPlatform(platform);
+      expect(buildAndFind(REMOVE_ITEM_LABEL)?.enabled).toBe(false);
+    }
+  });
+
+  it("reports where the Quick Action was removed from", async () => {
+    setPlatform("darwin");
+    const quickActionPath = "/home/test/Library/Services/Open in Daintree.workflow";
+    finderQuickActionRemoveMock.mockResolvedValue({ removed: true, path: quickActionPath });
+
+    await clickItem(REMOVE_ITEM_LABEL);
+
+    expect(finderQuickActionRemoveMock).toHaveBeenCalledOnce();
+    expect(lastToast()).toMatchObject({ type: "success", title: "Quick Action removed" });
+    expect(lastToast()?.message).toContain(quickActionPath);
+  });
+
+  it("does not claim a removal when nothing was installed", async () => {
+    setPlatform("darwin");
+    const quickActionPath = "/home/test/Library/Services/Open in Daintree.workflow";
+    finderQuickActionRemoveMock.mockResolvedValue({ removed: false, path: quickActionPath });
+
+    await clickItem(REMOVE_ITEM_LABEL);
+
+    // Same happy path, different truth — the title must not say something was
+    // removed when the service found nothing there.
+    expect(lastToast()?.title).not.toBe("Quick Action removed");
+    expect(lastToast()?.message).toContain(quickActionPath);
+  });
+
+  it("surfaces a removal failure instead of reporting success", async () => {
+    setPlatform("darwin");
+    finderQuickActionRemoveMock.mockRejectedValue(new Error("Operation not permitted"));
+
+    await clickItem(REMOVE_ITEM_LABEL);
+
+    expect(lastToast()).toMatchObject({ type: "error" });
+    expect(lastToast()?.message).toContain("not permitted");
   });
 });

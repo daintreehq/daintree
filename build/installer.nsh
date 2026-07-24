@@ -26,15 +26,30 @@
   ; Windows 11 files classic verbs like these under "Show more options"; the
   ; modern top-level menu would need an IExplorerCommand DLL plus a sparse
   ; package.
+  ;
+  ; The folder is joined to the switch (`--cli-path=<path>`) rather than passed
+  ; as a following token. A warm launch does not see this command line as-is:
+  ; Electron's `second-instance` reports Chromium's reconstruction, which groups
+  ; switches ahead of positionals, so with the two-token form an injected
+  ; Chromium switch can land in the operand slot and be read as the folder
+  ; (#11410). A joined switch cannot be split apart that way.
   WriteRegStr HKCU "Software\Classes\Directory\shell\Daintree" "" "Open in Daintree"
   ; Icon path is quoted so an install directory containing a comma isn't parsed
   ; as the icon-index separator.
   WriteRegStr HKCU "Software\Classes\Directory\shell\Daintree" "Icon" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}",0'
-  WriteRegStr HKCU "Software\Classes\Directory\shell\Daintree\command" "" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --cli-path "%1"'
+  WriteRegStr HKCU "Software\Classes\Directory\shell\Daintree\command" "" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --cli-path="%1"'
 
   WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Daintree" "" "Open in Daintree"
   WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Daintree" "Icon" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}",0'
-  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Daintree\command" "" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --cli-path "%V"'
+  ; The trailing `\.` is a drive-root guard, not a typo. At a drive root %V
+  ; expands to `D:\`, and CommandLineToArgvW treats an odd run of backslashes
+  ; immediately before a quote as escaping it — `--cli-path="D:\"` never closes
+  ; and swallows the rest of the command line. `\.` keeps a non-backslash
+  ; character against the closing quote and normalizes away: `D:\\.` -> `D:\`,
+  ; `C:\src\.` -> `C:\src`. (Appending a bare `.` the way Git for Windows does
+  ; would name the sibling `C:\src.` on every non-root folder.) %1 needs no
+  ; guard: a selected item is never a drive root — drives are `Drive\shell`.
+  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Daintree\command" "" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --cli-path="%V\."'
 
   ; Tell the shell the association table changed so Explorer picks it up now.
   ; Covers the `.dntr` mapping and both folder verbs in one call.

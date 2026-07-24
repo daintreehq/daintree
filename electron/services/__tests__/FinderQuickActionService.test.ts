@@ -305,6 +305,111 @@ describe("FinderQuickActionService", () => {
   });
 });
 
+describe("FinderQuickActionService — remove", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    setPlatform("darwin");
+    appMock.app.isPackaged = false;
+    resilientRenameSyncMock.mockReset();
+    fsMock.readFileSync.mockReset();
+    fsMock.rmSync.mockReset();
+    execFileMock.mockImplementation((_file, _args, _options, callback) => callback(null));
+    fsMock.existsSync.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", {
+      value: originalPlatform,
+      configurable: true,
+    });
+  });
+
+  /** Index of the first execFile call whose executable basename matches. */
+  const callIndexFor = (name: string): number =>
+    execFileMock.mock.calls.findIndex(([file]) => file.endsWith(`/${name}`));
+
+  it("unregisters the bundle from Launch Services before deleting it", async () => {
+    seedFiles(targetFiles("info", "wflow"));
+
+    const { remove } = await import("../FinderQuickActionService.js");
+    const result = await remove();
+
+    expect(result).toEqual({ removed: true, path: TARGET });
+    const unregister = callIndexFor("lsregister");
+    expect(execFileMock.mock.calls[unregister][1]).toEqual(["-u", TARGET]);
+    // Order is the contract: once the bundle is gone there is no longer a path
+    // for Launch Services to be told about.
+    expect(execFileMock.mock.invocationCallOrder[unregister]).toBeLessThan(
+      fsMock.rmSync.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("deletes the whole bundle and only then refreshes Finder", async () => {
+    seedFiles(targetFiles("info", "wflow"));
+
+    const { remove } = await import("../FinderQuickActionService.js");
+    await remove();
+
+    // A .workflow is a directory; a non-recursive unlink would leave it behind.
+    expect(fsMock.rmSync).toHaveBeenCalledWith(TARGET, { recursive: true, force: true });
+    // Flushing before the delete would rebuild the menu from a bundle that is
+    // still on disk, leaving the stale entry the removal exists to clear.
+    const flush = callIndexFor("pbs");
+    expect(execFileMock.mock.invocationCallOrder[flush]).toBeGreaterThan(
+      fsMock.rmSync.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("reports the target path without touching anything when nothing is installed", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+
+    const { remove } = await import("../FinderQuickActionService.js");
+    const result = await remove();
+
+    // The path still has to reach the caller: it is what the "nothing to
+    // remove" message names so a user can check for themselves.
+    expect(result).toEqual({ removed: false, path: TARGET });
+    expect(fsMock.rmSync).not.toHaveBeenCalled();
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("still removes the bundle when the Launch Services unregister fails", async () => {
+    seedFiles(targetFiles("info", "wflow"));
+    execFileMock.mockImplementation((file, _args, _options, callback) =>
+      callback(file.endsWith("/lsregister") ? new Error("lsregister exploded") : null)
+    );
+
+    const { remove } = await import("../FinderQuickActionService.js");
+    await expect(remove()).resolves.toEqual({ removed: true, path: TARGET });
+
+    // The bundle on disk is the real state; a failed cache nudge must not strand it.
+    expect(fsMock.rmSync).toHaveBeenCalledWith(TARGET, { recursive: true, force: true });
+  });
+
+  it("surfaces a delete failure instead of claiming the bundle is gone", async () => {
+    seedFiles(targetFiles("info", "wflow"));
+    fsMock.rmSync.mockImplementation(() => {
+      throw new Error("EACCES");
+    });
+
+    const { remove } = await import("../FinderQuickActionService.js");
+    await expect(remove()).rejects.toThrow("EACCES");
+
+    // Finder must not be told the entry is gone while the bundle is still there.
+    expect(callIndexFor("pbs")).toBe(-1);
+  });
+
+  it("rejects on non-darwin platforms before touching the filesystem", async () => {
+    setPlatform("win32");
+
+    const { remove } = await import("../FinderQuickActionService.js");
+    await expect(remove()).rejects.toThrow(/macOS/);
+
+    expect(fsMock.rmSync).not.toHaveBeenCalled();
+  });
+});
+
 describe("FinderQuickActionService — failure modes", () => {
   beforeEach(() => {
     vi.resetModules();

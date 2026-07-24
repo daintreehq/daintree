@@ -575,6 +575,42 @@ export function createApplicationMenu(
             }
           },
         },
+        {
+          // The bundle lives in ~/Library/Services, which no app uninstaller
+          // touches — without this the Quick Action outlives Daintree.
+          label: `Remove "Open in ${PRODUCT_NAME}" Quick Action`,
+          enabled: process.platform === "darwin",
+          click: async (_item, browserWindow) => {
+            const targetWin = getTargetBrowserWindow(browserWindow);
+            try {
+              const { removed, path: quickActionPath } = await FinderQuickActionService.remove();
+              if (targetWin && !targetWin.isDestroyed()) {
+                const wc = getAppWebContents(targetWin);
+                if (!wc.isDestroyed()) {
+                  wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+                    type: "success",
+                    title: removed ? "Quick Action removed" : "Quick Action wasn't installed",
+                    message: removed
+                      ? `"Open in ${PRODUCT_NAME}" is gone from Finder. Removed from ${quickActionPath}`
+                      : `Nothing to remove at ${quickActionPath}`,
+                  });
+                }
+              }
+            } catch (err) {
+              const message = formatErrorMessage(err, "Failed to remove Quick Action");
+              if (targetWin && !targetWin.isDestroyed()) {
+                const wc = getAppWebContents(targetWin);
+                if (!wc.isDestroyed()) {
+                  wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+                    type: "error",
+                    title: "Quick Action removal failed",
+                    message,
+                  });
+                }
+              }
+            }
+          },
+        },
       ],
     },
     {
