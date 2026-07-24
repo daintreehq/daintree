@@ -1123,6 +1123,41 @@ describe("FilePane diff mode (#11274)", () => {
     });
   });
 
+  describe("PDF preview (#11427)", () => {
+    it("frames the PDF scheme instead of reading the file as text", async () => {
+      const { container } = await renderPane({ filePath: "/repo/docs/spec.pdf" });
+
+      const frame = await waitFor(() => {
+        const found = container.querySelector("iframe");
+        if (!found) throw new Error("no iframe yet");
+        return found;
+      });
+      // The text-read IPC path is what produced "Binary file — cannot display";
+      // a PDF must short-circuit before it ever runs.
+      expect(readMock).not.toHaveBeenCalled();
+      const src = new URL(frame.getAttribute("src") ?? "");
+      expect(src.protocol).toBe("daintree-pdf:");
+      expect(src.searchParams.get("path")).toBe("/repo/docs/spec.pdf");
+    });
+
+    it("mounts the frame credentialless and unsandboxed", async () => {
+      const { container } = await renderPane({ filePath: "/repo/docs/spec.pdf" });
+
+      const frame = await waitFor(() => {
+        const found = container.querySelector("iframe");
+        if (!found) throw new Error("no iframe yet");
+        return found;
+      });
+      expect(frame.hasAttribute("credentialless")).toBe(true);
+      expect(frame.hasAttribute("sandbox")).toBe(false);
+    });
+
+    it("never shows the binary-file error for a PDF", async () => {
+      await renderPane({ filePath: "/repo/docs/spec.pdf" });
+      expect(screen.queryByText(/Binary file/)).toBeNull();
+    });
+  });
+
   describe("change lookup", () => {
     it("matches a change stored as an absolute path", async () => {
       seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);

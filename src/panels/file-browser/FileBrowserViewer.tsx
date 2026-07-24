@@ -17,8 +17,10 @@ import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
 import { ZoomableImage } from "@/components/FileViewer/ZoomableImage";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
 import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
+import { FilePdfPreview } from "@/components/FileViewer/FilePdfPreview";
 import {
   isImageFilePath,
+  isPdfFilePath,
   isSvgFilePath,
   isAudioFilePath,
   isUnsupportedAudioFilePath,
@@ -83,6 +85,7 @@ type ViewerState =
   | { status: "image" }
   | { status: "video" }
   | { status: "audio" }
+  | { status: "pdf" }
   | { status: "error"; message: string };
 
 // Markdown gets a Source/Rendered switch mirroring FilePane's toggle. Typed at
@@ -156,6 +159,13 @@ export function FileBrowserViewer({
     // Audio takes the same protocol-to-blob route as video.
     if (isAudioFilePath(filePath)) {
       setState({ status: "audio" });
+      return;
+    }
+
+    // PDFs are framed from `daintree-pdf://` into Chromium's built-in viewer;
+    // the text path would reject them as a binary file.
+    if (isPdfFilePath(filePath)) {
+      setState({ status: "pdf" });
       return;
     }
 
@@ -518,6 +528,14 @@ export function FileBrowserViewer({
               }
             />
           </div>
+        );
+
+      case "pdf":
+        return (
+          // Same reasoning as the video case: no `revision` key. Remounting the
+          // frame on every worktree write would throw away the reader's page
+          // and zoom; a rewritten PDF shows new bytes on re-selection.
+          <FilePdfPreview filePath={filePath} rootPath={rootPath} label={fileName} />
         );
 
       case "html":

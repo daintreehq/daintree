@@ -185,12 +185,32 @@ const LARGE_IMAGE_MIME_TYPES = new Set([
   "image/x-icon",
 ]);
 
-// The size ceiling for a resolved file. Only the daintree-file:// viewer path
-// opts into the larger raster-image cap (allowLargeImages); daintree-html://
-// report assets stay at the tight cap so a script-driven preview can't turn the
-// allowance into an aggregate-memory DoS.
-function maxBytesForFile(realFile: string, allowLargeImages: boolean): number {
-  return allowLargeImages && LARGE_IMAGE_MIME_TYPES.has(getMimeType(realFile))
+// PDFium renders from a single buffered response (no Range/206 needed —
+// verified against Electron 42 / Chromium 148), so the whole document is held
+// in memory across the Node buffer, the Response, and the viewer. 50 MB is
+// double the raster-image allowance: enough for the specs, datasheets and
+// design exports repos actually carry, while still bounding a single preview.
+const DAINTREE_PDF_MAX_BYTES = 50 * 1024 * 1024;
+
+function isPdfPath(filePath: string): boolean {
+  return /\.pdf$/i.test(filePath);
+}
+
+/**
+ * Which scheme is doing the read — selects the size ceiling and any gate the
+ * canonical path must pass.
+ *
+ * `file`  daintree-file://, the viewer path that opts into the raster-image cap.
+ * `asset` daintree-html:// sibling assets — the tight cap, so a script-driven
+ *         preview can't turn the image allowance into an aggregate-memory DoS.
+ * `pdf`   daintree-pdf://, capped separately and restricted to real PDFs.
+ */
+type DaintreeReadKind = "file" | "asset" | "pdf";
+
+// The size ceiling for a resolved file, chosen from its canonical path.
+function maxBytesForFile(realFile: string, kind: DaintreeReadKind): number {
+  if (kind === "pdf") return DAINTREE_PDF_MAX_BYTES;
+  return kind === "file" && LARGE_IMAGE_MIME_TYPES.has(getMimeType(realFile))
     ? DAINTREE_IMAGE_MAX_BYTES
     : DAINTREE_FILE_MAX_BYTES;
 }
@@ -441,12 +461,12 @@ async function resolveContainedRealPath(
 }
 
 /**
- * Shared read core for daintree-file:// and daintree-html://: realpath
- * containment, a size cap (per maxBytesForFile — larger for raster images when
- * allowLargeImages is set), and O_RDONLY|O_NOFOLLOW open. Returns the file bytes
- * plus the canonical path (for MIME), or an error Response. Callers own the
- * success headers so each scheme sets its own CSP. The flow (realpath →
- * path.relative → stat → O_NOFOLLOW open) and its TOCTOU defenses are unchanged.
+ * Shared read core for daintree-file://, daintree-html:// and daintree-pdf://:
+ * realpath containment, a size cap (per maxBytesForFile, selected by `kind`),
+ * and O_RDONLY|O_NOFOLLOW open. Returns the file bytes plus the canonical path
+ * (for MIME), or an error Response. Callers own the success headers so each
+ * scheme sets its own CSP. The flow (realpath → path.relative → stat →
+ * O_NOFOLLOW open) and its TOCTOU defenses are unchanged.
  */
 // Return type is inferred, not annotated: annotating `buffer: Buffer` widens it
 // to `Buffer<ArrayBufferLike>`, which `new Response(...)` rejects as a BodyInit.
@@ -454,11 +474,22 @@ async function resolveContainedRealPath(
 async function readContainedDaintreeFile(
   normalizedRoot: string,
   normalizedFile: string,
-  allowLargeImages: boolean
+  kind: DaintreeReadKind
 ) {
   const contained = await resolveContainedRealPath(normalizedRoot, normalizedFile);
   if (contained instanceof Response) return contained;
   const { realFile } = contained;
+
+  // Gate on the CANONICAL path before any stat/open/read: routing on the
+  // request path would let `report.pdf` → `huge.bin` be buffered under the
+  // 50 MB PDF ceiling on Windows, where O_NOFOLLOW is a no-op. Rejecting here
+  // means a non-PDF never gets read under the PDF allowance at all.
+  if (kind === "pdf" && !isPdfPath(realFile)) {
+    return new Response("Unsupported Media Type", {
+      status: 415,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
 
   // Stat the realpath-resolved path for an accurate size before any read.
   let fileStat: Awaited<ReturnType<typeof fs.stat>>;
@@ -471,7 +502,7 @@ async function readContainedDaintreeFile(
     });
   }
 
-  const maxBytes = maxBytesForFile(realFile, allowLargeImages);
+  const maxBytes = maxBytesForFile(realFile, kind);
   if (fileStat.size > maxBytes) {
     return new Response("Payload Too Large", {
       status: 413,
@@ -618,7 +649,7 @@ function createDaintreeFileRequestCore() {
         // buffered path, which redoes containment and applies its usual caps.
       }
 
-      const result = await readContainedDaintreeFile(normalizedRoot, normalizedFile, true);
+      const result = await readContainedDaintreeFile(normalizedRoot, normalizedFile, "file");
       if (result instanceof Response) return result;
 
       // Content-Length reflects the bytes actually returned. If the file
@@ -801,7 +832,7 @@ function createDaintreeHtmlProtocolHandler() {
       // Report assets keep the tight cap: a preview document can execute scripts
       // and request the same file many times, so the raster-image allowance is
       // scoped to the daintree-file:// viewer path only.
-      const result = await readContainedDaintreeFile(path.normalize(root), candidatePath, false);
+      const result = await readContainedDaintreeFile(path.normalize(root), candidatePath, "asset");
       if (result instanceof Response) return result;
 
       // Only navigable HTML documents get the loosened, token-scoped CSP;
@@ -814,6 +845,129 @@ function createDaintreeHtmlProtocolHandler() {
       return new Response(result.buffer, { status: 200, headers });
     } catch (err) {
       console.error("[MAIN] daintree-html protocol error:", err);
+      return new Response("Internal Server Error", {
+        status: 500,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+  };
+}
+
+/** True for any `daintree-pdf://…` request URL (the inline PDF preview scheme). */
+function isDaintreePdfPreviewUrl(url: string | undefined): boolean {
+  return typeof url === "string" && url.startsWith("daintree-pdf://");
+}
+
+/**
+ * Preview documents whose protocol-handler response headers must survive the
+ * session-wide CSP overlay untouched. Both schemes need the pass-through, for
+ * opposite reasons:
+ *   daintree-html:// carries a token-scoped CSP and a COEP that the overlay
+ *     would replace with the trusted app policy.
+ *   daintree-pdf:// carries NEITHER, and must not acquire either: a `sandbox`
+ *     CSP blocks PDFium outright (ERR_BLOCKED_BY_CLIENT), and a COEP header
+ *     makes the PDF document an embedder whose own internal viewer frame is
+ *     then blocked (ERR_BLOCKED_BY_RESPONSE). Both verified against
+ *     Electron 42 / Chromium 148.
+ */
+function shouldPreservePreviewResponseHeaders(url: string | undefined): boolean {
+  return isDaintreeHtmlPreviewUrl(url) || isDaintreePdfPreviewUrl(url);
+}
+
+/**
+ * `Content-Disposition` for a PDF response. The URL's own last segment is
+ * `load`, so without an explicit filename PDFium's download button and title
+ * would both use that. Ships a quoted ASCII fallback plus an RFC 5987
+ * `filename*` so non-ASCII names survive.
+ */
+function buildPdfContentDisposition(realFile: string): string {
+  const base = path.basename(realFile);
+  const ascii = base.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  return `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(base)}`;
+}
+
+/**
+ * Response headers for a daintree-pdf:// document.
+ *
+ * Content-Type is hard-coded, never derived from the path: the canonical-path
+ * `.pdf` gate in the read core plus a fixed `application/pdf` here is what
+ * makes the `frame-src daintree-pdf:` allowance safe — a repo file holding
+ * active HTML under a `.pdf` name reaches PDFium as PDF bytes and fails as a
+ * malformed document rather than executing.
+ *
+ * Deliberately absent: `Content-Security-Policy` (a `sandbox` policy blocks
+ * PDFium) and `Cross-Origin-Embedder-Policy` (blocks PDFium's own viewer
+ * frame). The iframe carries `credentialless` instead, which is what lets a
+ * COEP-credentialless app shell embed a document that asserts no COEP at all.
+ */
+function buildDaintreePdfHeaders(realFile: string, contentLength: number): Record<string, string> {
+  return {
+    "Content-Type": "application/pdf",
+    "Content-Length": String(contentLength),
+    "Content-Disposition": buildPdfContentDisposition(realFile),
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-store",
+  };
+}
+
+/**
+ * Create the daintree-pdf:// protocol handler — inline PDF preview (#11427).
+ * URL shape mirrors daintree-file://: `daintree-pdf://load?path=…&root=…`.
+ *
+ * Range headers are ignored: PDFium renders fine from a single buffered 200
+ * with an accurate Content-Length, so there is no reason to carry the video
+ * path's ranged-streaming machinery here.
+ */
+function createDaintreePdfProtocolHandler() {
+  return async (request: GlobalRequest) => {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return new Response("Method Not Allowed", {
+        status: 405,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+
+    try {
+      const url = new URL(request.url);
+      const filePath = url.searchParams.get("path");
+      const rootPath = url.searchParams.get("root");
+
+      if (!filePath || !rootPath) {
+        return new Response("Missing path or root parameter", {
+          status: 400,
+          headers: buildDaintreeFileErrorHeaders(),
+        });
+      }
+
+      if (filePath.includes("\0") || rootPath.includes("\0")) {
+        return new Response("Invalid path", {
+          status: 400,
+          headers: buildDaintreeFileErrorHeaders(),
+        });
+      }
+
+      if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
+        return new Response("Paths must be absolute", {
+          status: 400,
+          headers: buildDaintreeFileErrorHeaders(),
+        });
+      }
+
+      const result = await readContainedDaintreeFile(
+        path.normalize(rootPath),
+        path.normalize(filePath),
+        "pdf"
+      );
+      if (result instanceof Response) return result;
+
+      return new Response(result.buffer, {
+        status: 200,
+        headers: buildDaintreePdfHeaders(result.realFile, result.buffer.length),
+      });
+    } catch (err) {
+      console.error("[MAIN] daintree-pdf protocol error:", err);
       return new Response("Internal Server Error", {
         status: 500,
         headers: buildDaintreeFileErrorHeaders(),
@@ -1063,7 +1217,8 @@ export function createPluginProtocolHandler(getPluginDir: GetPluginDir) {
 }
 
 /**
- * Register app://, daintree-file://, and plugin:// protocol handlers on a specific session.
+ * Register app://, daintree-file://, daintree-html://, daintree-pdf:// and
+ * plugin:// protocol handlers on a specific session.
  * Safe to call multiple times — skips sessions that are already configured.
  * Used for per-project session partitions that don't inherit the default session's handlers.
  *
@@ -1080,6 +1235,7 @@ export function registerProtocolsForSession(ses: Electron.Session, distPath: str
   ses.protocol.handle("app", createAppProtocolHandler(distPath));
   ses.protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
   ses.protocol.handle("daintree-html", createDaintreeHtmlProtocolHandler());
+  ses.protocol.handle("daintree-pdf", createDaintreePdfProtocolHandler());
   if (cachedGetPluginDir) {
     ses.protocol.handle("plugin", createPluginProtocolHandler(resolvePluginDir));
   }
@@ -1124,6 +1280,10 @@ export function registerDaintreeFileProtocol(): void {
 
 export function registerDaintreeHtmlProtocol(): void {
   protocol.handle("daintree-html", createDaintreeHtmlProtocolHandler());
+}
+
+export function registerDaintreePdfProtocol(): void {
+  protocol.handle("daintree-pdf", createDaintreePdfProtocolHandler());
 }
 
 // Stable indirection so the live `plugin://` resolver can be swapped after the
@@ -1219,7 +1379,7 @@ export function applyDaintreeAppCspToSession(ses: Electron.Session): void {
   ses.webRequest.onHeadersReceived(
     { urls: ["<all_urls>"], types: ["mainFrame", "subFrame", "script"] },
     (details, callback) => {
-      if (isDaintreeHtmlPreviewUrl(details.url)) {
+      if (shouldPreservePreviewResponseHeaders(details.url)) {
         callback({ responseHeaders: details.responseHeaders });
         return;
       }
@@ -1265,13 +1425,15 @@ export function setupWebviewCSP(): void {
     ses.webRequest.onHeadersReceived(
       { urls: ["<all_urls>"], types: ["mainFrame", "subFrame", "script"] },
       (details, callback) => {
-        // A daintree-html:// preview iframe carries its own token-scoped CSP
-        // (buildDaintreeHtmlDocHeaders). protocol.handle responses DO flow
-        // through onHeadersReceived (Electron 42 / Chromium 148), so without
-        // this bypass mergeCspHeaders would replace that policy with the trusted
-        // app CSP — breaking the sandboxed page's scripts AND re-exposing
-        // connect-src daintree-file:. Pass it through untouched.
-        if (isDaintreeHtmlPreviewUrl(details.url)) {
+        // Preview documents own their response headers. protocol.handle
+        // responses DO flow through onHeadersReceived (Electron 42 /
+        // Chromium 148), so without this bypass mergeCspHeaders would replace
+        // a daintree-html:// page's token-scoped CSP with the trusted app CSP
+        // — breaking its scripts AND re-exposing connect-src daintree-file: —
+        // and would stamp that same policy onto a daintree-pdf:// document,
+        // whose `frame-src` omits chrome-extension: and would therefore block
+        // PDFium's internal viewer frame. Pass both through untouched.
+        if (shouldPreservePreviewResponseHeaders(details.url)) {
           callback({ responseHeaders: details.responseHeaders });
           return;
         }

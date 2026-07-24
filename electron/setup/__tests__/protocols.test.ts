@@ -136,9 +136,11 @@ vi.mock("../../ipc/channels.js", () => ({
 }));
 
 import {
+  applyDaintreeAppCspToSession,
   createPluginProtocolHandler,
   registerAppProtocol,
   registerDaintreeFileProtocol,
+  registerDaintreePdfProtocol,
   registerPluginProtocol,
   registerProtocolsForSession,
   setPluginDirResolver,
@@ -1198,6 +1200,46 @@ describe("setupWebviewCSP — partition CSP wiring", () => {
     expect(vi.mocked(mergeCspHeaders)).toHaveBeenCalledTimes(1);
   });
 
+  it("passes daintree-pdf:// responses through without stamping a CSP on them (#11427)", async () => {
+    const { session } = await import("electron");
+    const { mergeCspHeaders } = await import("../../utils/webviewCsp.js");
+    const fromPartition = vi.mocked(session.fromPartition);
+    vi.mocked(mergeCspHeaders).mockClear();
+
+    let captured:
+      | ((details: unknown, callback: (r: { responseHeaders?: unknown }) => void) => void)
+      | undefined;
+    fromPartition.mockImplementation((partition: string) => {
+      const onHeadersReceived = vi.fn(
+        (
+          _filter: unknown,
+          listener: (details: unknown, callback: (r: { responseHeaders?: unknown }) => void) => void
+        ) => {
+          if (partition === "persist:daintree") captured = listener;
+        }
+      );
+      return { webRequest: { onHeadersReceived } } as unknown as Electron.Session;
+    });
+
+    setupWebviewCSP();
+    expect(captured).toBeDefined();
+
+    // A PDF document must reach PDFium carrying NO CSP: the app policy's
+    // frame-src omits chrome-extension:, so overlaying it would block the
+    // viewer frame PDFium installs inside the document.
+    const pdfHeaders = { "Content-Type": ["application/pdf"] };
+    let pdfResult: { responseHeaders?: unknown } | undefined;
+    captured!({ url: "daintree-pdf://load?path=%2Frepo%2Fa.pdf", responseHeaders: pdfHeaders }, (r) => {
+      pdfResult = r;
+    });
+    expect(pdfResult?.responseHeaders).toBe(pdfHeaders);
+    expect(vi.mocked(mergeCspHeaders)).not.toHaveBeenCalled();
+
+    // A normal app response still gets the overlay, so the bypass is scoped.
+    captured!({ url: "app://daintree/index.html", responseHeaders: {} }, () => {});
+    expect(vi.mocked(mergeCspHeaders)).toHaveBeenCalledTimes(1);
+  });
+
   it("attaches an onHeadersReceived listener for persist:daintree only (browser is excluded)", async () => {
     const { session } = await import("electron");
     const fromPartition = vi.mocked(session.fromPartition);
@@ -1420,10 +1462,14 @@ describe("protocol registration", () => {
     // plugin:// is skipped here — registerPluginProtocol hasn't been called yet
     // in this test. Production order is the opposite: registerPluginProtocol runs
     // in app.whenReady() before any per-project session is created.
-    expect(handle).toHaveBeenCalledTimes(3);
-    expect(handle).toHaveBeenCalledWith("app", expect.any(Function));
-    expect(handle).toHaveBeenCalledWith("daintree-file", expect.any(Function));
-    expect(handle).toHaveBeenCalledWith("daintree-html", expect.any(Function));
+    const schemes = handle.mock.calls.map((c) => c[0] as string);
+    expect(new Set(schemes)).toEqual(new Set(["app", "daintree-file", "daintree-html", "daintree-pdf"]));
+    // Each exactly once: a duplicate handle() for one scheme throws in Electron.
+    expect(schemes).toHaveLength(new Set(schemes).size);
+    expect(schemes).not.toContain("plugin");
+    for (const scheme of schemes) {
+      expect(handle).toHaveBeenCalledWith(scheme, expect.any(Function));
+    }
   });
 
   it("also registers plugin:// on per-project sessions after the resolver is cached", async () => {
@@ -1443,6 +1489,14 @@ describe("protocol registration", () => {
     registerDaintreeFileProtocol();
 
     expect(protocol.handle).toHaveBeenCalledWith("daintree-file", expect.any(Function));
+  });
+
+  it("registers the default-session daintree-pdf protocol", async () => {
+    const { protocol } = await import("electron");
+
+    registerDaintreePdfProtocol();
+
+    expect(protocol.handle).toHaveBeenCalledWith("daintree-pdf", expect.any(Function));
   });
 
   it("registers the default-session plugin protocol", async () => {
@@ -3373,5 +3427,283 @@ describe("createDaintreeHtmlProtocolHandler — sandboxed HTML preview (#11191)"
     const handler = await captureHandler();
     const response = await handler(makeRequest(token, "chart.png"));
     expect(response.status).toBe(413);
+  });
+});
+
+describe("createDaintreePdfProtocolHandler — inline PDF preview (#11427)", () => {
+  type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
+
+  async function captureHandler(): Promise<ProtocolHandler> {
+    const handle = vi.fn();
+    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
+    registerProtocolsForSession(mockSession, "/tmp/dist");
+    const call = handle.mock.calls.find((c) => c[0] === "daintree-pdf");
+    if (!call) throw new Error("handler for daintree-pdf not registered");
+    return call[1] as ProtocolHandler;
+  }
+
+  function makeRequest(
+    filePath: string,
+    rootPath: string,
+    init?: RequestInit
+  ): GlobalRequest {
+    const url = new URL("daintree-pdf://load");
+    url.searchParams.set("path", filePath);
+    url.searchParams.set("root", rootPath);
+    return new Request(url.toString(), init) as GlobalRequest;
+  }
+
+  function makeFileHandle(content: string | Buffer = "%PDF-1.4 body") {
+    const buffer = typeof content === "string" ? Buffer.from(content) : content;
+    return {
+      readFile: vi.fn().mockResolvedValue(buffer),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({ size: 13 } as Awaited<ReturnType<typeof fs.stat>>);
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("application/pdf");
+  });
+
+  it("serves a PDF with no CSP and no COEP so PDFium can install its viewer frame", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/project/spec.pdf", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("application/pdf");
+    // Both headers are load-bearing by their ABSENCE: a `sandbox` CSP blocks
+    // PDFium outright, and a COEP makes the PDF an embedder whose own viewer
+    // frame is then blocked. The iframe carries `credentialless` instead.
+    expect(response.headers.get("Content-Security-Policy")).toBeNull();
+    expect(response.headers.get("Cross-Origin-Embedder-Policy")).toBeNull();
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("reports the byte length actually returned", async () => {
+    const fs = await import("fs/promises");
+    const bytes = Buffer.from("%PDF-1.7 a longer body than the stat claimed");
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle(bytes) as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/project/spec.pdf", "/project"));
+
+    expect(response.headers.get("Content-Length")).toBe(String(bytes.length));
+  });
+
+  it("names the download after the file, not the URL's `load` segment", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/project/data sheet.pdf", "/project"));
+
+    const disposition = response.headers.get("Content-Disposition") ?? "";
+    expect(disposition.startsWith("inline")).toBe(true);
+    expect(disposition).toContain('filename="data sheet.pdf"');
+    expect(disposition).not.toContain("load");
+  });
+
+  it("opens the user-supplied path with O_NOFOLLOW", async () => {
+    const fs = await import("fs/promises");
+    const handler = await captureHandler();
+    await handler(makeRequest("/project/spec.pdf", "/project"));
+
+    expect(fs.open).toHaveBeenCalledWith(
+      path.normalize("/project/spec.pdf"),
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
+    );
+  });
+
+  it.each(["/project/spec.PDF", "/project/a.b.Pdf"])(
+    "accepts the case-insensitive extension %s",
+    async (filePath) => {
+      const handler = await captureHandler();
+      const response = await handler(makeRequest(filePath, "/project"));
+      expect(response.status).toBe(200);
+    }
+  );
+
+  it("rejects a non-PDF before reading any bytes", async () => {
+    const fs = await import("fs/promises");
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/project/notes.txt", "/project"));
+
+    expect(response.status).toBe(415);
+    // The gate must run before the read, or an arbitrary in-root file would be
+    // buffered under the PDF ceiling rather than the much tighter text cap.
+    expect(fs.open).not.toHaveBeenCalled();
+    expect(fs.stat).not.toHaveBeenCalled();
+  });
+
+  it("rejects a .pdf name whose canonical path is not a PDF", async () => {
+    // On Windows O_NOFOLLOW is a no-op, so a final-component symlink
+    // (`spec.pdf` -> `huge.bin`) would otherwise be served under the PDF cap.
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) =>
+      Promise.resolve(
+        (p as string).endsWith("spec.pdf") ? path.normalize("/project/huge.bin") : (p as string)
+      )
+    );
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/project/spec.pdf", "/project"));
+
+    expect(response.status).toBe(415);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("types a .pdf holding active HTML as a PDF rather than a document", async () => {
+    // This is what makes the `frame-src daintree-pdf:` allowance safe: the
+    // bytes reach PDFium and fail as a malformed PDF instead of executing.
+    const fs = await import("fs/promises");
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle("<script>parent.pwned = true</script>") as unknown as Awaited<
+        ReturnType<typeof fs.open>
+      >
+    );
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/project/evil.pdf", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("application/pdf");
+  });
+
+  it("ignores a Range header and answers with the whole document", async () => {
+    // PDFium renders from a single buffered 200, so the video path's ranged
+    // streaming is deliberately not wired here.
+    const handler = await captureHandler();
+    const response = await handler(
+      makeRequest("/project/spec.pdf", "/project", { headers: { Range: "bytes=0-4" } })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Range")).toBeNull();
+  });
+
+  it("allows a PDF larger than the raster-image ceiling but rejects one past its own", async () => {
+    const fs = await import("fs/promises");
+    const handler = await captureHandler();
+
+    // 30 MB clears the 25 MB image cap — proving PDFs get their own, larger
+    // ceiling rather than inheriting one of the existing limits.
+    vi.mocked(fs.stat).mockResolvedValue({ size: 30 * 1024 * 1024 } as Awaited<
+      ReturnType<typeof fs.stat>
+    >);
+    expect((await handler(makeRequest("/project/big.pdf", "/project"))).status).toBe(200);
+
+    vi.mocked(fs.stat).mockResolvedValue({ size: 512 * 1024 * 1024 } as Awaited<
+      ReturnType<typeof fs.stat>
+    >);
+    expect((await handler(makeRequest("/project/huge.pdf", "/project"))).status).toBe(413);
+  });
+
+  it("rejects a file outside the root", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/elsewhere/secret.pdf", "/project"));
+    expect(response.status).toBe(404);
+  });
+
+  it.each([
+    ["relative paths", "project/spec.pdf", "/project"],
+    ["a NUL byte", "/project/spec\0.pdf", "/project"],
+  ])("rejects %s with 400", async (_label, filePath, rootPath) => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest(filePath, rootPath));
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a request missing the path parameter", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      new Request("daintree-pdf://load?root=%2Fproject") as GlobalRequest
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a non-GET method", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeRequest("/project/spec.pdf", "/project", { method: "POST" })
+    );
+    expect(response.status).toBe(405);
+  });
+
+  it("keeps error responses inert rather than serving them as PDFs", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/project/notes.txt", "/project"));
+
+    expect(response.headers.get("Content-Type")).toBe("text/plain");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Content-Security-Policy")).toContain("sandbox");
+  });
+});
+
+describe("applyDaintreeAppCspToSession — preview response pass-through", () => {
+  // The second CSP overlay call site. It and setupWebviewCSP must agree about
+  // which preview responses keep their own headers; a bypass added to only one
+  // leaves paint-surface views silently broken (#11198).
+  async function captureListener() {
+    const { mergeCspHeaders } = await import("../../utils/webviewCsp.js");
+    vi.mocked(mergeCspHeaders).mockClear();
+
+    let captured:
+      | ((details: unknown, callback: (r: { responseHeaders?: unknown }) => void) => void)
+      | undefined;
+    const ses = {
+      webRequest: {
+        onHeadersReceived: vi.fn(
+          (
+            _filter: unknown,
+            listener: (
+              details: unknown,
+              callback: (r: { responseHeaders?: unknown }) => void
+            ) => void
+          ) => {
+            captured = listener;
+          }
+        ),
+      },
+    } as unknown as Electron.Session;
+
+    applyDaintreeAppCspToSession(ses);
+    if (!captured) throw new Error("no onHeadersReceived listener registered");
+    return { listener: captured, mergeCspHeaders: vi.mocked(mergeCspHeaders) };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ["daintree-pdf://load?path=%2Frepo%2Fa.pdf"],
+    ["daintree-html://tok/index.html"],
+  ])("passes %s through untouched", async (url) => {
+    const { listener, mergeCspHeaders } = await captureListener();
+    const headers = { "Content-Type": ["application/pdf"] };
+
+    let result: { responseHeaders?: unknown } | undefined;
+    listener({ url, responseHeaders: headers }, (r) => {
+      result = r;
+    });
+
+    expect(result?.responseHeaders).toBe(headers);
+    expect(mergeCspHeaders).not.toHaveBeenCalled();
+  });
+
+  it("still overlays the app CSP on ordinary responses", async () => {
+    const { listener, mergeCspHeaders } = await captureListener();
+
+    listener({ url: "app://daintree/index.html", responseHeaders: {} }, () => {});
+
+    expect(mergeCspHeaders).toHaveBeenCalledTimes(1);
   });
 });

@@ -25,6 +25,7 @@ import {
   registerAppProtocol,
   registerDaintreeFileProtocol,
   registerDaintreeHtmlProtocol,
+  registerDaintreePdfProtocol,
   registerDeepLinkProtocolClient,
   registerPluginProtocol,
   setupWebviewCSP,
@@ -149,6 +150,23 @@ protocol.registerSchemesAsPrivileged([
     scheme: "daintree-html",
     privileges: {
       standard: true,
+      secure: true,
+    },
+  },
+  {
+    // Inline PDF preview (#11427). Chromium's built-in PDFium viewer engages for
+    // any custom-scheme response typed `application/pdf` — verified against
+    // Electron 42 / Chromium 148 — so this scheme exists purely to give the
+    // viewer a `frame-src` allowance that can never resolve to anything but a
+    // PDF. Kept off daintree-file:// on purpose: that scheme serves arbitrary
+    // repo files under extension-derived MIME types and a `sandbox` response
+    // CSP, and a sandboxed document blocks PDFium (ERR_BLOCKED_BY_CLIENT).
+    // Deliberately minimal privileges: no `standard` (an opaque origin is more
+    // isolated, and the query-string URL shape needs no hierarchical parsing),
+    // and no supportFetchAPI/corsEnabled — the iframe navigates here, it never
+    // fetch()es.
+    scheme: "daintree-pdf",
+    privileges: {
       secure: true,
     },
   },
@@ -592,6 +610,7 @@ if (!gotTheLock) {
       registerAppProtocol(distPath, { allowDisplayCapture: isDemoMode });
       registerDaintreeFileProtocol();
       registerDaintreeHtmlProtocol();
+      registerDaintreePdfProtocol();
       // Register `plugin://` with a placeholder resolver that 404s every
       // request, keeping the heavy ~2900-line PluginService module off the
       // first-paint critical path (#10322). The handler must exist before

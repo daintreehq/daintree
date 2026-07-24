@@ -29,9 +29,11 @@ import { revealCopy, type RevealCopy } from "@/components/FileViewer/revealCopy"
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
 import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
+import { FilePdfPreview } from "@/components/FileViewer/FilePdfPreview";
 import {
   isAudioFilePath,
   isImageFilePath,
+  isPdfFilePath,
   isSvgFilePath,
   isUnsupportedAudioFilePath,
   isUnsupportedVideoFilePath,
@@ -115,11 +117,22 @@ function isUnderRoot(filePath: string, rootPath: string): boolean {
   return toForwardSlashes(filePath).startsWith(root);
 }
 
-// "image", "svg", "video", and "audio" are terminal preview states: an image is
-// handed to the `daintree-file://` protocol as an <img> src, an SVG is read as
-// text, sanitized, then inlined, and video/audio are fetched from the same
-// protocol into a blob the media element plays. None has readable text content.
-type LoadState = "idle" | "loading" | "loaded" | "error" | "image" | "svg" | "video" | "audio";
+// "image", "svg", "video", "audio", and "pdf" are terminal preview states: an
+// image is handed to the `daintree-file://` protocol as an <img> src, an SVG is
+// read as text, sanitized, then inlined, video/audio are fetched from the same
+// protocol into a blob the media element plays, and a PDF is framed from
+// `daintree-pdf://` into Chromium's built-in viewer. None has readable text
+// content.
+type LoadState =
+  | "idle"
+  | "loading"
+  | "loaded"
+  | "error"
+  | "image"
+  | "svg"
+  | "video"
+  | "audio"
+  | "pdf";
 
 // Which external surface a toolbar action aims the current file at. `reveal` is
 // always offered; `browser`/`editor` is the mode-dependent open button.
@@ -489,6 +502,21 @@ export function FilePane({
         // playback while someone is listening.
         if (!silent) setReloadNonce((nonce) => nonce + 1);
         setLoadState("audio");
+        setErrorCode(null);
+        setErrorMessage(null);
+        return;
+      }
+
+      // PDFs are framed straight from the protocol handler into Chromium's
+      // built-in viewer; the text path would reject them as a binary file.
+      if (isPdfFilePath(filePath)) {
+        setContent(null);
+        setSanitizedSvg(null);
+        // Only an explicit load (open, toolbar Refresh) re-requests the
+        // document — a silent background pass must not remount the frame and
+        // throw away the reader's page and zoom.
+        if (!silent) setReloadNonce((nonce) => nonce + 1);
+        setLoadState("pdf");
         setErrorCode(null);
         setErrorMessage(null);
         return;
@@ -984,6 +1012,15 @@ export function FilePane({
               setErrorMessage(error?.title ?? "This audio file couldn't be played");
               setLoadState("error");
             }}
+          />
+        )}
+
+        {filePath && viewMode !== "diff" && loadState === "pdf" && (
+          <FilePdfPreview
+            filePath={filePath}
+            rootPath={effectiveRootPath}
+            label={fileName ?? filePath}
+            reloadKey={reloadNonce}
           />
         )}
 
