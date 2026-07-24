@@ -102,6 +102,49 @@ function normalizeCreationIdentity(
   return { name: trimmedName, emoji: trimmedEmoji };
 }
 
+/**
+ * Remove a project row and everything keyed to it. Extracted from
+ * `handleProjectRemove` so non-IPC callers can offer removal too — the native
+ * "Remove from recent" recovery on a dead Recent Projects entry (#11409) — with
+ * the same teardown rather than a bare `removeProject` that would orphan PTYs
+ * and leave stale window state behind.
+ */
+export async function removeProjectWithCleanup(
+  projectId: string,
+  deps: Pick<HandlerDependencies, "ptyClient" | "worktreeService">
+): Promise<void> {
+  // Resolve the path before removeProject() deletes the row — the prune below
+  // keys window-states.json by path, which is unrecoverable once the row is gone.
+  const removedPath = projectStore.getProjectById(projectId)?.path ?? null;
+
+  if (deps.ptyClient) {
+    // Gracefully tear down and journal each agent session before the row (and
+    // its restoration state) is permanently deleted. Fail closed: if the host
+    // can't confirm the kills, keep the project so its still-running agents
+    // aren't orphaned by a deleted row (#11340).
+    const { confirmed } = await gracefulTeardownAndJournalProject(
+      projectId,
+      deps.ptyClient,
+      deps.worktreeService
+    );
+    if (!confirmed) {
+      throw new AppError({
+        code: "INTERNAL",
+        message: UNCONFIRMED_TEARDOWN_MESSAGE,
+        context: { projectId },
+      });
+    }
+  }
+
+  await projectStore.removeProject(projectId);
+  if (removedPath) {
+    pruneWindowStateForPath(removedPath);
+  }
+  broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
+  // The row is gone, so a window still bound to it no longer has a project open.
+  refreshProjectMenuState();
+}
+
 export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () => void {
   const handleProjectAdd = async (projectPath: string, options?: ProjectAddOptions) =>
     addProjectByPath(projectPath, options);
@@ -148,36 +191,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       throw new Error("Invalid project ID");
     }
 
-    // Resolve the path before removeProject() deletes the row — the prune below
-    // keys window-states.json by path, which is unrecoverable once the row is gone.
-    const removedPath = projectStore.getProjectById(projectId)?.path ?? null;
-
-    if (deps.ptyClient) {
-      // Gracefully tear down and journal each agent session before the row (and
-      // its restoration state) is permanently deleted. Fail closed: if the host
-      // can't confirm the kills, keep the project so its still-running agents
-      // aren't orphaned by a deleted row (#11340).
-      const { confirmed } = await gracefulTeardownAndJournalProject(
-        projectId,
-        deps.ptyClient,
-        deps.worktreeService
-      );
-      if (!confirmed) {
-        throw new AppError({
-          code: "INTERNAL",
-          message: UNCONFIRMED_TEARDOWN_MESSAGE,
-          context: { projectId },
-        });
-      }
-    }
-
-    await projectStore.removeProject(projectId);
-    if (removedPath) {
-      pruneWindowStateForPath(removedPath);
-    }
-    broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
-    // The row is gone, so a window still bound to it no longer has a project open.
-    refreshProjectMenuState();
+    await removeProjectWithCleanup(projectId, deps);
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_REMOVE, handleProjectRemove));
 

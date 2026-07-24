@@ -17,6 +17,7 @@ import { existsSync } from "fs";
 import { app } from "electron";
 import { GitService } from "./GitService.js";
 import { AppError, isDaintreeError } from "../utils/errorTypes.js";
+import { assertProjectDirectory, isMissingExecutableError } from "./projectOpenPreflight.js";
 import { logError } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { store } from "../store.js";
@@ -391,6 +392,11 @@ export class ProjectStore {
    * identity never implies a mode.
    */
   async addProject(projectPath: string, options?: ProjectAddOptions): Promise<Project> {
+    // Classify the path before git ever sees it. simple-git's own synchronous
+    // baseDir check throws first otherwise, and its error can't distinguish a
+    // missing folder from a file — the root cause of #11409.
+    await assertProjectDirectory(projectPath);
+
     const creationIdentity = options?.identity;
     let gitRoot: string;
     try {
@@ -403,17 +409,37 @@ export class ProjectStore {
       const combined = [message, causeMessage].filter(Boolean).join("\n");
       const lower = combined.toLowerCase();
 
-      if (lower.includes("spawn git enoent") || lower.includes("git: not found")) {
-        throw new Error(
-          "Git executable not found. Install Git and ensure it is available on your PATH."
-        );
+      // Classified before the directory re-check below because it's a property
+      // of the machine, not the path: a transient stat failure must not mask
+      // "git isn't installed", and a missing binary must not be reported as a
+      // problem with the folder.
+      if (isMissingExecutableError(error)) {
+        throw new AppError({
+          code: "GIT_NOT_INSTALLED",
+          message: "Git executable not found",
+          context: { projectPath },
+          cause: error instanceof Error ? error : undefined,
+        });
       }
 
       if (lower.includes("dubious ownership") || lower.includes("safe.directory")) {
-        throw new Error(
-          "Git refused to open this repository due to 'dubious ownership'. Mark it as safe.directory and try again."
-        );
+        // The substring match is against git's own stderr, which git genuinely
+        // emits. What the renderer keys on is the code, so this message is
+        // diagnostic copy and free to be reworded.
+        throw new AppError({
+          code: "DUBIOUS_OWNERSHIP",
+          message:
+            "Git refused to open this repository due to 'dubious ownership'. Mark it as safe.directory and try again.",
+          context: { projectPath },
+        });
       }
+
+      // Re-check the directory before the guided-init branch: several awaits
+      // have passed since the pre-flight, and a folder deleted or swapped for a
+      // file in that window reports as "not a git repository" too. Offering to
+      // run `git init` in a folder that no longer exists would be worse than
+      // useless, so a path that stopped validating is reclassified here.
+      await assertProjectDirectory(projectPath);
 
       if (lower.includes("not a git repository")) {
         // The folder has no repository. Adopt it as a lightweight workspace when
@@ -446,7 +472,19 @@ export class ProjectStore {
         });
       }
 
-      throw new Error(combined || "Failed to open project");
+      // Everything unrecognized becomes one opaque code, and the raw text is
+      // demoted to diagnostics. The old fallback rethrew `combined` as the
+      // message, which is how "Git operation failed: getRepositoryRoot" and
+      // simple-git's own wording reached the user (#11409) — keeping it out of
+      // `message` means even a surface that naively renders `error.message`
+      // can't leak it.
+      logError("Failed to open project", error, { projectPath });
+      throw new AppError({
+        code: "PROJECT_OPEN_FAILED",
+        message: `Failed to open project: ${projectPath}`,
+        context: { projectPath, detail: combined },
+        cause: error instanceof Error ? error : undefined,
+      });
     }
 
     // NFC-normalize for dedup so a Finder-dragged NFD path and a typed NFC
