@@ -198,11 +198,17 @@ export function registerGitInitHandlers(): () => void {
   return () => handlers.forEach((cleanup) => cleanup());
 }
 
+/**
+ * Collects the exclusion patterns from a .gitignore, dropping comments, blank
+ * lines, and negations. A negation only re-includes something an exclusion took
+ * away, so it is meaningless on its own — reporting `!.env.example` as "missing"
+ * from a file that never excluded `.env.example` would be noise.
+ */
 function parseGitignoreLines(content: string): Set<string> {
   const lines = new Set<string>();
   for (const raw of content.split(/\r?\n/)) {
     const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
+    if (!line || line.startsWith("#") || line.startsWith("!")) continue;
     lines.add(line);
   }
   return lines;

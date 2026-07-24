@@ -222,4 +222,34 @@ describe("computeMissingTemplateEntries", () => {
     const existing = "  .env  \n .DS_Store \n";
     expect(computeMissingTemplateEntries(existing, template)).toEqual([]);
   });
+
+  it("never reports a negation as missing", () => {
+    const template = ".env\n!.env.example\n.yarn/*\n!.yarn/patches\n";
+    expect(computeMissingTemplateEntries("", template)).toEqual([".env", ".yarn/*"]);
+  });
+
+  it("reports nothing when only negations are absent from the existing file", () => {
+    const template = ".env\n!.env.example\n";
+    const existing = ".env\n";
+    expect(computeMissingTemplateEntries(existing, template)).toEqual([]);
+  });
+
+  it("ignores negations the existing file happens to carry", () => {
+    const template = ".env\n.DS_Store\n";
+    const existing = "!.env\n.DS_Store\n";
+    expect(computeMissingTemplateEntries(existing, template)).toEqual([".env"]);
+  });
+
+  it("keeps every shipped template's missing count free of negations", () => {
+    for (const id of LANGUAGE_IDS.concat("minimal")) {
+      const missing = computeMissingTemplateEntries("", resolve(id));
+      expect(missing.filter((entry) => entry.startsWith("!")), `${id} reported negations`).toEqual(
+        []
+      );
+      expect(missing.length, `${id} reported no entries`).toBeGreaterThan(0);
+      expect(missing.length, `${id} counted every active line`).toBeLessThan(
+        activeLines(resolve(id)).length
+      );
+    }
+  });
 });
