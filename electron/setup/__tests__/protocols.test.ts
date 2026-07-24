@@ -2004,14 +2004,17 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
   function makeVideoRequest(
     filePath: string,
     rootPath: string,
-    init?: { method?: string; range?: string }
+    init?: { method?: string; range?: string; origin?: string }
   ): GlobalRequest {
     const url = new URL("daintree-file://serve");
     url.searchParams.set("path", filePath);
     url.searchParams.set("root", rootPath);
     return new Request(url.toString(), {
       method: init?.method ?? "GET",
-      ...(init?.range && { headers: { Range: init.range } }),
+      headers: {
+        ...(init?.range && { Range: init.range }),
+        ...(init?.origin && { Origin: init.origin }),
+      },
     }) as GlobalRequest;
   }
 
@@ -2050,8 +2053,8 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
   });
 
   it("streams a 200 with Accept-Ranges and no whole-file cap, bypassing the buffered core", async () => {
-    // Far beyond both the 512 KB text cap and the 25 MB image ceiling — videos
-    // are streamed in bounded chunks, so no whole-file cap applies.
+    // Far beyond both the 512 KB text cap and the 25 MB image ceiling — video
+    // responses are backpressured streams, so no whole-file cap applies.
     const size = 600 * 1024 * 1024;
     const handle = makeVideoHandle(VIDEO_BYTES, { size });
     await installHandle(handle);
@@ -2068,6 +2071,50 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
       start: 0,
       end: size - 1,
       autoClose: true,
+    });
+  });
+
+  describe("CORS gate (blob-URL playback fetch)", () => {
+    // corsEnabled on the scheme only makes cross-origin fetch possible;
+    // these pin the actual grant: ACAO echoed solely for the trusted app
+    // origin, never for arbitrary web content in a browser panel.
+    it("echoes Access-Control-Allow-Origin for the trusted app origin", async () => {
+      const handler = await captureHandler();
+      const response = await handler(
+        makeVideoRequest("/project/clip.mp4", "/project", { origin: "app://daintree" })
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
+    });
+
+    it("omits the grant for a foreign origin", async () => {
+      const handler = await captureHandler();
+      const response = await handler(
+        makeVideoRequest("/project/clip.mp4", "/project", { origin: "https://evil.example" })
+      );
+
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    });
+
+    it("omits the grant when no Origin header is present", async () => {
+      const handler = await captureHandler();
+      const response = await handler(makeVideoRequest("/project/clip.mp4", "/project"));
+
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    });
+
+    it("carries the grant on error responses so fetch() can read the status", async () => {
+      const handler = await captureHandler();
+      const response = await handler(
+        makeVideoRequest("/project/clip.mp4", "/project", {
+          origin: "app://daintree",
+          range: "bytes=99-",
+        })
+      );
+
+      expect(response.status).toBe(416);
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
     });
   });
 

@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import { FileVideoPreview, VIDEO_TOO_LARGE_MESSAGE } from "../FileVideoPreview";
+import { FileVideoPreview } from "../FileVideoPreview";
 
 const fetchMock = vi.fn();
 const createObjectURL = vi.fn();
@@ -105,16 +105,19 @@ describe("FileVideoPreview", () => {
     );
 
     await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
-    expect(onError).toHaveBeenCalledWith();
+    // No specific message — callers fall back to their generic copy.
+    expect(onError.mock.calls[0]?.[0]).toBeUndefined();
   });
 
   it("rejects an over-cap video by declared length without reading the body", async () => {
-    const blob = { size: 1 } as Blob;
+    // The declared-length gate fires before blob() is consulted, so the body
+    // can stay tiny — asserted below via the untouched blob spy.
+    const blobSpy = vi.fn(() => Promise.resolve(new Blob(["x"])));
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
       headers: new Headers({ "content-length": String(2 * 1024 * 1024 * 1024) }),
-      blob: () => Promise.resolve(blob),
+      blob: blobSpy,
     });
     const onError = vi.fn();
     render(
@@ -126,7 +129,59 @@ describe("FileVideoPreview", () => {
       />
     );
 
-    await waitFor(() => expect(onError).toHaveBeenCalledWith(VIDEO_TOO_LARGE_MESSAGE));
+    // A distinct message (not the callers' generic "couldn't be played" copy)
+    // — the exact wording is the component's own to choose.
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(expect.any(String)));
+    expect(blobSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects an over-cap video by blob size when no length was declared", async () => {
+    const oversized = new Blob(["x"]);
+    Object.defineProperty(oversized, "size", { value: 2 * 1024 * 1024 * 1024 });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      blob: () => Promise.resolve(oversized),
+    });
+    const onError = vi.fn();
+    render(
+      <FileVideoPreview
+        filePath="/repo/huge.mp4"
+        rootPath="/repo"
+        label="huge.mp4"
+        onError={onError}
+      />
+    );
+
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(expect.any(String)));
+  });
+
+  it("does not report an error when unmounted mid-fetch", async () => {
+    let resolveFetch: (value: unknown) => void = () => {};
+    fetchMock.mockImplementation(
+      (_url: string, opts: { signal: AbortSignal }) =>
+        new Promise((resolve, reject) => {
+          resolveFetch = resolve;
+          opts.signal.addEventListener("abort", () => reject(new DOMException("", "AbortError")));
+        })
+    );
+    const onError = vi.fn();
+    const { unmount } = render(
+      <FileVideoPreview
+        filePath="/repo/demo.mp4"
+        rootPath="/repo"
+        label="demo.mp4"
+        onError={onError}
+      />
+    );
+
+    unmount();
+    resolveFetch(undefined);
+    // Flush any queued reactions before asserting silence.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onError).not.toHaveBeenCalled();
+    expect(createObjectURL).not.toHaveBeenCalled();
   });
 
   it("forwards media element errors to onError", async () => {

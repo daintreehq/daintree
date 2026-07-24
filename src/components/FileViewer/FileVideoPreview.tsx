@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { Spinner } from "@/components/ui/Spinner";
 import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
@@ -9,7 +9,7 @@ import { buildDaintreeFileUrl } from "./filePreviewKinds";
 // runs ~10MB/min; 1GiB covers over an hour before the viewer says no.
 const VIDEO_PREVIEW_MAX_BYTES = 1024 * 1024 * 1024;
 
-export const VIDEO_TOO_LARGE_MESSAGE = "This video is too large to preview";
+const VIDEO_TOO_LARGE_MESSAGE = "This video is too large to preview";
 
 interface FileVideoPreviewProps {
   /** Absolute path of the video being previewed. */
@@ -65,11 +65,10 @@ export function FileVideoPreview({
   const [fetching, setFetching] = useState(true);
   const showSpinner = useDeferredLoading(fetching, UI_DOHERTY_THRESHOLD);
 
-  // Ref'd so the fetch effect keys on `src` alone — callers pass inline
-  // closures, and refetching the file on every parent render would discard
-  // playback position each time anything else in the pane changes.
-  const onErrorRef = useRef(onError);
-  onErrorRef.current = onError;
+  // Effect events so the fetch effect keys on `src` alone — callers pass
+  // inline closures, and refetching the file on every parent render would
+  // discard playback position each time anything else in the pane changes.
+  const reportError = useEffectEvent((message?: string) => onError?.(message));
 
   useEffect(() => {
     const controller = new AbortController();
@@ -79,18 +78,25 @@ export function FileVideoPreview({
 
     void fetch(src, { signal: controller.signal })
       .then(async (response) => {
+        // Guarded before any state write: an already-settled fetch promise can
+        // run this reaction after cleanup aborted it, and reporting then would
+        // clear the spinner / flag an error on the file shown NEXT.
+        if (controller.signal.aborted) return;
         if (!response.ok) throw new Error(`daintree-file responded ${response.status}`);
         const declaredLength = Number(response.headers.get("content-length"));
         if (Number.isFinite(declaredLength) && declaredLength > VIDEO_PREVIEW_MAX_BYTES) {
+          // Drop the unread body so the protocol stream (and its fd) closes
+          // now rather than when the response gets collected.
+          void response.body?.cancel().catch(() => {});
           setFetching(false);
-          onErrorRef.current?.(VIDEO_TOO_LARGE_MESSAGE);
+          reportError(VIDEO_TOO_LARGE_MESSAGE);
           return;
         }
         const blob = await response.blob();
         if (controller.signal.aborted) return;
         if (blob.size > VIDEO_PREVIEW_MAX_BYTES) {
           setFetching(false);
-          onErrorRef.current?.(VIDEO_TOO_LARGE_MESSAGE);
+          reportError(VIDEO_TOO_LARGE_MESSAGE);
           return;
         }
         url = URL.createObjectURL(blob);
@@ -100,7 +106,7 @@ export function FileVideoPreview({
       .catch(() => {
         if (controller.signal.aborted) return;
         setFetching(false);
-        onErrorRef.current?.();
+        reportError();
       });
 
     return () => {
@@ -127,7 +133,7 @@ export function FileVideoPreview({
           preload="metadata"
           aria-label={label}
           className={`max-w-full ${maxHeightClassName} rounded`}
-          onError={() => onErrorRef.current?.()}
+          onError={() => onError?.()}
         />
       ) : showSpinner ? (
         <Spinner size="xl" className="text-text-secondary" />

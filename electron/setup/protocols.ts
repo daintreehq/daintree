@@ -525,7 +525,14 @@ function daintreeFileCorsOrigin(request: GlobalRequest): string | null {
   const origin = request.headers.get("origin");
   if (!origin) return null;
   if (origin === "app://daintree") return origin;
-  if (process.env.NODE_ENV === "development" && getDevServerOrigins().includes(origin)) {
+  // The dev-server allowance additionally requires an unpackaged build so a
+  // packaged app launched with NODE_ENV=development in its environment can't
+  // widen the trust set to localhost origins.
+  if (
+    !app.isPackaged &&
+    process.env.NODE_ENV === "development" &&
+    getDevServerOrigins().includes(origin)
+  ) {
     return origin;
   }
   return null;

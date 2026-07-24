@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from "react";
-import { render, fireEvent, screen } from "@testing-library/react";
+import { render, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitStatus } from "@shared/types/git";
 import type { DiffChangeSetEntry } from "@shared/types/git";
@@ -561,16 +561,38 @@ describe("DiffPane — unresolvable subject", () => {
 });
 
 describe("DiffPane — video current-version mode (#11382)", () => {
-  it("plays the working-tree version instead of rendering a diff", () => {
+  // FileVideoPreview fetch()es the bytes and plays a blob object URL —
+  // Chromium's custom-scheme media loader can't do follow-up range requests
+  // (electron#51442) — so the suite stubs the fetch/object-URL boundary.
+  const videoFetchMock = vi.fn();
+  beforeEach(() => {
+    videoFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      blob: () => Promise.resolve(new Blob(["x"])),
+    });
+    vi.stubGlobal("fetch", videoFetchMock);
+    let objectUrlSequence = 0;
+    URL.createObjectURL = vi.fn(() => `blob:app://daintree/video-${objectUrlSequence++}`);
+    URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    videoFetchMock.mockReset();
+  });
+
+  it("plays the working-tree version instead of rendering a diff", async () => {
     const changeSet = [entry("media/demo.mp4")];
     seedPanel({ filePath: "media/demo.mp4", fileStatus: "modified", changeSet });
     const { container } = renderPane();
 
-    const video = container.querySelector("video");
-    expect(video).not.toBeNull();
+    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
     // The absolute working-tree path rides the protocol URL — no diff content,
     // no base64 diffMedia IPC (8 MB cap, unsuited to video).
-    expect(video?.getAttribute("src")).toContain(encodeURIComponent("/repo/media/demo.mp4"));
+    expect(String(videoFetchMock.mock.calls[0]?.[0])).toContain(
+      encodeURIComponent("/repo/media/demo.mp4")
+    );
     expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
   });
 
@@ -586,7 +608,7 @@ describe("DiffPane — video current-version mode (#11382)", () => {
     expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
   });
 
-  it("reloads the video from the toolbar Refresh (nonce-busted URL) and still retries the diff", () => {
+  it("reloads the video from the toolbar Refresh (nonce-busted refetch) and still retries the diff", async () => {
     const retry = vi.fn();
     useDiffContentMock.mockReturnValue({ content: "diff --git a/x b/x", stale: false, retry });
     seedPanel({
@@ -595,24 +617,31 @@ describe("DiffPane — video current-version mode (#11382)", () => {
       changeSet: [entry("media/demo.mp4")],
     });
     const { container } = renderPane();
+    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
     const before = container.querySelector("video")?.getAttribute("src");
-    expect(before).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
-    const after = container.querySelector("video")?.getAttribute("src");
-    expect(after).toBeTruthy();
-    expect(after).not.toBe(before);
+    // A bumped nonce must produce a fresh protocol fetch (new &v= param) and a
+    // new blob URL — the old element would otherwise keep playing stale bytes.
+    await waitFor(() => expect(videoFetchMock).toHaveBeenCalledTimes(2));
+    expect(String(videoFetchMock.mock.calls[1]?.[0])).not.toBe(
+      String(videoFetchMock.mock.calls[0]?.[0])
+    );
+    await waitFor(() =>
+      expect(container.querySelector("video")?.getAttribute("src")).not.toBe(before)
+    );
     expect(retry).toHaveBeenCalledTimes(1);
   });
 
-  it("shows a playback-failure state instead of a dead control on media error", () => {
+  it("shows a playback-failure state instead of a dead control on media error", async () => {
     seedPanel({
       filePath: "media/demo.mp4",
       fileStatus: "modified",
       changeSet: [entry("media/demo.mp4")],
     });
     const { container } = renderPane();
+    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
 
     fireEvent.error(container.querySelector("video")!);
 

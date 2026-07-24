@@ -266,12 +266,13 @@ export function DiffPane({
   const [videoReloadNonce, setVideoReloadNonce] = useState(0);
   // An allowlisted container can still hold a codec Chromium lacks, or the
   // file may be unreadable — surface that instead of a dead native control.
-  const [videoPlaybackFailed, setVideoPlaybackFailed] = useState(false);
+  // Holds the preview's specific reason (e.g. too large) when it gives one.
+  const [videoPlaybackError, setVideoPlaybackError] = useState<string | null>(null);
   useEffect(() => {
     // Any change to the playback attempt's identity — file, resolved root, or
     // an explicit refresh — gets a fresh attempt. absolutePath covers a
     // worktree move that filePath (relative) alone would miss.
-    setVideoPlaybackFailed(false);
+    setVideoPlaybackError(null);
   }, [filePath, absolutePath, worktreePath, videoReloadNonce]);
 
   const [pathCopied, setPathCopied] = useState(false);
@@ -743,13 +744,16 @@ export function DiffPane({
                     description="This video was deleted, and the diff view can only play the current file."
                   />
                 </div>
-              ) : videoPlaybackFailed ? (
+              ) : videoPlaybackError !== null ? (
                 <div className="flex h-full w-full items-center justify-center p-6">
                   <EmptyState
                     variant="zero-data"
                     scale="canvas"
                     title="This video couldn't be played"
-                    description="The container is supported but the codec may not be — Refresh to try again."
+                    description={
+                      videoPlaybackError ||
+                      "The container is supported but the codec may not be — Refresh to try again."
+                    }
                   />
                 </div>
               ) : (
@@ -758,7 +762,7 @@ export function DiffPane({
                   rootPath={worktreePath}
                   label={fileName ?? filePath}
                   reloadKey={videoReloadNonce}
-                  onError={() => setVideoPlaybackFailed(true)}
+                  onError={(message) => setVideoPlaybackError(message ?? "")}
                   maxHeightClassName="max-h-full"
                 />
               ))}
