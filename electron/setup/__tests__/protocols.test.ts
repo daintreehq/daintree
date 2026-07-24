@@ -2132,9 +2132,7 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
       );
 
       expect(response.status).toBe(206);
-      expect(response.headers.get("Content-Range")).toBe(
-        `bytes 4-9/${String(VIDEO_BYTES.length)}`
-      );
+      expect(response.headers.get("Content-Range")).toBe(`bytes 4-9/${String(VIDEO_BYTES.length)}`);
       expect(await response.text()).toBe("456789");
     });
 
