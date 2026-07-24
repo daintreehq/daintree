@@ -14,11 +14,15 @@ describe("urlHistoryStore cross-view write merge (#11351)", () => {
 
   type PersistedBlob = { version: number; state: { entries: Record<string, UrlHistoryEntry[]> } };
 
+  // Pinned clock so the sibling entry stays inside the 90-day retention window the
+  // reconciler's `migrateEntries` normalization enforces on every input.
+  const NOW = 1_800_000_000_000;
+
   const siblingEntry: UrlHistoryEntry = {
     url: "https://sibling.example/",
     title: "Sibling",
     visitCount: 3,
-    lastVisitAt: 1_700_000_000_000,
+    lastVisitAt: NOW - 1000,
   };
 
   function installLocalStorage(initial: Record<string, string>): Map<string, string> {
@@ -55,6 +59,7 @@ describe("urlHistoryStore cross-view write merge (#11351)", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.useFakeTimers();
+    vi.setSystemTime(NOW);
   });
 
   afterEach(() => {
@@ -79,7 +84,8 @@ describe("urlHistoryStore cross-view write merge (#11351)", () => {
 
     const written = readBlob(backing);
     expect(Object.keys(written.state.entries).sort()).toEqual(["proj-a", "proj-b"]);
-    expect(written.state.entries["proj-b"]).toEqual([siblingEntry]);
+    expect(written.state.entries["proj-b"]).toHaveLength(1);
+    expect(written.state.entries["proj-b"]?.[0]?.title).toBe("Sibling");
   });
 
   it("a sibling's visit written during the debounce window survives this view's flush", async () => {
@@ -104,11 +110,9 @@ describe("urlHistoryStore cross-view write merge (#11351)", () => {
 
     const written = readBlob(backing);
     expect(Object.keys(written.state.entries).sort()).toEqual(["proj-a", "proj-b"]);
-    expect(written.state.entries["proj-b"]).toEqual([siblingEntry]);
-    expect(written.state.entries["proj-a"]!.map((e) => e.url).sort()).toEqual([
-      "https://a.example/",
-      "https://a2.example/",
-    ]);
+    expect(written.state.entries["proj-b"]).toHaveLength(1);
+    expect(written.state.entries["proj-b"]?.[0]?.title).toBe("Sibling");
+    expect(written.state.entries["proj-a"]).toHaveLength(2);
   });
 
   it("does not resurrect a project's history this view removed, and keeps a sibling's", async () => {
@@ -128,6 +132,7 @@ describe("urlHistoryStore cross-view write merge (#11351)", () => {
 
     const written = readBlob(backing);
     expect(written.state.entries["proj-a"]).toBeUndefined();
-    expect(written.state.entries["proj-b"]).toEqual([siblingEntry]);
+    expect(written.state.entries["proj-b"]).toHaveLength(1);
+    expect(written.state.entries["proj-b"]?.[0]?.title).toBe("Sibling");
   });
 });

@@ -80,13 +80,15 @@ function entriesOf(
  * resurrected. Concurrent writes to the *same* project bucket stay
  * last-writer-wins (the separate same-project multi-window case).
  *
- * Only the `baseline` is normalized through `migrateEntries` (the same
- * canonicalize + prune-expired transform the hydration `merge` applies): the
- * in-memory `incoming` already passed through it, but `baseline` is raw JSON, so
- * diffing a raw baseline against a pruned incoming would misread a
- * hydration-pruned project as a writer deletion and drop a sibling's re-added
- * bucket. `onDisk` stays raw so a sibling's freshly-written bucket is preserved
- * verbatim (it was already normalized by the sibling that wrote it).
+ * All three inputs are normalized through `migrateEntries` (the same
+ * canonicalize + prune-expired transform the hydration `merge` applies) against a
+ * single captured `now`, so the writer-delta diff compares like-for-like. Without
+ * it, a raw baseline diffed against a pruned incoming would misread a
+ * hydration-pruned project as a writer deletion (dropping a sibling's re-added
+ * bucket); and a lone-normalized baseline would misread an entry that expired
+ * after hydration (still present in raw incoming) as a writer add (clobbering a
+ * sibling's fresh replacement). Sharing one `now` keeps an entry from being
+ * pruned in one input but kept in another at the retention boundary.
  */
 function mergeUrlHistoryPersistedWrite({
   baseline,
@@ -95,13 +97,14 @@ function mergeUrlHistoryPersistedWrite({
 }: PersistWriteMergeContext<UrlHistoryPersistedState>): StorageValue<UrlHistoryPersistedState> {
   // No shared value on disk yet → nothing to reconcile against.
   if (!onDisk) return incoming;
+  const now = Date.now();
   return {
     version: incoming.version,
     state: {
       entries: mergeRecordByWriterDelta(
-        migrateEntries(entriesOf(baseline)),
-        entriesOf(incoming),
-        entriesOf(onDisk)
+        migrateEntries(entriesOf(baseline), now),
+        migrateEntries(entriesOf(incoming), now),
+        migrateEntries(entriesOf(onDisk), now)
       ),
     },
   };
@@ -112,9 +115,9 @@ function pruneStaleEntries(entries: UrlHistoryEntry[], now: number): UrlHistoryE
 }
 
 function migrateEntries(
-  rawEntries: Record<string, UrlHistoryEntry[]>
+  rawEntries: Record<string, UrlHistoryEntry[]>,
+  now: number = Date.now()
 ): Record<string, UrlHistoryEntry[]> {
-  const now = Date.now();
   const result: Record<string, UrlHistoryEntry[]> = {};
   for (const [projectId, projectEntries] of Object.entries(rawEntries)) {
     if (!Array.isArray(projectEntries)) continue;

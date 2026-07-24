@@ -59,10 +59,17 @@ function toRecentTargets(
  * entries stay separate.
  */
 function recentTargetIdentity(target: RecentDictationTarget): string {
+  // JSON-encode the key fields so a value containing the delimiter can't forge a
+  // collision with a different target.
   if (target.worktreeId || target.panelTitle) {
-    return `id:${target.worktreeId ?? ""}|${target.panelTitle ?? ""}`;
+    return `id:${JSON.stringify([target.worktreeId ?? "", target.panelTitle ?? ""])}`;
   }
-  return `anon:${target.projectId ?? ""}|${target.projectName ?? ""}|${target.worktreeLabel ?? ""}|${target.lastUsedAt}`;
+  return `anon:${JSON.stringify([
+    target.projectId ?? "",
+    target.projectName ?? "",
+    target.worktreeLabel ?? "",
+    target.lastUsedAt,
+  ])}`;
 }
 
 /**
