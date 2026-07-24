@@ -55,6 +55,7 @@ import {
   matchProviderForRemoteUrl,
   type ForgeProviderMatcher,
 } from "../../shared/utils/forgeHostnames.js";
+import { resolveForgeRemote } from "../../shared/utils/forgeRemoteSelection.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import { ResourceActionExecutor } from "./ResourceActionExecutor.js";
 import { TopologyWatcher, type TopologyWatcherHost } from "./TopologyWatcher.js";
@@ -200,6 +201,11 @@ export class WorkspaceService {
   // config writes that already wake the watcher (`git push -u`,
   // `branch --set-upstream-to`) cost nothing and cannot churn the provider.
   private forgeRemoteSignature: string | null = null;
+  // The project's selected forge remote *name* (#11408). Kept on the service
+  // (not just handed to `pullRequestService`) because `readForgeRemotes` needs
+  // it to pick the same remote the toolbar routes through — otherwise the
+  // worktree cards probe `origin` while the toolbar talks to `upstream`.
+  private forgeRemoteName: string | null = null;
   private forgeRemoteProbeSeq = 0;
   private forgeRemoteReprobeTimer: NodeJS.Timeout | null = null;
   // Bumped whenever a `.git/config` write is OBSERVED. A baseline read that
@@ -630,6 +636,7 @@ export class WorkspaceService {
         this.wslGitByWorktree = { ...wslGitByWorktree, ...this.wslGitByWorktree };
       }
       if (forgeSettings) {
+        this.forgeRemoteName = forgeSettings.forgeRemote;
         pullRequestService.setForgeSettings(forgeSettings);
       }
       // Merge: global (lowest priority) < project-level < DAINTREE_* (set in buildEnv)
@@ -1601,8 +1608,8 @@ export class WorkspaceService {
   }
 
   /**
-   * Read the repo's remote table once. Returns origin's (or the first remote's)
-   * fetch URL plus a stable signature of every name→fetch-URL pair, used to tell
+   * Read the repo's remote table once. Returns the selected remote's fetch URL
+   * plus a stable signature of every name→fetch-URL pair, used to tell
    * a real remote change from an unrelated `.git/config` write. The signature
    * stays in this process — remote URLs can carry embedded credentials.
    */
@@ -1612,12 +1619,22 @@ export class WorkspaceService {
     try {
       const git = await createHardenedGit(cwd);
       const remotes = await git.getRemotes(true);
-      const origin = remotes.find((r) => r.name === "origin") ?? remotes[0];
       const signature = remotes
         .map((remote) => `${remote.name} ${remote.refs?.fetch ?? ""}`)
         .sort()
         .join("");
-      return { fetchUrl: origin?.refs?.fetch, signature };
+      // Selection honours the project's `forgeRemote` setting (#11408). The
+      // signature above deliberately still covers ALL remotes: it answers "did
+      // the remote table change", independent of which entry we route through.
+      const selected = resolveForgeRemote({
+        remotes: remotes.map((r) => ({ name: r.name, fetchUrl: r.refs?.fetch ?? "" })),
+        forgeRemote: this.forgeRemoteName,
+        // The host has no provider registry — it matches against the matcher
+        // table main relays via `setForgeProviderMatchers`.
+        isSupportedRemote: (url) =>
+          matchProviderForRemoteUrl(url, this.forgeProviderMatchers) !== null,
+      });
+      return { fetchUrl: selected?.fetchUrl, signature };
     } catch {
       // Remote probe is best-effort; keep the affordance hidden on failure.
       return null;
@@ -3364,8 +3381,35 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     forgeDefaultProviderId: string | null;
     forgeRemote: string | null;
   }): void {
+    const remoteSelectionChanged = args.forgeRemote !== this.forgeRemoteName;
+    this.forgeRemoteName = args.forgeRemote;
     pullRequestService.setForgeSettings(args);
     void pullRequestService.refresh();
+    // The remote table on disk is unchanged, so the signature-gated reprobe
+    // would never fire — but the remote we *select* from it just moved, which
+    // changes the matched provider for every monitor (#11408).
+    if (remoteSelectionChanged) void this.reselectForgeRemote();
+  }
+
+  /**
+   * Re-run remote selection after the `forgeRemote` setting changed. Unlike
+   * `reprobeForgeRemotes` this deliberately skips the `.git/config`
+   * fingerprint and signature gates: neither moved, only the choice did.
+   */
+  private async reselectForgeRemote(): Promise<void> {
+    const cwd = this.forgeProbeCwd();
+    if (!cwd) return;
+    const probed = await this.readForgeRemotes(cwd);
+    if (!probed || this._shutdownController.signal.aborted) return;
+
+    const matchedProviderId = probed.fetchUrl
+      ? matchProviderForRemoteUrl(probed.fetchUrl, this.forgeProviderMatchers)
+      : null;
+    for (const monitor of this.monitors.values()) {
+      if (!monitor.isRunning) continue;
+      monitor.setRemoteFetchUrl(probed.fetchUrl);
+      monitor.setMatchedForgeProviderId(matchedProviderId);
+    }
   }
 
   /**

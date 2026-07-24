@@ -108,7 +108,8 @@ export function CodeForgeTab({
       <div>
         <label className="block text-sm font-medium text-daintree-text mb-1">Forge remote</label>
         <p className="text-xs text-daintree-text/60 mb-2">
-          Select which git remote to use for forge integration (issues, PRs, and pulse data)
+          Select which git remote to use for forge integration (issues, PRs, and pulse data).
+          Auto-detect prefers a remote a forge provider recognises, favouring upstream over origin.
         </p>
         {loading ? (
           <div className="text-sm text-daintree-text/60">Loading remotes...</div>
@@ -120,7 +121,7 @@ export function CodeForgeTab({
             onChange={(e) => onForgeRemoteChange(e.target.value || undefined)}
             className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
           >
-            <option value="">Auto-detect (origin)</option>
+            <option value="">Auto-detect</option>
             {remotes.map((r) => (
               <option key={r.name} value={r.name}>
                 {r.name}

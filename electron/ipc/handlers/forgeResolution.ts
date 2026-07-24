@@ -1,8 +1,12 @@
 // eager-import-allow: reads forge-resolution config via store.get synchronously in the IPC handler
 import path from "node:path";
 import { store } from "../../store.js";
-import { getForgeProviderImpl } from "../../services/forgeProviderRegistry.js";
+import {
+  getForgeProviderImpl,
+  listMatchingProviders,
+} from "../../services/forgeProviderRegistry.js";
 import { resolveForgeProvider } from "../../services/forgeProviderResolver.js";
+import { resolveForgeRemote } from "../../../shared/utils/forgeRemoteSelection.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import type { ForgeProviderImpl, RepoRef } from "../../../shared/types/forge.js";
@@ -38,6 +42,44 @@ export interface ResolvedForgeContext {
   impl: ForgeProviderImpl;
 }
 
+/** The subset of `GitService` remote selection needs. */
+interface RemoteReader {
+  getRemoteUrl(repoPath: string): Promise<string | null>;
+  listRemotes?(repoPath: string): Promise<Array<{ name: string; fetchUrl: string }>>;
+}
+
+/**
+ * Read the repo's remote table and pick the one the forge integration should
+ * use, honouring the project's `forgeRemote` setting (#11408). Shared by
+ * `resolveForCwd` and the `FORGE_RESOLVE_PROVIDER` handler so the pill's
+ * visibility gate and the data it gates can never disagree about which remote
+ * is live.
+ *
+ * Degrades to the previous origin-only lookup whenever `listRemotes` is
+ * unavailable or fails, and never introduces a throw where the old path
+ * returned a URL — a transient failure here would otherwise read as "no
+ * provider" downstream and wipe the toolbar's persisted counts.
+ */
+export async function resolveEffectiveRemoteUrl(
+  gitService: RemoteReader,
+  cwd: string,
+  forgeRemote: string | null
+): Promise<string | null> {
+  const remotes =
+    typeof gitService.listRemotes === "function"
+      ? await gitService.listRemotes(cwd).catch(() => [])
+      : [];
+
+  const selected = resolveForgeRemote({
+    remotes,
+    forgeRemote,
+    isSupportedRemote: (url) => listMatchingProviders(url).length > 0,
+  });
+  if (selected) return selected.fetchUrl;
+
+  return gitService.getRemoteUrl(cwd).catch(() => null);
+}
+
 export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> {
   if (typeof cwd !== "string" || !cwd) {
     throw new Error("Invalid working directory");
@@ -51,14 +93,14 @@ export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> 
     throw new Error("Not a git repository");
   }
 
-  const remoteUrl = await gitService.getRemoteUrl(cwd).catch(() => null);
-  if (!remoteUrl) {
-    throw new Error("No remote URL found for this repository");
-  }
-
   // The cwd may be a linked-worktree subdirectory, so an exact match against
   // `project.path` would miss. `git worktree list` reports the main worktree
   // first from anywhere inside the repo — that path is what ProjectStore keys on.
+  //
+  // Resolved before the remote URL (#11408): the project's `forgeRemote`
+  // setting decides *which* remote we read, so the settings have to be in hand
+  // first. Previously this block ran after an origin-only `getRemoteUrl`, which
+  // is why the setting never reached the toolbar's data path.
   const worktrees = await gitService.listWorktrees().catch(() => []);
   const mainWorktreePath =
     worktrees.find((wt) => wt.isMainWorktree)?.path ??
@@ -69,6 +111,15 @@ export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> 
     ? await projectStore.getProjectSettings(project.id).catch(() => null)
     : null;
   const forgeProviderOverride = settings?.forgeProviderOverride ?? null;
+
+  const remoteUrl = await resolveEffectiveRemoteUrl(
+    gitService,
+    cwd,
+    settings?.forgeRemote ?? settings?.githubRemote ?? null
+  );
+  if (!remoteUrl) {
+    throw new Error("No remote URL found for this repository");
+  }
 
   const globalDefaultProviderId = normalizeProviderId(store.get("forgeDefaultProviderId"));
 

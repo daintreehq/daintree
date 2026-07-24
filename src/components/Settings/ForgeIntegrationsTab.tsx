@@ -13,6 +13,7 @@ import { useProjectStore } from "@/store";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
+import { resolveForgeRemote } from "@shared/utils/forgeRemoteSelection";
 import { logError } from "@/utils/logger";
 
 // Non-empty sentinel because Radix's `SelectItem` rejects an empty string value
@@ -30,6 +31,22 @@ const DEFAULT_SETTINGS: ForgeSettings = { defaultProviderId: null };
 interface RemoteRouting {
   remote: RemoteInfo;
   resolved: ResolvedForgeProvider;
+}
+
+/**
+ * Which remote the project actually routes through (#11408) — the same
+ * selection main and the workspace host run, replayed here so the panel can
+ * label it. `isSupportedRemote` reuses the per-remote resolutions already
+ * loaded above rather than re-deriving hostname matching.
+ */
+function findLiveRemoteName(rows: RemoteRouting[], forgeRemote: string | null): string | null {
+  const selected = resolveForgeRemote({
+    remotes: rows.map(({ remote }) => ({ name: remote.name, fetchUrl: remote.fetchUrl })),
+    forgeRemote,
+    isSupportedRemote: (url) =>
+      rows.some((row) => row.remote.fetchUrl === url && row.resolved.entry !== null),
+  });
+  return selected?.name ?? null;
 }
 
 const TOOLTIP_COPY: Record<ForgeProviderResolutionVia, string> = {
@@ -56,6 +73,7 @@ export function ForgeIntegrationsTab() {
   const activeProjectPath = activeProject?.path;
 
   const [remotes, setRemotes] = useState<RemoteRouting[]>([]);
+  const [forgeRemote, setForgeRemote] = useState<string | null>(null);
   const [remotesLoading, setRemotesLoading] = useState(false);
   const [remotesError, setRemotesError] = useState<string | null>(null);
   // Mirror project id + remotes into refs so a `reresolveRemotes` call that was
@@ -134,8 +152,16 @@ export function ForgeIntegrationsTab() {
         if (cancelled) return;
         if (loadedRemotes.length === 0) {
           setRemotes([]);
+          setForgeRemote(null);
           return;
         }
+        // Which remote this project routes through depends on its `forgeRemote`
+        // setting; a read failure just means "auto-detect" (#11408).
+        const projectSettings = await window.electron.project
+          .getSettings(activeProjectId)
+          .catch(() => null);
+        if (cancelled) return;
+        setForgeRemote(projectSettings?.forgeRemote ?? projectSettings?.githubRemote ?? null);
         const resolutions = await Promise.allSettled(
           loadedRemotes.map((remote) =>
             window.electron.forge.resolveProvider(activeProjectId, remote.fetchUrl)
@@ -294,6 +320,7 @@ export function ForgeIntegrationsTab() {
           providersInstalled={providers.length}
           providersLoading={loading}
           remotes={remotes}
+          forgeRemote={forgeRemote}
           loading={showRemotesLoading}
           pending={remotesPending}
           error={remotesError}
@@ -311,6 +338,8 @@ interface ProjectRoutingPanelProps {
   // avoid asserting "no plugins installed" before the provider list resolves.
   providersLoading: boolean;
   remotes: RemoteRouting[];
+  /** The project's selected forge remote name, or null for auto-detect. */
+  forgeRemote: string | null;
   loading: boolean;
   // Raw (un-gated) loading flag. `loading` is the Doherty-gated flag that only
   // flips true past the 400ms threshold; during the sub-400ms window a load is
@@ -326,6 +355,7 @@ function ProjectRoutingPanel({
   providersInstalled,
   providersLoading,
   remotes,
+  forgeRemote,
   loading,
   pending,
   error,
@@ -360,6 +390,8 @@ function ProjectRoutingPanel({
     );
   }
 
+  const liveRemoteName = findLiveRemoteName(remotes, forgeRemote);
+
   return (
     <div className="space-y-2">
       {providersInstalled === 0 && !providersLoading && (
@@ -377,6 +409,23 @@ function ProjectRoutingPanel({
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline gap-2">
                 <span className="text-xs font-medium text-daintree-text">{remote.name}</span>
+                {remote.name === liveRemoteName && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium border border-daintree-border/60 text-daintree-text/70 cursor-default"
+                        tabIndex={0}
+                      >
+                        Active
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      {forgeRemote
+                        ? "This project is set to use this remote for issues, PRs, and pulse data."
+                        : "Auto-detected as this project's forge remote for issues, PRs, and pulse data."}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
               </div>
               <p
                 className="text-xs text-daintree-text/50 font-mono truncate"

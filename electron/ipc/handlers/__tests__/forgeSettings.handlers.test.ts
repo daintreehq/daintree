@@ -28,6 +28,9 @@ vi.mock("../../../store.js", () => ({
 const registryMock = vi.hoisted(() => ({
   getRegisteredForgeProviders: vi.fn<() => ForgeProviderEntry[]>(() => []),
   getForgeProviderImpl: vi.fn<(id: string) => unknown>(() => undefined),
+  // Consulted by remote selection (#11408) to decide whether a URL is
+  // parseable. Default "yes" keeps these tests about provider resolution.
+  listMatchingProviders: vi.fn<(remoteUrl: string) => unknown[]>(() => [{}]),
 }));
 
 vi.mock("../../../services/forgeProviderRegistry.js", () => registryMock);
@@ -55,7 +58,10 @@ const projectStoreMock = vi.hoisted(() => ({
 
 vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 
-const gitServiceMock = vi.hoisted(() => ({ getRemoteUrl: vi.fn() }));
+const gitServiceMock = vi.hoisted(() => ({
+  getRemoteUrl: vi.fn(),
+  listRemotes: vi.fn<() => Promise<Array<{ name: string; fetchUrl: string }>>>(async () => []),
+}));
 const gitServiceCacheMock = vi.hoisted(() => ({ getGitService: vi.fn(() => gitServiceMock) }));
 
 vi.mock("../../../services/GitServiceCache.js", () => ({
@@ -100,6 +106,8 @@ describe("registerForgeSettingsHandlers", () => {
     });
     projectStoreMock.getProjectSettings.mockResolvedValue({ runCommands: [] });
     gitServiceMock.getRemoteUrl.mockResolvedValue("https://github.com/owner/repo.git");
+    gitServiceMock.listRemotes.mockResolvedValue([]);
+    registryMock.listMatchingProviders.mockReturnValue([{}]);
   });
 
   it("registers all IPC handlers including the credential channels", () => {
@@ -324,6 +332,45 @@ describe("registerForgeSettingsHandlers", () => {
       forgeProviderOverride: null,
       globalDefaultProviderId: null,
     });
+  });
+
+  it("resolveProvider resolves against the project's forgeRemote, not origin (#11408)", async () => {
+    // The pill visibility gate. An origin-only lookup here hid issues and PRs
+    // on every fork whose forge remote is named something else.
+    projectStoreMock.getProjectSettings.mockResolvedValue({ forgeRemote: "upstream" });
+    gitServiceMock.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://github.com/me/fork.git" },
+      { name: "upstream", fetchUrl: "https://github.com/acme/canonical.git" },
+    ]);
+    resolverMock.resolveForgeProvider.mockReturnValueOnce({ entry: null, resolvedVia: null });
+    registerForgeSettingsHandlers();
+    const resolveProvider = findHandler("forge:resolve-provider");
+
+    await resolveProvider(null, "project-1");
+
+    expect(resolverMock.resolveForgeProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ remoteUrl: "https://github.com/acme/canonical.git" })
+    );
+  });
+
+  it("resolveProvider still honours an explicitly passed remoteUrl over the setting (#11408)", async () => {
+    // The Settings routing panel probes each remote in turn — the project's
+    // own selection must not override what the caller asked about.
+    projectStoreMock.getProjectSettings.mockResolvedValue({ forgeRemote: "upstream" });
+    gitServiceMock.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://github.com/me/fork.git" },
+      { name: "upstream", fetchUrl: "https://github.com/acme/canonical.git" },
+    ]);
+    resolverMock.resolveForgeProvider.mockReturnValueOnce({ entry: null, resolvedVia: null });
+    registerForgeSettingsHandlers();
+    const resolveProvider = findHandler("forge:resolve-provider");
+
+    await resolveProvider(null, "project-1", "https://github.com/me/fork.git");
+
+    expect(resolverMock.resolveForgeProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ remoteUrl: "https://github.com/me/fork.git" })
+    );
+    expect(gitServiceMock.listRemotes).not.toHaveBeenCalled();
   });
 
   it("resolveProvider returns no-match for invalid projectId payloads without calling the resolver", async () => {
