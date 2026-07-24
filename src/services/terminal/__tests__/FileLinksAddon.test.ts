@@ -306,14 +306,22 @@ describe("FileLinksAddon", () => {
         new FileLinksAddon(terminal, () => cwd).provideLinks(1, resolve);
       });
 
-    /** Rows as xterm stores them: row 0 plus soft-wrapped continuations. */
+    /**
+     * Rows as xterm stores them: row 0 plus soft-wrapped continuations. Rows
+     * are given with their real trailing spaces, and `translateToString`
+     * honours `trimRight` the way xterm does — that difference is what decides
+     * whether a rejoin fuses two tokens together.
+     */
     const linksForWrapped = (rows: string[], hoveredRow: number): Promise<ILink[] | undefined> =>
       new Promise((resolve) => {
         const terminal = createMockTerminal();
         vi.mocked(terminal.buffer.active.getLine).mockImplementation((index: number) => {
           const text = rows[index];
           if (text === undefined) return undefined;
-          return { translateToString: () => text, isWrapped: index > 0 } as IBufferLine;
+          return {
+            translateToString: (trimRight?: boolean) => (trimRight ? text.trimEnd() : text),
+            isWrapped: index > 0,
+          } as IBufferLine;
         });
         new FileLinksAddon(terminal, () => "/home/user/project").provideLinks(
           hoveredRow + 1,
@@ -385,6 +393,38 @@ describe("FileLinksAddon", () => {
         expect(link.range.start).toEqual({ x: "Saved image to ".length + 1, y: 1 });
         expect(link.range.end).toEqual({ x: "images/shot.png".length, y: 2 });
       }
+    });
+
+    it("links a continuation row that carries no separator of its own", async () => {
+      // `shot.png` alone would hit the '/'-or-'\' fast path and never be
+      // scanned, leaving the tail of a wrapped URL dead to the pointer.
+      const links = await linksForWrapped(["file:///tmp/long/", "shot.png"], 1);
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).absolutePath).toBe("/tmp/long/shot.png");
+    });
+
+    it("keeps the spaces that separate a wrapped URL from the next token", async () => {
+      // Row one is full to the margin with real spaces. Trimming them on
+      // rejoin would fuse the two tokens into `/tmp/a.pngsrc/foo.ts`.
+      const links = await linksForWrapped(["file:///tmp/a.png   ", "src/foo.ts"], 0);
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).absolutePath).toBe("/tmp/a.png");
+    });
+
+    it("ignores a URL that lies entirely on a sibling row", async () => {
+      // xterm evicts lower-priority links intersecting a returned range, so a
+      // link the pointer can't reach on this row must not be reported at all.
+      expect(await linksForWrapped(["no separator here", "file:///tmp/a.png"], 0)).toBeUndefined();
+    });
+
+    it("refuses to link a URL clipped by the rejoin budget", async () => {
+      // Past the budget the window's edge is not a token boundary, and a
+      // truncated file URL still parses — the original wrapping bug.
+      const rows: string[] = [];
+      const huge = `file:///tmp/${"a".repeat(2500)}.png`;
+      for (let i = 0; i < huge.length; i += 80) rows.push(huge.slice(i, i + 80));
+      expect(await linksForWrapped(rows, 0)).toBeUndefined();
+      expect(await linksForWrapped(rows, rows.length - 1)).toBeUndefined();
     });
 
     it("does not let a literal ( in a URL leak a bare-path link", async () => {
@@ -486,6 +526,18 @@ describe("FileLinksAddon", () => {
           { source: "user" }
         );
         expect(systemClient.openPath).not.toHaveBeenCalled();
+      });
+
+      it("falls back to the OS opener only after the in-app viewer refuses", async () => {
+        // Deliberate: a file:// URL and its bare-path spelling must behave the
+        // same way once file.view has failed. The issue's constraint is about
+        // which linkifier owns the token, not about the recovery path.
+        vi.mocked(actionService.dispatch).mockResolvedValue({
+          ok: false,
+          error: { code: "EXECUTION_ERROR", message: "no panel" },
+        });
+        await activateUrlLink({});
+        await vi.waitFor(() => expect(systemClient.openPath).toHaveBeenCalledWith(DECODED));
       });
 
       it("sends the decoded path to the external editor on a modified click", async () => {

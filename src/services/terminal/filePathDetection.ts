@@ -32,7 +32,7 @@ const WINDOWS_ABS = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 // `$`/`^` mean logical-line ends, so callers scanning a terminal buffer must
 // rejoin soft-wrapped rows first — a row boundary is not a token boundary.
 export const FILE_URL_REGEX =
-  /(?:^|[\s("'`<[])(file:\/\/[^\s<>"'`]*[^\s<>"'`:,.!?;)\]}])[,:.;!?)\]}]*(?=$|[\s<>"'`])/gi;
+  /(?:^|[\s("'`<[{])(file:\/\/[^\s<>"'`]*[^\s<>"'`:,.!?;)\]}])[,:.;!?)\]}]*(?=$|[\s<>"'`])/gi;
 
 // A `file:` pathname carrying a Windows drive arrives as `/C:/…`. Matched
 // against the DECODED path so `%43`/`%3A` spellings resolve identically, and

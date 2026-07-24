@@ -153,10 +153,14 @@ interface ScopedDirCandidate extends DirCandidate {
 /** A soft-wrapped run of buffer rows, rejoined into the line the user sees. */
 interface LogicalLine {
   text: string;
-  /** 0-based buffer index of the first row in the run. */
+  /** 0-based buffer index of the first row in the window. */
   startRow: number;
   /** Where each row's text begins in `text`, indexed from `startRow`. */
   rowOffsets: number[];
+  /** The budget, not a real line start, ended the window — `^` is a lie here. */
+  clippedStart: boolean;
+  /** The budget, not a real line end, ended the window — `$` is a lie here. */
+  clippedEnd: boolean;
 }
 
 // Matches xterm's own web-link provider: a rejoin budget that keeps a pathological
@@ -231,13 +235,21 @@ export class FileLinksAddon implements ILinkProvider {
 
     const lineText = line.translateToString(true);
 
+    // A row that continues, or is continued by, another holds only part of a
+    // logical line, so nothing about it can be decided from its own text.
+    const partOfWrappedLine =
+      line.isWrapped === true ||
+      this._terminal.buffer.active.getLine(bufferLineNumber)?.isWrapped === true;
+
     // Fast path: every FILE_PATH_REGEX alternative requires a path separator
     // ('/' or '\'), so a line with neither can never contain a file path. Most
     // agent output (code without imports, prose, prompts) hits this and skips
     // the regex entirely. provideLinks is pointer-driven (xterm Linkifier2
     // _activeLine cache, fires when the pointer crosses a new row), so this is
-    // scroll-feel regex/GC cost, not write throughput.
-    if (!lineText.includes("/") && !lineText.includes("\\")) {
+    // scroll-feel regex/GC cost, not write throughput. A wrapped row is exempt:
+    // the tail of `file:///tmp/long/` + `shot.png` carries no separator of its
+    // own, and skipping it would leave half the URL unclickable.
+    if (!partOfWrappedLine && !lineText.includes("/") && !lineText.includes("\\")) {
       callback(undefined);
       return;
     }
@@ -253,12 +265,10 @@ export class FileLinksAddon implements ILinkProvider {
     // continued can't be hiding the rest of one. provideLinks is pointer-driven
     // across every visible terminal, so the common line still does no work.
     // `://` (not `file://`) keeps the guard case-insensitive without a copy.
-    const partOfWrappedLine =
-      line.isWrapped === true ||
-      this._terminal.buffer.active.getLine(bufferLineNumber)?.isWrapped === true;
-    if (lineText.includes("://") || partOfWrappedLine) {
-      this._collectUrlLinks(bufferLineNumber, lineText, links, claimed);
-    }
+    const urlScanText =
+      lineText.includes("://") || partOfWrappedLine
+        ? this._collectUrlLinks(bufferLineNumber, lineText, links, claimed)
+        : null;
 
     // matchAll on the module-scope global regex clones it internally (per spec)
     // and never mutates lastIndex, so the regex is reused across hover calls
@@ -337,6 +347,13 @@ export class FileLinksAddon implements ILinkProvider {
           callback(undefined);
           return;
         }
+        // A URL link can span rows this check never looks at, so re-read the
+        // whole window it was computed from: rewriting only the continuation
+        // row would otherwise leave a link to the path the URL used to name.
+        if (urlScanText !== null && this._readLogicalLine(bufferLineNumber - 1)?.text !== urlScanText) {
+          callback(undefined);
+          return;
+        }
         for (const candidate of confirmed) {
           const range: IBufferRange = {
             start: { x: candidate.startIndex + 1, y: bufferLineNumber },
@@ -374,20 +391,23 @@ export class FileLinksAddon implements ILinkProvider {
    *
    * Spans are claimed for every syntactic match, resolved or not: a rejected
    * remote URL must still shield its own characters from the bare-path pass.
+   *
+   * Returns the rejoined text it scanned, so a deferred reply can tell whether
+   * any contributing row changed underneath it, or null if there was no line.
    */
   private _collectUrlLinks(
     bufferLineNumber: number,
     lineText: string,
     links: ILink[],
     claimed: Array<[number, number]>
-  ): void {
+  ): string | null {
     const logical = this._readLogicalLine(bufferLineNumber - 1);
-    if (!logical) return;
+    if (!logical) return null;
     // The current row's offset into the joined text, for translating a match
     // back into `lineText` coordinates — that's the space `claimed` and the
-    // single-row bare-path and directory passes all speak.
-    const rowOffset = logical.rowOffsets[bufferLineNumber - 1 - logical.startRow];
-    if (rowOffset === undefined) return;
+    // single-row bare-path and directory passes all speak. The window is
+    // anchored on this row, so the lookup always lands.
+    const rowOffset = logical.rowOffsets[bufferLineNumber - 1 - logical.startRow]!;
 
     for (const match of logical.text.matchAll(FILE_URL_REGEX)) {
       const url = match[1];
@@ -399,13 +419,26 @@ export class FileLinksAddon implements ILinkProvider {
       const startIndex = match.index + match[0]!.indexOf(url);
       const endIndex = startIndex + url.length;
 
+      // Only URLs touching THIS row are ours to report. xterm projects a
+      // returned range onto the requested row and evicts lower-priority links
+      // that intersect it, so handing back a sibling row's link would blank a
+      // web link the user can actually see.
       const localStart = startIndex - rowOffset;
       const localEnd = endIndex - rowOffset;
-      // A URL wholly on a sibling row still surfaces here (xterm's own web-link
-      // provider behaves the same way, and its range keeps it inert until the
-      // pointer reaches it) — but it owns no characters on this row to claim.
-      if (localEnd > 0 && localStart < lineText.length) {
-        claimed.push([Math.max(0, localStart), Math.min(lineText.length, localEnd)]);
+      if (localEnd <= 0 || localStart >= lineText.length) continue;
+      claimed.push([Math.max(0, localStart), Math.min(lineText.length, localEnd)]);
+
+      // A token touching a clipped edge may continue past it, and the regex's
+      // `^`/`$` would read the budget cutoff as a boundary — the same lie a row
+      // edge tells. Claim it anyway (claiming only ever suppresses links) but
+      // never link it. A token starting entirely outside the window stays
+      // invisible; bounding the rejoin is what makes hover affordable, and that
+      // needs a logical line past 2048 columns to reach.
+      if (
+        (logical.clippedStart && startIndex === 0) ||
+        (logical.clippedEnd && endIndex === logical.text.length)
+      ) {
+        continue;
       }
 
       const resolved = resolveFileUrlCandidate(url);
@@ -434,31 +467,72 @@ export class FileLinksAddon implements ILinkProvider {
         )
       );
     }
+    return logical.text;
   }
 
   /**
    * Rejoin the soft-wrapped rows around `rowIndex` into the logical line the
    * user actually sees, remembering where each row's text starts so matches
    * can be mapped back to buffer coordinates.
+   *
+   * The window is anchored on `rowIndex` and grows outward on a shared budget,
+   * rather than starting at the logical line's first row: a run longer than
+   * the budget would otherwise stop before reaching the hovered row, leaving
+   * it unclaimed and its characters free for the bare-path pass to mis-link.
+   * Whichever end the budget cuts is reported as clipped, because a match
+   * touching an artificial edge can't be trusted to be whole.
    */
   private _readLogicalLine(rowIndex: number): LogicalLine | null {
     const buffer = this._terminal.buffer.active;
+    const current = buffer.getLine(rowIndex);
+    if (!current) return null;
+
+    // trimRight is deliberately OFF for the rejoin. A wrapped row is full by
+    // definition, so trimming can only delete real trailing spaces — and those
+    // spaces are what separate a URL from the next token, so dropping them
+    // fuses `file:///tmp/a.png` and a following path into one bogus target.
+    // The cost is the inverse of xterm's tradeoff: a wide char that wrapped
+    // early leaves a placeholder space mid-token, so that (rare, ASCII-free)
+    // URL goes unlinked. Missing a link beats linking the wrong file.
+    const texts = [current.translateToString(false)];
     let startRow = rowIndex;
-    // `isWrapped` marks a row as the CONTINUATION of the one above it, so walk
-    // up while that holds to find where the logical line begins.
-    while (startRow > 0 && buffer.getLine(startRow)?.isWrapped === true) startRow--;
+    let budget = MAX_LOGICAL_LINE_LENGTH - texts[0]!.length;
+    let clippedStart = false;
+    let clippedEnd = false;
+
+    // `isWrapped` marks a row as the CONTINUATION of the one above it.
+    while (startRow > 0 && buffer.getLine(startRow)?.isWrapped === true) {
+      const above = buffer.getLine(startRow - 1);
+      if (!above) break;
+      const text = above.translateToString(false);
+      if (text.length > budget) {
+        clippedStart = true;
+        break;
+      }
+      budget -= text.length;
+      texts.unshift(text);
+      startRow--;
+    }
+
+    for (let row = rowIndex + 1; ; row++) {
+      const below = buffer.getLine(row);
+      if (!below || below.isWrapped !== true) break;
+      const text = below.translateToString(false);
+      if (text.length > budget) {
+        clippedEnd = true;
+        break;
+      }
+      budget -= text.length;
+      texts.push(text);
+    }
 
     const rowOffsets: number[] = [];
     let text = "";
-    for (let row = startRow; text.length < MAX_LOGICAL_LINE_LENGTH; row++) {
-      const line = buffer.getLine(row);
-      if (!line) break;
-      if (row > startRow && line.isWrapped !== true) break;
+    for (const rowText of texts) {
       rowOffsets.push(text.length);
-      text += line.translateToString(true);
+      text += rowText;
     }
-    if (rowOffsets.length === 0) return null;
-    return { text, startRow, rowOffsets };
+    return { text, startRow, rowOffsets, clippedStart, clippedEnd };
   }
 
   private _collectDirCandidates(

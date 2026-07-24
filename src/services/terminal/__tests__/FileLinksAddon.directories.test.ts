@@ -187,6 +187,43 @@ describe("FileLinksAddon directory links", () => {
     expect(await provide(addon)).toBeUndefined();
   });
 
+  it("drops the reply when only a wrapped URL's continuation row was rewritten", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    let release: (value: Array<"directory" | "file" | null>) => void = () => {};
+    vi.mocked(fileBrowserClient.statPaths).mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      })
+    );
+
+    // The hovered row never changes, so the single-row guard sees nothing —
+    // only the rejoined window reveals that the URL now names another file.
+    const rows = ["src/generated file:///tmp/renders/", "a.png"];
+    const terminal = {
+      buffer: {
+        active: {
+          getLine: vi.fn((index: number): IBufferLine | undefined => {
+            const text = rows[index];
+            if (text === undefined) return undefined;
+            return {
+              translateToString: (trimRight?: boolean) => (trimRight ? text.trimEnd() : text),
+              isWrapped: index > 0,
+            } as IBufferLine;
+          }),
+        },
+      },
+    } as unknown as Terminal;
+
+    const addon = new FileLinksAddon(terminal, () => root);
+    const callback = vi.fn();
+    addon.provideLinks(1, callback);
+    rows[1] = "b.png";
+    release(["directory"]);
+    await vi.waitFor(() => expect(callback).toHaveBeenCalled());
+    expect(callback).toHaveBeenCalledWith(undefined);
+  });
+
   it("stays silent after disposal", async () => {
     const root = nextRoot();
     bindWorktrees(new Map([[root, { id: root, path: root }]]));

@@ -291,6 +291,7 @@ describe("FILE_URL_REGEX (terminal line scanning)", () => {
       ["'", "'"],
       ["<", ">"],
       ["[", "]"],
+      ["{", "}"],
     ]) {
       expect(scan(`saved to ${open}file:///tmp/a.png${close}`)).toEqual(["file:///tmp/a.png"]);
     }
