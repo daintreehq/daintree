@@ -795,16 +795,21 @@ async function showProjectOpenFailure(
     title: "Couldn't open folder",
     message: `Something went wrong opening "${directoryPath}".`,
     recovery: "retry" as const,
+    removable: false,
   };
 
   // A dead Recent Projects entry is the case worth acting on: the row itself is
   // the problem, so offer to drop it rather than sending the user to a picker.
-  if (
-    failure.recovery === "choose-folder" &&
-    (await projectStore.getProjectByPath(directoryPath))
-  ) {
-    failure = withRemoveFromRecent(failure);
-  }
+  // The id is captured now and reused on confirmation — re-resolving by path
+  // afterwards could land on a different row if one took this path meanwhile.
+  // A lookup failure must not swallow the dialog, so it degrades to the picker.
+  const deadProjectId = failure.removable
+    ? await projectStore
+        .getProjectByPath(directoryPath)
+        .then((project) => project?.id ?? null)
+        .catch(() => null)
+    : null;
+  if (deadProjectId) failure = withRemoveFromRecent(failure);
 
   if (targetWindow.isDestroyed()) return;
 
@@ -821,16 +826,20 @@ async function showProjectOpenFailure(
   if (response !== 0 || targetWindow.isDestroyed()) return;
 
   switch (failure.recovery) {
-    case "remove-from-recent": {
-      const project = await projectStore.getProjectByPath(directoryPath);
-      if (project) {
-        await removeProjectWithCleanup(project.id, {
+    case "remove-from-recent":
+      if (deadProjectId) {
+        await removeProjectWithCleanup(deadProjectId, {
           ptyClient: getPtyClient() ?? undefined,
           worktreeService: getWorkspaceClientRef() ?? undefined,
         });
+        // Recent Projects is a static submenu built at menu-construction time,
+        // so the removed row lingers until the whole menu is rebuilt —
+        // refreshProjectMenuState only toggles the project-gated item states.
+        if (!targetWindow.isDestroyed()) {
+          createApplicationMenu(targetWindow, cliAvailabilityService);
+        }
       }
       break;
-    }
     case "choose-folder":
       await promptForDirectoryOpen(targetWindow, cliAvailabilityService);
       break;

@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { Stats } from "fs";
+import { constants as fsConstants, type Stats } from "fs";
 
 const statMock = vi.hoisted(() => vi.fn<(path: string) => Promise<Stats>>());
+const accessMock = vi.hoisted(() => vi.fn<(path: string, mode?: number) => Promise<void>>());
 
 vi.mock("fs/promises", () => ({
-  default: { stat: statMock },
+  default: { stat: statMock, access: accessMock },
   stat: statMock,
+  access: accessMock,
 }));
 
 const { assertProjectDirectory, isMissingExecutableError, PROJECT_DIRECTORY_STAT_TIMEOUT_MS } =
@@ -39,6 +41,7 @@ async function rejectionOf(
 describe("assertProjectDirectory", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    accessMock.mockResolvedValue(undefined);
   });
 
   it("resolves for a real directory", async () => {
@@ -98,11 +101,33 @@ describe("assertProjectDirectory", () => {
     expect(statMock).toHaveBeenCalledTimes(1);
     expect(statMock).toHaveBeenCalledWith(FOLDER);
   });
+
+  it("classifies a directory that stats fine but can't be entered", async () => {
+    // stat() only needs execute permission on the PARENT, so a folder whose own
+    // bits are cleared stats successfully and only fails once git tries to
+    // enter it. Without the explicit access check this fell through to the
+    // generic bucket instead of PERMISSION.
+    statMock.mockResolvedValue(statsFor(true));
+    accessMock.mockRejectedValue(errnoError("EACCES"));
+
+    expect((await rejectionOf(FOLDER)).code).toBe("PERMISSION");
+  });
+
+  it("checks for both read and traverse access", async () => {
+    statMock.mockResolvedValue(statsFor(true));
+
+    await assertProjectDirectory(FOLDER);
+
+    const mode = accessMock.mock.calls[0]?.[1] ?? 0;
+    expect(mode & fsConstants.R_OK).toBe(fsConstants.R_OK);
+    expect(mode & fsConstants.X_OK).toBe(fsConstants.X_OK);
+  });
 });
 
 describe("assertProjectDirectory under a hung filesystem", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    accessMock.mockResolvedValue(undefined);
     vi.useFakeTimers();
   });
 

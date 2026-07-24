@@ -1409,6 +1409,66 @@ describe("handleDirectoryOpen failure dialogs", () => {
 
       expect(shownDialog().buttons[0]).toBe("Choose another folder");
     });
+
+    it("still shows the failure when the project lookup itself fails", async () => {
+      // The lookup only decides which recovery to offer; losing it must not
+      // swallow the error the user needs to see.
+      projectStoreMock.getProjectByPath.mockRejectedValue(new Error("db is down"));
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      expect(shownDialog().buttons[0]).toBe("Choose another folder");
+      expect(removeProjectWithCleanupMock).not.toHaveBeenCalled();
+    });
+
+    it("rebuilds the menu so the removed row leaves Recent Projects", async () => {
+      vi.mocked(dialog.showMessageBox).mockResolvedValue({
+        response: 0,
+        checkboxChecked: false,
+      });
+      vi.mocked(Menu.setApplicationMenu).mockClear();
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      // Recent Projects is a static submenu; without a rebuild the dead entry
+      // stays clickable after the user removes it.
+      expect(Menu.setApplicationMenu).toHaveBeenCalled();
+    });
+  });
+
+  describe("choosing a different folder", () => {
+    beforeEach(() => {
+      projectStoreMock.addProject.mockRejectedValue(
+        new AppError({ code: "NOT_A_DIRECTORY", message: "a file" })
+      );
+      vi.mocked(dialog.showMessageBox).mockResolvedValue({
+        response: 0,
+        checkboxChecked: false,
+      });
+    });
+
+    it("opens the picker and opens what the user chooses", async () => {
+      vi.mocked(dialog.showOpenDialog).mockResolvedValue({
+        canceled: false,
+        filePaths: ["/repos/elsewhere"],
+      });
+      projectStoreMock.addProject
+        .mockRejectedValueOnce(new AppError({ code: "NOT_A_DIRECTORY", message: "a file" }))
+        .mockResolvedValueOnce({ id: "project-b", path: "/repos/elsewhere" });
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      expect(dialog.showOpenDialog).toHaveBeenCalledTimes(1);
+      expect(projectStoreMock.addProject).toHaveBeenLastCalledWith("/repos/elsewhere");
+    });
+
+    it("does nothing further when the picker is cancelled", async () => {
+      vi.mocked(dialog.showOpenDialog).mockResolvedValue({ canceled: true, filePaths: [] });
+
+      await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+      expect(projectStoreMock.addProject).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("retries the same folder when the user asks to try again", async () => {

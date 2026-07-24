@@ -409,6 +409,19 @@ export class ProjectStore {
       const combined = [message, causeMessage].filter(Boolean).join("\n");
       const lower = combined.toLowerCase();
 
+      // Classified before the directory re-check below because it's a property
+      // of the machine, not the path: a transient stat failure must not mask
+      // "git isn't installed", and a missing binary must not be reported as a
+      // problem with the folder.
+      if (isMissingExecutableError(error)) {
+        throw new AppError({
+          code: "GIT_NOT_INSTALLED",
+          message: "Git executable not found",
+          context: { projectPath },
+          cause: error instanceof Error ? error : undefined,
+        });
+      }
+
       if (lower.includes("dubious ownership") || lower.includes("safe.directory")) {
         // Message text preserved verbatim: the renderer's dedicated
         // dubious-ownership retry flow still recognizes it by substring.
@@ -419,6 +432,13 @@ export class ProjectStore {
           context: { projectPath },
         });
       }
+
+      // Re-check the directory before the guided-init branch: several awaits
+      // have passed since the pre-flight, and a folder deleted or swapped for a
+      // file in that window reports as "not a git repository" too. Offering to
+      // run `git init` in a folder that no longer exists would be worse than
+      // useless, so a path that stopped validating is reclassified here.
+      await assertProjectDirectory(projectPath);
 
       if (lower.includes("not a git repository")) {
         // The folder has no repository. Adopt it as a lightweight workspace when
@@ -448,22 +468,6 @@ export class ProjectStore {
         throw new AppError({
           code: "NOT_A_GIT_REPO",
           message: `Not a git repository: ${projectPath}`,
-        });
-      }
-
-      // Re-check the directory: several awaits have passed since the pre-flight,
-      // and a folder deleted or replaced in that window is what actually failed
-      // here, not git. Rethrows a classified AppError when so.
-      await assertProjectDirectory(projectPath);
-
-      // The directory is fine, so a failed *spawn* of a missing executable can
-      // only be git itself.
-      if (isMissingExecutableError(error)) {
-        throw new AppError({
-          code: "GIT_NOT_INSTALLED",
-          message: "Git executable not found",
-          context: { projectPath },
-          cause: error instanceof Error ? error : undefined,
         });
       }
 

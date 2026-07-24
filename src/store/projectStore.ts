@@ -23,7 +23,10 @@ import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { rebaseAbsolutePath } from "@shared/utils/projectPathRelocation";
 import { isClientAppError } from "@/utils/clientAppError";
-import { getProjectOpenFailure } from "@shared/utils/projectOpenErrors";
+import {
+  getProjectOpenFailure,
+  PROJECT_OPEN_RECOVERY_LABELS,
+} from "@shared/utils/projectOpenErrors";
 import { getViewWorkspaceId } from "./viewWorkspaceId";
 import {
   clearPanelStoreForSwitchThroughAccessor,
@@ -577,16 +580,27 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       // value the dialog flow was originally invoked with.
       const retryPath = resolvedPath ?? path.trim();
       const message = getProjectOpenErrorMessage(error, retryPath || undefined);
+      // A folder that's missing or isn't a folder won't fix itself, so retrying
+      // the same path just reproduces the error — those send the user back to
+      // the picker instead.
+      const classified = isClientAppError(error)
+        ? getProjectOpenFailure(error.code, retryPath || undefined)
+        : null;
+      const pickAnother = classified?.recovery === "choose-folder";
       notify({
         type: "error",
         title: "Couldn't add project",
         message,
         actions: [
           {
-            label: "Try again",
+            label: pickAnother
+              ? PROJECT_OPEN_RECOVERY_LABELS["choose-folder"]
+              : PROJECT_OPEN_RECOVERY_LABELS.retry,
             variant: "primary",
             onClick: () => {
-              void get().addProjectByPath(retryPath, { identity: options?.identity });
+              void (pickAnother
+                ? get().addProject()
+                : get().addProjectByPath(retryPath, { identity: options?.identity }));
             },
           },
         ],

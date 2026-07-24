@@ -474,7 +474,7 @@ describe("projectStore addProject", () => {
     function toastPayload(): {
       title: string;
       message: string;
-      actions?: Array<{ label: string }>;
+      actions?: Array<{ label: string; onClick: () => Promise<void> }>;
     } {
       expect(notifyMock).toHaveBeenCalledTimes(1);
       const payload: unknown = notifyMock.mock.calls[0]?.[0];
@@ -486,7 +486,19 @@ describe("projectStore addProject", () => {
         title: String(Reflect.get(payload, "title")),
         message: String(Reflect.get(payload, "message")),
         actions: Array.isArray(actions)
-          ? actions.map((action: object) => ({ label: String(Reflect.get(action, "label")) }))
+          ? actions.map((action: object) => {
+              const handler: unknown = Reflect.get(action, "onClick");
+              return {
+                label: String(Reflect.get(action, "label")),
+                onClick: async (): Promise<void> => {
+                  if (typeof handler !== "function") throw new Error("action has no onClick");
+                  // The store's handlers kick off work fire-and-forget, so let
+                  // the queued microtasks drain before asserting on it.
+                  Reflect.apply(handler, undefined, []);
+                  await new Promise((resolve) => setTimeout(resolve, 0));
+                },
+              };
+            })
           : undefined,
       };
     }
@@ -542,7 +554,7 @@ describe("projectStore addProject", () => {
       expect(missing).not.toBe(notADirectory);
     });
 
-    it("still offers a recovery action", async () => {
+    it("retries the same folder for a failure that could clear on its own", async () => {
       projectClientMock.add.mockRejectedValueOnce(preloadError("PERMISSION", "denied"));
 
       await useProjectStore.getState().addProjectByPath(FOLDER);
@@ -550,6 +562,47 @@ describe("projectStore addProject", () => {
       const { actions } = toastPayload();
       expect(actions).toHaveLength(1);
       expect(actions?.[0]?.label).toBe("Try again");
+
+      projectClientMock.add.mockResolvedValueOnce({ id: "p1", path: FOLDER });
+      await actions?.[0]?.onClick();
+
+      expect(projectClientMock.add).toHaveBeenLastCalledWith(FOLDER);
+      expect(projectClientMock.openDialog).not.toHaveBeenCalled();
+    });
+
+    it("sends the user to the picker when retrying the same folder can't help", async () => {
+      // A folder that's gone stays gone — retrying the identical path would
+      // just reproduce the same error.
+      projectClientMock.add.mockRejectedValueOnce(preloadError("NOT_FOUND", "gone"));
+
+      await useProjectStore.getState().addProjectByPath(FOLDER);
+
+      const { actions } = toastPayload();
+      expect(actions?.[0]?.label).toBe("Choose another folder");
+
+      projectClientMock.openDialog.mockResolvedValueOnce("/repos/elsewhere");
+      projectClientMock.add.mockResolvedValueOnce({ id: "p1", path: "/repos/elsewhere" });
+      await actions?.[0]?.onClick();
+
+      expect(projectClientMock.openDialog).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the dedicated dubious-ownership flow working across the typed boundary", async () => {
+      // Main now throws this as an AppError rather than a plain Error; the
+      // renderer's ownership branch still recognizes it by substring, and that
+      // coupling is only load-bearing because the message text was preserved.
+      projectClientMock.openDialog.mockResolvedValueOnce("/tmp/dubious-repo");
+      projectClientMock.add.mockRejectedValueOnce(
+        preloadError(
+          "DUBIOUS_OWNERSHIP",
+          "Git refused to open this repository due to 'dubious ownership'. Mark it as safe.directory and try again."
+        )
+      );
+
+      await useProjectStore.getState().addProject();
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(toastPayload().title).toBe("Repository ownership issue");
     });
 
     it("leaves the guided git-init path alone", async () => {

@@ -1,5 +1,5 @@
 import fs from "fs/promises";
-import type { Stats } from "fs";
+import { constants as fsConstants, type Stats } from "fs";
 import { AppError } from "../utils/errorTypes.js";
 import { TimeoutError, withTimeout } from "../utils/withTimeout.js";
 
@@ -92,6 +92,21 @@ export async function assertProjectDirectory(directoryPath: string): Promise<voi
       context: { directoryPath },
     });
   }
+
+  // A successful stat says nothing about our access to the directory itself —
+  // it only needs execute permission on the *parent*. A folder with its own
+  // permissions cleared stats fine and then fails when git tries to enter it,
+  // which is precisely the "permission denied" case this classifier owes an
+  // answer for.
+  try {
+    await withTimeout(
+      fs.access(directoryPath, fsConstants.R_OK | fsConstants.X_OK),
+      PROJECT_DIRECTORY_STAT_TIMEOUT_MS,
+      `Timed out reading ${directoryPath}`
+    );
+  } catch (error) {
+    throw classifyStatFailure(directoryPath, error);
+  }
 }
 
 function classifyStatFailure(directoryPath: string, error: unknown): AppError {
@@ -144,18 +159,26 @@ function classifyStatFailure(directoryPath: string, error: unknown): AppError {
 }
 
 /**
- * True when `error` (or anything on its cause chain) is a failed *spawn* of a
- * missing executable.
+ * Matches the spawn failure Node reports for a binary that isn't on PATH, e.g.
+ * `Error: spawn git ENOENT`. The binary name is whatever simple-git was
+ * configured with, so it isn't pinned here.
+ */
+const SPAWN_ENOENT_PATTERN = /\bspawn\b[^\n]*\bENOENT\b/;
+
+/**
+ * True when `error` is a failed *spawn* of a missing executable.
  *
  * Callers reach this only after {@link assertProjectDirectory} has confirmed the
- * directory exists, so a spawn ENOENT can no longer mean the working directory
- * — it's the git binary. Walking the chain rather than probing with
- * `git --version` keeps the failure path free of a subprocess, and the signal is
- * strictly better: it's the actual failure, not a re-enactment of it.
+ * directory exists and is enterable, so a spawn ENOENT can no longer mean the
+ * working directory — it's the git binary.
  *
- * The chain walk is required because `GitService.handleGitOperation` rewraps
- * this as a `WorktreeRemovedError` — its ENOENT text match can't tell a missing
- * binary from a missing worktree — but it does preserve the original as `cause`.
+ * Both a structured check and a message check are needed. simple-git 3.36.0
+ * does not preserve the spawn error: it stringifies it into the message and
+ * rethrows a bare `GitError` whose only own property is `task` — no `code`, no
+ * `syscall`, no `cause`. So the errno walk alone never fires for the real
+ * failure, while the message match alone would miss a raw Node error arriving
+ * from anywhere that doesn't launder it. Verified against the installed
+ * simple-git; re-check on upgrade.
  */
 export function isMissingExecutableError(error: unknown): boolean {
   const seen = new Set<unknown>();
@@ -165,6 +188,7 @@ export function isMissingExecutableError(error: unknown): boolean {
     seen.add(current);
     const errno = current as NodeJS.ErrnoException;
     if (errno.code === "ENOENT" && errno.syscall?.startsWith("spawn")) return true;
+    if (errno instanceof Error && SPAWN_ENOENT_PATTERN.test(errno.message)) return true;
     current = (current as { cause?: unknown }).cause;
   }
 
