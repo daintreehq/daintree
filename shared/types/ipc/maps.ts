@@ -3,6 +3,7 @@ import type { AgentId } from "../agent.js";
 import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
 import type {
   Project,
+  ProjectCreationIdentity,
   ProjectSettings,
   RecipeNameCollision,
   RunCommand,
@@ -590,7 +591,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: Project | null;
   };
   "project:add": {
-    args: [path: string];
+    args: [path: string, identity?: ProjectCreationIdentity];
     result: Project;
   };
   "project:remove": {

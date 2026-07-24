@@ -13,6 +13,7 @@ import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { Project } from "../../../types/index.js";
+import type { ProjectCreationIdentity } from "../../../../shared/types/project.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { pruneWindowStateForPath } from "../../../windowState.js";
@@ -39,20 +40,61 @@ const PROJECT_VISIBLE_MESSAGE =
  * Extracted from `handleProjectAdd` so other handlers (e.g. scratch
  * Save-as-Project) can register a path as a project without going through IPC.
  */
-export async function addProjectByPath(projectPath: string): Promise<Project> {
+export async function addProjectByPath(
+  projectPath: string,
+  identity?: ProjectCreationIdentity
+): Promise<Project> {
   if (typeof projectPath !== "string" || !projectPath) {
     throw new Error("Invalid project path");
   }
   if (!path.isAbsolute(projectPath)) {
     throw new Error("Project path must be absolute");
   }
-  const project = await projectStore.addProject(projectPath);
+  const project = await projectStore.addProject(projectPath, normalizeCreationIdentity(identity));
   broadcastToRenderer(CHANNELS.PROJECT_UPDATED, project);
   return project;
 }
 
+// Matches the in-repo `.daintree/project.json` cap so an identity chosen at
+// creation can't exceed what enabling in-repo settings would later accept.
+const MAX_CREATION_NAME_LENGTH = 100;
+// Generous next to any real emoji (a flag-with-modifier sequence is ~14 code
+// units) while still bounding what a compromised renderer can store.
+const MAX_CREATION_EMOJI_LENGTH = 32;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\x00-\x1F\x7F]/;
+
+/**
+ * Creation identity arrives from the renderer, so treat it as untrusted: keep
+ * it only when both halves are plain, bounded, control-character-free strings.
+ * A partial or malformed payload is dropped whole rather than half-applied,
+ * leaving `addProject` on its normal basename + default-emoji path.
+ *
+ * Reads own properties only and returns a fresh object, so neither inherited
+ * fields nor extra keys (`id`, `path`) can ride along into the insert.
+ */
+function normalizeCreationIdentity(
+  identity: ProjectCreationIdentity | undefined
+): ProjectCreationIdentity | undefined {
+  if (!identity || typeof identity !== "object" || Array.isArray(identity)) return undefined;
+  if (!Object.hasOwn(identity, "name") || !Object.hasOwn(identity, "emoji")) return undefined;
+
+  const { name, emoji } = identity;
+  if (typeof name !== "string" || typeof emoji !== "string") return undefined;
+
+  const trimmedName = name.trim();
+  const trimmedEmoji = emoji.trim();
+  if (!trimmedName || !trimmedEmoji) return undefined;
+  if (trimmedName.length > MAX_CREATION_NAME_LENGTH) return undefined;
+  if (trimmedEmoji.length > MAX_CREATION_EMOJI_LENGTH) return undefined;
+  if (CONTROL_CHARS.test(trimmedName) || CONTROL_CHARS.test(trimmedEmoji)) return undefined;
+
+  return { name: trimmedName, emoji: trimmedEmoji };
+}
+
 export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () => void {
-  const handleProjectAdd = async (projectPath: string) => addProjectByPath(projectPath);
+  const handleProjectAdd = async (projectPath: string, identity?: ProjectCreationIdentity) =>
+    addProjectByPath(projectPath, identity);
 
   const handlers: Array<() => void> = [];
 

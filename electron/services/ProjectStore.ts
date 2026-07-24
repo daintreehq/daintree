@@ -8,6 +8,7 @@ import type {
   TerminalRecipe,
   RecipeNameCollision,
 } from "../types/index.js";
+import type { ProjectCreationIdentity } from "../../shared/types/project.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import type { AgentPreset } from "../../shared/config/agentRegistry.js";
 import path from "path";
@@ -53,7 +54,8 @@ import { rewriteAgentSessionPathsForProject } from "./pty/agentSessionHistory.js
 import { getPendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
 import { repairMovedSubmodulePaths } from "./git/submodulePathRepair.js";
 
-export const DEFAULT_PROJECT_EMOJI = "🌲";
+export { DEFAULT_PROJECT_EMOJI } from "../../shared/utils/projectEmoji.js";
+import { DEFAULT_PROJECT_EMOJI } from "../../shared/utils/projectEmoji.js";
 
 /**
  * The single spelling of a project path used for identity comparisons. Separator
@@ -353,6 +355,20 @@ export class ProjectStore {
 
   // --- DB CRUD ---
 
+  /**
+   * Canonical spelling of a path for comparison against a resolved git root:
+   * realpath (resolving symlinks and case) then the same separator + NFC
+   * normalization the root gets. Returns null if the path can't be resolved,
+   * which compares unequal to every root — the safe direction.
+   */
+  private async canonicalizeForCompare(input: string): Promise<string | null> {
+    try {
+      return normalizeProjectPath(await fs.realpath(input));
+    } catch {
+      return null;
+    }
+  }
+
   private async getGitRoot(projectPath: string): Promise<string> {
     const gitService = new GitService(projectPath);
     const root = await gitService.getRepositoryRoot(projectPath);
@@ -360,7 +376,17 @@ export class ProjectStore {
     return canonical;
   }
 
-  async addProject(projectPath: string): Promise<Project> {
+  /**
+   * `creationIdentity` is the name/emoji chosen in a creation dialog. It is
+   * consulted only where a brand-new row is minted below — every earlier return
+   * (already-registered path, adopted move, lost insert race) keeps the
+   * identity it already has, so re-adding a folder can never rename it.
+   * In-repo `.daintree/project.json` still wins field-wise.
+   */
+  async addProject(
+    projectPath: string,
+    creationIdentity?: ProjectCreationIdentity
+  ): Promise<Project> {
     let gitRoot: string;
     try {
       gitRoot = await this.getGitRoot(projectPath);
@@ -399,6 +425,21 @@ export class ProjectStore {
     // handles separator/segment normalization; Unicode normalization is
     // independent.
     const normalizedPath = path.normalize(gitRoot).normalize("NFC");
+
+    // The registered project is the git ROOT, which is not always the path the
+    // caller handed us: creating `/repo/child` inside an existing repository
+    // resolves back to `/repo`. Identity chosen for the child must not be
+    // stamped onto the ancestor, so it only survives when the two agree.
+    //
+    // Both sides are canonicalized the same way (`normalizedPath` already comes
+    // from a realpath'd git root). A lexical-only comparison here would treat a
+    // symlinked path, a trailing separator, or different casing on a
+    // case-insensitive volume as a mismatch and silently discard an identity
+    // the user actually chose.
+    const mintIdentity =
+      (await this.canonicalizeForCompare(projectPath)) === normalizedPath
+        ? creationIdentity
+        : undefined;
 
     const existing = await this.getProjectByPath(normalizedPath);
     if (existing) {
@@ -443,8 +484,8 @@ export class ProjectStore {
     const project: Project = {
       id: mintProjectId(normalizedPath, (candidate) => this.isProjectIdTaken(candidate)),
       path: normalizedPath,
-      name: inRepo.name ?? path.basename(normalizedPath),
-      emoji: inRepo.emoji ?? DEFAULT_PROJECT_EMOJI,
+      name: inRepo.name ?? mintIdentity?.name ?? path.basename(normalizedPath),
+      emoji: inRepo.emoji ?? mintIdentity?.emoji ?? DEFAULT_PROJECT_EMOJI,
       lastOpened: now,
       status: "closed",
       frecencyScore: FRECENCY_COLD_START,

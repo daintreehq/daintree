@@ -97,6 +97,17 @@ export interface Project {
   lastKnownStats?: ProjectRepoStats;
 }
 
+/**
+ * Identity chosen in a creation dialog and applied when the project row is
+ * first minted. Only consulted on that branch — an already-registered path, an
+ * adopted move, or an in-repo `.daintree/project.json` all keep their own
+ * identity, so this can never be used to rename by re-adding a folder.
+ */
+export interface ProjectCreationIdentity {
+  name: string;
+  emoji: string;
+}
+
 /** Panel snapshot for state preservation. */
 export interface PanelSnapshot {
   /** Terminal ID */

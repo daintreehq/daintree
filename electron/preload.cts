@@ -84,6 +84,7 @@ import { buildTerminalConfigPreloadBindings } from "./ipc/handlers/terminalConfi
 
 import type {
   Project,
+  ProjectCreationIdentity,
   ProjectSettings,
   TerminalSpawnOptions,
   CopyTreeOptions,
@@ -1708,7 +1709,12 @@ function buildElectronApi(): ElectronAPI {
 
       getCurrent: () => _unwrappingInvoke(CHANNELS.PROJECT_GET_CURRENT),
 
-      add: (path: string) => _unwrappingInvoke(CHANNELS.PROJECT_ADD, path),
+      // Forward the optional identity only when present — an open-existing-repo
+      // add stays a one-argument invoke, byte-identical to before.
+      add: (path: string, identity?: ProjectCreationIdentity) =>
+        identity
+          ? _unwrappingInvoke(CHANNELS.PROJECT_ADD, path, identity)
+          : _unwrappingInvoke(CHANNELS.PROJECT_ADD, path),
 
       remove: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_REMOVE, projectId),
 

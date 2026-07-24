@@ -1,5 +1,6 @@
 import type {
   Project,
+  ProjectCreationIdentity,
   ProjectSettings,
   RunCommand,
   ProjectCloseResult,
@@ -111,8 +112,8 @@ export const projectClient = {
     return inflight;
   },
 
-  add: (path: string): Promise<Project> => {
-    return window.electron.project.add(path);
+  add: (path: string, identity?: ProjectCreationIdentity): Promise<Project> => {
+    return window.electron.project.add(path, identity);
   },
 
   remove: (projectId: string): Promise<void> => {
