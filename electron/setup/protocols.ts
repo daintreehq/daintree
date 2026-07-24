@@ -18,6 +18,7 @@ import {
   DAINTREE_APP_PERMISSIONS_POLICY,
   buildAppPermissionsPolicy,
 } from "../../shared/config/permissionsPolicy.js";
+import { getDevServerOrigins } from "../../shared/config/devServer.js";
 import {
   classifyPartition,
   getDaintreeAppCSP,
@@ -511,9 +512,43 @@ async function readContainedDaintreeFile(
 }
 
 /**
+ * The origin allowed to read this daintree-file:// response via cross-origin
+ * fetch(), or null for everyone else. The scheme is corsEnabled so the file
+ * viewer can fetch() video bytes for blob-URL playback, but eligibility alone
+ * must not grant reads: a browser panel hosting an arbitrary remote site
+ * shares the scheme registration, and echoing its origin here would hand it
+ * the user's local files. Only the trusted app document qualifies — app:// in
+ * production, the Vite dev-server origins in development. Tag loads (<img>,
+ * <video>) are no-cors and never consult this.
+ */
+function daintreeFileCorsOrigin(request: GlobalRequest): string | null {
+  const origin = request.headers.get("origin");
+  if (!origin) return null;
+  if (origin === "app://daintree") return origin;
+  if (process.env.NODE_ENV === "development" && getDevServerOrigins().includes(origin)) {
+    return origin;
+  }
+  return null;
+}
+
+/**
  * Create the daintree-file:// protocol handler function.
  */
 function createDaintreeFileProtocolHandler() {
+  const handleRequest = createDaintreeFileRequestCore();
+  return async (request: GlobalRequest) => {
+    const response = await handleRequest(request);
+    // Constructed Responses have mutable headers, so the CORS grant rides on
+    // every path (success and error alike) — a blocked error response would
+    // otherwise surface as an opaque TypeError instead of a readable status.
+    const corsOrigin = daintreeFileCorsOrigin(request);
+    if (corsOrigin) response.headers.set("Access-Control-Allow-Origin", corsOrigin);
+    return response;
+  };
+}
+
+/** The daintree-file:// request core, minus the CORS header pass. */
+function createDaintreeFileRequestCore() {
   return async (request: GlobalRequest) => {
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method Not Allowed", {
