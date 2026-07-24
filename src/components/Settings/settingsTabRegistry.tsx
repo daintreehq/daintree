@@ -1044,7 +1044,7 @@ export const SETTINGS_REGISTRY = [
         subtab: "claude",
         subtabLabel: "Claude",
         section: "Agent runtime settings",
-        title: "Inline mode",
+        title: "Alt-screen mode",
         description: "Choose inline rendering or the CLI's fullscreen TUI per agent",
         keywords: ["inline", "mode", "tui", "fullscreen", "alt screen", "resize", "tty"],
       },

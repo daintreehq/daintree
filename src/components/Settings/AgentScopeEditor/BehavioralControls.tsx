@@ -141,7 +141,7 @@ export function BehavioralControls({
         <div id="agents-inline-mode" className="space-y-1.5">
           <SettingsChoicebox<InlineMode>
             label="Alt-screen mode"
-            description="Alt screen uses the CLI's full-screen TUI; inline keeps output in Daintree's scrollback with cleaner resizing. Either choice overrides the global setting for this scope."
+            description="Alt screen uses the CLI's full-screen TUI; inline keeps output in Daintree's scrollback with cleaner resizing. Choosing Inline or Alt screen overrides the inherited setting for this scope."
             columns={3}
             value={inlineMode}
             onChange={onInlineModeChange}

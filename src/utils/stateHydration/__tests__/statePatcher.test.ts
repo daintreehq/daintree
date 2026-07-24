@@ -8,7 +8,7 @@ const getMergedPresetMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/config/agents", () => ({
   isRegisteredAgent: (type: string) =>
-    ["claude", "gemini", "antigravity", "codex", "opencode"].includes(type),
+    ["claude", "gemini", "antigravity", "codex", "opencode", "grok"].includes(type),
   getAgentConfig: (id: string) => ({
     command: id,
     name: id.charAt(0).toUpperCase() + id.slice(1),
@@ -1067,6 +1067,59 @@ describe("buildArgsForRespawn", () => {
     ]);
     // ...but the stored snapshot is not synthesized from nothing.
     expect(result.agentLaunchFlags).toEqual([]);
+  });
+
+  it("injects the force-alt-screen flag into an empty snapshot at resume (#11423)", () => {
+    // The live crash-recovery boundary: this file runs the REAL reconciler, so
+    // it proves the chokepoint actually threads the resolved decision through
+    // rather than merely that the reconciler works in isolation. A session
+    // captured before #11423 has no screen-mode token at all, and alt-screen
+    // used to mean "inject nothing" — which left grok on its own inline default.
+    buildResumeCommandMock.mockClear();
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "grok",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: [],
+      },
+      "agent",
+      "/p",
+      { agents: { grok: {} }, globalUseAltScreen: true },
+      false,
+      undefined
+    );
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("grok", "sess-1", ["--fullscreen"]);
+    expect(result.agentLaunchFlags).toEqual([]);
+  });
+
+  it("flips a stale inline token to force-alt-screen on resume (#11423)", () => {
+    buildResumeCommandMock.mockClear();
+    buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "grok",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        // Captured while the global switch said inline.
+        agentLaunchFlags: ["--no-alt-screen", "--model", "grok-build"],
+      },
+      "agent",
+      "/p",
+      { agents: { grok: {} }, globalUseAltScreen: true },
+      false,
+      undefined
+    );
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("grok", "sess-1", [
+      "--fullscreen",
+      "--model",
+      "grok-build",
+    ]);
   });
 
   it("prefers primary buildResumeCommand over resume-latest when session ID is present", () => {

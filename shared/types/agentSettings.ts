@@ -14,9 +14,11 @@ export type DangerousMode = "inherit" | "on" | "off";
 /**
  * Tri-state alt-screen intent, stored on the `inlineMode` field. `"on"` =
  * inline rendering (inject the agent's `inlineModeFlag`, e.g. `--no-alt-screen`);
- * `"off"` = full-screen alternate buffer (no flag); `"inherit"` defers to the
- * next level up (preset → agent registry default → the global "Use alt-screen
- * mode by default" switch). Value polarity intentionally matches the legacy
+ * `"off"` = full-screen alternate buffer (inject the agent's `altScreenFlag`,
+ * e.g. `--fullscreen`, or no flag when it declares none and rides its own CLI
+ * default); `"inherit"` defers to the next level up (preset → agent registry
+ * default → the global "Use alt-screen mode by default" switch). Value polarity
+ * intentionally matches the legacy
  * `inlineMode` boolean (`true` was inline), so a persisted boolean maps
  * literally — `true → "on"`, `false → "off"` (see {@link resolveInlineMode}).
  * The UI labels are decoupled from these values (the Settings control presents
@@ -267,8 +269,9 @@ export function combineInlineModes(agentMode: InlineMode, presetMode?: InlineMod
  * preset-merged) entry's tri-state mode. Returns `true` when the agent should
  * render inline — i.e. when the agent's `inlineModeFlag` should be injected.
  *
- * - `"on"`  → inline (inject flag).
- * - `"off"` → alt-screen (no flag); an explicit veto that beats the global switch.
+ * - `"on"`  → inline (inject `inlineModeFlag`).
+ * - `"off"` → alt-screen (inject `altScreenFlag` when the agent declares one,
+ *   otherwise no flag); an explicit veto that beats the global switch.
  * - `"inherit"` → a curated per-agent registry `capabilities.defaultInlineMode`
  *   wins if declared (no shipped agent pins one today — they all follow the
  *   global switch so it stays user-overridable); otherwise defer to the global

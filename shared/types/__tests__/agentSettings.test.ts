@@ -1192,6 +1192,61 @@ describe("paired screen-mode polarities (#11423)", () => {
     expect(reconcileInlineModeFlag(flags, "neither-mode", true)).toEqual(flags);
     expect(reconcileInlineModeFlag(flags, "neither-mode", false)).toEqual(flags);
   });
+
+  it("injects into an empty snapshot, the shape the relaunch chokepoints pass", () => {
+    // restart.ts calls the reconciler with [] and uses the result only when it
+    // comes back non-empty, so a session launched before either polarity
+    // existed still picks up the current decision.
+    expect(reconcileInlineModeFlag([], "both-modes", false)).toEqual([ALT]);
+    expect(reconcileInlineModeFlag([], "both-modes", true)).toEqual([INLINE]);
+    expect(reconcileInlineModeFlag([], "alt-only", true)).toEqual([]);
+    expect(reconcileInlineModeFlag([], "neither-mode", false)).toEqual([]);
+  });
+
+  it("never mutates the input array", () => {
+    for (const agentId of ["inline-only", "alt-only", "both-modes", "neither-mode"]) {
+      for (const effectiveInline of [true, false]) {
+        const input = ["--keep", INLINE, ALT];
+        const snapshot = [...input];
+        reconcileInlineModeFlag(input, agentId, effectiveInline);
+        expect(input, `${agentId} mutated its input`).toEqual(snapshot);
+      }
+    }
+  });
+
+  it("is idempotent for every capability and direction combination", () => {
+    const inputs = [[], ["--keep"], [INLINE], [ALT], ["--keep", INLINE, ALT, INLINE]];
+    for (const agentId of ["inline-only", "alt-only", "both-modes", "neither-mode"]) {
+      for (const effectiveInline of [true, false]) {
+        for (const input of inputs) {
+          const once = reconcileInlineModeFlag(input, agentId, effectiveInline);
+          expect(
+            reconcileInlineModeFlag(once, agentId, effectiveInline),
+            `${agentId} inline=${effectiveInline} input=${JSON.stringify(input)}`
+          ).toEqual(once);
+        }
+      }
+    }
+  });
+
+  it("injects an alt-only agent's token through the generated command too", () => {
+    // The command builder must select from the same pair — a guard accidentally
+    // keyed on `inlineModeFlag` would silently skip an alt-only agent here.
+    const altScreen = generateAgentCommand("alt-only", { inlineMode: "off" }, "alt-only");
+    expect(altScreen).toContain(ALT);
+
+    const inline = generateAgentCommand("alt-only", { inlineMode: "on" }, "alt-only");
+    expect(inline).not.toContain(ALT);
+  });
+
+  it("keeps an alt-only agent's token out of a headless one-shot", () => {
+    // The interactive gate must cover the alt polarity independently: grok
+    // declares both, so it can't prove the gate isn't keyed on the inline flag.
+    const headless = generateAgentCommand("alt-only", { inlineMode: "off" }, "alt-only", {
+      interactive: false,
+    });
+    expect(headless).not.toContain(ALT);
+  });
 });
 
 describe("screen-mode reconciliation composed with bypass reconciliation (#11423)", () => {
@@ -1204,29 +1259,47 @@ describe("screen-mode reconciliation composed with bypass reconciliation (#11423
     agentId: string,
     effectiveBypass: boolean,
     effectiveInline: boolean
-  ) => reconcileInlineModeFlag(reconcileBypassFlags(flags, agentId, effectiveBypass), agentId, effectiveInline);
-
-  it("flips the screen-mode token while the bypass reconciler flips its own", () => {
-    // Grok carries both polarities; codex's bypass token is independent.
-    const withInline = reconcileBoth(["--no-alt-screen"], "grok", true, false);
-    expect(withInline).toContain("--fullscreen");
-    expect(withInline).not.toContain("--no-alt-screen");
-
-    // Flipping back leaves exactly one screen token and preserves the bypass
-    // decision the first reconciler made.
-    const backToInline = reconcileBoth(withInline, "grok", true, true);
-    expect(backToInline.filter((f) => f === "--no-alt-screen" || f === "--fullscreen")).toEqual([
-      "--no-alt-screen",
-    ]);
-    expect(backToInline.filter((f) => f.startsWith("--dangerously"))).toEqual(
-      withInline.filter((f) => f.startsWith("--dangerously"))
+  ) =>
+    reconcileInlineModeFlag(
+      reconcileBypassFlags(flags, agentId, effectiveBypass),
+      agentId,
+      effectiveInline
     );
+
+  // Grok's real bypass token, so the composition is exercised with a token the
+  // bypass reconciler actually owns rather than one it ignores.
+  const bypassToken = DEFAULT_DANGEROUS_ARGS.grok!;
+  const screenTokens = (flags: readonly string[]) =>
+    flags.filter((f) => f === "--no-alt-screen" || f === "--fullscreen");
+
+  it("flips the screen-mode token while the bypass reconciler keeps its own", () => {
+    const altScreen = reconcileBoth(["--no-alt-screen"], "grok", true, false);
+    expect(screenTokens(altScreen)).toEqual(["--fullscreen"]);
+    // The bypass reconciler injected its token into the same array.
+    expect(altScreen).toContain(bypassToken);
+
+    // Flipping screen mode back leaves exactly one screen token and does not
+    // disturb the bypass token the other reconciler owns.
+    const backToInline = reconcileBoth(altScreen, "grok", true, true);
+    expect(screenTokens(backToInline)).toEqual(["--no-alt-screen"]);
+    expect(backToInline.filter((f) => f === bypassToken)).toEqual([bypassToken]);
+  });
+
+  it("drops the bypass token without disturbing the screen-mode token", () => {
+    // The inverse direction: bypass off, screen mode unchanged. Proves neither
+    // reconciler claims the other's token.
+    const both = reconcileBoth([], "grok", true, false);
+    expect(both).toContain(bypassToken);
+
+    const bypassOff = reconcileBoth(both, "grok", false, false);
+    expect(bypassOff).not.toContain(bypassToken);
+    expect(screenTokens(bypassOff)).toEqual(["--fullscreen"]);
   });
 
   it("is idempotent under repeated composed reconciliation", () => {
     const once = reconcileBoth(["--model", "grok-build"], "grok", false, false);
-    expect(once).toEqual(reconcileBoth(once, "grok", false, false));
-    expect(once).toContain("--fullscreen");
+    expect(reconcileBoth(once, "grok", false, false)).toEqual(once);
+    expect(screenTokens(once)).toEqual(["--fullscreen"]);
   });
 });
 
