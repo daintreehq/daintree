@@ -452,7 +452,7 @@ export function RecipesTab({
         description={
           deleteError
             ? `Error: ${deleteError}`
-            : "The recipe will be permanently removed. This cannot be undone."
+            : "Deletes this recipe — the terminals it launches and their settings. Committed in-repo recipes in .daintree/recipes/ can be restored from git; recipes stored only on this machine can't be recovered."
         }
         confirmLabel={deleteError ? "Retry delete" : "Delete recipe"}
         variant="destructive"

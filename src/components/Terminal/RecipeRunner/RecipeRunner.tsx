@@ -43,7 +43,7 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
       description={
         runner.deleteError
           ? `Error: ${runner.deleteError}`
-          : "The recipe will be permanently removed. This cannot be undone."
+          : "Deletes this recipe — the terminals it launches and their settings. Committed in-repo recipes in .daintree/recipes/ can be restored from git; recipes stored only on this machine can't be recovered."
       }
       confirmLabel={runner.deleteError ? "Retry delete" : "Delete recipe"}
       variant="destructive"
