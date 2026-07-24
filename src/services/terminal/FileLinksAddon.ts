@@ -9,9 +9,11 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   DIR_PATH_REGEX,
   FILE_PATH_REGEX,
+  FILE_URL_REGEX,
   isPathExcluded,
   resolveDirPathCandidate,
   resolveFilePathCandidate,
+  resolveFileUrlCandidate,
 } from "./filePathDetection";
 import { fileBrowserClient } from "@/clients/fileBrowserClient";
 import type { TerminalLink } from "./types";
@@ -208,6 +210,46 @@ export class FileLinksAddon implements ILinkProvider {
     // re-matches a file token (`src/file.ts` satisfies both regexes) is
     // dropped instead of stacking a second link on the same characters.
     const claimed: Array<[number, number]> = [];
+
+    // `file://` URLs are scanned first so their ranges are claimed before the
+    // bare-path and directory passes. Gated on a substring test rather than
+    // run unconditionally: provideLinks is pointer-driven across every visible
+    // terminal, and virtually no line carries a scheme at all. `://` (not
+    // `file://`) keeps the guard case-insensitive without a lowercase copy.
+    if (lineText.includes("://")) {
+      for (const match of lineText.matchAll(FILE_URL_REGEX)) {
+        const url = match[1];
+        if (url === undefined) continue;
+
+        const resolved = resolveFileUrlCandidate(url);
+        if (!resolved) continue;
+
+        // Indexed off the capture, not `match[0]`: the match also spans the
+        // leading boundary character and any trailing sentence punctuation,
+        // neither of which the link should underline or own.
+        const startIndex = match.index + match[0]!.indexOf(url);
+        claimed.push([startIndex, startIndex + url.length]);
+
+        const range: IBufferRange = {
+          start: { x: startIndex + 1, y: bufferLineNumber },
+          end: { x: startIndex + url.length, y: bufferLineNumber },
+        };
+
+        // No line/col: `resolveFileUrlCandidate` deliberately doesn't peel a
+        // `:line` suffix off a URL, so there is none to forward.
+        links.push(
+          new FileLink(
+            range,
+            url,
+            resolved.absolutePath,
+            undefined,
+            undefined,
+            this._getCwd(),
+            this._onHover
+          )
+        );
+      }
+    }
 
     // matchAll on the module-scope global regex clones it internally (per spec)
     // and never mutates lastIndex, so the regex is reused across hover calls

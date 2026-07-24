@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
   DIR_PATH_REGEX,
   FILE_PATH_REGEX,
+  FILE_URL_REGEX,
   isPathExcluded,
   resolveDirPathCandidate,
   resolveFilePathCandidate,
+  resolveFileUrlCandidate,
   resolveSelectedFilePath,
 } from "../filePathDetection";
 
@@ -106,6 +108,169 @@ describe("resolveSelectedFilePath", () => {
 
   it("rejects a bare filename with no separator", () => {
     expect(resolveSelectedFilePath("foo.ts", "/p")).toBeNull();
+  });
+
+  it("accepts a selection that is exactly one file:// URL", () => {
+    expect(resolveSelectedFilePath("file:///tmp/renders/a.png", "/p")?.absolutePath).toBe(
+      "/tmp/renders/a.png"
+    );
+    expect(resolveSelectedFilePath("  file:///tmp/renders/a.png \n", "/p")?.absolutePath).toBe(
+      "/tmp/renders/a.png"
+    );
+  });
+
+  it("resolves a selected file:// URL the same way a click on it would", () => {
+    const url = "file:///tmp/my%20render.png";
+    expect(resolveSelectedFilePath(url, "/p")).toEqual(resolveFileUrlCandidate(url));
+  });
+
+  it("rejects a file:// URL embedded in prose or paired with another", () => {
+    expect(resolveSelectedFilePath("see file:///tmp/a.png for details", "/p")).toBeNull();
+    expect(resolveSelectedFilePath("file:///tmp/a.png file:///tmp/b.png", "/p")).toBeNull();
+  });
+
+  it("rejects a file:// URL that resolves to nothing viewable", () => {
+    expect(resolveSelectedFilePath("file://someserver/share/a.png", "/p")).toBeNull();
+    expect(resolveSelectedFilePath("file:///", "/p")).toBeNull();
+  });
+});
+
+describe("resolveFileUrlCandidate", () => {
+  const CODEX_URL =
+    "file:///Users/gpriday/.codex/generated_images/019f92d9-d4b8-7de3-b1c3-56ce778ef00b/call_H5WWfuc4aUo8pAYO4a5eYRZ5.png";
+
+  it("decodes the URL an agent CLI prints for a generated image", () => {
+    expect(resolveFileUrlCandidate(CODEX_URL)).toEqual({
+      absolutePath:
+        "/Users/gpriday/.codex/generated_images/019f92d9-d4b8-7de3-b1c3-56ce778ef00b/call_H5WWfuc4aUo8pAYO4a5eYRZ5.png",
+    });
+  });
+
+  it("percent-decodes spaces without treating + as one", () => {
+    expect(resolveFileUrlCandidate("file:///tmp/my%20render+v2.png")?.absolutePath).toBe(
+      "/tmp/my render+v2.png"
+    );
+  });
+
+  it("decodes non-ASCII without re-normalizing the Unicode form", () => {
+    // NFD "café": the combining acute stays a separate code point. Forcing NFC
+    // would rewrite the name the filesystem actually holds.
+    const decomposed = "/tmp/cafe\u0301.png";
+    const resolved = resolveFileUrlCandidate("file:///tmp/cafe%CC%81.png")?.absolutePath;
+    expect(resolved).toBe(decomposed);
+    expect(resolved).not.toBe(decomposed.normalize("NFC"));
+  });
+
+  it("drops a query string and a fragment", () => {
+    expect(resolveFileUrlCandidate("file:///tmp/a.png?download=1#preview")?.absolutePath).toBe(
+      "/tmp/a.png"
+    );
+  });
+
+  it("accepts an empty and a localhost authority alike", () => {
+    expect(resolveFileUrlCandidate("file:///tmp/a.png")?.absolutePath).toBe("/tmp/a.png");
+    expect(resolveFileUrlCandidate("file://localhost/tmp/a.png")?.absolutePath).toBe("/tmp/a.png");
+    expect(resolveFileUrlCandidate("file://LOCALHOST/tmp/a.png")?.absolutePath).toBe("/tmp/a.png");
+  });
+
+  it("rejects a remote authority", () => {
+    expect(resolveFileUrlCandidate("file://someserver/share/x.png")).toBeNull();
+  });
+
+  it("rejects a four-slash URL whose empty host hides a UNC path", () => {
+    expect(resolveFileUrlCandidate("file:////someserver/share/x.png")).toBeNull();
+  });
+
+  it("strips the drive's leading slash and preserves the letter's case", () => {
+    expect(resolveFileUrlCandidate("file:///C:/Users/me/x.png")?.absolutePath).toBe(
+      "C:/Users/me/x.png"
+    );
+    expect(resolveFileUrlCandidate("file:///d:/Users/me/x.png")?.absolutePath).toBe(
+      "d:/Users/me/x.png"
+    );
+  });
+
+  it("accepts the bar and backslash spellings of a Windows drive URL", () => {
+    expect(resolveFileUrlCandidate("file:///C|/Users/me/x.png")?.absolutePath).toBe(
+      "C:/Users/me/x.png"
+    );
+    expect(resolveFileUrlCandidate("file:///C:\\Users\\me\\x.png")?.absolutePath).toBe(
+      "C:/Users/me/x.png"
+    );
+  });
+
+  it("rejects encoded path separators in either case", () => {
+    expect(resolveFileUrlCandidate("file:///tmp/a%2Fb.png")).toBeNull();
+    expect(resolveFileUrlCandidate("file:///tmp/a%2fb.png")).toBeNull();
+    expect(resolveFileUrlCandidate("file:///tmp/a%5Cb.png")).toBeNull();
+    expect(resolveFileUrlCandidate("file:///C:/a%5cb.png")).toBeNull();
+  });
+
+  it("rejects a malformed percent escape instead of throwing", () => {
+    expect(() => resolveFileUrlCandidate("file:///tmp/a%zz.png")).not.toThrow();
+    expect(resolveFileUrlCandidate("file:///tmp/a%zz.png")).toBeNull();
+  });
+
+  it("rejects roots and directory-shaped URLs", () => {
+    expect(resolveFileUrlCandidate("file://")).toBeNull();
+    expect(resolveFileUrlCandidate("file:///")).toBeNull();
+    expect(resolveFileUrlCandidate("file:///C:/")).toBeNull();
+    expect(resolveFileUrlCandidate("file:///C:")).toBeNull();
+    expect(resolveFileUrlCandidate("file:///tmp/renders/")).toBeNull();
+  });
+
+  it("rejects a non-file scheme and unparseable text", () => {
+    expect(resolveFileUrlCandidate("https://example.com/a.png")).toBeNull();
+    expect(resolveFileUrlCandidate("not a url")).toBeNull();
+  });
+
+  it("rejects a URL carrying an escape sequence", () => {
+    expect(resolveFileUrlCandidate("file:///tmp/\x1b[0m/a.png")).toBeNull();
+  });
+
+  it("keeps no line or column — a file URL names an exact resource", () => {
+    // `:2024` is a legal POSIX filename ending; peeling it would retarget the
+    // link at a file the URL never named.
+    expect(resolveFileUrlCandidate("file:///tmp/render:2024")).toEqual({
+      absolutePath: "/tmp/render:2024",
+    });
+  });
+});
+
+describe("FILE_URL_REGEX (terminal line scanning)", () => {
+  const scan = (line: string) => [...line.matchAll(FILE_URL_REGEX)].map((m) => m[1]);
+
+  it("captures a bare URL and one wrapped in parentheses", () => {
+    expect(scan("saved to file:///tmp/a.png")).toEqual(["file:///tmp/a.png"]);
+    expect(scan("![shot](file:///tmp/a.png)")).toEqual(["file:///tmp/a.png"]);
+  });
+
+  it("leaves trailing sentence punctuation out of the capture", () => {
+    expect(scan("wrote file:///tmp/a.png.")).toEqual(["file:///tmp/a.png"]);
+    expect(scan("wrote file:///tmp/a.png, then stopped")).toEqual(["file:///tmp/a.png"]);
+  });
+
+  it("never truncates at a Windows bar or a bracket", () => {
+    // A truncated `file:///C` still parses as a URL, so a partial capture would
+    // silently link to the wrong path rather than to nothing.
+    expect(scan("open file:///C|/Users/me/x.png")).toEqual(["file:///C|/Users/me/x.png"]);
+    expect(scan("open file:///tmp/shot[1].png")).toEqual(["file:///tmp/shot[1].png"]);
+    expect(scan("open file:///C:\\Users\\me\\x.png")).toEqual(["file:///C:\\Users\\me\\x.png"]);
+  });
+
+  it("requires a boundary before the scheme", () => {
+    expect(scan("xfile:///tmp/a.png")).toEqual([]);
+  });
+
+  it("matches an uppercase scheme", () => {
+    expect(scan("FILE:///tmp/a.png")).toEqual(["FILE:///tmp/a.png"]);
+  });
+
+  it("finds every URL on a line", () => {
+    expect(scan("file:///tmp/a.png and file:///tmp/b.png")).toEqual([
+      "file:///tmp/a.png",
+      "file:///tmp/b.png",
+    ]);
   });
 });
 

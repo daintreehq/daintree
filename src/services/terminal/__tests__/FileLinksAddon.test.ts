@@ -295,6 +295,110 @@ describe("FileLinksAddon", () => {
     });
   });
 
+  describe("file:// URLs (#11419)", () => {
+    const CODEX_URL =
+      "file:///Users/gpriday/.codex/generated_images/019f92d9-d4b8-7de3-b1c3-56ce778ef00b/call_H5WWfuc4aUo8pAYO4a5eYRZ5.png";
+
+    const linksFor = (lineText: string, cwd = "/home/user/project"): Promise<ILink[] | undefined> =>
+      new Promise((resolve) => {
+        const terminal = createMockTerminal();
+        vi.mocked(terminal.buffer.active.getLine).mockReturnValue(createMockLine(lineText));
+        new FileLinksAddon(terminal, () => cwd).provideLinks(1, resolve);
+      });
+
+    const readLink = (link: ILink) =>
+      link as unknown as { kind: string; text: string; absolutePath: string };
+
+    it("turns an agent's generated-image URL into a single file link", async () => {
+      const links = await linksFor(`Saved image to ${CODEX_URL}`);
+      expect(links).toHaveLength(1);
+      const link = readLink(links![0]!);
+      expect(link.kind).toBe("file");
+      expect(link.text).toBe(CODEX_URL);
+      expect(link.absolutePath).toBe(
+        "/Users/gpriday/.codex/generated_images/019f92d9-d4b8-7de3-b1c3-56ce778ef00b/call_H5WWfuc4aUo8pAYO4a5eYRZ5.png"
+      );
+    });
+
+    it("spans exactly the URL's columns", async () => {
+      const prefix = "Saved to ";
+      const url = "file:///tmp/a.png";
+      const links = await linksFor(`${prefix}${url}.`);
+      expect(links).toHaveLength(1);
+      // xterm columns are 1-based and the end is inclusive, so the range covers
+      // the URL alone — not the leading space, not the sentence period.
+      expect(links![0]!.range).toEqual({
+        start: { x: prefix.length + 1, y: 1 },
+        end: { x: prefix.length + url.length, y: 1 },
+      });
+    });
+
+    it("keeps query and fragment in the link text but out of the resolved path", async () => {
+      const links = await linksFor("open file:///tmp/a.png?download=1#preview");
+      expect(links).toHaveLength(1);
+      const link = readLink(links![0]!);
+      expect(link.text).toBe("file:///tmp/a.png?download=1#preview");
+      expect(link.absolutePath).toBe("/tmp/a.png");
+    });
+
+    it("decodes the Windows drive spellings a URL can carry", async () => {
+      for (const url of ["file:///C:/Users/me/x.png", "file:///C|/Users/me/x.png"]) {
+        const links = await linksFor(`open ${url}`);
+        expect(links).toHaveLength(1);
+        expect(readLink(links![0]!).absolutePath).toBe("C:/Users/me/x.png");
+      }
+    });
+
+    it("produces no link for a URL that isn't a viewable local file", async () => {
+      const rejected = [
+        "file://someserver/share/x.png",
+        "file:////someserver/share/x.png",
+        "file:///tmp/a%2Fb.png",
+        "file:///tmp/a%zz.png",
+        "file:///",
+        "file:///tmp/renders/",
+      ];
+      for (const url of rejected) {
+        expect(await linksFor(`open ${url}`)).toBeUndefined();
+      }
+    });
+
+    it("links a URL and a bare path on the same line without overlapping", async () => {
+      const links = await linksFor("wrote file:///tmp/a.png from src/App.tsx:10");
+      expect(links).toHaveLength(2);
+      expect(links!.map((link) => readLink(link).absolutePath)).toEqual([
+        "/tmp/a.png",
+        "/home/user/project/src/App.tsx",
+      ]);
+      const [first, second] = links!;
+      expect(first!.range.end.x).toBeLessThan(second!.range.start.x);
+    });
+
+    it("opens in the in-app viewer rather than the OS default app", async () => {
+      vi.mocked(actionService.dispatch).mockReset();
+      vi.mocked(systemClient.openPath).mockReset();
+      vi.mocked(actionService.dispatch).mockResolvedValue({ ok: true, value: { panelId: "p1" } });
+
+      const links = await linksFor(`Saved image to ${CODEX_URL}`);
+      links![0]!.activate(
+        { metaKey: false, ctrlKey: false } as unknown as MouseEvent,
+        links![0]!.text
+      );
+      await vi.waitFor(() => expect(actionService.dispatch).toHaveBeenCalledTimes(1));
+
+      expect(actionService.dispatch).toHaveBeenCalledWith(
+        "file.view",
+        expect.objectContaining({
+          path: "/Users/gpriday/.codex/generated_images/019f92d9-d4b8-7de3-b1c3-56ce778ef00b/call_H5WWfuc4aUo8pAYO4a5eYRZ5.png",
+          line: undefined,
+          col: undefined,
+        }),
+        { source: "user" }
+      );
+      expect(systemClient.openPath).not.toHaveBeenCalled();
+    });
+  });
+
   describe("path resolution", () => {
     it("should resolve relative paths against cwd", () => {
       return new Promise<void>((resolve) => {
