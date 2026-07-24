@@ -1332,14 +1332,45 @@ describe("registerAppLifecycleHandlers – second-instance folder handling", () 
       })
     );
 
-    getHandler()(
-      {},
-      ["daintree", "--cli-path", "/explicit/repo", pathToFileURL(dirPath).href],
-      "/work"
-    );
+    // A real directory: `extractCliPath` only yields paths that exist (#11410),
+    // so a fictional one would fail the request rather than win it.
+    const explicitDir = nodePath.join(dirPath, "explicit");
+    fs.mkdirSync(explicitDir);
+
+    getHandler()({}, ["daintree", "--cli-path", explicitDir, pathToFileURL(dirPath).href], "/work");
     await vi.waitFor(() => expect(onCreateWindowForPath).toHaveBeenCalled());
 
-    expect(onCreateWindowForPath).toHaveBeenCalledExactlyOnceWith("/explicit/repo");
+    expect(onCreateWindowForPath).toHaveBeenCalledExactlyOnceWith(explicitDir);
+  });
+
+  it("does not fall back to a folder URI when an explicit --cli-path fails to resolve", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const mainWindow = makeBrowserWindow();
+    const onCreateWindowForPath = vi.fn();
+    registerAppLifecycleHandlers(
+      makeOpts({
+        getMainWindow: vi.fn(() => mainWindow as unknown as import("electron").BrowserWindow),
+        onCreateWindowForPath,
+      })
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      getHandler()(
+        {},
+        ["daintree", "--cli-path", "/explicit/gone", pathToFileURL(dirPath).href],
+        "/work"
+      );
+      // Microtask flush: the folder branch dispatches synchronously into a
+      // promise chain, so anything it was going to call has been called by now.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(onCreateWindowForPath).not.toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("treats a directory named like an archive as a folder, not a .dntr install", async () => {
