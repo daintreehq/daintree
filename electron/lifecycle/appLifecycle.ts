@@ -1,5 +1,7 @@
 // eager-import-allow: manages application lifetime hooks and native deep link triggers on startup
 import { app, BrowserWindow } from "electron";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
@@ -22,40 +24,158 @@ export function setPendingCliPath(p: string | null): void {
   pendingCliPath = p;
 }
 
-export function extractCliPath(argv: string[]): string | null {
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--cli-path" && argv[i + 1]) {
-      return argv[i + 1];
-    }
-    if (argv[i].startsWith("--cli-path=")) {
-      return argv[i].slice("--cli-path=".length);
+const CLI_PATH_FLAG = "--cli-path";
+const CLI_PATH_PREFIX = `${CLI_PATH_FLAG}=`;
+
+// `\` separates path segments only on Windows; on POSIX it is a legal filename
+// character, so `~\foo` there names a file and must not be home-expanded.
+const TILDE_PREFIX = process.platform === "win32" ? /^~(?=[/\\]|$)/ : /^~(?=\/|$)/;
+
+// A `--`-prefixed token is a switch, never a path. Chromium injects its own
+// switches into the reconstructed `second-instance` command line, so this is
+// the guard that stops one being mistaken for a project directory (#11410).
+// Bare argv tokens only — the value of `--cli-path=<path>` is unambiguous even
+// when the directory is itself named `--something`.
+function isSwitchToken(arg: string | undefined): boolean {
+  return !arg || arg.startsWith("--");
+}
+
+// Decode an argv token to an OS path, without resolving it. Callers that care
+// about the literal filename see it before `path.resolve` collapses a trailing
+// `.`/`..` into an ancestor directory's name.
+function decodeArgPath(arg: string | undefined): string | null {
+  if (!arg) return null;
+
+  // XDG file managers pass `file://` URIs because electron-builder appends
+  // `%U` to the Linux .desktop Exec line, and macOS Shortcuts/Automator produce
+  // them by default.
+  let candidate = arg;
+  if (candidate.startsWith("file://")) {
+    try {
+      candidate = fileURLToPath(candidate);
+    } catch {
+      return null;
     }
   }
+
+  // Only the current user's own `~` — `~other` would need an account lookup.
+  // The function replacer keeps a `$` in the home path from being read as a
+  // replacement pattern.
+  return candidate.replace(TILDE_PREFIX, () => os.homedir());
+}
+
+// Shared normalization for every path-shaped argv token, used by both
+// `extractCliPath` and `extractDntrPaths` so the two can't drift (#11283). The
+// OS may supply a path relative to the launching shell's cwd, so it resolves
+// against the launching instance's `workingDirectory`.
+function normalizeArgPath(arg: string | undefined, workingDirectory: string): string | null {
+  const decoded = decodeArgPath(arg);
+  return decoded === null ? null : path.resolve(workingDirectory, decoded);
+}
+
+// As `normalizeArgPath`, but only returns candidates that are an existing
+// directory. `statSync` follows symlinks (a symlinked project dir is valid) and
+// the try/catch covers absence, permission errors, and anything else stat can
+// throw, all of which mean "not usable as a project path".
+function normalizeArgDirectory(arg: string | undefined, workingDirectory: string): string | null {
+  const resolved = normalizeArgPath(arg, workingDirectory);
+  if (!resolved) return null;
+  try {
+    return fs.statSync(resolved).isDirectory() ? resolved : null;
+  } catch {
+    return null;
+  }
+}
+
+// Single reporting point for a `--cli-path` that was asked for but couldn't be
+// resolved. Error surfacing in the UI is #11409 — this is the hook it replaces.
+function reportUnresolvedCliPath(arg: string | undefined, workingDirectory: string): void {
+  console.error("[MAIN] Failed to resolve --cli-path to an existing directory", {
+    argument: arg ?? null,
+    workingDirectory,
+  });
+}
+
+// The `commandLine` array Electron hands the `second-instance` event is not the
+// literal argv of the second process — it's Chromium's `base::CommandLine`
+// reconstruction, which groups switches ahead of positional arguments and may
+// inject its own switches between them. In the two-token `--cli-path <path>`
+// form the flag parses as a valueless switch and the folder as a positional, so
+// the adjacent token can be an unrelated switch (#11410 saw
+// `--allow-file-access-from-files` land there). Hence: the single-token
+// `--cli-path=<path>` form is authoritative, the adjacent token is only trusted
+// when it resolves to a real directory, and otherwise we search the remaining
+// positionals for the displaced path.
+//
+// Returns an absolute path to an existing directory, or null.
+export function extractCliPath(argv: string[], workingDirectory: string): string | null {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+
+    // Single-token form: unambiguous, so its value is final. Never fall back to
+    // a positional here — that could silently open a directory the user never
+    // named in place of the one they did.
+    if (arg.startsWith(CLI_PATH_PREFIX)) {
+      const raw = arg.slice(CLI_PATH_PREFIX.length);
+      const resolved = normalizeArgDirectory(raw, workingDirectory);
+      if (!resolved) reportUnresolvedCliPath(raw, workingDirectory);
+      return resolved;
+    }
+
+    if (arg !== CLI_PATH_FLAG) continue;
+
+    const adjacent = argv[i + 1];
+    if (adjacent !== undefined && !adjacent.startsWith("--")) {
+      // Nothing displaced the value — this token is what the launcher passed.
+      // If it doesn't name a directory the request has failed; substituting
+      // some other positional would open a project the user never asked for.
+      const adjacentPath = normalizeArgDirectory(adjacent, workingDirectory);
+      if (!adjacentPath) reportUnresolvedCliPath(adjacent, workingDirectory);
+      return adjacentPath;
+    }
+
+    // An injected switch sits where the value should be (#11410). Chromium
+    // orders positionals after the switches, so the displaced path is further
+    // along — never behind the flag. Take the first token past the displaced
+    // slot that names a directory; a `.dntr` archive is a file, so the
+    // directory check keeps it out of the running.
+    for (let j = i + 2; j < argv.length; j++) {
+      if (isSwitchToken(argv[j])) continue;
+      const fallback = normalizeArgDirectory(argv[j], workingDirectory);
+      if (fallback) return fallback;
+    }
+
+    reportUnresolvedCliPath(adjacent, workingDirectory);
+    return null;
+  }
+
+  // No `--cli-path` was asked for. Stay silent — and never treat a bare
+  // positional directory as a project-open request on its own.
   return null;
 }
 
+// True when argv asks for a project directory at all, whether or not it
+// resolves. Lets a caller retire a one-shot `process.argv` read even when the
+// request failed, instead of re-parsing — and re-reporting — it per window.
+export function hasCliPathFlag(argv: string[]): boolean {
+  return argv.some((arg) => arg === CLI_PATH_FLAG || arg.startsWith(CLI_PATH_PREFIX));
+}
+
 // `.dntr` plugin archives double-clicked on Windows/Linux arrive as bare argv
-// entries (no `--flag`) on the `second-instance` event. The OS may supply a
-// relative path resolved against the launching shell's cwd, so the second
-// instance's `workingDirectory` is used to normalize it. Extension matching is
-// case-insensitive for Windows.
+// entries (no `--flag`) on the `second-instance` event. Extension matching is
+// case-insensitive for Windows. No existence check: the archive-preview
+// pipeline owns missing-file failures.
 export function extractDntrPaths(argv: string[], workingDirectory: string): string[] {
   const paths: string[] = [];
   for (const arg of argv) {
-    if (!arg || arg.startsWith("--")) continue;
-    // XDG file managers pass `file://` URIs because electron-builder appends
-    // `%U` to the Linux .desktop Exec line. Decode to an OS path before the
-    // extension check and resolution.
-    let candidate = arg;
-    if (candidate.startsWith("file://")) {
-      try {
-        candidate = fileURLToPath(candidate);
-      } catch {
-        continue;
-      }
-    }
-    if (!candidate.toLowerCase().endsWith(".dntr")) continue;
-    paths.push(path.resolve(workingDirectory, candidate));
+    if (isSwitchToken(arg)) continue;
+    const decoded = decodeArgPath(arg);
+    // Match the literal token, before `path.resolve` normalizes it: resolving
+    // first would strip a trailing separator and collapse `.`/`..`, routing
+    // `some.dntr/` or `some.dntr/child/..` — which name a directory — to the
+    // archive-install pipeline.
+    if (!decoded || !decoded.toLowerCase().endsWith(".dntr")) continue;
+    paths.push(path.resolve(workingDirectory, decoded));
   }
   return paths;
 }
@@ -141,7 +261,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
     console.log("[MAIN] Second instance detected");
     const mainWindow = opts.windowRegistry?.getPrimary()?.browserWindow ?? opts.getMainWindow();
     const liveWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
-    const cliPath = extractCliPath(commandLine);
+    const cliPath = extractCliPath(commandLine, workingDirectory);
     const dntrPaths = extractDntrPaths(commandLine, workingDirectory);
     // Windows/Linux: a warm `daintree://` deep link arrives as an argv entry on
     // the relaunched second instance. Route it through the same handler as the

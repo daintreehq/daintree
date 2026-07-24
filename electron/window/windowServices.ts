@@ -32,6 +32,7 @@ import { shouldDeferRendererLoadForE2E } from "./earlyRenderer.js";
 import { isE2EFaultMode } from "../setup/runtimeFlags.js";
 import {
   extractCliPath,
+  hasCliPathFlag,
   getPendingCliPath,
   setPendingCliPath,
   extractDntrPaths,
@@ -553,7 +554,9 @@ export async function setupWindowServices(
     initializePowerSaveBlockerService();
     console.log("[MAIN] AgentAvailabilityStore and PowerSaveBlocker initialized");
 
-    const processArgvCli = !getProcessArgvCliHandled() ? extractCliPath(process.argv) : null;
+    const processArgvCli = !getProcessArgvCliHandled()
+      ? extractCliPath(process.argv, process.cwd())
+      : null;
     const skipDefaultSpawn =
       opts.initialProjectPath || processArgvCli || getPendingCliPath() || restoreProject;
     if (skipDefaultSpawn) {
@@ -709,8 +712,13 @@ export async function setupWindowServices(
 
   // CLI path handling — skip if this window was opened with an explicit initialProjectPath
   if (!opts.initialProjectPath) {
-    const firstLaunchCliPath = !getProcessArgvCliHandled() ? extractCliPath(process.argv) : null;
-    if (firstLaunchCliPath) setProcessArgvCliHandled(true);
+    const firstLaunchCliPath = !getProcessArgvCliHandled()
+      ? extractCliPath(process.argv, process.cwd())
+      : null;
+    // Retire the one-shot read whenever argv asked for a path at all, not only
+    // when it resolved: an unresolvable `--cli-path` is still consumed, so it
+    // isn't re-parsed (and re-reported) by every window created afterwards.
+    if (firstLaunchCliPath || hasCliPathFlag(process.argv)) setProcessArgvCliHandled(true);
     const cliPath = firstLaunchCliPath ?? getPendingCliPath();
     if (cliPath) {
       setPendingCliPath(null);

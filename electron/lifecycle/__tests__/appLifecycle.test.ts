@@ -248,10 +248,19 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
     };
   }
 
+  // `extractCliPath` only yields paths that exist and are directories (#11410),
+  // so these handler tests need a real directory rather than a fictional one.
+  let cliDir: string;
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(process, "on").mockImplementation(() => process);
     vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    cliDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "daintree-second-instance-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(cliDir, { recursive: true, force: true });
   });
 
   it("creates a new window via onCreateWindowForPath when CLI path and existing window", async () => {
@@ -274,9 +283,9 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
       workingDirectory: string
     ) => void;
 
-    handler({}, ["daintree", "--cli-path", "/path/to/repo"], "/");
+    handler({}, ["daintree", `--cli-path=${cliDir}`], "/");
 
-    expect(onCreateWindowForPath).toHaveBeenCalledWith("/path/to/repo");
+    expect(onCreateWindowForPath).toHaveBeenCalledWith(cliDir);
     expect(handleDirectoryOpen).not.toHaveBeenCalled();
     expect(mainWindow.focus).not.toHaveBeenCalled();
   });
@@ -299,9 +308,11 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
       workingDirectory: string
     ) => void;
 
-    handler({}, ["daintree", "--cli-path", "/path/to/repo"], "/");
+    // Two-token form kept here on purpose: it must still work when the adjacent
+    // token really is the path.
+    handler({}, ["daintree", "--cli-path", cliDir], "/");
 
-    expect(handleDirectoryOpen).toHaveBeenCalledWith("/path/to/repo", mainWindow, undefined);
+    expect(handleDirectoryOpen).toHaveBeenCalledWith(cliDir, mainWindow, undefined);
   });
 
   it("queues CLI path as pending when no window exists", async () => {
@@ -318,11 +329,11 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
       workingDirectory: string
     ) => void;
 
-    handler({}, ["daintree", "--cli-path", "/pending/path"], "/");
+    handler({}, ["daintree", `--cli-path=${cliDir}`], "/");
 
     expect(onCreateWindowForPath).not.toHaveBeenCalled();
     expect(handleDirectoryOpen).not.toHaveBeenCalled();
-    expect(getPendingCliPath()).toBe("/pending/path");
+    expect(getPendingCliPath()).toBe(cliDir);
   });
 
   it("focuses primary window when no CLI path is provided", async () => {
@@ -706,6 +717,206 @@ describe("registerWindowSessionEndHandler – Windows planned-shutdown wiring", 
   });
 });
 
+describe("extractCliPath", () => {
+  // Real fixtures rather than mocked fs: choosing between candidate positionals
+  // is now a filesystem-driven decision, so the behaviour under test is the
+  // filesystem check itself.
+  let root: string;
+  let projectDir: string;
+  let otherDir: string;
+  let plainFile: string;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(nodePath.join(os.tmpdir(), "daintree-cli-path-"));
+    projectDir = nodePath.join(root, "project");
+    otherDir = nodePath.join(root, "other");
+    plainFile = nodePath.join(root, "notes.txt");
+    fs.mkdirSync(projectDir);
+    fs.mkdirSync(otherDir);
+    fs.writeFileSync(plainFile, "x");
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("returns null and stays silent when no --cli-path is present", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    // A bare positional directory must not be treated as a project-open request.
+    expect(extractCliPath(["daintree", projectDir], root)).toBeNull();
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts an existing directory in the single-token form", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    expect(extractCliPath(["daintree", `--cli-path=${projectDir}`], root)).toBe(projectDir);
+  });
+
+  it("accepts the two-token form when the adjacent token is the real path", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    expect(extractCliPath(["daintree", "--cli-path", projectDir], root)).toBe(projectDir);
+  });
+
+  it("ignores an injected switch and recovers the displaced path (#11410)", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    // The exact shape reported in #11410: Chromium slots one of its own
+    // switches between the flag and the folder, which lands at the end.
+    expect(
+      extractCliPath(["daintree", "--cli-path", "--allow-file-access-from-files", projectDir], root)
+    ).toBe(projectDir);
+  });
+
+  it("never returns a switch as the path when nothing else qualifies", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    const result = extractCliPath(
+      ["daintree", "--cli-path", "--allow-file-access-from-files"],
+      root
+    );
+    expect(result).toBeNull();
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it("fails rather than substituting when the adjacent token is an explicit bad value", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    // Nothing displaced this value — the launcher really did name a file.
+    // Opening some other positional instead would be a project the user never
+    // asked for.
+    expect(extractCliPath(["daintree", "--cli-path", plainFile, projectDir], root)).toBeNull();
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it("does not substitute a later directory for an explicit missing path", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    const missing = nodePath.join(root, "gone");
+    expect(extractCliPath(["daintree", "--cli-path", missing, projectDir], root)).toBeNull();
+  });
+
+  it("never scans behind the flag for the displaced path", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    // Chromium orders positionals after the switches, so a directory sitting
+    // before the flag is someone else's argument — taking it would open the
+    // wrong project.
+    expect(
+      extractCliPath(["daintree", otherDir, "--cli-path", "--injected", projectDir], root)
+    ).toBe(projectDir);
+  });
+
+  it("returns null when the flag is last, even if an earlier token is a directory", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    expect(extractCliPath(["daintree", projectDir, "--cli-path"], root)).toBeNull();
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[MAIN] Failed to resolve --cli-path to an existing directory",
+      expect.objectContaining({ argument: null })
+    );
+  });
+
+  it("accepts a switch-like directory name in the single-token form", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    // The `=` form is unambiguous, so the switch guard must not apply to it.
+    const oddDir = nodePath.join(root, "--project");
+    fs.mkdirSync(oddDir);
+    expect(extractCliPath(["daintree", `--cli-path=${oddDir}`], root)).toBe(oddDir);
+  });
+
+  it("does not select a .dntr archive as the fallback directory", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    const archive = nodePath.join(root, "plugin.dntr");
+    fs.writeFileSync(archive, "x");
+    expect(extractCliPath(["daintree", "--cli-path", "--injected", archive], root)).toBeNull();
+  });
+
+  it("never considers argv[0], even when it names a real directory", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    expect(extractCliPath([projectDir, "--cli-path", "--injected"], root)).toBeNull();
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not home-expand a leading ~ followed by a backslash on POSIX",
+    async () => {
+      const { extractCliPath } = await import("../appLifecycle.js");
+      // `\` is a legal filename character here, so `~\x` is a literal name.
+      const odd = nodePath.join(root, "~\\x");
+      fs.mkdirSync(odd);
+      expect(extractCliPath(["daintree", "--cli-path=~\\x"], root)).toBe(odd);
+    }
+  );
+
+  it("takes the first qualifying directory when several positionals exist", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    expect(
+      extractCliPath(["daintree", "--cli-path", "--injected", otherDir, projectDir], root)
+    ).toBe(otherDir);
+  });
+
+  it("treats the single-token form as authoritative and never falls back", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    // An explicit value that can't be resolved must not silently open some
+    // other directory the user never named.
+    expect(extractCliPath(["daintree", "--cli-path=/does/not/exist", projectDir], root)).toBeNull();
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it("resolves a relative path against the launching instance's workingDirectory", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    expect(extractCliPath(["daintree", "--cli-path=project"], root)).toBe(projectDir);
+  });
+
+  it("expands a leading ~ to the home directory", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    // `~` alone resolves to the home directory itself, which always exists.
+    expect(extractCliPath(["daintree", "--cli-path=~"], root)).toBe(os.homedir());
+  });
+
+  it("reports a failure for a path that does not exist", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    expect(extractCliPath(["daintree", "--cli-path=/nope/nope"], root)).toBeNull();
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[MAIN] Failed to resolve --cli-path to an existing directory",
+      expect.objectContaining({ workingDirectory: root })
+    );
+  });
+
+  it("rejects a path that exists but is not a directory", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    expect(extractCliPath(["daintree", `--cli-path=${plainFile}`], root)).toBeNull();
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform === "win32")("decodes a file:// directory URI", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    expect(extractCliPath(["daintree", `--cli-path=file://${projectDir}`], root)).toBe(projectDir);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "decodes percent-encoded characters in a file:// URI",
+    async () => {
+      const { extractCliPath } = await import("../appLifecycle.js");
+      const spaced = nodePath.join(root, "my project");
+      fs.mkdirSync(spaced);
+      expect(extractCliPath(["daintree", `--cli-path=file://${root}/my%20project`], root)).toBe(
+        spaced
+      );
+    }
+  );
+
+  it.skipIf(process.platform === "win32")("follows a symlink to a directory", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    const link = nodePath.join(root, "link");
+    fs.symlinkSync(projectDir, link);
+    expect(extractCliPath(["daintree", `--cli-path=${link}`], root)).toBe(link);
+  });
+
+  it("rejects a malformed file:// URI", async () => {
+    const { extractCliPath } = await import("../appLifecycle.js");
+    // An encoded path separator makes fileURLToPath throw on every platform.
+    expect(extractCliPath(["daintree", "--cli-path=file:///a%2Fb"], root)).toBeNull();
+    expect(errorSpy).toHaveBeenCalled();
+  });
+});
+
 describe("extractDntrPaths", () => {
   it("returns absolute .dntr paths unchanged", async () => {
     const { extractDntrPaths } = await import("../appLifecycle.js");
@@ -754,6 +965,36 @@ describe("extractDntrPaths", () => {
   it("returns an empty array when no .dntr path is present", async () => {
     const { extractDntrPaths } = await import("../appLifecycle.js");
     expect(extractDntrPaths(["daintree"], "/work")).toEqual([]);
+  });
+
+  it("expands a leading ~ through the shared path normalization", async () => {
+    const { extractDntrPaths } = await import("../appLifecycle.js");
+    expect(extractDntrPaths(["daintree", nodePath.join("~", "plugin.dntr")], "/work")).toEqual([
+      nodePath.join(os.homedir(), "plugin.dntr"),
+    ]);
+  });
+
+  it("ignores tokens that only resolve onto a *.dntr directory", async () => {
+    const { extractDntrPaths } = await import("../appLifecycle.js");
+    // Both name a directory, not an archive. Resolving before the extension
+    // check would strip the trailing separator / collapse the `..` and hand a
+    // directory to the archive-install pipeline.
+    expect(extractDntrPaths(["daintree", "plugin.dntr/"], "/work")).toEqual([]);
+    expect(extractDntrPaths(["daintree", "plugin.dntr/child/.."], "/work")).toEqual([]);
+  });
+});
+
+describe("hasCliPathFlag", () => {
+  it("reports a requested path in either form, regardless of whether it resolves", async () => {
+    const { hasCliPathFlag } = await import("../appLifecycle.js");
+    expect(hasCliPathFlag(["daintree", "--cli-path", "/gone"])).toBe(true);
+    expect(hasCliPathFlag(["daintree", "--cli-path=/gone"])).toBe(true);
+    expect(hasCliPathFlag(["daintree", "--cli-path"])).toBe(true);
+  });
+
+  it("is false when no path was requested", async () => {
+    const { hasCliPathFlag } = await import("../appLifecycle.js");
+    expect(hasCliPathFlag(["daintree", "--other", "/some/dir"])).toBe(false);
   });
 
   it.skipIf(process.platform === "win32")(
@@ -826,6 +1067,7 @@ describe("registerAppLifecycleHandlers – second-instance .dntr handling", () =
   }
 
   let dntrFile: string;
+  let cliDir: string;
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -833,6 +1075,7 @@ describe("registerAppLifecycleHandlers – second-instance .dntr handling", () =
     vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     dntrFile = nodePath.join(os.tmpdir(), `dntr-handler-${process.pid}.dntr`);
     fs.writeFileSync(dntrFile, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    cliDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "daintree-dntr-cli-"));
     enqueueArchiveInstallIntentsMock.mockResolvedValue(undefined);
   });
 
@@ -842,6 +1085,7 @@ describe("registerAppLifecycleHandlers – second-instance .dntr handling", () =
     } catch {
       // already gone
     }
+    fs.rmSync(cliDir, { recursive: true, force: true });
   });
 
   function getHandler() {
@@ -906,10 +1150,10 @@ describe("registerAppLifecycleHandlers – second-instance .dntr handling", () =
       })
     );
 
-    getHandler()({}, ["daintree", "--cli-path", "/repo", dntrFile], "/work");
+    getHandler()({}, ["daintree", `--cli-path=${cliDir}`, dntrFile], "/work");
     await vi.waitFor(() => expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalled());
 
-    expect(onCreateWindowForPath).toHaveBeenCalledWith("/repo");
+    expect(onCreateWindowForPath).toHaveBeenCalledWith(cliDir);
     expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalledWith([dntrFile]);
   });
 });
