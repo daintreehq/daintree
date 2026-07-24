@@ -87,17 +87,19 @@ export const config: AgentConfig = {
     // override: inline follows the global "Use alt-screen mode by default"
     // switch (off ⇒ inline), so users can still flip back globally or per-agent.
     //
-    // `--no-alt-screen` controls the alternate buffer only — it is a separate
-    // axis from `--minimal`, which trims the chrome. Both polarities need an
-    // explicit flag here because grok picks inline on its own whenever
-    // `~/.grok/config.toml` sets `screen_mode` or terminal auto-detection says
-    // so, which made "Alt screen" a no-op when it merely omitted the inline flag
-    // (#11423). `--fullscreen` is session-scoped, so it overrides that config
-    // and the auto-detection without Daintree ever touching user-owned files.
+    // Two axes: `--no-alt-screen` / `[terminal] alt_screen` pick the buffer,
+    // `--minimal` / `[ui] screen_mode` trim the chrome. Both polarities need an
+    // explicit flag here because grok also goes inline on its own whenever
+    // `~/.grok/config.toml` or terminal auto-detection says so, which made "Alt
+    // screen" a no-op when it merely omitted the inline flag (#11423).
     //
-    // Provisional — `--fullscreen` is verified against grok 0.2.111 (issue
-    // author, first-hand); older builds may not accept it. Only users who
-    // actively pick "Alt screen" are exposed, since the default stays inline.
+    // `--fullscreen` is the chrome-axis opposite of `--minimal`. Per `grok --help`
+    // (0.2.111) it is session-scoped — never writes config — but it overrides only
+    // `[ui] screen_mode = "minimal"`; the buffer still follows `[terminal]
+    // alt_screen` and auto-detection, so someone who set `alt_screen = false`
+    // stays inline even on "Alt screen". Collapsing both axes onto one flag pair
+    // is a deliberate simplification; older builds may not accept `--fullscreen`,
+    // and only users who actively pick "Alt screen" are exposed.
     inlineModeFlag: "--no-alt-screen",
     altScreenFlag: "--fullscreen",
     supportsBracketedPaste: true,
