@@ -41,7 +41,8 @@ describe("panelLimitStore cross-view write merge (#11351)", () => {
   }
 
   function readBlob(backing: Map<string, string>): PersistedBlob {
-    return JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+    const blob: PersistedBlob = JSON.parse(backing.get(STORAGE_KEY)!);
+    return blob;
   }
 
   beforeEach(() => {
@@ -98,7 +99,7 @@ describe("panelLimitStore cross-view write merge (#11351)", () => {
 
     // A transient, non-persisted state change (requestSeq/pendingConfirm) still
     // triggers a persist write of this stale view's unchanged limits.
-    store.getState().requestConfirmation(10, null);
+    void store.getState().requestConfirmation(10, null);
 
     const written = readBlob(backing);
     expect(written.state.hardLimit).toBe(50); // sibling's edit not clobbered

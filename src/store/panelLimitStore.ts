@@ -287,17 +287,19 @@ export const usePanelLimitStore = create<PanelLimitState>()(
       storage: createSafeJSONStorage<PanelLimitPersistedState>({
         mergeOnWrite: mergePanelLimitPersistedWrite,
       }),
-      migrate: (persisted, version) => {
-        const state = persisted as Record<string, unknown>;
+      migrate: (persisted, version): PanelLimitPersistedState => {
+        const migrated = toPanelLimitPersisted(persisted as Partial<PanelLimitState>);
         if (version === 0) {
+          // Pre-hardware-defaults blobs keep their existing limits and are marked
+          // as already-applied so hardware defaults don't overwrite them.
           return {
-            ...state,
+            ...migrated,
             warningsDisabled: false,
             hardwareDefaultsApplied: true,
             lastSoftWarningDismissedAt: null,
           };
         }
-        return state;
+        return migrated;
       },
       partialize: (state) => ({
         softWarningLimit: state.softWarningLimit,

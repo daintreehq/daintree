@@ -333,10 +333,11 @@ function toGlobalPrefsPersisted(
  * project views (issue #11351). These five fields share one literal key
  * (`daintree-worktree-filters`) and are set independently, so each defers to a
  * sibling's on-disk value unless this writer changed it. The per-project store
- * (`_projectStore`) needs no merge — its key already embeds the project id
- * (`…:{projectId}`), so each project view writes a disjoint key. After merging,
- * we reapply the `merge()`-time invariant that `manual` order is invalid while
- * grouping (a cross-view merge could otherwise recombine them).
+ * (`_projectStore`) has its own reconciler below — its key embeds the project id,
+ * so it's immune to cross-project clobber, but two windows on the same project
+ * still share it. After merging, we reapply the `merge()`-time invariant that
+ * `manual` order is invalid while grouping (a cross-view merge could otherwise
+ * recombine them).
  */
 function mergeGlobalPrefsPersistedWrite({
   baseline,
@@ -433,6 +434,70 @@ const _globalPrefsStore = create<GlobalPrefsState>()(
   )
 );
 
+/**
+ * Baseline-aware three-way merge for the PER-PROJECT worktree-filter state
+ * (issue #11351). Its storage key already embeds the project id
+ * (`daintree-worktree-filters:{projectId}`), so it's immune to CROSS-project
+ * clobber — but two windows showing the SAME project share this key (see
+ * `ProjectViewManager`), and a stale window's write (even the transient
+ * `setLiveQuery` on every keystroke persists this partialized snapshot) would
+ * otherwise wipe a sibling window's pin/filter. Each persisted field defers to a
+ * sibling's on-disk value unless this writer changed it; divergent filter/list
+ * values across two windows can't be element-merged, so it's whole-value
+ * last-writer-wins on a genuine concurrent edit.
+ */
+function mergeProjectFiltersPersistedWrite({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<ProjectPersistedShape>): StorageValue<ProjectPersistedShape> {
+  if (!onDisk || onDisk.version !== incoming.version) return incoming;
+  if (baseline && typeof baseline.version === "number" && baseline.version !== incoming.version) {
+    return { version: incoming.version, state: onDisk.state };
+  }
+  const base = baseline?.state;
+  const inc = incoming.state;
+  const disk = onDisk.state;
+  return {
+    version: incoming.version,
+    state: {
+      query: pickFieldByWriterDelta(base?.query ?? "", inc.query, disk.query),
+      statusFilters: pickFieldByWriterDelta(
+        base?.statusFilters ?? [],
+        inc.statusFilters,
+        disk.statusFilters
+      ),
+      typeFilters: pickFieldByWriterDelta(base?.typeFilters ?? [], inc.typeFilters, disk.typeFilters),
+      prIssueFilters: pickFieldByWriterDelta(
+        base?.prIssueFilters ?? [],
+        inc.prIssueFilters,
+        disk.prIssueFilters
+      ),
+      sessionFilters: pickFieldByWriterDelta(
+        base?.sessionFilters ?? [],
+        inc.sessionFilters,
+        disk.sessionFilters
+      ),
+      activityFilters: pickFieldByWriterDelta(
+        base?.activityFilters ?? [],
+        inc.activityFilters,
+        disk.activityFilters
+      ),
+      pinnedWorktrees: pickFieldByWriterDelta(
+        base?.pinnedWorktrees ?? [],
+        inc.pinnedWorktrees,
+        disk.pinnedWorktrees
+      ),
+      collapsedWorktrees: pickFieldByWriterDelta(
+        base?.collapsedWorktrees ?? [],
+        inc.collapsedWorktrees,
+        disk.collapsedWorktrees
+      ),
+      manualOrder: pickFieldByWriterDelta(base?.manualOrder ?? [], inc.manualOrder, disk.manualOrder),
+    },
+  };
+}
+
 const _projectStore = create<ProjectScopedState>()(
   persist(
     (): ProjectScopedState => ({
@@ -452,7 +517,9 @@ const _projectStore = create<ProjectScopedState>()(
     {
       name: PROJECT_KEY,
       version: 2,
-      storage: createDebouncedSafeJSONStorage(300),
+      storage: createDebouncedSafeJSONStorage<ProjectPersistedShape>(300, {
+        mergeOnWrite: mergeProjectFiltersPersistedWrite,
+      }),
       partialize: (state): ProjectPersistedShape => ({
         query: state.query,
         statusFilters: Array.from(state.statusFilters),

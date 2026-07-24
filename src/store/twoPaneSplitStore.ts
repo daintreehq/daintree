@@ -88,7 +88,7 @@ function toTwoPaneSplitPersisted(
     config: {
       enabled: typeof config?.enabled === "boolean" ? config.enabled : DEFAULT_CONFIG.enabled,
       defaultRatio:
-        typeof config?.defaultRatio === "number"
+        typeof config?.defaultRatio === "number" && Number.isFinite(config.defaultRatio)
           ? config.defaultRatio
           : DEFAULT_CONFIG.defaultRatio,
       preferPreview:
@@ -159,9 +159,11 @@ export const useTwoPaneSplitStore = create<TwoPaneSplitState>()(
         })),
 
       setDefaultRatio: (ratio) =>
-        set((state) => ({
-          config: { ...state.config, defaultRatio: Math.max(0.2, Math.min(0.8, ratio)) },
-        })),
+        set((state) =>
+          Number.isFinite(ratio)
+            ? { config: { ...state.config, defaultRatio: Math.max(0.2, Math.min(0.8, ratio)) } }
+            : state
+        ),
 
       setPreferPreview: (prefer) =>
         set((state) => ({
@@ -169,12 +171,16 @@ export const useTwoPaneSplitStore = create<TwoPaneSplitState>()(
         })),
 
       setWorktreeRatio: (worktreeId, ratio, panels) =>
-        set((state) => ({
-          ratioByWorktreeId: {
-            ...state.ratioByWorktreeId,
-            [worktreeId]: { ratio: Math.max(0.2, Math.min(0.8, ratio)), panels },
-          },
-        })),
+        set((state) =>
+          Number.isFinite(ratio)
+            ? {
+                ratioByWorktreeId: {
+                  ...state.ratioByWorktreeId,
+                  [worktreeId]: { ratio: Math.max(0.2, Math.min(0.8, ratio)), panels },
+                },
+              }
+            : state
+        ),
 
       commitRatioIfChanged: (worktreeId, pendingRatio, panels) => {
         if (pendingRatio === null || !Number.isFinite(pendingRatio)) return;
@@ -225,20 +231,20 @@ export const useTwoPaneSplitStore = create<TwoPaneSplitState>()(
         config: state.config,
         ratioByWorktreeId: state.ratioByWorktreeId,
       }),
-      migrate: (persisted: unknown, fromVersion: number) => {
+      migrate: (persisted: unknown, fromVersion: number): TwoPaneSplitPersistedState => {
+        const migrated = toTwoPaneSplitPersisted(persisted as Partial<TwoPaneSplitState>);
         if (fromVersion === 0) {
-          const old = persisted as { ratioByWorktreeId?: Record<string, number> } & Record<
-            string,
-            unknown
-          >;
-          const entries = old.ratioByWorktreeId ?? {};
-          const migrated: Record<string, WorktreeRatioEntry> = {};
-          for (const [id, scalar] of Object.entries(entries)) {
-            migrated[id] = { ratio: scalar, panels: [null, null] };
+          // v0 stored each ratio as a bare number; reshape into WorktreeRatioEntry.
+          const old = (persisted ?? {}) as { ratioByWorktreeId?: Record<string, unknown> };
+          const reshaped: Record<string, WorktreeRatioEntry> = {};
+          for (const [id, scalar] of Object.entries(old.ratioByWorktreeId ?? {})) {
+            if (typeof scalar === "number" && Number.isFinite(scalar)) {
+              reshaped[id] = { ratio: scalar, panels: [null, null] };
+            }
           }
-          return { ...old, ratioByWorktreeId: migrated };
+          return { config: migrated.config, ratioByWorktreeId: reshaped };
         }
-        return persisted;
+        return migrated;
       },
     }
   )

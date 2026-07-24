@@ -79,6 +79,14 @@ function entriesOf(
  * history a sibling view recorded, and a `removeProjectHistory` isn't
  * resurrected. Concurrent writes to the *same* project bucket stay
  * last-writer-wins (the separate same-project multi-window case).
+ *
+ * Only the `baseline` is normalized through `migrateEntries` (the same
+ * canonicalize + prune-expired transform the hydration `merge` applies): the
+ * in-memory `incoming` already passed through it, but `baseline` is raw JSON, so
+ * diffing a raw baseline against a pruned incoming would misread a
+ * hydration-pruned project as a writer deletion and drop a sibling's re-added
+ * bucket. `onDisk` stays raw so a sibling's freshly-written bucket is preserved
+ * verbatim (it was already normalized by the sibling that wrote it).
  */
 function mergeUrlHistoryPersistedWrite({
   baseline,
@@ -90,7 +98,11 @@ function mergeUrlHistoryPersistedWrite({
   return {
     version: incoming.version,
     state: {
-      entries: mergeRecordByWriterDelta(entriesOf(baseline), entriesOf(incoming), entriesOf(onDisk)),
+      entries: mergeRecordByWriterDelta(
+        migrateEntries(entriesOf(baseline)),
+        entriesOf(incoming),
+        entriesOf(onDisk)
+      ),
     },
   };
 }

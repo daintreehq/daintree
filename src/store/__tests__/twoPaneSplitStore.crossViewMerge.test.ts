@@ -48,7 +48,8 @@ describe("twoPaneSplitStore cross-view write merge (#11351)", () => {
   }
 
   function readBlob(backing: Map<string, string>): PersistedBlob {
-    return JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+    const blob: PersistedBlob = JSON.parse(backing.get(STORAGE_KEY)!);
+    return blob;
   }
 
   beforeEach(() => {

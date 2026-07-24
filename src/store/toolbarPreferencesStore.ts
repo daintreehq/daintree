@@ -109,20 +109,23 @@ function asButtonList(value: unknown): AnyToolbarButtonId[] | undefined {
 
 function normalizePinnedButtons(value: unknown): ToolbarPinnedState {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
-  const result: ToolbarPinnedState = {};
+  // Keyed by plain string then returned as ToolbarPinnedState
+  // (Partial<Record<AnyToolbarButtonId, boolean>>) — a total string→boolean map
+  // is assignable to it, so no per-key assertion is needed.
+  const result: Record<string, boolean> = {};
   for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry === "boolean") result[key as AnyToolbarButtonId] = entry;
+    if (typeof entry === "boolean") result[key] = entry;
   }
   return result;
 }
 
 /**
  * Coerce a persisted (or in-memory) snapshot into the canonical persisted shape.
- * Button lists route through `mergeButtonList` — the same normalization the
- * hydration `merge()` applies — so the baseline (raw from disk) compares equal to
- * the in-memory snapshot (which already carries the defaults `merge()` folded in);
- * otherwise every write would read as a list edit. A null/malformed blob maps to
- * defaults (issue #11351).
+ * Button lists are only deduped/fixed-stripped via `sanitizeButtonList` (NOT
+ * `mergeButtonList`): the reconciler takes the writer's own list verbatim rather
+ * than diffing it, so there's no need to re-materialize defaults — and doing so
+ * would duplicate a button the user moved across sides. A null/malformed blob
+ * maps to defaults (issue #11351).
  */
 function toToolbarPersisted(
   state: Partial<ToolbarPreferencesState> | null | undefined
@@ -131,8 +134,8 @@ function toToolbarPersisted(
   const launcher = state?.launcher;
   return {
     layout: {
-      leftButtons: mergeButtonList(asButtonList(layout?.leftButtons), DEFAULT_LEFT_BUTTONS),
-      rightButtons: mergeButtonList(asButtonList(layout?.rightButtons), DEFAULT_RIGHT_BUTTONS),
+      leftButtons: sanitizeButtonList(asButtonList(layout?.leftButtons) ?? DEFAULT_LEFT_BUTTONS),
+      rightButtons: sanitizeButtonList(asButtonList(layout?.rightButtons) ?? DEFAULT_RIGHT_BUTTONS),
       pinnedButtons: normalizePinnedButtons(layout?.pinnedButtons),
     },
     launcher: {
@@ -145,11 +148,11 @@ function toToolbarPersisted(
 
 /**
  * Baseline-aware three-way merge for toolbar-preferences writes across project
- * views (issue #11351). Button orderings and launcher scalars defer to a
- * sibling's on-disk value unless this writer changed them (two divergent
- * orderings can't be meaningfully merged, so it's whole-list-if-changed);
- * `pinnedButtons` merges per button id so a stale view neither drops nor
- * resurrects a sibling's plugin pin/hide.
+ * views (issue #11351). `pinnedButtons` merges per button id so a stale view
+ * neither drops nor resurrects a sibling's plugin pin/hide; launcher scalars
+ * defer to a sibling's on-disk value unless this writer changed them. Button
+ * orderings are the writer's own arrangement — two divergent orders can't be
+ * merged, so they're taken verbatim (last-writer-wins).
  *
  * Migration coexistence: `onDisk` is read raw (no `migrate`), so the reconciler
  * must never diff against a foreign schema version — the 11-step migrate chain
@@ -182,16 +185,10 @@ function mergeToolbarPreferencesPersistedWrite({
     version: incoming.version,
     state: {
       layout: {
-        leftButtons: pickFieldByWriterDelta(
-          base.layout.leftButtons,
-          inc.layout.leftButtons,
-          disk.layout.leftButtons
-        ),
-        rightButtons: pickFieldByWriterDelta(
-          base.layout.rightButtons,
-          inc.layout.rightButtons,
-          disk.layout.rightButtons
-        ),
+        // Take the writer's own ordering verbatim (last-writer-wins) — see the
+        // JSDoc; this also avoids re-materializing a moved default onto both sides.
+        leftButtons: inc.layout.leftButtons,
+        rightButtons: inc.layout.rightButtons,
         pinnedButtons: mergeRecordByWriterDelta(
           base.layout.pinnedButtons,
           inc.layout.pinnedButtons,

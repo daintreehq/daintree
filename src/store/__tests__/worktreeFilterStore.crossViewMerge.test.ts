@@ -43,14 +43,19 @@ describe("worktreeFilterStore cross-view write merge (#11351)", () => {
   }
 
   function readGlobal(backing: Map<string, string>): PersistedBlob {
-    return JSON.parse(backing.get(GLOBAL_KEY)!) as PersistedBlob;
+    const blob: PersistedBlob = JSON.parse(backing.get(GLOBAL_KEY)!);
+    return blob;
   }
 
   beforeEach(() => {
     vi.resetModules();
+    // The per-project sub-store is debounced; the global sub-store is synchronous
+    // and unaffected by fake timers.
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     restoreLocalStorage();
     vi.resetModules();
     vi.restoreAllMocks();
@@ -109,7 +114,8 @@ describe("worktreeFilterStore cross-view write merge (#11351)", () => {
     const backing = installLocalStorage({});
     const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
 
-    // A sibling left `manual` ordering on disk (valid while not grouping).
+    // A sibling left `manual` ordering (valid while not grouping) plus a
+    // non-default `alwaysShowActive` on disk.
     backing.set(
       GLOBAL_KEY,
       JSON.stringify({
@@ -117,7 +123,7 @@ describe("worktreeFilterStore cross-view write merge (#11351)", () => {
         state: {
           orderBy: "manual",
           groupByType: false,
-          alwaysShowActive: true,
+          alwaysShowActive: false,
           alwaysShowWaiting: true,
           hideMainWorktree: false,
         },
@@ -125,12 +131,49 @@ describe("worktreeFilterStore cross-view write merge (#11351)", () => {
     );
 
     // This view enables grouping (its own orderBy is the default "created"). The
-    // merge would recombine grouping (this view) with the sibling's `manual`
-    // order — an invalid pair the reconciler must normalize back to "created".
+    // merge pulls in the sibling's `manual` order, recombining it with grouping —
+    // an invalid pair the reconciler must normalize back to "created".
     store.getState().setGroupByType(true);
 
     const written = readGlobal(backing);
     expect(written.state.groupByType).toBe(true);
     expect(written.state.orderBy).toBe("created");
+    // Proves the merge ran (without it, this view would rewrite the default true).
+    expect(written.state.alwaysShowActive).toBe(false);
+  });
+
+  it("a stale same-project window's filter write preserves a sibling window's pin", async () => {
+    const backing = installLocalStorage({});
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+    vi.advanceTimersByTime(400); // drain any hydration write on the debounced project store
+
+    // A sibling window on the SAME project (which shares the per-project key)
+    // pinned a worktree.
+    backing.set(
+      PROJECT_KEY,
+      JSON.stringify({
+        version: 2,
+        state: {
+          query: "",
+          statusFilters: [],
+          typeFilters: [],
+          prIssueFilters: [],
+          sessionFilters: [],
+          activityFilters: [],
+          pinnedWorktrees: ["wt-1"],
+          collapsedWorktrees: [],
+          manualOrder: [],
+        },
+      })
+    );
+
+    // This stale window (never saw the pin) changes its filter query.
+    store.getState().setQuery("needle");
+    vi.advanceTimersByTime(400);
+
+    const projectBlob: { version: number; state: { pinnedWorktrees: string[]; query: string } } =
+      JSON.parse(backing.get(PROJECT_KEY)!);
+    expect(projectBlob.state.pinnedWorktrees).toEqual(["wt-1"]); // sibling's pin survived
+    expect(projectBlob.state.query).toBe("needle"); // this window's change applied
   });
 });

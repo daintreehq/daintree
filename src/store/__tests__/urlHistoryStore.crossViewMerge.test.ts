@@ -48,7 +48,8 @@ describe("urlHistoryStore cross-view write merge (#11351)", () => {
   }
 
   function readBlob(backing: Map<string, string>): PersistedBlob {
-    return JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+    const blob: PersistedBlob = JSON.parse(backing.get(STORAGE_KEY)!);
+    return blob;
   }
 
   beforeEach(() => {
@@ -86,17 +87,19 @@ describe("urlHistoryStore cross-view write merge (#11351)", () => {
     const { useUrlHistoryStore: store } = await import("../urlHistoryStore");
     vi.advanceTimersByTime(400);
 
-    // This view records project A.
+    // This view records project A and lets it settle.
     store.getState().recordVisit("proj-a", "https://a.example/");
     vi.advanceTimersByTime(400);
 
-    // A sibling records project B directly to the shared blob.
+    // This view enqueues a SECOND A visit — pending, not yet flushed.
+    store.getState().recordVisit("proj-a", "https://a2.example/");
+
+    // A sibling records project B directly to disk DURING the pending debounce
+    // window. The flush must read disk at flush time to preserve it.
     const disk = readBlob(backing);
     disk.state.entries["proj-b"] = [siblingEntry];
     backing.set(STORAGE_KEY, JSON.stringify(disk));
 
-    // This stale view records another A visit.
-    store.getState().recordVisit("proj-a", "https://a2.example/");
     vi.advanceTimersByTime(400);
 
     const written = readBlob(backing);

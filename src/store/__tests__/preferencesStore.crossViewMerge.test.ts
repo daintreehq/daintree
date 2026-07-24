@@ -12,7 +12,17 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
   const VERSION = 13;
   const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
-  type PersistedBlob = { version: number; state: Record<string, unknown> };
+  type PersistedBlob = {
+    version: number;
+    state: {
+      lastSelectedWorktreeRecipeIdByProject?: Record<string, string | null | undefined>;
+      skipPushConfirmByWorktreePath?: Record<string, boolean>;
+      showProjectPulse?: boolean;
+      reduceAnimations?: boolean;
+      dockDensity?: string;
+      [key: string]: unknown;
+    };
+  };
 
   function installLocalStorage(initial: Record<string, string>): Map<string, string> {
     const backing = new Map<string, string>(Object.entries(initial));
@@ -41,15 +51,16 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
   }
 
   function readBlob(backing: Map<string, string>): PersistedBlob {
-    return JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+    const blob: PersistedBlob = JSON.parse(backing.get(STORAGE_KEY)!);
+    return blob;
   }
 
-  function recipeMap(blob: PersistedBlob): Record<string, unknown> {
-    return blob.state.lastSelectedWorktreeRecipeIdByProject as Record<string, unknown>;
+  function recipeMap(blob: PersistedBlob): Record<string, string | null | undefined> {
+    return blob.state.lastSelectedWorktreeRecipeIdByProject ?? {};
   }
 
-  function skipMap(blob: PersistedBlob): Record<string, unknown> {
-    return blob.state.skipPushConfirmByWorktreePath as Record<string, unknown>;
+  function skipMap(blob: PersistedBlob): Record<string, boolean> {
+    return blob.state.skipPushConfirmByWorktreePath ?? {};
   }
 
   beforeEach(() => {
@@ -92,7 +103,9 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
 
     // Sibling opts out of push-confirm for another worktree and enables reduce-motion.
     const disk = readBlob(backing);
-    (disk.state.skipPushConfirmByWorktreePath as Record<string, boolean>)["/path-b"] = true;
+    const skip = disk.state.skipPushConfirmByWorktreePath ?? {};
+    skip["/path-b"] = true;
+    disk.state.skipPushConfirmByWorktreePath = skip;
     disk.state.reduceAnimations = true;
     backing.set(STORAGE_KEY, JSON.stringify(disk));
 
@@ -112,8 +125,9 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     store.getState().setLastSelectedWorktreeRecipeIdByProject("proj-a", "recipe-a");
 
     const disk = readBlob(backing);
-    (disk.state.lastSelectedWorktreeRecipeIdByProject as Record<string, unknown>)["proj-b"] =
-      "recipe-b";
+    const recipes = disk.state.lastSelectedWorktreeRecipeIdByProject ?? {};
+    recipes["proj-b"] = "recipe-b";
+    disk.state.lastSelectedWorktreeRecipeIdByProject = recipes;
     backing.set(STORAGE_KEY, JSON.stringify(disk));
 
     // Clearing proj-a (undefined) is a deletion — it must not resurrect on merge.

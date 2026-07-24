@@ -42,7 +42,8 @@ describe("voiceRecordingStore cross-view write merge (#11351)", () => {
   }
 
   function readTargets(backing: Map<string, string>): RecentDictationTarget[] {
-    return (JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob).state.recentTargets;
+    const blob: PersistedBlob = JSON.parse(backing.get(STORAGE_KEY)!);
+    return blob.state.recentTargets;
   }
 
   function writeDisk(backing: Map<string, string>, targets: RecentDictationTarget[]): void {
@@ -91,6 +92,35 @@ describe("voiceRecordingStore cross-view write merge (#11351)", () => {
 
     const written = readTargets(backing);
     expect(written.map((t) => t.panelTitle)).toEqual(["Sib", "Mine"]); // newest first
+  });
+
+  it("a stale view's transient flush preserves a sibling's recorded target", async () => {
+    const backing = installLocalStorage({});
+    const { useVoiceRecordingStore: store } = await import("../voiceRecordingStore");
+    vi.advanceTimersByTime(400);
+
+    // This view records its own target and lets it settle into a durable baseline.
+    vi.setSystemTime(3000);
+    store
+      .getState()
+      .recordRecentTarget({ panelId: "p1", panelTitle: "Mine", worktreeId: "wt-mine" });
+    vi.advanceTimersByTime(400);
+
+    // A sibling records a newer target directly to disk.
+    writeDisk(backing, [
+      ...readTargets(backing),
+      { panelTitle: "Sib", worktreeId: "wt-sib", lastUsedAt: 9000 },
+    ]);
+
+    // A transient, non-persisted change (audio level) triggers a debounced flush
+    // of this stale view's unchanged recentTargets.
+    store.getState().setAudioLevel(0.5);
+    vi.advanceTimersByTime(400);
+
+    const titles = readTargets(backing)
+      .map((t) => t.panelTitle)
+      .sort();
+    expect(titles).toEqual(["Mine", "Sib"]); // sibling target not clobbered
   });
 
   it("dedupes a same-identity target to the newer entry and keeps other sibling targets", async () => {
