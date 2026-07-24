@@ -9,6 +9,8 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
+import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
+import { basename } from "@shared/utils/path";
 import {
   deriveReviewReadiness,
   REVIEW_READINESS_ITEM_IDS,
@@ -36,6 +38,22 @@ type ReadinessActionSuggestion =
       actionArgs: { worktreeId: string };
     }
   | { actionId: "git.pullRebase"; actionArgs: { cwd: string } };
+
+/**
+ * Whether the context's worktree has anything `worktree.openChanges` could show.
+ * Reads the live store rather than the context because `ActionContext` carries
+ * no change data — a synchronous, side-effect-free Map lookup.
+ */
+function hasOpenableChanges(ctx: ActionContext): boolean {
+  const targetWorktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+  if (!targetWorktreeId) return false;
+
+  const worktreeChanges = getCurrentViewStore()
+    .getState()
+    .worktrees.get(targetWorktreeId)?.worktreeChanges;
+
+  return (worktreeChanges?.changes.length ?? 0) > 0;
+}
 
 /**
  * Args always target the inspected worktree explicitly — the suggested
@@ -301,6 +319,66 @@ export function registerWorktreeContextActions(
           // to a shared branch (#7884).
           initialCommitMessage: deriveCommitMessageSeed(worktree, Date.now()),
           autoStageOnOpen: true,
+        });
+      },
+    })
+  );
+
+  actions.set("worktree.openChanges", () =>
+    defineAction({
+      id: "worktree.openChanges",
+      title: "Open changes",
+      description:
+        "Open the working-tree diff for a worktree on its highest-churn changed file, seeded with the full change set so the diff sidebar can step between every changed file",
+      category: "worktree",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      // Deliberately a palette gate, not `isEnabled`. `isEnabled` gates dispatch
+      // on ActionContext alone — it never sees args — so on an explicit
+      // `worktreeId` it would answer for the *focused* worktree instead: it
+      // would refuse a dirty target while a clean one held focus, and, worse,
+      // pass for a clean target while a dirty one held focus, letting dispatch
+      // report ok for a run() that opened nothing. Gating only the palette row
+      // keeps the disabled-with-reason affordance where context IS the target.
+      palette: {
+        mode: "requireContext",
+        isReady: (ctx: ActionContext) => hasOpenableChanges(ctx),
+        reason: "No changes in the focused worktree",
+      },
+      argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+      run: async (args, ctx: ActionContext) => {
+        const worktreeId = args?.worktreeId;
+        const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        if (!targetWorktreeId) return;
+
+        // Read straight from the store: WorktreeMonitor keeps `worktreeChanges`
+        // current with no component mounted, so this opens a fresh set even from
+        // a collapsed card, where the Changed Files list does not exist.
+        const worktreeChanges = getCurrentViewStore()
+          .getState()
+          .worktrees.get(targetWorktreeId)?.worktreeChanges;
+        if (!worktreeChanges || worktreeChanges.changes.length === 0) return;
+
+        const { diffChangeSet } = buildWorkingTreeDiffModel(
+          worktreeChanges.changes,
+          worktreeChanges.rootPath
+        );
+        const firstChange = diffChangeSet[0];
+        if (!firstChange) return;
+
+        // Lazily imported for the same reason as the review hub below.
+        const { usePanelDialogStore } = await import("@/store/panelDialogStore");
+
+        await usePanelDialogStore.getState().openPanelDialog({
+          kind: "diff",
+          filePath: firstChange.path,
+          fileStatus: firstChange.status,
+          diffSource: "working-tree",
+          changeSet: diffChangeSet,
+          viewedKey: firstChange.viewedKey,
+          title: basename(firstChange.path),
+          worktreeId: targetWorktreeId,
         });
       },
     })

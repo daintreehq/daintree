@@ -503,6 +503,15 @@ export function WorktreeCard({
     void actionService.dispatch("worktree.openReviewHub", { worktreeId: worktree.id });
   };
 
+  const hasOpenableChanges = (worktree.worktreeChanges?.changes.length ?? 0) > 0;
+
+  // Names the card outright, like the Review Hub entry point. No focus nudge is
+  // needed: the action gates only its palette row on context, so an explicit
+  // worktreeId is always honoured whatever else holds focus.
+  const openChangesForThisWorktree = () => {
+    void actionService.dispatch("worktree.openChanges", { worktreeId: worktree.id });
+  };
+
   // Same shape as the Review Hub entry point: the action owns which surface the
   // browser is presented on (dialog first, promotable to the grid), so the card
   // only names the worktree.
@@ -728,6 +737,11 @@ export function WorktreeCard({
     onOpenPRExternal: worktree.linked?.pr?.url ? handleOpenPRExternal : undefined,
     onAttachIssue: () => setShowIssuePicker(true),
     onViewPlan: () => setShowPlanViewer(true),
+    // Gated on the change list, not `hasChanges` (a `changedFileCount` read):
+    // an external git provider may report a count with no per-file entries, and
+    // the action has nothing to open then. Same guard the Changed Files header
+    // button uses.
+    onOpenChanges: hasOpenableChanges ? openChangesForThisWorktree : undefined,
     onOpenReviewHub: openReviewHubForThisWorktree,
     onOpenFileBrowser: openFileBrowserForThisWorktree,
     onCompareDiff: () => useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),

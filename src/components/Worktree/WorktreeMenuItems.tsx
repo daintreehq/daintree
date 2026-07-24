@@ -17,6 +17,7 @@ import {
   Clock,
   Code,
   Copy,
+  FileDiff,
   FileText,
   Folder,
   FolderTree,
@@ -112,6 +113,8 @@ export interface WorktreeMenuItemsProps {
   onOpenPRExternal?: () => void;
   onAttachIssue?: () => void;
   onViewPlan?: () => void;
+  /** Omitted when the worktree has no changes, so the item is absent then. */
+  onOpenChanges?: () => void;
   onOpenReviewHub?: () => void;
   onOpenFileBrowser?: () => void;
   onCompareDiff?: () => void;
@@ -179,6 +182,7 @@ export function WorktreeMenuItems({
   onOpenPRExternal,
   onAttachIssue,
   onViewPlan,
+  onOpenChanges,
   onOpenReviewHub,
   onOpenFileBrowser,
   onCompareDiff,
@@ -481,6 +485,13 @@ export function WorktreeMenuItems({
         <C.Item onSelect={onViewPlan}>
           <FileText className="w-3.5 h-3.5 mr-2" />
           View Plan
+        </C.Item>
+      )}
+
+      {onOpenChanges && (
+        <C.Item onSelect={onOpenChanges}>
+          <FileDiff className="w-3.5 h-3.5 mr-2" />
+          Open changes
         </C.Item>
       )}
 

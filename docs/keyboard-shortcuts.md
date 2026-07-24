@@ -124,6 +124,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Create a new worktree | `⌘+K ⌘+N` | `Ctrl+K Ctrl+N` |
 | Toggle worktrees overview | `⌘+⇧+O` | `Ctrl+Shift+O` |
 | Copy tree context for active worktree | `⌘+⇧+C` | `Ctrl+Shift+C` |
+| Open changes for focused worktree | `⌘+⇧+D` | `Ctrl+Shift+D` |
 
 ## Worktree Sessions
 
@@ -140,7 +141,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Open panel palette | `⌘+N` | `Ctrl+N` |
 | Open diagnostics dock to Logs tab | `⌃+⇧+L` | `Ctrl+Shift+L` |
 | Open diagnostics dock to Problems tab | `⌃+⇧+M` | `Ctrl+Shift+M` |
-| Toggle diagnostics dock | `⌘+⇧+D` | `Ctrl+Shift+D` |
+| Toggle diagnostics dock | `⌃+⇧+J` | `Ctrl+Shift+J` |
 | Toggle notification inbox | `⌘+⇧+N` | `Ctrl+Shift+N` |
 | Toggle portal panel | `⌘+\` | `Ctrl+\` |
 | Open focused panel context menu | `⇧+F10` | `Shift+F10` |
