@@ -43,7 +43,10 @@ function generateAppImageWrapper(appImagePath: string): string {
     "set -euo pipefail",
     'TARGET="${1:-.}"',
     `ABSOLUTE_PATH="$(cd -- "$TARGET" 2>/dev/null && pwd -P)" || { echo "${CLI_COMMAND_NAME}: '$TARGET' is not a directory" >&2; exit 1; }`,
-    `'${escaped}' --cli-path "$ABSOLUTE_PATH" &`,
+    // Single-token `=` form: Chromium's `second-instance` command-line
+    // reconstruction can inject a switch between a bare flag and its value
+    // (#11410).
+    `'${escaped}' --cli-path="$ABSOLUTE_PATH" &`,
     "exit 0",
     "",
   ].join("\n");

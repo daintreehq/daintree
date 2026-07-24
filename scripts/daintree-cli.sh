@@ -108,7 +108,7 @@ if [[ "$(uname)" == "Darwin" ]]; then
 
   # Fall back to Spotlight if the script is not installed as an app symlink.
   if [[ -z "$APP_PATH" ]] && command -v mdfind &>/dev/null; then
-    APP_PATH="$(mdfind 'kMDItemCFBundleIdentifier == "com.daintree.commandcenter"' 2>/dev/null | head -1)"
+    APP_PATH="$(mdfind 'kMDItemCFBundleIdentifier == "org.daintree.app"' 2>/dev/null | head -1)"
     [[ -n "$APP_PATH" && ! -d "$APP_PATH" ]] && APP_PATH=""
   fi
 
@@ -129,8 +129,11 @@ if [[ "$(uname)" == "Darwin" ]]; then
     exit 1
   fi
 
-  # open -a respects single-instance; the app's second-instance handler picks up --cli-path
-  open -a "$APP_PATH" --args --cli-path "$ABSOLUTE_PATH"
+  # open -a respects single-instance; the app's second-instance handler picks up
+  # --cli-path. The single-token `=` form is required: Chromium's command-line
+  # reconstruction can slot an injected switch between a bare flag and its
+  # value (#11410).
+  open -a "$APP_PATH" --args --cli-path="$ABSOLUTE_PATH"
   exit 0
 fi
 
@@ -165,5 +168,7 @@ if [[ -z "$DAINTREE_BIN" ]]; then
   exit 1
 fi
 
-"$DAINTREE_BIN" --cli-path "$ABSOLUTE_PATH" &
+# Single-token `=` form — a warm launch here spawns a real second process, whose
+# command line Chromium reconstructs and can inject switches into (#11410).
+"$DAINTREE_BIN" --cli-path="$ABSOLUTE_PATH" &
 exit 0

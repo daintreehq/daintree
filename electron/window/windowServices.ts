@@ -553,7 +553,9 @@ export async function setupWindowServices(
     initializePowerSaveBlockerService();
     console.log("[MAIN] AgentAvailabilityStore and PowerSaveBlocker initialized");
 
-    const processArgvCli = !getProcessArgvCliHandled() ? extractCliPath(process.argv) : null;
+    const processArgvCli = !getProcessArgvCliHandled()
+      ? extractCliPath(process.argv, process.cwd())
+      : null;
     const skipDefaultSpawn =
       opts.initialProjectPath || processArgvCli || getPendingCliPath() || restoreProject;
     if (skipDefaultSpawn) {
@@ -709,7 +711,9 @@ export async function setupWindowServices(
 
   // CLI path handling — skip if this window was opened with an explicit initialProjectPath
   if (!opts.initialProjectPath) {
-    const firstLaunchCliPath = !getProcessArgvCliHandled() ? extractCliPath(process.argv) : null;
+    const firstLaunchCliPath = !getProcessArgvCliHandled()
+      ? extractCliPath(process.argv, process.cwd())
+      : null;
     if (firstLaunchCliPath) setProcessArgvCliHandled(true);
     const cliPath = firstLaunchCliPath ?? getPendingCliPath();
     if (cliPath) {
