@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import type { GettingStartedChecklistState } from "@/hooks/app/useGettingStartedChecklist";
+import { isGitBackedProject } from "@shared/types";
 import { useProjectStore } from "@/store";
 import { useScratchStore } from "@/store/scratchStore";
 import { ContentGridEmptyState } from "@/components/Terminal/ContentGridEmptyState";
@@ -15,6 +16,12 @@ import { LazyWelcomeScreen } from "@/lazyPanels";
  * has no worktree, branch, recipes or project settings, so those affordances
  * stay off. A project returns `undefined`, deferring to the grid's own
  * context-driven empty state.
+ *
+ * A project opened without git (#11405) is the third case: the grid derives its
+ * launch target from the active worktree, and this one has none, so deferring
+ * would leave the user no way to start an agent in the folder they just opened.
+ * It supplies the target explicitly like a scratch does, but keeps the project
+ * affordances a scratch lacks — it has real settings and recipes.
  */
 export function useEmptyCanvasContent(gettingStarted: GettingStartedChecklistState): {
   emptyContent: React.ReactNode | undefined;
@@ -26,6 +33,24 @@ export function useEmptyCanvasContent(gettingStarted: GettingStartedChecklistSta
   const canvas = resolveEmptyCanvas(currentProject, currentScratch);
 
   if (canvas.kind === "project") {
+    if (currentProject && !isGitBackedProject(currentProject)) {
+      return {
+        emptyContent: (
+          <ContentGridEmptyState
+            hasLaunchTarget
+            hasProjectContext
+            hasWorktrees={false}
+            isWorktreeInitialized={false}
+            workspaceName={currentProject.name}
+            projectEmoji={currentProject.emoji}
+            activeWorktreePath={currentProject.path}
+            showProjectPulse={false}
+            defaultCwd={currentProject.path}
+          />
+        ),
+        workspaceId: currentProject.id,
+      };
+    }
     return { emptyContent: undefined, workspaceId: currentProject?.id ?? null };
   }
 

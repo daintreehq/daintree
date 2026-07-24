@@ -219,6 +219,28 @@ describe("WorkspaceService adversarial", () => {
       expect(monitorCount()).toBe(0);
     });
 
+    it("ignores a sync carrying worktrees from main", async () => {
+      await service.loadProject("req-plain", "/downloads", "ws-plain");
+
+      // `WorkspaceClient.sync` fans out to every live host, so a lightweight
+      // one can be handed another project's worktree list. Accepting it would
+      // arm a monitor whose first poll deletes this workspace.
+      await service.syncMonitors(
+        [
+          {
+            id: "wt-1",
+            path: "/downloads",
+            branch: "main",
+            isMainWorktree: true,
+          } as unknown as Parameters<typeof service.syncMonitors>[0][number],
+        ],
+        "wt-1",
+        "main"
+      );
+
+      expect(monitorCount()).toBe(0);
+    });
+
     it("treats a throwing repository probe as no repository", async () => {
       // simple-git rejects rather than answering false on permission denials
       // and other environment faults.

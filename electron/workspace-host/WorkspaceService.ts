@@ -745,6 +745,15 @@ export class WorkspaceService {
     monitorConfig?: MonitorConfig,
     skipInitialGitStatus: boolean = false
   ): Promise<void> {
+    // The only place a monitor is ever constructed, and therefore the only
+    // place that can arm the self-deletion hazard for a folder with no
+    // repository: a monitor's first `GitStatusPass` tick there raises
+    // `WorktreeRemovedError`, which the pass answers by removing the workspace.
+    // Guarding here rather than only at the callers covers the `sync` host
+    // message, which arrives with a caller-supplied worktree list and is
+    // fanned out to every live host by `WorkspaceClient.sync` (#11405).
+    if (this.gitBacked === false) return;
+
     // Derive the repository's main/integration branch from the actual main
     // worktree rather than trusting the caller. The legacy `mainBranch`
     // argument is never populated with a real value — internal callers pass

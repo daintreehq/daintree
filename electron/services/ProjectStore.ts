@@ -421,11 +421,23 @@ export class ProjectStore {
         // as one — the latter is what lets Recents, Dock drops, Open With and the
         // CLI reopen it without re-prompting (#11405). Anything else keeps
         // today's behavior and drives the choice dialog.
+        //
+        // A registered *git-backed* row is deliberately not demoted on its own:
+        // git failing to see a repository at a path we recorded as one is an
+        // anomaly (an unmounted volume, a permissions blip, a `.git` deleted out
+        // from under us), and silently rewriting the row would lose that project's
+        // git identity for good. It falls through to the choice dialog, where
+        // demotion becomes the user's explicit decision.
         const lightweight = await this.resolveLightweightPath(projectPath);
         if (lightweight) {
           const existing = await this.getProjectByPath(lightweight);
-          if (existing) return this.touchExistingProject(existing, { gitBacked: false });
-          if (options?.gitBacked === false) return this.insertLightweightProject(lightweight);
+          if (existing) {
+            if (existing.gitBacked === false || options?.gitBacked === false) {
+              return this.touchExistingProject(existing, { gitBacked: false });
+            }
+          } else if (options?.gitBacked === false) {
+            return this.insertLightweightProject(lightweight);
+          }
         }
 
         throw new AppError({

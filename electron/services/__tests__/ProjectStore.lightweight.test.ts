@@ -206,6 +206,32 @@ describe("opening a folder without git (#11405)", () => {
     expect(store.getProjectById(owner.id)?.path).toBe(original);
   });
 
+  it("does not demote a registered repository whose git metadata went missing", async () => {
+    const folder = await makeDir("repo");
+    repoPaths.add(folder);
+    const project = await store.addProject(folder);
+
+    // An unmounted volume, a permissions blip, or a `.git` deleted externally.
+    // Rewriting the row here would lose the project's git identity for good, so
+    // the anomaly surfaces and demotion stays the user's explicit decision.
+    repoPaths.delete(folder);
+    await expect(store.addProject(folder)).rejects.toMatchObject({ code: "NOT_A_GIT_REPO" });
+
+    expect(store.getProjectById(project.id)?.gitBacked).toBeUndefined();
+  });
+
+  it("demotes a registered repository only when the user explicitly asks", async () => {
+    const folder = await makeDir("repo");
+    repoPaths.add(folder);
+    const project = await store.addProject(folder);
+
+    repoPaths.delete(folder);
+    const demoted = await store.addProject(folder, { gitBacked: false });
+
+    expect(demoted.id).toBe(project.id);
+    expect(demoted.gitBacked).toBe(false);
+  });
+
   it("refuses a path that is not a directory", async () => {
     const file = path.join(tmpRoot, "note.txt");
     await fs.promises.writeFile(file, "hi");
