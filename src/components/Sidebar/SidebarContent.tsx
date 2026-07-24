@@ -1246,9 +1246,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // grouped path interleaves sticky header sentinels with static rows; the
   // ungrouped path emits sortable rows so dnd-kit's SortableContext can
   // wrap the whole Virtuoso surface.
-  // Publish the visible order so a worktree deleted later can pin its row to
-  // the slot it currently occupies (#11232). Recorded from an effect rather
-  // than during render because it is a write to module state — reading it
+  // Publish the visible order so a worktree deleted later can anchor its row to
+  // the live successor it currently precedes (#11232). Recorded from an effect
+  // rather than during render because it is a write to module state — reading it
   // happens once, at deletion, well after this has settled.
   useEffect(() => {
     recordSidebarWorktreeOrder(filteredWorktrees.map((w) => w.id));

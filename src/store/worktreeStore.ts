@@ -80,16 +80,15 @@ export interface DeletedWorktree {
   /**
    * Identity anchor for where the row renders: the id of the live worktree that
    * sat immediately after this row in the last published sidebar order (its
-   * successor). While that anchor is still visible the row renders immediately
-   * before it, holding its old slot — without trusting a raw index that a
-   * later, unrelated worktree could reclaim once the list empties and regrows
-   * past it (#11400). `null` when the row was last in the order (no successor)
-   * or was not visible at all (filtered out, or deleted before the sidebar
-   * rendered it); either way the row trails.
-   *
-   * A deleted worktree cannot re-sort like a live worktree — the git status and
-   * activity timestamps its sort keys derive from froze at deletion — so its
-   * position is anchored once here rather than recomputed.
+   * successor). The successor identity is captured once, at deletion; its
+   * current position is re-resolved every render, so the row renders just
+   * before that neighbour wherever it now sits — and follows it through a
+   * reorder — never trusting a raw index that a later, unrelated worktree could
+   * reclaim once the list empties and regrows past it (#11400). `null` when the
+   * row was last in the order (no successor) or was not visible at all (filtered
+   * out, or deleted before the sidebar rendered it). An anchor that no longer
+   * resolves trails the list — or, inside a deleted-worktree group, defers to
+   * whichever sibling's anchor still resolves.
    */
   pinnedBeforeWorktreeId: string | null;
 }

@@ -121,7 +121,7 @@ describe("planDeletedWorktreePlacement", () => {
       "a",
     ]);
 
-    // Filter cleared: "b" is visible again, so the row reclaims its slot.
+    // Filter cleared: "b" is visible again, so the row resolves before it once more.
     const restored = planDeletedWorktreePlacement(ghosts, ["x", "b", "y"]);
     expect(restored.trailing).toHaveLength(0);
     expect(restored.byIndex.get(1)?.map((d) => d.id)).toEqual(["a"]);

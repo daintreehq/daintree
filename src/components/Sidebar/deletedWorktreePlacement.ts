@@ -4,8 +4,9 @@ export interface DeletedWorktreePlacement {
   /** Deleted rows collapse behind one summary item instead of rendering a card each. */
   isGrouped: boolean;
   /**
-   * Slot in the filtered worktree list the group is inserted before, or `-1`
-   * when no member's anchor is still visible and the group trails the list.
+   * Slot the collapsed deleted-worktree group is inserted before, or `-1` when
+   * the group trails — either because no member's anchor still resolves, or
+   * because the cohort is too small to group (`isGrouped` is false).
    */
   groupSlot: number;
   /**
@@ -14,7 +15,11 @@ export interface DeletedWorktreePlacement {
    * that index.
    */
   byIndex: Map<number, DeletedWorktree[]>;
-  /** Deleted rows whose anchor is gone (or was never visible), appended after the live rows. */
+  /**
+   * Deleted rows whose anchor is gone (or was never visible), for the ungrouped
+   * path — appended after the live rows. A collapsed group renders as one item
+   * from the full list at `groupSlot`, so it never consults this bucket.
+   */
   trailing: DeletedWorktree[];
 }
 
