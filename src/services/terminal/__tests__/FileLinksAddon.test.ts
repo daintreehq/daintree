@@ -486,7 +486,11 @@ describe("FileLinksAddon", () => {
         createMockLine(`Saved image to ${CODEX_URL}`)
       );
       const seen: Array<unknown> = [];
-      const addon = new FileLinksAddon(terminal, () => "/p", (link) => seen.push(link));
+      const addon = new FileLinksAddon(
+        terminal,
+        () => "/p",
+        (link) => seen.push(link)
+      );
 
       const link = await new Promise<ILink>((resolve) =>
         addon.provideLinks(1, (links) => resolve(links![0]!))

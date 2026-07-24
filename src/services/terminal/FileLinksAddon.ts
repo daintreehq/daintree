@@ -350,7 +350,10 @@ export class FileLinksAddon implements ILinkProvider {
         // A URL link can span rows this check never looks at, so re-read the
         // whole window it was computed from: rewriting only the continuation
         // row would otherwise leave a link to the path the URL used to name.
-        if (urlScanText !== null && this._readLogicalLine(bufferLineNumber - 1)?.text !== urlScanText) {
+        if (
+          urlScanText !== null &&
+          this._readLogicalLine(bufferLineNumber - 1)?.text !== urlScanText
+        ) {
           callback(undefined);
           return;
         }
