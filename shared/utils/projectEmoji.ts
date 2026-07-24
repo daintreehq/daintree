@@ -12,36 +12,38 @@ export const DEFAULT_PROJECT_EMOJI = "🌲";
  * name so `mobile-api` suggests 📱 (its first meaningful token) rather than
  * whichever key happens to sit earlier in this map.
  */
-const KEYWORD_EMOJI: Record<string, string> = {
-  api: "🔌",
-  server: "🖥️",
-  backend: "🖥️",
-  service: "🛎️",
-  web: "🌐",
-  frontend: "🎨",
-  ui: "🎨",
-  mobile: "📱",
-  ios: "📱",
-  android: "🤖",
-  docs: "📚",
-  documentation: "📚",
-  bot: "🤖",
-  agent: "🤖",
-  ai: "🧠",
-  data: "📊",
-  database: "🗄️",
-  db: "🗄️",
-  auth: "🔐",
-  security: "🔐",
-  cli: "⌨️",
-  terminal: "⌨️",
-  infra: "🏗️",
-  devops: "🏗️",
-  cloud: "☁️",
-  test: "🧪",
-  tests: "🧪",
-  game: "🎮",
-};
+const KEYWORD_EMOJI = new Map<string, string>(
+  Object.entries({
+    api: "🔌",
+    server: "🖥️",
+    backend: "🖥️",
+    service: "🛎️",
+    web: "🌐",
+    frontend: "🎨",
+    ui: "🎨",
+    mobile: "📱",
+    ios: "📱",
+    android: "🤖",
+    docs: "📚",
+    documentation: "📚",
+    bot: "🤖",
+    agent: "🤖",
+    ai: "🧠",
+    data: "📊",
+    database: "🗄️",
+    db: "🗄️",
+    auth: "🔐",
+    security: "🔐",
+    cli: "⌨️",
+    terminal: "⌨️",
+    infra: "🏗️",
+    devops: "🏗️",
+    cloud: "☁️",
+    test: "🧪",
+    tests: "🧪",
+    game: "🎮",
+  })
+);
 
 /**
  * Fallback pool for names with no keyword hit. Deliberately excludes
@@ -67,13 +69,19 @@ const FALLBACK_EMOJI = [
   "🏗️",
 ] as const;
 
-/** Split on separators and camelCase boundaries, lowercased and NFC-normalized. */
+/**
+ * Split on separators and camelCase boundaries, lowercased and NFC-normalized.
+ * The case boundary and the separator class are both Unicode-aware: an
+ * ASCII-only `[a-z][A-Z]` split misses `δDocs`, and dropping `\p{M}` would
+ * shred any script that writes with combining marks.
+ */
 function tokenize(name: string): string[] {
   return name
     .normalize("NFC")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/(\p{Ll}|\p{N})(\p{Lu})/gu, "$1 $2")
     .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
+    .normalize("NFC")
+    .split(/[^\p{L}\p{N}\p{M}]+/u)
     .filter(Boolean);
 }
 
@@ -92,7 +100,10 @@ export function suggestProjectEmoji(name: string): string {
 
   const tokens = tokenize(trimmed);
   for (const token of tokens) {
-    const match = KEYWORD_EMOJI[token];
+    // A Map, not an object literal — a plain-object lookup would resolve
+    // `constructor`/`toString` to an inherited function and return it as the
+    // "emoji".
+    const match = KEYWORD_EMOJI.get(token);
     if (match) return match;
   }
 

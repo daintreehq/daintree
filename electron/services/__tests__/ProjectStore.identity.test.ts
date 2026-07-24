@@ -72,10 +72,14 @@ vi.mock("electron", () => ({
   app: { getPath: () => "/tmp/daintree-identity-test" },
 }));
 
+// Repository root normally IS the path handed in; set this to model the case
+// where the requested folder sits inside an existing repository.
+let repositoryRootOverride: string | null = null;
+
 vi.mock("../GitService.js", () => ({
   GitService: class {
     async getRepositoryRoot(p: string): Promise<string> {
-      return p;
+      return repositoryRootOverride ?? p;
     }
     repairWorktrees(...args: string[][]) {
       return repairWorktrees(...(args as []));
@@ -147,6 +151,7 @@ describe("project identity across folder moves", () => {
     rewriteAgentSessionPathsForProject.mockClear();
     rewriteHibernationProjectPath.mockClear();
     repairMovedSubmodulePaths.mockClear();
+    repositoryRootOverride = null;
     store = new ProjectStore();
   });
 
@@ -199,6 +204,68 @@ describe("project identity across folder moves", () => {
           status: "active",
         })
       ).rejects.toThrow(/moved concurrently/);
+    });
+  });
+
+  describe("creation identity", () => {
+    it("applies the chosen name and emoji when a new row is minted", async () => {
+      const dir = await makeDir("fresh");
+
+      const created = await store.addProject(dir, { name: "Chosen", emoji: "🚀" });
+
+      expect(created.name).toBe("Chosen");
+      expect(created.emoji).toBe("🚀");
+    });
+
+    it("falls back to basename and the default emoji without an identity", async () => {
+      const dir = await makeDir("fresh");
+
+      const created = await store.addProject(dir);
+
+      expect(created.name).toBe(path.basename(dir));
+      expect(created.emoji).toBe("🌲");
+    });
+
+    it("cannot rename an already-registered project by re-adding it", async () => {
+      const dir = await makeDir("existing");
+      const first = await store.addProject(dir, { name: "First", emoji: "🚀" });
+
+      const second = await store.addProject(dir, { name: "Hijacked", emoji: "💀" });
+
+      expect(second.id).toBe(first.id);
+      expect(second.name).toBe("First");
+      expect(second.emoji).toBe("🚀");
+      expect(store.getAllProjects()).toHaveLength(1);
+    });
+
+    it("cannot rename an adopted moved project by supplying an identity", async () => {
+      const original = await makeDir("original");
+      const registered = await store.addProject(original, { name: "Original", emoji: "🚀" });
+      await writeAnchor(original, registered.id);
+
+      const moved = path.join(tmpRoot, "renamed");
+      await fs.promises.rename(original, moved);
+      const canonicalMoved = await fs.promises.realpath(moved);
+
+      const reopened = await store.addProject(canonicalMoved, { name: "Hijacked", emoji: "💀" });
+
+      expect(reopened.id).toBe(registered.id);
+      expect(reopened.emoji).not.toBe("💀");
+    });
+
+    it("does not stamp a child folder's identity onto its ancestor repository", async () => {
+      // Creating `<root>/child` inside an existing repo resolves the git root
+      // back to `<root>`, so the row minted is the ANCESTOR — the child's
+      // chosen identity must not ride along onto it.
+      const root = await makeDir("repo-root");
+      const child = await makeDir("repo-root/child");
+      repositoryRootOverride = root;
+
+      const created = await store.addProject(child, { name: "Child", emoji: "🚀" });
+
+      expect(created.path).toBe(root);
+      expect(created.name).toBe(path.basename(root));
+      expect(created.emoji).toBe("🌲");
     });
   });
 

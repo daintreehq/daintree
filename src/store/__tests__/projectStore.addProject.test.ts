@@ -73,6 +73,10 @@ vi.mock("../slices", () => ({
 
 const { useProjectStore } = await import("../projectStore");
 
+// Exact store signature, so the mock needs no cast (which would trip the
+// no-unsafe-type-assertion ratchet).
+type AddProjectByPath = ReturnType<typeof useProjectStore.getState>["addProjectByPath"];
+
 // Capture original action references once — earlier tests replace them via
 // setState() which is a merge, so functions leak across tests without this.
 const originalAddProjectByPath = useProjectStore.getState().addProjectByPath;
@@ -179,11 +183,11 @@ describe("projectStore addProject", () => {
   });
 
   it("retries adding the project after successful initialization", async () => {
-    const addProjectByPathMock = vi.fn().mockResolvedValue(undefined);
+    const addProjectByPathMock = vi.fn<AddProjectByPath>().mockResolvedValue(undefined);
     useProjectStore.setState({
       gitInitDialogOpen: true,
       gitInitDirectoryPath: "/tmp/repo",
-      addProjectByPath: addProjectByPathMock as (path: string) => Promise<void>,
+      addProjectByPath: addProjectByPathMock,
     });
 
     await useProjectStore.getState().handleGitInitSuccess();
@@ -194,11 +198,11 @@ describe("projectStore addProject", () => {
   });
 
   it("passes the identity supplied at git-init completion through to the add", async () => {
-    const addProjectByPathMock = vi.fn().mockResolvedValue(undefined);
+    const addProjectByPathMock = vi.fn<AddProjectByPath>().mockResolvedValue(undefined);
     useProjectStore.setState({
       gitInitDialogOpen: true,
       gitInitDirectoryPath: "/tmp/repo",
-      addProjectByPath: addProjectByPathMock as (path: string) => Promise<void>,
+      addProjectByPath: addProjectByPathMock,
     });
 
     await useProjectStore.getState().handleGitInitSuccess({ name: "Edited", emoji: "🚀" });
@@ -209,12 +213,12 @@ describe("projectStore addProject", () => {
   });
 
   it("falls back to the identity carried in from the create-project dialog", async () => {
-    const addProjectByPathMock = vi.fn().mockResolvedValue(undefined);
+    const addProjectByPathMock = vi.fn<AddProjectByPath>().mockResolvedValue(undefined);
     useProjectStore.setState({
       gitInitDialogOpen: true,
       gitInitDirectoryPath: "/tmp/repo",
       gitInitIdentity: { name: "Carried", emoji: "📦" },
-      addProjectByPath: addProjectByPathMock as (path: string) => Promise<void>,
+      addProjectByPath: addProjectByPathMock,
     });
 
     await useProjectStore.getState().handleGitInitSuccess();

@@ -200,9 +200,15 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
 
     it("marks the whole project switcher grid cell as no-drag", () => {
-      expect(source).toContain(
-        "app-no-drag relative flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
-      );
+      // Assert the load-bearing tokens on the center group, not the literal
+      // class string — a copied string forces the same edit as the source on
+      // any unrelated styling change.
+      const centerGroup = /aria-label="Project"[\s\S]{0,400}?className="([^"]+)"/.exec(source)?.[1];
+      expect(centerGroup).toBeDefined();
+      expect(centerGroup).toContain("app-no-drag");
+      expect(centerGroup).toContain("pointer-events-none");
+      // The identity trigger is absolutely positioned against this cell.
+      expect(centerGroup).toContain("relative");
     });
 
     it("does not depend on renderer or main-process drag-region recompute hooks", () => {

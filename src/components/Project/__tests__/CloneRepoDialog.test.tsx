@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from "vite
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import type { CloneRepoProgressEvent } from "@shared/types/ipc/gitClone";
+import { suggestProjectEmoji } from "@shared/utils/projectEmoji";
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -296,7 +297,7 @@ describe("CloneRepoDialog", () => {
       () =>
         expect(onSuccess).toHaveBeenCalledWith("/tmp/my-repo", {
           name: "my-repo",
-          emoji: expect.any(String) as unknown as string,
+          emoji: suggestProjectEmoji("my-repo"),
         }),
       {
         timeout: 3000,

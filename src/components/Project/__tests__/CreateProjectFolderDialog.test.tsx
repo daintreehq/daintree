@@ -73,7 +73,7 @@ function emojiTrigger() {
 }
 
 function folderInput() {
-  return screen.getByLabelText(/folder name/i) as HTMLInputElement;
+  return screen.getByLabelText<HTMLInputElement>(/folder name/i);
 }
 
 async function renderDialog() {
@@ -82,7 +82,7 @@ async function renderDialog() {
   // The dialog resolves the home directory on open; wait for it to land, or the
   // Create button stays disabled on a missing parent path.
   await waitFor(() =>
-    expect((screen.getByLabelText(/location/i) as HTMLInputElement).value).toBe("/Users/test")
+    expect(screen.getByLabelText<HTMLInputElement>(/location/i).value).toBe("/Users/test")
   );
   return { onClose, ...result };
 }

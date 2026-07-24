@@ -55,21 +55,40 @@ export async function addProjectByPath(
   return project;
 }
 
+// Matches the in-repo `.daintree/project.json` cap so an identity chosen at
+// creation can't exceed what enabling in-repo settings would later accept.
+const MAX_CREATION_NAME_LENGTH = 100;
+// Generous next to any real emoji (a flag-with-modifier sequence is ~14 code
+// units) while still bounding what a compromised renderer can store.
+const MAX_CREATION_EMOJI_LENGTH = 32;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\x00-\x1F\x7F]/;
+
 /**
  * Creation identity arrives from the renderer, so treat it as untrusted: keep
- * it only when both halves are non-empty strings. A partial or malformed
- * payload is dropped whole rather than half-applied, leaving `addProject` on
- * its normal basename + default-emoji path.
+ * it only when both halves are plain, bounded, control-character-free strings.
+ * A partial or malformed payload is dropped whole rather than half-applied,
+ * leaving `addProject` on its normal basename + default-emoji path.
+ *
+ * Reads own properties only and returns a fresh object, so neither inherited
+ * fields nor extra keys (`id`, `path`) can ride along into the insert.
  */
 function normalizeCreationIdentity(
   identity: ProjectCreationIdentity | undefined
 ): ProjectCreationIdentity | undefined {
-  if (!identity || typeof identity !== "object") return undefined;
+  if (!identity || typeof identity !== "object" || Array.isArray(identity)) return undefined;
+  if (!Object.hasOwn(identity, "name") || !Object.hasOwn(identity, "emoji")) return undefined;
+
   const { name, emoji } = identity;
   if (typeof name !== "string" || typeof emoji !== "string") return undefined;
+
   const trimmedName = name.trim();
   const trimmedEmoji = emoji.trim();
   if (!trimmedName || !trimmedEmoji) return undefined;
+  if (trimmedName.length > MAX_CREATION_NAME_LENGTH) return undefined;
+  if (trimmedEmoji.length > MAX_CREATION_EMOJI_LENGTH) return undefined;
+  if (CONTROL_CHARS.test(trimmedName) || CONTROL_CHARS.test(trimmedEmoji)) return undefined;
+
   return { name: trimmedName, emoji: trimmedEmoji };
 }
 

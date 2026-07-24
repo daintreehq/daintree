@@ -30,20 +30,22 @@ export function ProjectEmojiButton({
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label={ariaLabel}
+          // Name carries the current value — the glyph is the button's only
+          // content, and an aria-label would otherwise hide what is selected.
+          aria-label={`${ariaLabel}, currently ${emoji}`}
           disabled={disabled}
           className={cn(
             "flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-md)]",
             "border border-daintree-border bg-muted/50 text-lg leading-none",
             "transition-colors hover:bg-muted disabled:opacity-50",
-            "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 focus:border-daintree-accent",
+            "focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
             className
           )}
         >
           <span className="select-none">{emoji}</span>
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-auto p-0" align="start">
+      <PopoverContent className="w-auto p-0" align="start" aria-label="Choose project emoji">
         <EmojiPicker
           onEmojiSelect={({ emoji: picked }) => {
             onEmojiChange(picked);

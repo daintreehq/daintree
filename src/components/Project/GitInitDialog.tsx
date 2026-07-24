@@ -75,10 +75,13 @@ export function GitInitDialog({
     if (!isOpen) return;
     setProjectName(seededName);
     setEmoji(seededEmoji);
-    // Seeds only on the open transition — re-seeding while open would discard
-    // edits the user is in the middle of making.
+    // Keyed on the folder as well as the open transition: a second git-init
+    // request arriving while this one is open swaps `directoryPath` under us,
+    // and leaving the identity behind would save folder B under folder A's
+    // name. Not keyed on the seed values themselves — that would re-seed on
+    // every render and discard edits in progress.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]);
+  }, [isOpen, directoryPath]);
 
   useEffect(() => {
     if (!isOpen) {

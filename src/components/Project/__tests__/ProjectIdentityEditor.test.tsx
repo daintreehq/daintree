@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import type { Project } from "@shared/types";
@@ -15,14 +15,44 @@ vi.mock("@/store/projectStore", () => ({
 }));
 
 // Render popover content inline — this test is about the editing contract, not
-// Radix's positioning.
+// Radix's positioning. `onEscapeKeyDown` is captured rather than swallowed:
+// Radix fires it from a document CAPTURE listener BEFORE the input's own
+// keydown, and the cancel-vs-commit ordering hangs on that. A mock that dropped
+// it would let a broken Escape path pass while production saved the edit.
+let escapeKeyDownHandler: ((event: { preventDefault: () => void }) => void) | null = null;
+
 vi.mock("@/components/ui/popover", () => ({
   Popover: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   PopoverTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
-  PopoverContent: ({ children, ...rest }: { children: ReactNode }) => (
-    <div {...rest}>{children}</div>
-  ),
+  PopoverContent: ({
+    children,
+    onEscapeKeyDown,
+    onOpenAutoFocus: _onOpenAutoFocus,
+    ...rest
+  }: {
+    children: ReactNode;
+    onEscapeKeyDown?: (event: { preventDefault: () => void }) => void;
+    onOpenAutoFocus?: (event: { preventDefault: () => void }) => void;
+  }) => {
+    escapeKeyDownHandler = onEscapeKeyDown ?? null;
+    return <div {...rest}>{children}</div>;
+  },
 }));
+
+/** Drive Escape the way Radix does — via the content handler, not the input. */
+function pressEscape(): boolean {
+  let defaultPrevented = false;
+  // Invoked directly rather than through fireEvent, so the state updates it
+  // makes need an explicit act().
+  act(() => {
+    escapeKeyDownHandler?.({
+      preventDefault: () => {
+        defaultPrevented = true;
+      },
+    });
+  });
+  return defaultPrevented;
+}
 
 vi.mock("@/components/ui/emoji-picker", () => ({
   EmojiPicker: ({ onEmojiSelect }: { onEmojiSelect: (e: { emoji: string }) => void }) => (
@@ -46,7 +76,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
 }
 
 function nameField() {
-  return screen.getByLabelText(/project name/i) as HTMLInputElement;
+  return screen.getByLabelText<HTMLInputElement>(/project name/i);
 }
 
 describe("ProjectIdentityEditor", () => {
@@ -102,6 +132,33 @@ describe("ProjectIdentityEditor", () => {
 
       expect(updateProjectMock).not.toHaveBeenCalled();
     });
+
+    it("carries a pending name edit along when an emoji is picked", () => {
+      render(<ProjectIdentityEditor project={makeProject()} />);
+
+      fireEvent.change(nameField(), { target: { value: "Renamed" } });
+      // Picking closes the popover programmatically, which does NOT fire
+      // onOpenChange — so this write is the only chance the rename gets.
+      fireEvent.click(screen.getByText("pick-unicorn"));
+
+      expect(updateProjectMock).toHaveBeenCalledTimes(1);
+      expect(updateProjectMock).toHaveBeenCalledWith("p1", {
+        name: "Renamed",
+        emoji: "🦄",
+      });
+    });
+
+    it("suggests from the edited draft, not the committed name", () => {
+      render(<ProjectIdentityEditor project={makeProject({ name: "plain" })} />);
+
+      fireEvent.change(nameField(), { target: { value: "docs" } });
+      fireEvent.click(screen.getByRole("button", { name: /use suggested/i }));
+
+      expect(updateProjectMock).toHaveBeenCalledWith("p1", {
+        name: "docs",
+        emoji: suggestProjectEmoji("docs"),
+      });
+    });
   });
 
   describe("name", () => {
@@ -145,7 +202,9 @@ describe("ProjectIdentityEditor", () => {
       render(<ProjectIdentityEditor project={makeProject()} />);
 
       fireEvent.change(nameField(), { target: { value: "Abandoned" } });
-      fireEvent.keyDown(nameField(), { key: "Escape" });
+      // Radix dismisses on Escape by default, which would run the close-commit
+      // before any revert; the cancel path must take the close over itself.
+      expect(pressEscape()).toBe(true);
 
       expect(updateProjectMock).not.toHaveBeenCalled();
       expect(nameField().value).toBe("my-api");
@@ -159,6 +218,17 @@ describe("ProjectIdentityEditor", () => {
 
       // A stale draft must never be committable against a different project.
       expect(nameField().value).toBe("other");
+    });
+
+    it("does not write an untouched draft over a rename from elsewhere", () => {
+      const { rerender } = render(<ProjectIdentityEditor project={makeProject({ name: "A" })} />);
+      // Same project id, renamed in another window while this sat open and
+      // untouched. Closing must not resurrect the old name.
+      rerender(<ProjectIdentityEditor project={makeProject({ name: "B" })} />);
+
+      fireEvent.click(screen.getByText("pick-unicorn"));
+
+      expect(updateProjectMock).toHaveBeenCalledWith("p1", { emoji: "🦄" });
     });
   });
 });

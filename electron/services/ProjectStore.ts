@@ -412,6 +412,14 @@ export class ProjectStore {
     // independent.
     const normalizedPath = path.normalize(gitRoot).normalize("NFC");
 
+    // The registered project is the git ROOT, which is not always the path the
+    // caller handed us: creating `/repo/child` inside an existing repository
+    // resolves back to `/repo`. Identity chosen for the child must not be
+    // stamped onto the ancestor, so it only survives when the two agree.
+    const identityTargetsResolvedRoot =
+      normalizedPath === path.normalize(projectPath).normalize("NFC");
+    const mintIdentity = identityTargetsResolvedRoot ? creationIdentity : undefined;
+
     const existing = await this.getProjectByPath(normalizedPath);
     if (existing) {
       const now = Date.now();
@@ -455,8 +463,8 @@ export class ProjectStore {
     const project: Project = {
       id: mintProjectId(normalizedPath, (candidate) => this.isProjectIdTaken(candidate)),
       path: normalizedPath,
-      name: inRepo.name ?? creationIdentity?.name ?? path.basename(normalizedPath),
-      emoji: inRepo.emoji ?? creationIdentity?.emoji ?? DEFAULT_PROJECT_EMOJI,
+      name: inRepo.name ?? mintIdentity?.name ?? path.basename(normalizedPath),
+      emoji: inRepo.emoji ?? mintIdentity?.emoji ?? DEFAULT_PROJECT_EMOJI,
       lastOpened: now,
       status: "closed",
       frecencyScore: FRECENCY_COLD_START,

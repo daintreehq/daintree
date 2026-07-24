@@ -42,6 +42,16 @@ describe("suggestProjectEmoji", () => {
       expect(suggestProjectEmoji("docs-mobile")).toBe(suggestProjectEmoji("docs"));
     });
 
+    it("never resolves an inherited Object.prototype member as an emoji", () => {
+      // A plain-object keyword map would return `Object.prototype.constructor`
+      // — a function — for these names, which then reaches React and IPC.
+      for (const name of ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__"]) {
+        const result = suggestProjectEmoji(name);
+        expect(typeof result).toBe("string");
+        expect(result.length).toBeGreaterThan(0);
+      }
+    });
+
     it("gives different keywords different emoji", () => {
       const api = suggestProjectEmoji("api");
       const docs = suggestProjectEmoji("docs");
@@ -78,6 +88,30 @@ describe("suggestProjectEmoji", () => {
     it("returns a non-empty string for names with no alphanumeric tokens", () => {
       expect(suggestProjectEmoji("!!!")).toBeTruthy();
       expect(suggestProjectEmoji("...")).toBeTruthy();
+    });
+  });
+
+  describe("unicode handling", () => {
+    it("splits case boundaries beyond ASCII", () => {
+      // An ASCII-only camelCase split would leave "δdocs" as one token and
+      // miss the keyword entirely.
+      expect(suggestProjectEmoji("δDocs")).toBe(suggestProjectEmoji("docs"));
+    });
+
+    it("keeps combining marks inside a token", () => {
+      // Marks are token characters, not separators. If they were stripped, a
+      // name and its mark-less skeleton would hash to the same suggestion.
+      const withMarks = "\u092a\u0930\u093f\u092f\u094b\u091c\u0928\u093e";
+      const withoutMarks = withMarks.replace(/\p{M}/gu, "");
+      expect(withoutMarks).not.toBe(withMarks);
+      expect(suggestProjectEmoji(withMarks)).not.toBe(suggestProjectEmoji(withoutMarks));
+    });
+
+    it("treats NFC and NFD spellings of the same name identically", () => {
+      const nfc = "caf\u00e9-app".normalize("NFC");
+      const nfd = "caf\u00e9-app".normalize("NFD");
+      expect(nfd).not.toBe(nfc);
+      expect(suggestProjectEmoji(nfd)).toBe(suggestProjectEmoji(nfc));
     });
   });
 });

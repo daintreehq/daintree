@@ -9,6 +9,7 @@ import {
   GITIGNORE_TEMPLATE_OPTIONS,
   DEFAULT_GITIGNORE_TEMPLATE_ID,
 } from "@shared/config/gitignoreTemplates";
+import { suggestProjectEmoji } from "@shared/utils/projectEmoji";
 
 const { initGitGuidedMock, onInitGitProgressMock } = vi.hoisted(() => ({
   initGitGuidedMock: vi.fn(),
@@ -544,7 +545,7 @@ describe("GitInitDialog", () => {
 
   describe("project identity row", () => {
     function nameInput() {
-      return screen.getByLabelText(/project name/i) as HTMLInputElement;
+      return screen.getByLabelText<HTMLInputElement>(/project name/i);
     }
 
     it("derives the name from the folder when reached without a carried identity", () => {
@@ -570,8 +571,10 @@ describe("GitInitDialog", () => {
       renderDialog();
       fireEvent.change(nameInput(), { target: { value: "   " } });
 
-      const start = screen.getByRole("button", { name: /initialize repository/i });
-      expect((start as HTMLButtonElement).disabled).toBe(true);
+      const start = screen.getByRole<HTMLButtonElement>("button", {
+        name: /initialize repository/i,
+      });
+      expect(start.disabled).toBe(true);
     });
 
     it("reports the edited identity on success", async () => {
@@ -582,9 +585,10 @@ describe("GitInitDialog", () => {
       fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
 
       await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1), { timeout: 3000 });
+      // Emoji is seeded from the folder name, and renaming must not re-derive it.
       expect(onSuccess).toHaveBeenCalledWith({
         name: "Renamed",
-        emoji: expect.any(String) as unknown as string,
+        emoji: suggestProjectEmoji("new-repo"),
       });
     });
 

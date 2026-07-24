@@ -25,67 +25,122 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
   const updateProject = useProjectStore((state) => state.updateProject);
   const [isOpen, setIsOpen] = useState(false);
   const [draftName, setDraftName] = useState(project.name);
+  // Only a name the user actually typed is worth writing back. Without this,
+  // an untouched draft would overwrite a rename that landed from another
+  // window while this popover sat open.
+  const [isNameDirty, setIsNameDirty] = useState(false);
+
+  const resetDraft = useCallback(() => {
+    setDraftName(project.name);
+    setIsNameDirty(false);
+  }, [project.name]);
 
   // Re-seed when the popover opens, and whenever the project changes underneath
   // it, so a draft left over from another project can never be committed.
-  // Deliberately not keyed on `project.name` — that would wipe the field
-  // mid-edit as soon as an optimistic rename lands.
-  useEffect(() => {
+  // Adjusted during render rather than in an effect: keying an effect on
+  // `project.name` would wipe the field mid-edit the moment an optimistic
+  // rename lands, and omitting it needs an exhaustive-deps suppression that
+  // opts the whole component out of the React Compiler.
+  const seedKey = `${project.id}:${isOpen ? "open" : "closed"}`;
+  const [lastSeedKey, setLastSeedKey] = useState(seedKey);
+  if (lastSeedKey !== seedKey) {
+    setLastSeedKey(seedKey);
     setDraftName(project.name);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, project.id]);
+    setIsNameDirty(false);
+  }
 
-  const commitName = useCallback(() => {
-    const trimmed = draftName.trim();
-    // An emptied field means "no change" rather than "erase the name" — there
-    // is no such thing as a nameless project.
-    if (!trimmed || trimmed === project.name) {
-      setDraftName(project.name);
-      return;
-    }
-    void updateProject(project.id, { name: trimmed });
-  }, [draftName, project.id, project.name, updateProject]);
+  /**
+   * Single write path for both halves of the identity. The emoji picker closes
+   * the popover programmatically, which does NOT fire `onOpenChange`, so an
+   * emoji-only commit has to carry any pending name edit with it or the rename
+   * is silently dropped.
+   */
+  const commitIdentity = useCallback(
+    (pickedEmoji?: string) => {
+      const updates: { name?: string; emoji?: string } = {};
+
+      const trimmed = draftName.trim();
+      // An emptied field means "no change" rather than "erase the name" — there
+      // is no such thing as a nameless project.
+      if (isNameDirty && trimmed && trimmed !== project.name) {
+        updates.name = trimmed;
+      }
+      if (pickedEmoji !== undefined && pickedEmoji !== project.emoji) {
+        updates.emoji = pickedEmoji;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        resetDraft();
+        return;
+      }
+
+      // The store rolls back and rethrows on failure; swallow here so a failed
+      // write can't surface as an unhandled rejection. It already logs and sets
+      // the store's error state.
+      void updateProject(project.id, updates).catch(() => {
+        resetDraft();
+      });
+    },
+    [draftName, isNameDirty, project.id, project.name, project.emoji, updateProject, resetDraft]
+  );
 
   const handleEmojiSelect = useCallback(
     (picked: string) => {
-      if (picked !== project.emoji) {
-        void updateProject(project.id, { emoji: picked });
-      }
+      commitIdentity(picked);
       setIsOpen(false);
     },
-    [project.id, project.emoji, updateProject]
+    [commitIdentity]
   );
 
   // While a project still carries the default tree, offer the name-derived
-  // suggestion as a one-click accept. The tree is the "unset" signal, so the
-  // suggestion is shown here rather than silently stored at creation.
+  // suggestion as a one-click accept. Derived from the draft so renaming and
+  // accepting a suggestion in one pass suggests for the NEW name. The tree is
+  // the "unset" signal, so the suggestion is offered here rather than silently
+  // stored at creation.
   const suggestion =
-    project.emoji === DEFAULT_PROJECT_EMOJI ? suggestProjectEmoji(project.name) : null;
+    project.emoji === DEFAULT_PROJECT_EMOJI
+      ? suggestProjectEmoji(draftName.trim() || project.name)
+      : null;
 
   return (
     <Popover
       open={isOpen}
       onOpenChange={(next) => {
-        if (!next) commitName();
+        if (!next) commitIdentity();
         setIsOpen(next);
       }}
     >
       <PopoverTrigger asChild>
         <button
           type="button"
+          // Joins the toolbar's roving-tabindex domain in DOM order (it renders
+          // just before the pill), so it is one arrow stop rather than a stray
+          // extra Tab stop outside the model.
+          data-toolbar-item=""
           data-project-identity-trigger=""
-          aria-label={`Edit identity for ${project.name}`}
+          aria-label={`Edit identity for ${project.name}, currently ${project.emoji}`}
           className="pointer-events-auto absolute left-1.5 top-1/2 z-10 h-7 w-7 -translate-y-1/2 rounded-[var(--radius-md)] bg-transparent transition-colors hover:bg-overlay-subtle focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
         />
       </PopoverTrigger>
       <PopoverContent
         className="w-auto p-0"
         align="start"
+        aria-label="Edit project identity"
         data-project-identity-popover=""
         // Hand focus to the name field instead of letting Radix park it on the
         // popover container.
         onOpenAutoFocus={(event) => {
           event.preventDefault();
+        }}
+        // Escape means "cancel the edit". Radix's dismissable layer sees the
+        // key on a document CAPTURE listener, so its default dismissal would
+        // fire `onOpenChange` — and with it the commit — before any handler on
+        // the input could revert the draft. Take the close over manually so the
+        // revert lands first and no commit runs at all.
+        onEscapeKeyDown={(event) => {
+          event.preventDefault();
+          resetDraft();
+          setIsOpen(false);
         }}
       >
         <div className="flex flex-col">
@@ -96,24 +151,23 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
             >
               Project name
             </label>
-            {/* eslint-disable-next-line jsx-a11y/no-autofocus */}
             <input
               id="project-identity-name"
               type="text"
+              // The popover exists to edit this field, so it takes focus on
+              // open (onOpenAutoFocus above defers to it).
               autoFocus
               value={draftName}
-              onChange={(event) => setDraftName(event.target.value)}
+              onChange={(event) => {
+                setDraftName(event.target.value);
+                setIsNameDirty(true);
+              }}
               onKeyDown={(event) => {
+                // Escape is handled by onEscapeKeyDown on the content — Radix
+                // sees it first, on a document capture listener.
                 if (event.key === "Enter") {
                   event.preventDefault();
-                  commitName();
-                  setIsOpen(false);
-                } else if (event.key === "Escape") {
-                  // Cancel the edit without letting the keystroke also dismiss
-                  // the popover mid-revert.
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setDraftName(project.name);
+                  commitIdentity();
                   setIsOpen(false);
                 }
               }}
