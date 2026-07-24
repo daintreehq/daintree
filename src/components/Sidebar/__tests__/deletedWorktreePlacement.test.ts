@@ -131,9 +131,11 @@ describe("planDeletedWorktreePlacement", () => {
     const ghosts = [deleted("a", "c")];
 
     // Anchor "c" at index 1 → ghost sits at slot 1 (before "c").
-    expect(planDeletedWorktreePlacement(ghosts, ["b", "c"]).byIndex.get(1)?.map((d) => d.id)).toEqual(
-      ["a"]
-    );
+    expect(
+      planDeletedWorktreePlacement(ghosts, ["b", "c"])
+        .byIndex.get(1)
+        ?.map((d) => d.id)
+    ).toEqual(["a"]);
 
     // User reorders live rows; the ghost tracks "c" to its new index 0.
     const reordered = planDeletedWorktreePlacement(ghosts, ["c", "b"]);
