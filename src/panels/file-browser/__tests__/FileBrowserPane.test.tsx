@@ -102,7 +102,7 @@ vi.mock("../FileTreeView", () => ({
 // `notify` is replaced — the module's other exports stay real, since shadowing
 // them breaks unrelated consumers in this tree.
 const { notifyMock } = vi.hoisted(() => ({
-  notifyMock: vi.fn<(payload: import("@/lib/notify").NotifyPayload) => void>(),
+  notifyMock: vi.fn<typeof import("@/lib/notify").notify>(),
 }));
 vi.mock("@/lib/notify", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/notify")>()),
@@ -167,6 +167,9 @@ beforeEach(() => {
   readMock.mockResolvedValue({ content: "hello" });
   flushPanelPersistenceMock.mockReset();
   notifyMock.mockReset();
+  // Module-global and never reset by the store itself, so a message left by an
+  // earlier test would satisfy the next one's announcement assertion.
+  useAnnouncerStore.setState({ polite: null, assertive: null });
   writeTextMock = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
   Object.defineProperty(navigator, "clipboard", {
     writable: true,
@@ -786,11 +789,37 @@ describe("tree-header root path copy (#11407)", () => {
     expect(writeTextMock).not.toHaveBeenCalled();
   });
 
+  it("stays inert when the root is set but the worktree cannot be resolved", () => {
+    // A restored panel can carry a root for a worktree the store has not (or no
+    // longer) resolves — there is no absolute path to build, so no affordance.
+    mockPanel.browserRootPath = ROOT;
+    render(
+      <TooltipProvider>
+        <FileBrowserPane
+          id="fb-1"
+          title="Files"
+          worktreeId="wt-missing"
+          isFocused
+          location="grid"
+          onFocus={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+
+    expect(screen.queryByRole("button", { name: /copy folder path/i })).toBeNull();
+    expect(label().tagName).toBe("SPAN");
+  });
+
   it("copies the absolute path, not the relative text it displays", async () => {
     mockPanel.browserRootPath = ROOT;
     render(paneJsx());
 
     const button = copyButton();
+    // A native button, not a role-annotated div: that's what makes it reachable
+    // by Tab and activatable by Enter/Space without bespoke key handling.
+    expect(button.tagName).toBe("BUTTON");
+    expect(button.getAttribute("type")).toBe("button");
     // The visible label stays the compact relative path…
     expect(button.textContent).toBe(ROOT);
     // …while the accessible name names what actually lands on the clipboard.
@@ -883,23 +912,29 @@ describe("tree-header root path copy (#11407)", () => {
 
     // A silent failure would leave the previous clipboard contents in place.
     expect(notifyMock).toHaveBeenCalledTimes(1);
-    const payload = notifyMock.mock.calls[0]?.[0] as {
-      type: string;
-      action?: { label: string; onClick: () => void };
-    };
-    expect(payload.type).toBe("error");
-    expect(payload.action?.label).toBe("Retry");
+    const payload = notifyMock.mock.calls[0]?.[0];
+    expect(payload?.type).toBe("error");
+    expect(payload?.action?.label).toBe("Retry");
+    // The inbox drops onClick actions, so a demoted toast would lose the Retry.
+    expect(payload?.priority).toBe("high");
     // Nothing claims success: no announcement, no lit label.
     expect(lastAnnouncement()?.id).toBe(announcedBefore?.id);
     expect(copyButton().className).toBe(idle);
 
     await act(async () => {
-      payload.action!.onClick();
+      await payload?.action?.onClick();
     });
 
-    expect(writeTextMock).toHaveBeenLastCalledWith(ABSOLUTE);
+    // A Retry that never re-wrote would still satisfy a "last call" assertion,
+    // since the failed attempt already passed ABSOLUTE — so count the writes.
+    expect(writeTextMock).toHaveBeenCalledTimes(2);
+    expect(writeTextMock.mock.calls[1]?.[0]).toBe(ABSOLUTE);
     // The retry re-enters the whole gesture, so feedback lands on the second try.
-    expect(lastAnnouncement()?.msg).toBe("Path copied");
+    const announced = lastAnnouncement();
+    expect(announced?.msg).toBe("Path copied");
+    expect(announced?.id).not.toBe(announcedBefore?.id);
     expect(copyButton().className).not.toBe(idle);
+    // The successful retry raises no second toast.
+    expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 });

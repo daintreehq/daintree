@@ -11,6 +11,13 @@ export interface UseCopyWithFeedbackOptions {
 
 export interface UseCopyWithFeedbackResult {
   copied: boolean;
+  /**
+   * The text the live `copied` window describes, or null while idle. Callers
+   * whose copy target can change under them (a path label that re-roots) gate
+   * their feedback on this rather than on `copied`, so the flag and the value
+   * it refers to can never be read apart.
+   */
+  copiedText: string | null;
   copy: (text: string) => Promise<boolean>;
 }
 
@@ -24,7 +31,10 @@ export function useCopyWithFeedback(
   options: UseCopyWithFeedbackOptions = {}
 ): UseCopyWithFeedbackResult {
   const { dwellMs = UI_ACTION_SUCCESS_DWELL_MS, announcement = "Copied" } = options;
-  const [copied, setCopied] = useState(false);
+  // One state, not a flag beside a value: `announce` below can drive a
+  // synchronous external-store commit, which would otherwise let a render
+  // observe the raised flag while the text still names the previous copy.
+  const [copiedText, setCopiedText] = useState<string | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(true);
 
@@ -48,13 +58,13 @@ export function useCopyWithFeedback(
       }
       if (!isMountedRef.current) return true;
 
-      setCopied(true);
+      setCopiedText(text);
       useAnnouncerStore.getState().announce(announcement, "polite");
 
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       timeoutRef.current = setTimeout(() => {
         if (!isMountedRef.current) return;
-        setCopied(false);
+        setCopiedText(null);
         timeoutRef.current = null;
       }, dwellMs);
 
@@ -63,5 +73,5 @@ export function useCopyWithFeedback(
     [announcement, dwellMs]
   );
 
-  return { copied, copy };
+  return { copied: copiedText !== null, copiedText, copy };
 }

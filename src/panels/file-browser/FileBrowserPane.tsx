@@ -479,14 +479,13 @@ export function FileBrowserPane({
     rootPath === "" || worktreePath === "" ? "" : join(worktreePath, rootPath);
   const rootHoverPath = rootPath === "" ? worktreePath : `${basename(worktreePath)}/${rootPath}`;
 
-  const { copied: rootPathCopied, copy: copyRootPath } = useCopyWithFeedback({
+  const { copiedText: copiedRootPath, copy: copyRootPath } = useCopyWithFeedback({
     announcement: "Path copied",
   });
-  // Keyed by the path that was copied, not a bare flag: re-rooting inside the
-  // dwell window would otherwise leave the success color describing a folder
-  // the header no longer points at.
-  const [copiedRootPath, setCopiedRootPath] = useState<string | null>(null);
-  const showRootPathCopied = rootPathCopied && copiedRootPath === rootAbsolutePath;
+  // Matched against the path actually copied, not a bare flag: re-rooting
+  // inside the dwell window would otherwise leave the success color describing
+  // a folder the header no longer points at.
+  const showRootPathCopied = copiedRootPath === rootAbsolutePath;
 
   const handleCopyRootPath = useCallback(() => {
     if (rootAbsolutePath === "") return;
@@ -494,20 +493,21 @@ export function FileBrowserPane({
     // second attempt still flashes and announces.
     const attempt = () => {
       void copyRootPath(rootAbsolutePath).then((copied) => {
-        if (copied) {
-          setCopiedRootPath(rootAbsolutePath);
-          return;
-        }
+        if (copied) return;
         notify({
           type: "error",
           title: "Couldn't copy path",
           message: "The clipboard rejected the write.",
+          // uiFeedback is passive, and the inbox keeps only actionId actions —
+          // resolving to "low" would strip the Retry this toast exists for.
+          priority: "high",
+          context: { eventKind: "uiFeedback", panelId: id, worktreeId },
           action: { label: "Retry", onClick: attempt },
         });
       });
     };
     attempt();
-  }, [rootAbsolutePath, copyRootPath]);
+  }, [rootAbsolutePath, copyRootPath, id, worktreeId]);
 
   const reveal = useMemo(() => revealCopy(), []);
   const handleReveal = useCallback(
@@ -693,8 +693,17 @@ export function FileBrowserPane({
                       {rootPath}
                     </button>
                   </TooltipTrigger>
+                  {/* The path stays put through the dwell — it's the reason
+                      this tooltip exists — so success appends rather than
+                      replaces. aria-hidden because the live region already
+                      announced it; the description must not change. */}
                   <TooltipContent side="bottom" className="break-words">
-                    {showRootPathCopied ? "Copied!" : rootHoverPath}
+                    {rootHoverPath}
+                    {showRootPathCopied && (
+                      <span aria-hidden="true" className="block text-status-success">
+                        Copied!
+                      </span>
+                    )}
                   </TooltipContent>
                 </Tooltip>
               ) : (
