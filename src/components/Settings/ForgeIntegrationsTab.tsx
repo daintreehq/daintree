@@ -14,6 +14,7 @@ import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { resolveForgeRemote } from "@shared/utils/forgeRemoteSelection";
+import { extractHostname, hostnameMatchesAny } from "@shared/utils/forgeHostnames";
 import { logError } from "@/utils/logger";
 
 // Non-empty sentinel because Radix's `SelectItem` rejects an empty string value
@@ -36,17 +37,29 @@ interface RemoteRouting {
 /**
  * Which remote the project actually routes through (#11408) — the same
  * selection main and the workspace host run, replayed here so the panel can
- * label it. `isSupportedRemote` reuses the per-remote resolutions already
- * loaded above rather than re-deriving hostname matching.
+ * label it.
+ *
+ * `isSupportedRemote` must mirror main's `listMatchingProviders(url).length > 0`
+ * EXACTLY, which is a hostname match against the registered providers and
+ * nothing more. Using each row's full `resolved.entry` instead would be a
+ * stricter test (it also applies the override/global-default chain) and the
+ * panel would then label a different remote than main actually uses.
  */
-function findLiveRemoteName(rows: RemoteRouting[], forgeRemote: string | null): string | null {
-  const selected = resolveForgeRemote({
-    remotes: rows.map(({ remote }) => ({ name: remote.name, fetchUrl: remote.fetchUrl })),
+function findLiveRemoteName(
+  rows: RemoteRouting[],
+  forgeRemote: string | null,
+  providers: ForgeProviderEntry[]
+): string | null {
+  const { remote } = resolveForgeRemote({
+    remotes: rows.map(({ remote: r }) => ({ name: r.name, fetchUrl: r.fetchUrl })),
     forgeRemote,
-    isSupportedRemote: (url) =>
-      rows.some((row) => row.remote.fetchUrl === url && row.resolved.entry !== null),
+    isSupportedRemote: (url) => {
+      const hostname = extractHostname(url);
+      if (hostname === null) return false;
+      return providers.some((p) => hostnameMatchesAny(hostname, p.contribution.matches));
+    },
   });
-  return selected?.name ?? null;
+  return remote?.name ?? null;
 }
 
 const TOOLTIP_COPY: Record<ForgeProviderResolutionVia, string> = {
@@ -318,6 +331,7 @@ export function ForgeIntegrationsTab() {
           activeProjectName={activeProject?.name}
           activeProjectId={activeProjectId}
           providersInstalled={providers.length}
+          providers={providers}
           providersLoading={loading}
           remotes={remotes}
           forgeRemote={forgeRemote}
@@ -334,6 +348,8 @@ interface ProjectRoutingPanelProps {
   activeProjectName: string | undefined;
   activeProjectId: string | undefined;
   providersInstalled: number;
+  /** Registered providers, used to replay main's hostname-match test. */
+  providers: ForgeProviderEntry[];
   // Whether the top-level provider/settings load is still in flight. Used to
   // avoid asserting "no plugins installed" before the provider list resolves.
   providersLoading: boolean;
@@ -353,6 +369,7 @@ function ProjectRoutingPanel({
   activeProjectName,
   activeProjectId,
   providersInstalled,
+  providers,
   providersLoading,
   remotes,
   forgeRemote,
@@ -390,7 +407,7 @@ function ProjectRoutingPanel({
     );
   }
 
-  const liveRemoteName = findLiveRemoteName(remotes, forgeRemote);
+  const liveRemoteName = findLiveRemoteName(remotes, forgeRemote, providers);
 
   return (
     <div className="space-y-2">

@@ -206,6 +206,7 @@ export class WorkspaceService {
   // it to pick the same remote the toolbar routes through — otherwise the
   // worktree cards probe `origin` while the toolbar talks to `upstream`.
   private forgeRemoteName: string | null = null;
+  private forgeReselectSeq = 0;
   private forgeRemoteProbeSeq = 0;
   private forgeRemoteReprobeTimer: NodeJS.Timeout | null = null;
   // Bumped whenever a `.git/config` write is OBSERVED. A baseline read that
@@ -1626,7 +1627,9 @@ export class WorkspaceService {
       // Selection honours the project's `forgeRemote` setting (#11408). The
       // signature above deliberately still covers ALL remotes: it answers "did
       // the remote table change", independent of which entry we route through.
-      const selected = resolveForgeRemote({
+      // A configured-but-missing remote selects nothing, leaving the
+      // affordance hidden rather than silently probing a different repo.
+      const { remote: selected } = resolveForgeRemote({
         remotes: remotes.map((r) => ({ name: r.name, fetchUrl: r.refs?.fetch ?? "" })),
         forgeRemote: this.forgeRemoteName,
         // The host has no provider registry — it matches against the matcher
@@ -1859,6 +1862,13 @@ export class WorkspaceService {
         fetchUrl ? matchProviderForRemoteUrl(fetchUrl, this.forgeProviderMatchers) : null
       );
     }
+    // Re-matching the REMEMBERED url is not enough (#11408): which remote is
+    // selected depends on the matcher table too. At cold start the table is
+    // empty, so auto-detect ranks by name alone and can settle on a remote no
+    // provider ends up supporting — re-matching that URL would leave the
+    // affordance hidden forever while a sibling remote was usable all along.
+    // Same story when enabling or disabling a provider plugin at runtime.
+    void this.reselectForgeRemote();
   }
 
   private handleInotifyLimitReached(): void {
@@ -3399,8 +3409,24 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   private async reselectForgeRemote(): Promise<void> {
     const cwd = this.forgeProbeCwd();
     if (!cwd) return;
+    // Its OWN sequence, deliberately not `forgeRemoteProbeSeq`: bumping that
+    // would cancel an in-flight `reprobeForgeRemotes` before it consumed its
+    // fingerprint, silently dropping a real `.git/config` change until the
+    // next watcher event. This counter only makes two rapid setting changes
+    // land in order.
+    const seq = ++this.forgeReselectSeq;
+    // Snapshot WITHOUT bumping: bumping `forgeRemoteProbeSeq` would cancel an
+    // in-flight `reprobeForgeRemotes` before it consumed its fingerprint,
+    // silently dropping a real `.git/config` change until the next watcher
+    // event. Yielding to it instead is safe — a reprobe re-reads the table
+    // with the current `forgeRemoteName`, so its result already reflects this
+    // settings change. The same check covers teardown and project switch,
+    // which bump the probe seq in `stopForgeRemoteDetection`.
+    const probeSeq = this.forgeRemoteProbeSeq;
     const probed = await this.readForgeRemotes(cwd);
-    if (!probed || this._shutdownController.signal.aborted) return;
+    if (!probed || seq !== this.forgeReselectSeq) return;
+    if (probeSeq !== this.forgeRemoteProbeSeq) return;
+    if (this._shutdownController.signal.aborted) return;
 
     const matchedProviderId = probed.fetchUrl
       ? matchProviderForRemoteUrl(probed.fetchUrl, this.forgeProviderMatchers)

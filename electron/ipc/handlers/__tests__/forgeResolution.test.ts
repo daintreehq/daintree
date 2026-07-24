@@ -89,7 +89,10 @@ describe("resolveForCwd", () => {
       p === "/repo" ? { id: "project-1", path: "/repo" } : null
     );
     projectStoreMock.getProjectSettings.mockResolvedValue({ runCommands: [] });
-    gitServiceMock.listRemotes.mockResolvedValue([]);
+    // Mirrors the `getRemoteUrl` default above: a plain single-origin repo.
+    gitServiceMock.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://gitea.example.com/owner/repo.git" },
+    ]);
     registryMock.getForgeProviderImpl.mockReturnValue(undefined);
     registryMock.listMatchingProviders.mockReturnValue([{}]);
     resolverMock.resolveForgeProvider.mockReturnValue({ entry: null, resolvedVia: null });
@@ -156,9 +159,23 @@ describe("resolveForCwd", () => {
       expect(lastResolverInputs()?.remoteUrl).toBe(CANONICAL);
     });
 
-    it("falls back to the origin lookup when listRemotes fails", async () => {
+    it("rejects instead of retargeting when forgeRemote names a missing remote", async () => {
+      // Auto-detecting here would silently point assign/close/merge at a
+      // different repository than the one the user named.
+      projectStoreMock.getProjectSettings.mockResolvedValue({
+        runCommands: [],
+        forgeRemote: "renamed-away",
+      });
+      gitServiceMock.listRemotes.mockResolvedValue([{ name: "origin", fetchUrl: FORK }]);
+      resolvesToGitea();
+
+      await expect(resolveForCwd("/repo")).rejects.toThrow(/no longer exists/);
+      expect(resolverMock.resolveForgeProvider).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the origin lookup when listRemotes fails and nothing is configured", async () => {
       // A transient git failure must not become a hard "no provider" — that
-      // would read downstream as a genuinely unlinked repo.
+      // would read downstream as a genuinely unlinked repo and wipe counts.
       gitServiceMock.listRemotes.mockRejectedValue(new Error("git exploded"));
       resolvesToGitea();
 
@@ -168,13 +185,26 @@ describe("resolveForCwd", () => {
       expect(gitServiceMock.getRemoteUrl).toHaveBeenCalled();
     });
 
-    it("falls back to the origin lookup when the repo reports no remotes", async () => {
+    it("does NOT substitute origin when listRemotes fails and a remote is configured", async () => {
+      // We cannot tell whether the configured remote still exists, so origin
+      // would be a guess at which repo to talk to.
+      projectStoreMock.getProjectSettings.mockResolvedValue({
+        runCommands: [],
+        forgeRemote: "upstream",
+      });
+      gitServiceMock.listRemotes.mockRejectedValue(new Error("git exploded"));
+      resolvesToGitea();
+
+      await expect(resolveForCwd("/repo")).rejects.toThrow("No remote URL found");
+      expect(gitServiceMock.getRemoteUrl).not.toHaveBeenCalled();
+    });
+
+    it("enumerates the remote table only once for a repo with no remotes", async () => {
       gitServiceMock.listRemotes.mockResolvedValue([]);
       resolvesToGitea();
 
-      await resolveForCwd("/repo");
-
-      expect(lastResolverInputs()?.remoteUrl).toBe(CANONICAL);
+      await expect(resolveForCwd("/repo")).rejects.toThrow("No remote URL found");
+      expect(gitServiceMock.getRemoteUrl).not.toHaveBeenCalled();
     });
   });
 

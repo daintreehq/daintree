@@ -150,12 +150,13 @@ describe("ForgeIntegrationsTab", () => {
     });
 
     it("marks the auto-detected remote when no setting is stored", async () => {
-      // Both match a provider, so name preference picks upstream over origin.
+      // Both match a provider, so origin-first name preference wins — the
+      // same answer PullRequestService reaches.
       renderWithBothRemotes(undefined);
 
       await waitFor(() => expect(screen.getByText("Active")).toBeTruthy());
-      expect(rowFor("upstream").textContent).toContain("Active");
-      expect(rowFor("origin").textContent).not.toContain("Active");
+      expect(rowFor("origin").textContent).toContain("Active");
+      expect(rowFor("upstream").textContent).not.toContain("Active");
     });
 
     it("marks exactly one remote", async () => {

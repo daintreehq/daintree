@@ -45,7 +45,17 @@ export interface ResolvedForgeContext {
 /** The subset of `GitService` remote selection needs. */
 interface RemoteReader {
   getRemoteUrl(repoPath: string): Promise<string | null>;
-  listRemotes?(repoPath: string): Promise<Array<{ name: string; fetchUrl: string }>>;
+  listRemotes(repoPath: string): Promise<Array<{ name: string; fetchUrl: string }>>;
+}
+
+/** Thrown when `forgeRemote` names a remote the repo no longer has. */
+export class StaleForgeRemoteError extends Error {
+  constructor(readonly remoteName: string) {
+    super(
+      `This project is set to use the "${remoteName}" remote, which no longer exists. Pick a different remote in Project settings.`
+    );
+    this.name = "StaleForgeRemoteError";
+  }
 }
 
 /**
@@ -55,29 +65,37 @@ interface RemoteReader {
  * visibility gate and the data it gates can never disagree about which remote
  * is live.
  *
- * Degrades to the previous origin-only lookup whenever `listRemotes` is
- * unavailable or fails, and never introduces a throw where the old path
- * returned a URL — a transient failure here would otherwise read as "no
- * provider" downstream and wipe the toolbar's persisted counts.
+ * Two deliberate asymmetries:
+ *
+ *  - A configured-but-missing remote throws {@link StaleForgeRemoteError}
+ *    rather than auto-detecting. `resolveForCwd` backs mutations, so silently
+ *    retargeting a renamed remote could push a write at the wrong repository.
+ *  - Enumeration failure falls back to the origin-only lookup ONLY when no
+ *    remote was configured. With a configured remote we cannot tell whether it
+ *    still exists, and substituting origin has the same wrong-repo risk. This
+ *    keeps the no-setting path byte-identical to the pre-fix behavior, so no
+ *    project that resolved before can start reading as "no provider" and wipe
+ *    the toolbar's persisted counts.
  */
 export async function resolveEffectiveRemoteUrl(
   gitService: RemoteReader,
   cwd: string,
   forgeRemote: string | null
 ): Promise<string | null> {
-  const remotes =
-    typeof gitService.listRemotes === "function"
-      ? await gitService.listRemotes(cwd).catch(() => [])
-      : [];
+  const remotes = await gitService.listRemotes(cwd).catch(() => null);
 
-  const selected = resolveForgeRemote({
+  if (remotes === null) {
+    if (forgeRemote) return null;
+    return gitService.getRemoteUrl(cwd).catch(() => null);
+  }
+
+  const { remote, missingConfiguredRemote } = resolveForgeRemote({
     remotes,
     forgeRemote,
     isSupportedRemote: (url) => listMatchingProviders(url).length > 0,
   });
-  if (selected) return selected.fetchUrl;
-
-  return gitService.getRemoteUrl(cwd).catch(() => null);
+  if (missingConfiguredRemote) throw new StaleForgeRemoteError(missingConfiguredRemote);
+  return remote?.fetchUrl ?? null;
 }
 
 export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> {

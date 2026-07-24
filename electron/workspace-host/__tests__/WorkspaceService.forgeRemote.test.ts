@@ -287,6 +287,40 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       expect(main.remoteFetchUrl).toBe("https://github.com/upstream/app.git");
     });
 
+    it("keeps auto-detect on origin when origin itself matches a provider", async () => {
+      // Origin-first parity with PullRequestService — the toolbar and the
+      // worktree PR badges must not read different repositories.
+      service["forgeRemoteName"] = null;
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      await runStartProbe(main, [ORIGIN_GITHUB, UPSTREAM_GITHUB]);
+
+      expect(main.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+    });
+
+    it("re-selects when the matcher table arrives after a cold start", async () => {
+      // Cold start: no matchers yet, so name preference alone picks origin
+      // even though no provider can read it. Once the GitHub matcher lands,
+      // re-matching that remembered URL is not enough — selection must re-run
+      // or the affordance stays hidden while upstream was usable all along.
+      service["forgeProviderMatchers"] = [];
+      service["forgeRemoteName"] = null;
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      await runStartProbe(main, [ORIGIN_INTERNAL, UPSTREAM_GITHUB]);
+      expect(main.remoteFetchUrl).toBe("https://git.internal.example/acme/app.git");
+      expect(main.getSnapshot().matchedForgeProviderId).toBeFalsy();
+
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_INTERNAL, UPSTREAM_GITHUB]);
+      service.setForgeProviderMatchers([
+        { providerId: GITHUB_PROVIDER_ID, hostnames: ["github.com"] },
+      ]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(main.remoteFetchUrl).toBe("https://github.com/upstream/app.git");
+      expect(main.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
+    });
+
     it("keeps the signature across ALL remotes, not just the selected one", async () => {
       // The signature answers "did the remote table change" — adding an
       // unselected remote must still be detected as a change.

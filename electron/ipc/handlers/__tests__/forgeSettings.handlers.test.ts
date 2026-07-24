@@ -106,7 +106,10 @@ describe("registerForgeSettingsHandlers", () => {
     });
     projectStoreMock.getProjectSettings.mockResolvedValue({ runCommands: [] });
     gitServiceMock.getRemoteUrl.mockResolvedValue("https://github.com/owner/repo.git");
-    gitServiceMock.listRemotes.mockResolvedValue([]);
+    // Mirrors the `getRemoteUrl` default above: a plain single-origin repo.
+    gitServiceMock.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://github.com/owner/repo.git" },
+    ]);
     registryMock.listMatchingProviders.mockReturnValue([{}]);
   });
 
@@ -326,7 +329,9 @@ describe("registerForgeSettingsHandlers", () => {
     registerForgeSettingsHandlers();
     const resolveProvider = findHandler("forge:resolve-provider");
     await expect(resolveProvider(null, "project-1", 42)).resolves.toEqual(resolved);
-    expect(gitServiceMock.getRemoteUrl).toHaveBeenCalledTimes(1);
+    // Selection reads the remote table (#11408); `getRemoteUrl` is now only
+    // the fallback for when enumeration itself fails.
+    expect(gitServiceMock.listRemotes).toHaveBeenCalledTimes(1);
     expect(resolverMock.resolveForgeProvider).toHaveBeenCalledWith({
       remoteUrl: "https://github.com/owner/repo.git",
       forgeProviderOverride: null,

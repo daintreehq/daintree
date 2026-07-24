@@ -9,32 +9,35 @@ const INTERNAL = "https://git.internal.example/acme/widgets.git";
 const githubOnly = (url: string) => url.includes("github.com");
 
 describe("resolveForgeRemote", () => {
-  it("returns null when there are no remotes", () => {
-    expect(resolveForgeRemote({ remotes: [], forgeRemote: null })).toBeNull();
+  it("selects nothing when there are no remotes", () => {
+    expect(resolveForgeRemote({ remotes: [], forgeRemote: null })).toEqual({
+      remote: null,
+      missingConfiguredRemote: null,
+    });
   });
 
   it("ignores remotes with an empty fetch URL", () => {
-    const result = resolveForgeRemote({
+    const { remote } = resolveForgeRemote({
       remotes: [
         { name: "origin", fetchUrl: "" },
         { name: "upstream", fetchUrl: GITHUB },
       ],
       forgeRemote: null,
     });
-    expect(result?.name).toBe("upstream");
+    expect(remote?.name).toBe("upstream");
   });
 
-  it("returns null when every remote has an empty fetch URL", () => {
-    const result = resolveForgeRemote({
+  it("selects nothing when every remote has an empty fetch URL", () => {
+    const { remote } = resolveForgeRemote({
       remotes: [{ name: "origin", fetchUrl: "" }],
       forgeRemote: null,
     });
-    expect(result).toBeNull();
+    expect(remote).toBeNull();
   });
 
   describe("explicit forgeRemote setting", () => {
     it("wins over name preference and provider matching", () => {
-      const result = resolveForgeRemote({
+      const { remote } = resolveForgeRemote({
         remotes: [
           { name: "origin", fetchUrl: GITHUB },
           { name: "upstream", fetchUrl: GITHUB },
@@ -43,11 +46,11 @@ describe("resolveForgeRemote", () => {
         forgeRemote: "mirror",
         isSupportedRemote: githubOnly,
       });
-      expect(result).toEqual({ name: "mirror", fetchUrl: INTERNAL });
+      expect(remote).toEqual({ name: "mirror", fetchUrl: INTERNAL });
     });
 
     it("selects a non-origin remote — the issue's reported case", () => {
-      const result = resolveForgeRemote({
+      const { remote } = resolveForgeRemote({
         remotes: [
           { name: "origin", fetchUrl: FORK },
           { name: "upstream", fetchUrl: GITHUB },
@@ -55,35 +58,47 @@ describe("resolveForgeRemote", () => {
         forgeRemote: "upstream",
         isSupportedRemote: githubOnly,
       });
-      expect(result?.fetchUrl).toBe(GITHUB);
+      expect(remote?.fetchUrl).toBe(GITHUB);
     });
 
-    it("falls through to auto-detect when the named remote no longer exists", () => {
-      // A renamed or deleted remote must not silently disable forge
-      // affordances — that is the failure this resolver exists to prevent.
+    it("fails closed when the named remote no longer exists", () => {
+      // Must NOT auto-detect: resolveForCwd backs assign/close/merge, so
+      // substituting origin here could redirect a write to a fork.
       const result = resolveForgeRemote({
         remotes: [{ name: "origin", fetchUrl: GITHUB }],
-        forgeRemote: "deleted-remote",
+        forgeRemote: "renamed-away",
         isSupportedRemote: githubOnly,
       });
-      expect(result?.name).toBe("origin");
+      expect(result).toEqual({ remote: null, missingConfiguredRemote: "renamed-away" });
+    });
+
+    it("fails closed even when the named remote exists but has no fetch URL", () => {
+      const result = resolveForgeRemote({
+        remotes: [
+          { name: "upstream", fetchUrl: "" },
+          { name: "origin", fetchUrl: GITHUB },
+        ],
+        forgeRemote: "upstream",
+      });
+      expect(result).toEqual({ remote: null, missingConfiguredRemote: "upstream" });
     });
 
     it("treats an empty-string setting as unset", () => {
-      const result = resolveForgeRemote({
+      const { remote, missingConfiguredRemote } = resolveForgeRemote({
         remotes: [
+          { name: "fork", fetchUrl: FORK },
           { name: "origin", fetchUrl: GITHUB },
-          { name: "upstream", fetchUrl: GITHUB },
         ],
         forgeRemote: "",
       });
-      expect(result?.name).toBe("upstream");
+      expect(remote?.name).toBe("origin");
+      expect(missingConfiguredRemote).toBeNull();
     });
   });
 
   describe("auto-detect", () => {
     it("prefers a provider-matching remote over a better-named unmatched one", () => {
-      const result = resolveForgeRemote({
+      const { remote } = resolveForgeRemote({
         remotes: [
           { name: "origin", fetchUrl: INTERNAL },
           { name: "backup", fetchUrl: GITHUB },
@@ -91,35 +106,53 @@ describe("resolveForgeRemote", () => {
         forgeRemote: null,
         isSupportedRemote: githubOnly,
       });
-      expect(result?.name).toBe("backup");
+      expect(remote?.name).toBe("backup");
     });
 
-    it("prefers upstream over origin when both match a provider", () => {
-      const result = resolveForgeRemote({
+    it("prefers origin over upstream when both match a provider", () => {
+      // Origin-first on purpose: PullRequestService and the built-in GitHub
+      // context both auto-detect origin, and a resolver that preferred
+      // upstream would point the toolbar at a different repo than the
+      // worktree PR badges.
+      const { remote } = resolveForgeRemote({
         remotes: [
+          { name: "upstream", fetchUrl: GITHUB },
           { name: "origin", fetchUrl: FORK },
+        ],
+        forgeRemote: null,
+        isSupportedRemote: githubOnly,
+      });
+      expect(remote?.name).toBe("origin");
+    });
+
+    it("prefers upstream once origin is not a candidate", () => {
+      const { remote } = resolveForgeRemote({
+        remotes: [
+          { name: "zed", fetchUrl: GITHUB },
           { name: "upstream", fetchUrl: GITHUB },
         ],
         forgeRemote: null,
         isSupportedRemote: githubOnly,
       });
-      expect(result?.name).toBe("upstream");
+      expect(remote?.name).toBe("upstream");
     });
 
-    it("prefers origin over an arbitrarily-named remote", () => {
-      const result = resolveForgeRemote({
+    it("skips an unparseable origin for a remote a provider recognises", () => {
+      // The reported bug: origin exists but no provider can read it, so the
+      // toolbar went dark instead of using the remote that works.
+      const { remote } = resolveForgeRemote({
         remotes: [
-          { name: "fork", fetchUrl: FORK },
-          { name: "origin", fetchUrl: GITHUB },
+          { name: "origin", fetchUrl: INTERNAL },
+          { name: "upstream", fetchUrl: GITHUB },
         ],
         forgeRemote: null,
         isSupportedRemote: githubOnly,
       });
-      expect(result?.name).toBe("origin");
+      expect(remote?.name).toBe("upstream");
     });
 
     it("falls back to git's listing order when no name is preferred", () => {
-      const result = resolveForgeRemote({
+      const { remote } = resolveForgeRemote({
         remotes: [
           { name: "alpha", fetchUrl: GITHUB },
           { name: "beta", fetchUrl: GITHUB },
@@ -127,27 +160,27 @@ describe("resolveForgeRemote", () => {
         forgeRemote: null,
         isSupportedRemote: githubOnly,
       });
-      expect(result?.name).toBe("alpha");
+      expect(remote?.name).toBe("alpha");
     });
 
     it("does not special-case a remote merely named 'github'", () => {
       // gh ranks a `github`-named remote third; Daintree is forge-neutral, so
       // hostname matching decides instead.
-      const result = resolveForgeRemote({
+      const { remote } = resolveForgeRemote({
         remotes: [
           { name: "github", fetchUrl: INTERNAL },
-          { name: "origin", fetchUrl: GITHUB },
+          { name: "zed", fetchUrl: GITHUB },
         ],
         forgeRemote: null,
         isSupportedRemote: githubOnly,
       });
-      expect(result?.name).toBe("origin");
+      expect(remote?.name).toBe("zed");
     });
   });
 
   describe("no provider match", () => {
     it("still returns a remote so the provider chain reports the failure", () => {
-      const result = resolveForgeRemote({
+      const { remote } = resolveForgeRemote({
         remotes: [
           { name: "mirror", fetchUrl: INTERNAL },
           { name: "origin", fetchUrl: INTERNAL },
@@ -155,29 +188,29 @@ describe("resolveForgeRemote", () => {
         forgeRemote: null,
         isSupportedRemote: () => false,
       });
-      expect(result?.name).toBe("origin");
+      expect(remote?.name).toBe("origin");
     });
 
     it("ranks by name when no predicate is supplied", () => {
-      const result = resolveForgeRemote({
+      const { remote } = resolveForgeRemote({
         remotes: [
-          { name: "origin", fetchUrl: FORK },
           { name: "upstream", fetchUrl: GITHUB },
+          { name: "origin", fetchUrl: FORK },
         ],
         forgeRemote: null,
       });
-      expect(result?.name).toBe("upstream");
+      expect(remote?.name).toBe("origin");
     });
 
     it("treats a throwing predicate as no match rather than propagating", () => {
-      const result = resolveForgeRemote({
+      const { remote } = resolveForgeRemote({
         remotes: [{ name: "origin", fetchUrl: GITHUB }],
         forgeRemote: null,
         isSupportedRemote: () => {
           throw new Error("registry exploded");
         },
       });
-      expect(result?.name).toBe("origin");
+      expect(remote?.name).toBe("origin");
     });
   });
 });
