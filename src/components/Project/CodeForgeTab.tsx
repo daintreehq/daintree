@@ -97,6 +97,8 @@ export function CodeForgeTab({
 
   if (!projectPath) return null;
 
+  const savedRemoteKnown = !forgeRemote || remotes.some((r) => r.name === forgeRemote);
+
   const savedProviderKnown =
     forgeProviderOverride === null ||
     providers.some(
@@ -109,7 +111,7 @@ export function CodeForgeTab({
         <label className="block text-sm font-medium text-daintree-text mb-1">Forge remote</label>
         <p className="text-xs text-daintree-text/60 mb-2">
           Select which git remote to use for forge integration (issues, PRs, and pulse data).
-          Auto-detect prefers origin, then any other remote a forge provider recognises.
+          Auto-detect prefers origin, then any other remote a forge provider recognizes.
         </p>
         {loading ? (
           <div className="text-sm text-daintree-text/60">Loading remotes...</div>
@@ -128,6 +130,9 @@ export function CodeForgeTab({
                 {r.parsedRepo ? ` — ${r.parsedRepo.owner}/${r.parsedRepo.repo}` : ""}
               </option>
             ))}
+            {!savedRemoteKnown && forgeRemote ? (
+              <option value={forgeRemote}>{forgeRemote} (unavailable)</option>
+            ) : null}
           </select>
         )}
       </div>

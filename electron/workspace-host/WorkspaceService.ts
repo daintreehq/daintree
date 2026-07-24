@@ -3437,11 +3437,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   private async reselectForgeRemote(): Promise<void> {
     const cwd = this.forgeProbeCwd();
     if (!cwd) return;
-    // Its OWN sequence, deliberately not `forgeRemoteProbeSeq`: bumping that
-    // would cancel an in-flight `reprobeForgeRemotes` before it consumed its
-    // fingerprint, silently dropping a real `.git/config` change until the
-    // next watcher event. This counter only makes two rapid setting changes
-    // land in order.
+    // Its OWN sequence — it only makes two rapid setting changes land in order.
     const seq = ++this.forgeReselectSeq;
     // Snapshot WITHOUT bumping: bumping `forgeRemoteProbeSeq` would cancel an
     // in-flight `reprobeForgeRemotes` before it consumed its fingerprint,
