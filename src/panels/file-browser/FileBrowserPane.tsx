@@ -12,7 +12,9 @@ import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { folderIncludePattern } from "@/lib/copyTreeFormat";
 import { notify } from "@/lib/notify";
@@ -470,6 +472,46 @@ export function FileBrowserPane({
     [copyToClipboard]
   );
 
+  // The header label copies the folder the tree is rooted at. Only a re-rooted
+  // tree has a path worth copying — at the worktree root the label is a bare
+  // basename, so the affordance stays absent rather than disabled.
+  const rootAbsolutePath =
+    rootPath === "" || worktreePath === "" ? "" : join(worktreePath, rootPath);
+  const rootHoverPath = rootPath === "" ? worktreePath : `${basename(worktreePath)}/${rootPath}`;
+
+  const { copiedText: copiedRootPath, copy: copyRootPath } = useCopyWithFeedback({
+    announcement: "Path copied",
+  });
+  // Matched against the path actually copied, not a bare flag: re-rooting
+  // inside the dwell window would otherwise leave the success color describing
+  // a folder the header no longer points at.
+  const showRootPathCopied = copiedRootPath === rootAbsolutePath;
+
+  const handleCopyRootPath = useCallback(() => {
+    if (rootAbsolutePath === "") return;
+    // Retry re-enters the whole gesture, so a write that only succeeds on the
+    // second attempt still flashes and announces.
+    const attempt = () => {
+      void copyRootPath(rootAbsolutePath).then((copied) => {
+        if (copied) return;
+        notify({
+          type: "error",
+          title: "Couldn't copy path",
+          message: "The clipboard rejected the write.",
+          // uiFeedback is passive, and the inbox keeps only actionId actions —
+          // resolving to "low" would strip the Retry this toast exists for.
+          // No panelId/worktreeId: those mark the origin surface as already
+          // showing the failure, which suppresses the toast outright — and this
+          // label renders nothing when a write fails.
+          priority: "high",
+          context: { eventKind: "uiFeedback" },
+          action: { label: "Retry", onClick: attempt },
+        });
+      });
+    };
+    attempt();
+  }, [rootAbsolutePath, copyRootPath]);
+
   const reveal = useMemo(() => revealCopy(), []);
   const handleReveal = useCallback(
     (path: string) => {
@@ -632,12 +674,49 @@ export function FileBrowserPane({
                   <FolderRoot className="h-4 w-4" />
                 </span>
               )}
-              <span
-                className="min-w-0 flex-1 truncate font-mono text-[11px] text-daintree-text/40"
-                title={rootPath ? `${basename(worktreePath)}/${rootPath}` : worktreePath}
-              >
-                {rootPath || (worktreePath ? basename(worktreePath) : "")}
-              </span>
+              {/* Re-rooted, so the label names a real folder: it copies the
+                  absolute path, matching a row's "Copy full path". The tooltip
+                  carries the untruncated path the `title` used to show, and
+                  hosts the copied confirmation; autoDismiss is off because the
+                  path IS the tooltip's body. */}
+              {rootAbsolutePath !== "" ? (
+                <Tooltip autoDismiss={false}>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={handleCopyRootPath}
+                      aria-label={`Copy folder path: ${rootAbsolutePath}`}
+                      className={cn(
+                        "min-w-0 flex-1 cursor-pointer truncate text-left font-mono text-[11px] transition-colors duration-150 ease-out",
+                        showRootPathCopied
+                          ? "text-status-success"
+                          : "text-daintree-text/40 hover:text-daintree-text/70"
+                      )}
+                    >
+                      {rootPath}
+                    </button>
+                  </TooltipTrigger>
+                  {/* The path stays put through the dwell — it's the reason
+                      this tooltip exists — so success appends rather than
+                      replaces. aria-hidden because the live region already
+                      announced it; the description must not change. */}
+                  <TooltipContent side="bottom" className="break-words">
+                    {rootHoverPath}
+                    {showRootPathCopied && (
+                      <span aria-hidden="true" className="block text-status-success">
+                        Copied!
+                      </span>
+                    )}
+                  </TooltipContent>
+                </Tooltip>
+              ) : (
+                <span
+                  className="min-w-0 flex-1 truncate font-mono text-[11px] text-daintree-text/40"
+                  title={rootHoverPath}
+                >
+                  {rootPath || (worktreePath ? basename(worktreePath) : "")}
+                </span>
+              )}
               {rootPath !== "" && (
                 <FileViewerToolbar.IconButton label="Up one level" onClick={handleUpOneLevel}>
                   <CornerLeftUp className="h-4 w-4" />

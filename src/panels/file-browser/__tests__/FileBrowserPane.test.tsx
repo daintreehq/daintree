@@ -98,6 +98,17 @@ vi.mock("../FileTreeView", () => ({
   FileTreeView: () => <div data-testid="file-tree-view" role="tree" tabIndex={-1} />,
 }));
 
+// The header's copy affordance raises the pane's clipboard-failure toast. Only
+// `notify` is replaced — the module's other exports stay real, since shadowing
+// them breaks unrelated consumers in this tree.
+const { notifyMock } = vi.hoisted(() => ({
+  notifyMock: vi.fn<typeof import("@/lib/notify").notify>(),
+}));
+vi.mock("@/lib/notify", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/notify")>()),
+  notify: notifyMock,
+}));
+
 // ContentPanel is chrome around the body; render just the children so the
 // pane's own layout is what's under test.
 vi.mock("@/components/Panel/ContentPanel", () => ({
@@ -116,6 +127,8 @@ vi.mock("@/components/FileViewer/CodeViewer", () => ({
 vi.mock("@/components/Html/HtmlViewer", () => ({ HtmlViewer: () => null }));
 
 import { FileBrowserPane } from "../FileBrowserPane";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 import {
   FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH as DEFAULT_W,
   FILE_BROWSER_SIDEBAR_MIN_WIDTH as MIN_W,
@@ -145,11 +158,24 @@ function classToken(el: Element, predicate: (cls: string) => boolean): string | 
   return Array.from(el.classList).find(predicate);
 }
 
+// jsdom ships no `navigator.clipboard`; the header copy gesture writes through it.
+let writeTextMock: ReturnType<typeof vi.fn<(text: string) => Promise<void>>>;
+
 beforeEach(() => {
   setFileBrowserViewMock.mockReset();
   readMock.mockReset();
   readMock.mockResolvedValue({ content: "hello" });
   flushPanelPersistenceMock.mockReset();
+  notifyMock.mockReset();
+  // Module-global and never reset by the store itself, so a message left by an
+  // earlier test would satisfy the next one's announcement assertion.
+  useAnnouncerStore.setState({ polite: null, assertive: null });
+  writeTextMock = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    writable: true,
+    configurable: true,
+    value: { writeText: writeTextMock },
+  });
   treeState.rows = defaultRows;
   treeState.rootError = null;
   treeState.isInitialLoading = false;
@@ -703,5 +729,218 @@ describe("FileBrowserPane resizable sidebar (#11331)", () => {
     fireEvent.mouseMove(document, { clientX: 400, buttons: 1 });
 
     expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("tree-header root path copy (#11407)", () => {
+  const ROOT = "src/panels";
+  // The worktree in the store mock is `/repo`, so this is what a row's
+  // "Copy full path" would produce for the same folder.
+  const ABSOLUTE = "/repo/src/panels";
+
+  const paneJsx = () => (
+    <TooltipProvider>
+      <FileBrowserPane
+        id="fb-1"
+        title="Files"
+        worktreeId="wt-1"
+        isFocused
+        location="grid"
+        onFocus={vi.fn()}
+        onClose={vi.fn()}
+      />
+    </TooltipProvider>
+  );
+
+  function copyButton(): HTMLElement {
+    return screen.getByRole("button", { name: /copy folder path/i });
+  }
+
+  /** The header label, whichever element currently occupies that slot. */
+  function label(): HTMLElement {
+    const treeColumn = document.getElementById(
+      screen.getByTestId("file-browser-sidebar-toggle").getAttribute("aria-controls")!
+    )!;
+    const header = treeColumn.querySelector<HTMLElement>(":scope > div")!;
+    return header.querySelector<HTMLElement>("[class~='flex-1']")!;
+  }
+
+  function lastAnnouncement() {
+    return useAnnouncerStore.getState().polite;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("leaves the label inert at the worktree root", () => {
+    // No rootPath — the label is a bare basename, not a path worth copying.
+    render(paneJsx());
+
+    expect(screen.queryByRole("button", { name: /copy folder path/i })).toBeNull();
+
+    const el = label();
+    expect(el.tagName).toBe("SPAN");
+    // Not focusable, and the hover text still resolves the worktree.
+    expect(el.hasAttribute("tabindex")).toBe(false);
+    expect(el.getAttribute("title")).toBe("/repo");
+
+    fireEvent.click(el);
+    expect(writeTextMock).not.toHaveBeenCalled();
+  });
+
+  it("stays inert when the root is set but the worktree cannot be resolved", () => {
+    // A restored panel can carry a root for a worktree the store has not (or no
+    // longer) resolves — there is no absolute path to build, so no affordance.
+    mockPanel.browserRootPath = ROOT;
+    render(
+      <TooltipProvider>
+        <FileBrowserPane
+          id="fb-1"
+          title="Files"
+          worktreeId="wt-missing"
+          isFocused
+          location="grid"
+          onFocus={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+
+    expect(screen.queryByRole("button", { name: /copy folder path/i })).toBeNull();
+    expect(label().tagName).toBe("SPAN");
+  });
+
+  it("copies the absolute path, not the relative text it displays", async () => {
+    mockPanel.browserRootPath = ROOT;
+    render(paneJsx());
+
+    const button = copyButton();
+    // A native button, not a role-annotated div: that's what makes it reachable
+    // by Tab and activatable by Enter/Space without bespoke key handling.
+    expect(button.tagName).toBe("BUTTON");
+    expect(button.getAttribute("type")).toBe("button");
+    // The visible label stays the compact relative path…
+    expect(button.textContent).toBe(ROOT);
+    // …while the accessible name names what actually lands on the clipboard.
+    expect(button.getAttribute("aria-label")).toContain(ABSOLUTE);
+
+    await act(async () => {
+      fireEvent.click(button);
+    });
+
+    expect(writeTextMock).toHaveBeenCalledTimes(1);
+    expect(writeTextMock).toHaveBeenCalledWith(ABSOLUTE);
+  });
+
+  it("announces the copy and keeps the accessible name stable", async () => {
+    mockPanel.browserRootPath = ROOT;
+    render(paneJsx());
+
+    const button = copyButton();
+    const nameBefore = button.getAttribute("aria-label");
+    const announcedBefore = lastAnnouncement();
+
+    await act(async () => {
+      fireEvent.click(button);
+    });
+
+    const announced = lastAnnouncement();
+    expect(announced?.msg).toBe("Path copied");
+    // A fresh entry, not the one some earlier test left behind.
+    expect(announced?.id).not.toBe(announcedBefore?.id);
+    // The live region is the sole SR signal; a label that flipped to "Copied"
+    // would double-announce.
+    expect(button.getAttribute("aria-label")).toBe(nameBefore);
+  });
+
+  it("shows copied feedback for the dwell window, then restores the idle styling", async () => {
+    vi.useFakeTimers();
+    mockPanel.browserRootPath = ROOT;
+    render(paneJsx());
+
+    const idle = copyButton().className;
+
+    await act(async () => {
+      fireEvent.click(copyButton());
+    });
+    const copied = copyButton().className;
+    expect(copied).not.toBe(idle);
+
+    // Still lit just before the shared dwell elapses.
+    act(() => {
+      vi.advanceTimersByTime(UI_ACTION_SUCCESS_DWELL_MS - 1);
+    });
+    expect(copyButton().className).toBe(copied);
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(copyButton().className).toBe(idle);
+  });
+
+  it("drops stale feedback when the tree is re-rooted inside the dwell window", async () => {
+    vi.useFakeTimers();
+    mockPanel.browserRootPath = ROOT;
+    const { rerender } = render(paneJsx());
+
+    const idle = copyButton().className;
+    await act(async () => {
+      fireEvent.click(copyButton());
+    });
+    expect(copyButton().className).not.toBe(idle);
+
+    // Up one level, well inside the dwell: the success color would otherwise
+    // describe a folder the header no longer points at.
+    mockPanel.browserRootPath = "src";
+    rerender(paneJsx());
+
+    expect(copyButton().className).toBe(idle);
+  });
+
+  it("reports a failed write and lets Retry complete the copy", async () => {
+    mockPanel.browserRootPath = ROOT;
+    writeTextMock.mockRejectedValueOnce(new Error("denied"));
+    render(paneJsx());
+
+    const announcedBefore = lastAnnouncement();
+    const idle = copyButton().className;
+
+    await act(async () => {
+      fireEvent.click(copyButton());
+    });
+
+    // A silent failure would leave the previous clipboard contents in place.
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const payload = notifyMock.mock.calls[0]?.[0];
+    expect(payload?.type).toBe("error");
+    expect(payload?.action?.label).toBe("Retry");
+    // The inbox drops onClick actions, so a demoted toast would lose the Retry.
+    expect(payload?.priority).toBe("high");
+    expect(payload?.context?.eventKind).toBe("uiFeedback");
+    // Naming the origin surface marks the failure as already visible there and
+    // suppresses the toast — but this label shows nothing when a write fails,
+    // so the Retry would become unreachable.
+    expect(payload?.context?.panelId).toBeUndefined();
+    expect(payload?.context?.worktreeId).toBeUndefined();
+    // Nothing claims success: no announcement, no lit label.
+    expect(lastAnnouncement()?.id).toBe(announcedBefore?.id);
+    expect(copyButton().className).toBe(idle);
+
+    await act(async () => {
+      await payload?.action?.onClick();
+    });
+
+    // A Retry that never re-wrote would still satisfy a "last call" assertion,
+    // since the failed attempt already passed ABSOLUTE — so count the writes.
+    expect(writeTextMock).toHaveBeenCalledTimes(2);
+    expect(writeTextMock.mock.calls[1]?.[0]).toBe(ABSOLUTE);
+    // The retry re-enters the whole gesture, so feedback lands on the second try.
+    const announced = lastAnnouncement();
+    expect(announced?.msg).toBe("Path copied");
+    expect(announced?.id).not.toBe(announcedBefore?.id);
+    expect(copyButton().className).not.toBe(idle);
+    // The successful retry raises no second toast.
+    expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 });
