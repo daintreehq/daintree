@@ -68,6 +68,8 @@ AGENTS.local.md
 .aider*
 !.aider.conf.yml
 !.aiderignore
+!.aider.model.settings.yml
+!.aider.model.metadata.json
 .cursor/rules/personal.mdc
 .specstory/
 .windsurf/

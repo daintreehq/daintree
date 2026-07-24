@@ -42,12 +42,16 @@ function unreachableNegations(lines: string[]): string[] {
       if (!parent) continue;
 
       const spellings = [parent, `${parent}/`];
-      const reincluded = lines.some(
-        (other) => other.startsWith("!") && spellings.includes(other.slice(1))
-      );
-      if (reincluded) continue;
 
-      if (lines.some((other) => spellings.includes(other))) {
+      // Whether git descends is decided by the LAST rule literally naming the
+      // parent, so a re-inclusion only helps if nothing excludes it again after.
+      let excluded = false;
+      for (const other of lines) {
+        if (spellings.includes(other)) excluded = true;
+        else if (other.startsWith("!") && spellings.includes(other.slice(1))) excluded = false;
+      }
+
+      if (excluded) {
         dead.push(line);
         break;
       }
@@ -177,6 +181,10 @@ describe("unreachableNegations", () => {
 
   it("accepts a parent that is explicitly re-included", () => {
     expect(unreachableNegations(["foo/", "!foo/", "!foo/keep"])).toEqual([]);
+  });
+
+  it("flags a parent re-excluded after being re-included", () => {
+    expect(unreachableNegations(["foo/", "!foo/", "foo/", "!foo/keep"])).toEqual(["!foo/keep"]);
   });
 
   it("accepts a negation whose parent is only matched by a glob", () => {
