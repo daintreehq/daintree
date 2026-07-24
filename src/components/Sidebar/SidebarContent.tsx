@@ -20,6 +20,8 @@ import {
 } from "react-virtuoso";
 import { AlertTriangle, FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { Button } from "@/components/ui/button";
+import { isGitBackedProject } from "@shared/types";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { ScrollIndicator } from "@/components/Worktree/ScrollIndicator";
@@ -1520,6 +1522,51 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       }}
     />
   );
+
+  // A workspace opened without git has no worktrees to wait for or fail at, so
+  // it takes neither the skeleton nor the "Open a Git repository" nudge. Paired
+  // with the empty list rather than read alone: a folder that has since been
+  // initialized externally loads worktrees normally, and those must win over a
+  // flag that is only reconciled the next time the folder is opened (#11405).
+  if (!isGitBackedProject(currentProject) && worktrees.length === 0) {
+    return (
+      <>
+        <div className="flex flex-col h-full">
+          <div className="flex items-center px-4 py-2 border-b border-divider shrink-0">
+            <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
+          </div>
+          <EmptyState
+            variant="zero-data"
+            scale="sidebar"
+            icon={<FolderOpen />}
+            title="Initialize a repository to use worktrees"
+            action={
+              <div className="flex flex-col items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (currentProject) {
+                      useProjectStore
+                        .getState()
+                        .openGitInitDialog(currentProject.path, { step: "initialize" });
+                    }
+                  }}
+                >
+                  Initialize repository
+                </Button>
+                <span className="text-xs text-daintree-text/50">
+                  Terminals, agents, and recipes work without one
+                </span>
+              </div>
+            }
+            className="flex-1"
+          />
+        </div>
+        {restartConfirmDialog}
+      </>
+    );
+  }
 
   if (isLoading && worktrees.length === 0) {
     return (

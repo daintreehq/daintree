@@ -31,6 +31,10 @@ const terminalClientMock = {
   getSharedBuffers: vi.fn().mockResolvedValue({ visualBuffers: [], signalBuffer: null }),
 };
 
+const worktreeClientMock = {
+  retryProjectLoad: vi.fn().mockResolvedValue(undefined),
+};
+
 const notifyMock = vi.fn().mockReturnValue("");
 
 const actionServiceDispatchMock = vi.fn().mockResolvedValue({ ok: true });
@@ -43,6 +47,7 @@ vi.mock("@/clients", () => ({
   projectClient: projectClientMock,
   appClient: appClientMock,
   terminalClient: terminalClientMock,
+  worktreeClient: worktreeClientMock,
 }));
 
 vi.mock("@/lib/notify", () => ({
@@ -119,8 +124,7 @@ describe("projectStore addProject", () => {
       .handleCloneSuccess("/tmp/cloned", { name: "cloned", emoji: "📦" });
 
     expect(projectClientMock.add).toHaveBeenCalledWith("/tmp/cloned", {
-      name: "cloned",
-      emoji: "📦",
+      identity: { name: "cloned", emoji: "📦" },
     });
   });
 
@@ -229,7 +233,9 @@ describe("projectStore addProject", () => {
   });
 
   it("clears the carried identity together with the path on close", () => {
-    useProjectStore.getState().openGitInitDialog("/tmp/repo", { name: "N", emoji: "🚀" });
+    useProjectStore
+      .getState()
+      .openGitInitDialog("/tmp/repo", { identity: { name: "N", emoji: "🚀" } });
     expect(useProjectStore.getState().gitInitIdentity).toEqual({ name: "N", emoji: "🚀" });
 
     useProjectStore.getState().closeGitInitDialog();
@@ -392,6 +398,60 @@ describe("projectStore addProject", () => {
         (call) => (call[0] as { title?: string }).title === "Couldn't add project"
       );
       expect(genericToasts.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("opening a folder without git (#11405)", () => {
+    const LIGHTWEIGHT = { id: "p-light", path: "/tmp/downloads", name: "downloads" };
+
+    beforeEach(() => {
+      useProjectStore.setState({ gitInitDirectoryPath: "/tmp/downloads" });
+      projectClientMock.add.mockResolvedValue(LIGHTWEIGHT);
+      projectClientMock.getAll.mockResolvedValue([LIGHTWEIGHT]);
+    });
+
+    it("opens the choice screen first when a folder has no repository", async () => {
+      projectClientMock.openDialog.mockResolvedValueOnce("/tmp/not-a-repo");
+      projectClientMock.add.mockRejectedValueOnce(
+        new Error("Not a git repository: /tmp/not-a-repo")
+      );
+
+      await useProjectStore.getState().addProject();
+
+      expect(useProjectStore.getState().gitInitDialogStep).toBe("choice");
+    });
+
+    it("asks main to drop the git requirement when the user opens without git", async () => {
+      await useProjectStore.getState().openWithoutGit();
+
+      expect(projectClientMock.add).toHaveBeenCalledWith("/tmp/downloads", { gitBacked: false });
+      expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
+    });
+
+    it("keeps the git requirement on an ordinary add", async () => {
+      await useProjectStore.getState().addProjectByPath("/tmp/some-repo");
+
+      expect(projectClientMock.add).toHaveBeenCalledWith("/tmp/some-repo", undefined);
+    });
+
+    it("reloads the workspace after initializing git in the open workspace", async () => {
+      useProjectStore.setState({
+        currentProject: { ...LIGHTWEIGHT, emoji: "🌳", lastOpened: 0, gitBacked: false },
+      });
+
+      await useProjectStore.getState().handleGitInitSuccess();
+
+      // The host loaded this folder with no repository and enumerated nothing;
+      // without a reload the sidebar would stay empty until the next switch.
+      expect(worktreeClientMock.retryProjectLoad).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not reload when git was initialized in some other folder", async () => {
+      useProjectStore.setState({ currentProject: null });
+
+      await useProjectStore.getState().handleGitInitSuccess();
+
+      expect(worktreeClientMock.retryProjectLoad).not.toHaveBeenCalled();
     });
   });
 });

@@ -112,7 +112,6 @@ describe("handleProjectOpenDialog", () => {
     expect(dialog.showOpenDialog).toHaveBeenCalledWith(
       fakeWindow,
       expect.objectContaining({
-        title: "Open Git Repository",
         properties: ["openDirectory", "createDirectory"],
       })
     );
@@ -129,15 +128,27 @@ describe("handleProjectOpenDialog", () => {
     const fakeEvent = { sender: { id: 99 } };
     const result = await handler(fakeEvent);
 
-    expect(dialog.showOpenDialog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: "Open Git Repository",
-      })
-    );
     // Should NOT have been called with a window as first arg
     const callArgs = (dialog.showOpenDialog as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(callArgs).toHaveLength(1); // only opts, no window
     expect(result).toBe("/projects/fallback");
+  });
+
+  it("does not present the picker as requiring a repository (#11405)", async () => {
+    // A folder without git is openable now, so the picker must not imply
+    // otherwise — the choice about git comes after, not at selection time.
+    mockGetWindowForWebContents.mockReturnValue({ id: 1 });
+    (dialog.showOpenDialog as ReturnType<typeof vi.fn>).mockResolvedValue({
+      canceled: true,
+      filePaths: [],
+    });
+
+    await handler({ sender: { id: 1 } });
+
+    const opts = (dialog.showOpenDialog as ReturnType<typeof vi.fn>).mock
+      .calls[0]![1] as Electron.OpenDialogOptions;
+    expect(opts.title).toBeTruthy();
+    expect(opts.title).not.toMatch(/git|repositor/i);
   });
 
   it("returns null when dialog is canceled", async () => {

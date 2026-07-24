@@ -5,7 +5,7 @@ import type { TabGroup } from "../panel.js";
 import type { WorktreeState } from "../worktree.js";
 import type {
   Project,
-  ProjectCreationIdentity,
+  ProjectAddOptions,
   ProjectSettings,
   RecipeNameCollision,
   RunCommand,
@@ -536,7 +536,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   project: {
     getAll(): Promise<Project[]>;
     getCurrent(): Promise<Project | null>;
-    add(path: string, identity?: ProjectCreationIdentity): Promise<Project>;
+    add(path: string, options?: ProjectAddOptions): Promise<Project>;
     remove(projectId: string): Promise<void>;
     update(projectId: string, updates: Partial<Project>): Promise<Project>;
     switch(

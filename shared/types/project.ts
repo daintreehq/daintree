@@ -56,11 +56,11 @@ export interface ProjectRepoStats {
   lastUpdated: number | null;
 }
 
-/** Project (Git repository) managed by Daintree */
+/** Workspace managed by Daintree — a git repository, or a plain folder. */
 export interface Project {
   /** Unique identifier (UUID or path hash) */
   id: string;
-  /** Git repository root path */
+  /** Git repository root, or the adopted folder itself when {@link Project.gitBacked} is false */
   path: string;
   /** User-editable display name */
   name: string;
@@ -95,6 +95,41 @@ export interface Project {
    * the write; absent until the project's first clean stats poll.
    */
   lastKnownStats?: ProjectRepoStats;
+  /**
+   * `false` for a folder opened without git (issue #11405) — worktrees, review,
+   * and diffs don't apply to it. Absent on every repository-backed project and
+   * every row predating the field, so absence means git-backed. Read it through
+   * {@link isGitBackedProject} rather than testing the field directly.
+   */
+  gitBacked?: boolean;
+}
+
+/** Options for registering a folder as a workspace. */
+export interface ProjectAddOptions {
+  /**
+   * `false` adopts a folder that isn't a git repository. Omitted keeps the
+   * strict git-root requirement, so an unknown non-repo still fails with
+   * `NOT_A_GIT_REPO` and drives the choice dialog.
+   */
+  gitBacked?: boolean;
+  /**
+   * Name/emoji chosen in a creation dialog, applied only where a brand-new row
+   * is minted. Kept as its own key rather than flattened alongside
+   * {@link ProjectAddOptions.gitBacked}: the main-process validator drops a
+   * creation identity whole unless both halves are present, so a flattened
+   * payload carrying only `gitBacked` would be discarded silently.
+   */
+  identity?: ProjectCreationIdentity;
+}
+
+/**
+ * Whether git-backed surfaces (worktrees, review, diffs, branch labels) apply.
+ * Absence means git-backed — legacy rows carry no discriminator.
+ */
+export function isGitBackedProject(
+  project: Pick<Project, "gitBacked"> | null | undefined
+): boolean {
+  return project?.gitBacked !== false;
 }
 
 /**

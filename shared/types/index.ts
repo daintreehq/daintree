@@ -82,9 +82,11 @@ export type {
 export type { BrowserHistory } from "./browser.js";
 
 // Project types
+export { isGitBackedProject } from "./project.js";
 export type {
   ProjectStatus,
   Project,
+  ProjectAddOptions,
   ProjectCreationIdentity,
   ProjectRepoStats,
   TerminalSnapshot,

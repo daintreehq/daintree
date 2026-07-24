@@ -181,6 +181,8 @@ function AppInner() {
   const gitInitIdentity = useProjectStore((state) => state.gitInitIdentity);
   const closeGitInitDialog = useProjectStore((state) => state.closeGitInitDialog);
   const handleGitInitSuccess = useProjectStore((state) => state.handleGitInitSuccess);
+  const gitInitDialogStep = useProjectStore((state) => state.gitInitDialogStep);
+  const openWithoutGit = useProjectStore((state) => state.openWithoutGit);
   const createFolderDialogOpen = useProjectStore((state) => state.createFolderDialogOpen);
   const closeCreateFolderDialog = useProjectStore((state) => state.closeCreateFolderDialog);
 
@@ -600,7 +602,9 @@ function AppInner() {
                 shouldMountGitInitDialog={shouldMountGitInitDialog}
                 effectiveGitInitPath={effectiveGitInitPath}
                 effectiveGitInitIdentity={effectiveGitInitIdentity}
+                gitInitDialogStep={gitInitDialogStep}
                 handleGitInitSuccess={handleGitInitSuccess}
+                openWithoutGit={openWithoutGit}
                 closeGitInitDialog={closeGitInitDialog}
                 createFolderDialogOpen={createFolderDialogOpen}
                 shouldMountCreateFolderDialog={shouldMountCreateFolderDialog}

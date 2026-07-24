@@ -57,6 +57,13 @@
       "when": 1783900000000,
       "tag": "0007_add_project_stats",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1784500000000,
+      "tag": "0008_add_project_git_backed",
+      "breakpoints": true
     }
   ]
 }

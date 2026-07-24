@@ -12,7 +12,7 @@ import { projectRelocationCoordinator } from "../../../services/ProjectRelocatio
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import type { HandlerDependencies } from "../../types.js";
-import type { Project } from "../../../types/index.js";
+import type { Project, ProjectAddOptions } from "../../../types/index.js";
 import type { ProjectCreationIdentity } from "../../../../shared/types/project.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
@@ -42,7 +42,7 @@ const PROJECT_VISIBLE_MESSAGE =
  */
 export async function addProjectByPath(
   projectPath: string,
-  identity?: ProjectCreationIdentity
+  options?: ProjectAddOptions
 ): Promise<Project> {
   if (typeof projectPath !== "string" || !projectPath) {
     throw new Error("Invalid project path");
@@ -50,7 +50,17 @@ export async function addProjectByPath(
   if (!path.isAbsolute(projectPath)) {
     throw new Error("Project path must be absolute");
   }
-  const project = await projectStore.addProject(projectPath, normalizeCreationIdentity(identity));
+  // The two halves are validated independently and stay separate keys.
+  // `normalizeCreationIdentity` drops a malformed identity WHOLE, so folding
+  // `gitBacked` in alongside `name`/`emoji` would make a lightweight-open
+  // payload fail the identity gate and be discarded in silence.
+  const project = await projectStore.addProject(projectPath, {
+    // Narrowed rather than forwarded: a caller may only ever ask to *drop* the
+    // git requirement. Anything else would let it assert a mode the folder
+    // doesn't have, and `addProject` alone decides that a repository was found.
+    ...(options?.gitBacked === false ? { gitBacked: false } : {}),
+    identity: normalizeCreationIdentity(options?.identity),
+  });
   broadcastToRenderer(CHANNELS.PROJECT_UPDATED, project);
   return project;
 }
@@ -93,8 +103,8 @@ function normalizeCreationIdentity(
 }
 
 export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () => void {
-  const handleProjectAdd = async (projectPath: string, identity?: ProjectCreationIdentity) =>
-    addProjectByPath(projectPath, identity);
+  const handleProjectAdd = async (projectPath: string, options?: ProjectAddOptions) =>
+    addProjectByPath(projectPath, options);
 
   const handlers: Array<() => void> = [];
 
@@ -183,12 +193,16 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     // renderer that could rewrite its own project's path to a sibling's would
     // point that resolution at the sibling's host. Path changes stay exclusive
     // to the main-owned relocation flow (#11282).
+    // `gitBacked` joins them: it decides whether the workspace host enumerates
+    // worktrees at all, and only `addProject` — which actually looked for a
+    // repository — may set it (#11405).
     const {
       id: _id,
       path: _path,
       inRepoSettings: _inRepo,
       frecencyScore: _fs,
       lastAccessedAt: _lat,
+      gitBacked: _gitBacked,
       ...safeUpdates
     } = updates;
     const updated = projectStore.updateProject(projectId, safeUpdates);
@@ -219,7 +233,9 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     const senderWindow = getWindowForWebContents(ctx.event.sender);
     const dialogOpts = {
       properties: ["openDirectory" as const, "createDirectory" as const],
-      title: "Open Git Repository",
+      // Not "Open Git Repository": a folder without one is now openable too,
+      // and the picker shouldn't imply a requirement it no longer has (#11405).
+      title: "Open Folder",
     };
     const result = senderWindow
       ? await dialog.showOpenDialog(senderWindow, dialogOpts)
