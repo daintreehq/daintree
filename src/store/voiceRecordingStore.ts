@@ -3,7 +3,10 @@ import { persist } from "zustand/middleware";
 import type { StorageValue } from "zustand/middleware";
 import type { VoiceInputError, VoiceInputStatus, VoiceTranscriptPhase } from "@shared/types";
 import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
-import type { PersistWriteMergeContext } from "./persistence/persistWriteMerge";
+import {
+  mergeRecordByWriterDelta,
+  type PersistWriteMergeContext,
+} from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 export interface VoiceRecordingTarget {
@@ -73,34 +76,63 @@ function recentTargetIdentity(target: RecentDictationTarget): string {
 }
 
 /**
+ * Index a recent-targets list by logical identity, keeping the more-recently-used
+ * entry when one list holds two entries with the same identity.
+ */
+function toTargetsByIdentity(
+  value: StorageValue<VoiceRecordingPersistedState> | null
+): Record<string, RecentDictationTarget> {
+  const byIdentity: Record<string, RecentDictationTarget> = {};
+  for (const target of toRecentTargets(value)) {
+    const identity = recentTargetIdentity(target);
+    const existing = byIdentity[identity];
+    if (!existing || target.lastUsedAt > existing.lastUsedAt) byIdentity[identity] = target;
+  }
+  return byIdentity;
+}
+
+/**
  * Baseline-aware three-way merge for voice-recording writes across project views
  * (issue #11351). `recentTargets` is one global MRU list (cap 3) that any view
  * appends to, and the store's high-frequency transient setters (`setAudioLevel`,
  * `setElapsedSeconds`) trigger debounced persist writes of it — so a stale view's
- * flush would otherwise drop a sibling's just-recorded target. We union this
- * writer's list with the freshest on-disk list by logical identity, keep the
- * more-recently-used entry on collision, and re-sort/cap to the globally three
- * most-recent — the same recency semantics the store's own `recordRecentTarget`
- * applies within a single view.
+ * flush would otherwise drop a sibling's just-recorded target.
+ *
+ * All three inputs are keyed by logical identity and reconciled with the same
+ * writer-delta semantics the other stores use: an entry this writer added or
+ * changed wins, one it left untouched defers to disk, and one that was in its
+ * baseline but is gone from its snapshot is dropped. That last case is what a
+ * plain union gets wrong: `recordRecentTarget` dedupes in memory by `panelId`,
+ * but a persisted entry's identity is `(worktreeId, panelTitle)` — so re-dictating
+ * into a panel whose title changed mid-session supersedes the old entry in memory,
+ * and without the baseline the stale title would linger on disk forever, evicting
+ * genuinely distinct targets through the cap. On a same-identity collision the
+ * more-recently-used copy still wins, so a sibling's fresher timestamp is never
+ * rolled back. The result is re-sorted and capped to the globally three
+ * most-recent — the same recency semantics `recordRecentTarget` applies in a
+ * single view.
  */
 function mergeVoiceRecordingPersistedWrite({
+  baseline,
   onDisk,
   incoming,
 }: PersistWriteMergeContext<VoiceRecordingPersistedState>): StorageValue<VoiceRecordingPersistedState> {
   // No shared value on disk yet → nothing to reconcile against.
   if (!onDisk) return incoming;
-  const byIdentity = new Map<string, RecentDictationTarget>();
-  for (const target of [...toRecentTargets(incoming), ...toRecentTargets(onDisk)]) {
-    const identity = recentTargetIdentity(target);
-    const existing = byIdentity.get(identity);
-    if (!existing || target.lastUsedAt > existing.lastUsedAt) {
-      byIdentity.set(identity, target);
-    }
-  }
-  const merged = [...byIdentity.values()]
+  const disk = toTargetsByIdentity(onDisk);
+  const merged = mergeRecordByWriterDelta(
+    toTargetsByIdentity(baseline),
+    toTargetsByIdentity(incoming),
+    disk
+  );
+  const recentTargets = Object.entries(merged)
+    .map(([identity, target]) => {
+      const diskTarget = disk[identity];
+      return diskTarget && diskTarget.lastUsedAt > target.lastUsedAt ? diskTarget : target;
+    })
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
     .slice(0, MAX_RECENT_TARGETS);
-  return { version: incoming.version, state: { recentTargets: merged } };
+  return { version: incoming.version, state: { recentTargets } };
 }
 
 interface VoiceTranscriptBuffer {

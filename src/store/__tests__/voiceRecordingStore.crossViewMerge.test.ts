@@ -151,4 +151,39 @@ describe("voiceRecordingStore cross-view write merge (#11351)", () => {
     expect(other).toBeDefined(); // the other sibling target survived
     expect(written).toHaveLength(2);
   });
+
+  it("drops the superseded entry when the same panel is re-recorded under a new title", async () => {
+    const backing = installLocalStorage({});
+    const { useVoiceRecordingStore: store } = await import("../voiceRecordingStore");
+    vi.advanceTimersByTime(400);
+
+    // A genuinely distinct target the user should keep seeing after restart.
+    vi.setSystemTime(1000);
+    store
+      .getState()
+      .recordRecentTarget({ panelId: "p0", panelTitle: "Alpha", worktreeId: "wt-alpha" });
+    vi.advanceTimersByTime(400);
+
+    // The same panel is dictated into three times while its title changes (agent
+    // task-title composition retitles panels mid-session). In memory each
+    // re-record supersedes the previous one (dedup is by panelId), so disk must
+    // follow — persisted identity is (worktreeId, panelTitle), which shifts.
+    for (const [at, title] of [
+      [2000, "Fix the parser"],
+      [3000, "Fix the parser bug"],
+      [4000, "Ship the parser fix"],
+    ] as const) {
+      vi.setSystemTime(at);
+      store.getState().recordRecentTarget({ panelId: "p1", panelTitle: title, worktreeId: "wt-1" });
+      vi.advanceTimersByTime(400);
+    }
+
+    expect(store.getState().recentTargets.map((t) => t.panelTitle)).toEqual([
+      "Ship the parser fix",
+      "Alpha",
+    ]);
+    // Disk mirrors memory: one entry per panel, and the older distinct target was
+    // not evicted by stale duplicates of the retitled one.
+    expect(readTargets(backing).map((t) => t.panelTitle)).toEqual(["Ship the parser fix", "Alpha"]);
+  });
 });

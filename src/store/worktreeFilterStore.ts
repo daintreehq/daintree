@@ -435,6 +435,31 @@ const _globalPrefsStore = create<GlobalPrefsState>()(
 );
 
 /**
+ * Coerce a persisted (or baseline) per-project blob to the exact
+ * `ProjectPersistedShape`, substituting the store's defaults for any field with
+ * the wrong runtime type. Mirrors `toGlobalPrefsPersisted`: without it a corrupt
+ * on-disk field (e.g. `statusFilters` stored as a string) would be treated as
+ * "unchanged by this writer" and written straight back on every write, so the
+ * blob never self-heals and the bad value reaches `new Set(...)` at hydration.
+ */
+function toProjectFiltersPersisted(
+  state: Partial<ProjectPersistedShape> | null | undefined
+): ProjectPersistedShape {
+  const raw = (state ?? {}) as Record<string, unknown>;
+  return {
+    query: typeof raw.query === "string" ? raw.query : "",
+    statusFilters: arrayOrUndefined<StatusFilter>(raw.statusFilters) ?? [],
+    typeFilters: arrayOrUndefined<TypeFilter>(raw.typeFilters) ?? [],
+    prIssueFilters: arrayOrUndefined<PrIssueFilter>(raw.prIssueFilters) ?? [],
+    sessionFilters: arrayOrUndefined<SessionFilter>(raw.sessionFilters) ?? [],
+    activityFilters: arrayOrUndefined<ActivityFilter>(raw.activityFilters) ?? [],
+    pinnedWorktrees: arrayOrUndefined<string>(raw.pinnedWorktrees) ?? [],
+    collapsedWorktrees: arrayOrUndefined<string>(raw.collapsedWorktrees) ?? [],
+    manualOrder: arrayOrUndefined<string>(raw.manualOrder) ?? [],
+  };
+}
+
+/**
  * Baseline-aware three-way merge for the PER-PROJECT worktree-filter state
  * (issue #11351). Its storage key already embeds the project id
  * (`daintree-worktree-filters:{projectId}`), so it's immune to CROSS-project
@@ -452,56 +477,48 @@ function mergeProjectFiltersPersistedWrite({
   incoming,
 }: PersistWriteMergeContext<ProjectPersistedShape>): StorageValue<ProjectPersistedShape> {
   if (!onDisk || onDisk.version !== incoming.version) return incoming;
+  const disk = toProjectFiltersPersisted(onDisk.state);
+  const inc = toProjectFiltersPersisted(incoming.state);
   if (baseline && typeof baseline.version === "number" && baseline.version !== incoming.version) {
-    return { version: incoming.version, state: onDisk.state };
+    return { version: incoming.version, state: disk };
   }
-  const base = baseline?.state;
-  const inc = incoming.state;
-  const disk = onDisk.state;
+  const base = toProjectFiltersPersisted(baseline?.state);
   return {
     version: incoming.version,
     state: {
-      query: pickFieldByWriterDelta(base?.query ?? "", inc.query, disk.query),
+      query: pickFieldByWriterDelta(base.query, inc.query, disk.query),
       statusFilters: pickFieldByWriterDelta(
-        base?.statusFilters ?? [],
+        base.statusFilters,
         inc.statusFilters,
         disk.statusFilters
       ),
-      typeFilters: pickFieldByWriterDelta(
-        base?.typeFilters ?? [],
-        inc.typeFilters,
-        disk.typeFilters
-      ),
+      typeFilters: pickFieldByWriterDelta(base.typeFilters, inc.typeFilters, disk.typeFilters),
       prIssueFilters: pickFieldByWriterDelta(
-        base?.prIssueFilters ?? [],
+        base.prIssueFilters,
         inc.prIssueFilters,
         disk.prIssueFilters
       ),
       sessionFilters: pickFieldByWriterDelta(
-        base?.sessionFilters ?? [],
+        base.sessionFilters,
         inc.sessionFilters,
         disk.sessionFilters
       ),
       activityFilters: pickFieldByWriterDelta(
-        base?.activityFilters ?? [],
+        base.activityFilters,
         inc.activityFilters,
         disk.activityFilters
       ),
       pinnedWorktrees: pickFieldByWriterDelta(
-        base?.pinnedWorktrees ?? [],
+        base.pinnedWorktrees,
         inc.pinnedWorktrees,
         disk.pinnedWorktrees
       ),
       collapsedWorktrees: pickFieldByWriterDelta(
-        base?.collapsedWorktrees ?? [],
+        base.collapsedWorktrees,
         inc.collapsedWorktrees,
         disk.collapsedWorktrees
       ),
-      manualOrder: pickFieldByWriterDelta(
-        base?.manualOrder ?? [],
-        inc.manualOrder,
-        disk.manualOrder
-      ),
+      manualOrder: pickFieldByWriterDelta(base.manualOrder, inc.manualOrder, disk.manualOrder),
     },
   };
 }
