@@ -72,10 +72,10 @@ describe("buildWorkingTreeDiffModel — ordering", () => {
     // Frozen rather than order-compared: reordering is only one way to mutate,
     // and writing `relativePath` onto a caller's row would slip past a check
     // that only looks at ordering.
-    const input = Object.freeze([
+    const input: readonly FileChangeDetail[] = Object.freeze([
       Object.freeze(change("b.ts", "modified", 1, 0)),
       Object.freeze(change("a.ts", "modified", 9, 0)),
-    ]) as readonly FileChangeDetail[];
+    ]);
 
     expect(() => buildWorkingTreeDiffModel(input, ROOT)).not.toThrow();
     expect(input.map((c) => c.path)).toEqual(["b.ts", "a.ts"]);
@@ -157,9 +157,8 @@ describe("buildWorkingTreeDiffModel — change set", () => {
     // Uniqueness alone would also hold for index-based or random keys, which
     // would break viewed-marker persistence across polls. Pin what it varies on.
     const keyFor = (path: string, status: GitStatus, insertions: number) =>
-      buildWorkingTreeDiffModel([change(path, status, insertions, 0)], ROOT)[
-        "diffChangeSet"
-      ][0]!.viewedKey;
+      buildWorkingTreeDiffModel([change(path, status, insertions, 0)], ROOT)["diffChangeSet"][0]!
+        .viewedKey;
 
     const base = keyFor("a.ts", "modified", 1);
     expect(keyFor("a.ts", "added", 1)).not.toBe(base);
@@ -219,7 +218,9 @@ describe("buildWorkingTreeDiffModel — index lookup", () => {
     );
 
     expect(indexByKey.size).toBe(2);
-    expect(indexByKey.get(getWorkingTreeChangeKey({ path: "same.ts", status: "modified" }))).toBe(0);
+    expect(indexByKey.get(getWorkingTreeChangeKey({ path: "same.ts", status: "modified" }))).toBe(
+      0
+    );
     expect(indexByKey.get(getWorkingTreeChangeKey({ path: "same.ts", status: "added" }))).toBe(1);
   });
 
@@ -243,6 +244,7 @@ describe("buildWorkingTreeDiffModel — index lookup", () => {
     // reachable at runtime even though the type forbids it.
     const { sortedChanges } = buildWorkingTreeDiffModel(
       [
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- deliberately off-contract: the point is the runtime `?? 99` fallback, which the type makes unreachable.
         change("unknown.ts", "something-new" as GitStatus, 5, 0),
         change("known.ts", "conflicted", 5, 0),
       ],

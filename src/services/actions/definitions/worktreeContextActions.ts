@@ -48,8 +48,9 @@ function hasOpenableChanges(ctx: ActionContext): boolean {
   const targetWorktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
   if (!targetWorktreeId) return false;
 
-  const worktreeChanges = getCurrentViewStore().getState().worktrees.get(targetWorktreeId)
-    ?.worktreeChanges;
+  const worktreeChanges = getCurrentViewStore()
+    .getState()
+    .worktrees.get(targetWorktreeId)?.worktreeChanges;
 
   return (worktreeChanges?.changes.length ?? 0) > 0;
 }
@@ -354,8 +355,9 @@ export function registerWorktreeContextActions(
         // Read straight from the store: WorktreeMonitor keeps `worktreeChanges`
         // current with no component mounted, so this opens a fresh set even from
         // a collapsed card, where the Changed Files list does not exist.
-        const worktreeChanges = getCurrentViewStore().getState().worktrees.get(targetWorktreeId)
-          ?.worktreeChanges;
+        const worktreeChanges = getCurrentViewStore()
+          .getState()
+          .worktrees.get(targetWorktreeId)?.worktreeChanges;
         if (!worktreeChanges || worktreeChanges.changes.length === 0) return;
 
         const { diffChangeSet } = buildWorkingTreeDiffModel(

@@ -36,6 +36,7 @@ const ROOT = "/repo/wt-1";
 
 function getAction() {
   const actions: ActionRegistry = new Map();
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- registerWorktreeContextActions takes the whole callback surface; openChanges touches none of it. Same shape the sibling openReviewHub test uses.
   const callbacks = { onInject: vi.fn() } as unknown as ActionCallbacks;
   registerWorktreeContextActions(actions, callbacks);
   const factory = actions.get("worktree.openChanges");
@@ -54,15 +55,17 @@ function change(
 
 /** Seed a worktree whose poll has reported the given changes. */
 function seedWorktree(id: string, changes: FileChangeDetail[], rootPath = ROOT) {
-  worktreesMock.current.set(id, {
+  const seeded: Partial<WorktreeState> = {
     id,
     path: rootPath,
     worktreeChanges: {
+      worktreeId: id,
       rootPath,
       changes,
       changedFileCount: changes.length,
     },
-  } as Partial<WorktreeState>);
+  };
+  worktreesMock.current.set(id, seeded);
 }
 
 /** Seed a worktree whose poll has not reported yet. */
@@ -173,10 +176,7 @@ describe("worktree.openChanges — explicit target beats context", () => {
     seedWorktree("wt-clean", []);
     seedWorktree("wt-dirty", [change("dirty.ts", "modified", 1, 0)], "/repo/wt-dirty");
 
-    await getAction().run(
-      { worktreeId: "wt-dirty" },
-      { focusedWorktreeId: "wt-clean" } as ActionContext
-    );
+    await getAction().run({ worktreeId: "wt-dirty" }, { focusedWorktreeId: "wt-clean" });
 
     expect(dialogOptions()).toMatchObject({ worktreeId: "wt-dirty", filePath: "dirty.ts" });
   });
@@ -185,10 +185,7 @@ describe("worktree.openChanges — explicit target beats context", () => {
     seedWorktree("wt-clean", []);
     seedWorktree("wt-dirty", [change("dirty.ts", "modified", 1, 0)], "/repo/wt-dirty");
 
-    await getAction().run(
-      { worktreeId: "wt-clean" },
-      { focusedWorktreeId: "wt-dirty" } as ActionContext
-    );
+    await getAction().run({ worktreeId: "wt-clean" }, { focusedWorktreeId: "wt-dirty" });
 
     expect(openPanelDialogMock).not.toHaveBeenCalled();
   });
@@ -197,7 +194,7 @@ describe("worktree.openChanges — explicit target beats context", () => {
 describe("worktree.openChanges — opening the diff", () => {
   it("opens the working-tree diff for an explicit worktreeId", async () => {
     seedWorktree("wt-1", [change("a.ts", "modified", 1, 0)]);
-    await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
+    await getAction().run({ worktreeId: "wt-1" }, {});
 
     expect(dialogOptions()).toMatchObject({
       kind: "diff",
@@ -212,7 +209,7 @@ describe("worktree.openChanges — opening the diff", () => {
       change("biggest.ts", "modified", 20, 20),
       change("medium.ts", "modified", 9, 0),
     ]);
-    await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
+    await getAction().run({ worktreeId: "wt-1" }, {});
 
     expect(dialogOptions()).toMatchObject({ filePath: "biggest.ts", fileStatus: "modified" });
   });
@@ -224,14 +221,12 @@ describe("worktree.openChanges — opening the diff", () => {
       change("c.ts", "deleted", 3, 0),
     ];
     seedWorktree("wt-1", seeded);
-    await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
+    await getAction().run({ worktreeId: "wt-1" }, {});
 
     // Compare as multisets: order is the helper's business, membership is this
     // action's. A length check alone would pass on `[x, x, x]`.
     const delivered = diffDialogOptions().changeSet!.map((e) => `${e.status}:${e.path}`);
-    expect([...delivered].sort()).toEqual(
-      seeded.map((c) => `${c.status}:${c.path}`).sort()
-    );
+    expect([...delivered].sort()).toEqual(seeded.map((c) => `${c.status}:${c.path}`).sort());
   });
 
   it("opens the file that is the change set's first entry", async () => {
@@ -241,7 +236,7 @@ describe("worktree.openChanges — opening the diff", () => {
       change("b.ts", "added", 40, 0),
       change("c.ts", "deleted", 3, 0),
     ]);
-    await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
+    await getAction().run({ worktreeId: "wt-1" }, {});
 
     const options = diffDialogOptions();
     expect(options.filePath).toBe(options.changeSet![0]!.path);
@@ -250,14 +245,14 @@ describe("worktree.openChanges — opening the diff", () => {
 
   it("addresses the opened file by a root-relative path", async () => {
     seedWorktree("wt-1", [change(`${ROOT}/src/deep/file.ts`, "modified", 1, 0)]);
-    await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
+    await getAction().run({ worktreeId: "wt-1" }, {});
 
     expect(dialogOptions()).toMatchObject({ filePath: "src/deep/file.ts", title: "file.ts" });
   });
 
   it("uses the change set's own viewed key for the opened file", async () => {
     seedWorktree("wt-1", [change("a.ts", "modified", 1, 0)]);
-    await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
+    await getAction().run({ worktreeId: "wt-1" }, {});
 
     const options = diffDialogOptions();
     expect(options.viewedKey).toBe(options.changeSet![0]!.viewedKey);
@@ -265,14 +260,14 @@ describe("worktree.openChanges — opening the diff", () => {
 
   it("resolves the target from focus when args omit it", async () => {
     seedWorktree("wt-focus", [change("focused.ts", "modified", 1, 0)]);
-    await getAction().run({}, { focusedWorktreeId: "wt-focus" } as ActionContext);
+    await getAction().run({}, { focusedWorktreeId: "wt-focus" });
 
     expect(dialogOptions()).toMatchObject({ worktreeId: "wt-focus", filePath: "focused.ts" });
   });
 
   it("falls back to the active worktree when nothing is focused", async () => {
     seedWorktree("wt-active", [change("active.ts", "modified", 1, 0)]);
-    await getAction().run({}, { activeWorktreeId: "wt-active" } as ActionContext);
+    await getAction().run({}, { activeWorktreeId: "wt-active" });
 
     expect(dialogOptions()).toMatchObject({ worktreeId: "wt-active" });
   });
@@ -281,10 +276,7 @@ describe("worktree.openChanges — opening the diff", () => {
     seedWorktree("wt-focus", [change("focused.ts", "modified", 1, 0)]);
     seedWorktree("wt-explicit", [change("explicit.ts", "modified", 1, 0)], "/repo/wt-explicit");
 
-    await getAction().run(
-      { worktreeId: "wt-explicit" },
-      { focusedWorktreeId: "wt-focus" } as ActionContext
-    );
+    await getAction().run({ worktreeId: "wt-explicit" }, { focusedWorktreeId: "wt-focus" });
 
     expect(dialogOptions()).toMatchObject({ worktreeId: "wt-explicit" });
   });
@@ -294,7 +286,7 @@ describe("worktree.openChanges — opening the diff", () => {
     const action = getAction();
 
     seedWorktree("wt-1", [change("second.ts", "modified", 5, 0)]);
-    await action.run({ worktreeId: "wt-1" }, {} as ActionContext);
+    await action.run({ worktreeId: "wt-1" }, {});
 
     expect(dialogOptions()).toMatchObject({ filePath: "second.ts" });
   });
@@ -303,26 +295,26 @@ describe("worktree.openChanges — opening the diff", () => {
 describe("worktree.openChanges — nothing to open", () => {
   it("opens nothing when the worktree has no changes", async () => {
     seedWorktree("wt-1", []);
-    await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
+    await getAction().run({ worktreeId: "wt-1" }, {});
 
     expect(openPanelDialogMock).not.toHaveBeenCalled();
   });
 
   it("opens nothing when the poll has not reported yet", async () => {
     seedUnpolledWorktree("wt-1");
-    await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
+    await getAction().run({ worktreeId: "wt-1" }, {});
 
     expect(openPanelDialogMock).not.toHaveBeenCalled();
   });
 
   it("opens nothing when the worktree is gone", async () => {
-    await getAction().run({ worktreeId: "missing" }, {} as ActionContext);
+    await getAction().run({ worktreeId: "missing" }, {});
 
     expect(openPanelDialogMock).not.toHaveBeenCalled();
   });
 
   it("opens nothing when no target can be resolved at all", async () => {
-    await getAction().run({}, {} as ActionContext);
+    await getAction().run({}, {});
 
     expect(openPanelDialogMock).not.toHaveBeenCalled();
   });

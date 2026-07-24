@@ -18,7 +18,7 @@ afterEach(cleanup);
  * render layer over whatever `components` it is given, so both real surfaces
  * (right-click menu and the ⋯ dropdown) exercise this same tree.
  */
-const components = {
+const components: WorktreeMenuComponents = {
   Item: ({ children, onSelect }: { children?: React.ReactNode; onSelect?: () => void }) => (
     <button type="button" onClick={onSelect}>
       {children}
@@ -30,8 +30,9 @@ const components = {
   Sub: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   SubTrigger: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   SubContent: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
-} as unknown as WorktreeMenuComponents;
+};
 
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- WorktreeState has ~60 fields and this render layer reads four of them; the repo's other worktree component tests build fixtures the same way.
 const worktree = {
   id: "wt-1",
   name: "feature",
