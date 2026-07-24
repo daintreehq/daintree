@@ -974,10 +974,12 @@ describe("extractDntrPaths", () => {
     ]);
   });
 
-  it("does not route a dot-segment path to an ancestor named *.dntr", async () => {
+  it("ignores tokens that only resolve onto a *.dntr directory", async () => {
     const { extractDntrPaths } = await import("../appLifecycle.js");
-    // Resolving before the extension check would collapse this to
-    // `/work/plugin.dntr` and treat a directory as an archive.
+    // Both name a directory, not an archive. Resolving before the extension
+    // check would strip the trailing separator / collapse the `..` and hand a
+    // directory to the archive-install pipeline.
+    expect(extractDntrPaths(["daintree", "plugin.dntr/"], "/work")).toEqual([]);
     expect(extractDntrPaths(["daintree", "plugin.dntr/child/.."], "/work")).toEqual([]);
   });
 });

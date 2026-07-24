@@ -36,7 +36,7 @@ const TILDE_PREFIX = process.platform === "win32" ? /^~(?=[/\\]|$)/ : /^~(?=\/|$
 // the guard that stops one being mistaken for a project directory (#11410).
 // Bare argv tokens only — the value of `--cli-path=<path>` is unambiguous even
 // when the directory is itself named `--something`.
-function isSwitchToken(arg: string | undefined): arg is undefined | string {
+function isSwitchToken(arg: string | undefined): boolean {
   return !arg || arg.startsWith("--");
 }
 
@@ -170,9 +170,11 @@ export function extractDntrPaths(argv: string[], workingDirectory: string): stri
   for (const arg of argv) {
     if (isSwitchToken(arg)) continue;
     const decoded = decodeArgPath(arg);
-    // Match the literal filename: resolving first would collapse a trailing
-    // `.`/`..` and route `some.dntr/..` to an ancestor named `*.dntr`.
-    if (!decoded || !path.basename(decoded).toLowerCase().endsWith(".dntr")) continue;
+    // Match the literal token, before `path.resolve` normalizes it: resolving
+    // first would strip a trailing separator and collapse `.`/`..`, routing
+    // `some.dntr/` or `some.dntr/child/..` — which name a directory — to the
+    // archive-install pipeline.
+    if (!decoded || !decoded.toLowerCase().endsWith(".dntr")) continue;
     paths.push(path.resolve(workingDirectory, decoded));
   }
   return paths;
