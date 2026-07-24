@@ -147,7 +147,8 @@ export function registerForgeSettingsHandlers(): () => void {
           effectiveRemoteUrl = await resolveEffectiveRemoteUrl(
             gitService,
             project.path,
-            settings?.forgeRemote ?? settings?.githubRemote ?? null
+            settings?.forgeRemote ?? settings?.githubRemote ?? null,
+            forgeProviderOverride
           );
         }
 

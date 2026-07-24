@@ -169,8 +169,53 @@ describe("resolveForCwd", () => {
       gitServiceMock.listRemotes.mockResolvedValue([{ name: "origin", fetchUrl: FORK }]);
       resolvesToGitea();
 
-      await expect(resolveForCwd("/repo")).rejects.toThrow(/no longer exists/);
+      await expect(resolveForCwd("/repo")).rejects.toThrow(/isn't available/);
       expect(resolverMock.resolveForgeProvider).not.toHaveBeenCalled();
+    });
+
+    it("rejects rather than auto-detecting when the settings read fails", async () => {
+      // A registered project whose settings are unreadable may well have a
+      // forgeRemote — auto-detecting past it could point a mutation at origin.
+      projectStoreMock.getProjectSettings.mockRejectedValue(new Error("db locked"));
+      gitServiceMock.listRemotes.mockResolvedValue([{ name: "origin", fetchUrl: FORK }]);
+      resolvesToGitea();
+
+      await expect(resolveForCwd("/repo")).rejects.toThrow(/forge settings/);
+      expect(resolverMock.resolveForgeProvider).not.toHaveBeenCalled();
+    });
+
+    it("still auto-detects when the path is not a registered project", async () => {
+      // No project means there is no setting to honour, so this stays on the
+      // pre-fix behaviour rather than going dark.
+      projectStoreMock.getProjectByPath.mockResolvedValue(null);
+      gitServiceMock.listRemotes.mockResolvedValue([{ name: "origin", fetchUrl: CANONICAL }]);
+      resolvesToGitea();
+
+      await resolveForCwd("/repo");
+
+      expect(lastResolverInputs()?.remoteUrl).toBe(CANONICAL);
+    });
+
+    it("does not let hostname matching veto a remote when a provider override is set", async () => {
+      // The override bypasses hostname matching by design, so a self-hosted
+      // origin it exists to support must not be filtered out in favour of a
+      // sibling that happens to match some other provider's hostname.
+      projectStoreMock.getProjectSettings.mockResolvedValue({
+        runCommands: [],
+        forgeProviderOverride: "acme.gitea",
+      });
+      gitServiceMock.listRemotes.mockResolvedValue([
+        { name: "origin", fetchUrl: "https://self-hosted.internal/owner/repo.git" },
+        { name: "mirror", fetchUrl: CANONICAL },
+      ]);
+      registryMock.listMatchingProviders.mockImplementation((url: string) =>
+        url.includes("gitea.example.com") ? [{}] : []
+      );
+      resolvesToGitea();
+
+      await resolveForCwd("/repo");
+
+      expect(lastResolverInputs()?.remoteUrl).toBe("https://self-hosted.internal/owner/repo.git");
     });
 
     it("falls back to the origin lookup when listRemotes fails and nothing is configured", async () => {
@@ -332,12 +377,14 @@ describe("resolveForCwd", () => {
     expect(lastResolverInputs().forgeProviderOverride).toBeNull();
   });
 
-  it("passes a null override when the settings fetch rejects", async () => {
+  it("refuses to resolve at all when the settings fetch rejects", async () => {
+    // Was "passes a null override": treating an unreadable settings row as
+    // "no settings" also discards any `forgeRemote` it holds, which would let
+    // a mutation resolve against origin instead of the selected repo (#11408).
     projectStoreMock.getProjectSettings.mockRejectedValue(new Error("db locked"));
 
-    await resolveForCwd("/repo").catch(() => null);
-
-    expect(lastResolverInputs().forgeProviderOverride).toBeNull();
+    await expect(resolveForCwd("/repo")).rejects.toThrow(/forge settings/);
+    expect(resolverMock.resolveForgeProvider).not.toHaveBeenCalled();
   });
 
   it("passes a null override when project settings have no override set", async () => {

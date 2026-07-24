@@ -298,6 +298,24 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       expect(main.remoteFetchUrl).toBe("https://github.com/acme/app.git");
     });
 
+    it("coalesces a burst of matcher pushes into one git read", async () => {
+      // The relay fires on every registry change, so plugin init arrives as a
+      // burst — one `git remote -v` each would be pure waste.
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+
+      for (let i = 0; i < 4; i++) {
+        service.setForgeProviderMatchers([
+          { providerId: GITHUB_PROVIDER_ID, hostnames: ["github.com"] },
+        ]);
+      }
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(1);
+    });
+
     it("re-selects when the matcher table arrives after a cold start", async () => {
       // Cold start: no matchers yet, so name preference alone picks origin
       // even though no provider can read it. Once the GitHub matcher lands,
@@ -315,6 +333,7 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       service.setForgeProviderMatchers([
         { providerId: GITHUB_PROVIDER_ID, hostnames: ["github.com"] },
       ]);
+      await vi.advanceTimersByTimeAsync(300);
       await vi.advanceTimersByTimeAsync(0);
 
       expect(main.remoteFetchUrl).toBe("https://github.com/upstream/app.git");

@@ -109,7 +109,7 @@ export function CodeForgeTab({
         <label className="block text-sm font-medium text-daintree-text mb-1">Forge remote</label>
         <p className="text-xs text-daintree-text/60 mb-2">
           Select which git remote to use for forge integration (issues, PRs, and pulse data).
-          Auto-detect prefers a remote a forge provider recognises, favouring upstream over origin.
+          Auto-detect prefers origin, then any other remote a forge provider recognises.
         </p>
         {loading ? (
           <div className="text-sm text-daintree-text/60">Loading remotes...</div>

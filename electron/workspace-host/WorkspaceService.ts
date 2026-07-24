@@ -135,6 +135,10 @@ const HOST_REFRESH_TIMEOUT_MS = 45_000;
 // lock-then-rename (two events), so a short trailing debounce collapses the
 // burst into one `getRemotes()` spawn.
 const FORGE_REMOTE_REPROBE_DEBOUNCE_MS = 250;
+// Re-arm budget for a settings/matcher-driven reselect whose probe was
+// superseded or failed. Bounded because a deleted repo fails enumeration
+// forever and nothing else retries this path (`.git/config` never changed).
+const FORGE_RESELECT_MAX_RETRIES = 3;
 
 // Backstop cadence for the config fingerprint check when the git watcher is
 // disabled or has silently degraded. A stat, not a subprocess.
@@ -207,6 +211,8 @@ export class WorkspaceService {
   // worktree cards probe `origin` while the toolbar talks to `upstream`.
   private forgeRemoteName: string | null = null;
   private forgeReselectSeq = 0;
+  private forgeReselectTimer: NodeJS.Timeout | null = null;
+  private forgeReselectRetries = 0;
   private forgeRemoteProbeSeq = 0;
   private forgeRemoteReprobeTimer: NodeJS.Timeout | null = null;
   // Bumped whenever a `.git/config` write is OBSERVED. A baseline read that
@@ -1835,6 +1841,10 @@ export class WorkspaceService {
       clearInterval(this.forgeConfigPollTimer);
       this.forgeConfigPollTimer = null;
     }
+    if (this.forgeReselectTimer) {
+      clearTimeout(this.forgeReselectTimer);
+      this.forgeReselectTimer = null;
+    }
     if (this.forgeRemoteReprobeTimer) {
       clearTimeout(this.forgeRemoteReprobeTimer);
       this.forgeRemoteReprobeTimer = null;
@@ -1868,7 +1878,13 @@ export class WorkspaceService {
     // provider ends up supporting — re-matching that URL would leave the
     // affordance hidden forever while a sibling remote was usable all along.
     // Same story when enabling or disabling a provider plugin at runtime.
-    void this.reselectForgeRemote();
+    //
+    // Coalesced: the relay pushes on EVERY registry change, so plugin init
+    // arrives as a burst of calls that would otherwise be one `git remote -v`
+    // each. Mirrors the reprobe debounce, minus its config-fingerprint gate —
+    // nothing wrote `.git/config` here, only the matcher table moved.
+    this.forgeReselectRetries = 0;
+    this.scheduleForgeReselect();
   }
 
   private handleInotifyLimitReached(): void {
@@ -3398,7 +3414,10 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     // The remote table on disk is unchanged, so the signature-gated reprobe
     // would never fire — but the remote we *select* from it just moved, which
     // changes the matched provider for every monitor (#11408).
-    if (remoteSelectionChanged) void this.reselectForgeRemote();
+    if (remoteSelectionChanged) {
+      this.forgeReselectRetries = 0;
+      void this.reselectForgeRemote();
+    }
   }
 
   /**
@@ -3406,6 +3425,15 @@ ${lines.map((l) => "+" + l).join("\n")}`;
    * `reprobeForgeRemotes` this deliberately skips the `.git/config`
    * fingerprint and signature gates: neither moved, only the choice did.
    */
+  private scheduleForgeReselect(): void {
+    if (this._shutdownController.signal.aborted) return;
+    if (this.forgeReselectTimer) return;
+    this.forgeReselectTimer = setTimeout(() => {
+      this.forgeReselectTimer = null;
+      void this.reselectForgeRemote();
+    }, FORGE_REMOTE_REPROBE_DEBOUNCE_MS);
+  }
+
   private async reselectForgeRemote(): Promise<void> {
     const cwd = this.forgeProbeCwd();
     if (!cwd) return;
@@ -3424,8 +3452,26 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     // which bump the probe seq in `stopForgeRemoteDetection`.
     const probeSeq = this.forgeRemoteProbeSeq;
     const probed = await this.readForgeRemotes(cwd);
-    if (!probed || seq !== this.forgeReselectSeq) return;
-    if (probeSeq !== this.forgeRemoteProbeSeq) return;
+    // A newer reselect is already authoritative — drop this one outright.
+    if (seq !== this.forgeReselectSeq) return;
+    // The other two bail-outs are NOT terminal, so they re-arm the debounce
+    // instead of returning. A config probe that superseded us may itself have
+    // exited at its fingerprint gate without ever reading the remotes, and a
+    // failed enumeration leaves monitors pointing at the previously selected
+    // remote. Either way the new selection would otherwise never be applied,
+    // and nothing else would retry: `.git/config` did not change, so the
+    // fingerprint-gated backstop skips this repo entirely.
+    if (!probed || probeSeq !== this.forgeRemoteProbeSeq) {
+      // Bounded: a repo that was deleted under us fails enumeration forever,
+      // and an unbounded re-arm would spawn a git process every debounce tick
+      // for the life of the host.
+      if (this.forgeReselectRetries < FORGE_RESELECT_MAX_RETRIES) {
+        this.forgeReselectRetries++;
+        this.scheduleForgeReselect();
+      }
+      return;
+    }
+    this.forgeReselectRetries = 0;
     if (this._shutdownController.signal.aborted) return;
 
     const matchedProviderId = probed.fetchUrl

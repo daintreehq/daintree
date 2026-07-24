@@ -51,8 +51,10 @@ interface RemoteReader {
 /** Thrown when `forgeRemote` names a remote the repo no longer has. */
 export class StaleForgeRemoteError extends Error {
   constructor(readonly remoteName: string) {
+    // Deliberately not "no longer exists": the name may still be present but
+    // carry no fetch URL (a push-only remote), which is equally unusable.
     super(
-      `This project is set to use the "${remoteName}" remote, which no longer exists. Pick a different remote in Project settings.`
+      `This project is set to use the "${remoteName}" remote, which isn't available. Pick a different remote in Project settings.`
     );
     this.name = "StaleForgeRemoteError";
   }
@@ -80,7 +82,8 @@ export class StaleForgeRemoteError extends Error {
 export async function resolveEffectiveRemoteUrl(
   gitService: RemoteReader,
   cwd: string,
-  forgeRemote: string | null
+  forgeRemote: string | null,
+  forgeProviderOverride: string | null = null
 ): Promise<string | null> {
   const remotes = await gitService.listRemotes(cwd).catch(() => null);
 
@@ -92,7 +95,14 @@ export async function resolveEffectiveRemoteUrl(
   const { remote, missingConfiguredRemote } = resolveForgeRemote({
     remotes,
     forgeRemote,
-    isSupportedRemote: (url) => listMatchingProviders(url).length > 0,
+    // A per-project provider override deliberately bypasses hostname matching
+    // (`forgeProviderResolver` searches the whole registry for it), so the
+    // hostname registry must not get a veto over which remote we pick either.
+    // Filtering here would discard a self-hosted origin the override exists to
+    // support and hand the override's provider a sibling mirror instead.
+    isSupportedRemote: forgeProviderOverride
+      ? undefined
+      : (url) => listMatchingProviders(url).length > 0,
   });
   if (missingConfiguredRemote) throw new StaleForgeRemoteError(missingConfiguredRemote);
   return remote?.fetchUrl ?? null;
@@ -125,15 +135,27 @@ export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> 
     (await gitService.getRepositoryRoot(cwd).catch(() => null)) ??
     cwd;
   const project = await projectStore.getProjectByPath(mainWorktreePath).catch(() => null);
-  const settings = project
-    ? await projectStore.getProjectSettings(project.id).catch(() => null)
-    : null;
+  // A registered project whose settings we cannot read is NOT the same as an
+  // unregistered path: the former may well have a `forgeRemote` we are about to
+  // ignore, and auto-detecting past it would point a mutation at whichever repo
+  // origin happens to be. Only a genuinely absent project may auto-detect.
+  let settings = null;
+  if (project) {
+    try {
+      settings = await projectStore.getProjectSettings(project.id);
+    } catch (error) {
+      throw new Error(
+        `Couldn't read this project's forge settings, so the remote to use is unknown: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
   const forgeProviderOverride = settings?.forgeProviderOverride ?? null;
 
   const remoteUrl = await resolveEffectiveRemoteUrl(
     gitService,
     cwd,
-    settings?.forgeRemote ?? settings?.githubRemote ?? null
+    settings?.forgeRemote ?? settings?.githubRemote ?? null,
+    forgeProviderOverride
   );
   if (!remoteUrl) {
     throw new Error("No remote URL found for this repository");
