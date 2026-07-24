@@ -76,7 +76,7 @@ function deletedRow(id: string): DeletedWorktree {
     deletedAt: 1000,
     expiresAt: null,
     holdReason: null,
-    pinnedIndex: 0,
+    pinnedBeforeWorktreeId: null,
   };
 }
 

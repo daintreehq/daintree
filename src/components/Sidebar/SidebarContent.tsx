@@ -1246,9 +1246,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // grouped path interleaves sticky header sentinels with static rows; the
   // ungrouped path emits sortable rows so dnd-kit's SortableContext can
   // wrap the whole Virtuoso surface.
-  // Publish the visible order so a worktree deleted later can pin its row to
-  // the slot it currently occupies (#11232). Recorded from an effect rather
-  // than during render because it is a write to module state — reading it
+  // Publish the visible order so a worktree deleted later can anchor its row to
+  // the live successor it currently precedes (#11232). Recorded from an effect
+  // rather than during render because it is a write to module state — reading it
   // happens once, at deletion, well after this has settled.
   useEffect(() => {
     recordSidebarWorktreeOrder(filteredWorktrees.map((w) => w.id));
@@ -1259,10 +1259,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     const pinnedSet = new Set(pinnedWorktrees);
     let nextRowIndex = firstScrollableRowIndex;
 
-    // Deleted worktrees hold the slot their row occupied when it was deleted,
-    // so the terminals the user is looking for stay where they left them
-    // instead of jumping to an edge of the list (#11232). Ties and unknown
-    // positions fall back to deletion order for a stable render.
+    // Deleted worktrees anchor their row to the live neighbour it sat above
+    // when it was deleted, so the terminals the user is looking for stay where
+    // they left them instead of jumping to an edge of the list (#11232). Ties
+    // and gone anchors fall back to deletion order / trailing for a stable
+    // render. `dragStartOrder` is the live filtered id order (see line ~1060).
     const deletedList = Array.from(deletedWorktrees.values()).sort(
       (a, b) => a.deletedAt - b.deletedAt
     );
@@ -1271,7 +1272,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       groupSlot,
       byIndex: deletedByIndex,
       trailing: trailingDeleted,
-    } = planDeletedWorktreePlacement(deletedList, filteredWorktrees.length);
+    } = planDeletedWorktreePlacement(deletedList, dragStartOrder);
     const hasGroupSlot = groupSlot >= 0;
     const pushDeleted = (deleted: DeletedWorktree) => {
       items.push({

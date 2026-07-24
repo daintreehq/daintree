@@ -98,7 +98,7 @@ const worktree: DeletedWorktree = {
   deletedAt: 1000,
   expiresAt: null,
   holdReason: null,
-  pinnedIndex: 2,
+  pinnedBeforeWorktreeId: null,
 };
 
 const originalSelectWorktree = useWorktreeSelectionStore.getState().selectWorktree;

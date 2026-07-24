@@ -78,21 +78,25 @@ export interface DeletedWorktree {
    */
   holdReason: DeletedWorktreeHoldReason | null;
   /**
-   * Index the row occupied in the sidebar's scrollable list when it was
-   * deleted, so the row holds its slot instead of jumping to an edge.
-   *
-   * A deleted worktree cannot re-sort like a live worktree — the git status and activity
-   * timestamps its sort keys derive from froze at deletion — so the position
-   * is pinned once here rather than recomputed. `-1` means the row was not
-   * visible (filtered out, or deleted before the sidebar ever rendered it),
-   * in which case the row appends.
+   * Identity anchor for where the row renders: the id of the live worktree that
+   * sat immediately after this row in the last published sidebar order (its
+   * successor). The successor identity is captured once, at deletion; its
+   * current position is re-resolved every render, so the row renders just
+   * before that neighbour wherever it now sits — and follows it through a
+   * reorder — never trusting a raw index that a later, unrelated worktree could
+   * reclaim once the list empties and regrows past it (#11400). `null` when the
+   * row was last in the order (no successor) or was not visible at all (filtered
+   * out, or deleted before the sidebar rendered it). An anchor that no longer
+   * resolves trails the list — or, inside a deleted-worktree group, defers to
+   * whichever sibling's anchor still resolves.
    */
-  pinnedIndex: number;
+  pinnedBeforeWorktreeId: string | null;
 }
 
 /**
  * The sidebar's most recent visible worktree order, published by
- * `SidebarContent` so a deleted worktree can be pinned to the slot its row occupied.
+ * `SidebarContent` so a deleted worktree can anchor its row to the live
+ * neighbour it sat above.
  *
  * Deliberately a module-level value rather than store state: it changes on
  * every filter/sort keystroke and is read exactly once (at deletion), so
@@ -105,8 +109,16 @@ export function recordSidebarWorktreeOrder(ids: readonly string[]): void {
   lastSidebarWorktreeOrder = ids;
 }
 
-export function getPinnedDeletedWorktreeIndex(worktreeId: string): number {
-  return lastSidebarWorktreeOrder.indexOf(worktreeId);
+/**
+ * The id of the worktree that immediately followed `worktreeId` in the last
+ * published sidebar order — the anchor a deleted row renders before. `null`
+ * when `worktreeId` was last (no successor) or absent from the order; both
+ * trail. Anchoring to an id rather than an index is what stops a stale slot
+ * from being reclaimed after the list empties and regrows (#11400).
+ */
+export function getPinnedDeletedWorktreeAnchorId(worktreeId: string): string | null {
+  const index = lastSidebarWorktreeOrder.indexOf(worktreeId);
+  return index === -1 ? null : (lastSidebarWorktreeOrder[index + 1] ?? null);
 }
 
 /**

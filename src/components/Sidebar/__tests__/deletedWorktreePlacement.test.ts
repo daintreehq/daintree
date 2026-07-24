@@ -11,7 +11,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 import { planDeletedWorktreePlacement } from "../deletedWorktreePlacement";
 import type { DeletedWorktree } from "@/store/worktreeStore";
 
-function deleted(id: string, pinnedIndex: number): DeletedWorktree {
+function deleted(id: string, pinnedBeforeWorktreeId: string | null): DeletedWorktree {
   return {
     id,
     title: id,
@@ -19,79 +19,152 @@ function deleted(id: string, pinnedIndex: number): DeletedWorktree {
     deletedAt: 1000,
     expiresAt: null,
     holdReason: null,
-    pinnedIndex,
+    pinnedBeforeWorktreeId,
   };
 }
 
 describe("planDeletedWorktreePlacement", () => {
-  it("leaves a lone deleted row ungrouped", () => {
-    const plan = planDeletedWorktreePlacement([deleted("a", 1)], 5);
+  it("leaves a lone deleted row ungrouped at its resolved anchor slot", () => {
+    const plan = planDeletedWorktreePlacement([deleted("a", "b")], ["x", "b", "c"]);
 
     expect(plan.isGrouped).toBe(false);
     expect(plan.groupSlot).toBe(-1);
     expect(plan.byIndex.get(1)).toHaveLength(1);
   });
 
-  it("groups from the second deleted row on", () => {
-    const plan = planDeletedWorktreePlacement([deleted("a", 1), deleted("b", 3)], 5);
+  it("resolves an anchor that sits at index 0", () => {
+    // Slot 0 must be treated as a resolved slot, not a falsy miss.
+    const plan = planDeletedWorktreePlacement([deleted("a", "b")], ["b"]);
 
-    expect(plan.isGrouped).toBe(true);
+    expect(plan.byIndex.get(0)?.map((d) => d.id)).toEqual(["a"]);
+    expect(plan.trailing).toHaveLength(0);
   });
 
-  it("puts the group at the earliest slot any member held", () => {
+  it("groups from the second deleted row on", () => {
     const plan = planDeletedWorktreePlacement(
-      [deleted("a", 3), deleted("b", 1), deleted("c", 4)],
-      5
+      [deleted("a", "b"), deleted("b", "d")],
+      ["x", "b", "y", "d"]
     );
 
-    expect(plan.groupSlot).toBe(1);
+    expect(plan.isGrouped).toBe(true);
   });
 
-  it("trails the group when no member held a visible slot", () => {
-    const plan = planDeletedWorktreePlacement([deleted("a", -1), deleted("b", -1)], 5);
+  it("puts the group at the earliest slot any member's anchor resolves to", () => {
+    const plan = planDeletedWorktreePlacement(
+      [deleted("a", "d"), deleted("b", "b"), deleted("c", "e")],
+      ["b", "c", "d", "e"]
+    );
+
+    // anchors resolve to: d→2, b→0, e→3; earliest is 0.
+    expect(plan.groupSlot).toBe(0);
+  });
+
+  it("trails the group when no member's anchor is visible", () => {
+    const plan = planDeletedWorktreePlacement([deleted("a", null), deleted("b", null)], ["x", "y"]);
 
     expect(plan.isGrouped).toBe(true);
     expect(plan.groupSlot).toBe(-1);
     expect(plan.trailing).toHaveLength(2);
   });
 
-  it("never claims a slot past the end of the filtered list", () => {
-    // A pin recorded before a filter narrowed the list points past the end.
-    // Claiming it would strand the group at an index the render loop never
-    // reaches, dropping every deleted row — and its rescuable terminals —
-    // out of the sidebar entirely.
-    const plan = planDeletedWorktreePlacement([deleted("a", 9), deleted("b", 7)], 3);
+  it("trails a row whose anchor was filtered out even when the list is non-empty", () => {
+    // The anchor is a real id, just not currently in the visible order — so the
+    // row cannot claim a slot; it trails rather than reclaiming a coincidental
+    // index.
+    const plan = planDeletedWorktreePlacement([deleted("a", "gone")], ["x", "y", "z"]);
 
-    expect(plan.groupSlot).toBe(-1);
-    expect(plan.trailing).toHaveLength(2);
     expect(plan.byIndex.size).toBe(0);
+    expect(plan.trailing.map((d) => d.id)).toEqual(["a"]);
   });
 
-  it("still uses an in-range slot when only some pins went out of range", () => {
-    const plan = planDeletedWorktreePlacement([deleted("a", 9), deleted("b", 2)], 3);
+  it("keeps a mixed group at the resolved slot with the unresolved member trailing", () => {
+    const plan = planDeletedWorktreePlacement(
+      [deleted("a", "gone"), deleted("b", "c")],
+      ["x", "c", "y"]
+    );
 
-    expect(plan.groupSlot).toBe(2);
+    expect(plan.isGrouped).toBe(true);
+    expect(plan.groupSlot).toBe(1);
     expect(plan.trailing.map((d) => d.id)).toEqual(["a"]);
   });
 
   it("handles an empty list without inventing a group", () => {
-    const plan = planDeletedWorktreePlacement([], 3);
+    const plan = planDeletedWorktreePlacement([], ["x", "y", "z"]);
 
     expect(plan.isGrouped).toBe(false);
     expect(plan.groupSlot).toBe(-1);
     expect(plan.trailing).toHaveLength(0);
   });
 
-  it("trails everything when the filtered list is empty", () => {
-    const plan = planDeletedWorktreePlacement([deleted("a", 0), deleted("b", 1)], 0);
+  it("trails everything when the visible list is empty", () => {
+    const plan = planDeletedWorktreePlacement([deleted("a", "b"), deleted("b", "c")], []);
 
     expect(plan.groupSlot).toBe(-1);
     expect(plan.trailing).toHaveLength(2);
+    expect(plan.byIndex.size).toBe(0);
   });
 
-  it("keeps several rows sharing one slot together in deletion order", () => {
-    const plan = planDeletedWorktreePlacement([deleted("a", 2), deleted("b", 2)], 5);
+  it("keeps several rows sharing one anchor together in deletion order", () => {
+    const plan = planDeletedWorktreePlacement(
+      [deleted("a", "c"), deleted("b", "c")],
+      ["x", "c", "y"]
+    );
 
-    expect(plan.byIndex.get(2)?.map((d) => d.id)).toEqual(["a", "b"]);
+    expect(plan.byIndex.get(1)?.map((d) => d.id)).toEqual(["a", "b"]);
+  });
+
+  it("re-resolves an anchor once it returns to the visible order", () => {
+    const ghosts = [deleted("a", "b")];
+
+    // Filtered out: the anchor "b" is absent, so the row trails.
+    expect(planDeletedWorktreePlacement(ghosts, ["x", "y"]).trailing.map((d) => d.id)).toEqual([
+      "a",
+    ]);
+
+    // Filter cleared: "b" is visible again, so the row resolves before it once more.
+    const restored = planDeletedWorktreePlacement(ghosts, ["x", "b", "y"]);
+    expect(restored.trailing).toHaveLength(0);
+    expect(restored.byIndex.get(1)?.map((d) => d.id)).toEqual(["a"]);
+  });
+
+  it("follows its anchor when the live rows are reordered (identity, not fixed slot)", () => {
+    const ghosts = [deleted("a", "c")];
+
+    // Anchor "c" at index 1 → ghost sits at slot 1 (before "c").
+    expect(
+      planDeletedWorktreePlacement(ghosts, ["b", "c"])
+        .byIndex.get(1)
+        ?.map((d) => d.id)
+    ).toEqual(["a"]);
+
+    // User reorders live rows; the ghost tracks "c" to its new index 0.
+    const reordered = planDeletedWorktreePlacement(ghosts, ["c", "b"]);
+    expect(reordered.byIndex.get(0)?.map((d) => d.id)).toEqual(["a"]);
+    expect(reordered.byIndex.get(1)).toBeUndefined();
+  });
+
+  it("keeps a null-anchored ungrouped ghost behind a freshly created worktree (#11400)", () => {
+    // A single last-row deletion (no successor) must never jump ahead of a new
+    // worktree that later takes index 0.
+    const plan = planDeletedWorktreePlacement([deleted("old", null)], ["new"]);
+
+    expect(plan.byIndex.size).toBe(0);
+    expect(plan.trailing.map((d) => d.id)).toEqual(["old"]);
+  });
+
+  it("keeps a grouped deleted cohort behind a freshly created worktree (#11400)", () => {
+    // Bulk-delete all worktrees, then create one: the stale top-of-list pin used
+    // to reclaim slot 0 and bump the new worktree to second position. Anchored
+    // to now-gone ids, the whole cohort trails instead.
+    const ghosts = [deleted("old-a", "old-b"), deleted("old-b", null)];
+
+    // While the list is empty, the cohort trails.
+    expect(planDeletedWorktreePlacement(ghosts, []).groupSlot).toBe(-1);
+
+    // After a new, unrelated worktree is created it stays at index 0.
+    const afterCreate = planDeletedWorktreePlacement(ghosts, ["new"]);
+    expect(afterCreate.groupSlot).toBe(-1);
+    expect(afterCreate.byIndex.size).toBe(0);
+    expect(afterCreate.trailing.map((d) => d.id)).toEqual(["old-a", "old-b"]);
   });
 });

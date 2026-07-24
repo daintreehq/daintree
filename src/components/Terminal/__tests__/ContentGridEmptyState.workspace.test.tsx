@@ -420,7 +420,7 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
         deletedAt: 1000,
         expiresAt: null,
         holdReason: null,
-        pinnedIndex: -1,
+        pinnedBeforeWorktreeId: null,
       });
       useWorktreeSelectionStore.setState({ activeWorktreeId: "ghost-1" });
     });

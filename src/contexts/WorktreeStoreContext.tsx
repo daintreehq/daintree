@@ -11,7 +11,7 @@ import type { PluginWorktreeLinked } from "@shared/types/plugin";
 import {
   useWorktreeSelectionStore,
   getDeletedWorktreeTerminalIds,
-  getPinnedDeletedWorktreeIndex,
+  getPinnedDeletedWorktreeAnchorId,
 } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { startDeletedWorktreeCleanup } from "@/store/deletedWorktreeCleanup";
@@ -453,7 +453,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             // already spent and no window to rescue anything (#11259).
             expiresAt: null,
             holdReason: null,
-            pinnedIndex: getPinnedDeletedWorktreeIndex(event.worktreeId),
+            pinnedBeforeWorktreeId: getPinnedDeletedWorktreeAnchorId(event.worktreeId),
           });
         }
       })

@@ -343,7 +343,7 @@ describe("WorktreeStoreProvider — surviving terminals on worktree removal", ()
     expect(useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1")?.title).toBe("wt-1");
   });
 
-  it("pins the row to the slot it held in the sidebar", async () => {
+  it("anchors the row to the live neighbour it sat above in the sidebar", async () => {
     const { store } = await renderProvider();
     act(() => {
       store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
@@ -355,7 +355,9 @@ describe("WorktreeStoreProvider — surviving terminals on worktree removal", ()
       emit("worktree-removed", removeEvent("wt-1"));
     });
 
-    expect(useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1")?.pinnedIndex).toBe(1);
+    expect(
+      useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1")?.pinnedBeforeWorktreeId
+    ).toBe("wt-2");
   });
 
   it("creates no row when the worktree held no terminals", async () => {
