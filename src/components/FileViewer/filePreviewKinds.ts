@@ -6,7 +6,21 @@
  * meant opening an image in one worked and errored in the other.
  */
 
-const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
+// apng is listed alongside png because the extension — not the container — is
+// what routes a file here: an .apng is a valid PNG, but without its own entry it
+// falls through to the text path and reports "Binary file". Chromium decodes and
+// animates both apng and avif natively in an <img>.
+const IMAGE_EXTENSIONS = new Set([
+  "png",
+  "apng",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "avif",
+  "bmp",
+  "ico",
+]);
 const SVG_EXTENSION = "svg";
 
 // Containers Chromium's media pipeline demuxes natively (stock Electron ships

@@ -167,15 +167,19 @@ const DAINTREE_FILE_MAX_BYTES = 512 * 1024;
 // a normal screenshot or AI-generated PNG routinely runs to several MB. These
 // MIME types get a much larger ceiling (still bounded, and enforced against the
 // bytes actually read) so the inline file viewer can display them. The set
-// mirrors FileViewerModal's IMAGE_EXTENSIONS; SVG is deliberately excluded — the
+// mirrors filePreviewKinds' IMAGE_EXTENSIONS; SVG is deliberately excluded — the
 // viewer routes SVG through the sanitizing files:read path (its own 512 KB cap),
 // so serving multi-MB raw SVG here would be inconsistent and pointless.
 const DAINTREE_IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 const LARGE_IMAGE_MIME_TYPES = new Set([
   "image/png",
+  // Animated PNG frames are stored close to raw, so an APNG clears 512 KB far
+  // sooner than a still image of the same dimensions.
+  "image/apng",
   "image/jpeg",
   "image/gif",
   "image/webp",
+  "image/avif",
   "image/bmp",
   "image/x-icon",
 ]);
