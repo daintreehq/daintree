@@ -12,7 +12,7 @@ const SCRIPT_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), "d
 // `--cli-path=<path>` guarantee testable: asserting the script's source text
 // would only restate it, whereas a displaced or word-split value shows up here
 // as two argv entries instead of one (#11410).
-function runCli(target: string): { argv: string[]; root: string } {
+async function runCli(target: string): Promise<{ argv: string[]; root: string }> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-cli-sh-"));
   const argvFile = path.join(root, "argv");
   const binDir = path.join(root, "shim");
@@ -49,13 +49,17 @@ function runCli(target: string): { argv: string[]; root: string } {
     encoding: "utf-8",
   });
 
-  // The Linux branch backgrounds the launch and exits immediately.
+  // The Linux branch backgrounds the launch and exits immediately, and the
+  // recorder's `>` redirect creates the file before writing it — so wait for a
+  // trailing NUL rather than for the file to merely exist.
   const deadline = Date.now() + 5000;
-  while (!fs.existsSync(argvFile) && Date.now() < deadline) {
-    execFileSync("sleep", ["0.05"]);
+  let raw = "";
+  while (Date.now() < deadline) {
+    raw = fs.existsSync(argvFile) ? fs.readFileSync(argvFile, "utf-8") : "";
+    if (raw.endsWith("\0")) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
 
-  const raw = fs.readFileSync(argvFile, "utf-8");
   return { argv: raw.split("\0").filter((entry) => entry.length > 0), root };
 }
 
@@ -76,8 +80,8 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
     for (const dir of roots.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("passes the project directory as a single --cli-path= argument", () => {
-    const { argv, root } = runCli(projectDir);
+  it("passes the project directory as a single --cli-path= argument", async () => {
+    const { argv, root } = await runCli(projectDir);
     roots.push(root);
 
     // `pwd -P` in the script resolves symlinks (macOS /var -> /private/var).
@@ -85,8 +89,8 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
     expect(argv).toContain(`--cli-path=${expected}`);
   });
 
-  it("never emits the flag and the path as two separate arguments", () => {
-    const { argv, root } = runCli(projectDir);
+  it("never emits the flag and the path as two separate arguments", async () => {
+    const { argv, root } = await runCli(projectDir);
     roots.push(root);
 
     // The #11410 failure mode: a bare `--cli-path` switch whose value is a
@@ -95,8 +99,8 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
     expect(argv.filter((entry) => entry.startsWith("--cli-path"))).toHaveLength(1);
   });
 
-  it("keeps a path containing spaces in one argument", () => {
-    const { argv, root } = runCli(projectDir);
+  it("keeps a path containing spaces in one argument", async () => {
+    const { argv, root } = await runCli(projectDir);
     roots.push(root);
 
     const cliArg = argv.find((entry) => entry.startsWith("--cli-path="));
