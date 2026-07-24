@@ -197,6 +197,22 @@ describe("ProjectStore.addProject open failures", () => {
     expect(await codeOf(() => store.addProject(doomed))).toBe("NOT_FOUND");
   });
 
+  it("re-checks the path before adopting it as a lightweight workspace", async () => {
+    // The re-check has to run before lightweight adoption, not after: git reports
+    // "not a git repository" either way, so without it a path that became a file
+    // mid-operation would be adopted as a workspace instead of refused.
+    const swapped = fs.mkdtempSync(path.join(tmpRoot, "swapped-"));
+    gitBehavior.getRepositoryRoot.mockImplementation(async () => {
+      fs.rmSync(swapped, { recursive: true, force: true });
+      fs.writeFileSync(swapped, "now a file");
+      throw new Error("fatal: not a git repository");
+    });
+
+    expect(await codeOf(() => store.addProject(swapped, { gitBacked: false }))).toBe(
+      "NOT_A_DIRECTORY"
+    );
+  });
+
   it("never lets the reported internal text into the thrown message", async () => {
     gitBehavior.getRepositoryRoot.mockRejectedValue(new Error(REPORTED_RAW_TEXT));
 

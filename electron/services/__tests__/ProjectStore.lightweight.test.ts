@@ -232,13 +232,23 @@ describe("opening a folder without git (#11405)", () => {
     expect(demoted.gitBacked).toBe(false);
   });
 
-  it("refuses a path that is not a directory", async () => {
+  it("refuses a file even when lightweight adoption is explicitly requested", async () => {
     const file = path.join(tmpRoot, "note.txt");
     await fs.promises.writeFile(file, "hi");
 
+    // gitBacked:false means "adopt this if it's a non-repository folder", not
+    // "accept any path" — so a file is still refused as a file. Reporting
+    // NOT_A_GIT_REPO here would offer "Open without git" for something that can
+    // never be a workspace, and on this explicit path would reopen the very
+    // dialog the caller just answered.
     await expect(store.addProject(file, { gitBacked: false })).rejects.toMatchObject({
-      code: "NOT_A_GIT_REPO",
+      code: "NOT_A_DIRECTORY",
     });
+
+    const { count } = sqlite
+      .prepare("SELECT COUNT(*) AS count FROM projects WHERE path = ?")
+      .get(file) as { count: number };
+    expect(count).toBe(0);
   });
 
   it("does not consult git when reopening a known lightweight folder", async () => {
