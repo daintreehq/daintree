@@ -7,7 +7,12 @@ import { FolderGit2 } from "@/components/icons";
 import { projectClient } from "@/clients";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { GitInitOptions, GitInitProgressEvent } from "@shared/types/ipc/gitInit";
+import {
+  GITIGNORE_TEMPLATE_OPTIONS,
+  DEFAULT_GITIGNORE_TEMPLATE_ID,
+  isGitignoreTemplateId,
+} from "@shared/config/gitignoreTemplates";
+import type { GitInitProgressEvent } from "@shared/types/ipc/gitInit";
 
 interface GitInitDialogProps {
   isOpen: boolean;
@@ -18,17 +23,8 @@ interface GitInitDialogProps {
 
 const AUTO_CLOSE_DELAY_MS = 2000;
 
-type GitignoreTemplate = NonNullable<GitInitOptions["gitignoreTemplate"]>;
-
-const TEMPLATE_OPTIONS: Array<{ value: GitignoreTemplate; label: string; description: string }> = [
-  { value: "node", label: "Node", description: "node_modules, build outputs, .env" },
-  { value: "python", label: "Python", description: "__pycache__, venv, .env" },
-  { value: "minimal", label: "Minimal", description: "OS files, IDE files, .env" },
-  { value: "none", label: "None", description: "Don't create a .gitignore" },
-];
-
 export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: GitInitDialogProps) {
-  const [gitignoreTemplate, setGitignoreTemplate] = useState<GitignoreTemplate>("node");
+  const [gitignoreTemplate, setGitignoreTemplate] = useState(DEFAULT_GITIGNORE_TEMPLATE_ID);
   const [createInitialCommit, setCreateInitialCommit] = useState(true);
   const [initialCommitMessage, setInitialCommitMessage] = useState("Initial commit");
   const [progressEvents, setProgressEvents] = useState<GitInitProgressEvent[]>([]);
@@ -51,7 +47,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
 
   useEffect(() => {
     if (!isOpen) {
-      setGitignoreTemplate("node");
+      setGitignoreTemplate(DEFAULT_GITIGNORE_TEMPLATE_ID);
       setCreateInitialCommit(true);
       setInitialCommitMessage("Initial commit");
       setProgressEvents([]);
@@ -191,11 +187,13 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
           <select
             id="git-init-template"
             value={gitignoreTemplate}
-            onChange={(e) => setGitignoreTemplate(e.target.value as GitignoreTemplate)}
+            onChange={(e) => {
+              if (isGitignoreTemplateId(e.target.value)) setGitignoreTemplate(e.target.value);
+            }}
             disabled={configDisabled}
             className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
           >
-            {TEMPLATE_OPTIONS.map((opt) => (
+            {GITIGNORE_TEMPLATE_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label} — {opt.description}
               </option>

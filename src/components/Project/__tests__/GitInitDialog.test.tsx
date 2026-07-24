@@ -5,6 +5,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import type { GitInitProgressEvent } from "@shared/types/ipc/gitInit";
+import {
+  GITIGNORE_TEMPLATE_OPTIONS,
+  DEFAULT_GITIGNORE_TEMPLATE_ID,
+} from "@shared/config/gitignoreTemplates";
 
 const { initGitGuidedMock, onInitGitProgressMock } = vi.hoisted(() => ({
   initGitGuidedMock: vi.fn(),
@@ -120,11 +124,21 @@ describe("GitInitDialog", () => {
           directoryPath: "/tmp/new-repo",
           createInitialCommit: true,
           createGitignore: true,
-          gitignoreTemplate: "node",
+          gitignoreTemplate: DEFAULT_GITIGNORE_TEMPLATE_ID,
           initialCommitMessage: "feat: init",
         })
       );
     });
+  });
+
+  it("offers every registry template in order and preselects the default", () => {
+    renderDialog();
+
+    const select = screen.getByLabelText(/gitignore template/i) as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(
+      GITIGNORE_TEMPLATE_OPTIONS.map((option) => option.value)
+    );
+    expect(select.value).toBe(DEFAULT_GITIGNORE_TEMPLATE_ID);
   });
 
   it("pre-fills the commit message and submits the default without editing", async () => {
@@ -158,7 +172,7 @@ describe("GitInitDialog", () => {
     expect(initGitGuidedMock).not.toHaveBeenCalled();
   });
 
-  it("resets the commit message to the default when reopened", () => {
+  it("resets the commit message and template to the defaults when reopened", () => {
     const onSuccess = vi.fn();
     const onCancel = vi.fn();
     const dialogProps = {
@@ -171,12 +185,17 @@ describe("GitInitDialog", () => {
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
       target: { value: "feat: custom" },
     });
+    fireEvent.change(screen.getByLabelText(/gitignore template/i), {
+      target: { value: "python" },
+    });
 
     rerender(<GitInitDialog isOpen={false} {...dialogProps} />);
     rerender(<GitInitDialog isOpen={true} {...dialogProps} />);
 
     const input = screen.getByLabelText(/initial commit message/i) as HTMLInputElement;
     expect(input.value).toBe("Initial commit");
+    const select = screen.getByLabelText(/gitignore template/i) as HTMLSelectElement;
+    expect(select.value).toBe(DEFAULT_GITIGNORE_TEMPLATE_ID);
   });
 
   it("clears the missing-status warning when a late success event arrives", async () => {
