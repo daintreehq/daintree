@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { render, act, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // FileBrowserViewer is the read-only preview beside the tree. #11319 adds a
 // Source/Rendered toggle for markdown, mirroring FilePane. Mock the heavy leaf
@@ -248,15 +248,34 @@ describe("FileBrowserViewer tree-sidebar toggle (#11328)", () => {
 });
 
 describe("FileBrowserViewer video preview (#11382)", () => {
+  // FileVideoPreview fetch()es the bytes and plays a blob object URL —
+  // Chromium's custom-scheme media loader can't do follow-up range requests
+  // (electron#51442) — so the suite stubs the fetch/object-URL boundary.
+  const videoFetchMock = vi.fn();
+  beforeEach(() => {
+    videoFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      blob: () => Promise.resolve(new Blob(["x"])),
+    });
+    vi.stubGlobal("fetch", videoFetchMock);
+    URL.createObjectURL = vi.fn(() => "blob:app://daintree/video-preview");
+    URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    videoFetchMock.mockReset();
+  });
+
   it("renders a <video> for a playable container without reading the file as text", async () => {
     const { container } = renderViewer("/repo/media/demo.webm");
-    await act(async () => {});
 
-    const video = container.querySelector("video");
-    expect(video).not.toBeNull();
-    expect(video?.getAttribute("src")).toContain("daintree-file://");
-    // The bytes stream through the protocol handler; the text-read IPC path
-    // (whose 500 KB cap produced the misleading error) must never run.
+    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+    // The bytes come from the protocol handler via fetch; the text-read IPC
+    // path (whose 500 KB cap produced the misleading error) must never run.
+    expect(String(videoFetchMock.mock.calls[0]?.[0])).toContain("daintree-file://");
+    expect(container.querySelector("video")?.getAttribute("src")).toMatch(/^blob:/);
     expect(readMock).not.toHaveBeenCalled();
   });
 

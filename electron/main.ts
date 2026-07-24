@@ -124,10 +124,18 @@ protocol.registerSchemesAsPrivileged([
     },
   },
   {
+    // corsEnabled lets the trusted renderer fetch() video bytes for blob-URL
+    // playback (Chromium's custom-scheme media loader can't consume follow-up
+    // range requests — electron#51442). It only makes the scheme *eligible*
+    // for cross-origin fetch: reads still require the handler to echo
+    // Access-Control-Allow-Origin, which it does solely for trusted app
+    // origins (see daintreeFileCorsOrigin in setup/protocols.ts), so browser
+    // panels hosting remote sites gain no access.
     scheme: "daintree-file",
     privileges: {
       secure: true,
       supportFetchAPI: true,
+      corsEnabled: true,
     },
   },
   {

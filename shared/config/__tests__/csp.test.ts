@@ -125,10 +125,13 @@ describe("Daintree app CSP", () => {
   });
 
   describe("daintree-file: scheme in media-src (#11382)", () => {
-    // The file viewer plays videos via <video src="daintree-file://…">, Range-
-    // streamed by the protocol handler. media-src is the directive that governs
-    // that load; without the scheme the element is silently blocked with only a
-    // devtools warning — every protocol/MIME fix upstream still fails.
+    // The file viewer fetch()es video bytes from daintree-file:// and plays
+    // them through a blob object URL (Chromium's custom-scheme media loader
+    // can't consume follow-up range requests — electron#51442), so media-src
+    // must allow blob:. daintree-file: stays for consumers that stream media
+    // from the scheme without the blob detour. Without either entry the
+    // element is silently blocked with only a devtools warning — every
+    // protocol/MIME fix upstream still fails.
     it("allows daintree-file: in media-src in production", () => {
       const mediaSrc = getDaintreeAppProdCSP().match(/media-src ([^;]*);/)?.[1];
       expect(mediaSrc).toContain("daintree-file:");
@@ -137,6 +140,16 @@ describe("Daintree app CSP", () => {
     it("allows daintree-file: in media-src in development", () => {
       const mediaSrc = getDaintreeAppDevCSP().match(/media-src ([^;]*);/)?.[1];
       expect(mediaSrc).toContain("daintree-file:");
+    });
+
+    it("allows blob: in media-src in production", () => {
+      const mediaSrc = getDaintreeAppProdCSP().match(/media-src ([^;]*);/)?.[1];
+      expect(mediaSrc).toContain("blob:");
+    });
+
+    it("allows blob: in media-src in development", () => {
+      const mediaSrc = getDaintreeAppDevCSP().match(/media-src ([^;]*);/)?.[1];
+      expect(mediaSrc).toContain("blob:");
     });
   });
 

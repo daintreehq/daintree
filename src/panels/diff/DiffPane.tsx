@@ -21,6 +21,7 @@ import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { DiffFileSidebar } from "@/components/FileViewer/DiffFileSidebar";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
+import type { VideoPreviewError } from "@/components/FileViewer/FileVideoPreview";
 import { isVideoFilePath } from "@/components/FileViewer/filePreviewKinds";
 import { ImageDiffViewer, isImageDiffCandidate } from "@/components/FileViewer/ImageDiffViewer";
 import { DiffViewer, FULL_FILE_MAX_LINES } from "@/components/Worktree/DiffViewer";
@@ -60,6 +61,13 @@ const FULL_FILE_FALLBACK_MESSAGES: Record<FullFileUnavailableReason, string> = {
   "source-mismatch": "The file changed after this diff loaded, so only changed lines are shown",
   "too-large": `Files over ${FULL_FILE_MAX_LINES.toLocaleString()} lines stay on changed lines to keep the diff responsive`,
   unsupported: "The whole file can't be shown for this diff",
+};
+
+// Used when the preview reports a failure it can't name — a decode error gives
+// the media element no detail beyond "this didn't play".
+const GENERIC_VIDEO_ERROR: VideoPreviewError = {
+  title: "This video couldn't be played",
+  description: "The container is supported but the codec may not be — Refresh to try again.",
 };
 
 // Mirrors the ladder the modal used, so the preference keeps meaning the same
@@ -266,12 +274,13 @@ export function DiffPane({
   const [videoReloadNonce, setVideoReloadNonce] = useState(0);
   // An allowlisted container can still hold a codec Chromium lacks, or the
   // file may be unreadable — surface that instead of a dead native control.
-  const [videoPlaybackFailed, setVideoPlaybackFailed] = useState(false);
+  // Holds the preview's specific reason (e.g. too large) when it gives one.
+  const [videoPlaybackError, setVideoPlaybackError] = useState<VideoPreviewError | null>(null);
   useEffect(() => {
     // Any change to the playback attempt's identity — file, resolved root, or
     // an explicit refresh — gets a fresh attempt. absolutePath covers a
     // worktree move that filePath (relative) alone would miss.
-    setVideoPlaybackFailed(false);
+    setVideoPlaybackError(null);
   }, [filePath, absolutePath, worktreePath, videoReloadNonce]);
 
   const [pathCopied, setPathCopied] = useState(false);
@@ -743,13 +752,13 @@ export function DiffPane({
                     description="This video was deleted, and the diff view can only play the current file."
                   />
                 </div>
-              ) : videoPlaybackFailed ? (
+              ) : videoPlaybackError !== null ? (
                 <div className="flex h-full w-full items-center justify-center p-6">
                   <EmptyState
                     variant="zero-data"
                     scale="canvas"
-                    title="This video couldn't be played"
-                    description="The container is supported but the codec may not be — Refresh to try again."
+                    title={videoPlaybackError.title}
+                    description={videoPlaybackError.description}
                   />
                 </div>
               ) : (
@@ -758,7 +767,7 @@ export function DiffPane({
                   rootPath={worktreePath}
                   label={fileName ?? filePath}
                   reloadKey={videoReloadNonce}
-                  onError={() => setVideoPlaybackFailed(true)}
+                  onError={(error) => setVideoPlaybackError(error ?? GENERIC_VIDEO_ERROR)}
                   maxHeightClassName="max-h-full"
                 />
               ))}

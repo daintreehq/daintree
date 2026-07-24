@@ -936,11 +936,11 @@ export function FilePane({
             rootPath={effectiveRootPath}
             label={fileName ?? filePath}
             reloadKey={reloadNonce}
-            onError={() => {
+            onError={(error) => {
               // An allowlisted container can still hold a codec Chromium lacks;
               // name that instead of implying the file is missing.
-              setErrorCode("BINARY_FILE");
-              setErrorMessage("This video couldn't be played");
+              setErrorCode(error?.code ?? "BINARY_FILE");
+              setErrorMessage(error?.title ?? "This video couldn't be played");
               setLoadState("error");
             }}
             maxHeightClassName="max-h-full"
