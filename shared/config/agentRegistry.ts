@@ -454,6 +454,20 @@ export interface AgentConfig {
     /** CLI flag to disable alt-screen and use inline rendering (e.g., "--no-alt-screen") */
     inlineModeFlag?: string;
     /**
+     * CLI flag that forces the full-screen alternate buffer (e.g. "--fullscreen"),
+     * the opposite polarity of {@link inlineModeFlag}. Declare it for a CLI that
+     * picks inline on its own — via its own config file or terminal
+     * auto-detection — so choosing "Alt screen" is more than the absence of the
+     * inline flag (#11423). Omit it when the CLI already defaults to alt-screen;
+     * dropping `inlineModeFlag` is then enough.
+     *
+     * Both are single tokens and mutually exclusive: exactly one is injected per
+     * launch, and the launch path strips the other. Never pair this with
+     * `blockAltScreen: true` — forcing a full-screen TUI while the terminal
+     * strips its alt-screen escape sequences leaves the agent unusable.
+     */
+    altScreenFlag?: string;
+    /**
      * Default inline-mode state when the user hasn't chosen one. Agents with an
      * `inlineModeFlag` otherwise default to inline (`true`); set this to `false`
      * for a full-screen TUI that renders better on the alternate screen (clean

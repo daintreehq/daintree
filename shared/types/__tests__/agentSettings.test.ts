@@ -1093,6 +1093,143 @@ describe("reconcileInlineModeFlag (resume trap, #10876)", () => {
   });
 });
 
+describe("paired screen-mode polarities (#11423)", () => {
+  // Sentinel tokens, not the real `--no-alt-screen`/`--fullscreen`: these cases
+  // pin the selection *mechanism* across the capability matrix, so they stay
+  // green if a shipped agent's flag spelling ever changes.
+  const INLINE = "--sentinel-inline";
+  const ALT = "--sentinel-alt";
+
+  const agent = (id: string, capabilities: AgentConfig["capabilities"]): AgentConfig => ({
+    id,
+    name: id,
+    command: id,
+    color: "#ffffff",
+    iconId: "custom",
+    supportsContextInjection: false,
+    capabilities,
+  });
+
+  beforeEach(() =>
+    setUserRegistry({
+      "inline-only": agent("inline-only", { inlineModeFlag: INLINE }),
+      "alt-only": agent("alt-only", { altScreenFlag: ALT }),
+      "both-modes": agent("both-modes", { inlineModeFlag: INLINE, altScreenFlag: ALT }),
+      "neither-mode": agent("neither-mode", { scrollback: 1000 }),
+    })
+  );
+  afterEach(() => setUserRegistry({}));
+
+  it("selects at most one token per direction across the capability matrix", () => {
+    // The gap #11423 closes: an agent declaring only `inlineModeFlag` still has
+    // NO way to force alt-screen (undefined row), which is why grok needed the
+    // opposite polarity added rather than a change to the resolver.
+    const cases: Array<[string, boolean, string | undefined]> = [
+      ["inline-only", true, INLINE],
+      ["inline-only", false, undefined],
+      ["alt-only", true, undefined],
+      ["alt-only", false, ALT],
+      ["both-modes", true, INLINE],
+      ["both-modes", false, ALT],
+      ["neither-mode", true, undefined],
+      ["neither-mode", false, undefined],
+    ];
+    for (const [agentId, effectiveInline, expected] of cases) {
+      const flags = buildAgentLaunchFlags({ inlineMode: effectiveInline ? "on" : "off" }, agentId);
+      const screenTokens = flags.filter((f) => f === INLINE || f === ALT);
+      expect(screenTokens).toEqual(expected ? [expected] : []);
+    }
+  });
+
+  it("never lets both polarities coexist after reconciliation", () => {
+    for (const effectiveInline of [true, false]) {
+      const reconciled = reconcileInlineModeFlag([INLINE, "--model", ALT], "both-modes", effectiveInline);
+      expect(reconciled).toEqual([effectiveInline ? INLINE : ALT, "--model"]);
+    }
+  });
+
+  it("flips a stale token in place rather than relocating it", () => {
+    // Position stability keeps an already-persisted snapshot's ordering intact
+    // so a flip rewrites one slot instead of churning the whole array.
+    expect(reconcileInlineModeFlag(["--a", INLINE, "--b"], "both-modes", false)).toEqual([
+      "--a",
+      ALT,
+      "--b",
+    ]);
+    expect(reconcileInlineModeFlag(["--a", ALT, "--b"], "both-modes", true)).toEqual([
+      "--a",
+      INLINE,
+      "--b",
+    ]);
+  });
+
+  it("upgrades a pre-#11423 snapshot that carried no screen-mode token", () => {
+    // The migration path: snapshots captured before `altScreenFlag` existed hold
+    // only the absence of the inline flag, which used to mean "alt screen" but
+    // actually left the CLI on its own default.
+    const legacy = ["--model", "grok-build"];
+    const upgraded = reconcileInlineModeFlag(legacy, "both-modes", false);
+    expect(upgraded).toEqual(["--model", "grok-build", ALT]);
+    // Reconciling the upgraded snapshot again must be a no-op.
+    expect(reconcileInlineModeFlag(upgraded, "both-modes", false)).toEqual(upgraded);
+  });
+
+  it("dedupes repeated managed tokens down to the wanted one", () => {
+    expect(
+      reconcileInlineModeFlag([INLINE, "--keep", INLINE, ALT], "both-modes", true)
+    ).toEqual([INLINE, "--keep"]);
+  });
+
+  it("strips the only declared token when the other direction has none", () => {
+    // An inline-only agent asked for alt-screen loses its inline flag and gains
+    // nothing — it falls back to the CLI's own default, unchanged from #10876.
+    expect(reconcileInlineModeFlag(["--a", INLINE], "inline-only", false)).toEqual(["--a"]);
+    expect(reconcileInlineModeFlag(["--a", ALT], "alt-only", true)).toEqual(["--a"]);
+  });
+
+  it("leaves an agent declaring neither polarity untouched", () => {
+    const flags = ["--a", INLINE, ALT];
+    expect(reconcileInlineModeFlag(flags, "neither-mode", true)).toEqual(flags);
+    expect(reconcileInlineModeFlag(flags, "neither-mode", false)).toEqual(flags);
+  });
+});
+
+describe("screen-mode reconciliation composed with bypass reconciliation (#11423)", () => {
+  // All three relaunch chokepoints (agentResume, panelRegistry/restart,
+  // stateHydration/statePatcher) compose the two reconcilers in this exact
+  // order. They own disjoint tokens, so neither may disturb the other's — this
+  // is the interaction the composition would hide if it regressed.
+  const reconcileBoth = (
+    flags: readonly string[],
+    agentId: string,
+    effectiveBypass: boolean,
+    effectiveInline: boolean
+  ) => reconcileInlineModeFlag(reconcileBypassFlags(flags, agentId, effectiveBypass), agentId, effectiveInline);
+
+  it("flips the screen-mode token while the bypass reconciler flips its own", () => {
+    // Grok carries both polarities; codex's bypass token is independent.
+    const withInline = reconcileBoth(["--no-alt-screen"], "grok", true, false);
+    expect(withInline).toContain("--fullscreen");
+    expect(withInline).not.toContain("--no-alt-screen");
+
+    // Flipping back leaves exactly one screen token and preserves the bypass
+    // decision the first reconciler made.
+    const backToInline = reconcileBoth(withInline, "grok", true, true);
+    expect(backToInline.filter((f) => f === "--no-alt-screen" || f === "--fullscreen")).toEqual([
+      "--no-alt-screen",
+    ]);
+    expect(backToInline.filter((f) => f.startsWith("--dangerously"))).toEqual(
+      withInline.filter((f) => f.startsWith("--dangerously"))
+    );
+  });
+
+  it("is idempotent under repeated composed reconciliation", () => {
+    const once = reconcileBoth(["--model", "grok-build"], "grok", false, false);
+    expect(once).toEqual(reconcileBoth(once, "grok", false, false));
+    expect(once).toContain("--fullscreen");
+  });
+});
+
 describe("global alt-screen threading through command generation (#10876)", () => {
   it("drops --no-alt-screen for an inherit agent when globalUseAltScreen is on", () => {
     // Codex inherits (no explicit choice, no registry default) → follows global.
@@ -1112,13 +1249,43 @@ describe("global alt-screen threading through command generation (#10876)", () =
 
   it("makes grok follow the global switch now that it has no curated default", () => {
     // Grok no longer pins a curated default, so it threads the global switch
-    // like any other inherit agent: inline when off, alt-screen when on.
-    expect(buildAgentLaunchFlags({}, "grok", { globalUseAltScreen: false })).toContain(
-      "--no-alt-screen"
-    );
-    expect(buildAgentLaunchFlags({}, "grok", { globalUseAltScreen: true })).not.toContain(
-      "--no-alt-screen"
-    );
+    // like any other inherit agent: inline when off, alt-screen when on. Grok
+    // declares BOTH polarities (#11423), so each direction is asserted
+    // positively — "alt screen" must inject the force-fullscreen token, not
+    // merely omit the inline one, or the setting is a no-op against grok's own
+    // config/auto-detected default.
+    const inline = buildAgentLaunchFlags({}, "grok", { globalUseAltScreen: false });
+    expect(inline).toContain("--no-alt-screen");
+    expect(inline).not.toContain("--fullscreen");
+
+    const altScreen = buildAgentLaunchFlags({}, "grok", { globalUseAltScreen: true });
+    expect(altScreen).toContain("--fullscreen");
+    expect(altScreen).not.toContain("--no-alt-screen");
+  });
+
+  it("threads both grok polarities through the generated command too", () => {
+    // generateAgentCommand and buildAgentLaunchFlags are dual representations
+    // (#9654) — a fix applied to only one silently drops the flag on restart.
+    const inline = generateAgentCommand("grok", {}, "grok", { globalUseAltScreen: false });
+    expect(inline).toContain("--no-alt-screen");
+    expect(inline).not.toContain("--fullscreen");
+
+    const altScreen = generateAgentCommand("grok", {}, "grok", { globalUseAltScreen: true });
+    expect(altScreen).toContain("--fullscreen");
+    expect(altScreen).not.toContain("--no-alt-screen");
+  });
+
+  it("omits both screen-mode polarities for a headless one-shot", () => {
+    // Screen mode configures the interactive TUI only, so neither token may
+    // reach a non-interactive invocation in either direction.
+    for (const globalUseAltScreen of [true, false]) {
+      const command = generateAgentCommand("grok", {}, "grok", {
+        globalUseAltScreen,
+        interactive: false,
+      });
+      expect(command).not.toContain("--fullscreen");
+      expect(command).not.toContain("--no-alt-screen");
+    }
   });
 
   it("lets an explicit per-agent choice veto the global switch", () => {

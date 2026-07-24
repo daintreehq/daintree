@@ -80,14 +80,26 @@ export const config: AgentConfig = {
   capabilities: {
     scrollback: 10000,
     resizeStrategy: "default",
-    // Rust TUI that would otherwise take over the alternate screen. We default
-    // it inline (`--no-alt-screen`, grok's scrollback-native mode) so output
-    // flows into Daintree's own WebGL scrollback and stays selectable with our
-    // native text-selection layer instead of grok's mouse-grabbing full-screen
-    // TUI. No `defaultInlineMode` override: inline follows the global
-    // "Use alt-screen mode by default" switch (off ⇒ inline), so users can still
-    // flip back to alt-screen globally or per-agent.
+    // Rust TUI that would otherwise take over the alternate screen. Default it
+    // inline (`--no-alt-screen`) so output flows into Daintree's own WebGL
+    // scrollback and stays selectable with the native text-selection layer
+    // instead of grok's mouse-grabbing full-screen TUI. No `defaultInlineMode`
+    // override: inline follows the global "Use alt-screen mode by default"
+    // switch (off ⇒ inline), so users can still flip back globally or per-agent.
+    //
+    // `--no-alt-screen` controls the alternate buffer only — it is a separate
+    // axis from `--minimal`, which trims the chrome. Both polarities need an
+    // explicit flag here because grok picks inline on its own whenever
+    // `~/.grok/config.toml` sets `screen_mode` or terminal auto-detection says
+    // so, which made "Alt screen" a no-op when it merely omitted the inline flag
+    // (#11423). `--fullscreen` is session-scoped, so it overrides that config
+    // and the auto-detection without Daintree ever touching user-owned files.
+    //
+    // Provisional — `--fullscreen` is verified against grok 0.2.111 (issue
+    // author, first-hand); older builds may not accept it. Only users who
+    // actively pick "Alt screen" are exposed, since the default stays inline.
     inlineModeFlag: "--no-alt-screen",
+    altScreenFlag: "--fullscreen",
     supportsBracketedPaste: true,
     // Rust TUI reads the PTY buffer atomically, so the quit-command body and
     // Enter must be sent as separate writes (same rationale as Codex).

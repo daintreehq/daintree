@@ -1003,6 +1003,48 @@ describe("blockAltScreen capabilities", () => {
   });
 });
 
+describe("screen-mode flag capabilities (#11423)", () => {
+  const screenModeAgents = getAgentIds()
+    .map((id) => ({ id, capabilities: getAgentConfig(id)?.capabilities }))
+    .filter((a) => a.capabilities?.inlineModeFlag ?? a.capabilities?.altScreenFlag);
+
+  it("declares every screen-mode flag as a single non-empty token", () => {
+    // The launch path matches these by whole-token equality, so a value with
+    // whitespace could never be stripped and would leak into every snapshot.
+    expect(screenModeAgents.length).toBeGreaterThan(0);
+    for (const { id, capabilities } of screenModeAgents) {
+      for (const flag of [capabilities?.inlineModeFlag, capabilities?.altScreenFlag]) {
+        if (flag === undefined) continue;
+        expect(`${id}:${flag}`).toBe(`${id}:${flag.trim()}`);
+        expect(flag.length, `${id} declares an empty screen-mode flag`).toBeGreaterThan(0);
+        expect(flag, `${id} declares a multi-token screen-mode flag`).not.toMatch(/\s/);
+      }
+    }
+  });
+
+  it("keeps the two polarities distinct for any agent declaring both", () => {
+    for (const { id, capabilities } of screenModeAgents) {
+      if (!capabilities?.inlineModeFlag || !capabilities?.altScreenFlag) continue;
+      expect(
+        capabilities.altScreenFlag,
+        `${id} declares the same token for both screen-mode polarities`
+      ).not.toBe(capabilities.inlineModeFlag);
+    }
+  });
+
+  it("never pairs a force-alt-screen flag with blockAltScreen", () => {
+    // Forcing the CLI into its full-screen TUI while the terminal strips the
+    // alt-screen escape sequences leaves the agent unusable.
+    for (const { id, capabilities } of screenModeAgents) {
+      if (!capabilities?.altScreenFlag) continue;
+      expect(
+        capabilities.blockAltScreen ?? false,
+        `${id} forces alt screen but also blocks it`
+      ).toBe(false);
+    }
+  });
+});
+
 describe("resume configuration", () => {
   it("session-id agents have a quitCommand and a sessionIdPattern", () => {
     const ids = getAgentIds();
