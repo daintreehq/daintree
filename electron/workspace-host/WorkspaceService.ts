@@ -55,6 +55,7 @@ import {
   matchProviderForRemoteUrl,
   type ForgeProviderMatcher,
 } from "../../shared/utils/forgeHostnames.js";
+import { resolveForgeRemote } from "../../shared/utils/forgeRemoteSelection.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import { ResourceActionExecutor } from "./ResourceActionExecutor.js";
 import { TopologyWatcher, type TopologyWatcherHost } from "./TopologyWatcher.js";
@@ -134,6 +135,10 @@ const HOST_REFRESH_TIMEOUT_MS = 45_000;
 // lock-then-rename (two events), so a short trailing debounce collapses the
 // burst into one `getRemotes()` spawn.
 const FORGE_REMOTE_REPROBE_DEBOUNCE_MS = 250;
+// Re-arm budget for a settings/matcher-driven reselect whose probe was
+// superseded or failed. Bounded because a deleted repo fails enumeration
+// forever and nothing else retries this path (`.git/config` never changed).
+const FORGE_RESELECT_MAX_RETRIES = 3;
 
 // Backstop cadence for the config fingerprint check when the git watcher is
 // disabled or has silently degraded. A stat, not a subprocess.
@@ -200,6 +205,14 @@ export class WorkspaceService {
   // config writes that already wake the watcher (`git push -u`,
   // `branch --set-upstream-to`) cost nothing and cannot churn the provider.
   private forgeRemoteSignature: string | null = null;
+  // The project's selected forge remote *name* (#11408). Kept on the service
+  // (not just handed to `pullRequestService`) because `readForgeRemotes` needs
+  // it to pick the same remote the toolbar routes through — otherwise the
+  // worktree cards probe `origin` while the toolbar talks to `upstream`.
+  private forgeRemoteName: string | null = null;
+  private forgeReselectSeq = 0;
+  private forgeReselectTimer: NodeJS.Timeout | null = null;
+  private forgeReselectRetries = 0;
   private forgeRemoteProbeSeq = 0;
   private forgeRemoteReprobeTimer: NodeJS.Timeout | null = null;
   // Bumped whenever a `.git/config` write is OBSERVED. A baseline read that
@@ -630,6 +643,7 @@ export class WorkspaceService {
         this.wslGitByWorktree = { ...wslGitByWorktree, ...this.wslGitByWorktree };
       }
       if (forgeSettings) {
+        this.forgeRemoteName = forgeSettings.forgeRemote;
         pullRequestService.setForgeSettings(forgeSettings);
       }
       // Merge: global (lowest priority) < project-level < DAINTREE_* (set in buildEnv)
@@ -1601,8 +1615,8 @@ export class WorkspaceService {
   }
 
   /**
-   * Read the repo's remote table once. Returns origin's (or the first remote's)
-   * fetch URL plus a stable signature of every name→fetch-URL pair, used to tell
+   * Read the repo's remote table once. Returns the selected remote's fetch URL
+   * plus a stable signature of every name→fetch-URL pair, used to tell
    * a real remote change from an unrelated `.git/config` write. The signature
    * stays in this process — remote URLs can carry embedded credentials.
    */
@@ -1612,12 +1626,24 @@ export class WorkspaceService {
     try {
       const git = await createHardenedGit(cwd);
       const remotes = await git.getRemotes(true);
-      const origin = remotes.find((r) => r.name === "origin") ?? remotes[0];
       const signature = remotes
         .map((remote) => `${remote.name} ${remote.refs?.fetch ?? ""}`)
         .sort()
         .join("");
-      return { fetchUrl: origin?.refs?.fetch, signature };
+      // Selection honours the project's `forgeRemote` setting (#11408). The
+      // signature above deliberately still covers ALL remotes: it answers "did
+      // the remote table change", independent of which entry we route through.
+      // A configured-but-missing remote selects nothing, leaving the
+      // affordance hidden rather than silently probing a different repo.
+      const { remote: selected } = resolveForgeRemote({
+        remotes: remotes.map((r) => ({ name: r.name, fetchUrl: r.refs?.fetch ?? "" })),
+        forgeRemote: this.forgeRemoteName,
+        // The host has no provider registry — it matches against the matcher
+        // table main relays via `setForgeProviderMatchers`.
+        isSupportedRemote: (url) =>
+          matchProviderForRemoteUrl(url, this.forgeProviderMatchers) !== null,
+      });
+      return { fetchUrl: selected?.fetchUrl, signature };
     } catch {
       // Remote probe is best-effort; keep the affordance hidden on failure.
       return null;
@@ -1815,6 +1841,10 @@ export class WorkspaceService {
       clearInterval(this.forgeConfigPollTimer);
       this.forgeConfigPollTimer = null;
     }
+    if (this.forgeReselectTimer) {
+      clearTimeout(this.forgeReselectTimer);
+      this.forgeReselectTimer = null;
+    }
     if (this.forgeRemoteReprobeTimer) {
       clearTimeout(this.forgeRemoteReprobeTimer);
       this.forgeRemoteReprobeTimer = null;
@@ -1842,6 +1872,19 @@ export class WorkspaceService {
         fetchUrl ? matchProviderForRemoteUrl(fetchUrl, this.forgeProviderMatchers) : null
       );
     }
+    // Re-matching the REMEMBERED url is not enough (#11408): which remote is
+    // selected depends on the matcher table too. At cold start the table is
+    // empty, so auto-detect ranks by name alone and can settle on a remote no
+    // provider ends up supporting — re-matching that URL would leave the
+    // affordance hidden forever while a sibling remote was usable all along.
+    // Same story when enabling or disabling a provider plugin at runtime.
+    //
+    // Coalesced: the relay pushes on EVERY registry change, so plugin init
+    // arrives as a burst of calls that would otherwise be one `git remote -v`
+    // each. Mirrors the reprobe debounce, minus its config-fingerprint gate —
+    // nothing wrote `.git/config` here, only the matcher table moved.
+    this.forgeReselectRetries = 0;
+    this.scheduleForgeReselect();
   }
 
   private handleInotifyLimitReached(): void {
@@ -3364,8 +3407,77 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     forgeDefaultProviderId: string | null;
     forgeRemote: string | null;
   }): void {
+    const remoteSelectionChanged = args.forgeRemote !== this.forgeRemoteName;
+    this.forgeRemoteName = args.forgeRemote;
     pullRequestService.setForgeSettings(args);
     void pullRequestService.refresh();
+    // The remote table on disk is unchanged, so the signature-gated reprobe
+    // would never fire — but the remote we *select* from it just moved, which
+    // changes the matched provider for every monitor (#11408).
+    if (remoteSelectionChanged) {
+      this.forgeReselectRetries = 0;
+      void this.reselectForgeRemote();
+    }
+  }
+
+  /**
+   * Re-run remote selection after the `forgeRemote` setting changed. Unlike
+   * `reprobeForgeRemotes` this deliberately skips the `.git/config`
+   * fingerprint and signature gates: neither moved, only the choice did.
+   */
+  private scheduleForgeReselect(): void {
+    if (this._shutdownController.signal.aborted) return;
+    if (this.forgeReselectTimer) return;
+    this.forgeReselectTimer = setTimeout(() => {
+      this.forgeReselectTimer = null;
+      void this.reselectForgeRemote();
+    }, FORGE_REMOTE_REPROBE_DEBOUNCE_MS);
+  }
+
+  private async reselectForgeRemote(): Promise<void> {
+    const cwd = this.forgeProbeCwd();
+    if (!cwd) return;
+    // Its OWN sequence — it only makes two rapid setting changes land in order.
+    const seq = ++this.forgeReselectSeq;
+    // Snapshot WITHOUT bumping: bumping `forgeRemoteProbeSeq` would cancel an
+    // in-flight `reprobeForgeRemotes` before it consumed its fingerprint,
+    // silently dropping a real `.git/config` change until the next watcher
+    // event. Yielding to it instead is safe — a reprobe re-reads the table
+    // with the current `forgeRemoteName`, so its result already reflects this
+    // settings change. The same check covers teardown and project switch,
+    // which bump the probe seq in `stopForgeRemoteDetection`.
+    const probeSeq = this.forgeRemoteProbeSeq;
+    const probed = await this.readForgeRemotes(cwd);
+    // A newer reselect is already authoritative — drop this one outright.
+    if (seq !== this.forgeReselectSeq) return;
+    // The other two bail-outs are NOT terminal, so they re-arm the debounce
+    // instead of returning. A config probe that superseded us may itself have
+    // exited at its fingerprint gate without ever reading the remotes, and a
+    // failed enumeration leaves monitors pointing at the previously selected
+    // remote. Either way the new selection would otherwise never be applied,
+    // and nothing else would retry: `.git/config` did not change, so the
+    // fingerprint-gated backstop skips this repo entirely.
+    if (!probed || probeSeq !== this.forgeRemoteProbeSeq) {
+      // Bounded: a repo that was deleted under us fails enumeration forever,
+      // and an unbounded re-arm would spawn a git process every debounce tick
+      // for the life of the host.
+      if (this.forgeReselectRetries < FORGE_RESELECT_MAX_RETRIES) {
+        this.forgeReselectRetries++;
+        this.scheduleForgeReselect();
+      }
+      return;
+    }
+    this.forgeReselectRetries = 0;
+    if (this._shutdownController.signal.aborted) return;
+
+    const matchedProviderId = probed.fetchUrl
+      ? matchProviderForRemoteUrl(probed.fetchUrl, this.forgeProviderMatchers)
+      : null;
+    for (const monitor of this.monitors.values()) {
+      if (!monitor.isRunning) continue;
+      monitor.setRemoteFetchUrl(probed.fetchUrl);
+      monitor.setMatchedForgeProviderId(matchedProviderId);
+    }
   }
 
   /**
