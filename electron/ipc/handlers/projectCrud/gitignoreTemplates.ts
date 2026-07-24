@@ -67,6 +67,7 @@ AGENTS.local.md
 .codex/sessions/
 .aider*
 !.aider.conf.yml
+!.aiderignore
 .cursor/rules/personal.mdc
 .specstory/
 .windsurf/

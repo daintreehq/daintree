@@ -23,6 +23,40 @@ function resolve(id: string): string {
   return content;
 }
 
+/**
+ * Negations whose target sits inside a literally excluded parent directory.
+ * Git refuses to descend into an excluded directory, so those lines are dead:
+ * `dir/*` keeps the directory traversable, `dir/` and `dir` do not. Pruning is
+ * not order-sensitive the way last-match-wins is, so a parent excluded anywhere
+ * in the file counts — unless that parent is itself re-included.
+ */
+function unreachableNegations(lines: string[]): string[] {
+  const dead: string[] = [];
+
+  for (const line of lines) {
+    if (!line.startsWith("!")) continue;
+    const segments = line.slice(1).replace(/\/$/, "").split("/");
+
+    for (let depth = 1; depth < segments.length; depth++) {
+      const parent = segments.slice(0, depth).join("/");
+      if (!parent) continue;
+
+      const spellings = [parent, `${parent}/`];
+      const reincluded = lines.some(
+        (other) => other.startsWith("!") && spellings.includes(other.slice(1))
+      );
+      if (reincluded) continue;
+
+      if (lines.some((other) => spellings.includes(other))) {
+        dead.push(line);
+        break;
+      }
+    }
+  }
+
+  return dead;
+}
+
 describe("gitignore template registry", () => {
   it("exposes unique ids", () => {
     expect(new Set(TEMPLATE_IDS).size).toBe(TEMPLATE_IDS.length);
@@ -54,23 +88,34 @@ describe("gitignore template registry", () => {
   it("returns null for unknown templates", () => {
     expect(getGitignoreTemplate("unknown")).toBeNull();
   });
+
+  // Guards the `Object.hasOwn` lookup against regressing to `in`, which would
+  // accept inherited prototype keys and resolve them to garbage content.
+  it("does not treat inherited object properties as templates", () => {
+    for (const key of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      expect(isGitignoreTemplateId(key), `${key} is not a template`).toBe(false);
+      expect(getGitignoreTemplate(key), `${key} should not resolve`).toBeNull();
+    }
+  });
 });
 
 describe("gitignore template composition", () => {
-  it("layers every language template on top of the full minimal baseline", () => {
-    const minimal = resolve("minimal");
+  // Anchored on the default rather than on "minimal" so that promoting a
+  // language template to the default fails here instead of quietly redefining
+  // what every other template is built on.
+  it("layers every other template on top of the full default baseline", () => {
+    const baseline = resolve(DEFAULT_GITIGNORE_TEMPLATE_ID);
     for (const id of LANGUAGE_IDS) {
       const content = resolve(id);
-      expect(content.startsWith(`${minimal}\n`), `${id} should open with minimal`).toBe(true);
+      expect(content.startsWith(`${baseline}\n`), `${id} should open with the baseline`).toBe(true);
     }
   });
 
   it("adds language-specific rules beyond the baseline", () => {
-    const minimalLineCount = activeLines(resolve("minimal")).length;
+    const baseline = new Set(activeLines(resolve(DEFAULT_GITIGNORE_TEMPLATE_ID)));
     for (const id of LANGUAGE_IDS) {
-      expect(activeLines(resolve(id)).length, `${id} should add rules`).toBeGreaterThan(
-        minimalLineCount
-      );
+      const added = activeLines(resolve(id)).filter((line) => !baseline.has(line));
+      expect(added.length, `${id} should add rules the baseline lacks`).toBeGreaterThan(0);
     }
   });
 
@@ -99,26 +144,43 @@ describe("gitignore pattern semantics", () => {
     }
   });
 
-  // Git refuses to descend into an excluded directory, so a negation is dead if
-  // one of its parent directories is excluded outright. `dir/*` keeps the
-  // directory traversable; `dir/` or `dir` does not.
-  it("keeps every negation reachable", () => {
+  it("never negates inside a literally excluded parent directory", () => {
     for (const id of TEMPLATE_IDS.filter((candidate) => candidate !== "none")) {
-      const lines = activeLines(resolve(id));
-
-      lines.forEach((line, index) => {
-        if (!line.startsWith("!")) return;
-
-        const segments = line.slice(1).replace(/\/$/, "").split("/");
-        const earlier = lines.slice(0, index);
-
-        for (let depth = 1; depth < segments.length; depth++) {
-          const parent = segments.slice(0, depth).join("/");
-          const blocked = earlier.filter((prior) => prior === parent || prior === `${parent}/`);
-          expect(blocked, `${id}: "${line}" is unreachable — "${parent}" is excluded`).toEqual([]);
-        }
-      });
+      expect(unreachableNegations(activeLines(resolve(id))), `${id} has dead negations`).toEqual(
+        []
+      );
     }
+  });
+});
+
+describe("unreachableNegations", () => {
+  it("flags a parent excluded as a bare directory", () => {
+    expect(unreachableNegations([".vscode/", "!.vscode/settings.json"])).toEqual([
+      "!.vscode/settings.json",
+    ]);
+    expect(unreachableNegations([".yarn", "!.yarn/patches"])).toEqual(["!.yarn/patches"]);
+  });
+
+  it("flags a parent excluded after the negation", () => {
+    expect(unreachableNegations(["foo/*", "!foo/keep", "foo/"])).toEqual(["!foo/keep"]);
+  });
+
+  it("accepts the traversable dir/* form", () => {
+    expect(unreachableNegations([".vscode/*", "!.vscode/settings.json"])).toEqual([]);
+    expect(unreachableNegations(["/log/*", "!/log/.keep"])).toEqual([]);
+  });
+
+  it("accepts negations with no directory component", () => {
+    expect(unreachableNegations([".env.*", "!.env.example"])).toEqual([]);
+    expect(unreachableNegations([".aider*", "!.aider.conf.yml", "!.aiderignore"])).toEqual([]);
+  });
+
+  it("accepts a parent that is explicitly re-included", () => {
+    expect(unreachableNegations(["foo/", "!foo/", "!foo/keep"])).toEqual([]);
+  });
+
+  it("accepts a negation whose parent is only matched by a glob", () => {
+    expect(unreachableNegations(["**/build/", "!**/src/**/build/"])).toEqual([]);
   });
 });
 
