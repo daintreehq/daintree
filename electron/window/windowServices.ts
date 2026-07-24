@@ -534,6 +534,24 @@ export async function setupWindowServices(
     ? projectStore.getProjectById(opts.initialProjectId)
     : undefined;
 
+  // A Linux file manager launching a cold Daintree via "Open With" on a folder
+  // puts a `file://` directory URI in argv. Classified here — outside the PTY
+  // gate below — so a degraded-mode launch still honours the request, and
+  // queued into the same pre-window store the macOS `open-file` drops use so
+  // `drainPendingOpenDirs` opens it. An explicit `--cli-path` suppresses the
+  // scan, mirroring `second-instance`, so one launch is never routed twice —
+  // gated on the flag rather than a resolved path, both so an unresolvable
+  // `--cli-path` isn't quietly replaced by a positional URI and so this doesn't
+  // become a second `extractCliPath` call that re-reports the same failure.
+  let coldDirectoryPaths: string[] = [];
+  if (!getProcessArgvDirectoryHandled()) {
+    setProcessArgvDirectoryHandled(true);
+    coldDirectoryPaths = hasCliPathFlag(process.argv) ? [] : extractDirectoryPaths(process.argv);
+    for (const dirPath of coldDirectoryPaths) {
+      queuePendingOpenDirPath(dirPath);
+    }
+  }
+
   // PTY-related features
   if (ptyReady) {
     const pty = getPtyClient()!;
@@ -562,16 +580,6 @@ export async function setupWindowServices(
     const processArgvCli = !getProcessArgvCliHandled()
       ? extractCliPath(process.argv, process.cwd())
       : null;
-    // A Linux file manager launching a cold Daintree via "Open With" on a
-    // folder puts a `file://` directory URI in argv. Queue it into the same
-    // pre-window store the macOS `open-file` drops use, so `drainPendingOpenDirs`
-    // below opens it and there is no second cold-start path to keep in sync.
-    if (!getProcessArgvDirectoryHandled()) {
-      setProcessArgvDirectoryHandled(true);
-      for (const dirPath of extractDirectoryPaths(process.argv)) {
-        queuePendingOpenDirPath(dirPath);
-      }
-    }
     const skipDefaultSpawn =
       opts.initialProjectPath ||
       processArgvCli ||
@@ -768,8 +776,12 @@ export async function setupWindowServices(
   // outright; the intent queue holds previews until this window paints, so
   // there is no separate windowless drain. Fire-and-forget: previews are read
   // sequentially so the prompts keep argv order.
+  // A folder named `foo.dntr` opened from the OS is a project, not an archive —
+  // the stat-backed directory scan above wins, mirroring `second-instance`.
   const firstLaunchDntrPaths = !getProcessArgvDntrHandled()
-    ? extractDntrPaths(process.argv, process.cwd())
+    ? extractDntrPaths(process.argv, process.cwd()).filter(
+        (dntrPath) => !coldDirectoryPaths.includes(dntrPath)
+      )
     : [];
   if (firstLaunchDntrPaths.length > 0) {
     setProcessArgvDntrHandled(true);

@@ -150,8 +150,12 @@ describe("FinderQuickActionService", () => {
     // recursive bundle copy — Finder reads ~/Library/Services continuously.
     expect(stagePath.startsWith(`${TARGET}.`)).toBe(true);
     expect(options).toEqual({ recursive: true });
-    // Rename happens after the copy, so Finder never sees a partial bundle.
     expect(resilientRenameSyncMock).toHaveBeenCalledWith(stagePath, TARGET);
+    // The copy must COMPLETE before the rename publishes it, otherwise Finder
+    // can observe a partial bundle. Order, not mere occurrence, is the contract.
+    expect(fsMock.cpSync.mock.invocationCallOrder[0]).toBeLessThan(
+      resilientRenameSyncMock.mock.invocationCallOrder[0]
+    );
   });
 
   it("parks an existing install as a backup and removes it once the swap lands", async () => {
@@ -164,9 +168,14 @@ describe("FinderQuickActionService", () => {
     expect(renames).toHaveLength(2);
     const [movedFrom, backupPath] = renames[0];
     expect(movedFrom).toBe(TARGET);
-    // Backup is parked before the replacement moves in, then swept afterwards.
     expect(renames[1][1]).toBe(TARGET);
-    expect(fsMock.rmSync).toHaveBeenCalledWith(backupPath, { recursive: true, force: true });
+    const sweep = fsMock.rmSync.mock.calls.findIndex(([p]) => p === backupPath);
+    expect(sweep).toBeGreaterThanOrEqual(0);
+    // The backup may only be swept AFTER the replacement has landed — sweeping
+    // first would leave nothing to roll back to if the swap then failed.
+    expect(fsMock.rmSync.mock.invocationCallOrder[sweep]).toBeGreaterThan(
+      resilientRenameSyncMock.mock.invocationCallOrder[1]
+    );
   });
 
   it("restores the previous install when the swap fails", async () => {
@@ -237,8 +246,10 @@ describe("FinderQuickActionService", () => {
     const result = await install();
 
     expect(result).toBe(TARGET);
+    // No copy and no rename: an unchanged bundle must not be republished under
+    // Finder. (The cache flush still runs — see the failure-modes suite.)
     expect(fsMock.cpSync).not.toHaveBeenCalled();
-    expect(execFileMock).not.toHaveBeenCalled();
+    expect(resilientRenameSyncMock).not.toHaveBeenCalled();
   });
 
   it("reinstalls when only one managed file drifted", async () => {
@@ -291,5 +302,91 @@ describe("FinderQuickActionService", () => {
     await expect(install()).rejects.toThrow(/not found/);
 
     expect(fsMock.cpSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("FinderQuickActionService — failure modes", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    setPlatform("darwin");
+    appMock.app.isPackaged = false;
+    resilientRenameSyncMock.mockReset();
+    fsMock.readFileSync.mockReset();
+    fsMock.cpSync.mockReset();
+    fsMock.mkdirSync.mockReset();
+    fsMock.rmSync.mockReset();
+    execFileMock.mockImplementation((_file, _args, _options, callback) => callback(null));
+    fsMock.existsSync.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", {
+      value: originalPlatform,
+      configurable: true,
+    });
+  });
+
+  it("leaves the previous install untouched when the copy itself fails", async () => {
+    seedFiles({ ...sourceFiles("new", "new-wflow"), ...targetFiles("old", "old-wflow") });
+    fsMock.cpSync.mockImplementation(() => {
+      throw new Error("ENOSPC");
+    });
+
+    const { install } = await import("../FinderQuickActionService.js");
+    await expect(install()).rejects.toThrow("ENOSPC");
+
+    // Nothing was renamed, so the working Quick Action is still in place.
+    expect(resilientRenameSyncMock).not.toHaveBeenCalled();
+    expect(fsMock.rmSync).not.toHaveBeenCalledWith(TARGET, expect.anything());
+  });
+
+  it("surfaces the backup location when the rollback also fails", async () => {
+    seedFiles({ ...sourceFiles("new", "new-wflow"), ...targetFiles("old", "old-wflow") });
+    let backupPath = "";
+    resilientRenameSyncMock.mockImplementation((from, to) => {
+      if (from === TARGET) {
+        backupPath = to;
+        fsMock.existsSync.mockImplementation((p) => p !== TARGET);
+        return;
+      }
+      throw new Error("rename failed");
+    });
+
+    const { install } = await import("../FinderQuickActionService.js");
+    const error = await install().then(
+      () => null,
+      (err: unknown) => (err instanceof Error ? err : new Error(String(err)))
+    );
+
+    // A stranded backup under a random suffix is unrecoverable unless its path
+    // reaches the user, and the original cause must survive too.
+    expect(backupPath).not.toBe("");
+    expect(error?.message).toContain(backupPath);
+    expect(error?.message).toContain("rename failed");
+  });
+
+  it("propagates a failure to create the Services directory", async () => {
+    seedFiles(sourceFiles("info", "wflow"));
+    fsMock.mkdirSync.mockImplementation(() => {
+      throw new Error("EACCES");
+    });
+
+    const { install } = await import("../FinderQuickActionService.js");
+    await expect(install()).rejects.toThrow("EACCES");
+
+    expect(fsMock.cpSync).not.toHaveBeenCalled();
+  });
+
+  it("flushes the services cache when the bundle is already current", async () => {
+    seedFiles({ ...sourceFiles("info", "wflow"), ...targetFiles("info", "wflow") });
+
+    const { install } = await import("../FinderQuickActionService.js");
+    await install();
+
+    // Re-running the menu action is the user's only retry after a flush that
+    // failed on a previous install, so the no-copy path must still flush.
+    expect(fsMock.cpSync).not.toHaveBeenCalled();
+    expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 });

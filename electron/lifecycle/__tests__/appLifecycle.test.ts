@@ -1188,9 +1188,7 @@ describe("extractDirectoryPaths", () => {
     const { extractDirectoryPaths } = await import("../appLifecycle.js");
     const spaced = nodePath.join(dirPath, "my project");
     fs.mkdirSync(spaced);
-    const href = pathToFileURL(spaced).href;
-    expect(href).toContain("%20");
-    expect(extractDirectoryPaths(["daintree", href])).toEqual([spaced]);
+    expect(extractDirectoryPaths(["daintree", pathToFileURL(spaced).href])).toEqual([spaced]);
   });
 
   it("ignores a file:// URI that resolves to a regular file", async () => {
@@ -1361,5 +1359,34 @@ describe("registerAppLifecycleHandlers – second-instance folder handling", () 
     await vi.waitFor(() => expect(onCreateWindowForPath).toHaveBeenCalledWith(archiveNamed));
 
     expect(enqueueArchiveInstallIntentsMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("extractDntrPaths – interaction with folder opens", () => {
+  it("does not claim the --cli-path operand as an archive", async () => {
+    const { extractDntrPaths } = await import("../appLifecycle.js");
+    // A Windows folder verb passes `--cli-path "C:\work\foo.dntr"`. Treating the
+    // operand as an archive would open the folder AND queue a plugin install.
+    expect(extractDntrPaths(["daintree", "--cli-path", "/work/foo.dntr"], "/")).toEqual([]);
+  });
+
+  it("still claims a bare archive path alongside a --cli-path operand", async () => {
+    const { extractDntrPaths } = await import("../appLifecycle.js");
+    expect(
+      extractDntrPaths(["daintree", "--cli-path", "/work/proj.dntr", "/other/real.dntr"], "/")
+    ).toEqual([nodePath.resolve("/", "/other/real.dntr")]);
+  });
+
+  it("normalizes decoded URIs so the folder filter can match them", async () => {
+    const { extractDirectoryPaths } = await import("../appLifecycle.js");
+    const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "dt-norm-"));
+    try {
+      // A doubled separator survives fileURLToPath but not path.resolve; if the
+      // two extractors disagree the .dntr de-duplication silently fails.
+      const doubled = `file://${pathToFileURL(dir).pathname}//`;
+      expect(extractDirectoryPaths(["daintree", doubled])).toEqual([dir]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

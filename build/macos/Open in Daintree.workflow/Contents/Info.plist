@@ -7,7 +7,7 @@
 	<key>CFBundleName</key>
 	<string>Open in Daintree</string>
 	<key>CFBundlePackageType</key>
-	<string>APPL</string>
+	<string>BNDL</string>
 	<key>NSServices</key>
 	<array>
 		<dict>

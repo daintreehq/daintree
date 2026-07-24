@@ -168,7 +168,16 @@ export function hasCliPathFlag(argv: string[]): boolean {
 // pipeline owns missing-file failures.
 export function extractDntrPaths(argv: string[], workingDirectory: string): string[] {
   const paths: string[] = [];
-  for (const arg of argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    // `--cli-path <value>` names a project directory; without skipping the
+    // operand, opening a folder called `foo.dntr` from a Windows context-menu
+    // verb would ALSO queue it as a plugin archive. The joined
+    // `--cli-path=<value>` form needs no skip — it is a switch token.
+    if (arg === CLI_PATH_FLAG) {
+      i++;
+      continue;
+    }
     if (isSwitchToken(arg)) continue;
     const decoded = decodeArgPath(arg);
     // Match the literal token, before `path.resolve` normalizes it: resolving
@@ -197,7 +206,11 @@ export function extractDirectoryPaths(argv: string[]): string[] {
     if (arg.length <= "file://".length) continue;
     let candidate: string;
     try {
-      candidate = fileURLToPath(arg);
+      // Normalized so this matches what `extractDntrPaths` produces via
+      // `path.resolve` — otherwise `file:///tmp//x.dntr` yields two different
+      // strings and the de-duplication between the two extractors silently
+      // fails.
+      candidate = path.resolve(fileURLToPath(arg));
     } catch {
       continue;
     }
@@ -226,10 +239,20 @@ async function openDirectoryPaths(
       queuePendingOpenDirPath(dirPath);
       continue;
     }
-    if (opts.onCreateWindowForPath) {
-      await opts.onCreateWindowForPath(dirPath);
-    } else {
-      await handleDirectoryOpen(dirPath, liveWindow, opts.getCliAvailabilityService() ?? undefined);
+    // Isolated per folder: one path that vanished between the stat and the
+    // open must not strand the rest of a multi-selection.
+    try {
+      if (opts.onCreateWindowForPath) {
+        await opts.onCreateWindowForPath(dirPath);
+      } else {
+        await handleDirectoryOpen(
+          dirPath,
+          liveWindow,
+          opts.getCliAvailabilityService() ?? undefined
+        );
+      }
+    } catch (err) {
+      console.error("[MAIN] Failed to open folder:", dirPath, err);
     }
   }
 }

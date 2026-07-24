@@ -5,6 +5,14 @@ import buildConfig from "../../electron-builder.config.cjs";
 const repoFile = (relativePath) =>
   readFile(new URL(`../../${relativePath}`, import.meta.url), "utf8");
 
+/** Value of `<key>name</key><string>…</string>` in a plist, ignoring whitespace. */
+const plistString = (xml, key) =>
+  xml.match(new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`))?.[1];
+
+/** Value of `<key>name</key><integer>…</integer>` in a plist. */
+const plistInteger = (xml, key) =>
+  xml.match(new RegExp(`<key>${key}</key>\\s*<integer>(-?\\d+)</integer>`))?.[1];
+
 describe("electron-builder config — macOS artifact naming (#10380)", () => {
   it("forces an explicit arch token into every macOS artifact name", async () => {
     const config = await buildConfig();
@@ -60,8 +68,32 @@ describe("electron-builder config — OS folder context menus (#11406)", () => {
     const config = await buildConfig();
     const entry = config.mac.extraResources.find((r) => r.from === WORKFLOW_DIR);
     // FinderQuickActionService resolves the packaged source as
-    // `process.resourcesPath/<to>`, so the basename must survive the copy.
-    expect(entry?.to).toBe("Open in Daintree.workflow");
+    // `process.resourcesPath/<basename>`, so the bundle name must survive the
+    // copy — renaming it in `to` would break the lookup.
+    expect(entry?.to).toBe(WORKFLOW_DIR.split("/").pop());
+  });
+
+  it("declares a Finder-only service that macOS will actually dispatch", async () => {
+    const infoPlist = await repoFile(`${WORKFLOW_DIR}/Contents/Info.plist`);
+    // macOS dispatches an Automator workflow service by this exact selector.
+    // `runWorkflow` looks plausible and is wrong: the menu item appears and
+    // then does nothing at all.
+    expect(plistString(infoPlist, "NSMessage")).toBe("runWorkflowAsService");
+    // Scoping to Finder is what keeps the entry out of every other app's
+    // Services menu.
+    expect(plistString(infoPlist, "NSApplicationIdentifier")).toBe("com.apple.finder");
+    // A .workflow is a bundle, not an application.
+    expect(plistString(infoPlist, "CFBundlePackageType")).toBe("BNDL");
+  });
+
+  it("declares the workflow document as a folder-scoped services-menu workflow", async () => {
+    const wflow = await repoFile(`${WORKFLOW_DIR}/Contents/document.wflow`);
+    // Any other workflow type registers as an app/print-plugin instead of a
+    // Services entry, so the Quick Action never appears.
+    expect(plistString(wflow, "workflowTypeIdentifier")).toBe("com.apple.Automator.servicesMenu");
+    expect(plistString(wflow, "serviceInputTypeIdentifier")).toContain(
+      "com.apple.Automator.fileSystemObject"
+    );
   });
 
   it("points the Quick Action's shell action at the real bundle id", async () => {
@@ -77,8 +109,9 @@ describe("electron-builder config — OS folder context menus (#11406)", () => {
     // `open --args` is dropped when the app is already running; the plain
     // open-document form fires `open-file`, which handles warm and cold alike.
     expect(wflow).not.toContain("--args");
-    // Input must arrive as shell arguments (inputMethod 1), not on stdin.
-    expect(wflow).toContain("<key>inputMethod</key>\n\t\t\t\t\t<integer>1</integer>");
+    // inputMethod 1 is "as arguments"; 0 would send the folder on stdin, where
+    // the `"$@"` loop would silently iterate nothing.
+    expect(plistInteger(wflow, "inputMethod")).toBe("1");
   });
 
   it("restricts the Quick Action to folders using the Finder-facing UTI", async () => {
@@ -134,11 +167,16 @@ describe("NSIS installer — folder context-menu verbs (#11406)", () => {
     expect(uninstall).not.toContain(`DeleteRegKey HKCU "Software\\Classes\\Directory\\shell"`);
   });
 
-  it("keeps one shell-refresh call per macro", async () => {
+  it("keeps exactly one shell-refresh call in each macro", async () => {
     const nsh = await repoFile("build/installer.nsh");
+    const uninstallStart = nsh.indexOf("!macro customUnInstall");
+    const install = nsh.slice(nsh.indexOf("!macro customInstall"), uninstallStart);
+    const uninstall = nsh.slice(uninstallStart);
     // SHCNE_ASSOCCHANGED covers the `.dntr` association and both folder verbs
-    // in a single notification; extra calls are redundant Explorer churn.
-    expect(nsh.match(/SHChangeNotify/g)).toHaveLength(2);
+    // in a single notification, but each macro needs its own — counting the
+    // file as a whole would pass with two in install and none in uninstall.
+    expect(install.match(/SHChangeNotify/g)).toHaveLength(1);
+    expect(uninstall.match(/SHChangeNotify/g)).toHaveLength(1);
   });
 });
 

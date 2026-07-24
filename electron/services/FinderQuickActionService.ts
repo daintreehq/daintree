@@ -53,6 +53,10 @@ function isInstallUpToDate(sourcePath: string, targetPath: string): boolean {
   });
 }
 
+function asErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function removeQuietly(targetPath: string): void {
   try {
     fs.rmSync(targetPath, { recursive: true, force: true });
@@ -88,6 +92,10 @@ export async function install(): Promise<string> {
 
   const targetPath = getTargetPath();
   if (isInstallUpToDate(sourcePath, targetPath)) {
+    // Still flush: an earlier install may have copied the bundle successfully
+    // but failed to refresh Finder, and re-running the menu action is the only
+    // retry a user has.
+    await flushServicesCache();
     return targetPath;
   }
 
@@ -116,14 +124,18 @@ export async function install(): Promise<string> {
       try {
         resilientRenameSync(backupPath, targetPath);
       } catch {
-        // Restore failed too — the backup deliberately stays on disk so the
-        // previous Quick Action is recoverable by hand rather than lost.
+        // Restore failed too. The backup deliberately stays on disk, and its
+        // location is surfaced so the previous Quick Action is recoverable by
+        // hand rather than silently stranded under a random suffix.
+        throw new Error(
+          `Failed to install the Quick Action and could not restore the previous one. It is preserved at ${backupPath}. Original error: ${asErrorMessage(err)}`
+        );
       }
     }
     throw err;
   }
 
-  removeQuietly(backupPath);
+  if (backedUp) removeQuietly(backupPath);
   await flushServicesCache();
 
   return targetPath;

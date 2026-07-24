@@ -27,11 +27,13 @@
   ; modern top-level menu would need an IExplorerCommand DLL plus a sparse
   ; package.
   WriteRegStr HKCU "Software\Classes\Directory\shell\Daintree" "" "Open in Daintree"
-  WriteRegStr HKCU "Software\Classes\Directory\shell\Daintree" "Icon" "$INSTDIR\${APP_EXECUTABLE_FILENAME},0"
+  ; Icon path is quoted so an install directory containing a comma isn't parsed
+  ; as the icon-index separator.
+  WriteRegStr HKCU "Software\Classes\Directory\shell\Daintree" "Icon" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}",0'
   WriteRegStr HKCU "Software\Classes\Directory\shell\Daintree\command" "" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --cli-path "%1"'
 
   WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Daintree" "" "Open in Daintree"
-  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Daintree" "Icon" "$INSTDIR\${APP_EXECUTABLE_FILENAME},0"
+  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Daintree" "Icon" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}",0'
   WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Daintree\command" "" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --cli-path "%V"'
 
   ; Tell the shell the association table changed so Explorer picks it up now.

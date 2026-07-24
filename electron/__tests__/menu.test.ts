@@ -124,6 +124,7 @@ vi.mock("../ipc/channels.js", () => ({
   CHANNELS: {
     MENU_ACTION: "menu-action",
     PROJECT_OPEN_GIT_INIT_DIALOG: "project:open-git-init-dialog",
+    NOTIFICATION_SHOW_TOAST: "notification:show-toast",
   },
 }));
 
@@ -134,8 +135,9 @@ vi.mock("../../shared/config/agentRegistry.js", () => ({
 
 vi.mock("../services/CliAvailabilityService.js", () => ({}));
 vi.mock("../services/CliInstallService.js", () => ({}));
+const finderQuickActionInstallMock = vi.hoisted(() => vi.fn<() => Promise<string>>());
 vi.mock("../services/FinderQuickActionService.js", () => ({
-  install: vi.fn<() => Promise<string>>(),
+  install: finderQuickActionInstallMock,
 }));
 vi.mock("../window/windowServices.js", () => ({
   getPtyClient: vi.fn(),
@@ -1068,5 +1070,81 @@ describe("handleDirectoryOpen non-repository folders", () => {
 
     expect(mockWebContents.send).not.toHaveBeenCalled();
     expect(dialog.showMessageBox).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Finder Quick Action menu item (#11406)", () => {
+  const ITEM_LABEL = 'Install "Open in Daintree" Quick Action';
+  const originalPlatform = process.platform;
+
+  function setPlatform(platform: string): void {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  }
+
+  function buildAndFind(): Electron.MenuItemConstructorOptions | undefined {
+    capturedTemplate = [];
+    createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+    return findMenuItem(capturedTemplate, "Terminal", ITEM_LABEL);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    finderQuickActionInstallMock.mockReset();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("is enabled only on macOS", () => {
+    setPlatform("darwin");
+    expect(buildAndFind()?.enabled).toBe(true);
+
+    // The Quick Action is a Finder feature; Windows and Linux reach the same
+    // folder-open flow through their own installer/desktop-entry wiring.
+    for (const platform of ["win32", "linux"]) {
+      setPlatform(platform);
+      expect(buildAndFind()?.enabled).toBe(false);
+    }
+  });
+
+  it("installs the Quick Action and reports where it landed", async () => {
+    setPlatform("darwin");
+    const installPath = "/home/test/Library/Services/Open in Daintree.workflow";
+    finderQuickActionInstallMock.mockResolvedValue(installPath);
+
+    const item = buildAndFind();
+    await item!.click!(
+      {} as Electron.MenuItem,
+      mockBrowserWindow as unknown as Electron.BaseWindow,
+      {} as Electron.KeyboardEvent
+    );
+
+    expect(finderQuickActionInstallMock).toHaveBeenCalledOnce();
+    const toast = mockWebContents.send.mock.calls.find(
+      ([channel]) => channel === "notification:show-toast"
+    );
+    expect(toast?.[1]).toMatchObject({ type: "success", title: "Quick Action installed" });
+    // The path is the only way a user can find or remove the installed bundle.
+    expect((toast?.[1] as { message: string }).message).toContain(installPath);
+  });
+
+  it("surfaces an install failure instead of reporting success", async () => {
+    setPlatform("darwin");
+    finderQuickActionInstallMock.mockRejectedValue(new Error("Services directory is read-only"));
+
+    const item = buildAndFind();
+    await item!.click!(
+      {} as Electron.MenuItem,
+      mockBrowserWindow as unknown as Electron.BaseWindow,
+      {} as Electron.KeyboardEvent
+    );
+
+    const toast = mockWebContents.send.mock.calls.find(
+      ([channel]) => channel === "notification:show-toast"
+    );
+    expect(toast?.[1]).toMatchObject({ type: "error" });
+    // The underlying reason must reach the user, not just a generic failure.
+    expect((toast?.[1] as { message: string }).message).toContain("read-only");
   });
 });
