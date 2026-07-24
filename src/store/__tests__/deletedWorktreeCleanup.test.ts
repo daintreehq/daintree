@@ -47,7 +47,7 @@ function addRow(overrides: Partial<DeletedWorktree> = {}): void {
     deletedAt: 0,
     expiresAt: null,
     holdReason: null,
-    pinnedIndex: -1,
+    pinnedBeforeWorktreeId: null,
     ...overrides,
   });
 }

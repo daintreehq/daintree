@@ -96,7 +96,7 @@ function makeDeleted(id: string, title: string, expiresAt: number | null = null)
     deletedAt: 1000,
     expiresAt,
     holdReason: null,
-    pinnedIndex: -1,
+    pinnedBeforeWorktreeId: null,
   };
 }
 

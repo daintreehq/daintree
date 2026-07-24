@@ -5,45 +5,72 @@ export interface DeletedWorktreePlacement {
   isGrouped: boolean;
   /**
    * Slot in the filtered worktree list the group is inserted before, or `-1`
-   * when no member held a visible slot and the group trails the list.
+   * when no member's anchor is still visible and the group trails the list.
    */
   groupSlot: number;
-  /** Deleted rows keyed by the visible slot they held, for the ungrouped path. */
+  /**
+   * Deleted rows keyed by the current index of their resolved successor anchor,
+   * for the ungrouped path. The render loop inserts them before the live row at
+   * that index.
+   */
   byIndex: Map<number, DeletedWorktree[]>;
-  /** Deleted rows with no visible slot, appended after the live rows. */
+  /** Deleted rows whose anchor is gone (or was never visible), appended after the live rows. */
   trailing: DeletedWorktree[];
 }
 
 /**
  * Where a sidebar's deleted rows go (#11232, #11260).
  *
- * A deleted worktree holds the slot its row occupied so the terminals the user
- * is looking for stay put, but that slot is only meaningful while it still
- * addresses the current filtered list — a pin recorded before a filter narrowed
- * the list can point past the end. Both the grouped and ungrouped paths drop
- * such a pin and fall back to trailing placement; keeping them in agreement is
- * the whole reason this is one function rather than two call sites.
+ * A deleted row records the live worktree that immediately followed it in the
+ * last published sidebar order (`pinnedBeforeWorktreeId`). While that anchor is
+ * still visible the row renders immediately before its current position, so the
+ * terminals the user is looking for stay put; otherwise the row trails. Keying
+ * off an identity rather than a raw index is what stops an unrelated worktree
+ * added later from reclaiming a stale numeric slot once the list empties and
+ * regrows past it (#11400).
+ *
+ * Placement is identity-relative, not an absolute visual slot: if the user
+ * reorders the live rows, the row follows its former successor rather than
+ * pinning to a fixed position. Both the grouped and ungrouped paths resolve the
+ * anchor the same way and fall back to trailing together; keeping them in
+ * agreement is the whole reason this is one function rather than two call sites.
+ *
+ * The anchor is a single successor, so if that exact neighbour is itself
+ * deleted in the same burst the row trails; whether an adjacent removal trails
+ * or resolves to the next survivor depends on when the visible order was last
+ * republished, and either outcome is acceptable for a ghost.
  */
 export function planDeletedWorktreePlacement(
   deletedList: readonly DeletedWorktree[],
-  visibleWorktreeCount: number
+  visibleWorktreeIds: readonly string[]
 ): DeletedWorktreePlacement {
+  const indexById = new Map<string, number>();
+  for (let i = 0; i < visibleWorktreeIds.length; i++) {
+    // First occurrence wins; ids are unique in practice, so this just guards
+    // against a duplicate leaking in without letting it shift the anchor.
+    if (!indexById.has(visibleWorktreeIds[i]!)) indexById.set(visibleWorktreeIds[i]!, i);
+  }
+
   const byIndex = new Map<number, DeletedWorktree[]>();
   const trailing: DeletedWorktree[] = [];
   for (const deleted of deletedList) {
-    if (deleted.pinnedIndex >= 0 && deleted.pinnedIndex < visibleWorktreeCount) {
-      const bucket = byIndex.get(deleted.pinnedIndex);
-      if (bucket) bucket.push(deleted);
-      else byIndex.set(deleted.pinnedIndex, [deleted]);
-    } else {
+    const slot =
+      deleted.pinnedBeforeWorktreeId == null
+        ? undefined
+        : indexById.get(deleted.pinnedBeforeWorktreeId);
+    if (slot === undefined) {
       trailing.push(deleted);
+    } else {
+      const bucket = byIndex.get(slot);
+      if (bucket) bucket.push(deleted);
+      else byIndex.set(slot, [deleted]);
     }
   }
 
   const isGrouped = deletedList.length >= DELETED_WORKTREE_GROUP_THRESHOLD;
-  // Derived from `byIndex` rather than raw `pinnedIndex`, so an out-of-range
-  // pin can never claim a slot the render loop won't reach — that would drop
-  // every deleted row out of the sidebar instead of merely misplacing it.
+  // Derived from `byIndex` rather than any raw pin, so an unresolved anchor can
+  // never claim a slot the render loop won't reach — that would drop every
+  // deleted row out of the sidebar instead of merely misplacing it.
   let groupSlot = -1;
   if (isGrouped) {
     for (const slot of byIndex.keys()) {

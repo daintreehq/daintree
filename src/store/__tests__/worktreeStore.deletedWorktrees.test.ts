@@ -19,7 +19,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 import {
   useWorktreeSelectionStore,
   getDeletedWorktreeTerminalIds,
-  getPinnedDeletedWorktreeIndex,
+  getPinnedDeletedWorktreeAnchorId,
   recordSidebarWorktreeOrder,
   type DeletedWorktree,
 } from "@/store/worktreeStore";
@@ -32,7 +32,7 @@ function makeDeleted(overrides: Partial<DeletedWorktree> = {}): DeletedWorktree 
     deletedAt: 1000,
     expiresAt: null,
     holdReason: null,
-    pinnedIndex: 0,
+    pinnedBeforeWorktreeId: null,
     ...overrides,
   };
 }
@@ -77,15 +77,20 @@ describe("getDeletedWorktreeTerminalIds", () => {
   });
 });
 
-describe("pinned index", () => {
-  it("reports the slot a worktree occupied in the last recorded sidebar order", () => {
+describe("placement anchor", () => {
+  it("reports the successor a worktree sat before in the last recorded sidebar order", () => {
     recordSidebarWorktreeOrder(["a", "b", "c"]);
-    expect(getPinnedDeletedWorktreeIndex("b")).toBe(1);
+    expect(getPinnedDeletedWorktreeAnchorId("b")).toBe("c");
   });
 
-  it("reports -1 for a worktree that was not visible", () => {
+  it("reports null for the last worktree in the order (no successor)", () => {
+    recordSidebarWorktreeOrder(["a", "b", "c"]);
+    expect(getPinnedDeletedWorktreeAnchorId("c")).toBeNull();
+  });
+
+  it("reports null for a worktree that was not visible", () => {
     recordSidebarWorktreeOrder(["a", "b"]);
-    expect(getPinnedDeletedWorktreeIndex("hidden")).toBe(-1);
+    expect(getPinnedDeletedWorktreeAnchorId("hidden")).toBeNull();
   });
 });
 
@@ -98,12 +103,12 @@ describe("addDeletedWorktree", () => {
 
   it("keeps the first record when the same id is added twice", () => {
     const store = useWorktreeSelectionStore.getState();
-    store.addDeletedWorktree(makeDeleted({ deletedAt: 1000, pinnedIndex: 2 }));
-    store.addDeletedWorktree(makeDeleted({ deletedAt: 9999, pinnedIndex: 7 }));
+    store.addDeletedWorktree(makeDeleted({ deletedAt: 1000, pinnedBeforeWorktreeId: "first" }));
+    store.addDeletedWorktree(makeDeleted({ deletedAt: 9999, pinnedBeforeWorktreeId: "second" }));
 
     const stored = useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1");
     expect(stored?.deletedAt).toBe(1000);
-    expect(stored?.pinnedIndex).toBe(2);
+    expect(stored?.pinnedBeforeWorktreeId).toBe("first");
   });
 });
 
