@@ -2095,6 +2095,63 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
     });
   });
 
+  describe("audio streaming (#11425)", () => {
+    // Audio joined the streaming route because the buffered core caps normal
+    // files at 512 KB — every real track would have 413'd before reaching the
+    // renderer.
+    it("streams an audio file far past the buffered cap instead of 413ing", async () => {
+      const size = 8 * 1024 * 1024;
+      const handle = makeVideoHandle(VIDEO_BYTES, { size });
+      await installHandle(handle);
+      const appProtocol = await import("../../utils/appProtocol.js");
+      vi.mocked(appProtocol.getMimeType).mockReturnValue("audio/mpeg");
+
+      const handler = await captureHandler();
+      const response = await handler(makeVideoRequest("/project/track.mp3", "/project"));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Length")).toBe(String(size));
+      expect(response.headers.get("Content-Type")).toBe("audio/mpeg");
+      expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+      expect(handle.readFile).not.toHaveBeenCalled();
+    });
+
+    it("serves a ranged audio request from the same stream path", async () => {
+      const appProtocol = await import("../../utils/appProtocol.js");
+      vi.mocked(appProtocol.getMimeType).mockReturnValue("audio/flac");
+
+      const handler = await captureHandler();
+      const response = await handler(
+        makeVideoRequest("/project/track.flac", "/project", { range: "bytes=4-9" })
+      );
+
+      expect(response.status).toBe(206);
+      expect(response.headers.get("Content-Range")).toBe(
+        `bytes 4-9/${String(VIDEO_BYTES.length)}`
+      );
+      expect(await response.text()).toBe("456789");
+    });
+
+    it("falls back to the buffered path when an audio name resolves to a non-media file", async () => {
+      // The canonical-path recheck is what stops an `.mp3` symlink pointed at a
+      // huge text file from being streamed uncapped under an audio MIME.
+      const fs = await import("fs/promises");
+      vi.mocked(fs.realpath).mockResolvedValue("/project/notes.txt");
+      const appProtocol = await import("../../utils/appProtocol.js");
+      vi.mocked(appProtocol.getMimeType).mockImplementation((p: string) =>
+        p.endsWith(".mp3") ? "audio/mpeg" : "text/plain"
+      );
+      const handle = makeVideoHandle(VIDEO_BYTES);
+      await installHandle(handle);
+
+      const handler = await captureHandler();
+      const response = await handler(makeVideoRequest("/project/track.mp3", "/project"));
+
+      expect(handle.createReadStream).not.toHaveBeenCalled();
+      expect(response.headers.get("Accept-Ranges")).toBeNull();
+    });
+  });
+
   describe("CORS gate (blob-URL playback fetch)", () => {
     // corsEnabled on the scheme only makes cross-origin fetch possible;
     // these pin the actual grant: ACAO echoed solely for the trusted app

@@ -1053,6 +1053,52 @@ describe("FilePane diff mode (#11274)", () => {
     });
   });
 
+  describe("audio preview (#11425)", () => {
+    // Same fetch-to-blob boundary as video above: audio rides the identical
+    // protocol path because electron#51442 covers <audio> too.
+    const audioFetchMock = vi.fn();
+    beforeEach(() => {
+      audioFetchMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        blob: () => Promise.resolve(new Blob(["x"])),
+      });
+      vi.stubGlobal("fetch", audioFetchMock);
+      URL.createObjectURL = vi.fn(() => "blob:app://daintree/audio-preview");
+      URL.revokeObjectURL = vi.fn();
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      audioFetchMock.mockReset();
+    });
+
+    it("renders an <audio> for a playable format without reading the file as text", async () => {
+      const { container } = await renderPane({ filePath: "/repo/media/track.mp3" });
+
+      await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+      // The text-read IPC path is what produced "Binary file — cannot display".
+      expect(String(audioFetchMock.mock.calls[0]?.[0])).toContain("daintree-file://");
+      expect(container.querySelector("audio")?.getAttribute("src")).toMatch(/^blob:/);
+      expect(readMock).not.toHaveBeenCalled();
+    });
+
+    it("shows a format message for audio Chromium can't decode, not the binary error", async () => {
+      const { container } = await renderPane({ filePath: "/repo/media/track.wma" });
+
+      expect(container.querySelector("audio")).toBeNull();
+      expect(readMock).not.toHaveBeenCalled();
+      expect(screen.getByText(/Can't play this audio format/)).toBeTruthy();
+    });
+
+    it("hides Retry for an unsupported audio format, since it can never succeed", async () => {
+      await renderPane({ filePath: "/repo/media/track.aiff" });
+
+      expect(screen.getByText(/Can't play this audio format/)).toBeTruthy();
+      expect(screen.queryByText("Retry")).toBeNull();
+    });
+  });
+
   describe("change lookup", () => {
     it("matches a change stored as an absolute path", async () => {
       seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);

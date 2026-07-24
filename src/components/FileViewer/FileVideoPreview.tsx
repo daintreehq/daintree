@@ -1,7 +1,6 @@
-import { useEffect, useEffectEvent, useMemo, useState } from "react";
-import type { FileReadErrorCode } from "@shared/types/ipc/files";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
-import { buildDaintreeFileUrl } from "./filePreviewKinds";
+import { useMediaBlobUrl } from "./useMediaBlobUrl";
+import type { MediaPreviewError } from "./useMediaBlobUrl";
 
 // Blob previews hold the whole file in Chromium's blob storage (memory, then
 // disk-backed), so cap what one preview may pull in. A 4K screen recording
@@ -9,16 +8,9 @@ import { buildDaintreeFileUrl } from "./filePreviewKinds";
 const VIDEO_PREVIEW_MAX_BYTES = 1024 * 1024 * 1024;
 
 /** Why a preview couldn't play, split so callers can render a headline and a way forward. */
-export interface VideoPreviewError {
-  /** Names what happened. Callers with a titled error surface use it as the title. */
-  title: string;
-  /** Second line naming the next action. */
-  description?: string;
-  /** Read-error code for panes that gate their error surface on one. */
-  code?: FileReadErrorCode;
-}
+export type VideoPreviewError = MediaPreviewError;
 
-const VIDEO_TOO_LARGE_ERROR: VideoPreviewError = {
+const VIDEO_TOO_LARGE_ERROR: MediaPreviewError = {
   title: "This video is too large to preview",
   description: "Open it outside Daintree to watch it.",
   code: "FILE_TOO_LARGE",
@@ -48,16 +40,8 @@ interface FileVideoPreviewProps {
  *
  * Shared by `FilePane`, `FileBrowserViewer`, and `DiffPane` so every surface
  * plays the same files the same way — mirroring `FileImagePreview`'s role for
- * images.
- *
- * The bytes are fetch()ed from the `daintree-file://` protocol into a Blob and
- * played through an object URL rather than pointing `<video src>` at the
- * protocol directly. Chromium's custom-scheme media loader is single-shot: it
- * cannot consume any follow-up range request for the same resource, so every
- * video whose moov atom trails the mdat (the default mp4 layout from most
- * recorders) dies with a demuxer error moments after playback starts
- * (electron/electron#51442; verified against Electron 42). fetch() doesn't go
- * through the media loader, and a blob URL is fully seekable in-renderer.
+ * images. `useMediaBlobUrl` owns the fetch-to-blob contract this and
+ * `FileAudioPreview` both depend on.
  */
 export function FileVideoPreview({
   filePath,
@@ -67,67 +51,14 @@ export function FileVideoPreview({
   onError,
   maxHeightClassName = "max-h-[70vh]",
 }: FileVideoPreviewProps) {
-  const src = useMemo(() => {
-    const url = buildDaintreeFileUrl(filePath, rootPath);
-    // Cache-busting query param only — the protocol handler ignores it.
-    // Null-checked, not truthiness: a numeric key of 0 is a valid value.
-    return reloadKey != null ? `${url}&v=${encodeURIComponent(reloadKey)}` : url;
-  }, [filePath, rootPath, reloadKey]);
-
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
-  const [fetching, setFetching] = useState(true);
-
-  // Effect events so the fetch effect keys on `src` alone — callers pass
-  // inline closures, and refetching the file on every parent render would
-  // discard playback position each time anything else in the pane changes.
-  const reportError = useEffectEvent((error?: VideoPreviewError) => onError?.(error));
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let url: string | null = null;
-    setFetching(true);
-    setObjectUrl(null);
-
-    void fetch(src, { signal: controller.signal })
-      .then(async (response) => {
-        // Guarded before any state write: an already-settled fetch promise can
-        // run this reaction after cleanup aborted it, and reporting then would
-        // clear the skeleton / flag an error on the file shown NEXT.
-        if (controller.signal.aborted) return;
-        if (!response.ok) throw new Error(`daintree-file responded ${response.status}`);
-        const declaredLength = Number(response.headers.get("content-length"));
-        if (Number.isFinite(declaredLength) && declaredLength > VIDEO_PREVIEW_MAX_BYTES) {
-          // Drop the unread body so the protocol stream (and its fd) closes
-          // now rather than when the response gets collected.
-          void response.body?.cancel().catch(() => {});
-          setFetching(false);
-          reportError(VIDEO_TOO_LARGE_ERROR);
-          return;
-        }
-        const blob = await response.blob();
-        if (controller.signal.aborted) return;
-        if (blob.size > VIDEO_PREVIEW_MAX_BYTES) {
-          setFetching(false);
-          reportError(VIDEO_TOO_LARGE_ERROR);
-          return;
-        }
-        url = URL.createObjectURL(blob);
-        setObjectUrl(url);
-        setFetching(false);
-      })
-      .catch(() => {
-        if (controller.signal.aborted) return;
-        setFetching(false);
-        reportError();
-      });
-
-    return () => {
-      controller.abort();
-      // Safe while the <video> below is unmounting with it: revoking detaches
-      // the URL from the blob for new loads; the element is gone either way.
-      if (url) URL.revokeObjectURL(url);
-    };
-  }, [src]);
+  const { objectUrl, fetching } = useMediaBlobUrl({
+    filePath,
+    rootPath,
+    reloadKey,
+    maxBytes: VIDEO_PREVIEW_MAX_BYTES,
+    tooLargeError: VIDEO_TOO_LARGE_ERROR,
+    onError,
+  });
 
   return (
     <div className="flex items-center justify-center p-6 min-h-[300px]">

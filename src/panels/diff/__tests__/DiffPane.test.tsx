@@ -698,3 +698,112 @@ describe("DiffPane — video current-version mode (#11382)", () => {
     expect(titles).toContain("No working-tree version to play");
   });
 });
+
+describe("DiffPane — audio current-version mode (#11425)", () => {
+  // Same fetch/object-URL boundary as the video suite: audio shares the
+  // protocol path because electron#51442 covers <audio> too.
+  const audioFetchMock = vi.fn();
+  beforeEach(() => {
+    audioFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      blob: () => Promise.resolve(new Blob(["x"])),
+    });
+    vi.stubGlobal("fetch", audioFetchMock);
+    let objectUrlSequence = 0;
+    URL.createObjectURL = vi.fn(() => `blob:app://daintree/audio-${objectUrlSequence++}`);
+    URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    audioFetchMock.mockReset();
+  });
+
+  it("plays the working-tree version instead of rendering a diff", async () => {
+    seedPanel({
+      filePath: "media/track.mp3",
+      fileStatus: "modified",
+      changeSet: [entry("media/track.mp3")],
+    });
+    const { container } = renderPane();
+
+    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+    expect(String(audioFetchMock.mock.calls[0]?.[0])).toContain(
+      encodeURIComponent("/repo/media/track.mp3")
+    );
+    expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+  });
+
+  it("hides the text-diff layout controls in audio mode", () => {
+    seedPanel({
+      filePath: "media/track.mp3",
+      fileStatus: "modified",
+      changeSet: [entry("media/track.mp3")],
+    });
+    renderPane();
+
+    expect(screen.queryByRole("button", { name: "Unified" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
+  });
+
+  it("reloads the track from the toolbar Refresh (nonce-busted refetch)", async () => {
+    const retry = vi.fn();
+    useDiffContentMock.mockReturnValue({ content: "diff --git a/x b/x", stale: false, retry });
+    seedPanel({
+      filePath: "media/track.mp3",
+      fileStatus: "modified",
+      changeSet: [entry("media/track.mp3")],
+    });
+    const { container } = renderPane();
+    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+    const before = container.querySelector("audio")?.getAttribute("src");
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitFor(() => expect(audioFetchMock).toHaveBeenCalledTimes(2));
+    expect(String(audioFetchMock.mock.calls[1]?.[0])).not.toBe(
+      String(audioFetchMock.mock.calls[0]?.[0])
+    );
+    await waitFor(() =>
+      expect(container.querySelector("audio")?.getAttribute("src")).not.toBe(before)
+    );
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses audio-specific copy on a playback failure, not the video wording", async () => {
+    seedPanel({
+      filePath: "media/track.mp3",
+      fileStatus: "modified",
+      changeSet: [entry("media/track.mp3")],
+    });
+    const { container } = renderPane();
+    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+
+    fireEvent.error(container.querySelector("audio")!);
+
+    expect(container.querySelector("audio")).toBeNull();
+    const titles = Array.from(container.querySelectorAll('[data-testid="empty-state-mock"]')).map(
+      (el) => el.getAttribute("data-title")
+    );
+    expect(titles).toContain("This audio file couldn't be played");
+    expect(titles).not.toContain("This video couldn't be played");
+  });
+
+  it("shows a quiet empty state for a deleted audio file", () => {
+    seedPanel({
+      filePath: "media/track.mp3",
+      fileStatus: "deleted",
+      changeSet: [entry("media/track.mp3", "deleted")],
+    });
+    const { container } = renderPane();
+
+    expect(container.querySelector("audio")).toBeNull();
+    const descriptions = Array.from(
+      container.querySelectorAll('[data-testid="empty-state-mock"]')
+    ).map((el) => el.getAttribute("data-description"));
+    // The shared title is kind-agnostic; the description must name audio so it
+    // doesn't tell someone their track was a video.
+    expect(descriptions.some((d) => d?.includes("audio file was deleted"))).toBe(true);
+  });
+});
