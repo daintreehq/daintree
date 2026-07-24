@@ -174,7 +174,8 @@ const DAINTREE_IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 const LARGE_IMAGE_MIME_TYPES = new Set([
   "image/png",
   // Animated PNG frames are stored close to raw, so an APNG clears 512 KB far
-  // sooner than a still image of the same dimensions.
+  // sooner than a still image of the same dimensions. Not a new exposure: the
+  // same bytes already got this ceiling whenever they were named .png.
   "image/apng",
   "image/jpeg",
   "image/gif",
