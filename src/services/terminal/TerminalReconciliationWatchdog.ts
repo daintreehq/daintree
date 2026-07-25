@@ -516,7 +516,6 @@ export class TerminalReconciliationWatchdog {
                   xtermRows: managed.terminal.rows,
                   proposedCols: proposal.cols,
                   proposedRows: proposal.rows,
-                  isAltBuffer: managed.isAltBuffer === true,
                 }
               );
             } else {
@@ -535,7 +534,6 @@ export class TerminalReconciliationWatchdog {
                   xtermRows: managed.terminal.rows,
                   proposedCols: proposal.cols,
                   proposedRows: proposal.rows,
-                  isAltBuffer: managed.isAltBuffer === true,
                 }
               );
               if (this.deps.reconcileRevealGeometry(id)) {

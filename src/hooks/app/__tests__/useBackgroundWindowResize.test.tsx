@@ -49,12 +49,12 @@ describe("useBackgroundWindowResize", () => {
   let lastCallback: ((payload: ResizePayload) => void) | null = null;
   let emitPhase: (phase: LifecyclePhase) => void;
   let unsubscribe: ReturnType<typeof vi.fn>;
-  let unsubscribeLifecycle: ReturnType<typeof vi.fn>;
+  let unsubscribeLifecycle: ReturnType<typeof vi.fn<() => void>>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     unsubscribe = vi.fn();
-    unsubscribeLifecycle = vi.fn();
+    unsubscribeLifecycle = vi.fn<() => void>();
     lastCallback = null;
     const phaseHandlers: Array<(phase: LifecyclePhase) => void> = [];
     emitPhase = (phase) => phaseHandlers.forEach((handler) => handler(phase));

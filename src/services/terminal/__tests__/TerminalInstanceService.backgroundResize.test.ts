@@ -95,7 +95,13 @@ function setCached(cached: boolean) {
 
 describe("TerminalInstanceService applyBackgroundWindowResize", () => {
   let service: BackgroundResizeTestService;
-  let applyBackgroundResizeSpy: ReturnType<typeof vi.spyOn>;
+  // Typed rather than the bare vi.spyOn return so `.mock.calls` stays tuple-typed
+  // — an untyped spy makes every destructured call argument an implicit any.
+  let applyBackgroundResizeSpy: ReturnType<
+    typeof vi.fn<
+      (id: string, width: number, height: number) => { cols: number; rows: number } | null
+    >
+  >;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -107,7 +113,7 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
     service.resetBackgroundResizeBasis();
     applyBackgroundResizeSpy = vi
       .spyOn(service.resizeController, "applyBackgroundResize")
-      .mockReturnValue(null) as ReturnType<typeof vi.spyOn>;
+      .mockReturnValue(null);
     // The production state this method exists to serve: main has detached and
     // hidden the view, but a child WebContentsView keeps reporting "visible"
     // (#11443). Cases that assert a resize is applied therefore only pass
