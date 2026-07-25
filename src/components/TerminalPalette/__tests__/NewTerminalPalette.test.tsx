@@ -148,8 +148,8 @@ describe("NewTerminalPalette results region (#11431)", () => {
   it("omits the active descendant when there are no results", () => {
     const { getByRole } = renderPalette({ results: [], selectedIndex: -1 });
 
-    expect(getByRole("group", { name: "Terminal types" }).hasAttribute("aria-activedescendant")).toBe(
-      false
-    );
+    expect(
+      getByRole("group", { name: "Terminal types" }).hasAttribute("aria-activedescendant")
+    ).toBe(false);
   });
 });
