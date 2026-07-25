@@ -877,7 +877,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Alt+=",
     scope: "global",
     priority: 10,
-    description: "Switch project forward",
+    description: "Go back to previous project",
     category: "Project",
   },
   {
@@ -885,7 +885,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+Alt+=",
     scope: "global",
     priority: 10,
-    description: "Switch project backward",
+    description: "Go forward to next project",
     category: "Project",
   },
   {

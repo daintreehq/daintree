@@ -59,67 +59,42 @@ beforeEach(() => {
 });
 
 describe("projectActions adversarial", () => {
-  describe("MRU cycle fallbacks", () => {
-    function mockMruState(currentProject: { id: string } | null = { id: "p-current" }) {
-      const switchProject = vi.fn().mockResolvedValue(undefined);
-      const reopenProject = vi.fn().mockResolvedValue(undefined);
-      const projects: Project[] = [
-        { id: "p-current", path: "/p-current", name: "Current", emoji: "tree", lastOpened: 500 },
-        { id: "p-recent", path: "/p-recent", name: "Recent", emoji: "leaf", lastOpened: 400 },
-        { id: "p-older", path: "/p-older", name: "Older", emoji: "branch", lastOpened: 300 },
-      ];
-
-      projectStoreMock.getState.mockReturnValue({
-        currentProject,
-        projects,
-        switchProject,
-        reopenProject,
-      });
-      projectMruMock.getMruProjects.mockReturnValue(projects);
-
-      return { switchProject, reopenProject };
+  describe("history navigation", () => {
+    // Destination selection belongs to the main-process history service; these
+    // actions only have to hand it the right direction and stay dispatchable
+    // from the command palette.
+    function mockHistory() {
+      const peek = vi.fn().mockResolvedValue(null);
+      // Node environment: no jsdom window, so the bridge is stubbed on globalThis.
+      (globalThis as unknown as { window: unknown }).window = {
+        electron: { projectHistory: { peek } },
+      };
+      return peek;
     }
 
-    it("project.mruCycleOlder switches to the most recent other project", async () => {
-      const { switchProject, reopenProject } = mockMruState();
-
+    it("project.mruCycleOlder steps back", async () => {
+      const peek = mockHistory();
       const { run } = setupActions();
+
       await run("project.mruCycleOlder");
 
-      expect(switchProject).toHaveBeenCalledWith("p-recent");
-      expect(reopenProject).not.toHaveBeenCalled();
+      expect(peek).toHaveBeenCalledWith("back");
     });
 
-    it("project.mruCycleNewer switches to the oldest other project", async () => {
-      const { switchProject, reopenProject } = mockMruState();
-
+    it("project.mruCycleNewer steps forward", async () => {
+      const peek = mockHistory();
       const { run } = setupActions();
+
       await run("project.mruCycleNewer");
 
-      expect(switchProject).toHaveBeenCalledWith("p-older");
-      expect(reopenProject).not.toHaveBeenCalled();
+      expect(peek).toHaveBeenCalledWith("forward");
     });
 
-    it("project.mruCycleOlder returns to the MRU head when a scratch cleared the current project", async () => {
-      const { switchProject, reopenProject } = mockMruState(null);
-
+    it("does not throw when there is nowhere to go", async () => {
+      mockHistory();
       const { run } = setupActions();
-      await run("project.mruCycleOlder");
 
-      expect(switchProject).toHaveBeenCalledTimes(1);
-      expect(switchProject).toHaveBeenCalledWith("p-current");
-      expect(reopenProject).not.toHaveBeenCalled();
-    });
-
-    it("project.mruCycleNewer wraps to the MRU tail when a scratch cleared the current project", async () => {
-      const { switchProject, reopenProject } = mockMruState(null);
-
-      const { run } = setupActions();
-      await run("project.mruCycleNewer");
-
-      expect(switchProject).toHaveBeenCalledTimes(1);
-      expect(switchProject).toHaveBeenCalledWith("p-older");
-      expect(reopenProject).not.toHaveBeenCalled();
+      await expect(run("project.mruCycleOlder")).resolves.not.toThrow();
     });
   });
 

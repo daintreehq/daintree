@@ -6,6 +6,7 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { SurfaceViewManager } from "./SurfaceViewManager.js";
 import type { SurfacePortBroker } from "./SurfacePortBroker.js";
 import { DisposableStore } from "../utils/lifecycle.js";
+import { disposeProjectHistory } from "../services/ProjectHistoryService.js";
 
 /**
  * Narrow structural type for the Electron `app` module — exposes only the
@@ -202,6 +203,11 @@ export class WindowRegistry {
       this.appViewWebContentsIds.delete(windowId);
     }
     this.windows.delete(windowId);
+
+    // Window ids are not guaranteed unique forever, so a stack left behind here
+    // could resurface in an unrelated window that happens to be given the same
+    // id — its Back would step into projects it never visited.
+    disposeProjectHistory(windowId);
 
     // Drop the closing window from the focus history before falling back.
     const historyIdx = this.focusHistory.indexOf(windowId);

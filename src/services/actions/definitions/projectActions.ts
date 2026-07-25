@@ -7,7 +7,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { notify, EVENT_KIND_TO_SETTING_KEY, EVENT_KIND_LABEL } from "@/lib/notify";
 import type { NotificationEventKind } from "@/lib/notify";
-import { switchProjectByMruDirection } from "@/lib/projectMruSwitch";
+import { switchProjectByHistory } from "@/lib/projectHistoryNav";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export function registerProjectActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
@@ -27,24 +27,24 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.mruCycleOlder", () => ({
     id: "project.mruCycleOlder",
-    title: "Switch Down Project List",
-    description: "Switch to the next project in MRU order",
+    title: "Go Back to Previous Project",
+    description: "Step back through the projects this window has visited",
     category: "project",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: () => switchProjectByMruDirection("older"),
+    run: () => switchProjectByHistory("back"),
   }));
 
   actions.set("project.mruCycleNewer", () => ({
     id: "project.mruCycleNewer",
-    title: "Switch Up Project List",
-    description: "Switch to the previous project in MRU order",
+    title: "Go Forward to Next Project",
+    description: "Step forward again after going back",
     category: "project",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: () => switchProjectByMruDirection("newer"),
+    run: () => switchProjectByHistory("forward"),
   }));
 
   actions.set("project.add", () => ({

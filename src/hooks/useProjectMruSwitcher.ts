@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { switchProjectByMruDirection, type ProjectMruCycleDirection } from "@/lib/projectMruSwitch";
+import { switchProjectByHistory, type ProjectHistoryDirection } from "@/lib/projectHistoryNav";
 
 export type UseProjectMruSwitcherReturn = void;
 
@@ -12,9 +12,9 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return false;
 }
 
-function getTriggerDirection(event: KeyboardEvent): ProjectMruCycleDirection | null {
+function getTriggerDirection(event: KeyboardEvent): ProjectHistoryDirection | null {
   if (event.code === "Equal" || event.code === "NumpadAdd") {
-    return event.shiftKey ? "newer" : "older";
+    return event.shiftKey ? "forward" : "back";
   }
   return null;
 }
@@ -26,11 +26,11 @@ function consumeEvent(event: KeyboardEvent): void {
 }
 
 /**
- * Immediate MRU project switcher.
+ * Back/forward navigation over the projects this window has visited.
  *
- * `Cmd+Alt+=` cycles forward (most-recent non-current project).
- * `Cmd+Shift+Alt+=` inverts direction and cycles backward (least-recent
- * non-current project).
+ * `Cmd+Alt+=` goes back, `Cmd+Shift+Alt+=` goes forward. Both walk a real
+ * history stack owned by the main process, so a third project is reachable —
+ * the previous recency walk could only ever bounce between two.
  *
  * Uses capture-phase window listeners so the event fires before xterm's
  * custom key handler and before `KeybindingService` dispatches the matching
@@ -49,7 +49,7 @@ export function useProjectMruSwitcher(): UseProjectMruSwitcherReturn {
 
       consumeEvent(event);
       if (event.repeat) return;
-      void switchProjectByMruDirection(direction);
+      void switchProjectByHistory(direction);
     };
 
     window.addEventListener("keydown", handleKeyDown, { capture: true });

@@ -9,6 +9,7 @@ import { contextInjectionTracker } from "./ContextInjectionTracker.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { broadcastProjectSwitchUpdates } from "../ipc/projectSwitchBroadcast.js";
+import { getProjectHistory } from "./ProjectHistoryService.js";
 import { randomUUID } from "crypto";
 import { store } from "../store.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
@@ -86,6 +87,12 @@ export class ProjectSwitchService {
       // carries the active project; the departing project's bumped
       // `lastOpened` would otherwise stay stale in cached stores (#8561).
       broadcastProjectSwitchUpdates(previousProjectId, projectId);
+
+      // The legacy non-PVM fallback still has to feed history; the normal path
+      // records from `activateProjectView`, which this branch never reaches.
+      if (this.windowId !== null) {
+        getProjectHistory(this.windowId).record(projectId);
+      }
 
       const updatedProject = projectStore.getProjectById(projectId);
       if (!updatedProject) {

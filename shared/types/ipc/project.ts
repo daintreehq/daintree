@@ -138,5 +138,21 @@ export interface ProjectStatusEntry {
   oldestWaitingSince?: number;
 }
 
+/** Direction of a step through project history, mirroring browser back/forward. */
+export type ProjectHistoryDirection = "back" | "forward";
+
+/**
+ * Where a back/forward step through project history landed, so the renderer can
+ * name the destination without re-deriving it from a project list that may not
+ * include it yet.
+ */
+export interface ProjectHistoryTarget {
+  projectId: string;
+  name: string;
+  emoji: string;
+  /** Whether a step in the opposite direction would also land somewhere. */
+  canGoOpposite: boolean;
+}
+
 /** Project status map pushed from main process, keyed by project ID */
 export type ProjectStatusMap = Record<string, ProjectStatusEntry>;

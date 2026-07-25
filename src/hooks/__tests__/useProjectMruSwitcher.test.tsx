@@ -2,44 +2,10 @@
 import { act, render, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { switchProjectMock, reopenProjectMock, notifyMock, projectState, useProjectStoreMock } =
-  vi.hoisted(() => {
-    const switchProjectMock = vi.fn().mockResolvedValue(undefined);
-    const reopenProjectMock = vi.fn().mockResolvedValue(undefined);
-    const notifyMock = vi.fn().mockReturnValue("");
-
-    const projectState = {
-      projects: [
-        { id: "p-current", path: "/p-current", name: "Current", emoji: "tree", lastOpened: 500 },
-        { id: "p-recent", path: "/p-recent", name: "Recent", emoji: "apple", lastOpened: 400 },
-        { id: "p-older", path: "/p-older", name: "Older", emoji: "carrot", lastOpened: 300 },
-        { id: "p-oldest", path: "/p-oldest", name: "Oldest", emoji: "cactus", lastOpened: 200 },
-      ] as Array<{
-        id: string;
-        path: string;
-        name: string;
-        emoji: string;
-        lastOpened: number;
-        status?: "active" | "background" | "closed" | "missing";
-      }>,
-      currentProject: { id: "p-current" } as { id: string } | null,
-      switchProject: switchProjectMock,
-      reopenProject: reopenProjectMock,
-    };
-
-    const useProjectStoreMock = Object.assign(
-      vi.fn((selector: (state: typeof projectState) => unknown) => selector(projectState)),
-      { getState: () => projectState }
-    );
-
-    return {
-      switchProjectMock,
-      reopenProjectMock,
-      notifyMock,
-      projectState,
-      useProjectStoreMock,
-    };
-  });
+const { peekMock, notifyMock } = vi.hoisted(() => ({
+  peekMock: vi.fn().mockResolvedValue(null),
+  notifyMock: vi.fn().mockReturnValue(""),
+}));
 
 const { actionDispatchMock, keybindingServiceMock } = vi.hoisted(() => {
   const actionDispatchMock = vi.fn(async () => ({ ok: true, result: undefined }));
@@ -60,12 +26,19 @@ const { actionDispatchMock, keybindingServiceMock } = vi.hoisted(() => {
   return { actionDispatchMock, keybindingServiceMock };
 });
 
-vi.mock("@/store/projectStore", () => ({
-  useProjectStore: useProjectStoreMock,
-}));
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
-vi.mock("@/lib/notify", () => ({
-  notify: notifyMock,
+// The nav module reads the project store to pick switch-vs-reopen; this suite
+// only cares that the keyboard reaches it.
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: {
+    getState: () => ({
+      currentProject: { id: "current" },
+      projects: [],
+      switchProject: vi.fn().mockResolvedValue(undefined),
+      reopenProject: vi.fn().mockResolvedValue(undefined),
+    }),
+  },
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -92,9 +65,7 @@ vi.mock("@/services/keybindingWhenContext", () => ({
   buildKeybindingWhenContext: vi.fn(() => ({})),
 }));
 
-vi.mock("@/utils/logger", () => ({
-  logError: vi.fn(),
-}));
+vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
 import { useProjectMruSwitcher } from "../useProjectMruSwitcher";
 import { useGlobalKeybindings } from "../useGlobalKeybindings";
@@ -135,23 +106,26 @@ function AppLikeKeybindingHost() {
   return null;
 }
 
+/**
+ * Which project a step lands on belongs to the history service
+ * (`ProjectHistoryService.test.ts`). This suite owns the keyboard contract: the
+ * shortcut has to survive being pressed inside a terminal, stay out of the way
+ * while the user is typing, and consume its event so nothing dispatches twice.
+ */
 describe("useProjectMruSwitcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    projectState.currentProject = { id: "p-current" };
-    projectState.projects = [
-      { id: "p-current", path: "/p-current", name: "Current", emoji: "tree", lastOpened: 500 },
-      { id: "p-recent", path: "/p-recent", name: "Recent", emoji: "apple", lastOpened: 400 },
-      { id: "p-older", path: "/p-older", name: "Older", emoji: "carrot", lastOpened: 300 },
-      { id: "p-oldest", path: "/p-oldest", name: "Oldest", emoji: "cactus", lastOpened: 200 },
-    ];
+    peekMock.mockResolvedValue(null);
+    (window as unknown as { electron: unknown }).electron = {
+      projectHistory: { peek: peekMock },
+    };
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("Cmd+Alt+- is ignored so the shortcut remains free", () => {
+  it("leaves Cmd+Alt+- free", () => {
     renderHook(() => useProjectMruSwitcher());
 
     let event: KeyboardEvent | undefined;
@@ -160,152 +134,105 @@ describe("useProjectMruSwitcher", () => {
     });
 
     expect(event?.defaultPrevented).toBe(false);
-    expect(switchProjectMock).not.toHaveBeenCalled();
-    expect(reopenProjectMock).not.toHaveBeenCalled();
+    expect(peekMock).not.toHaveBeenCalled();
   });
 
-  it("Cmd+Alt+= immediately switches forward through MRU", () => {
+  it("steps back on Cmd+Alt+=", () => {
     renderHook(() => useProjectMruSwitcher());
 
     act(() => {
       keyDown("Equal");
     });
 
-    expect(switchProjectMock).toHaveBeenCalledWith("p-recent");
+    expect(peekMock).toHaveBeenCalledWith("back");
   });
 
-  it("Cmd+Shift+Alt+= switches backward through MRU (Shift inverts direction)", () => {
+  it("steps forward when Shift is held", () => {
     renderHook(() => useProjectMruSwitcher());
 
     act(() => {
       keyDown("Equal", { shiftKey: true });
     });
 
-    // Shift maps to "newer" → least-recently-opened non-current project
-    expect(switchProjectMock).toHaveBeenCalledWith("p-oldest");
+    expect(peekMock).toHaveBeenCalledWith("forward");
   });
 
-  it("numpad add switches forward and numpad subtract remains free", () => {
+  it("accepts numpad add and leaves numpad subtract free", () => {
     renderHook(() => useProjectMruSwitcher());
 
     act(() => {
       keyDown("NumpadAdd");
     });
-    expect(switchProjectMock).toHaveBeenCalledWith("p-recent");
+    expect(peekMock).toHaveBeenCalledWith("back");
 
-    vi.clearAllMocks();
-
+    peekMock.mockClear();
     let event: KeyboardEvent | undefined;
     act(() => {
       event = keyDown("NumpadSubtract");
     });
     expect(event?.defaultPrevented).toBe(false);
-    expect(switchProjectMock).not.toHaveBeenCalled();
+    expect(peekMock).not.toHaveBeenCalled();
   });
 
-  it("two-project state lets plus toggle to the other project", () => {
-    projectState.projects = [
-      { id: "p-current", path: "/p-current", name: "Current", emoji: "tree", lastOpened: 500 },
-      { id: "p-other", path: "/p-other", name: "Other", emoji: "leaf", lastOpened: 400 },
-    ];
+  it("consumes auto-repeat without stepping again", () => {
     renderHook(() => useProjectMruSwitcher());
-
-    act(() => {
-      keyDown("Equal");
-    });
-    expect(switchProjectMock).toHaveBeenCalledWith("p-other");
-  });
-
-  it("repeat keydowns are consumed but do not switch again", () => {
-    render(<AppLikeKeybindingHost />);
 
     let event: KeyboardEvent | undefined;
     act(() => {
       event = keyDown("Equal", { repeat: true });
     });
 
+    // Holding the keys down must not machine-gun through the whole stack, but
+    // the event is still swallowed so nothing else acts on it.
     expect(event?.defaultPrevented).toBe(true);
-    expect(switchProjectMock).not.toHaveBeenCalled();
-    expect(keybindingServiceMock.resolveKeybinding).not.toHaveBeenCalled();
-    expect(actionDispatchMock).not.toHaveBeenCalled();
+    expect(peekMock).not.toHaveBeenCalled();
   });
 
-  it("single-project state is a no-op", () => {
-    projectState.projects = [
-      { id: "p-current", path: "/p-current", name: "Current", emoji: "tree", lastOpened: 500 },
-    ];
-    renderHook(() => useProjectMruSwitcher());
-
-    act(() => {
-      keyDown("Equal");
-    });
-
-    expect(switchProjectMock).not.toHaveBeenCalled();
-    expect(reopenProjectMock).not.toHaveBeenCalled();
-  });
-
-  it("IME composition keydown is ignored", () => {
+  it("ignores an IME composition keydown", () => {
     renderHook(() => useProjectMruSwitcher());
 
     act(() => {
       keyDown("Equal", { isComposing: true });
     });
 
-    expect(switchProjectMock).not.toHaveBeenCalled();
+    expect(peekMock).not.toHaveBeenCalled();
   });
 
-  it("commits background project via reopenProject", () => {
-    projectState.projects = [
-      { id: "p-current", path: "/p-current", name: "Current", emoji: "tree", lastOpened: 500 },
-      {
-        id: "p-bg",
-        path: "/p-bg",
-        name: "BG",
-        emoji: "leaf",
-        lastOpened: 400,
-        status: "background",
-      },
-    ];
+  it("stays out of the way while typing in an input", () => {
     renderHook(() => useProjectMruSwitcher());
-
-    act(() => {
-      keyDown("Equal");
-    });
-
-    expect(reopenProjectMock).toHaveBeenCalledWith("p-bg");
-    expect(switchProjectMock).not.toHaveBeenCalled();
-  });
-
-  it("no-ops when target is an editable input outside xterm", () => {
-    renderHook(() => useProjectMruSwitcher());
-
     const input = document.createElement("input");
     document.body.appendChild(input);
+
+    let event: KeyboardEvent | undefined;
     act(() => {
-      keyDown("Equal", { target: input });
+      event = keyDown("Equal", { target: input });
     });
 
-    expect(switchProjectMock).not.toHaveBeenCalled();
+    expect(peekMock).not.toHaveBeenCalled();
+    expect(event?.defaultPrevented).toBe(false);
     input.remove();
   });
 
-  it("still fires inside an .xterm container", () => {
+  it("fires inside a terminal", () => {
     renderHook(() => useProjectMruSwitcher());
-
     const term = document.createElement("div");
     term.className = "xterm";
+    const child = document.createElement("div");
+    term.appendChild(child);
     document.body.appendChild(term);
+
     act(() => {
-      keyDown("Equal", { target: term });
+      keyDown("Equal", { target: child });
     });
 
-    expect(switchProjectMock).toHaveBeenCalledWith("p-recent");
+    // Terminals are where this shortcut is most useful, so the editable-target
+    // guard must not treat xterm's DOM as a text field.
+    expect(peekMock).toHaveBeenCalledWith("back");
     term.remove();
   });
 
-  it("fires inside xterm helper textarea", () => {
+  it("fires inside the xterm helper textarea", () => {
     renderHook(() => useProjectMruSwitcher());
-
     const term = document.createElement("div");
     term.className = "xterm";
     const helper = document.createElement("textarea");
@@ -317,25 +244,23 @@ describe("useProjectMruSwitcher", () => {
       keyDown("Equal", { target: helper });
     });
 
-    expect(switchProjectMock).toHaveBeenCalledWith("p-recent");
+    expect(peekMock).toHaveBeenCalledWith("back");
     term.remove();
   });
 
-  it("switchProject rejection surfaces via notify", async () => {
-    const err = new Error("boom");
-    switchProjectMock.mockRejectedValueOnce(err);
-
+  it("surfaces a failed step with a retry", async () => {
+    peekMock.mockRejectedValueOnce(new Error("switch failed"));
     renderHook(() => useProjectMruSwitcher());
 
-    act(() => {
+    await act(async () => {
       keyDown("Equal");
+      await Promise.resolve();
     });
 
-    await vi.waitFor(() => {
-      expect(notifyMock).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "error", message: "boom" })
-      );
-    });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const call = notifyMock.mock.calls[0]![0] as { type: string; title: string };
+    expect(call.type).toBe("error");
+    expect(call.title).toBe("Couldn't switch project");
   });
 
   it("calls preventDefault and stopPropagation on handled keydowns", () => {
@@ -369,128 +294,21 @@ describe("useProjectMruSwitcher", () => {
       keyDown("Equal");
     });
 
-    expect(switchProjectMock).toHaveBeenCalledWith("p-recent");
+    // The capture-phase listener runs first and stops propagation, so the
+    // registered action must not also fire and step twice.
+    expect(peekMock).toHaveBeenCalledTimes(1);
     expect(keybindingServiceMock.resolveKeybinding).not.toHaveBeenCalled();
     expect(actionDispatchMock).not.toHaveBeenCalled();
   });
 
-  it("forces current project out of the selectable MRU set even when not newest", () => {
-    projectState.currentProject = { id: "p-stale" };
-    projectState.projects = [
-      { id: "p-stale", path: "/p-stale", name: "Stale", emoji: "tree", lastOpened: 100 },
-      { id: "p-fresh", path: "/p-fresh", name: "Fresh", emoji: "apple", lastOpened: 500 },
-    ];
+  it("ignores keydowns without both modifiers", () => {
     renderHook(() => useProjectMruSwitcher());
 
     act(() => {
-      keyDown("Equal");
+      keyDown("Equal", { metaKey: false });
+      keyDown("Equal", { altKey: false });
     });
 
-    expect(switchProjectMock).toHaveBeenCalledWith("p-fresh");
-  });
-
-  it("ignores keydowns when modifiers are absent", () => {
-    renderHook(() => useProjectMruSwitcher());
-
-    const event = keyDown("Equal", { metaKey: false, altKey: false });
-
-    expect(event.defaultPrevented).toBe(false);
-    expect(switchProjectMock).not.toHaveBeenCalled();
-  });
-
-  describe("with a scratch active (no current project)", () => {
-    beforeEach(() => {
-      // Switching to a scratch clears `currentProject` but leaves every
-      // project's `lastOpened` untouched, so the pre-scratch project is still
-      // the MRU head. Statuses here are the post-reconciliation snapshot, once
-      // main has repaired the departed row to "background" (#11085).
-      projectState.currentProject = null;
-      projectState.projects = [
-        {
-          id: "p-prev",
-          path: "/p-prev",
-          name: "Previous",
-          emoji: "tree",
-          lastOpened: 500,
-          status: "background",
-        },
-        {
-          id: "p-older",
-          path: "/p-older",
-          name: "Older",
-          emoji: "carrot",
-          lastOpened: 300,
-          status: "background",
-        },
-      ];
-    });
-
-    it("Cmd+Alt+= returns to the project active before the scratch", () => {
-      renderHook(() => useProjectMruSwitcher());
-
-      act(() => {
-        keyDown("Equal");
-      });
-
-      expect(reopenProjectMock).toHaveBeenCalledTimes(1);
-      expect(reopenProjectMock).toHaveBeenCalledWith("p-prev");
-      expect(switchProjectMock).not.toHaveBeenCalled();
-    });
-
-    it("Cmd+Shift+Alt+= wraps to the least-recent project", () => {
-      renderHook(() => useProjectMruSwitcher());
-
-      act(() => {
-        keyDown("Equal", { shiftKey: true });
-      });
-
-      expect(reopenProjectMock).toHaveBeenCalledTimes(1);
-      expect(reopenProjectMock).toHaveBeenCalledWith("p-older");
-      expect(switchProjectMock).not.toHaveBeenCalled();
-    });
-
-    it("still targets the pre-scratch project before main reconciles its status", () => {
-      // The immediate post-switch snapshot: the departed row is still "active"
-      // because the scratch switch never demoted or broadcast it.
-      projectState.projects = [
-        {
-          id: "p-prev",
-          path: "/p-prev",
-          name: "Previous",
-          emoji: "tree",
-          lastOpened: 500,
-          status: "active",
-        },
-        {
-          id: "p-older",
-          path: "/p-older",
-          name: "Older",
-          emoji: "carrot",
-          lastOpened: 300,
-          status: "background",
-        },
-      ];
-      renderHook(() => useProjectMruSwitcher());
-
-      act(() => {
-        keyDown("Equal");
-      });
-
-      expect(switchProjectMock).toHaveBeenCalledTimes(1);
-      expect(switchProjectMock).toHaveBeenCalledWith("p-prev");
-      expect(reopenProjectMock).not.toHaveBeenCalled();
-    });
-
-    it("no-ops when no projects exist at all", () => {
-      projectState.projects = [];
-      renderHook(() => useProjectMruSwitcher());
-
-      act(() => {
-        keyDown("Equal");
-      });
-
-      expect(switchProjectMock).not.toHaveBeenCalled();
-      expect(reopenProjectMock).not.toHaveBeenCalled();
-    });
+    expect(peekMock).not.toHaveBeenCalled();
   });
 });

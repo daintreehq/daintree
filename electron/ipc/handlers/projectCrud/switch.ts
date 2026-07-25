@@ -10,6 +10,7 @@ import { distributePortsToView } from "../../../window/portDistribution.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { ProjectSwitchService } from "../../../services/ProjectSwitchService.js";
+import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
 import { broadcastProjectSwitchUpdates } from "../../projectSwitchBroadcast.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
@@ -447,6 +448,16 @@ async function activateProjectView(
   }
   const { view, isNew } = swapResult;
   const swapMs = Math.round(performance.now() - activateStart);
+
+  // Fold the completed switch into this window's back/forward history. Recorded
+  // here — after the view swap has actually committed — because this is the
+  // path every real switch takes: `ProjectSwitchService` only runs on the
+  // legacy non-PVM fallback, so recording there alone left history empty in
+  // normal use. `windowId` comes from the captured operation, so a second
+  // window records into its own stack rather than the first window's.
+  if (windowId !== undefined) {
+    getProjectHistory(windowId).record(projectId);
+  }
 
   // Mutually exclusive with scratch: switching to a project clears any
   // active scratch pointer + notifies renderers so palette/UI state stays
