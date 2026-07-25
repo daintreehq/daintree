@@ -11,11 +11,14 @@ let ctx: AppContext;
 let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
 
-// Tall enough to overflow the preview in both source and rendered mode.
-// Blank-line separated so the rendered document is a stack of real <p>
-// elements rather than one wrapped paragraph.
+// Tall enough to overflow the preview in both modes. Blank-line separated so
+// the rendered document is a stack of real <p> elements rather than one
+// wrapped paragraph. The long unbroken line matters for source mode, where
+// CodeViewer defaults `wrapLines` to false: it forces horizontal overflow, so
+// the spec can prove which element owns that axis.
 const TALL_MARKDOWN =
   "# Tall browser document\n\n" +
+  `    const wide = "${"x".repeat(600)}";\n\n` +
   Array.from(
     { length: 300 },
     (_, i) => `Paragraph ${String(i + 1).padStart(3, "0")} lorem ipsum dolor sit amet.`
@@ -46,82 +49,102 @@ async function dispatchAction(
   );
 }
 
+// Scoped to the file browser's own marker rather than a bare `panel-dialog`:
+// that host is shared, so an unrelated dialog must not satisfy this.
+const BROWSER_DIALOG = `${SEL.fileViewer.dialog}:has([data-testid="file-browser-sidebar-toggle"])`;
+
 /**
  * Opens the browser through the real action rather than driving the
  * virtualized tree: `revealPath` seeds the selection, so the preview renders
  * the file without a click that depends on row virtualization.
  */
 async function openFileBrowser(page: Page, revealPath: string) {
-  const listed = await dispatchAction(page, "worktree.list");
-  if (!listed.ok) throw new Error(`worktree.list failed: ${listed.error?.message ?? "unknown"}`);
-  const worktrees = listed.result?.worktrees ?? [];
-  const target = worktrees.find((w) => w.isMain) ?? worktrees[0];
-  if (!target) throw new Error("no worktree to browse");
+  // Polled rather than read once: the project's worktree readiness gate is
+  // best-effort, so a loaded runner can briefly answer with an empty list.
+  let worktreeId: string | undefined;
+  await expect
+    .poll(
+      async () => {
+        const listed = await dispatchAction(page, "worktree.list");
+        worktreeId = (listed.result?.worktrees ?? []).find((w) => w.isMain)?.id;
+        return worktreeId ?? null;
+      },
+      { timeout: T_MEDIUM }
+    )
+    .not.toBeNull();
 
-  await dispatchAction(page, "worktree.openFileBrowser", {
-    worktreeId: target.id,
+  const opened = await dispatchAction(page, "worktree.openFileBrowser", {
+    worktreeId,
     revealPath,
     revealKind: "file",
   });
+  if (opened.ok === false) {
+    throw new Error(`openFileBrowser failed: ${opened.error?.message ?? "unknown"}`);
+  }
 
-  const dialog = page.locator(SEL.fileViewer.dialog);
+  const dialog = page.locator(BROWSER_DIALOG);
   await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
   return dialog;
 }
 
 async function closeDialog(page: Page) {
-  await page.locator(SEL.fileViewer.closeButton).first().click();
-  await expect(page.locator(SEL.fileViewer.dialog)).not.toBeVisible({ timeout: T_SHORT });
+  await page.locator(BROWSER_DIALOG).locator(SEL.fileViewer.closeButton).first().click();
+  await expect(page.locator(BROWSER_DIALOG)).not.toBeVisible({ timeout: T_SHORT });
 }
 
 /**
- * #11441: neither markdown surface brings its own scroller — MarkdownDocument
- * carries no overflow class, and CodeViewer forces `.cm-scroller` visible — so
- * without a scroll owner in the preview everything past the first screenful
- * was unreachable. Mirrors `expectScrollsWithinDialog` in core-file-viewer.
+ * Vertical scroll ownership: the element scrolls, and its scrollbar is on
+ * screen.
+ *
+ * The containment check measures the dialog SURFACE, not `panel-dialog` — that
+ * test id sits on AppDialog's inset-0 backdrop, so measuring against it would
+ * only prove the pane ends before the window bottom. The bounded surface is the
+ * backdrop's first child; without that, a pane clipped by the surface's own
+ * overflow-hidden still passes.
  */
-async function expectPreviewScrolls(scrollRoot: Locator) {
+async function expectOwnsVerticalScroll(scrollOwner: Locator) {
   await expect
     .poll(
       () =>
-        scrollRoot.evaluate((el) => {
-          const dialogRect = el.closest('[data-testid="panel-dialog"]')?.getBoundingClientRect();
+        scrollOwner.evaluate((el) => {
+          const surfaceRect = el
+            .closest('[data-testid="panel-dialog"]')
+            ?.firstElementChild?.getBoundingClientRect();
+          const rect = el.getBoundingClientRect();
           return {
-            scrollsInternally: el.scrollHeight > el.clientHeight,
+            // A collapsed root with overflowing content would otherwise satisfy
+            // the overflow check below while showing nothing.
+            hasHeight: el.clientHeight > 0,
+            scrollsVertically: el.scrollHeight > el.clientHeight,
             // A real scrollbar, not merely programmatic scrollability: an
-            // `overflow: hidden` element still accepts a `scrollTop` write, so
-            // the scroll check below would pass on a clipped preview.
+            // `overflow: hidden` element still accepts a `scrollTop` write.
             scrollable: ["auto", "scroll"].includes(getComputedStyle(el).overflowY),
-            // The preview stays inside the dialog surface. A pane that sizes to
-            // the document instead fits the window while having its bottom edge
-            // — and its scrollbar — clipped away.
-            withinDialog:
-              dialogRect !== undefined &&
-              el.getBoundingClientRect().bottom <= dialogRect.bottom + 1,
-            // The content is the preview's own child, not a nested scrollport
-            // that would trap the wheel and leave the outer one at zero.
-            childDelegatesScroll:
-              el.firstElementChild instanceof HTMLElement &&
-              el.firstElementChild.scrollHeight <= el.firstElementChild.clientHeight + 1,
+            withinSurface:
+              surfaceRect !== undefined &&
+              rect.bottom <= surfaceRect.bottom + 1 &&
+              rect.top >= surfaceRect.top - 1,
           };
         }),
       { timeout: T_MEDIUM }
     )
     .toEqual({
-      scrollsInternally: true,
+      hasHeight: true,
+      scrollsVertically: true,
       scrollable: true,
-      withinDialog: true,
-      childDelegatesScroll: true,
+      withinSurface: true,
     });
 
   // Content past the first screen is reachable, and scrolling lands on the real
-  // bottom rather than some intermediate clamp.
-  const scroll = await scrollRoot.evaluate((el) => {
+  // bottom rather than some intermediate clamp. Reset afterwards so a later
+  // assertion starts from a known position.
+  const vertical = await scrollOwner.evaluate((el) => {
     el.scrollTop = el.scrollHeight;
-    return { reached: el.scrollTop, max: el.scrollHeight - el.clientHeight };
+    const reached = el.scrollTop;
+    el.scrollTop = 0;
+    return { reached, max: el.scrollHeight - el.clientHeight };
   });
-  expect(scroll.reached).toBeGreaterThan(0);
-  expect(scroll.reached).toBeGreaterThanOrEqual(scroll.max - 2);
+  expect(vertical.reached).toBeGreaterThan(0);
+  expect(vertical.reached).toBeGreaterThanOrEqual(vertical.max - 2);
 }
 
 test.describe.serial("Core: File browser preview", () => {
@@ -144,36 +167,89 @@ test.describe.serial("Core: File browser preview", () => {
     const dialog = await openFileBrowser(ctx.window, "tall.md");
 
     // Rendered is the browser's default markdown mode.
-    const document = dialog.locator(".markdown-document");
-    await expect(document).toContainText("Paragraph 001", { timeout: T_LONG });
+    await expect(dialog.locator(".markdown-document")).toContainText("Paragraph 001", {
+      timeout: T_LONG,
+    });
 
+    // #11441: MarkdownDocument brings no scroller of its own, so before the fix
+    // nothing between the pane and the document was a scroll container.
     const scrollRoot = dialog.getByTestId("file-browser-markdown-scroll");
-    await expectPreviewScrolls(scrollRoot);
+    await expectOwnsVerticalScroll(scrollRoot);
+
+    // The document grows instead of clamping to the wrapper — restoring
+    // `h-full` on the MarkdownViewer call fails right here.
+    await expect
+      .poll(
+        () =>
+          scrollRoot.evaluate((el) => {
+            const doc = el.firstElementChild;
+            return doc instanceof HTMLElement && doc.scrollHeight <= doc.clientHeight + 1;
+          }),
+        { timeout: T_MEDIUM }
+      )
+      .toBe(true);
 
     // The user-visible symptom: the tail of the document was unreachable.
+    // ratio 1 — a single visible pixel of the heading is not "readable".
     await scrollRoot.evaluate((el) => {
       el.scrollTop = el.scrollHeight;
     });
     await expect(dialog.getByRole("heading", { name: /file-browser-end/ })).toBeInViewport({
+      ratio: 1,
       timeout: T_MEDIUM,
     });
 
     await closeDialog(ctx.window);
   });
 
-  test("markdown source mode scrolls in the same preview scroll root", async () => {
+  test("markdown source mode keeps one scrollport that owns both axes", async () => {
     const dialog = await openFileBrowser(ctx.window, "tall.md");
     await expect(dialog.locator(".markdown-document")).toBeVisible({ timeout: T_LONG });
 
-    await dialog.getByRole("button", { name: "Source" }).click();
+    await dialog.getByRole("button", { name: "Source", exact: true }).click();
     await expect(dialog.locator(".cm-content")).toContainText("# Tall browser document", {
       timeout: T_LONG,
     });
 
-    // CodeViewer's root carries `overflow-auto` by default, so this also proves
-    // the two scrollports don't fight: with no definite height it grows with
-    // CodeMirror and delegates the scroll up to the preview wrapper.
-    await expectPreviewScrolls(dialog.getByTestId("file-browser-markdown-scroll"));
+    // Source mode is deliberately left unwrapped: CodeViewer at pane height is
+    // the single scrollport, which keeps its horizontal scrollbar on screen.
+    // Handing the vertical axis to an outer wrapper would let this element grow
+    // to content height, stranding the horizontal scrollbar below the fold.
+    await expect(dialog.getByTestId("file-browser-markdown-scroll")).toHaveCount(0);
+
+    // Resolved by walking up from the editor to the nearest scrollable
+    // ancestor: the invariant is about whichever element actually owns the
+    // scroll, not about a particular tag or test id.
+    await expect
+      .poll(
+        () =>
+          dialog.locator(".cm-editor").evaluate((cm) => {
+            let owner = cm.parentElement;
+            while (owner && !["auto", "scroll"].includes(getComputedStyle(owner).overflowY)) {
+              owner = owner.parentElement;
+            }
+            if (!owner) return { found: false };
+            const surfaceRect = owner
+              .closest('[data-testid="panel-dialog"]')
+              ?.firstElementChild?.getBoundingClientRect();
+            const rect = owner.getBoundingClientRect();
+            return {
+              found: true,
+              ownsVertical: owner.scrollHeight > owner.clientHeight,
+              ownsHorizontal: owner.scrollWidth > owner.clientWidth,
+              horizontalScrollable: ["auto", "scroll"].includes(getComputedStyle(owner).overflowX),
+              withinSurface: surfaceRect !== undefined && rect.bottom <= surfaceRect.bottom + 1,
+            };
+          }),
+        { timeout: T_MEDIUM }
+      )
+      .toEqual({
+        found: true,
+        ownsVertical: true,
+        ownsHorizontal: true,
+        horizontalScrollable: true,
+        withinSurface: true,
+      });
 
     await closeDialog(ctx.window);
   });
@@ -185,16 +261,15 @@ test.describe.serial("Core: File browser preview", () => {
     });
 
     // `min-h-full` rather than no class at all: the document reaches the bottom
-    // of the preview so its background doesn't stop mid-pane, and rather than
+    // of the preview so its background doesn't stop mid-pane — and rather than
     // `h-full`, which would clamp it and re-break the tall case above.
     await expect
       .poll(
         () =>
           dialog.getByTestId("file-browser-markdown-scroll").evaluate((el) => {
-            const document = el.firstElementChild;
+            const doc = el.firstElementChild;
             return {
-              fillsPreview:
-                document instanceof HTMLElement && document.offsetHeight >= el.clientHeight - 1,
+              fillsPreview: doc instanceof HTMLElement && doc.offsetHeight >= el.clientHeight - 1,
               noSpuriousOverflow: el.scrollHeight <= el.clientHeight + 1,
             };
           }),

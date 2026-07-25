@@ -544,17 +544,37 @@ export function FileBrowserViewer({
         );
 
       case "text":
-        return isMarkdownFilePath(filePath) ? (
-          // Neither markdown surface brings a scroller: MarkdownDocument's root
-          // carries no overflow class by design, and CodeViewer forces
-          // `.cm-scroller` visible so it delegates upward. The viewer column
-          // above only clips, so without this wrapper anything past the first
-          // screenful was unreachable (#11441). Same idiom as svg/video/audio.
+        if (!isMarkdownFilePath(filePath)) {
+          return <CodeViewer content={state.content} filePath={filePath} className="h-full" />;
+        }
+        // Source mode was never part of #11441: CodeViewer's root is already a
+        // scrollport, and at pane height it owns BOTH axes, so its horizontal
+        // scrollbar stays pinned to the bottom of the visible pane. Letting it
+        // grow to content height instead would hand the vertical axis to an
+        // outer wrapper and strand the horizontal scrollbar below the fold —
+        // lines here don't wrap (CodeViewer defaults `wrapLines` to false).
+        // `min-h-0` only replaces MarkdownViewer's min-h-[300px] floor, which
+        // used to overflow a preview shorter than 300px.
+        if (markdownMode === "source") {
+          return (
+            <MarkdownViewer
+              content={state.content}
+              filePath={filePath}
+              rootPath={rootPath}
+              viewMode={markdownMode}
+              className="h-full min-h-0"
+            />
+          );
+        }
+        return (
+          // Rendered markdown is the bug: MarkdownDocument's root carries no
+          // overflow class by design, and the viewer column above only clips,
+          // so anything past the first screenful was unreachable (#11441).
+          // Same local-wrapper idiom as the svg/video/audio branches.
           <div data-testid="file-browser-markdown-scroll" className="h-full w-full overflow-auto">
             {/* min-h-full, never h-full: a floor lets a tall document grow past
                 the wrapper and scroll it, while a short one still fills the
-                preview. It also twMerge-replaces MarkdownViewer's source-mode
-                min-h-[300px], which used to overflow a preview under 300px. */}
+                preview. h-full would clamp it and silently restore the bug. */}
             <MarkdownViewer
               content={state.content}
               filePath={filePath}
@@ -563,8 +583,6 @@ export function FileBrowserViewer({
               className="min-h-full"
             />
           </div>
-        ) : (
-          <CodeViewer content={state.content} filePath={filePath} className="h-full" />
         );
     }
   }
