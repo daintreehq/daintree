@@ -408,6 +408,42 @@ describe("CopyTreeService", () => {
       expect(sdkOptions().sortOrder).toBeUndefined();
     });
 
+    it("routes scoped paths to scope and patterns to filter, keeping them independent", async () => {
+      await copyTreeService.generate(tempDir, {
+        scopePaths: ["src/panels"],
+        includePaths: ["**/*.ts"],
+      });
+
+      const options = sdkOptions();
+      // Scope walks literal paths under the root ignore stack; filter is a
+      // pattern match. Collapsing either into the other is the bug this guards.
+      expect(options.scope).toEqual(["src/panels"]);
+      expect(options.filter).toEqual(["**/*.ts"]);
+    });
+
+    it("leaves scope unset when no scoped paths were requested", async () => {
+      await copyTreeService.generate(tempDir, { includePaths: ["src/**"] });
+
+      expect(sdkOptions().scope).toBeUndefined();
+    });
+
+    it("treats an empty scope list as no scoping rather than an empty walk", async () => {
+      // Unreachable through IPC — both option schemas reject an empty list —
+      // but the service must not invent a scope of nothing if one slips past.
+      await copyTreeService.generate(tempDir, { scopePaths: [] });
+
+      expect(sdkOptions().scope).toBeUndefined();
+    });
+
+    it("never lifts the ignore rules a scope was meant to respect", async () => {
+      await copyTreeService.generate(tempDir, { scopePaths: ["src"] });
+
+      const options = sdkOptions();
+      expect(options.scopeIgnoresIgnoreFiles).toBeFalsy();
+      expect(options.scopeIgnoresConfigExcludes).toBeFalsy();
+      expect(options.respectGitignore).toBe(true);
+    });
+
     it("passes the remaining budgets through untouched", async () => {
       await copyTreeService.generate(tempDir, {
         maxTotalSize: 1234,

@@ -117,6 +117,148 @@ describe("CopyTreeService against the installed CopyTree", () => {
     expect(preview.includedFiles).toBe(preview.files?.length);
   });
 
+  describe("scoping to a folder", () => {
+    async function buildProject() {
+      await fs.writeFile(path.join(tempDir, ".gitignore"), "generated.ts\n");
+      await fs.mkdir(path.join(tempDir, "src"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "src", "kept.ts"), "export const kept = 1;\n");
+      await fs.writeFile(path.join(tempDir, "src", "generated.ts"), "export const gen = 1;\n");
+      // A dotfile is the case a `folder/**` glob quietly misses.
+      await fs.writeFile(path.join(tempDir, "src", ".eslintrc.json"), "{}\n");
+      await fs.mkdir(path.join(tempDir, "docs"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "docs", "sibling.ts"), "export const s = 1;\n");
+    }
+
+    it("selects what a whole-project run would for that subtree when no budget is set", async () => {
+      await buildProject();
+
+      const full = await copyTreeService.testConfig(tempDir);
+      const scoped = await copyTreeService.testConfig(tempDir, { scopePaths: ["src"] });
+
+      expect(scoped.error).toBeUndefined();
+      // The invariant the folder context menu is supposed to hold: narrowing to
+      // a folder may drop files, never add ones the full run had ruled out.
+      // Neither run configures a budget, and the fixture is far under the SDK's
+      // own defaults, so nothing is dropped and the two sets match exactly.
+      const fullUnderSrc = (full.files ?? [])
+        .map((file) => file.path)
+        .filter((filePath) => filePath.startsWith("src/"))
+        .sort();
+      expect((scoped.files ?? []).map((file) => file.path).sort()).toEqual(fullUnderSrc);
+    });
+
+    it("applies an ignore rule declared at the project root, not just inside the folder", async () => {
+      await buildProject();
+
+      const result = await copyTreeService.testConfig(tempDir, { scopePaths: ["src"] });
+
+      const paths = result.files?.map((file) => file.path) ?? [];
+      expect(paths).toContain("src/kept.ts");
+      // Root .gitignore names it, so a scoped walk starting below the root has
+      // to have carried that rule down with it.
+      expect(paths).not.toContain("src/generated.ts");
+    });
+
+    it("keeps everything outside the folder out and paths anchored at the project root", async () => {
+      await buildProject();
+
+      const result = await copyTreeService.testConfig(tempDir, { scopePaths: ["src"] });
+
+      const paths = result.files?.map((file) => file.path) ?? [];
+      expect(paths).not.toContain("docs/sibling.ts");
+      expect(paths).not.toContain("small.ts");
+      // Non-empty first, or the "all under src/" check below passes vacuously.
+      expect(paths).toContain("src/kept.ts");
+      // Root-relative, so an agent's @-reference to the emitted path resolves.
+      expect(paths.every((filePath) => filePath.startsWith("src/"))).toBe(true);
+    });
+
+    it("includes a dotfile that a folder glob would silently skip", async () => {
+      await buildProject();
+
+      const result = await copyTreeService.testConfig(tempDir, { scopePaths: ["src"] });
+
+      // `src/**` does not match dotfiles, so the old pattern-based folder copy
+      // dropped .eslintrc/.env-style files without reporting them anywhere.
+      expect(result.files?.map((file) => file.path)).toContain("src/.eslintrc.json");
+    });
+
+    it("does not account for files outside the folder as exclusions", async () => {
+      await buildProject();
+
+      const result = await copyTreeService.testConfig(tempDir, { scopePaths: ["src"] });
+
+      // A whole-project walk narrowed by a pattern books every unmatched file
+      // as `filterPattern`, which would make "why was this empty" misreport.
+      expect(result.excluded?.byReason.filterPattern ?? 0).toBe(0);
+      expect(result.excluded?.byReason.gitignore).toBeGreaterThan(0);
+    });
+
+    it("walks a single file target, which a folder glob turns into no match", async () => {
+      await buildProject();
+
+      const result = await copyTreeService.testConfig(tempDir, {
+        scopePaths: ["src/kept.ts"],
+      });
+
+      expect(result.files?.map((file) => file.path)).toEqual(["src/kept.ts"]);
+    });
+
+    it("takes the folder name literally instead of reading it as a pattern", async () => {
+      await fs.mkdir(path.join(tempDir, "src", "[draft]"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "src", "[draft]", "note.ts"), "export const n = 1;\n");
+      await fs.mkdir(path.join(tempDir, "src", "d"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "src", "d", "other.ts"), "export const o = 1;\n");
+
+      const result = await copyTreeService.testConfig(tempDir, { scopePaths: ["src/[draft]"] });
+
+      const paths = result.files?.map((file) => file.path) ?? [];
+      expect(paths).toContain("src/[draft]/note.ts");
+      // As a glob character class `[draft]` also matches `src/d`; as a literal
+      // path it must not.
+      expect(paths).not.toContain("src/d/other.ts");
+    });
+
+    it("explains an excluded folder as an exclusion rather than an empty result", async () => {
+      await fs.mkdir(path.join(tempDir, "node_modules", "left-pad"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, "node_modules", "left-pad", "index.js"),
+        "module.exports = 1;\n"
+      );
+
+      const result = await copyTreeService.testConfig(tempDir, { scopePaths: ["node_modules"] });
+
+      expect(result.error).toBeUndefined();
+      expect(result.includedFiles).toBe(0);
+      expect(result.noFilesMatched).toBe(true);
+      // The renderer's "why is this empty" toast reads byReason, so a pruned
+      // folder has to be accounted for rather than vanishing silently.
+      expect(result.excluded?.total).toBeGreaterThan(0);
+    });
+
+    it("reports a scoped path that doesn't exist as a sanitized error", async () => {
+      const result = await copyTreeService.testConfig(tempDir, { scopePaths: ["does/not/exist"] });
+
+      expect(result.error).toBeTruthy();
+      // Never the SDK's own message — it carries the absolute path.
+      expect(result.error).not.toContain(tempDir);
+    });
+
+    it("blames the folder, not the project, when only the folder is missing", async () => {
+      const missingFolder = await copyTreeService.testConfig(tempDir, {
+        scopePaths: ["does/not/exist"],
+      });
+      const missingProject = await copyTreeService.testConfig(
+        path.join(tempDir, "no-such-project")
+      );
+
+      // The SDK reuses ERR_PATH_NOT_FOUND for both, so a shared message would
+      // send someone with a stale tree row off checking their project setup.
+      expect(missingFolder.error).not.toBe(missingProject.error);
+      expect(missingFolder.error).toMatch(/folder/i);
+    });
+  });
+
   it("reports truncation when a character budget bites", async () => {
     await writeSized("wide.ts", 20_000);
 

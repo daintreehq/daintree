@@ -470,6 +470,10 @@ export const CopyTreeOptionsSchema = z
     exclude: z.union([z.string(), z.array(z.string())]).optional(),
     always: z.array(z.string()).optional(),
     includePaths: z.array(z.string()).optional(),
+    // Non-empty at both levels: an empty list or a blank entry would resolve to
+    // the worktree root, turning a folder copy into a whole-worktree copy that
+    // no caller asked for. Absent still means "no scoping".
+    scopePaths: z.array(z.string().min(1)).min(1).optional(),
     modified: z.boolean().optional(),
     changed: z.string().optional(),
     maxFileSize: z.number().int().positive().optional(),

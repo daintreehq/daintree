@@ -36,6 +36,16 @@ const ERROR_CODE_MESSAGES: Record<string, string> = {
   EACCES: "Can't read the project files",
 };
 
+/**
+ * The SDK reuses `ERR_PATH_NOT_FOUND` for the project root and for a scope
+ * entry, and only the error's own type tells them apart. A folder the user
+ * picked from a stale tree row is the common case, and "Project path is
+ * unavailable" would send them looking at the wrong thing.
+ */
+const SCOPE_ERROR_MESSAGES: Record<string, string> = {
+  ERR_PATH_NOT_FOUND: "That folder no longer exists",
+};
+
 const CANCELLED_MESSAGE = "Context generation cancelled";
 const CONFIG_FAILED_MESSAGE = "Context configuration couldn't be loaded";
 const GENERATE_FAILED_MESSAGE = "Failed to generate context";
@@ -286,6 +296,10 @@ class CopyTreeService {
         ...this.buildSdkOptions(options, controller.signal),
         config,
         dryRun: true,
+        // Merged options can carry `scopePaths` (a folder copy sets it), and
+        // honoring it here would reintroduce exactly the subtree-recomputed
+        // budgets this method avoids.
+        scope: undefined,
       });
       // A cancel that landed during the walk must not produce a tree. The
       // signal is passed to `copy()`, but the check is repeated here so
@@ -432,6 +446,11 @@ class CopyTreeService {
       format: options.format || "xml",
 
       filter: options.includePaths || options.filter || undefined,
+      // Literal paths, not patterns, and orthogonal to `filter`: the walk starts
+      // here but the ignore stack is still built from the root down, so a folder
+      // copy drops what a whole-project copy would have dropped. Both
+      // `scopeIgnores*` escape hatches stay off for that reason.
+      scope: options.scopePaths?.length ? options.scopePaths : undefined,
       exclude: options.exclude || undefined,
       always: options.always,
       respectGitignore: true,
@@ -500,6 +519,13 @@ class CopyTreeService {
       // otherwise resolve to an inherited function and fail structured clone on
       // its way to the renderer.
       const code = (error as Error & { code?: string }).code;
+      if (
+        error.name === "ScopeError" &&
+        typeof code === "string" &&
+        Object.hasOwn(SCOPE_ERROR_MESSAGES, code)
+      ) {
+        return SCOPE_ERROR_MESSAGES[code];
+      }
       if (typeof code === "string" && Object.hasOwn(ERROR_CODE_MESSAGES, code)) {
         return ERROR_CODE_MESSAGES[code];
       }

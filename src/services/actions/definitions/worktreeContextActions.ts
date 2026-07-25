@@ -162,6 +162,13 @@ export function registerWorktreeContextActions(
             .describe(
               "Worktree-relative minimatch patterns to scope the context to. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'."
             ),
+          scopePaths: z
+            .array(z.string().min(1))
+            .min(1)
+            .optional()
+            .describe(
+              "Worktree-relative literal file or directory paths to walk — not patterns, so pass 'src/panels', not 'src/panels/**'. Ignore rules still resolve from the worktree root, so the result matches what a whole-worktree copy would have returned for that subtree. Prefer this over includePaths when selecting a folder."
+            ),
         })
         .optional(),
       run: async (args, ctx: ActionContext) => {
@@ -169,6 +176,7 @@ export function registerWorktreeContextActions(
         const explicitFormat = args?.format;
         const modified = args?.modified;
         const includePaths = args?.includePaths;
+        const scopePaths = args?.scopePaths;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         if (!targetWorktreeId) return null;
 
@@ -178,6 +186,7 @@ export function registerWorktreeContextActions(
           format,
           modified,
           ...(includePaths && includePaths.length > 0 ? { includePaths } : {}),
+          ...(scopePaths && scopePaths.length > 0 ? { scopePaths } : {}),
         });
 
         if (result.error) {

@@ -16,7 +16,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
-import { folderIncludePattern } from "@/lib/copyTreeFormat";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
@@ -422,8 +421,10 @@ export function FileBrowserPane({
   const handleCopyFolderContext = useCallback(
     (path: string) => {
       if (!worktreeId) return;
+      // Literal path, not a pattern: scoping keeps the worktree's ignore rules
+      // in play, so the folder yields what a whole-worktree copy would have.
       void copyContextWithFeedback(worktreeId, "context-menu", {
-        includePaths: [folderIncludePattern(path)],
+        scopePaths: [path],
       });
     },
     [worktreeId]
