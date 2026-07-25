@@ -955,7 +955,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "copyTree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Get file tree nodes for file picker",
+    "description": "List a directory as the generated context sees it",
     "examples": undefined,
     "id": "copyTree.getFileTree",
     "keywords": undefined,
