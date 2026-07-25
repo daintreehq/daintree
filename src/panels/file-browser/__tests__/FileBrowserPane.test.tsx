@@ -125,10 +125,9 @@ vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
 }));
 
 const { copyContextWithFeedbackMock } = vi.hoisted(() => ({
-  copyContextWithFeedbackMock:
-    vi.fn<typeof import("@/hooks/useWorktreeActions").copyContextWithFeedback>(() =>
-      Promise.resolve()
-    ),
+  copyContextWithFeedbackMock: vi.fn<
+    typeof import("@/hooks/useWorktreeActions").copyContextWithFeedback
+  >(() => Promise.resolve()),
 }));
 vi.mock("@/hooks/useWorktreeActions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useWorktreeActions")>()),
