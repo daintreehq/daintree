@@ -15,8 +15,10 @@ export interface CopyTreeOptions {
    * Literal worktree-relative file or directory paths to walk, used by the file
    * browser's folder context menu. Unlike `includePaths` these are not patterns
    * — nothing is escaped or globbed — and the ignore stack is still resolved
-   * from the worktree root down, so a scoped run yields exactly what a full run
-   * would have yielded for that subtree. Composes with `filter`/`includePaths`
+   * from the worktree root down, so a scoped run yields what a full run would
+   * have yielded for that subtree, modulo the global budgets (`maxFileCount`,
+   * `maxTotalSize`, `charLimit`, plus the SDK's own defaults), which are
+   * recomputed over the scoped traversal. Composes with `filter`/`includePaths`
    * rather than replacing them.
    */
   scopePaths?: string[];

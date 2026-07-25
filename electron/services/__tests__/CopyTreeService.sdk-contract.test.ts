@@ -129,7 +129,7 @@ describe("CopyTreeService against the installed CopyTree", () => {
       await fs.writeFile(path.join(tempDir, "docs", "sibling.ts"), "export const s = 1;\n");
     }
 
-    it("selects exactly what a whole-project run would have for that subtree", async () => {
+    it("selects what a whole-project run would for that subtree when no budget is set", async () => {
       await buildProject();
 
       const full = await copyTreeService.testConfig(tempDir);
@@ -138,6 +138,8 @@ describe("CopyTreeService against the installed CopyTree", () => {
       expect(scoped.error).toBeUndefined();
       // The invariant the folder context menu is supposed to hold: narrowing to
       // a folder may drop files, never add ones the full run had ruled out.
+      // Neither run configures a budget, and the fixture is far under the SDK's
+      // own defaults, so nothing is dropped and the two sets match exactly.
       const fullUnderSrc = (full.files ?? [])
         .map((file) => file.path)
         .filter((filePath) => filePath.startsWith("src/"))
