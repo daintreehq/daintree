@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
@@ -11,15 +11,29 @@ import { copyTreeService } from "../CopyTreeService.js";
 
 describe("CopyTreeService against the installed CopyTree", () => {
   let tempDir: string;
+  let fakeHome: string;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-copytree-sdk-"));
     await fs.writeFile(path.join(tempDir, "small.ts"), "export const a = 1;\n");
+
+    // CopyTree resolves the user's global excludes from `~/.gitconfig`,
+    // `core.excludesFile` and `$XDG_CONFIG_HOME/git/ignore`. Left alone, a
+    // developer's or runner's own global ignore would leak in: a host rule for
+    // `*.ts` would break the positive assertions here, and — worse — a rule
+    // matching one of the fixtures would let an exclusion test pass for the
+    // wrong reason. Point the lookup at an empty home instead.
+    fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-copytree-home-"));
+    vi.stubEnv("HOME", fakeHome);
+    vi.stubEnv("USERPROFILE", fakeHome);
+    vi.stubEnv("XDG_CONFIG_HOME", path.join(fakeHome, ".config"));
   });
 
   afterEach(async () => {
     copyTreeService.cancelAll();
+    vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
+    await fs.rm(fakeHome, { recursive: true, force: true });
   });
 
   async function writeSized(name: string, bytes: number) {
@@ -124,13 +138,66 @@ describe("CopyTreeService against the installed CopyTree", () => {
     });
 
     it("honours a .gitignore with no git repository present", async () => {
-      await fs.writeFile(path.join(tempDir, ".gitignore"), "ignored.ts\n");
       await fs.writeFile(path.join(tempDir, "ignored.ts"), "export const b = 2;\n");
 
-      const nodes = await copyTreeService.getFileTree(tempDir);
+      // Prove the file is visible first, so the assertion below can only pass
+      // because the .gitignore took effect — not because something else in the
+      // exclusion stack was already hiding it.
+      const before = await copyTreeService.getFileTree(tempDir);
+      expect(before.map((node) => node.name)).toContain("ignored.ts");
 
-      expect(nodes.map((node) => node.name)).toContain("small.ts");
-      expect(nodes.map((node) => node.name)).not.toContain("ignored.ts");
+      await fs.writeFile(path.join(tempDir, ".gitignore"), "ignored.ts\n");
+      const after = await copyTreeService.getFileTree(tempDir);
+
+      expect(after.map((node) => node.name)).toContain("small.ts");
+      expect(after.map((node) => node.name)).not.toContain("ignored.ts");
+    });
+
+    it("keeps .git and node_modules out of the listing", async () => {
+      // The old listing special-cased `.git` by name. Now CopyTree simply never
+      // descends into either, so both vanish with no name checks in our code —
+      // this pins that against the real exclusion stack, not a stubbed manifest.
+      await fs.mkdir(path.join(tempDir, ".git"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, ".git", "HEAD"), "ref: refs/heads/main\n");
+      await fs.mkdir(path.join(tempDir, "node_modules", "pkg"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, "node_modules", "pkg", "index.js"),
+        "module.exports={}"
+      );
+
+      const nodes = await copyTreeService.getFileTree(tempDir);
+      const names = nodes.map((node) => node.name);
+
+      expect(names).toContain("small.ts");
+      expect(names).not.toContain(".git");
+      expect(names).not.toContain("node_modules");
+    });
+
+    it("omits every excluded path from the manifest instead of reporting a reason", async () => {
+      // The listing's whole verdict rests on this: CopyTree records only what
+      // survived, so "absent from the manifest" is the exclusion signal and
+      // there is no per-entry reason to surface. That is why `FileTreeNode` has
+      // `excluded` but no reason field. If a future CopyTree starts reporting
+      // `excluded:*` entries this test fails — which is the signal to revisit
+      // that decision, not a regression.
+      await fs.writeFile(path.join(tempDir, ".gitignore"), "hidden.ts\n");
+      await fs.writeFile(path.join(tempDir, "hidden.ts"), "export const h = 1;\n");
+      // Names chosen so path order is unambiguous: `a-kept.ts` wins the budget
+      // of one and `z-dropped.ts` loses it.
+      await fs.writeFile(path.join(tempDir, "a-kept.ts"), "export const k = 1;\n");
+      await fs.writeFile(path.join(tempDir, "z-dropped.ts"), "export const d = 1;\n");
+
+      const result = await copyTreeService.testConfig(tempDir, { maxFileCount: 1, sort: "path" });
+
+      const paths = result.files?.map((file) => file.path) ?? [];
+      expect(paths).toEqual(["a-kept.ts"]);
+      // Neither the ignore-excluded file nor the budget loser is reported at all.
+      expect(paths).not.toContain("hidden.ts");
+      expect(paths).not.toContain("z-dropped.ts");
+      // Both exclusions are counted, so they were genuinely evaluated and
+      // dropped rather than never seen.
+      expect(result.excluded?.byReason.gitignore).toBeGreaterThan(0);
+      expect(result.excluded?.byReason.fileCountBudget).toBeGreaterThan(0);
     });
 
     it("hides what the config excludes, which git knows nothing about", async () => {
@@ -186,11 +253,18 @@ describe("CopyTreeService against the installed CopyTree", () => {
       await fs.writeFile(path.join(tempDir, "sub", "z.ts"), "export const z = 1;\n");
 
       const options = { maxFileCount: 1, sort: "path" as const };
-      const nodes = await copyTreeService.getFileTree(tempDir, "sub", options);
+      // Opt in to the excluded entries so this asserts a positive fact about
+      // `z.ts` — a listing that returned nothing at all would otherwise pass.
+      const nodes = await copyTreeService.getFileTree(tempDir, "sub", options, {
+        includeExcluded: true,
+      });
       const real = await copyTreeService.generate(tempDir, options);
 
+      expect(real.content).toContain("small.ts");
       expect(real.content).not.toContain("sub/z.ts");
-      expect(nodes.map((node) => node.name)).not.toContain("z.ts");
+      // Scoping to `sub` would discover only `sub/z.ts`, so the budget of 1
+      // would keep it and this flips to `excluded: undefined`.
+      expect(nodes.find((node) => node.name === "z.ts")).toMatchObject({ excluded: true });
     });
 
     it("lists exactly the files the real run emits", async () => {
@@ -201,15 +275,27 @@ describe("CopyTreeService against the installed CopyTree", () => {
 
       const nodes = await copyTreeService.getFileTree(tempDir);
       const real = await copyTreeService.generate(tempDir);
+      // An independent dry run is the source of truth for "what the run keeps",
+      // so the listing can be compared as a set rather than one direction.
+      const preview = await copyTreeService.testConfig(tempDir);
 
       expect(real.error).toBeUndefined();
-      // The whole point of the change: every entry the listing shows is in the
-      // document, so a user can't tick a file that never arrives.
-      for (const node of nodes) {
-        if (node.isDirectory) continue;
-        expect(real.content).toContain(node.path);
+      const listed = nodes.filter((node) => !node.isDirectory).map((node) => node.path);
+      // The listing covers one directory; the dry run covers the whole root, so
+      // compare against its top-level entries.
+      const kept = (preview.files ?? [])
+        .map((file) => file.path)
+        .filter((filePath) => !filePath.includes("/"));
+
+      // The whole point of the change, in both directions: nothing the listing
+      // shows is missing from the document, and nothing the document carries is
+      // missing from the listing. A listing of `[]` fails the second half.
+      expect([...listed].sort()).toEqual([...kept].sort());
+      expect(listed).toContain("small.ts");
+      expect(listed).not.toContain("skipped.ts");
+      for (const filePath of listed) {
+        expect(real.content).toContain(filePath);
       }
-      expect(nodes.some((node) => node.name === "skipped.ts")).toBe(false);
     });
 
     it("hides a directory whose only contents are excluded", async () => {

@@ -209,10 +209,14 @@ describe("CopytreeWorkerClient", () => {
     expect(client.getGovernanceSnapshot().queueDepth).toBe(0);
   });
 
-  it("routes a listing cancel to the worker", async () => {
+  it("settles a cancelled listing on the worker's reply and releases the entry", async () => {
+    // `cancel` is advisory — it aborts the op and the worker's reply is what
+    // settles the caller. A listing has no error-shaped result to carry the
+    // cancellation, so the reply is an error and the promise must reject rather
+    // than hang until the 125s backstop.
     const { client, worker } = makeClient();
 
-    void client.getFileTree("/root", undefined, {}, undefined, "op-1").catch(() => {});
+    const promise = client.getFileTree("/root", undefined, {}, undefined, "op-1");
     client.cancel("op-1");
 
     expect(copyTreeService.cancel).toHaveBeenCalledWith("op-1");
@@ -220,6 +224,62 @@ describe("CopytreeWorkerClient", () => {
       .map((c) => c[0] as CopytreeWorkerRequest)
       .find((m) => m.type === "cancel");
     expect(cancelMessage).toEqual({ type: "cancel", id: "op-1" });
+
+    worker.emit("message", {
+      type: "get-file-tree-error",
+      id: "op-1",
+      error: "Context generation cancelled",
+    });
+
+    await expect(promise).rejects.toThrow("Context generation cancelled");
+    expect(client.getGovernanceSnapshot().queueDepth).toBe(0);
+  });
+
+  it("falls back in-thread for a listing whose postMessage throws, leaving no pending entry", async () => {
+    const worker = new FakeWorker();
+    worker.postMessage.mockImplementation(() => {
+      throw new Error("port closed");
+    });
+    const { client } = makeClient(worker);
+
+    await expect(client.getFileTree("/root", "src", {}, true, "op-1")).resolves.toEqual(
+      inlineNodes
+    );
+    expect(copyTreeService.getFileTree).toHaveBeenCalledWith(
+      "/root",
+      "src",
+      {},
+      { includeExcluded: true },
+      "op-1"
+    );
+    expect(client.getGovernanceSnapshot().queueDepth).toBe(0);
+  });
+
+  it("times out a wedged listing: rejects, drops the pending entry, posts a cancel", async () => {
+    // `timeOutOperation` reaches the listing map only as its third lookup, so
+    // without this the operand could be dropped and nothing would notice.
+    vi.useFakeTimers();
+    try {
+      const { client, worker } = makeClient();
+
+      const promise = client.getFileTree("/root", undefined, {}, undefined, "op-1");
+      const rejection = expect(promise).rejects.toThrow("did not respond");
+      await vi.runOnlyPendingTimersAsync();
+      await rejection;
+
+      expect(client.getGovernanceSnapshot().queueDepth).toBe(0);
+      const cancelMessage = worker.postMessage.mock.calls
+        .map((c) => c[0] as CopytreeWorkerRequest)
+        .find((m) => m.type === "cancel");
+      expect(cancelMessage).toEqual({ type: "cancel", id: "op-1" });
+
+      // A late result after the timeout finds no pending entry.
+      expect(() =>
+        worker.emit("message", { type: "get-file-tree-result", id: "op-1", nodes: [] })
+      ).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("routes cancel to both the worker op and the in-thread service", async () => {

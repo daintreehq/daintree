@@ -355,6 +355,24 @@ describe("copyTree handlers", () => {
       );
       expect(getContextFileTree).not.toHaveBeenCalled();
     });
+
+    it("rejects a traversal segment buried mid-path", async () => {
+      const { getContextFileTree } = registerWithFileTree();
+
+      await expect(invokeGetFileTree({ dirPath: "src/../../etc" })).rejects.toThrow(
+        "cannot traverse outside worktree root"
+      );
+      expect(getContextFileTree).not.toHaveBeenCalled();
+    });
+
+    it("allows a directory whose name merely begins with dots", async () => {
+      // `..cache` is a legal directory name; only a `..` path segment traverses.
+      const { getContextFileTree } = registerWithFileTree();
+
+      await invokeGetFileTree({ dirPath: "..cache" });
+
+      expect(getContextFileTree.mock.calls[0][1]).toBe("..cache");
+    });
   });
 
   describe("project-scoped settings resolution", () => {
@@ -404,6 +422,7 @@ describe("copyTree handlers", () => {
         includedSize: 1,
       });
       const generateContext = vi.fn().mockResolvedValue({ content: "", fileCount: 1 });
+      const getContextFileTree = vi.fn().mockResolvedValue([]);
 
       if (options.withSenderWindow !== false) {
         browserWindowMock.fromWebContents.mockReturnValue({
@@ -434,6 +453,7 @@ describe("copyTree handlers", () => {
           }),
           testConfig,
           generateContext,
+          getContextFileTree,
         },
         windowRegistry: options.windowScopedPvm
           ? {
@@ -446,26 +466,47 @@ describe("copyTree handlers", () => {
         projectViewManager: options.depsPvm,
       } as never);
 
-      return { testConfig, generateContext };
+      return { testConfig, generateContext, getContextFileTree };
     }
 
     /**
-     * The four handlers that merge project settings, with the seam each one hands
-     * the merged options to. Every case runs against all four so a regression in
-     * one call site can't hide behind the others.
+     * Every handler that merges project settings, with the seam it hands the
+     * merged options to and the argument position they land in. All cases run
+     * against all of them so a regression in one call site can't hide behind the
+     * others — picking the wrong project's settings is this code's recurring bug
+     * (#11103, #6015), and for the file tree it would put the picker and the
+     * bundle back on different settings (#11439).
      */
     const MERGE_CALL_SITES = [
-      { channel: CHANNELS.COPYTREE_TEST_CONFIG, seam: "testConfig" as const, payload: {} },
-      { channel: CHANNELS.COPYTREE_GENERATE, seam: "generateContext" as const, payload: {} },
+      {
+        channel: CHANNELS.COPYTREE_TEST_CONFIG,
+        seam: "testConfig" as const,
+        payload: {},
+        optionsArgIndex: 1,
+      },
+      {
+        channel: CHANNELS.COPYTREE_GENERATE,
+        seam: "generateContext" as const,
+        payload: {},
+        optionsArgIndex: 1,
+      },
       {
         channel: CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE,
         seam: "generateContext" as const,
         payload: {},
+        optionsArgIndex: 1,
       },
       {
         channel: CHANNELS.COPYTREE_INJECT,
         seam: "generateContext" as const,
         payload: { terminalId: "term-1" },
+        optionsArgIndex: 1,
+      },
+      {
+        channel: CHANNELS.COPYTREE_GET_FILE_TREE,
+        seam: "getContextFileTree" as const,
+        payload: {},
+        optionsArgIndex: 2,
       },
     ];
 
@@ -474,7 +515,7 @@ describe("copyTree handlers", () => {
       await handler(mockEvent, { worktreeId: "wt-1", options: {}, ...extraPayload });
     }
 
-    describe.each(MERGE_CALL_SITES)("$channel", ({ channel, seam, payload }) => {
+    describe.each(MERGE_CALL_SITES)("$channel", ({ channel, seam, payload, optionsArgIndex }) => {
       it("merges the sender window's project settings, not the globally current project's", async () => {
         aimGlobalSourcesAtGlobalProject();
         const seams = registerWithScope({
@@ -484,7 +525,7 @@ describe("copyTree handlers", () => {
 
         await invoke(channel, payload);
 
-        const [, mergedOptions] = seams[seam].mock.calls[0];
+        const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
         expect(mergedOptions.maxTotalSize).toBe(senderSettings.copyTreeSettings.maxContextSize);
         expect(mergedOptions.maxTotalSize).not.toBe(globalSettings.copyTreeSettings.maxContextSize);
         expect(mergedOptions.always).toEqual(senderSettings.copyTreeSettings.alwaysInclude);
@@ -504,7 +545,7 @@ describe("copyTree handlers", () => {
         // An unbound view must not inherit the global current project's settings
         // from ANY source, so nothing back-fills the empty runtime options.
         expect(seams[seam]).toHaveBeenCalledTimes(1);
-        const [, mergedOptions] = seams[seam].mock.calls[0];
+        const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
         expect(mergedOptions).toEqual({});
         expect(depsPvm.getProjectIdForWebContents).not.toHaveBeenCalled();
         expect(projectStoreMock.getProjectSettings).not.toHaveBeenCalled();
@@ -526,7 +567,7 @@ describe("copyTree handlers", () => {
 
         await invoke(channel, payload);
 
-        const [, mergedOptions] = seams[seam].mock.calls[0];
+        const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
         expect(mergedOptions.exclude).toEqual(senderSettings.excludedPaths);
         expect(mergedOptions.maxTotalSize).toBe(senderSettings.copyTreeSettings.maxContextSize);
         expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(SENDER_PROJECT);
@@ -538,7 +579,7 @@ describe("copyTree handlers", () => {
 
         await invoke(channel, payload);
 
-        const [, mergedOptions] = seams[seam].mock.calls[0];
+        const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
         expect(mergedOptions.maxTotalSize).toBe(globalSettings.copyTreeSettings.maxContextSize);
         expect(mergedOptions.always).toEqual(globalSettings.copyTreeSettings.alwaysInclude);
         expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(GLOBAL_PROJECT);

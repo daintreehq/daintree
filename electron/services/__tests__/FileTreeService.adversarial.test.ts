@@ -7,6 +7,9 @@ const shared = vi.hoisted(() => ({
   stat: vi.fn(),
   readdir: vi.fn(),
   lstat: vi.fn(),
+  spawn: vi.fn(() => {
+    throw new Error("a raw listing must not spawn a subprocess");
+  }),
 }));
 
 vi.mock("fs/promises", () => ({
@@ -14,6 +17,14 @@ vi.mock("fs/promises", () => ({
   stat: shared.stat,
   readdir: shared.readdir,
   lstat: shared.lstat,
+}));
+
+// Poisoned so reintroducing a subprocess to this listing fails loudly rather
+// than quietly costing a spawn per directory read.
+vi.mock("node:child_process", () => ({
+  spawn: shared.spawn,
+  execFile: shared.spawn,
+  exec: shared.spawn,
 }));
 
 interface DirEntry {
@@ -124,6 +135,7 @@ describe("FileTreeService adversarial", () => {
     const result = await service.getFileTree("/not-a-repo");
 
     expect(result.map((node) => node.name)).toEqual(["node_modules", "visible.txt"]);
+    expect(shared.spawn).not.toHaveBeenCalled();
   });
 
   it("CONCURRENT_CALLS_NO_SHARED_SNAPSHOT", async () => {

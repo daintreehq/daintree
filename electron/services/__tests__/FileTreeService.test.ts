@@ -155,13 +155,18 @@ describe("FileTreeService", () => {
     await fs.writeFile(path.join(tempDir, "app.ts"), "export {};");
     try {
       await fs.symlink(path.join(tempDir, "app.ts"), path.join(tempDir, "link.ts"));
-    } catch {
-      // Some CI filesystems disallow symlinks; the drop is still asserted by the
-      // absence below, and a failed create just means no link exists.
+    } catch (error) {
+      // Only platforms that genuinely forbid symlinks may skip: without a link
+      // on disk the assertion below proves nothing, so any other setup failure
+      // has to surface rather than pass as a silent no-op.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") return;
+      throw error;
     }
 
     const nodes = await service.getFileTree(tempDir);
 
+    expect(nodes.some((node) => node.name === "app.ts")).toBe(true);
     expect(nodes.some((node) => node.name === "link.ts")).toBe(false);
   });
 

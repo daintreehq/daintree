@@ -106,6 +106,68 @@ describe("WorkspaceCopyTreeClient", () => {
     });
   });
 
+  describe("getContextFileTree", () => {
+    it("sends the context listing request to the host that owns the path", async () => {
+      const sendWithResponse = vi.fn().mockResolvedValue({ nodes: [] });
+      hostA = makeHost({ sendWithResponse });
+      entries[0] = makeEntry(hostA, "/project/a");
+
+      await client.getContextFileTree("/project/a", "src", { exclude: ["docs/**"] }, true);
+
+      expect(sendWithResponse).toHaveBeenCalledTimes(1);
+      expect(sendWithResponse.mock.calls[0][0]).toMatchObject({
+        type: "copytree:get-file-tree",
+        worktreePath: "/project/a",
+        dirPath: "src",
+        options: { exclude: ["docs/**"] },
+        includeExcluded: true,
+      });
+    });
+
+    it("tracks the listing so a cancel-all can reclaim a walk in progress", async () => {
+      let seenDuringCall = 0;
+      const sendWithResponse = vi.fn().mockImplementation(async () => {
+        seenDuringCall = client.activeCopyTreeOperations.size;
+        return { nodes: [] };
+      });
+      hostA = makeHost({ sendWithResponse });
+      entries[0] = makeEntry(hostA, "/project/a");
+
+      await client.getContextFileTree("/project/a");
+
+      // A full-root dry run can run for hundreds of milliseconds, so it has to
+      // be cancellable for its whole duration — and released afterwards.
+      expect(seenDuringCall).toBe(1);
+      expect(client.activeCopyTreeOperations.size).toBe(0);
+    });
+
+    it("surfaces a host-reported error rather than an empty tree", async () => {
+      // An empty listing reads as "nothing here"; a failure has to look like a
+      // failure, or the picker silently shows a project as having no files.
+      const sendWithResponse = vi.fn().mockResolvedValue({ nodes: [], error: "scan exploded" });
+      hostA = makeHost({ sendWithResponse });
+      entries[0] = makeEntry(hostA, "/project/a");
+
+      await expect(client.getContextFileTree("/project/a")).rejects.toThrow("scan exploded");
+      expect(client.activeCopyTreeOperations.size).toBe(0);
+    });
+
+    it("releases the operation when the host request rejects", async () => {
+      const sendWithResponse = vi.fn().mockRejectedValue(new Error("host timeout"));
+      hostA = makeHost({ sendWithResponse });
+      entries[0] = makeEntry(hostA, "/project/a");
+
+      await expect(client.getContextFileTree("/project/a")).rejects.toThrow("host timeout");
+      expect(client.activeCopyTreeOperations.size).toBe(0);
+    });
+
+    it("throws when no host owns the path", async () => {
+      await expect(client.getContextFileTree("/nonexistent")).rejects.toThrow(
+        "No workspace host for path"
+      );
+    });
+  });
+
   describe("dispose", () => {
     it("clears both maps", () => {
       const cb = vi.fn();

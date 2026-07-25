@@ -680,8 +680,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       if (path.isAbsolute(validated.dirPath)) {
         throw new Error("dirPath must be a relative path");
       }
+      // Segment-aware: a bare `startsWith("..")` also rejects legitimate names
+      // like `..cache`. This is the cheap pre-check — `FileTreeService` still
+      // owns the authoritative containment guard, including realpath escapes.
       const normalized = path.normalize(validated.dirPath);
-      if (normalized.startsWith("..")) {
+      const segments = normalized.split(/[\\/]/);
+      if (segments.includes("..")) {
         throw new Error("dirPath cannot traverse outside worktree root");
       }
     }

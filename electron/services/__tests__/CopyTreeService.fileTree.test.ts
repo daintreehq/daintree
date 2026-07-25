@@ -178,6 +178,64 @@ describe("CopyTreeService.getFileTree", () => {
     expect(nodes.map((node) => node.name)).toEqual(["a.ts"]);
   });
 
+  it("does not treat a path-prefix sibling as an ancestor", async () => {
+    // `src2/deep/a.ts` must not make `src` look populated. Ancestors are matched
+    // by exact set membership for this reason — a `startsWith` check here would
+    // surface an excluded directory because a differently-named sibling shares
+    // its prefix.
+    await fs.mkdir(path.join(tempDir, "src"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "src", "ignored.log"), "");
+    await fs.mkdir(path.join(tempDir, "src2", "deep"), { recursive: true });
+    copyMock.mockResolvedValue(dryRunResult(manifest([["src2/deep/a.ts"]])));
+
+    const nodes = await copyTreeService.getFileTree(tempDir);
+
+    expect(nodes.map((node) => node.name)).toEqual(["src2"]);
+  });
+
+  it("returns nothing when listing inside a directory the context excludes", async () => {
+    // Expanding into `node_modules` is a legitimate request with an empty
+    // answer: none of it reaches the context.
+    await fs.mkdir(path.join(tempDir, "node_modules", "pkg"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "node_modules", "pkg", "index.js"), "");
+    copyMock.mockResolvedValue(dryRunResult(manifest([["a.ts"]])));
+
+    await expect(copyTreeService.getFileTree(tempDir, "node_modules")).resolves.toEqual([]);
+  });
+
+  it("flags every child as excluded when listing inside an excluded directory under opt-in", async () => {
+    await fs.mkdir(path.join(tempDir, "node_modules", "pkg"), { recursive: true });
+    copyMock.mockResolvedValue(dryRunResult(manifest([["a.ts"]])));
+
+    const nodes = await copyTreeService.getFileTree(
+      tempDir,
+      "node_modules",
+      {},
+      { includeExcluded: true }
+    );
+
+    expect(nodes).toEqual([
+      { name: "pkg", path: "node_modules/pkg", isDirectory: true, excluded: true },
+    ]);
+  });
+
+  it("rejects a dirPath that names a file rather than a directory", async () => {
+    await fs.writeFile(path.join(tempDir, "a.ts"), "");
+
+    await expect(copyTreeService.getFileTree(tempDir, "a.ts")).rejects.toThrow(
+      "Failed to read the project files"
+    );
+    expect(copyMock).not.toHaveBeenCalled();
+  });
+
+  it("hides files by default when the manifest is empty but the directory is not", async () => {
+    await fs.writeFile(path.join(tempDir, "a.ts"), "");
+    await fs.mkdir(path.join(tempDir, "sub"), { recursive: true });
+    copyMock.mockResolvedValue(dryRunResult([]));
+
+    await expect(copyTreeService.getFileTree(tempDir)).resolves.toEqual([]);
+  });
+
   it("flags an empty directory as excluded under opt-in without inventing a reason", async () => {
     await fs.mkdir(path.join(tempDir, "empty"), { recursive: true });
     copyMock.mockResolvedValue(dryRunResult([]));
@@ -226,28 +284,70 @@ describe("CopyTreeService.getFileTree", () => {
     expect(options.dryRun).toBe(true);
   });
 
-  it("passes the caller's options through the same builder generation uses", async () => {
-    await copyTreeService.getFileTree(tempDir, "", {
+  it("selects files under exactly the options generation would use", async () => {
+    // Comparing the two option objects — rather than spot-checking the
+    // listing's — is what actually proves parity. If the listing built its
+    // selection differently in any respect, the picker and the bundle would
+    // disagree again, which is the whole bug (#11439).
+    const options = {
       exclude: ["docs/**"],
       always: ["README.md"],
       maxFileSize: 1024,
       maxFileCount: 7,
-      sort: "modified",
-    });
+      sort: "modified" as const,
+    };
 
-    const options = sdkOptions();
-    expect(options).toMatchObject({
-      exclude: ["docs/**"],
-      always: ["README.md"],
-      // The user-facing "max file size" is the liftable per-file gate, not the
-      // SDK's memory ceiling.
+    await copyTreeService.getFileTree(tempDir, "", options);
+    const listingOptions = copyMock.mock.calls[0][1] as Record<string, unknown>;
+
+    copyMock.mockClear();
+    await copyTreeService.generate(tempDir, options);
+    const generateOptions = copyMock.mock.calls[0][1] as Record<string, unknown>;
+
+    // Legitimately different: the listing plans instead of reading, reports no
+    // progress, and each operation carries its own abort signal.
+    const operational = new Set(["dryRun", "onProgress", "progressThrottleMs", "signal", "config"]);
+    const selectionOf = (all: Record<string, unknown>) =>
+      Object.fromEntries(Object.entries(all).filter(([key]) => !operational.has(key)));
+
+    expect(selectionOf(listingOptions)).toEqual(selectionOf(generateOptions));
+    // And the mapping itself is right: the user-facing "max file size" is the
+    // liftable per-file gate, not the SDK's memory ceiling.
+    expect(listingOptions).toMatchObject({
       sizeGate: 1024,
-      maxFileCount: 7,
       sort: "modified",
       sortOrder: "desc",
       respectGitignore: true,
     });
-    expect(options.maxFileSize).toBeUndefined();
+    expect(listingOptions.maxFileSize).toBeUndefined();
+  });
+
+  it("shares one config load across concurrent operations without cross-cancelling them", async () => {
+    // The cache is a shared promise, so a cancel landing while another caller
+    // awaits it must not take that caller down with it.
+    let releaseConfig!: (value: { isDefaultsLoaded: boolean }) => void;
+    configCreateMock.mockReturnValue(
+      new Promise<{ isDefaultsLoaded: boolean }>((resolve) => {
+        releaseConfig = resolve;
+      })
+    );
+    await fs.writeFile(path.join(tempDir, "a.ts"), "");
+    copyMock.mockResolvedValue(dryRunResult(manifest([["a.ts"]])));
+
+    const listing = copyTreeService.getFileTree(tempDir, "", {}, {}, "op-listing");
+    const generation = copyTreeService.generate(tempDir, {}, undefined, "op-generate");
+    // Both do real filesystem work before reaching the config, so wait for them
+    // to arrive rather than counting microtasks. One call for two operations is
+    // the property under test.
+    await vi.waitFor(() => expect(configCreateMock).toHaveBeenCalledTimes(1));
+
+    copyTreeService.cancel("op-listing");
+    releaseConfig({ isDefaultsLoaded: true });
+
+    await expect(listing).rejects.toThrow("Context generation cancelled");
+    // The survivor is unaffected: it got the shared config and ran to completion.
+    expect((await generation).error).toBeUndefined();
+    expect(copyMock).toHaveBeenCalledTimes(1);
   });
 
   it("rejects a non-absolute root before scanning", async () => {
