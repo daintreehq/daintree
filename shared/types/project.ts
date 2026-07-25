@@ -444,7 +444,7 @@ export interface RunCommand {
 export interface CopyTreeSettings {
   /** Maximum total context size in bytes. Undefined falls back to CopyTree's 100MB ceiling */
   maxContextSize?: number;
-  /** Maximum individual file size in bytes. Undefined means no per-file limit */
+  /** Per-file size gate in bytes. CopyTree's unliftable 10MB ceiling applies regardless */
   maxFileSize?: number;
   /** Character budget across all file content, not per file */
   charLimit?: number;

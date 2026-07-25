@@ -89,7 +89,7 @@ class CopyTreeService {
         return {
           content: "",
           fileCount: 0,
-          error: `Path does not exist or is not accessible: ${rootPath}`,
+          error: ERROR_CODE_MESSAGES.ENOENT,
         };
       }
 
@@ -99,7 +99,7 @@ class CopyTreeService {
       const { copy } = await getCopytree();
       this.throwIfAborted(controller.signal);
 
-      const config = await this.createConfig();
+      const config = await this.createConfig(controller.signal);
       this.throwIfAborted(controller.signal);
 
       const sdkOptions: SdkCopyOptions = {
@@ -162,7 +162,7 @@ class CopyTreeService {
         return {
           includedFiles: 0,
           includedSize: 0,
-          error: `Path does not exist or is not accessible: ${rootPath}`,
+          error: ERROR_CODE_MESSAGES.ENOENT,
         };
       }
 
@@ -172,7 +172,7 @@ class CopyTreeService {
       const { copy } = await getCopytree();
       this.throwIfAborted(controller.signal);
 
-      const config = await this.createConfig();
+      const config = await this.createConfig(controller.signal);
       this.throwIfAborted(controller.signal);
 
       const sdkOptions: SdkCopyOptions = {
@@ -184,10 +184,12 @@ class CopyTreeService {
       const result: CopyResult = await copy(rootPath, sdkOptions);
       this.logScanErrors(result);
 
-      // The 0.16 manifest reports every file's outcome, not just the kept ones,
-      // so the preview has to drop anything that wouldn't actually be included.
+      // The 0.16 manifest reports every file's outcome, not just the kept ones.
+      // Everything that isn't `excluded:*` reaches the output in some form —
+      // truncated content, a structure-only lock file and a binary placeholder
+      // all still occupy a slot — so only the excluded entries are dropped.
       const included = (result.manifest ?? [])
-        .filter((entry) => entry.outcome === "included")
+        .filter((entry) => !entry.outcome.startsWith("excluded:"))
         .map((entry) => ({ path: entry.path, size: entry.size }));
 
       return {
@@ -239,11 +241,20 @@ class CopyTreeService {
    * degraded: since 0.16 the config carries the exclusions, so running without
    * it would sweep `node_modules`, media and build output into the context.
    */
-  private async createConfig() {
+  private async createConfig(signal: AbortSignal) {
     const { ConfigManager } = await getCopytree();
     try {
-      return await ConfigManager.create({ userConfig: false, strict: true });
+      const config = await ConfigManager.create({ userConfig: false, strict: true });
+      // `strict` only throws when a source errors. A config directory that is
+      // simply absent resolves successfully and empty, which carries none of
+      // the exclusion lists — the case this flag exists to expose.
+      if (!config.isDefaultsLoaded) {
+        throw new Error("CopyTree default configuration is missing");
+      }
+      return config;
     } catch (error) {
+      // A cancel that lands while config is loading is a cancel, not a failure.
+      this.throwIfAborted(signal);
       logWarn("Failed to load CopyTree configuration; refusing to run without exclusions", {
         error,
       });
@@ -271,10 +282,12 @@ class CopyTreeService {
       addLineNumbers: options.withLineNumbers,
       // The user-facing "max file size" is a per-file gate that `always`
       // patterns are meant to override, which is `sizeGate` — not the SDK's
-      // `maxFileSize` memory ceiling, which nothing lifts. Left unset the gate
-      // is disabled rather than falling back to the SDK's 256KB default, so
-      // existing projects keep the files they had before this upgrade.
-      sizeGate: options.maxFileSize ?? false,
+      // `maxFileSize` memory ceiling, which nothing lifts. Left unset (or set to
+      // a non-positive value) the gate is disabled rather than falling back to
+      // the SDK's 256KB default, so existing projects keep the files they had
+      // before this upgrade.
+      sizeGate:
+        options.maxFileSize !== undefined && options.maxFileSize > 0 ? options.maxFileSize : false,
       maxTotalSize: options.maxTotalSize,
       maxFileCount: options.maxFileCount,
       sort: options.sort,
@@ -298,6 +311,7 @@ class CopyTreeService {
       truncated: stats.truncated,
       truncatedCount: stats.truncatedCount,
       truncatedBy: stats.truncatedBy,
+      budgetExceeded: stats.budgetExceeded,
     };
   }
 
@@ -321,8 +335,13 @@ class CopyTreeService {
     if (error instanceof Error) {
       if (error.name === "AbortError") return CANCELLED_MESSAGE;
 
+      // Own-property check only: an error carrying `code: "constructor"` would
+      // otherwise resolve to an inherited function and fail structured clone on
+      // its way to the renderer.
       const code = (error as Error & { code?: string }).code;
-      if (code && ERROR_CODE_MESSAGES[code]) return ERROR_CODE_MESSAGES[code];
+      if (typeof code === "string" && Object.hasOwn(ERROR_CODE_MESSAGES, code)) {
+        return ERROR_CODE_MESSAGES[code];
+      }
       if (error.name === "ValidationError") return "Context settings are invalid";
     }
 

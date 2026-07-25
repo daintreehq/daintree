@@ -22,7 +22,7 @@ describe("CopyTreeService adversarial", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-copytree-adv-"));
     vi.clearAllMocks();
-    configCreateMock.mockResolvedValue(undefined);
+    configCreateMock.mockResolvedValue({ isDefaultsLoaded: true });
   });
 
   afterEach(async () => {

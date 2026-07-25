@@ -19,7 +19,8 @@ export interface CopyTreeOptions {
   /**
    * Per-file size gate in bytes. Files above it are never opened and are
    * reported under `excluded.byReason.sizeGate`. `always` patterns override it.
-   * Left unset, no per-file gate applies.
+   * Left unset no configurable gate applies, but CopyTree's own 10MB
+   * memory-safety ceiling still does and nothing lifts that.
    */
   maxFileSize?: number;
   maxTotalSize?: number;
@@ -136,10 +137,16 @@ export interface CopyTreeBudgetStats {
   excluded?: CopyTreeExclusionSummary;
   /** Whether a budget dropped files */
   truncated?: boolean;
-  /** How many files a budget dropped */
+  /** How many files a budget dropped or cut short */
   truncatedCount?: number;
-  /** Which budget bit first */
+  /** Which budget bit first — not necessarily the only one that bit */
   truncatedBy?: CopyTreeTruncatedBy;
+  /**
+   * The retained set is larger than `maxTotalSize`. Happens when the first file
+   * alone exceeds the budget and is kept anyway, so it can be true even when
+   * nothing was truncated.
+   */
+  budgetExceeded?: boolean;
 }
 
 /** Result from CopyTree dry run test */

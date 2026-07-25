@@ -81,9 +81,9 @@ describe("ContextTab copy", () => {
     expect(excludedSubtitle?.endsWith(").")).toBe(false);
 
     const includeSubtitle = screen
-      .getByText(/Files matching these patterns will always be included/)
+      .getByText(/Files matching these patterns are included/)
       .textContent?.trim();
-    expect(includeSubtitle?.endsWith("excluded")).toBe(true);
+    expect(includeSubtitle?.endsWith("them")).toBe(true);
 
     const excludeSubtitle = screen
       .getByText(/Additional exclusion patterns beyond the default excluded paths above/)
@@ -205,25 +205,38 @@ describe("ContextTab test-config button", () => {
 });
 
 describe("ContextTab dry-run reporting", () => {
-  async function runWith(result: Partial<CopyTreeTestConfigResult>) {
+  async function runWith(
+    result: Partial<CopyTreeTestConfigResult>,
+    settledText: string | RegExp = "5 files would be included"
+  ) {
     testConfigMock.mockResolvedValue({ ...successResult, ...result });
     renderTab();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Test config" }));
     });
     await waitFor(() => {
-      expect(screen.getByText("5 files would be included")).toBeTruthy();
+      expect(screen.getByText(settledText)).toBeTruthy();
     });
   }
 
-  it("abbreviates large token estimates and leaves small ones exact", async () => {
-    await runWith({ estimatedTokens: 78_400 });
-    expect(screen.getByText("~78k tokens")).toBeTruthy();
+  it.each([
+    [999, "~999 tokens"],
+    [1_000, "~1.0k tokens"],
+    [9_949, "~9.9k tokens"],
+    [10_000, "~10k tokens"],
+    [78_400, "~78k tokens"],
+    // Must roll over to M rather than printing a malformed "1000k".
+    [999_500, "~1.0M tokens"],
+    [1_000_000, "~1.0M tokens"],
+    [2_400_000, "~2.4M tokens"],
+  ])("formats a %i token estimate as %s", async (tokens, expected) => {
+    await runWith({ estimatedTokens: tokens });
+    expect(screen.getByText(expected)).toBeTruthy();
   });
 
-  it("shows an exact count below a thousand tokens", async () => {
-    await runWith({ estimatedTokens: 640 });
-    expect(screen.getByText("~640 tokens")).toBeTruthy();
+  it("never renders a four-digit thousands abbreviation", async () => {
+    await runWith({ estimatedTokens: 999_499 });
+    expect(screen.queryByText(/~\d{4}k tokens/)).toBeNull();
   });
 
   it("omits the token estimate when the dry run did not report one", async () => {
@@ -248,16 +261,47 @@ describe("ContextTab dry-run reporting", () => {
     expect(screen.queryByText(/\d+ excluded/)).toBeNull();
   });
 
-  it("warns which budget dropped files when the run truncated", async () => {
+  it("names the budget that bit first without claiming it was the only cause", async () => {
     await runWith({ truncated: true, truncatedCount: 9, truncatedBy: "charLimit" });
 
-    const warning = screen.getByText(/9 files were dropped/).textContent ?? "";
-    expect(warning).toContain("character budget");
+    const warning = screen.getByText(/9 files were truncated or left out/).textContent ?? "";
+    expect(warning).toContain("the character budget");
+    expect(warning).toContain("reached first");
+  });
+
+  it("uses singular grammar for a single truncated file", async () => {
+    await runWith({ truncated: true, truncatedCount: 1, truncatedBy: "maxTotalSize" });
+
+    expect(screen.getByText(/^1 file was truncated or left out/)).toBeTruthy();
+  });
+
+  it("attributes no cause when the SDK reported none", async () => {
+    await runWith({ truncated: true, truncatedCount: 4, truncatedBy: undefined });
+
+    const warning = screen.getByText(/4 files were truncated or left out/).textContent ?? "";
+    expect(warning).not.toContain("reached first");
   });
 
   it("shows no truncation warning on an untruncated run", async () => {
     await runWith({ truncated: false });
-    expect(screen.queryByText(/were dropped by/)).toBeNull();
+    expect(screen.queryByText(/truncated or left out/)).toBeNull();
+  });
+
+  it("warns when an oversized first file pushed the run past the total size limit", async () => {
+    await runWith({ truncated: false, budgetExceeded: true });
+
+    expect(screen.getByText(/first file alone is over the total size limit/)).toBeTruthy();
+  });
+
+  it("reports a no-match run as an empty state rather than a success", async () => {
+    await runWith(
+      { noFilesMatched: true, includedFiles: 0, files: [] },
+      /No files match these settings/
+    );
+
+    // The success headline carries a count; the static tab subtitle also says
+    // "files would be included", so match only the counted form.
+    expect(screen.queryByText(/^\d+ files would be included$/)).toBeNull();
   });
 
   it("renders an error card when the dry-run fails", async () => {

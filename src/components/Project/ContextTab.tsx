@@ -23,14 +23,23 @@ function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
 }
 
-/** Token counts are a ±20% heuristic, so they read better rounded than exact. */
+/**
+ * Token counts are a ±20% heuristic, so they read better rounded than exact.
+ * Thresholds are picked off the *rounded* value so it can never print "1000k",
+ * and so the one-decimal form stops before it would round up to two digits.
+ */
 function formatTokenEstimate(tokens: number): string {
-  if (tokens < 1000) return String(tokens);
-  if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
+  if (tokens < 1000) return String(Math.round(tokens));
+  if (tokens < 999_500) {
+    const thousands = tokens / 1000;
+    return thousands < 9.95 ? `${thousands.toFixed(1)}k` : `${Math.round(thousands)}k`;
+  }
   return `${(tokens / 1_000_000).toFixed(1)}M`;
 }
 
-const EXCLUSION_LABELS: Partial<Record<CopyTreeExclusionReason, string>> = {
+// Keyed loosely on purpose: exclusion reasons are additive upstream, and an
+// unrecognized one falls back to showing its own key rather than nothing.
+const EXCLUSION_LABELS: Record<string, string | undefined> = {
   gitignore: "gitignore",
   copytreeignore: "copytreeignore",
   globalGitignore: "global gitignore",
@@ -51,12 +60,24 @@ const EXCLUSION_LABELS: Partial<Record<CopyTreeExclusionReason, string>> = {
 };
 
 const TRUNCATION_LABELS: Record<CopyTreeTruncatedBy, string> = {
-  maxFileCount: "file count",
-  maxTotalSize: "total size",
-  charLimit: "character budget",
+  maxFileCount: "the file count limit",
+  maxTotalSize: "the total size limit",
+  charLimit: "the character budget",
 };
 
 const EXCLUSION_REASON_PREVIEW_COUNT = 3;
+
+/**
+ * `truncatedBy` names the budget that bit first, not the only one that bit, and
+ * the count mixes files cut short with files left out entirely — so the notice
+ * says what is certain and attributes the cause only when the SDK reported one.
+ */
+function formatTruncationNotice(count?: number, by?: CopyTreeTruncatedBy): string {
+  const subject =
+    count === undefined ? "Some files were" : count === 1 ? "1 file was" : `${count} files were`;
+  const cause = by ? ` — ${TRUNCATION_LABELS[by]} was reached first` : "";
+  return `${subject} truncated or left out${cause}`;
+}
 
 /** Names the biggest exclusion reasons so the count isn't an unexplained number. */
 function describeTopExclusions(byReason: Partial<Record<CopyTreeExclusionReason, number>>): string {
@@ -64,7 +85,7 @@ function describeTopExclusions(byReason: Partial<Record<CopyTreeExclusionReason,
     .filter(([, count]) => (count ?? 0) > 0)
     .sort(([, a], [, b]) => (b ?? 0) - (a ?? 0))
     .slice(0, EXCLUSION_REASON_PREVIEW_COUNT)
-    .map(([reason]) => EXCLUSION_LABELS[reason as CopyTreeExclusionReason] ?? reason);
+    .map(([reason]) => EXCLUSION_LABELS[reason] ?? reason);
 
   return top.length > 0 ? ` — ${top.join(", ")}` : "";
 }
@@ -279,7 +300,7 @@ export function ContextTab({
                   setTestConfigResult(null);
                 }}
                 min={1}
-                placeholder="Default (no limit)"
+                placeholder="Default (up to 10 MB)"
                 className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
               />
               <p className="text-xs text-daintree-text/40 mt-1">Skip files larger than this</p>
@@ -335,8 +356,8 @@ export function ContextTab({
               Always include (glob patterns)
             </label>
             <p className="text-xs text-daintree-text/40 mb-2">
-              Files matching these patterns will always be included, even if they would otherwise be
-              excluded
+              Files matching these patterns are included even when an exclude rule or the max file
+              size would drop them
             </p>
             <div className="space-y-2">
               {(copyTreeSettings.alwaysInclude || []).map((pattern, index) => (
@@ -487,7 +508,11 @@ export function ContextTab({
             )}
 
             {testConfigResult && !showTestingSkeleton && (
+              // The skeleton this replaces is a live status, so the outcome has
+              // to be announced too — focus stays on the button either way.
               <div
+                role={testConfigResult.error ? "alert" : "status"}
+                aria-live={testConfigResult.error ? "assertive" : "polite"}
                 className={cn(
                   "mt-4 p-4 rounded-[var(--radius-md)] border",
                   testConfigResult.error
@@ -502,32 +527,55 @@ export function ContextTab({
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Check className="h-4 w-4 text-status-success" />
-                      <span className="text-sm font-medium text-daintree-text">
-                        {testConfigResult.includedFiles} files would be included
-                      </span>
-                      <span className="text-xs text-daintree-text/60">
-                        ({formatBytes(testConfigResult.includedSize)})
-                      </span>
-                      {testConfigResult.estimatedTokens !== undefined && (
-                        <span className="text-xs text-daintree-text/60">
-                          ~{formatTokenEstimate(testConfigResult.estimatedTokens)} tokens
+                    {testConfigResult.noFilesMatched ? (
+                      <p className="text-sm text-daintree-text">
+                        No files match these settings — loosen the excluded paths or size limits
+                      </p>
+                    ) : (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Check className="h-4 w-4 text-status-success" />
+                        <span className="text-sm font-medium text-daintree-text">
+                          {testConfigResult.includedFiles} files would be included
                         </span>
-                      )}
-                    </div>
+                        <span className="text-xs text-daintree-text/60">
+                          ({formatBytes(testConfigResult.includedSize)})
+                        </span>
+                        {testConfigResult.estimatedTokens !== undefined && (
+                          <span className="text-xs text-daintree-text/60">
+                            ~{formatTokenEstimate(testConfigResult.estimatedTokens)} tokens
+                          </span>
+                        )}
+                      </div>
+                    )}
                     {testConfigResult.excluded && testConfigResult.excluded.total > 0 && (
                       <p className="text-xs text-daintree-text/60">
                         {testConfigResult.excluded.total} excluded
                         {describeTopExclusions(testConfigResult.excluded.byReason)}
                       </p>
                     )}
+                    {copyTreeSettings.charLimit !== undefined && (
+                      // The dry run plans the character budget from byte sizes
+                      // without reading content, so this preview is an estimate.
+                      <p className="text-xs text-daintree-text/40">
+                        Estimated — the character budget is planned from file sizes
+                      </p>
+                    )}
                     {testConfigResult.truncated && (
                       <div className="flex items-start gap-2">
                         <AlertTriangle className="h-4 w-4 text-status-warning mt-0.5 shrink-0" />
                         <p className="text-xs text-daintree-text/80">
-                          {testConfigResult.truncatedCount ?? 0} files were dropped by the{" "}
-                          {TRUNCATION_LABELS[testConfigResult.truncatedBy ?? "maxTotalSize"]} limit
+                          {formatTruncationNotice(
+                            testConfigResult.truncatedCount,
+                            testConfigResult.truncatedBy
+                          )}
+                        </p>
+                      </div>
+                    )}
+                    {testConfigResult.budgetExceeded && !testConfigResult.truncated && (
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="h-4 w-4 text-status-warning mt-0.5 shrink-0" />
+                        <p className="text-xs text-daintree-text/80">
+                          The first file alone is over the total size limit, so it was kept anyway
                         </p>
                       </div>
                     )}

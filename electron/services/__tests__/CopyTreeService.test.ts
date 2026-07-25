@@ -21,7 +21,7 @@ describe("CopyTreeService", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-copytree-service-"));
     vi.clearAllMocks();
-    configCreateMock.mockResolvedValue(undefined);
+    configCreateMock.mockResolvedValue({ isDefaultsLoaded: true });
     copyMock.mockResolvedValue({
       output: "<context />",
       outputFormatVersion: "copytree-xml@1",
@@ -59,7 +59,10 @@ describe("CopyTreeService", () => {
 
     const result = await copyTreeService.generate(missingPath);
 
-    expect(result.error).toContain("does not exist or is not accessible");
+    expect(result.error).toBe("Project path is unavailable");
+    // The path itself is the user's filesystem layout and must not cross to the
+    // renderer with the error.
+    expect(result.error).not.toContain(missingPath);
     expect(copyMock).not.toHaveBeenCalled();
   });
 
@@ -257,7 +260,7 @@ describe("CopyTreeService", () => {
         output: "",
         manifest: [
           { path: "kept.ts", size: 1024, outcome: "included" },
-          { path: "gone.mp4", size: 3072, outcome: "excluded:binaryExtension" },
+          { path: "gone.mp4", size: 3072, outcome: "excluded:configExclude" },
         ],
         stats: { totalFiles: 7, totalSize: 4096, duration: 5, dryRun: true },
       });
@@ -332,6 +335,32 @@ describe("CopyTreeService", () => {
       expect(result.error).toBe("Context configuration couldn't be loaded");
       expect(result.includedFiles).toBe(0);
     });
+
+    it.each([
+      ["generate", () => copyTreeService.generate(tempDir)],
+      ["testConfig", () => copyTreeService.testConfig(tempDir)],
+    ])(
+      "refuses to run %s when config resolved without the exclusion defaults",
+      async (_name, run) => {
+        // strict only throws when a source errors; an absent config directory
+        // resolves successfully and empty, carrying no exclusion lists at all.
+        configCreateMock.mockResolvedValue({ isDefaultsLoaded: false });
+
+        const result = await run();
+
+        expect(copyMock).not.toHaveBeenCalled();
+        expect(result.error).toBe("Context configuration couldn't be loaded");
+      }
+    );
+
+    it("proceeds when the defaults did load", async () => {
+      configCreateMock.mockResolvedValue({ isDefaultsLoaded: true });
+
+      const result = await copyTreeService.generate(tempDir);
+
+      expect(copyMock).toHaveBeenCalledTimes(1);
+      expect(result.error).toBeUndefined();
+    });
   });
 
   describe("SDK option policy", () => {
@@ -349,6 +378,12 @@ describe("CopyTreeService", () => {
       // maxFileSize is the SDK's memory ceiling and cannot be lifted by
       // `always`, so the user-facing limit must not be routed there.
       expect(options.maxFileSize).toBeUndefined();
+    });
+
+    it.each([0, -1])("treats a non-positive max file size (%i) as no gate", async (maxFileSize) => {
+      await copyTreeService.generate(tempDir, { maxFileSize });
+
+      expect(sdkOptions().sizeGate).toBe(false);
     });
 
     it("keeps redaction off so it cannot rewrite source handed to an agent", async () => {
@@ -396,7 +431,9 @@ describe("CopyTreeService", () => {
       });
     });
 
-    it("counts only files the dry run would actually include", async () => {
+    it("drops excluded entries but keeps every outcome that reaches the output", async () => {
+      // truncated / structure-only / binary-placeholder files all still occupy a
+      // slot in the generated context, so the preview must count them.
       copyMock.mockResolvedValue({
         output: "",
         outputFormatVersion: null,
@@ -404,28 +441,32 @@ describe("CopyTreeService", () => {
           { path: "a.ts", size: 10, outcome: "included" },
           { path: "big.bin", size: 900, outcome: "excluded:sizeGate" },
           { path: "lock.json", size: 40, outcome: "structure-only" },
-          { path: "b.ts", size: 20, outcome: "included" },
+          { path: "logo.png", size: 60, outcome: "binary-placeholder" },
+          { path: "long.md", size: 80, outcome: "truncated" },
+          { path: "vendored.js", size: 500, outcome: "excluded:gitignore" },
         ],
         stats: {
-          totalFiles: 4,
-          totalSize: 970,
+          totalFiles: 6,
+          totalSize: 1590,
           duration: 1,
           estimatedOutputChars: 0,
           estimatedTokens: 0,
           noFilesMatched: false,
-          excluded: { total: 1, byReason: { sizeGate: 1 } },
+          excluded: { total: 2, byReason: { sizeGate: 1, gitignore: 1 } },
         },
       });
 
       const result = await copyTreeService.testConfig(tempDir);
 
-      expect(result.files).toEqual([
-        { path: "a.ts", size: 10 },
-        { path: "b.ts", size: 20 },
+      expect(result.files?.map((file) => file.path)).toEqual([
+        "a.ts",
+        "lock.json",
+        "logo.png",
+        "long.md",
       ]);
-      expect(result.includedFiles).toBe(2);
-      expect(result.includedSize).toBe(30);
-      expect(result.excluded).toEqual({ total: 1, byReason: { sizeGate: 1 } });
+      expect(result.includedFiles).toBe(4);
+      expect(result.includedSize).toBe(190);
+      expect(result.excluded).toEqual({ total: 2, byReason: { sizeGate: 1, gitignore: 1 } });
     });
 
     it("surfaces which budget truncated the run", async () => {
