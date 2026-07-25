@@ -140,6 +140,8 @@ const emptyBulkStats = (projectIds: string[]) => {
       processIds: number[];
       activeAgentCount: number;
       waitingAgentCount: number;
+      blockedAgentCount: number;
+      oldestWaitingSince?: number;
     }
   > = {};
   for (const id of projectIds) {
@@ -151,6 +153,7 @@ const emptyBulkStats = (projectIds: string[]) => {
       processIds: [],
       activeAgentCount: 0,
       waitingAgentCount: 0,
+      blockedAgentCount: 0,
     };
   }
   return result;
@@ -1332,6 +1335,7 @@ describe("useProjectSwitcherPalette", () => {
           processIds: [1, 2],
           activeAgentCount: 1,
           waitingAgentCount: 3,
+          blockedAgentCount: 0,
         },
       });
 
@@ -1376,6 +1380,7 @@ describe("useProjectSwitcherPalette", () => {
           processIds: [],
           activeAgentCount: 99,
           waitingAgentCount: 99,
+          blockedAgentCount: 9,
         },
       });
 
@@ -1404,6 +1409,7 @@ describe("useProjectSwitcherPalette", () => {
           processIds: [],
           activeAgentCount: 1,
           waitingAgentCount: 3,
+          blockedAgentCount: 0,
         },
       });
 
@@ -1634,7 +1640,7 @@ describe("useProjectSwitcherPalette", () => {
       };
       getBulkStatsMock.mockResolvedValue(emptyBulkStats(["waiting", "idle"]));
 
-      const { result } = renderHook(() => useProjectSwitcherPalette());
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
       act(() => {
         result.current.open("modal");
       });
@@ -1649,6 +1655,9 @@ describe("useProjectSwitcherPalette", () => {
         projectStatsState.stats = {
           waiting: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
         };
+        // A real stats push updates the store and renders; the layout captured
+        // on the next open has to come from that render, not the one before it.
+        rerender();
       });
       act(() => {
         result.current.open("modal");
@@ -1948,6 +1957,7 @@ describe("useProjectSwitcherPalette", () => {
           processIds: [],
           activeAgentCount: 0,
           waitingAgentCount: 2,
+          blockedAgentCount: 0,
         },
       });
 

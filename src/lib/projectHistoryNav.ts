@@ -6,13 +6,13 @@ import type { ProjectHistoryDirection } from "@shared/types/ipc/project";
 export type { ProjectHistoryDirection };
 
 /**
- * Step back or forward through the projects this window has visited.
+ * Cycle around the projects this window has visited.
  *
  * The previous behaviour walked the recency list, which the act of arriving
  * mutated — so "back" always pointed at where you had just come from, two
- * projects ping-ponged forever, and a third was unreachable. The stack itself
+ * projects ping-ponged forever, and a third was unreachable. The ring itself
  * lives in main: renderer contexts are per-project and are torn down on a cold
- * switch, so a stack kept here would not survive the navigation it exists for.
+ * switch, so a ring kept here would not survive the navigation it exists for.
  *
  * Main resolves the destination but does not perform the switch. The switch
  * goes back through the project store, which is the route the palette already
@@ -22,8 +22,8 @@ export type { ProjectHistoryDirection };
 export async function switchProjectByHistory(direction: ProjectHistoryDirection): Promise<void> {
   try {
     const target = await window.electron.projectHistory.peek(direction);
-    // Reaching either end is not a failure and not worth interrupting for — the
-    // same nothing a browser's greyed-out Back button does.
+    // An empty ring, or one holding only the project already on screen, has
+    // nowhere to go. Not a failure and not worth interrupting for.
     if (!target) return;
 
     const state = useProjectStore.getState();

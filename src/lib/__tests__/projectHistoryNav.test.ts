@@ -84,20 +84,26 @@ describe("switchProjectByHistory", () => {
     expect(projectState.switchProject).not.toHaveBeenCalled();
   });
 
-  it("surfaces a failed lookup with a retry", async () => {
-    peekMock.mockRejectedValue(new Error("bridge gone"));
+  it("surfaces a failed lookup with a retry that actually retries", async () => {
+    peekMock.mockRejectedValueOnce(new Error("bridge gone"));
 
     await switchProjectByHistory("back");
 
     expect(notifyMock).toHaveBeenCalledTimes(1);
     const call = notifyMock.mock.calls[0]![0] as {
       type: string;
-      title: string;
-      actions: Array<{ label: string }>;
+      actions: Array<{ onClick: () => void }>;
     };
     expect(call.type).toBe("error");
-    expect(call.title).toBe("Couldn't switch project");
-    expect(call.actions[0]?.label).toBe("Try again");
+
+    // Assert the action works rather than that its label matches the source.
+    peekMock.mockResolvedValue({ projectId: "target" });
+    call.actions[0]!.onClick();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(peekMock).toHaveBeenCalledTimes(2);
+    expect(peekMock).toHaveBeenLastCalledWith("back");
   });
 
   it("surfaces a failed switch with a retry", async () => {

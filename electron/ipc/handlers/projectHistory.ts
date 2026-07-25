@@ -35,11 +35,8 @@ export function createProjectHistoryNamespace(deps: HandlerDependencies) {
     return ctx.projectId ?? projectStore.getCurrentProjectId();
   };
 
-  const describe = (projectId: string): ProjectHistoryTarget | null => {
-    const project = projectStore.getProjectById(projectId);
-    if (!project) return null;
-    return { projectId, name: project.name, emoji: project.emoji || "🌲" };
-  };
+  const describe = (projectId: string): ProjectHistoryTarget | null =>
+    projectExists(projectId) ? { projectId } : null;
 
   /**
    * Resolve a step without performing it.

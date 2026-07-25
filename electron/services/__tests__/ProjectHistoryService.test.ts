@@ -57,6 +57,56 @@ describe("ProjectHistoryService", () => {
     expect(history.snapshot().entries).toEqual(["a", "b", "c"]);
   });
 
+  it("cycles forward as the mirror of cycling back", () => {
+    const history = new ProjectHistoryService();
+    visit(history, "a", "b", "c");
+
+    const visited: string[] = [];
+    for (let press = 0; press < 6; press++) {
+      const target = history.peek("forward", always)!;
+      history.record(target);
+      visited.push(target);
+    }
+
+    expect(visited).toEqual(["a", "b", "c", "a", "b", "c"]);
+    expect(history.snapshot().entries).toEqual(["a", "b", "c"]);
+  });
+
+  it("holds its invariants across a long random walk", () => {
+    // The cyclic neighbour check in `record` is the subtlest part of this
+    // service: a wrap lands somewhere non-adjacent by index, and getting the
+    // inference wrong rewrites the ring underneath the user. Hand-picked
+    // sequences can't cover the interleavings, so this walks a mix of steps and
+    // off-ring jumps and asserts the structure holds throughout.
+    const history = new ProjectHistoryService();
+    visit(history, "a", "b", "c", "d", "e");
+
+    let seed = 7;
+    const rand = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+
+    for (let move = 0; move < 200; move++) {
+      const roll = rand();
+      if (roll < 0.45) {
+        const target = history.peek("back", always);
+        if (target) history.record(target);
+      } else if (roll < 0.9) {
+        const target = history.peek("forward", always);
+        if (target) history.record(target);
+      } else {
+        history.record(`jump-${Math.floor(rand() * 4)}`);
+      }
+
+      const { entries, cursor } = history.snapshot();
+      // The cursor always addresses a real entry.
+      expect(cursor).toBeGreaterThanOrEqual(0);
+      expect(cursor).toBeLessThan(entries.length);
+      // No entry is ever its own neighbour, or a step would go nowhere visible.
+      for (let index = 1; index < entries.length; index++) {
+        expect(entries[index]).not.toBe(entries[index - 1]);
+      }
+    }
+  });
+
   it("goes nowhere when the ring holds only the current project", () => {
     const history = new ProjectHistoryService();
     visit(history, "a");
@@ -84,14 +134,45 @@ describe("ProjectHistoryService", () => {
     expect(history.snapshot()).toEqual({ entries: ["a", "b", "c"], cursor: 0 });
   });
 
-  it("discards the forward branch when the user jumps somewhere new", () => {
+  it("inserts a new project beside the cursor, not at the end", () => {
+    // Back must keep meaning "where I came from". Appending to the tail would
+    // point it at whatever happened to be visited last instead.
     const history = new ProjectHistoryService();
     visit(history, "a", "b", "c");
     history.record("b");
     history.record("d");
 
-    expect(history.snapshot()).toEqual({ entries: ["a", "b", "d"], cursor: 2 });
+    expect(history.snapshot()).toEqual({ entries: ["a", "b", "d", "c"], cursor: 2 });
     expect(history.peek("back", always)).toBe("b");
+  });
+
+  it("never holds the same project twice", () => {
+    // Duplicates are what make a cursor ambiguous: the same id at both ends of
+    // the ring cannot be told apart, so a step lands on the wrong occurrence or
+    // loops onto itself and strands the shortcut.
+    const history = new ProjectHistoryService();
+    visit(history, "a", "b", "c", "d");
+    history.record("c");
+    history.record("a");
+    history.record("d");
+
+    const { entries } = history.snapshot();
+    expect(new Set(entries).size).toBe(entries.length);
+  });
+
+  it("keeps stepping after revisiting a project already in the ring", () => {
+    const history = new ProjectHistoryService();
+    visit(history, "a", "b", "c", "d");
+    history.record("c");
+    // An explicit jump back to the far end used to append a second copy, after
+    // which stepping onward landed on that copy and went nowhere.
+    history.record("a");
+
+    const forward = history.peek("forward", always);
+    expect(forward).not.toBe("a");
+    expect(forward).not.toBeNull();
+    history.record(forward!);
+    expect(history.current()).toBe(forward);
   });
 
   it("ignores a redundant switch to the project already showing", () => {
@@ -237,6 +318,6 @@ describe("ProjectHistoryService", () => {
 
     expect(history.peek("back", always)).toBeNull();
     expect(history.peek("forward", always)).toBeNull();
-    expect(history.canGo("back", always)).toBe(false);
+    expect(history.current()).toBeNull();
   });
 });

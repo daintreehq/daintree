@@ -449,14 +449,21 @@ async function activateProjectView(
   const { view, isNew } = swapResult;
   const swapMs = Math.round(performance.now() - activateStart);
 
-  // Fold the completed switch into this window's back/forward history. Recorded
-  // here — after the view swap has actually committed — because this is the
-  // path every real switch takes: `ProjectSwitchService` only runs on the
-  // legacy non-PVM fallback, so recording there alone left history empty in
-  // normal use. `windowId` comes from the captured operation, so a second
-  // window records into its own stack rather than the first window's.
+  // Fold the completed switch into this window's project history. Recorded here
+  // — after the view swap has actually committed — because this is the path
+  // every real switch takes: `ProjectSwitchService` only runs on the legacy
+  // non-PVM fallback, so recording there alone left history empty in normal
+  // use. `windowId` comes from the captured operation, so a second window
+  // records into its own ring rather than the first window's.
+  //
+  // The outgoing project is recorded first. Nothing records the project a
+  // window opens on — that load never reaches this path — so without this the
+  // ring would start at the first destination and the most common flow of all,
+  // open on A, switch to B, press Back, would find nowhere to go.
   if (windowId !== undefined) {
-    getProjectHistory(windowId).record(projectId);
+    const history = getProjectHistory(windowId);
+    if (outgoingProjectId) history.record(outgoingProjectId);
+    history.record(projectId);
   }
 
   // Mutually exclusive with scratch: switching to a project clears any

@@ -5,6 +5,7 @@ import type { BulkProjectStats } from "../../../../shared/types/ipc/project.js";
 import type { MemoryRollup, MemoryRollupProject } from "../../../../shared/types/pty-host.js";
 import { ProjectStatsService } from "../../../services/ProjectStatsService.js";
 import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
+import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
 
 let projectStatsServiceInstance: ProjectStatsService | null = null;
 
@@ -90,38 +91,14 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       }
     }
 
-    // Group agent counts by projectId from the bulk terminal list
-    const agentCounts = new Map<string, { active: number; waiting: number }>();
-    for (const id of uniqueIds) {
-      agentCounts.set(id, { active: 0, waiting: 0 });
-    }
-    for (const terminal of allTerminals) {
-      if (!terminal.projectId) continue;
-      const counts = agentCounts.get(terminal.projectId);
-      if (!counts) continue;
-      if (terminal.isTrashed) continue;
-      if (terminal.kind === "dev-preview") continue;
-      if (terminal.hasPty === false) continue;
-      // Runtime identity wins; launch intent is only a boot-window fallback
-      // before detection has ever committed. Demoted ex-agents must not
-      // inflate active/waiting counts just because they were launched as agents.
-      const hasLiveOrBootAgent =
-        Boolean(terminal.detectedAgentId) ||
-        (Boolean(terminal.launchAgentId) && terminal.everDetectedAgent !== true);
-      if (!hasLiveOrBootAgent) continue;
-
-      if (terminal.agentState === "waiting") {
-        counts.waiting += 1;
-      } else if (terminal.agentState === "working") {
-        counts.active += 1;
-      }
-    }
+    const agentCounts = computeProjectAgentCounts(uniqueIds, allTerminals);
 
     const result: BulkProjectStats = {};
     for (const entry of statsResults) {
       if (entry.status === "fulfilled") {
         const [id, ptyStats] = entry.value;
-        const counts = agentCounts.get(id) ?? { active: 0, waiting: 0 };
+        const counts = agentCounts.get(id);
+        if (!counts) continue;
         const measured = measuredByProject.get(id);
         // Trust the measurement only once at least one process resolved — a
         // just-spawned shell may not be in the process table yet, and reporting
@@ -129,13 +106,20 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
         const hasMeasured = measured !== undefined && measured.processCount > 0;
         const top = hasMeasured ? measured!.topProcesses[0] : undefined;
         result[id] = {
-          processCount: ptyStats.terminalCount,
+          // Net out the assistant help PTY, exactly as the pushed status map
+          // does. Reporting the raw host count here made opening the palette
+          // reintroduce the counts #10989 removed.
+          processCount: Math.max(0, ptyStats.terminalCount - counts.helpTerminals),
           terminalCount: ptyStats.terminalCount,
           estimatedMemoryMB: ptyStats.terminalCount * MEMORY_PER_TERMINAL_MB,
           terminalTypes: ptyStats.terminalTypes,
           processIds: ptyStats.processIds,
           activeAgentCount: counts.active,
           waitingAgentCount: counts.waiting,
+          blockedAgentCount: counts.blocked,
+          ...(counts.oldestWaitingSince !== null
+            ? { oldestWaitingSince: counts.oldestWaitingSince }
+            : {}),
           terminalMemoryMB: hasMeasured ? Math.round(measured!.memoryKb / 1024) : undefined,
           topProcess: top
             ? { name: top.comm, memoryMB: Math.round(top.memoryKb / 1024) }

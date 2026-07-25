@@ -392,16 +392,15 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         return projectClient.getBulkStats(ids).then((bulk) => {
           // Seed only — never overwrite.
           //
-          // `ProjectStatsService` is the authoritative producer: it alone nets
-          // out the assistant help PTY (#10989) and computes the blocked/aged
-          // breakdown, and it suppresses broadcasts whose payload is unchanged.
-          // That suppression is what makes an overwrite here unrecoverable — a
-          // stale bulk response landing after a newer push would stick until the
-          // underlying counts happened to change again.
+          // Bulk and the push service now compute agent state from the same
+          // helper, so a seed is as accurate as a push. It is still only ever a
+          // seed: the push service suppresses broadcasts whose payload is
+          // unchanged, which is what would make a late bulk response landing on
+          // top of a newer push stick until the underlying counts next moved.
           //
-          // Bulk exists to cover the one gap the push model leaves: a renderer
-          // that has never received a broadcast has nothing to show. So fill
-          // absent entries and leave every present one alone.
+          // Bulk covers the one gap the push model leaves: a renderer that has
+          // never received a broadcast has nothing to show. Fill absent entries
+          // and leave every present one alone.
           const previous = useProjectStatsStore.getState().stats;
           const seeded: ProjectStatusMap = { ...previous };
           let changed = false;
@@ -410,9 +409,10 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
             seeded[id] = {
               activeAgentCount: entry.activeAgentCount,
               waitingAgentCount: entry.waitingAgentCount,
-              // Bulk cannot distinguish an error-blocked wait from a prompt, and
-              // guessing would put a red row on screen that no agent earned.
-              blockedAgentCount: 0,
+              blockedAgentCount: entry.blockedAgentCount,
+              ...(entry.oldestWaitingSince !== undefined
+                ? { oldestWaitingSince: entry.oldestWaitingSince }
+                : {}),
               processCount: entry.processCount,
             };
             changed = true;
@@ -522,20 +522,24 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // that kept its frozen slot while its band changed underneath would split its
   // old band in two and print that header twice. Counts, ages and status text
   // are read fresh every render, so rows still update in place.
-  const frozenLayoutRef = useRef<{
+  // Captured in `open()`/`close()` rather than during render. A ref written
+  // while rendering leaks into the committed tree if React abandons that render,
+  // and it never resets on a mode change that leaves the palette open.
+  const [frozenLayout, setFrozenLayout] = useState<{
     order: string[];
     sections: Map<string, ProjectSectionKey>;
   } | null>(null);
-  if (!isOpen) frozenLayoutRef.current = null;
-  else if (frozenLayoutRef.current === null) {
-    frozenLayoutRef.current = {
-      order: liveBrowseOrder.map((project) => project.id),
-      sections: new Map(liveBrowseOrder.map((project) => [project.id, project.section])),
-    };
-  }
+
+  const captureLayout = useCallback(
+    (projects: SearchableProject[]) => ({
+      order: projects.map((project) => project.id),
+      sections: new Map(projects.map((project) => [project.id, project.section])),
+    }),
+    []
+  );
 
   const browseOrdered = useMemo<SearchableProject[]>(() => {
-    const frozen = frozenLayoutRef.current;
+    const frozen = frozenLayout;
     if (!frozen) return liveBrowseOrder;
 
     const byId = new Map(liveBrowseOrder.map((project) => [project.id, project]));
@@ -568,7 +572,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     return ordered.sort(
       (a, b) => PROJECT_SECTION_ORDER.indexOf(a.section) - PROJECT_SECTION_ORDER.indexOf(b.section)
     );
-  }, [liveBrowseOrder]);
+  }, [liveBrowseOrder, frozenLayout]);
 
   // Clearing the box reverts to browse immediately rather than holding the
   // deferred ranking for a commit — otherwise browse would flash the stale
@@ -633,15 +637,19 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         setDropdownIsOpen(true);
       }
       setQuery("");
+      // Freeze the layout for this open session. Taken from the live order,
+      // not `browseOrdered`, which is still holding the previous session's
+      // frozen shape at this point.
+      setFrozenLayout(captureLayout(liveBrowseOrder));
       // Preselect the first row that isn't the project we're already in, so
       // open-then-Enter is a one-two return. Both modes render the same
-      // section-ordered browse list now, so this is `browseOrdered` regardless
+      // section-ordered browse list now, so this is the browse order regardless
       // of which surface is opening. From a scratch there is no active row, so
       // it lands on row 1 rather than skipping past it (#11085).
-      const initial = browseOrdered.find((project) => !project.isActive) ?? browseOrdered[0];
+      const initial = liveBrowseOrder.find((project) => !project.isActive) ?? liveBrowseOrder[0];
       setSelectedProjectId(initial?.id ?? null);
     },
-    [browseOrdered]
+    [liveBrowseOrder, captureLayout]
   );
 
   const close = useCallback(() => {
@@ -652,6 +660,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }
     setQuery("");
     setSelectedProjectId(null);
+    setFrozenLayout(null);
   }, [mode]);
 
   // Steps the selection by `delta` rows, wrapping. Resolves the current row

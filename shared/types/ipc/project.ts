@@ -102,6 +102,15 @@ export interface BulkProjectStatsEntry extends ProjectStats {
   activeAgentCount: number;
   waitingAgentCount: number;
   /**
+   * Waiting agents blocked on an error — a subset of
+   * {@link BulkProjectStatsEntry.waitingAgentCount}. Carried so a renderer that
+   * has never received a pushed status update seeds from the same reading the
+   * push would have given it.
+   */
+  blockedAgentCount: number;
+  /** Earliest transition into `waiting`, absent when nothing is waiting. */
+  oldestWaitingSince?: number;
+  /**
    * Measured resident memory (MB) of this project's terminal process trees —
    * each shell plus every descendant (dev servers, agents, language servers),
    * deduplicated by PID. Undefined when the OS process table couldn't be read;
@@ -142,14 +151,11 @@ export interface ProjectStatusEntry {
 export type ProjectHistoryDirection = "back" | "forward";
 
 /**
- * Where a step around project history would land, so the renderer can act on it
- * without re-deriving the destination from a project list that may not include
- * it yet.
+ * Where a step around the project-history ring would land. Main resolves it;
+ * the renderer performs the switch through its ordinary path.
  */
 export interface ProjectHistoryTarget {
   projectId: string;
-  name: string;
-  emoji: string;
 }
 
 /** Project status map pushed from main process, keyed by project ID */
