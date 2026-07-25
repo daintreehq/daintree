@@ -35,10 +35,10 @@ export function createProjectHistoryNamespace(deps: HandlerDependencies) {
     return ctx.projectId ?? projectStore.getCurrentProjectId();
   };
 
-  const describe = (projectId: string, canGoOpposite: boolean): ProjectHistoryTarget | null => {
+  const describe = (projectId: string): ProjectHistoryTarget | null => {
     const project = projectStore.getProjectById(projectId);
     if (!project) return null;
-    return { projectId, name: project.name, emoji: project.emoji || "🌲", canGoOpposite };
+    return { projectId, name: project.name, emoji: project.emoji || "🌲" };
   };
 
   /**
@@ -71,14 +71,13 @@ export function createProjectHistoryNamespace(deps: HandlerDependencies) {
     // "return to the project I left" — the cursor itself, not one behind it.
     if (!currentProjectId && direction === "back") {
       const target = history.current();
-      return target && projectExists(target) ? describe(target, false) : null;
+      return target && projectExists(target) ? describe(target) : null;
     }
 
     const targetId = history.peek(direction, projectExists);
     if (!targetId) return null;
 
-    const opposite = direction === "back" ? "forward" : "back";
-    return describe(targetId, history.canGo(opposite, projectExists));
+    return describe(targetId);
   };
 
   return defineIpcNamespace({

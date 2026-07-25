@@ -39,7 +39,6 @@ describe("switchProjectByHistory", () => {
       projectId: "target",
       name: "Target",
       emoji: "🌲",
-      canGoOpposite: true,
     });
 
     await switchProjectByHistory("back");
@@ -53,7 +52,6 @@ describe("switchProjectByHistory", () => {
       projectId: "parked",
       name: "Parked",
       emoji: "🌿",
-      canGoOpposite: false,
     });
 
     await switchProjectByHistory("forward");
@@ -79,7 +77,6 @@ describe("switchProjectByHistory", () => {
       projectId: "current",
       name: "Current",
       emoji: "🌲",
-      canGoOpposite: false,
     });
 
     await switchProjectByHistory("back");
@@ -108,7 +105,6 @@ describe("switchProjectByHistory", () => {
       projectId: "target",
       name: "Target",
       emoji: "🌲",
-      canGoOpposite: true,
     });
     projectState.switchProject.mockRejectedValue(new Error("view crashed"));
 

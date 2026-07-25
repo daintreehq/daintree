@@ -18,16 +18,60 @@ describe("ProjectHistoryService", () => {
     history.record("b");
     expect(history.peek("back", always)).toBe("a");
     history.record("a");
-    expect(history.peek("back", always)).toBeNull();
+    // Past the oldest entry the ring comes round rather than dead-ending.
+    expect(history.peek("back", always)).toBe("c");
   });
 
-  it("offers forward only after going back", () => {
+  it("alternates between two projects on repeated back presses", () => {
+    // The behaviour people actually use, and the one the pre-stack shortcut
+    // had. Losing it to strict browser semantics would have been a downgrade
+    // for the common case in exchange for depth nobody asked for.
     const history = new ProjectHistoryService();
     visit(history, "a", "b");
 
-    expect(history.peek("forward", always)).toBeNull();
-    history.record("a");
-    expect(history.peek("forward", always)).toBe("b");
+    const visited: string[] = [];
+    for (let press = 0; press < 4; press++) {
+      const target = history.peek("back", always);
+      expect(target).not.toBeNull();
+      history.record(target!);
+      visited.push(target!);
+    }
+
+    expect(visited).toEqual(["a", "b", "a", "b"]);
+    // Alternating must not grow or rewrite the ring.
+    expect(history.snapshot().entries).toEqual(["a", "b"]);
+  });
+
+  it("cycles through three projects without stranding the cursor", () => {
+    const history = new ProjectHistoryService();
+    visit(history, "a", "b", "c");
+
+    const visited: string[] = [];
+    for (let press = 0; press < 6; press++) {
+      const target = history.peek("back", always)!;
+      history.record(target);
+      visited.push(target);
+    }
+
+    expect(visited).toEqual(["b", "a", "c", "b", "a", "c"]);
+    expect(history.snapshot().entries).toEqual(["a", "b", "c"]);
+  });
+
+  it("goes nowhere when the ring holds only the current project", () => {
+    const history = new ProjectHistoryService();
+    visit(history, "a");
+
+    // Wrapping onto yourself is not a step; the caller treats it as a no-op.
+    expect(history.peek("back", always)).toBe("a");
+    expect(history.current()).toBe("a");
+  });
+
+  it("offers forward to the entry ahead of the cursor", () => {
+    const history = new ProjectHistoryService();
+    visit(history, "a", "b", "c");
+    history.record("b");
+
+    expect(history.peek("forward", always)).toBe("c");
   });
 
   it("moves the cursor rather than growing when a step lands on a neighbour", () => {
@@ -47,7 +91,6 @@ describe("ProjectHistoryService", () => {
     history.record("d");
 
     expect(history.snapshot()).toEqual({ entries: ["a", "b", "d"], cursor: 2 });
-    expect(history.peek("forward", always)).toBeNull();
     expect(history.peek("back", always)).toBe("b");
   });
 
@@ -154,11 +197,13 @@ describe("ProjectHistoryService", () => {
     expect(history.peek("back", exists)).toBe("a");
   });
 
-  it("reports nowhere to go when every earlier entry is gone", () => {
+  it("reports nowhere to go when only the current project survives", () => {
     const history = new ProjectHistoryService();
     visit(history, "gone", "c");
 
-    expect(history.peek("back", (id) => id !== "gone")).toBeNull();
+    // Pruning leaves a single entry, so the ring wraps onto the project already
+    // showing — the caller reads that as nothing to do.
+    expect(history.peek("back", (id) => id !== "gone")).toBe("c");
   });
 
   it("stops growing while keeping the newest entries and a valid cursor", () => {

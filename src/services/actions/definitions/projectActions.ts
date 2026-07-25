@@ -28,7 +28,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   actions.set("project.mruCycleOlder", () => ({
     id: "project.mruCycleOlder",
     title: "Go Back to Previous Project",
-    description: "Step back through the projects this window has visited",
+    description: "Cycle back through the projects this window has visited",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -39,7 +39,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   actions.set("project.mruCycleNewer", () => ({
     id: "project.mruCycleNewer",
     title: "Go Forward to Next Project",
-    description: "Step forward again after going back",
+    description: "Cycle forward through the projects this window has visited",
     category: "project",
     kind: "command",
     danger: "safe",

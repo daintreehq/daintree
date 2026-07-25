@@ -34,29 +34,43 @@ export class ProjectHistoryService {
   /** Index of the current project within {@link entries}; -1 while empty. */
   private cursor = -1;
 
+  /** Index one step from `cursor`, wrapping around the ends. */
+  private step(direction: ProjectHistoryDirection): number {
+    const size = this.entries.length;
+    if (size === 0) return -1;
+    const offset = direction === "back" ? -1 : 1;
+    return (this.cursor + offset + size) % size;
+  }
+
   /**
    * Fold a completed switch into the history.
    *
    * Ordering matters: the "already here" check has to come first, because a
    * redundant switch to the current project must not be mistaken for a step
    * onto an identical neighbour and silently move the cursor.
+   *
+   * Neighbours are cyclic to match {@link peek}. A wrap lands on an entry that
+   * isn't adjacent by index, and without this it would read as a jump off the
+   * branch and rewrite the stack underneath the user.
    */
   record(projectId: string): void {
     if (!projectId) return;
 
     if (this.entries[this.cursor] === projectId) return;
 
-    if (this.entries[this.cursor + 1] === projectId) {
-      this.cursor += 1;
+    const forward = this.step("forward");
+    if (forward >= 0 && this.entries[forward] === projectId) {
+      this.cursor = forward;
       return;
     }
 
-    if (this.cursor > 0 && this.entries[this.cursor - 1] === projectId) {
-      this.cursor -= 1;
+    const back = this.step("back");
+    if (back >= 0 && this.entries[back] === projectId) {
+      this.cursor = back;
       return;
     }
 
-    // A jump off the current branch. Everything ahead of the cursor is now
+    // A jump off the ring entirely. Everything ahead of the cursor is now
     // unreachable, exactly as a browser discards forward history on navigation.
     this.entries = this.entries.slice(0, this.cursor + 1);
     this.entries.push(projectId);
@@ -73,17 +87,23 @@ export class ProjectHistoryService {
   }
 
   /**
-   * The project a step would land on, or null when there is nowhere to go.
+   * The project a step would land on, or null when the ring is empty.
+   *
+   * Wraps at both ends. Two projects then alternate on a single key — the
+   * dominant way this shortcut is used, and what it did before it grew a
+   * stack — while three or more cycle rather than dead-ending. A shortcut that
+   * silently does nothing at the end of a list reads as broken, and there is no
+   * HUD here to explain the refusal.
    *
    * Prunes removed projects before stepping rather than skipping over them.
    * Skipping would hand back a target two or more slots away, which
    * {@link record} could not recognise as a step — it would append a new branch
-   * instead, stranding the cursor and losing Forward.
+   * instead, stranding the cursor.
    */
   peek(direction: ProjectHistoryDirection, exists: (projectId: string) => boolean): string | null {
     this.prune(exists);
-    const index = direction === "back" ? this.cursor - 1 : this.cursor + 1;
-    return this.entries[index] ?? null;
+    const index = this.step(direction);
+    return index >= 0 ? (this.entries[index] ?? null) : null;
   }
 
   /** Whether a step in this direction would land anywhere. */
