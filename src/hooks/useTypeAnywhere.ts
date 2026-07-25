@@ -112,8 +112,8 @@ export function useTypeAnywhere(): void {
         // Locating is one action per episode, not per keystroke. Without this
         // the receipt flash on the worktree card re-fires for every character
         // (pingTerminal advances pingSeq unconditionally), which is the same
-        // per-keystroke flashing the card's border-accent guard already avoids
-        // (#11445).
+        // per-keystroke flashing the card's own border flash already guards
+        // against (#11445).
         const episode = locateEpisodeRef.current;
         const now = Date.now();
         const elapsed = episode === null ? 0 : now - episode.at;
