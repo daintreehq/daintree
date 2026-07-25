@@ -488,8 +488,19 @@ export type WorkspaceHostRequest =
       requestId: string;
       worktreePath: string;
       dirPath?: string;
-      /** Raw-listing mode: skip the git check-ignore pass and return every entry (#11330) */
-      includeIgnored?: boolean;
+    }
+  // The context listing: same request, but answered by a CopyTree dry run so it
+  // matches what generation would actually copy (#11439). Shares the
+  // `file-tree-result` response envelope — request ids disambiguate callers.
+  | {
+      type: "copytree:get-file-tree";
+      requestId: string;
+      operationId: string;
+      worktreePath: string;
+      dirPath?: string;
+      options?: CopyTreeOptions;
+      /** Return excluded entries flagged rather than omitting them */
+      includeExcluded?: boolean;
     }
   // Project Pulse operations
   | {

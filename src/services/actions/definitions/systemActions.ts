@@ -420,7 +420,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     defineAction({
       id: "copyTree.getFileTree",
       title: "Get File Tree",
-      description: "Get file tree nodes for file picker",
+      description: "List a directory as the generated context sees it",
       category: "copyTree",
       kind: "query",
       danger: "safe",
@@ -433,10 +433,16 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           .describe(
             "Relative path within the worktree (e.g. 'src', 'src/components'). Omit for root."
           ),
+        includeExcluded: z
+          .boolean()
+          .optional()
+          .describe(
+            "Also return entries the context leaves out, each flagged `excluded`. Omit to list only what would be copied."
+          ),
       }),
       resultSchema: z.object({ nodes: z.array(z.unknown()) }),
-      run: async ({ worktreeId, dirPath }) => {
-        const result = await copyTreeClient.getFileTree(worktreeId, dirPath);
+      run: async ({ worktreeId, dirPath, includeExcluded }) => {
+        const result = await copyTreeClient.getFileTree(worktreeId, dirPath, includeExcluded);
         return { nodes: result };
       },
     })

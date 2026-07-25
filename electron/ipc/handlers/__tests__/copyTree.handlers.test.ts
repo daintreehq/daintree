@@ -259,6 +259,104 @@ describe("copyTree handlers", () => {
     });
   });
 
+  describe("get-file-tree merge integration", () => {
+    const projectSettingsFixture = {
+      excludedPaths: ["vendor/**"],
+      copyTreeSettings: { maxContextSize: 4242, alwaysInclude: ["*.md"] },
+    };
+
+    function registerWithFileTree() {
+      const getContextFileTree = vi.fn().mockResolvedValue([]);
+      const getFileTree = vi.fn().mockResolvedValue([]);
+      ipcMainMock.handle.mockClear();
+      registerCopyTreeHandlers({
+        mainWindow: {
+          isDestroyed: () => false,
+          webContents: { isDestroyed: () => false, send: vi.fn() },
+        },
+        ptyClient: { hasTerminal: vi.fn(() => false), write: vi.fn() },
+        worktreeService: {
+          getAllStatesAsync: vi.fn().mockResolvedValue([{ id: "wt-1", path: "/wt-1" }]),
+          getContextFileTree,
+          getFileTree,
+        },
+      } as never);
+      projectStoreMock.getCurrentProjectId.mockReturnValue("proj-1" as never);
+      projectStoreMock.getProjectSettings.mockResolvedValue(projectSettingsFixture as never);
+      return { getContextFileTree, getFileTree };
+    }
+
+    async function invokeGetFileTree(payload: Record<string, unknown>) {
+      const handler = getInvokeHandler(CHANNELS.COPYTREE_GET_FILE_TREE);
+      _resetRateLimitQueuesForTest();
+      return handler(mockEvent, { worktreeId: "wt-1", ...payload });
+    }
+
+    it("answers from the context listing, never the raw one", async () => {
+      // The raw listing returns every entry, `.git` and gitignored folders
+      // included. Routing the picker there is the leak this channel must not
+      // reintroduce (#11439).
+      const { getContextFileTree, getFileTree } = registerWithFileTree();
+
+      await invokeGetFileTree({ dirPath: "src" });
+
+      expect(getContextFileTree).toHaveBeenCalledTimes(1);
+      expect(getFileTree).not.toHaveBeenCalled();
+      expect(getContextFileTree.mock.calls[0][0]).toBe("/wt-1");
+      expect(getContextFileTree.mock.calls[0][1]).toBe("src");
+    });
+
+    it("applies the project's saved context settings to the listing", async () => {
+      // Without this the listing answers for CopyTree's defaults while the
+      // bundle is built with the project's exclusions and budgets — the two
+      // engines disagreeing again, one layer up.
+      const { getContextFileTree } = registerWithFileTree();
+
+      await invokeGetFileTree({});
+
+      const mergedOptions = getContextFileTree.mock.calls[0][2];
+      expect(mergedOptions.maxTotalSize).toBe(
+        projectSettingsFixture.copyTreeSettings.maxContextSize
+      );
+      expect(mergedOptions.always).toEqual(projectSettingsFixture.copyTreeSettings.alwaysInclude);
+      expect(mergedOptions.exclude).toEqual(projectSettingsFixture.excludedPaths);
+    });
+
+    it("forwards the opt-in for excluded entries", async () => {
+      const { getContextFileTree } = registerWithFileTree();
+
+      await invokeGetFileTree({ includeExcluded: true });
+
+      expect(getContextFileTree.mock.calls[0][3]).toBe(true);
+    });
+
+    it("defaults to omitting excluded entries", async () => {
+      const { getContextFileTree } = registerWithFileTree();
+
+      await invokeGetFileTree({});
+
+      expect(getContextFileTree.mock.calls[0][3]).toBeUndefined();
+    });
+
+    it("rejects a dirPath that escapes the worktree", async () => {
+      const { getContextFileTree } = registerWithFileTree();
+
+      await expect(invokeGetFileTree({ dirPath: "../outside" })).rejects.toThrow(
+        "cannot traverse outside worktree root"
+      );
+      expect(getContextFileTree).not.toHaveBeenCalled();
+    });
+
+    it("rejects an absolute dirPath", async () => {
+      const { getContextFileTree } = registerWithFileTree();
+
+      await expect(invokeGetFileTree({ dirPath: "/etc" })).rejects.toThrow(
+        "dirPath must be a relative path"
+      );
+      expect(getContextFileTree).not.toHaveBeenCalled();
+    });
+  });
+
   describe("project-scoped settings resolution", () => {
     const SENDER_WINDOW_ID = 42;
     const SENDER_PROJECT = "proj-sender";

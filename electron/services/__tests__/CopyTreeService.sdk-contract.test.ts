@@ -111,4 +111,115 @@ describe("CopyTreeService against the installed CopyTree", () => {
     expect(result.error).toBeUndefined();
     expect(result.truncated).toBe(true);
   });
+
+  describe("context file tree", () => {
+    it("lists a folder that is not a git repository", async () => {
+      // The old `git check-ignore` listing needed a repository and failed closed
+      // — an empty tree — without one. CopyTree reads ignore files as plain
+      // files, so a bare folder lists normally (#11439, and the non-git
+      // workspaces in #11405).
+      const nodes = await copyTreeService.getFileTree(tempDir);
+
+      expect(nodes.map((node) => node.name)).toContain("small.ts");
+    });
+
+    it("honours a .gitignore with no git repository present", async () => {
+      await fs.writeFile(path.join(tempDir, ".gitignore"), "ignored.ts\n");
+      await fs.writeFile(path.join(tempDir, "ignored.ts"), "export const b = 2;\n");
+
+      const nodes = await copyTreeService.getFileTree(tempDir);
+
+      expect(nodes.map((node) => node.name)).toContain("small.ts");
+      expect(nodes.map((node) => node.name)).not.toContain("ignored.ts");
+    });
+
+    it("hides what the config excludes, which git knows nothing about", async () => {
+      // The gap the issue calls out: the config's excluded-file list and binary
+      // classification drop files no gitignore mentions.
+      await fs.writeFile(path.join(tempDir, ".env"), "SECRET=1\n");
+      await fs.writeFile(path.join(tempDir, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0]));
+
+      const nodes = await copyTreeService.getFileTree(tempDir);
+      const names = nodes.map((node) => node.name);
+
+      expect(names).toContain("small.ts");
+      expect(names).not.toContain(".env");
+      expect(names).not.toContain("logo.png");
+    });
+
+    it("surfaces the excluded entries on request, flagged", async () => {
+      await fs.writeFile(path.join(tempDir, ".env"), "SECRET=1\n");
+
+      const nodes = await copyTreeService.getFileTree(tempDir, "", {}, { includeExcluded: true });
+
+      expect(nodes.find((node) => node.name === ".env")).toMatchObject({ excluded: true });
+      expect(nodes.find((node) => node.name === "small.ts")?.excluded).toBeUndefined();
+    });
+
+    it("agrees with the real run about a file the size gate drops", async () => {
+      await writeSized("big.ts", 300 * 1024);
+
+      const nodes = await copyTreeService.getFileTree(tempDir, "", { maxFileSize: 100 * 1024 });
+      const real = await copyTreeService.generate(tempDir, { maxFileSize: 100 * 1024 });
+
+      expect(nodes.map((node) => node.name)).not.toContain("big.ts");
+      expect(real.content).not.toContain("big.ts");
+    });
+
+    it("lets an always pattern put a size-gated file back in the listing", async () => {
+      await writeSized("big.ts", 300 * 1024);
+
+      const nodes = await copyTreeService.getFileTree(tempDir, "", {
+        maxFileSize: 100 * 1024,
+        always: ["big.ts"],
+      });
+
+      expect(nodes.map((node) => node.name)).toContain("big.ts");
+    });
+
+    it("applies a global budget to a nested listing, as the real run would", async () => {
+      // This is why the dry run covers the whole root instead of scoping to the
+      // listed directory. `maxFileCount` is applied after discovery, so a run
+      // scoped to `sub` would recompute the winner from that subtree alone and
+      // list `sub/z.ts` — a file the real run drops.
+      await fs.mkdir(path.join(tempDir, "sub"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "sub", "z.ts"), "export const z = 1;\n");
+
+      const options = { maxFileCount: 1, sort: "path" as const };
+      const nodes = await copyTreeService.getFileTree(tempDir, "sub", options);
+      const real = await copyTreeService.generate(tempDir, options);
+
+      expect(real.content).not.toContain("sub/z.ts");
+      expect(nodes.map((node) => node.name)).not.toContain("z.ts");
+    });
+
+    it("lists exactly the files the real run emits", async () => {
+      await fs.writeFile(path.join(tempDir, "package-lock.json"), JSON.stringify({ a: 1 }));
+      await fs.writeFile(path.join(tempDir, ".gitignore"), "skipped.ts\n");
+      await fs.writeFile(path.join(tempDir, "skipped.ts"), "export const s = 1;\n");
+      await fs.writeFile(path.join(tempDir, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0]));
+
+      const nodes = await copyTreeService.getFileTree(tempDir);
+      const real = await copyTreeService.generate(tempDir);
+
+      expect(real.error).toBeUndefined();
+      // The whole point of the change: every entry the listing shows is in the
+      // document, so a user can't tick a file that never arrives.
+      for (const node of nodes) {
+        if (node.isDirectory) continue;
+        expect(real.content).toContain(node.path);
+      }
+      expect(nodes.some((node) => node.name === "skipped.ts")).toBe(false);
+    });
+
+    it("hides a directory whose only contents are excluded", async () => {
+      await fs.writeFile(path.join(tempDir, ".gitignore"), "logs/\n");
+      await fs.mkdir(path.join(tempDir, "logs"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "logs", "run.log"), "noise\n");
+
+      const nodes = await copyTreeService.getFileTree(tempDir);
+
+      expect(nodes.map((node) => node.name)).not.toContain("logs");
+    });
+  });
 });

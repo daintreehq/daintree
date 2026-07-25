@@ -532,6 +532,11 @@ export const CopyTreeProgressSchema = z.object({
 export const CopyTreeGetFileTreePayloadSchema = z.object({
   worktreeId: z.string().min(1),
   dirPath: z.string().optional(),
+  /**
+   * Return the entries CopyTree would leave out, flagged `excluded`, instead of
+   * omitting them. Off by default so the listing keeps its no-leak shape.
+   */
+  includeExcluded: z.boolean().optional(),
 });
 
 // Both strings are capped: they cross the boundary as untrusted input and end

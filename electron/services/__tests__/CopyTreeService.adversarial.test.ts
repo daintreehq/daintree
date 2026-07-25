@@ -12,7 +12,7 @@ vi.mock("copytree", () => ({
   ConfigManager: { create: configCreateMock },
 }));
 
-import { copyTreeService } from "../CopyTreeService.js";
+import { copyTreeService, _resetConfigCacheForTests } from "../CopyTreeService.js";
 
 type CapturedOptions = SdkCopyOptions & { signal: AbortSignal };
 
@@ -22,6 +22,10 @@ describe("CopyTreeService adversarial", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-copytree-adv-"));
     vi.clearAllMocks();
+    // The defaults-only config is cached for the isolate's lifetime, so a test
+    // that stubs a config failure would otherwise inherit a previous test's
+    // successful load (or leak its own failure forward).
+    _resetConfigCacheForTests();
     configCreateMock.mockResolvedValue({ isDefaultsLoaded: true });
   });
 

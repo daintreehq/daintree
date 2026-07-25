@@ -33,8 +33,12 @@ export const copyTreeClient = {
     return window.electron.copyTree.cancel(injectionId);
   },
 
-  getFileTree: (worktreeId: string, dirPath?: string): Promise<FileTreeNode[]> => {
-    return window.electron.copyTree.getFileTree(worktreeId, dirPath);
+  getFileTree: (
+    worktreeId: string,
+    dirPath?: string,
+    includeExcluded?: boolean
+  ): Promise<FileTreeNode[]> => {
+    return window.electron.copyTree.getFileTree(worktreeId, dirPath, includeExcluded);
   },
 
   testConfig: (

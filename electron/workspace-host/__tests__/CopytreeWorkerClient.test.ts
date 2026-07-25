@@ -6,6 +6,7 @@ vi.mock("../../services/CopyTreeService.js", () => ({
   copyTreeService: {
     generate: vi.fn(),
     testConfig: vi.fn(),
+    getFileTree: vi.fn(),
     cancel: vi.fn(),
   },
 }));
@@ -33,10 +34,12 @@ const inlineTestResult = {
   includedFiles: 2,
   includedSize: 10,
 };
+const inlineNodes = [{ name: "inline.ts", path: "inline.ts", isDirectory: false }];
 
 beforeEach(() => {
   vi.mocked(copyTreeService.generate).mockResolvedValue(inlineResult);
   vi.mocked(copyTreeService.testConfig).mockResolvedValue(inlineTestResult);
+  vi.mocked(copyTreeService.getFileTree).mockResolvedValue(inlineNodes);
 });
 
 afterEach(() => {
@@ -132,6 +135,91 @@ describe("CopytreeWorkerClient", () => {
     const promise = client.testConfig("/root", {}, "op-1");
     worker.emit("message", { type: "test-config-error", id: "op-1", error: "boom" });
     await expect(promise).rejects.toThrow("boom");
+  });
+
+  it("runs a file-tree listing on the worker and resolves with its nodes", async () => {
+    const { client, worker } = makeClient();
+
+    const promise = client.getFileTree("/root", "src", { exclude: ["docs/**"] }, true, "op-1");
+    const sent = worker.postMessage.mock.calls[0][0] as CopytreeWorkerRequest;
+    expect(sent).toMatchObject({
+      type: "get-file-tree",
+      id: "op-1",
+      rootPath: "/root",
+      dirPath: "src",
+      options: { exclude: ["docs/**"] },
+      includeExcluded: true,
+    });
+
+    const nodes = [{ name: "a.ts", path: "src/a.ts", isDirectory: false }];
+    worker.emit("message", { type: "get-file-tree-result", id: "op-1", nodes });
+
+    await expect(promise).resolves.toEqual(nodes);
+    expect(copyTreeService.getFileTree).not.toHaveBeenCalled();
+  });
+
+  it("rejects the pending listing when the worker reports an error", async () => {
+    // A listing has no error-shaped result to fold a failure into the way
+    // generate does, so a failure has to reject rather than resolve empty —
+    // an empty tree would read as "nothing here" instead of "this broke".
+    const { client, worker } = makeClient();
+
+    const promise = client.getFileTree("/root", undefined, {}, undefined, "op-1");
+    worker.emit("message", { type: "get-file-tree-error", id: "op-1", error: "boom" });
+
+    await expect(promise).rejects.toThrow("boom");
+  });
+
+  it("falls back in-thread for a listing when the worker is disabled", async () => {
+    vi.stubEnv("DAINTREE_DISABLE_COPYTREE_WORKER", "1");
+    const { client, factory } = makeClient();
+
+    await expect(client.getFileTree("/root", "src", {}, true, "op-1")).resolves.toEqual(
+      inlineNodes
+    );
+    expect(factory).not.toHaveBeenCalled();
+    expect(copyTreeService.getFileTree).toHaveBeenCalledWith(
+      "/root",
+      "src",
+      {},
+      { includeExcluded: true },
+      "op-1"
+    );
+  });
+
+  it("rejects an in-flight listing when the worker dies", async () => {
+    const { client, worker } = makeClient();
+
+    const promise = client.getFileTree("/root", undefined, {}, undefined, "op-1");
+    worker.emit("error", new Error("worker crashed"));
+
+    await expect(promise).rejects.toThrow("worker crashed");
+    expect(client.getGovernanceSnapshot().queueDepth).toBe(0);
+  });
+
+  it("counts a pending listing in the governance queue depth", async () => {
+    const { client, worker } = makeClient();
+
+    const promise = client.getFileTree("/root", undefined, {}, undefined, "op-1");
+    expect(client.getGovernanceSnapshot().queueDepth).toBe(1);
+
+    worker.emit("message", { type: "get-file-tree-result", id: "op-1", nodes: [] });
+    await promise;
+
+    expect(client.getGovernanceSnapshot().queueDepth).toBe(0);
+  });
+
+  it("routes a listing cancel to the worker", async () => {
+    const { client, worker } = makeClient();
+
+    void client.getFileTree("/root", undefined, {}, undefined, "op-1").catch(() => {});
+    client.cancel("op-1");
+
+    expect(copyTreeService.cancel).toHaveBeenCalledWith("op-1");
+    const cancelMessage = worker.postMessage.mock.calls
+      .map((c) => c[0] as CopytreeWorkerRequest)
+      .find((m) => m.type === "cancel");
+    expect(cancelMessage).toEqual({ type: "cancel", id: "op-1" });
   });
 
   it("routes cancel to both the worker op and the in-thread service", async () => {
