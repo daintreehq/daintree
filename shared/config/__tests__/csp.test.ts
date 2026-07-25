@@ -124,6 +124,54 @@ describe("Daintree app CSP", () => {
     });
   });
 
+  describe("daintree-pdf: preview scheme in frame-src (#11427)", () => {
+    // The file viewer mounts a `daintree-pdf://load?…` iframe so Chromium's
+    // built-in PDFium viewer renders the document. The scheme exists purely to
+    // carry this allowance: its handler rejects any canonical path that isn't
+    // `.pdf` and answers with a hard-coded `application/pdf`.
+    const frameSrcOf = (csp: string) => csp.match(/frame-src ([^;]*);/)?.[1];
+
+    it("allows daintree-pdf: in frame-src in production", () => {
+      expect(frameSrcOf(getDaintreeAppProdCSP())).toContain("daintree-pdf:");
+    });
+
+    it("allows daintree-pdf: in frame-src in development", () => {
+      expect(frameSrcOf(getDaintreeAppDevCSP())).toContain("daintree-pdf:");
+    });
+
+    it("keeps daintree-file: out of frame-src in both modes", () => {
+      // The general file scheme serves arbitrary repo files under
+      // extension-derived MIME types, so framing it would let a repo-controlled
+      // document render as a live page. That is why the PDF scheme is separate.
+      for (const csp of [getDaintreeAppProdCSP(), getDaintreeAppDevCSP()]) {
+        expect(frameSrcOf(csp)).not.toContain("daintree-file:");
+      }
+    });
+
+    it.each([
+      ["production", getDaintreeAppProdCSP],
+      ["development", getDaintreeAppDevCSP],
+    ])("confines daintree-pdf: to frame-src in %s", (_label, build) => {
+      // Navigation-only: the iframe navigates to the scheme, nothing fetches it.
+      // Every directive is parsed rather than a hand-picked few, so the scheme
+      // can't leak into default-src, worker-src or anything added later.
+      const carriers = build()
+        .split(";")
+        .map((directive) => directive.trim())
+        .filter((directive) => directive.includes("daintree-pdf:"))
+        .map((directive) => directive.split(/\s+/)[0]);
+
+      expect(carriers).toEqual(["frame-src"]);
+    });
+
+    it("keeps the existing frame-src entries alongside the new scheme", () => {
+      // Adding a scheme must widen the directive, not replace what was there.
+      const frameSrc = frameSrcOf(getDaintreeAppProdCSP());
+      expect(frameSrc).toContain("'self'");
+      expect(frameSrc).toContain("daintree-html:");
+    });
+  });
+
   describe("daintree-file: scheme in media-src (#11382)", () => {
     // The file viewer fetch()es video bytes from daintree-file:// and plays
     // them through a blob object URL (Chromium's custom-scheme media loader

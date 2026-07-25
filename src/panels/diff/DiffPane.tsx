@@ -22,8 +22,13 @@ import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { DiffFileSidebar } from "@/components/FileViewer/DiffFileSidebar";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
 import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
+import { FilePdfPreview } from "@/components/FileViewer/FilePdfPreview";
 import type { MediaPreviewError } from "@/components/FileViewer/useMediaBlobUrl";
-import { isAudioFilePath, isVideoFilePath } from "@/components/FileViewer/filePreviewKinds";
+import {
+  isAudioFilePath,
+  isPdfFilePath,
+  isVideoFilePath,
+} from "@/components/FileViewer/filePreviewKinds";
 import { ImageDiffViewer, isImageDiffCandidate } from "@/components/FileViewer/ImageDiffViewer";
 import { DiffViewer, FULL_FILE_MAX_LINES } from "@/components/Worktree/DiffViewer";
 import type { FullFileUnavailableReason } from "@/components/Worktree/DiffViewer";
@@ -275,9 +280,9 @@ export function DiffPane({
   const currentEntry = currentIndex === -1 ? undefined : changeSet?.[currentIndex];
   const isViewed = currentEntry ? viewedSet.has(currentEntry.viewedKey) : false;
 
-  // Forces a fresh media request in video/audio mode — the diff content hooks
-  // don't carry media bytes, so Refresh has to re-request the protocol URL.
-  const [mediaReloadNonce, setMediaReloadNonce] = useState(0);
+  // Forces a fresh request in video, audio and PDF mode — the diff content hooks
+  // don't carry those bytes, so Refresh has to re-request the protocol URL itself.
+  const [previewReloadNonce, setPreviewReloadNonce] = useState(0);
   // An allowlisted container can still hold a codec Chromium lacks, or the
   // file may be unreadable — surface that instead of a dead native control.
   // Holds the preview's specific reason (e.g. too large) when it gives one.
@@ -287,7 +292,7 @@ export function DiffPane({
     // an explicit refresh — gets a fresh attempt. absolutePath covers a
     // worktree move that filePath (relative) alone would miss.
     setMediaPlaybackError(null);
-  }, [filePath, absolutePath, worktreePath, mediaReloadNonce]);
+  }, [filePath, absolutePath, worktreePath, previewReloadNonce]);
 
   const [pathCopied, setPathCopied] = useState(false);
   const handleCopyPath = useCallback(() => {
@@ -413,6 +418,10 @@ export function DiffPane({
   const isVideoMode = Boolean(filePath && isVideoFilePath(filePath));
   const isAudioMode = Boolean(filePath && isAudioFilePath(filePath));
   const isMediaMode = isVideoMode || isAudioMode;
+  // PDFs likewise show only the current working-tree version: the built-in
+  // viewer renders a whole document, not a comparison, so like media this
+  // applies to every diff source.
+  const isPdfMode = Boolean(filePath && isPdfFilePath(filePath));
   // Sentinels the viewer turns into empty states rather than a rendered diff.
   // `NO_CHANGES`/`ERROR` gate the pane's own branches below; the binary and
   // oversized ones matter to the full-file scope, which has nothing to expand
@@ -442,9 +451,11 @@ export function DiffPane({
         ? { available: false, reason: "This view already shows the whole video" }
         : isAudioMode
           ? { available: false, reason: "This view already shows the whole audio file" }
-          : !hasDiff
-            ? { available: false, reason: "There's no diff to expand yet" }
-            : { available: true };
+          : isPdfMode
+            ? { available: false, reason: "This view already shows the whole PDF" }
+            : !hasDiff
+              ? { available: false, reason: "There's no diff to expand yet" }
+              : { available: true };
 
   // The hunks and the file on disk must describe the same revision. Once the
   // store reports the file changed, they demonstrably don't: the check inside
@@ -480,10 +491,10 @@ export function DiffPane({
   // Only the diff is retried: clearing it drops `hasDiff`, which disables the
   // source hook and invalidates its read, and the source is fetched again when
   // the new diff lands. Retrying both here would issue that read twice. The
-  // media nonce bump is a no-op outside media mode (nothing renders it).
+  // preview nonce bump is a no-op outside media/PDF mode (nothing renders it).
   const refreshAll = useCallback(() => {
     retry();
-    setMediaReloadNonce((nonce) => nonce + 1);
+    setPreviewReloadNonce((nonce) => nonce + 1);
   }, [retry]);
 
   // One line explaining why a requested whole-file view isn't on screen. The
@@ -539,7 +550,7 @@ export function DiffPane({
   const toolbar = filePath ? (
     <>
       <FileViewerToolbar.Root>
-        {!isImageMode && !isMediaMode && (
+        {!isImageMode && !isMediaMode && !isPdfMode && (
           <div role="group" aria-label="Diff layout">
             <SegmentedToggle<DiffViewType>
               options={[
@@ -563,7 +574,7 @@ export function DiffPane({
         )}
         <FileViewerToolbar.Path path={filePath} copied={pathCopied} onCopy={handleCopyPath} />
         <FileViewerToolbar.Actions>
-          {!isImageMode && !isMediaMode && (
+          {!isImageMode && !isMediaMode && !isPdfMode && (
             <FileViewerToolbar.IconButton
               label="Wrap long lines"
               pressed={diffWrapLines}
@@ -780,7 +791,7 @@ export function DiffPane({
                   filePath={absolutePath}
                   rootPath={worktreePath}
                   label={fileName ?? filePath}
-                  reloadKey={mediaReloadNonce}
+                  reloadKey={previewReloadNonce}
                   onError={(error) => setMediaPlaybackError(error ?? GENERIC_AUDIO_ERROR)}
                 />
               ) : (
@@ -788,13 +799,34 @@ export function DiffPane({
                   filePath={absolutePath}
                   rootPath={worktreePath}
                   label={fileName ?? filePath}
-                  reloadKey={mediaReloadNonce}
+                  reloadKey={previewReloadNonce}
                   onError={(error) => setMediaPlaybackError(error ?? GENERIC_VIDEO_ERROR)}
                   maxHeightClassName="max-h-full"
                 />
               ))}
 
-            {filePath && subject && !isImageMode && !isMediaMode && content && (
+            {filePath &&
+              subject &&
+              isPdfMode &&
+              (fileStatus === "deleted" || !absolutePath ? (
+                <div className="flex h-full w-full items-center justify-center p-6">
+                  <EmptyState
+                    variant="zero-data"
+                    scale="canvas"
+                    title="No working-tree version to preview"
+                    description="This PDF was deleted, and the diff view can only show the current file."
+                  />
+                </div>
+              ) : (
+                <FilePdfPreview
+                  filePath={absolutePath}
+                  rootPath={worktreePath}
+                  label={fileName ?? filePath}
+                  reloadKey={previewReloadNonce}
+                />
+              ))}
+
+            {filePath && subject && !isImageMode && !isMediaMode && !isPdfMode && content && (
               <DiffViewer
                 diff={content}
                 viewType={diffViewType}
@@ -807,7 +839,7 @@ export function DiffPane({
               />
             )}
 
-            {filePath && subject && !isImageMode && !isMediaMode && !content && (
+            {filePath && subject && !isImageMode && !isMediaMode && !isPdfMode && !content && (
               <div className="p-4 space-y-3">
                 <Skeleton label="Loading diff">
                   <SkeletonBone className="h-7 w-3/4" />

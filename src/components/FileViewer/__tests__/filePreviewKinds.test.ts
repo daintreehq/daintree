@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDaintreeFileUrl,
+  buildDaintreePdfUrl,
   isAudioFilePath,
   isImageFilePath,
+  isPdfFilePath,
   isSvgFilePath,
   isUnsupportedAudioFilePath,
   isUnsupportedVideoFilePath,
@@ -187,10 +189,54 @@ describe("filePreviewKinds", () => {
     });
   });
 
+  describe("isPdfFilePath", () => {
+    it.each(["spec.pdf", "SPEC.PDF", "a/b/data.sheet.pdf", "/abs/path/report.Pdf"])(
+      "accepts %s",
+      (path) => {
+        expect(isPdfFilePath(path)).toBe(true);
+      }
+    );
+
+    it.each(["spec.pdf.txt", "spec", "notes.md", "photo.png", "clip.mp4"])("rejects %s", (path) => {
+      expect(isPdfFilePath(path)).toBe(false);
+    });
+
+    it("is disjoint from every other preview classifier", () => {
+      // A PDF must not also route to the image/video branches — the panes check
+      // these in sequence, so an overlap would silently pick the wrong preview.
+      expect(isImageFilePath("spec.pdf")).toBe(false);
+      expect(isSvgFilePath("spec.pdf")).toBe(false);
+      expect(isVideoFilePath("spec.pdf")).toBe(false);
+      expect(isUnsupportedVideoFilePath("spec.pdf")).toBe(false);
+      expect(isAudioFilePath("spec.pdf")).toBe(false);
+      expect(isUnsupportedAudioFilePath("spec.pdf")).toBe(false);
+    });
+  });
+
   describe("buildDaintreeFileUrl", () => {
     it("encodes path and root as query params", () => {
       const url = buildDaintreeFileUrl("/a dir/clip.mp4", "/a dir");
       expect(url).toBe("daintree-file://load?path=%2Fa%20dir%2Fclip.mp4&root=%2Fa%20dir");
+    });
+  });
+
+  describe("buildDaintreePdfUrl", () => {
+    it("round-trips path and root through the query string", () => {
+      const url = new URL(buildDaintreePdfUrl("/a dir/spec #1.pdf", "/a dir"));
+      expect(url.protocol).toBe("daintree-pdf:");
+      expect(url.searchParams.get("path")).toBe("/a dir/spec #1.pdf");
+      expect(url.searchParams.get("root")).toBe("/a dir");
+    });
+
+    it("differs from the general file URL only by scheme", () => {
+      // The PDF scheme is the only one allowed in frame-src, so routing a PDF
+      // through daintree-file:// would make the iframe fail CSP. The rest of
+      // the URL must stay identical so both resolve the same file.
+      const pdf = new URL(buildDaintreePdfUrl("/repo/spec.pdf", "/repo"));
+      const file = new URL(buildDaintreeFileUrl("/repo/spec.pdf", "/repo"));
+
+      expect(pdf.protocol).not.toBe(file.protocol);
+      expect(pdf.search).toBe(file.search);
     });
   });
 });

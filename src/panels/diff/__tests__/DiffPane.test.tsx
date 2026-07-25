@@ -845,3 +845,66 @@ describe("DiffPane — audio current-version mode (#11425)", () => {
     expect(descriptions.some((d) => d?.includes("audio file was deleted"))).toBe(true);
   });
 });
+
+describe("DiffPane — PDF current-version mode (#11427)", () => {
+  function pdfFrame(container: HTMLElement): HTMLIFrameElement | null {
+    return container.querySelector("iframe");
+  }
+
+  it("shows the working-tree PDF instead of rendering a diff", () => {
+    seedPanel({
+      filePath: "docs/spec.pdf",
+      fileStatus: "modified",
+      changeSet: [entry("docs/spec.pdf")],
+    });
+    const { container } = renderPane();
+
+    const src = new URL(pdfFrame(container)?.getAttribute("src") ?? "");
+    expect(src.protocol).toBe("daintree-pdf:");
+    // The absolute working-tree path rides the protocol URL, and no text diff
+    // is attempted for a binary document.
+    expect(src.searchParams.get("path")).toBe("/repo/docs/spec.pdf");
+    expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+  });
+
+  it("hides the text-diff layout controls in PDF mode", () => {
+    seedPanel({
+      filePath: "docs/spec.pdf",
+      fileStatus: "modified",
+      changeSet: [entry("docs/spec.pdf")],
+    });
+    renderPane();
+
+    expect(screen.queryByRole("button", { name: "Unified" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
+  });
+
+  it("re-navigates the frame from the toolbar Refresh and still retries the diff", async () => {
+    const retry = vi.fn();
+    useDiffContentMock.mockReturnValue({ content: "diff --git a/x b/x", stale: false, retry });
+    seedPanel({
+      filePath: "docs/spec.pdf",
+      fileStatus: "modified",
+      changeSet: [entry("docs/spec.pdf")],
+    });
+    const { container } = renderPane();
+    const before = pdfFrame(container)?.getAttribute("src");
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitFor(() => expect(pdfFrame(container)?.getAttribute("src")).not.toBe(before));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains there is nothing to preview when the PDF was deleted", () => {
+    seedPanel({
+      filePath: "docs/spec.pdf",
+      fileStatus: "deleted",
+      changeSet: [entry("docs/spec.pdf", "deleted")],
+    });
+    const { container } = renderPane();
+
+    expect(pdfFrame(container)).toBeNull();
+    expect(screen.getByTestId("empty-state-mock")).toBeTruthy();
+  });
+});

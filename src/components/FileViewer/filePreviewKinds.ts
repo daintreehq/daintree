@@ -72,6 +72,11 @@ export function isUnsupportedVideoFilePath(filePath: string): boolean {
   return UNSUPPORTED_VIDEO_EXTENSIONS.has(extensionOf(filePath));
 }
 
+/** PDFs — framed from daintree-pdf:// and rendered by Chromium's built-in viewer. */
+export function isPdfFilePath(filePath: string): boolean {
+  return extensionOf(filePath) === "pdf";
+}
+
 /** Copy for containers in the unsupported set — shared so both panes say the same thing. */
 export const UNSUPPORTED_VIDEO_MESSAGE =
   "Can't play this video format — only MP4, WebM, and Ogg are supported";
@@ -101,4 +106,14 @@ export const UNSUPPORTED_AUDIO_MESSAGE =
  */
 export function buildDaintreeFileUrl(filePath: string, rootPath: string): string {
   return `daintree-file://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
+}
+
+/**
+ * URL for the custom `daintree-pdf://` protocol — a PDF-only sibling of
+ * `daintree-file://`, kept separate because it is the one scheme allowed in
+ * `frame-src`. Used as an iframe `src` so Chromium's built-in PDFium viewer
+ * renders the document.
+ */
+export function buildDaintreePdfUrl(filePath: string, rootPath: string): string {
+  return `daintree-pdf://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
 }
