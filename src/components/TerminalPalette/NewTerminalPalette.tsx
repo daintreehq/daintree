@@ -95,6 +95,7 @@ export function NewTerminalPalette({
 
   const selectedOption =
     selectedIndex >= 0 && selectedIndex < results.length ? results[selectedIndex] : null;
+  const activeDescendant = selectedOption ? `new-terminal-option-${selectedOption.id}` : undefined;
 
   return (
     <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="New terminal palette">
@@ -109,15 +110,15 @@ export function NewTerminalPalette({
           aria-expanded={isOpen}
           aria-label="Select terminal type"
           aria-controls="new-terminal-list"
-          aria-activedescendant={
-            results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length
-              ? `new-terminal-option-${results[selectedIndex]!.id}`
-              : undefined
-          }
+          aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>
 
-      <AppPaletteDialog.Body>
+      <AppPaletteDialog.Body
+        ariaLabel="Terminal types"
+        activeDescendant={activeDescendant}
+        onNavigationKeyDown={handleKeyDown}
+      >
         <div role="status" aria-live="polite" className="sr-only">
           {results.length} terminal types
         </div>

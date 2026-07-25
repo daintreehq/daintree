@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render } from "@testing-library/react";
+import { render, fireEvent } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 class ResizeObserverStub {
@@ -125,5 +125,31 @@ describe("NewTerminalPalette", () => {
     handler();
     expect(onQueryChange).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("NewTerminalPalette results region (#11431)", () => {
+  it("forwards navigation from the region and resolves its active option", () => {
+    const { getByRole, props } = renderPalette();
+    const region = getByRole("group", { name: "Terminal types" });
+
+    fireEvent.keyDown(region, { key: "ArrowDown" });
+    fireEvent.keyDown(region, { key: "Enter" });
+
+    expect(props.onSelectNext).toHaveBeenCalledTimes(1);
+    expect(props.onConfirm).toHaveBeenCalledTimes(1);
+
+    // A wrong id prefix here would silently break the announcement.
+    const activeDescendant = region.getAttribute("aria-activedescendant");
+    expect(activeDescendant).toBe("new-terminal-option-a");
+    expect(document.getElementById(activeDescendant!)).not.toBeNull();
+  });
+
+  it("omits the active descendant when there are no results", () => {
+    const { getByRole } = renderPalette({ results: [], selectedIndex: -1 });
+
+    expect(
+      getByRole("group", { name: "Terminal types" }).hasAttribute("aria-activedescendant")
+    ).toBe(false);
   });
 });

@@ -234,15 +234,14 @@ export function SearchablePalette<T>({
 
   const hoverIndexHandler = onHoverIndex ?? noopHoverIndex;
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
-
-      if (onKeyDown) {
-        onKeyDown(e);
-        if (e.defaultPrevented) return;
-      }
-
+  /**
+   * List navigation shared by the query input and the focusable results region
+   * (`AppPaletteDialog.Body`), so arrow keys and Enter keep working after Tab
+   * moves focus off the input (#11431). Element-agnostic: it reads only
+   * key/modifier state, never `currentTarget`.
+   */
+  const handleNavigationKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLElement>) => {
       switch (e.key) {
         case "ArrowUp":
           e.preventDefault();
@@ -276,18 +275,36 @@ export function SearchablePalette<T>({
           e.stopPropagation();
           onConfirm();
           break;
-        case "Tab":
-          e.preventDefault();
-          e.stopPropagation();
-          if (e.shiftKey) {
-            onSelectPrevious();
-          } else {
-            onSelectNext();
-          }
-          break;
       }
     },
-    [onKeyDown, onSelectPrevious, onSelectNext, onConfirm, results.length, hoverIndexHandler]
+    [onSelectPrevious, onSelectNext, onConfirm, results.length, hoverIndexHandler]
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+
+      if (onKeyDown) {
+        onKeyDown(e);
+        if (e.defaultPrevented) return;
+      }
+
+      // Tab stays input-only: on the results region it must keep its native
+      // traversal so controls rendered after the list stay reachable.
+      if (e.key === "Tab") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.shiftKey) {
+          onSelectPrevious();
+        } else {
+          onSelectNext();
+        }
+        return;
+      }
+
+      handleNavigationKeyDown(e);
+    },
+    [onKeyDown, onSelectPrevious, onSelectNext, handleNavigationKeyDown]
   );
 
   const activeDescendant =
@@ -367,7 +384,12 @@ export function SearchablePalette<T>({
         />
       </AppPaletteDialog.Header>
 
-      <AppPaletteDialog.Body className={bodyClassName}>
+      <AppPaletteDialog.Body
+        className={bodyClassName}
+        ariaLabel={label}
+        activeDescendant={activeDescendant}
+        onNavigationKeyDown={handleNavigationKeyDown}
+      >
         {renderBody ? (
           renderBody()
         ) : (

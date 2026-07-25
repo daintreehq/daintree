@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { PanelPalette } from "../PanelPalette";
 import type { PanelKindOption } from "@/hooks/usePanelPalette";
@@ -96,5 +96,33 @@ describe("PanelPalette resume section", () => {
     expect(screen.queryByText("Resume Sessions")).toBeNull();
     // The options themselves still render.
     expect(screen.getByText("Resume: Fixing auth")).toBeTruthy();
+  });
+});
+
+describe("PanelPalette results region (#11431)", () => {
+  it("forwards navigation from the region and resolves its active option", () => {
+    const onSelectNext = vi.fn();
+    const onConfirm = vi.fn();
+    render(
+      <PanelPalette
+        {...baseProps}
+        query=""
+        results={resumeResults}
+        onSelectNext={onSelectNext}
+        onConfirm={onConfirm}
+      />
+    );
+    const region = screen.getByRole("group", { name: "Panel types" });
+
+    fireEvent.keyDown(region, { key: "ArrowDown" });
+    fireEvent.keyDown(region, { key: "Enter" });
+
+    expect(onSelectNext).toHaveBeenCalledTimes(1);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+
+    // A wrong id prefix here would silently break the announcement.
+    const activeDescendant = region.getAttribute("aria-activedescendant");
+    expect(activeDescendant).toBe(`panel-option-${resumeResults[0]!.id}`);
+    expect(document.getElementById(activeDescendant!)).not.toBeNull();
   });
 });

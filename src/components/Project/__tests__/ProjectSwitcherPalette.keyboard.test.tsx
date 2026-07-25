@@ -59,8 +59,31 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
   }: React.InputHTMLAttributes<HTMLInputElement> & {
     inputRef?: React.Ref<HTMLInputElement>;
   }) => <input ref={inputRef} data-testid="palette-input" {...props} />;
-  const Body = ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="palette-body">{children}</div>
+  // Mirrors the real Body's focusable-region contract (role/label/active
+  // descendant/handler) so the palette's wiring is observable here. Key
+  // filtering itself is covered against the real component in
+  // src/components/ui/__tests__/AppPaletteDialog.test.tsx.
+  const Body = ({
+    children,
+    ariaLabel,
+    activeDescendant,
+    onNavigationKeyDown,
+  }: {
+    children: React.ReactNode;
+    ariaLabel?: string;
+    activeDescendant?: string;
+    onNavigationKeyDown?: React.KeyboardEventHandler<HTMLDivElement>;
+  }) => (
+    <div
+      data-testid="palette-body"
+      tabIndex={0}
+      role="group"
+      aria-label={ariaLabel}
+      aria-activedescendant={activeDescendant}
+      onKeyDown={onNavigationKeyDown}
+    >
+      {children}
+    </div>
   );
   const Footer = ({ children }: { children: React.ReactNode }) => (
     <div data-testid="palette-footer">{children}</div>
@@ -180,18 +203,77 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     vi.restoreAllMocks();
   });
 
-  it("does not call onSelectNext when Tab is pressed on the input", () => {
+  // Tab must keep its native traversal so the controls rendered after the
+  // results list (the scratch section) stay keyboard-reachable. Remapping it
+  // to selection movement is what commit e7028aeb6 removed.
+  it("leaves Tab to native focus traversal instead of moving the selection", () => {
     render(<ProjectSwitcherPalette {...defaultProps} />);
     const input = screen.getByTestId("palette-input");
-    fireEvent.keyDown(input, { key: "Tab" });
+    const notCancelled = fireEvent.keyDown(input, { key: "Tab" });
     expect(defaultProps.onSelectNext).not.toHaveBeenCalled();
+    expect(notCancelled).toBe(true);
   });
 
-  it("does not call onSelectPrevious when Shift+Tab is pressed on the input", () => {
+  it("leaves Shift+Tab to native focus traversal instead of moving the selection", () => {
     render(<ProjectSwitcherPalette {...defaultProps} />);
     const input = screen.getByTestId("palette-input");
-    fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+    const notCancelled = fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
     expect(defaultProps.onSelectPrevious).not.toHaveBeenCalled();
+    expect(notCancelled).toBe(true);
+  });
+
+  // #11431: Tab lands on the scrollable results region, so that region has to
+  // keep driving the same navigation the input does.
+  it("moves the selection when ArrowDown is pressed on the results region", () => {
+    render(<ProjectSwitcherPalette {...defaultProps} />);
+    fireEvent.keyDown(screen.getByTestId("palette-body"), { key: "ArrowDown" });
+    expect(defaultProps.onSelectNext).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves the selection when ArrowUp is pressed on the results region", () => {
+    render(<ProjectSwitcherPalette {...defaultProps} />);
+    fireEvent.keyDown(screen.getByTestId("palette-body"), { key: "ArrowUp" });
+    expect(defaultProps.onSelectPrevious).toHaveBeenCalledTimes(1);
+  });
+
+  it("confirms the active project when Enter is pressed on the results region", () => {
+    render(<ProjectSwitcherPalette {...defaultProps} />);
+    fireEvent.keyDown(screen.getByTestId("palette-body"), { key: "Enter" });
+    expect(defaultProps.onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps modifier shortcuts working from the results region", () => {
+    // The region forwards the raw event, so Meta+Enter must still reach the
+    // new-window branch rather than degrading to a plain switch.
+    const onSelectNewWindow = vi.fn();
+    render(<ProjectSwitcherPalette {...defaultProps} onSelectNewWindow={onSelectNewWindow} />);
+    fireEvent.keyDown(screen.getByTestId("palette-body"), { key: "Enter", metaKey: true });
+
+    expect(onSelectNewWindow).toHaveBeenCalledTimes(1);
+    expect(onSelectNewWindow).toHaveBeenCalledWith(defaultProps.results[0]);
+    expect(defaultProps.onSelect).not.toHaveBeenCalled();
+  });
+
+  it("closes the active project on Meta+Backspace from the results region", () => {
+    const onCloseProject = vi.fn();
+    render(<ProjectSwitcherPalette {...defaultProps} onCloseProject={onCloseProject} />);
+    fireEvent.keyDown(screen.getByTestId("palette-body"), { key: "Backspace", metaKey: true });
+
+    expect(onCloseProject).toHaveBeenCalledWith("p1");
+  });
+
+  it("mirrors the input's active descendant onto the results region", () => {
+    render(<ProjectSwitcherPalette {...defaultProps} selectedIndex={1} />);
+    const activeDescendant = screen
+      .getByTestId("palette-input")
+      .getAttribute("aria-activedescendant");
+
+    expect(activeDescendant).toBe("project-option-p2");
+    expect(screen.getByTestId("palette-body").getAttribute("aria-activedescendant")).toBe(
+      activeDescendant
+    );
+    // The IDREF has to resolve to a real option, or the mirror announces nothing.
+    expect(document.getElementById(activeDescendant!)).not.toBeNull();
   });
 
   it("still calls onSelectNext on ArrowDown", () => {

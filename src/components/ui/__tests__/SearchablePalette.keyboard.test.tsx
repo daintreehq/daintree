@@ -191,3 +191,73 @@ describe("SearchablePalette keyboard navigation (non-composing)", () => {
     expect(prevented).toBe(false);
   });
 });
+
+describe("SearchablePalette Tab remap (input)", () => {
+  it("moves the selection forward on Tab and cancels native traversal", () => {
+    const onSelectNext = vi.fn();
+    renderPalette({ onSelectNext });
+    const notCancelled = fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab" });
+
+    expect(onSelectNext).toHaveBeenCalledTimes(1);
+    expect(notCancelled).toBe(false);
+  });
+
+  it("moves the selection backward on Shift+Tab and cancels native traversal", () => {
+    const onSelectPrevious = vi.fn();
+    renderPalette({ onSelectPrevious });
+    const notCancelled = fireEvent.keyDown(screen.getByRole("combobox"), {
+      key: "Tab",
+      shiftKey: true,
+    });
+
+    expect(onSelectPrevious).toHaveBeenCalledTimes(1);
+    expect(notCancelled).toBe(false);
+  });
+
+  it("lets the custom onKeyDown hook pre-empt the Tab remap", () => {
+    const onSelectNext = vi.fn();
+    const onKeyDown = vi.fn((e: React.KeyboardEvent) => e.preventDefault());
+    renderPalette({ onSelectNext, onKeyDown });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab" });
+
+    expect(onKeyDown).toHaveBeenCalledTimes(1);
+    expect(onSelectNext).not.toHaveBeenCalled();
+  });
+});
+
+describe("SearchablePalette results region (#11431)", () => {
+  function getRegion() {
+    return screen.getByRole("group", { name: "Test" });
+  }
+
+  it("drives the same navigation as the input while it owns focus", () => {
+    const onSelectNext = vi.fn();
+    const onSelectPrevious = vi.fn();
+    const onConfirm = vi.fn();
+    renderPalette({ onSelectNext, onSelectPrevious, onConfirm });
+    const region = getRegion();
+
+    fireEvent.keyDown(region, { key: "ArrowDown" });
+    fireEvent.keyDown(region, { key: "ArrowUp" });
+    fireEvent.keyDown(region, { key: "Enter" });
+
+    expect(onSelectNext).toHaveBeenCalledTimes(1);
+    expect(onSelectPrevious).toHaveBeenCalledTimes(1);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not remap Tab on the region, so focus can leave the list", () => {
+    const onSelectNext = vi.fn();
+    renderPalette({ onSelectNext });
+    const notCancelled = fireEvent.keyDown(getRegion(), { key: "Tab" });
+
+    expect(onSelectNext).not.toHaveBeenCalled();
+    expect(notCancelled).toBe(true);
+  });
+
+  it("omits the active descendant when there are no results", () => {
+    renderPalette({ results: [], selectedIndex: -1 });
+
+    expect(getRegion().hasAttribute("aria-activedescendant")).toBe(false);
+  });
+});

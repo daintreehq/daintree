@@ -1095,6 +1095,7 @@ function ProjectPaletteInner({
   );
 
   const activeResult = results[selectedIndex];
+  const activeDescendant = activeResult ? `project-option-${activeResult.id}` : undefined;
 
   return (
     <>
@@ -1115,11 +1116,17 @@ function ProjectPaletteInner({
           aria-haspopup="listbox"
           aria-label="Search projects"
           aria-controls="project-list"
-          aria-activedescendant={activeResult ? `project-option-${activeResult.id}` : undefined}
+          aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>
 
-      <AppPaletteDialog.Body maxHeight={PALETTE_MAX_HEIGHT} className="p-0">
+      <AppPaletteDialog.Body
+        maxHeight={PALETTE_MAX_HEIGHT}
+        className="p-0"
+        ariaLabel="Projects"
+        activeDescendant={activeDescendant}
+        onNavigationKeyDown={handleKeyDown}
+      >
         <ProjectListContent
           results={results}
           selectedIndex={selectedIndex}
