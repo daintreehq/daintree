@@ -826,11 +826,11 @@ export class WorkspaceClient extends EventEmitter {
 
   // ── File tree ──
 
-  async getFileTree(
-    worktreePath: string,
-    dirPath?: string,
-    options: { includeIgnored?: boolean } = {}
-  ): Promise<FileTreeNode[]> {
+  /**
+   * Raw listing for the file browser: every entry, hidden client-side (#11330).
+   * For "what would actually land in the context", use `getContextFileTree`.
+   */
+  async getFileTree(worktreePath: string, dirPath?: string): Promise<FileTreeNode[]> {
     const host = this.pool.resolveHostForPath(worktreePath);
     if (!host) throw new Error("No workspace host for path");
 
@@ -844,7 +844,6 @@ export class WorkspaceClient extends EventEmitter {
         requestId,
         worktreePath,
         dirPath,
-        includeIgnored: options.includeIgnored,
       },
       30000
     );
@@ -853,6 +852,15 @@ export class WorkspaceClient extends EventEmitter {
       throw new Error(result.error);
     }
     return result.nodes;
+  }
+
+  async getContextFileTree(
+    worktreePath: string,
+    dirPath?: string,
+    options?: CopyTreeOptions,
+    includeExcluded?: boolean
+  ): Promise<FileTreeNode[]> {
+    return this.copyTree.getContextFileTree(worktreePath, dirPath, options, includeExcluded);
   }
 
   // ── Disposal ──

@@ -664,6 +664,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(typedHandle(CHANNELS.COPYTREE_CANCEL, handleCopyTreeCancel));
 
   const handleCopyTreeGetFileTree = async (
+    ctx: import("../types.js").IpcContext,
     payload: CopyTreeGetFileTreePayload
   ): Promise<FileTreeNode[]> => {
     checkRateLimit(CHANNELS.COPYTREE_GET_FILE_TREE, 5, 10_000);
@@ -679,8 +680,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       if (path.isAbsolute(validated.dirPath)) {
         throw new Error("dirPath must be a relative path");
       }
+      // Segment-aware: a bare `startsWith("..")` also rejects legitimate names
+      // like `..cache`. This is the cheap pre-check — `FileTreeService` still
+      // owns the authoritative containment guard, including realpath escapes.
       const normalized = path.normalize(validated.dirPath);
-      if (normalized.startsWith("..")) {
+      const segments = normalized.split(/[\\/]/);
+      if (segments.includes("..")) {
         throw new Error("dirPath cannot traverse outside worktree root");
       }
     }
@@ -689,15 +694,32 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       throw new Error("Worktree service not available");
     }
 
-    const monitor = await deps.worktreeService.getMonitorAsync(validated.worktreeId);
+    // Capture the sender's project before awaiting: the view can be evicted
+    // while the workspace call is in flight, taking its binding with it.
+    const settingsProjectId = resolveCopyTreeProjectId(ctx, deps);
 
-    if (!monitor) {
+    const states = await deps.worktreeService.getAllStatesAsync(ctx.senderWindow?.id);
+    const worktree = states.find((wt) => wt.id === validated.worktreeId);
+
+    if (!worktree) {
       throw new Error(`Worktree not found: ${validated.worktreeId}`);
     }
 
-    return deps.worktreeService.getFileTree(monitor.path, validated.dirPath);
+    // The same merge generation uses. Without it the listing would answer for
+    // CopyTree's defaults while the bundle is built with the project's
+    // exclusions and budgets — the disagreement this channel exists to end
+    // (#11439).
+    const projectSettings = await loadCopyTreeProjectSettings(settingsProjectId);
+    const mergedOptions = mergeCopyTreeOptions(projectSettings, undefined);
+
+    return deps.worktreeService.getContextFileTree(
+      worktree.path,
+      validated.dirPath,
+      mergedOptions,
+      validated.includeExcluded
+    );
   };
-  handlers.push(typedHandle(CHANNELS.COPYTREE_GET_FILE_TREE, handleCopyTreeGetFileTree));
+  handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_GET_FILE_TREE, handleCopyTreeGetFileTree));
 
   const handleCopyTreeTestConfig = async (
     ctx: import("../types.js").IpcContext,

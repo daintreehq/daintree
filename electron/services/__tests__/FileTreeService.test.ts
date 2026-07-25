@@ -1,16 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { FileTreeService } from "../FileTreeService.js";
 
-// The temp dirs created below are NOT git repos — `git check-ignore` would
-// reject and the service would fail-closed (hide every entry). Stub the
-// helper so the integration tests only exercise fs/realpath/path logic.
-vi.mock("../../utils/gitCheckIgnore.js", () => ({
-  checkIgnoredPaths: vi.fn(async () => new Set<string>()),
-}));
-
+// The temp dirs created below are NOT git repos, and that is no longer a
+// special case: this service is a raw listing with no git dependency at all.
+// Deciding what belongs in a context is `CopyTreeService.getFileTree`'s job
+// (#11439).
 describe("FileTreeService", () => {
   let tempDir: string;
   let service: FileTreeService;
@@ -136,6 +133,41 @@ describe("FileTreeService", () => {
 
     expect(forward).toEqual(reverse);
     expect(forward).toEqual(["file001", "file01", "file1", "file2"]);
+  });
+
+  it("returns every entry including .git and gitignored paths", async () => {
+    // Migrated from the old raw-mode suite. The listing takes no view on
+    // visibility: the file browser hides entries client-side (#11330) and the
+    // context picker asks CopyTree (#11439), so filtering anything here would
+    // rob both callers of a choice.
+    await fs.writeFile(path.join(tempDir, ".gitignore"), "dist/\n");
+    await fs.mkdir(path.join(tempDir, "dist"), { recursive: true });
+    await fs.mkdir(path.join(tempDir, ".git"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "app.ts"), "export {};");
+
+    const nodes = await service.getFileTree(tempDir);
+
+    expect(nodes.map((node) => node.name).sort()).toEqual([".git", ".gitignore", "app.ts", "dist"]);
+  });
+
+  it("omits symlinked entries", async () => {
+    // Containment property, independent of any ignore filtering.
+    await fs.writeFile(path.join(tempDir, "app.ts"), "export {};");
+    try {
+      await fs.symlink(path.join(tempDir, "app.ts"), path.join(tempDir, "link.ts"));
+    } catch (error) {
+      // Only platforms that genuinely forbid symlinks may skip: without a link
+      // on disk the assertion below proves nothing, so any other setup failure
+      // has to surface rather than pass as a silent no-op.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") return;
+      throw error;
+    }
+
+    const nodes = await service.getFileTree(tempDir);
+
+    expect(nodes.some((node) => node.name === "app.ts")).toBe(true);
+    expect(nodes.some((node) => node.name === "link.ts")).toBe(false);
   });
 
   it("blocks dirPath values that resolve through symlinks outside base path", async () => {

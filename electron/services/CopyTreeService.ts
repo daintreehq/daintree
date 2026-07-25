@@ -1,4 +1,9 @@
-import type { CopyResult, CopyOptions as SdkCopyOptions, ProgressEvent } from "copytree";
+import type {
+  CopyResult,
+  CopyOptions as SdkCopyOptions,
+  ProgressEvent,
+  ConfigManager as SdkConfigManager,
+} from "copytree";
 import * as path from "path";
 import * as fs from "fs/promises";
 import type { CopyTreeOptions, CopyTreeResult, CopyTreeProgress } from "../types/index.js";
@@ -6,7 +11,9 @@ import type {
   CopyTreeBudgetStats,
   CopyTreeExclusionReason,
   CopyTreeExclusionSummary,
+  FileTreeNode,
 } from "../../shared/types/ipc/copyTree.js";
+import { fileTreeService } from "./FileTreeService.js";
 import { logWarn } from "../utils/logger.js";
 
 /**
@@ -33,6 +40,21 @@ const CANCELLED_MESSAGE = "Context generation cancelled";
 const CONFIG_FAILED_MESSAGE = "Context configuration couldn't be loaded";
 const GENERATE_FAILED_MESSAGE = "Failed to generate context";
 const TEST_CONFIG_FAILED_MESSAGE = "Failed to test context settings";
+const FILE_TREE_FAILED_MESSAGE = "Failed to read the project files";
+
+/**
+ * The defaults-only config is immutable and project-independent (`userConfig`
+ * is off, so nothing outside the packaged defaults feeds it), and loading one
+ * parses every config file and compiles a JSON schema. Cache the promise per
+ * isolate: the context listing runs a dry run per directory, and paying that
+ * cost on every expansion is pure waste. Failures are evicted so a later call
+ * retries rather than inheriting a dead config.
+ */
+let _configPromise: Promise<SdkConfigManager> | null = null;
+
+export function _resetConfigCacheForTests(): void {
+  _configPromise = null;
+}
 
 // Lazy-load copytree so its module graph (ajv, xmlbuilder2, fast-glob, lodash, …)
 // stays off the workspace-host readiness path; it resolves on first use.
@@ -209,6 +231,133 @@ class CopyTreeService {
     }
   }
 
+  /**
+   * List one directory the way the context sees it.
+   *
+   * The picker used to answer "is this ignored?" with a `git check-ignore`
+   * subprocess while the bundle was built by CopyTree's own layered resolution,
+   * so the two disagreed: a ticked file could be missing from the output, and
+   * exclusions git knows nothing about (the config's excluded-file list, binary
+   * classification, the size gate, the budgets) were invisible (#11439). Both
+   * answers now come from one dry run of the same `copy()` the real generation
+   * runs, with the same merged options.
+   *
+   * The dry run covers the whole root rather than scoping to `dirPath`. Scoping
+   * would be far cheaper — traversal starts at the selection — but `scope`
+   * resolves during discovery and the global budgets (`maxFileCount`,
+   * `maxTotalSize`, `charLimit`, plus CopyTree's own 100MB/10k defaults) are
+   * applied to whatever that traversal found. A scoped run therefore recomputes
+   * which files win the budget from one subtree, and would list a file the real
+   * run drops — the same class of disagreement this method exists to remove.
+   */
+  async getFileTree(
+    rootPath: string,
+    dirPath: string = "",
+    options: CopyTreeOptions = {},
+    listOptions: { includeExcluded?: boolean } = {},
+    traceId?: string
+  ): Promise<FileTreeNode[]> {
+    // Checked before the operation is registered so the caller's own mistake
+    // reaches it verbatim rather than through the error sanitizer, which exists
+    // to keep SDK messages and absolute paths away from the renderer.
+    if (!path.isAbsolute(rootPath)) {
+      throw new Error("rootPath must be an absolute path");
+    }
+
+    const opId = traceId || crypto.randomUUID();
+    const controller = new AbortController();
+    // Registered before the first await so a cancel that lands immediately
+    // still finds the operation.
+    this.activeOperations.set(opId, controller);
+
+    try {
+      // Raw listing first: it owns the containment guards, so a traversal
+      // attempt fails before a repository-wide scan is ever started.
+      const rawNodes = await fileTreeService.getFileTree(rootPath, dirPath);
+      this.throwIfAborted(controller.signal);
+
+      const { copy } = await getCopytree();
+      this.throwIfAborted(controller.signal);
+
+      const config = await this.createConfig(controller.signal);
+      this.throwIfAborted(controller.signal);
+
+      const result: CopyResult = await copy(rootPath, {
+        ...this.buildSdkOptions(options, controller.signal),
+        config,
+        dryRun: true,
+      });
+      // A cancel that landed during the walk must not produce a tree. The
+      // signal is passed to `copy()`, but the check is repeated here so
+      // cancellation holds even when the scan runs to completion anyway.
+      this.throwIfAborted(controller.signal);
+      this.logScanErrors(result);
+
+      const manifest = result.manifest;
+      if (!Array.isArray(manifest)) {
+        // Without a manifest there is no verdict to apply, and returning the
+        // raw listing would leak exactly what the picker must not show.
+        throw new Error("CopyTree dry run returned no manifest");
+      }
+
+      return this.applyContextVerdict(rawNodes, manifest, listOptions.includeExcluded === true);
+    } catch (error: unknown) {
+      throw new Error(this.errorMessageFor(error, FILE_TREE_FAILED_MESSAGE));
+    } finally {
+      this.activeOperations.delete(opId);
+    }
+  }
+
+  /**
+   * Keep the entries the context would carry, in the raw listing's order.
+   *
+   * A manifest entry means the file reaches the output in some form — a
+   * truncated file, a structure-only lock file and a binary placeholder all
+   * still occupy a slot. Anything excluded has no entry at all: CopyTree records
+   * only what survived, so absence is the exclusion signal, and it covers every
+   * layer uniformly (ignore files, config excludes, binary classification, the
+   * size gate, the budgets) including entries the walk never reached.
+   *
+   * Directories are never in the manifest — CopyTree does not descend into one
+   * it has pruned — so a directory is judged by whether anything under it
+   * survived. That drops `.git` and `node_modules` with no special-casing, and
+   * also drops a directory whose every file is excluded, which would otherwise
+   * expand into nothing.
+   */
+  private applyContextVerdict(
+    rawNodes: FileTreeNode[],
+    manifest: CopyResult["manifest"],
+    includeExcluded: boolean
+  ): FileTreeNode[] {
+    const includedFiles = new Set<string>();
+    const populatedDirs = new Set<string>();
+
+    for (const entry of manifest) {
+      if (entry.outcome.startsWith("excluded:")) continue;
+      includedFiles.add(entry.path);
+      // Record every ancestor so a directory listed at any depth can be
+      // answered from this one pass.
+      let slash = entry.path.lastIndexOf("/");
+      while (slash > 0) {
+        const ancestor = entry.path.slice(0, slash);
+        if (populatedDirs.has(ancestor)) break;
+        populatedDirs.add(ancestor);
+        slash = ancestor.lastIndexOf("/");
+      }
+    }
+
+    const nodes: FileTreeNode[] = [];
+    for (const node of rawNodes) {
+      const kept = node.isDirectory ? populatedDirs.has(node.path) : includedFiles.has(node.path);
+      if (kept) {
+        nodes.push(node);
+      } else if (includeExcluded) {
+        nodes.push({ ...node, excluded: true });
+      }
+    }
+    return nodes;
+  }
+
   cancelAll(): void {
     for (const controller of this.activeOperations.values()) {
       controller.abort();
@@ -242,16 +391,28 @@ class CopyTreeService {
    * it would sweep `node_modules`, media and build output into the context.
    */
   private async createConfig(signal: AbortSignal) {
-    const { ConfigManager } = await getCopytree();
     try {
-      const config = await ConfigManager.create({ userConfig: false, strict: true });
-      // `strict` only throws when a source errors. A config directory that is
-      // simply absent resolves successfully and empty, which carries none of
-      // the exclusion lists — the case this flag exists to expose.
-      if (!config.isDefaultsLoaded) {
-        throw new Error("CopyTree default configuration is missing");
-      }
-      return config;
+      // Share the in-flight promise so concurrent operations load the config
+      // once, and evict on failure so the next call retries. Awaiting a shared
+      // promise means one operation's cancel must not poison it for the others,
+      // so the abort check below happens after the await, on this operation's
+      // own signal.
+      _configPromise ??= (async () => {
+        const { ConfigManager } = await getCopytree();
+        const config = await ConfigManager.create({ userConfig: false, strict: true });
+        // `strict` only throws when a source errors. A config directory that is
+        // simply absent resolves successfully and empty, which carries none of
+        // the exclusion lists — the case this flag exists to expose.
+        if (!config.isDefaultsLoaded) {
+          throw new Error("CopyTree default configuration is missing");
+        }
+        return config;
+      })().catch((error: unknown) => {
+        _configPromise = null;
+        throw error;
+      });
+
+      return await _configPromise;
     } catch (error) {
       // A cancel that lands while config is loading is a cancel, not a failure.
       this.throwIfAborted(signal);

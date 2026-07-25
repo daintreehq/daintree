@@ -1421,8 +1421,12 @@ function buildElectronApi(): ElectronAPI {
       cancel: (injectionId?: string) =>
         _unwrappingInvoke(CHANNELS.COPYTREE_CANCEL, { injectionId }),
 
-      getFileTree: (worktreeId: string, dirPath?: string) =>
-        _unwrappingInvoke(CHANNELS.COPYTREE_GET_FILE_TREE, { worktreeId, dirPath }),
+      getFileTree: (worktreeId: string, dirPath?: string, includeExcluded?: boolean) =>
+        _unwrappingInvoke(CHANNELS.COPYTREE_GET_FILE_TREE, {
+          worktreeId,
+          dirPath,
+          includeExcluded,
+        }),
 
       testConfig: (worktreeId: string, options?: CopyTreeTestConfigOptions) =>
         _unwrappingInvoke(CHANNELS.COPYTREE_TEST_CONFIG, { worktreeId, options }),

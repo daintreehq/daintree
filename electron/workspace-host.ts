@@ -769,12 +769,40 @@ port.on("message", async (rawMsg: any) => {
         workspaceService.retryAuthFetch();
         break;
 
+      // Raw listing for the file browser: every entry, `.git` included, hidden
+      // client-side (#11330).
       case "get-file-tree": {
-        const { requestId, worktreePath, dirPath, includeIgnored } = request;
+        const { requestId, worktreePath, dirPath } = request;
         try {
-          const nodes = await fileTreeService.getFileTree(worktreePath, dirPath, {
-            includeIgnored,
+          const nodes = await fileTreeService.getFileTree(worktreePath, dirPath);
+          sendEvent({
+            type: "file-tree-result",
+            requestId,
+            nodes,
           });
+        } catch (error) {
+          sendEvent({
+            type: "file-tree-result",
+            requestId,
+            nodes: [],
+            error: (error as Error).message,
+          });
+        }
+        break;
+      }
+
+      // Context listing: routed through the worker because a full-root dry run
+      // is CPU-heavy enough to stall this host's git polling and file watching.
+      case "copytree:get-file-tree": {
+        const { requestId, operationId, worktreePath, dirPath, options, includeExcluded } = request;
+        try {
+          const nodes = await copytreeWorkerClient.getFileTree(
+            worktreePath,
+            dirPath,
+            options ?? {},
+            includeExcluded,
+            operationId
+          );
           sendEvent({
             type: "file-tree-result",
             requestId,

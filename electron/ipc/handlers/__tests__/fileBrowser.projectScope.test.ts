@@ -75,7 +75,10 @@ describe("fileBrowser listDirectory project scoping", () => {
 
     expect(getAllStatesForProjectAsync).toHaveBeenCalledWith("/projects/a", "project-a");
     expect(getAllStatesAsync).not.toHaveBeenCalled();
-    expect(getFileTree).toHaveBeenCalledWith(WT_A, undefined, { includeIgnored: true });
+    // The raw listing takes no options: it returns every entry and the browser
+    // hides them client-side (#11330). The ignore-aware listing is a separate
+    // route, `copytree:get-file-tree` (#11439).
+    expect(getFileTree).toHaveBeenCalledWith(WT_A, undefined);
   });
 
   it("refuses the active project's worktree id from the cached sender", async () => {

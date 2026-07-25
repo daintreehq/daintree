@@ -259,6 +259,122 @@ describe("copyTree handlers", () => {
     });
   });
 
+  describe("get-file-tree merge integration", () => {
+    const projectSettingsFixture = {
+      excludedPaths: ["vendor/**"],
+      copyTreeSettings: { maxContextSize: 4242, alwaysInclude: ["*.md"] },
+    };
+
+    function registerWithFileTree() {
+      const getContextFileTree = vi.fn().mockResolvedValue([]);
+      const getFileTree = vi.fn().mockResolvedValue([]);
+      ipcMainMock.handle.mockClear();
+      registerCopyTreeHandlers({
+        mainWindow: {
+          isDestroyed: () => false,
+          webContents: { isDestroyed: () => false, send: vi.fn() },
+        },
+        ptyClient: { hasTerminal: vi.fn(() => false), write: vi.fn() },
+        worktreeService: {
+          getAllStatesAsync: vi.fn().mockResolvedValue([{ id: "wt-1", path: "/wt-1" }]),
+          getContextFileTree,
+          getFileTree,
+        },
+      } as never);
+      projectStoreMock.getCurrentProjectId.mockReturnValue("proj-1" as never);
+      projectStoreMock.getProjectSettings.mockResolvedValue(projectSettingsFixture as never);
+      return { getContextFileTree, getFileTree };
+    }
+
+    async function invokeGetFileTree(payload: Record<string, unknown>) {
+      const handler = getInvokeHandler(CHANNELS.COPYTREE_GET_FILE_TREE);
+      _resetRateLimitQueuesForTest();
+      return handler(mockEvent, { worktreeId: "wt-1", ...payload });
+    }
+
+    it("answers from the context listing, never the raw one", async () => {
+      // The raw listing returns every entry, `.git` and gitignored folders
+      // included. Routing the picker there is the leak this channel must not
+      // reintroduce (#11439).
+      const { getContextFileTree, getFileTree } = registerWithFileTree();
+
+      await invokeGetFileTree({ dirPath: "src" });
+
+      expect(getContextFileTree).toHaveBeenCalledTimes(1);
+      expect(getFileTree).not.toHaveBeenCalled();
+      expect(getContextFileTree.mock.calls[0][0]).toBe("/wt-1");
+      expect(getContextFileTree.mock.calls[0][1]).toBe("src");
+    });
+
+    it("applies the project's saved context settings to the listing", async () => {
+      // Without this the listing answers for CopyTree's defaults while the
+      // bundle is built with the project's exclusions and budgets — the two
+      // engines disagreeing again, one layer up.
+      const { getContextFileTree } = registerWithFileTree();
+
+      await invokeGetFileTree({});
+
+      const mergedOptions = getContextFileTree.mock.calls[0][2];
+      expect(mergedOptions.maxTotalSize).toBe(
+        projectSettingsFixture.copyTreeSettings.maxContextSize
+      );
+      expect(mergedOptions.always).toEqual(projectSettingsFixture.copyTreeSettings.alwaysInclude);
+      expect(mergedOptions.exclude).toEqual(projectSettingsFixture.excludedPaths);
+    });
+
+    it("forwards the opt-in for excluded entries", async () => {
+      const { getContextFileTree } = registerWithFileTree();
+
+      await invokeGetFileTree({ includeExcluded: true });
+
+      expect(getContextFileTree.mock.calls[0][3]).toBe(true);
+    });
+
+    it("defaults to omitting excluded entries", async () => {
+      const { getContextFileTree } = registerWithFileTree();
+
+      await invokeGetFileTree({});
+
+      expect(getContextFileTree.mock.calls[0][3]).toBeUndefined();
+    });
+
+    it("rejects a dirPath that escapes the worktree", async () => {
+      const { getContextFileTree } = registerWithFileTree();
+
+      await expect(invokeGetFileTree({ dirPath: "../outside" })).rejects.toThrow(
+        "cannot traverse outside worktree root"
+      );
+      expect(getContextFileTree).not.toHaveBeenCalled();
+    });
+
+    it("rejects an absolute dirPath", async () => {
+      const { getContextFileTree } = registerWithFileTree();
+
+      await expect(invokeGetFileTree({ dirPath: "/etc" })).rejects.toThrow(
+        "dirPath must be a relative path"
+      );
+      expect(getContextFileTree).not.toHaveBeenCalled();
+    });
+
+    it("rejects a traversal segment buried mid-path", async () => {
+      const { getContextFileTree } = registerWithFileTree();
+
+      await expect(invokeGetFileTree({ dirPath: "src/../../etc" })).rejects.toThrow(
+        "cannot traverse outside worktree root"
+      );
+      expect(getContextFileTree).not.toHaveBeenCalled();
+    });
+
+    it("allows a directory whose name merely begins with dots", async () => {
+      // `..cache` is a legal directory name; only a `..` path segment traverses.
+      const { getContextFileTree } = registerWithFileTree();
+
+      await invokeGetFileTree({ dirPath: "..cache" });
+
+      expect(getContextFileTree.mock.calls[0][1]).toBe("..cache");
+    });
+  });
+
   describe("project-scoped settings resolution", () => {
     const SENDER_WINDOW_ID = 42;
     const SENDER_PROJECT = "proj-sender";
@@ -306,6 +422,7 @@ describe("copyTree handlers", () => {
         includedSize: 1,
       });
       const generateContext = vi.fn().mockResolvedValue({ content: "", fileCount: 1 });
+      const getContextFileTree = vi.fn().mockResolvedValue([]);
 
       if (options.withSenderWindow !== false) {
         browserWindowMock.fromWebContents.mockReturnValue({
@@ -336,6 +453,7 @@ describe("copyTree handlers", () => {
           }),
           testConfig,
           generateContext,
+          getContextFileTree,
         },
         windowRegistry: options.windowScopedPvm
           ? {
@@ -348,26 +466,47 @@ describe("copyTree handlers", () => {
         projectViewManager: options.depsPvm,
       } as never);
 
-      return { testConfig, generateContext };
+      return { testConfig, generateContext, getContextFileTree };
     }
 
     /**
-     * The four handlers that merge project settings, with the seam each one hands
-     * the merged options to. Every case runs against all four so a regression in
-     * one call site can't hide behind the others.
+     * Every handler that merges project settings, with the seam it hands the
+     * merged options to and the argument position they land in. All cases run
+     * against all of them so a regression in one call site can't hide behind the
+     * others — picking the wrong project's settings is this code's recurring bug
+     * (#11103, #6015), and for the file tree it would put the picker and the
+     * bundle back on different settings (#11439).
      */
     const MERGE_CALL_SITES = [
-      { channel: CHANNELS.COPYTREE_TEST_CONFIG, seam: "testConfig" as const, payload: {} },
-      { channel: CHANNELS.COPYTREE_GENERATE, seam: "generateContext" as const, payload: {} },
+      {
+        channel: CHANNELS.COPYTREE_TEST_CONFIG,
+        seam: "testConfig" as const,
+        payload: {},
+        optionsArgIndex: 1,
+      },
+      {
+        channel: CHANNELS.COPYTREE_GENERATE,
+        seam: "generateContext" as const,
+        payload: {},
+        optionsArgIndex: 1,
+      },
       {
         channel: CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE,
         seam: "generateContext" as const,
         payload: {},
+        optionsArgIndex: 1,
       },
       {
         channel: CHANNELS.COPYTREE_INJECT,
         seam: "generateContext" as const,
         payload: { terminalId: "term-1" },
+        optionsArgIndex: 1,
+      },
+      {
+        channel: CHANNELS.COPYTREE_GET_FILE_TREE,
+        seam: "getContextFileTree" as const,
+        payload: {},
+        optionsArgIndex: 2,
       },
     ];
 
@@ -376,7 +515,7 @@ describe("copyTree handlers", () => {
       await handler(mockEvent, { worktreeId: "wt-1", options: {}, ...extraPayload });
     }
 
-    describe.each(MERGE_CALL_SITES)("$channel", ({ channel, seam, payload }) => {
+    describe.each(MERGE_CALL_SITES)("$channel", ({ channel, seam, payload, optionsArgIndex }) => {
       it("merges the sender window's project settings, not the globally current project's", async () => {
         aimGlobalSourcesAtGlobalProject();
         const seams = registerWithScope({
@@ -386,7 +525,7 @@ describe("copyTree handlers", () => {
 
         await invoke(channel, payload);
 
-        const [, mergedOptions] = seams[seam].mock.calls[0];
+        const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
         expect(mergedOptions.maxTotalSize).toBe(senderSettings.copyTreeSettings.maxContextSize);
         expect(mergedOptions.maxTotalSize).not.toBe(globalSettings.copyTreeSettings.maxContextSize);
         expect(mergedOptions.always).toEqual(senderSettings.copyTreeSettings.alwaysInclude);
@@ -406,7 +545,7 @@ describe("copyTree handlers", () => {
         // An unbound view must not inherit the global current project's settings
         // from ANY source, so nothing back-fills the empty runtime options.
         expect(seams[seam]).toHaveBeenCalledTimes(1);
-        const [, mergedOptions] = seams[seam].mock.calls[0];
+        const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
         expect(mergedOptions).toEqual({});
         expect(depsPvm.getProjectIdForWebContents).not.toHaveBeenCalled();
         expect(projectStoreMock.getProjectSettings).not.toHaveBeenCalled();
@@ -428,7 +567,7 @@ describe("copyTree handlers", () => {
 
         await invoke(channel, payload);
 
-        const [, mergedOptions] = seams[seam].mock.calls[0];
+        const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
         expect(mergedOptions.exclude).toEqual(senderSettings.excludedPaths);
         expect(mergedOptions.maxTotalSize).toBe(senderSettings.copyTreeSettings.maxContextSize);
         expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(SENDER_PROJECT);
@@ -440,7 +579,7 @@ describe("copyTree handlers", () => {
 
         await invoke(channel, payload);
 
-        const [, mergedOptions] = seams[seam].mock.calls[0];
+        const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
         expect(mergedOptions.maxTotalSize).toBe(globalSettings.copyTreeSettings.maxContextSize);
         expect(mergedOptions.always).toEqual(globalSettings.copyTreeSettings.alwaysInclude);
         expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(GLOBAL_PROJECT);

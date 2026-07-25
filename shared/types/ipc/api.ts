@@ -363,7 +363,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): Promise<CopyTreeResult>;
     isAvailable(): Promise<boolean>;
     cancel(injectionId?: string): Promise<void>;
-    getFileTree(worktreeId: string, dirPath?: string): Promise<FileTreeNode[]>;
+    getFileTree(
+      worktreeId: string,
+      dirPath?: string,
+      includeExcluded?: boolean
+    ): Promise<FileTreeNode[]>;
     testConfig(
       worktreeId: string,
       options?: CopyTreeTestConfigOptions

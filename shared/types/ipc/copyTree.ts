@@ -216,4 +216,17 @@ export interface FileTreeNode {
   size?: number;
   /** Children (only populated for directories if expanded) */
   children?: FileTreeNode[];
+  /**
+   * Set when the node contributes nothing to the context CopyTree would
+   * generate — an excluded file, or a directory with no includable descendant.
+   * Only present on the context listing, and only when the caller opted in with
+   * `includeExcluded`; the default listing omits these nodes entirely.
+   *
+   * There is deliberately no per-node reason. CopyTree 0.16's manifest records
+   * only what survived, so an excluded path has no entry to read a reason from,
+   * and `stats.excluded.largest` is capped at 50 and ordered by size — pruned
+   * directories report size 0 and fall off the list first, which is exactly the
+   * case a picker most needs an answer for.
+   */
+  excluded?: boolean;
 }
