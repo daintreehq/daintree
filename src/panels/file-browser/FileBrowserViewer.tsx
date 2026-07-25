@@ -545,13 +545,24 @@ export function FileBrowserViewer({
 
       case "text":
         return isMarkdownFilePath(filePath) ? (
-          <MarkdownViewer
-            content={state.content}
-            filePath={filePath}
-            rootPath={rootPath}
-            viewMode={markdownMode}
-            className="h-full"
-          />
+          // Neither markdown surface brings a scroller: MarkdownDocument's root
+          // carries no overflow class by design, and CodeViewer forces
+          // `.cm-scroller` visible so it delegates upward. The viewer column
+          // above only clips, so without this wrapper anything past the first
+          // screenful was unreachable (#11441). Same idiom as svg/video/audio.
+          <div data-testid="file-browser-markdown-scroll" className="h-full w-full overflow-auto">
+            {/* min-h-full, never h-full: a floor lets a tall document grow past
+                the wrapper and scroll it, while a short one still fills the
+                preview. It also twMerge-replaces MarkdownViewer's source-mode
+                min-h-[300px], which used to overflow a preview under 300px. */}
+            <MarkdownViewer
+              content={state.content}
+              filePath={filePath}
+              rootPath={rootPath}
+              viewMode={markdownMode}
+              className="min-h-full"
+            />
+          </div>
         ) : (
           <CodeViewer content={state.content} filePath={filePath} className="h-full" />
         );
