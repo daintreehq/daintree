@@ -205,7 +205,6 @@ describe("copyTree handlers", () => {
       const testConfig = vi.fn().mockResolvedValue({
         includedFiles: 1,
         includedSize: 1,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
       });
       // Re-register so the channel resolves to a handler whose worktreeService
       // is live; clear ipcMain.handle first so getInvokeHandler finds this one.
@@ -305,7 +304,6 @@ describe("copyTree handlers", () => {
       const testConfig = vi.fn().mockResolvedValue({
         includedFiles: 1,
         includedSize: 1,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
       });
       const generateContext = vi.fn().mockResolvedValue({ content: "", fileCount: 1 });
 

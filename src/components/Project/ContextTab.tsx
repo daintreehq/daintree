@@ -6,7 +6,13 @@ import { useSkeletonGate, useSkeletonFloor } from "@/hooks/useDeferredLoading";
 import { cn } from "@/lib/utils";
 import { copyTreeClient } from "@/clients/copyTreeClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { CopyTreeSettings, CopyTreeTestConfigResult, Worktree } from "@/types";
+import type {
+  CopyTreeExclusionReason,
+  CopyTreeSettings,
+  CopyTreeTestConfigResult,
+  CopyTreeTruncatedBy,
+  Worktree,
+} from "@/types";
 import { logError } from "@/utils/logger";
 
 function formatBytes(bytes: number): string {
@@ -15,6 +21,52 @@ function formatBytes(bytes: number): string {
   const sizes = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+}
+
+/** Token counts are a ±20% heuristic, so they read better rounded than exact. */
+function formatTokenEstimate(tokens: number): string {
+  if (tokens < 1000) return String(tokens);
+  if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
+  return `${(tokens / 1_000_000).toFixed(1)}M`;
+}
+
+const EXCLUSION_LABELS: Partial<Record<CopyTreeExclusionReason, string>> = {
+  gitignore: "gitignore",
+  copytreeignore: "copytreeignore",
+  globalGitignore: "global gitignore",
+  gitInfoExclude: "git exclude file",
+  configExclude: "built-in excludes",
+  optionExclude: "excluded paths",
+  filterPattern: "filter patterns",
+  testExclude: "test excludes",
+  binaryExtension: "binary files",
+  sizeGate: "max file size",
+  totalSizeBudget: "total size limit",
+  fileCountBudget: "file count limit",
+  charBudget: "character budget",
+  scopeFilter: "scope",
+  gitFilter: "git filter",
+  duplicate: "duplicates",
+  unreadable: "unreadable files",
+};
+
+const TRUNCATION_LABELS: Record<CopyTreeTruncatedBy, string> = {
+  maxFileCount: "file count",
+  maxTotalSize: "total size",
+  charLimit: "character budget",
+};
+
+const EXCLUSION_REASON_PREVIEW_COUNT = 3;
+
+/** Names the biggest exclusion reasons so the count isn't an unexplained number. */
+function describeTopExclusions(byReason: Partial<Record<CopyTreeExclusionReason, number>>): string {
+  const top = Object.entries(byReason)
+    .filter(([, count]) => (count ?? 0) > 0)
+    .sort(([, a], [, b]) => (b ?? 0) - (a ?? 0))
+    .slice(0, EXCLUSION_REASON_PREVIEW_COUNT)
+    .map(([reason]) => EXCLUSION_LABELS[reason as CopyTreeExclusionReason] ?? reason);
+
+  return top.length > 0 ? ` — ${top.join(", ")}` : "";
 }
 
 const FILE_PREVIEW_COUNT = 10;
@@ -69,7 +121,6 @@ export function ContextTab({
       setTestConfigResult({
         includedFiles: 0,
         includedSize: 0,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
         error: "No worktree available to test configuration",
       });
       return;
@@ -110,7 +161,6 @@ export function ContextTab({
       setTestConfigResult({
         includedFiles: 0,
         includedSize: 0,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
         error: formatErrorMessage(error, "Failed to test configuration"),
       });
     } finally {
@@ -211,7 +261,7 @@ export function ContextTab({
                   setTestConfigResult(null);
                 }}
                 min={1}
-                placeholder="Default (unlimited)"
+                placeholder="Default (100 MB)"
                 className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
               />
               <p className="text-xs text-daintree-text/40 mt-1">Total size limit for all files</p>
@@ -229,7 +279,7 @@ export function ContextTab({
                   setTestConfigResult(null);
                 }}
                 min={1}
-                placeholder="Default (50KB)"
+                placeholder="Default (no limit)"
                 className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
               />
               <p className="text-xs text-daintree-text/40 mt-1">Skip files larger than this</p>
@@ -239,9 +289,7 @@ export function ContextTab({
           {/* Truncation Strategy */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs text-daintree-text/60 mb-1">
-                Char limit (per file)
-              </label>
+              <label className="block text-xs text-daintree-text/60 mb-1">Character budget</label>
               <input
                 type="number"
                 value={copyTreeSettings.charLimit ?? ""}
@@ -255,7 +303,7 @@ export function ContextTab({
                 className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
               />
               <p className="text-xs text-daintree-text/40 mt-1">
-                Truncate each file to this many characters
+                Total characters across all files
               </p>
             </div>
             <div>
@@ -454,7 +502,7 @@ export function ContextTab({
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <Check className="h-4 w-4 text-status-success" />
                       <span className="text-sm font-medium text-daintree-text">
                         {testConfigResult.includedFiles} files would be included
@@ -462,7 +510,27 @@ export function ContextTab({
                       <span className="text-xs text-daintree-text/60">
                         ({formatBytes(testConfigResult.includedSize)})
                       </span>
+                      {testConfigResult.estimatedTokens !== undefined && (
+                        <span className="text-xs text-daintree-text/60">
+                          ~{formatTokenEstimate(testConfigResult.estimatedTokens)} tokens
+                        </span>
+                      )}
                     </div>
+                    {testConfigResult.excluded && testConfigResult.excluded.total > 0 && (
+                      <p className="text-xs text-daintree-text/60">
+                        {testConfigResult.excluded.total} excluded
+                        {describeTopExclusions(testConfigResult.excluded.byReason)}
+                      </p>
+                    )}
+                    {testConfigResult.truncated && (
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="h-4 w-4 text-status-warning mt-0.5 shrink-0" />
+                        <p className="text-xs text-daintree-text/80">
+                          {testConfigResult.truncatedCount ?? 0} files were dropped by the{" "}
+                          {TRUNCATION_LABELS[testConfigResult.truncatedBy ?? "maxTotalSize"]} limit
+                        </p>
+                      </div>
+                    )}
                     {testConfigResult.files && testConfigResult.files.length > 0 && (
                       <div className="space-y-1">
                         <ul className="max-h-60 overflow-y-auto space-y-1">

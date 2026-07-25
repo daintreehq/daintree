@@ -135,6 +135,10 @@ export type {
   CopyTreeTestConfigResult,
   CopyTreeResult,
   CopyTreeProgress,
+  CopyTreeExclusionReason,
+  CopyTreeExclusionSummary,
+  CopyTreeBudgetStats,
+  CopyTreeTruncatedBy,
   FileTreeNode,
   // Worktree IPC types
   WorktreeRemovePayload,

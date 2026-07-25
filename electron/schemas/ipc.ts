@@ -526,9 +526,6 @@ export const CopyTreeProgressSchema = z.object({
   stage: z.string(),
   progress: z.number().min(0).max(1),
   message: z.string(),
-  filesProcessed: z.number().int().nonnegative().optional(),
-  totalFiles: z.number().int().nonnegative().optional(),
-  currentFile: z.string().optional(),
   traceId: z.string().optional(),
 });
 

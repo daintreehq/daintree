@@ -32,7 +32,6 @@ const inlineResult = { content: "inline", fileCount: 1 };
 const inlineTestResult = {
   includedFiles: 2,
   includedSize: 10,
-  excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
 };
 
 beforeEach(() => {

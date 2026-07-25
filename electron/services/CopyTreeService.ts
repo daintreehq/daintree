@@ -2,8 +2,37 @@ import type { CopyResult, CopyOptions as SdkCopyOptions, ProgressEvent } from "c
 import * as path from "path";
 import * as fs from "fs/promises";
 import type { CopyTreeOptions, CopyTreeResult, CopyTreeProgress } from "../types/index.js";
+import type {
+  CopyTreeBudgetStats,
+  CopyTreeExclusionReason,
+  CopyTreeExclusionSummary,
+} from "../../shared/types/ipc/copyTree.js";
 import { logWarn } from "../utils/logger.js";
-import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+
+/**
+ * Renderer-visible text for the SDK's stable error codes. SDK messages can
+ * carry absolute paths and raw option values, so nothing from the error itself
+ * reaches the renderer — only these static strings.
+ */
+const ERROR_CODE_MESSAGES: Record<string, string> = {
+  ERR_PATH_NOT_FOUND: "Project path is unavailable",
+  ERR_NOT_A_DIRECTORY: "Project path isn't a directory",
+  ERR_SCOPE_OUTSIDE_ROOT: "Selected paths must stay inside the project",
+  ERR_SYMLINK_OUTSIDE_ROOT: "Selected paths must stay inside the project",
+  ERR_INVALID_OPTION: "Context settings are invalid",
+  ERR_INVALID_FORMAT: "Context settings are invalid",
+  ERR_CONFIG_INVALID: "Context configuration couldn't be loaded",
+  ERR_NO_FILES_MATCHED: "No files matched the current context settings",
+  ERR_SECRETS_DETECTED: "Context generation stopped because secrets were detected",
+  ERR_ABORTED: "Context generation cancelled",
+  ENOENT: "Project path is unavailable",
+  EACCES: "Can't read the project files",
+};
+
+const CANCELLED_MESSAGE = "Context generation cancelled";
+const CONFIG_FAILED_MESSAGE = "Context configuration couldn't be loaded";
+const GENERATE_FAILED_MESSAGE = "Failed to generate context";
+const TEST_CONFIG_FAILED_MESSAGE = "Failed to test context settings";
 
 // Lazy-load copytree so its module graph (ajv, xmlbuilder2, fast-glob, lodash, …)
 // stays off the workspace-host readiness path; it resolves on first use.
@@ -67,71 +96,41 @@ class CopyTreeService {
       const controller = new AbortController();
       this.activeOperations.set(opId, controller);
 
-      const { copy, ConfigManager } = await getCopytree();
+      const { copy } = await getCopytree();
       this.throwIfAborted(controller.signal);
 
-      let config;
-      try {
-        config = await ConfigManager.create();
-      } catch (error) {
-        logWarn(
-          "Failed to load default config (likely missing configuration files in bundle), proceeding with defaults",
-          { error }
-        );
-      }
-
+      const config = await this.createConfig();
       this.throwIfAborted(controller.signal);
 
       const sdkOptions: SdkCopyOptions = {
-        signal: controller.signal,
-        display: false,
-        clipboard: false,
-        format: options.format || "xml",
-
-        filter: options.includePaths || options.filter || undefined,
-        exclude: options.exclude || undefined,
-        always: options.always,
-
-        modified: options.modified,
-        changed: options.changed,
-
-        charLimit: options.charLimit,
-        addLineNumbers: options.withLineNumbers,
-        maxFileSize: options.maxFileSize,
-        maxTotalSize: options.maxTotalSize,
-        maxFileCount: options.maxFileCount,
-        sort: options.sort,
-
+        ...this.buildSdkOptions(options, controller.signal),
+        config,
         onProgress: onProgress
           ? (event: ProgressEvent) => {
               if (controller.signal.aborted) return;
 
-              const progress: CopyTreeProgress = {
-                stage: event.stage || "Processing",
+              onProgress({
+                stage: event.stage || "unknown",
                 progress: Math.max(0, Math.min(100, event.percent || 0)) / 100,
-                message: event.message || `Processing: ${event.stage || "files"}`,
-                filesProcessed: event.filesProcessed,
-                totalFiles: event.totalFiles,
-                currentFile: event.currentFile,
+                message: event.message || "Processing files",
                 traceId: effectiveTraceId,
-              };
-              onProgress(progress);
+              });
             }
           : undefined,
         progressThrottleMs: 100,
       };
-      if (config) {
-        sdkOptions.config = config;
-      }
 
       const result: CopyResult = await copy(rootPath, sdkOptions);
+      this.logScanErrors(result);
 
       return {
         content: result.output,
         fileCount: result.stats.totalFiles,
+        outputFormatVersion: result.outputFormatVersion,
         stats: {
           totalSize: result.stats.totalSize,
           duration: result.stats.duration,
+          ...this.mapBudgetStats(result),
         },
       };
     } catch (error: unknown) {
@@ -153,7 +152,6 @@ class CopyTreeService {
         return {
           includedFiles: 0,
           includedSize: 0,
-          excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
           error: "rootPath must be an absolute path",
         };
       }
@@ -164,7 +162,6 @@ class CopyTreeService {
         return {
           includedFiles: 0,
           includedSize: 0,
-          excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
           error: `Path does not exist or is not accessible: ${rootPath}`,
         };
       }
@@ -172,72 +169,38 @@ class CopyTreeService {
       const controller = new AbortController();
       this.activeOperations.set(opId, controller);
 
-      const { copy, ConfigManager } = await getCopytree();
+      const { copy } = await getCopytree();
       this.throwIfAborted(controller.signal);
 
-      let config;
-      try {
-        config = await ConfigManager.create();
-      } catch (error) {
-        logWarn(
-          "Failed to load default config (likely missing configuration files in bundle), proceeding with defaults",
-          { error }
-        );
-      }
-
+      const config = await this.createConfig();
       this.throwIfAborted(controller.signal);
 
       const sdkOptions: SdkCopyOptions = {
-        signal: controller.signal,
-        display: false,
-        clipboard: false,
-        format: options.format || "xml",
+        ...this.buildSdkOptions(options, controller.signal),
+        config,
         dryRun: true,
-
-        filter: options.includePaths || options.filter || undefined,
-        exclude: options.exclude || undefined,
-        always: options.always,
-
-        modified: options.modified,
-        changed: options.changed,
-
-        charLimit: options.charLimit,
-        addLineNumbers: options.withLineNumbers,
-        maxFileSize: options.maxFileSize,
-        maxTotalSize: options.maxTotalSize,
-        maxFileCount: options.maxFileCount,
-        sort: options.sort,
       };
-      if (config) {
-        sdkOptions.config = config;
-      }
 
       const result: CopyResult = await copy(rootPath, sdkOptions);
+      this.logScanErrors(result);
+
+      // The 0.16 manifest reports every file's outcome, not just the kept ones,
+      // so the preview has to drop anything that wouldn't actually be included.
+      const included = (result.manifest ?? [])
+        .filter((entry) => entry.outcome === "included")
+        .map((entry) => ({ path: entry.path, size: entry.size }));
 
       return {
-        includedFiles: result.stats.totalFiles,
-        includedSize: result.stats.totalSize,
-        excluded: {
-          byTruncation: 0,
-          bySize: 0,
-          byPattern: 0,
-        },
-        files: result.manifest ?? [],
+        includedFiles: included.length,
+        includedSize: included.reduce((total, entry) => total + entry.size, 0),
+        files: included,
+        ...this.mapBudgetStats(result),
       };
     } catch (error: unknown) {
-      if (error instanceof Error && error.name === "AbortError") {
-        return {
-          includedFiles: 0,
-          includedSize: 0,
-          excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
-          error: "Context generation cancelled",
-        };
-      }
       return {
         includedFiles: 0,
         includedSize: 0,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
-        error: formatErrorMessage(error, "Failed to generate context"),
+        error: this.errorMessageFor(error, TEST_CONFIG_FAILED_MESSAGE),
       };
     } finally {
       this.activeOperations.delete(opId);
@@ -263,50 +226,115 @@ class CopyTreeService {
 
   private throwIfAborted(signal: AbortSignal): void {
     if (signal.aborted) {
-      throw Object.assign(new Error("Context generation cancelled"), { name: "AbortError" });
+      throw Object.assign(new Error(CANCELLED_MESSAGE), { name: "AbortError" });
     }
   }
 
-  private handleError(error: unknown): CopyTreeResult {
-    if (error instanceof Error && error.name === "AbortError") {
-      return {
-        content: "",
-        fileCount: 0,
-        error: "Context generation cancelled",
-      };
+  /**
+   * Load configuration from the packaged defaults only.
+   *
+   * `userConfig` would let `~/.copytree/config/copytree.js` — arbitrary code on
+   * a machine we don't control — run inside the host process, and would make a
+   * project's context depend on a file outside it. Failure is fatal rather than
+   * degraded: since 0.16 the config carries the exclusions, so running without
+   * it would sweep `node_modules`, media and build output into the context.
+   */
+  private async createConfig() {
+    const { ConfigManager } = await getCopytree();
+    try {
+      return await ConfigManager.create({ userConfig: false, strict: true });
+    } catch (error) {
+      logWarn("Failed to load CopyTree configuration; refusing to run without exclusions", {
+        error,
+      });
+      throw Object.assign(new Error(CONFIG_FAILED_MESSAGE), { code: "ERR_CONFIG_INVALID" });
     }
+  }
 
+  private buildSdkOptions(options: CopyTreeOptions, signal: AbortSignal): SdkCopyOptions {
+    return {
+      signal,
+      display: false,
+      clipboard: false,
+      quiet: true,
+      format: options.format || "xml",
+
+      filter: options.includePaths || options.filter || undefined,
+      exclude: options.exclude || undefined,
+      always: options.always,
+      respectGitignore: true,
+
+      modified: options.modified,
+      changed: options.changed,
+
+      charLimit: options.charLimit,
+      addLineNumbers: options.withLineNumbers,
+      // The user-facing "max file size" is a per-file gate that `always`
+      // patterns are meant to override, which is `sizeGate` — not the SDK's
+      // `maxFileSize` memory ceiling, which nothing lifts. Left unset the gate
+      // is disabled rather than falling back to the SDK's 256KB default, so
+      // existing projects keep the files they had before this upgrade.
+      sizeGate: options.maxFileSize ?? false,
+      maxTotalSize: options.maxTotalSize,
+      maxFileCount: options.maxFileCount,
+      sort: options.sort,
+      // Budgets keep the head of the sorted list, so "recently modified first"
+      // only holds descending.
+      sortOrder: options.sort === "modified" ? "desc" : undefined,
+
+      // Redaction runs by default from 0.16 and still misfires on ordinary
+      // source, which would silently corrupt the context handed to an agent.
+      secretsGuard: false,
+    };
+  }
+
+  private mapBudgetStats(result: CopyResult): CopyTreeBudgetStats {
+    const stats = result.stats;
+    return {
+      estimatedOutputChars: stats.estimatedOutputChars,
+      estimatedTokens: stats.estimatedTokens,
+      noFilesMatched: stats.noFilesMatched,
+      excluded: this.mapExclusions(stats.excluded),
+      truncated: stats.truncated,
+      truncatedCount: stats.truncatedCount,
+      truncatedBy: stats.truncatedBy,
+    };
+  }
+
+  private mapExclusions(excluded: CopyResult["stats"]["excluded"]): CopyTreeExclusionSummary {
+    const byReason: Partial<Record<CopyTreeExclusionReason, number>> = excluded?.byReason ?? {};
+    return { total: excluded?.total ?? 0, byReason };
+  }
+
+  /**
+   * Unreadable files are already accounted for as exclusions, so a scan error
+   * is a logged detail rather than a reason to fail the whole run.
+   */
+  private logScanErrors(result: CopyResult): void {
+    const scanErrors = result.stats.scanErrors;
+    if (scanErrors && scanErrors.length > 0) {
+      logWarn("CopyTree reported scan errors", { count: scanErrors.length });
+    }
+  }
+
+  private errorMessageFor(error: unknown, fallback: string): string {
     if (error instanceof Error) {
-      const errorName = error.name;
-      const errorCode = (error as Error & { code?: string }).code;
+      if (error.name === "AbortError") return CANCELLED_MESSAGE;
 
-      if (errorName === "ValidationError") {
-        return {
-          content: "",
-          fileCount: 0,
-          error: `Validation Error: ${error.message}`,
-        };
-      }
-
-      if (errorName === "CopyTreeError" || errorCode) {
-        return {
-          content: "",
-          fileCount: 0,
-          error: `CopyTree Error${errorCode ? ` [${errorCode}]` : ""}: ${error.message}`,
-        };
-      }
-
-      return {
-        content: "",
-        fileCount: 0,
-        error: `CopyTree Error: ${error.message}`,
-      };
+      const code = (error as Error & { code?: string }).code;
+      if (code && ERROR_CODE_MESSAGES[code]) return ERROR_CODE_MESSAGES[code];
+      if (error.name === "ValidationError") return "Context settings are invalid";
     }
 
+    logWarn("CopyTree operation failed", { error });
+    return fallback;
+  }
+
+  private handleError(error: unknown): CopyTreeResult {
     return {
       content: "",
       fileCount: 0,
-      error: `CopyTree Error: ${String(error)}`,
+      error: this.errorMessageFor(error, GENERATE_FAILED_MESSAGE),
     };
   }
 

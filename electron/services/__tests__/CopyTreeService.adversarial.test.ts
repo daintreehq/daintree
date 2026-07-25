@@ -115,44 +115,44 @@ describe("CopyTreeService adversarial", () => {
       expect(emitters.length).toBe(1);
     });
 
-    emitters[0]({ stage: "before", percent: 10 } as ProgressEvent);
+    emitters[0]({ stage: "discover", percent: 10, message: "Discovering" });
     copyTreeService.cancel("op-p");
-    emitters[0]({ stage: "after", percent: 90 } as ProgressEvent);
+    emitters[0]({ stage: "format", percent: 90, message: "Formatting" });
 
     await pending;
 
-    expect(progressCalls).toEqual(["before"]);
+    expect(progressCalls).toEqual(["discover"]);
   });
 
-  it("ENOENT error from copy is mapped to a stable CopyTree Error code", async () => {
+  it("ENOENT error from copy is mapped to a stable user-facing message", async () => {
     const err = new Error("missing file") as Error & { code?: string };
     err.code = "ENOENT";
     copyMock.mockRejectedValue(err);
 
     const result = await copyTreeService.generate(tempDir);
 
-    expect(result.error).toBe("CopyTree Error [ENOENT]: missing file");
+    expect(result.error).toBe("Project path is unavailable");
     expect(result.content).toBe("");
     expect(result.fileCount).toBe(0);
   });
 
-  it("EACCES error from copy is mapped to a stable CopyTree Error code", async () => {
+  it("EACCES error from copy is mapped to a stable user-facing message", async () => {
     const err = new Error("permission denied") as Error & { code?: string };
     err.code = "EACCES";
     copyMock.mockRejectedValue(err);
 
     const result = await copyTreeService.generate(tempDir);
 
-    expect(result.error).toBe("CopyTree Error [EACCES]: permission denied");
+    expect(result.error).toBe("Can't read the project files");
   });
 
-  it("non-Error thrown value is still wrapped into a CopyTree Error", async () => {
+  it("non-Error thrown value does not reach the renderer verbatim", async () => {
     copyMock.mockRejectedValue("unexpected string");
 
     const result = await copyTreeService.generate(tempDir);
 
-    expect(result.error).toContain("CopyTree Error");
-    expect(result.error).toContain("unexpected string");
+    expect(result.error).toBe("Failed to generate context");
+    expect(result.error).not.toContain("unexpected string");
   });
 
   it("activeOperations map is drained on success so future cancels return false", async () => {

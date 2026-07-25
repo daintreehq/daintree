@@ -31,7 +31,7 @@ function renderTab(overrides: Partial<React.ComponentProps<typeof ContextTab>> =
 const successResult: CopyTreeTestConfigResult = {
   includedFiles: 5,
   includedSize: 2048,
-  excluded: { byTruncation: 1, bySize: 2, byPattern: 3 },
+  excluded: { total: 6, byReason: { gitignore: 4, sizeGate: 2 } },
 };
 
 beforeEach(() => {
@@ -52,7 +52,7 @@ describe("ContextTab copy", () => {
     expect(screen.getByText("Test configuration")).toBeTruthy();
     expect(screen.getByText("Max context size (bytes)")).toBeTruthy();
     expect(screen.getByText("Max file size (bytes)")).toBeTruthy();
-    expect(screen.getByText("Char limit (per file)")).toBeTruthy();
+    expect(screen.getByText("Character budget")).toBeTruthy();
     expect(screen.getByText("File priority strategy")).toBeTruthy();
     expect(screen.getByText("Always include (glob patterns)")).toBeTruthy();
     expect(screen.getByText("Always exclude (glob patterns)")).toBeTruthy();
@@ -202,12 +202,68 @@ describe("ContextTab test-config button", () => {
     });
     expect(screen.queryByRole("status", { name: "Running test configuration" })).toBeNull();
   });
+});
+
+describe("ContextTab dry-run reporting", () => {
+  async function runWith(result: Partial<CopyTreeTestConfigResult>) {
+    testConfigMock.mockResolvedValue({ ...successResult, ...result });
+    renderTab();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Test config" }));
+    });
+    await waitFor(() => {
+      expect(screen.getByText("5 files would be included")).toBeTruthy();
+    });
+  }
+
+  it("abbreviates large token estimates and leaves small ones exact", async () => {
+    await runWith({ estimatedTokens: 78_400 });
+    expect(screen.getByText("~78k tokens")).toBeTruthy();
+  });
+
+  it("shows an exact count below a thousand tokens", async () => {
+    await runWith({ estimatedTokens: 640 });
+    expect(screen.getByText("~640 tokens")).toBeTruthy();
+  });
+
+  it("omits the token estimate when the dry run did not report one", async () => {
+    await runWith({ estimatedTokens: undefined });
+    expect(screen.queryByText(/tokens/)).toBeNull();
+  });
+
+  it("names the largest exclusion reasons behind the excluded count", async () => {
+    await runWith({
+      excluded: { total: 12, byReason: { gitignore: 7, sizeGate: 4, duplicate: 1 } },
+    });
+
+    const line = screen.getByText(/12 excluded/).textContent ?? "";
+    expect(line).toContain("gitignore");
+    expect(line).toContain("max file size");
+    // Ordered by count, so the largest reason leads.
+    expect(line.indexOf("gitignore")).toBeLessThan(line.indexOf("max file size"));
+  });
+
+  it("stays quiet when nothing was excluded", async () => {
+    await runWith({ excluded: { total: 0, byReason: {} } });
+    expect(screen.queryByText(/\d+ excluded/)).toBeNull();
+  });
+
+  it("warns which budget dropped files when the run truncated", async () => {
+    await runWith({ truncated: true, truncatedCount: 9, truncatedBy: "charLimit" });
+
+    const warning = screen.getByText(/9 files were dropped/).textContent ?? "";
+    expect(warning).toContain("character budget");
+  });
+
+  it("shows no truncation warning on an untruncated run", async () => {
+    await runWith({ truncated: false });
+    expect(screen.queryByText(/were dropped by/)).toBeNull();
+  });
 
   it("renders an error card when the dry-run fails", async () => {
     testConfigMock.mockResolvedValue({
       includedFiles: 0,
       includedSize: 0,
-      excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
       error: "Boom",
     } satisfies CopyTreeTestConfigResult);
     renderTab();
@@ -289,7 +345,6 @@ describe("ContextTab file-list preview", () => {
     return {
       includedFiles: files.length,
       includedSize: files.reduce((sum, file) => sum + file.size, 0),
-      excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
       files,
     };
   }

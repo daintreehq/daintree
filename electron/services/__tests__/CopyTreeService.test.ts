@@ -24,14 +24,23 @@ describe("CopyTreeService", () => {
     configCreateMock.mockResolvedValue(undefined);
     copyMock.mockResolvedValue({
       output: "<context />",
+      outputFormatVersion: "copytree-xml@1",
       manifest: [],
       stats: {
         totalFiles: 1,
         totalSize: 10,
         duration: 5,
+        estimatedOutputChars: 400,
+        estimatedTokens: 100,
+        noFilesMatched: false,
+        excluded: { total: 0, byReason: {} },
       },
     });
   });
+
+  function sdkOptions() {
+    return copyMock.mock.calls[0][1] as Record<string, unknown>;
+  }
 
   afterEach(async () => {
     copyTreeService.cancelAll();
@@ -63,9 +72,10 @@ describe("CopyTreeService", () => {
 
     expect(result).toEqual(
       expect.objectContaining({
-        error: "Validation Error: Bad include pattern",
+        error: "Context settings are invalid",
       })
     );
+    expect(result.error).not.toContain("Bad include pattern");
   });
 
   it("cancels a specific in-flight operation by trace id", async () => {
@@ -215,9 +225,9 @@ describe("CopyTreeService", () => {
   describe("testConfig", () => {
     it("returns files populated from the SDK manifest", async () => {
       const manifest = [
-        { path: "src/index.ts", size: 1024 },
-        { path: "src/utils.ts", size: 512 },
-        { path: "README.md", size: 256 },
+        { path: "src/index.ts", size: 1024, outcome: "included" },
+        { path: "src/utils.ts", size: 512, outcome: "included" },
+        { path: "README.md", size: 256, outcome: "included" },
       ];
       copyMock.mockResolvedValue({
         output: "",
@@ -239,14 +249,25 @@ describe("CopyTreeService", () => {
       }
     });
 
-    it("maps stats onto includedFiles and includedSize", async () => {
-      const stats = { totalFiles: 7, totalSize: 4096, duration: 5, dryRun: true };
-      copyMock.mockResolvedValue({ output: "", manifest: [], stats });
+    it("keeps includedFiles and includedSize consistent with the previewed files", async () => {
+      // stats.totalFiles counts everything the run processed, which in 0.16
+      // includes outcomes that never reach the output, so the headline numbers
+      // are derived from the same list the preview renders.
+      copyMock.mockResolvedValue({
+        output: "",
+        manifest: [
+          { path: "kept.ts", size: 1024, outcome: "included" },
+          { path: "gone.mp4", size: 3072, outcome: "excluded:binaryExtension" },
+        ],
+        stats: { totalFiles: 7, totalSize: 4096, duration: 5, dryRun: true },
+      });
 
       const result = await copyTreeService.testConfig(tempDir);
 
-      expect(result.includedFiles).toBe(stats.totalFiles);
-      expect(result.includedSize).toBe(stats.totalSize);
+      expect(result.includedFiles).toBe(result.files?.length);
+      expect(result.includedSize).toBe(result.files?.reduce((sum, file) => sum + file.size, 0));
+      expect(result.includedFiles).toBe(1);
+      expect(result.includedSize).toBe(1024);
     });
 
     it("returns an empty files array when the manifest is empty", async () => {
@@ -285,14 +306,205 @@ describe("CopyTreeService", () => {
     });
   });
 
-  it("omits config from sdkOptions when ConfigManager.create() fails", async () => {
-    configCreateMock.mockRejectedValue(new Error("No config"));
+  describe("configuration loading", () => {
+    it("loads configuration without the user config directory", async () => {
+      await copyTreeService.generate(tempDir);
 
-    await copyTreeService.generate(tempDir);
+      expect(configCreateMock).toHaveBeenCalledWith(expect.objectContaining({ userConfig: false }));
+    });
 
-    expect(copyMock).toHaveBeenCalledTimes(1);
-    const sdkOptions = copyMock.mock.calls[0][1] as Record<string, unknown>;
-    expect(sdkOptions).not.toHaveProperty("config");
-    expect("config" in sdkOptions).toBe(false);
+    it("refuses to run when config fails, rather than generating without exclusions", async () => {
+      configCreateMock.mockRejectedValue(new Error("No config"));
+
+      const result = await copyTreeService.generate(tempDir);
+
+      expect(copyMock).not.toHaveBeenCalled();
+      expect(result.error).toBe("Context configuration couldn't be loaded");
+      expect(result.content).toBe("");
+    });
+
+    it("fails the dry run closed when config cannot be loaded", async () => {
+      configCreateMock.mockRejectedValue(new Error("No config"));
+
+      const result = await copyTreeService.testConfig(tempDir);
+
+      expect(copyMock).not.toHaveBeenCalled();
+      expect(result.error).toBe("Context configuration couldn't be loaded");
+      expect(result.includedFiles).toBe(0);
+    });
+  });
+
+  describe("SDK option policy", () => {
+    it("disables the per-file gate when the user set no max file size", async () => {
+      await copyTreeService.generate(tempDir);
+
+      expect(sdkOptions().sizeGate).toBe(false);
+    });
+
+    it("routes the user's max file size to the overridable gate, not the memory ceiling", async () => {
+      await copyTreeService.generate(tempDir, { maxFileSize: 50_000 });
+
+      const options = sdkOptions();
+      expect(options.sizeGate).toBe(50_000);
+      // maxFileSize is the SDK's memory ceiling and cannot be lifted by
+      // `always`, so the user-facing limit must not be routed there.
+      expect(options.maxFileSize).toBeUndefined();
+    });
+
+    it("keeps redaction off so it cannot rewrite source handed to an agent", async () => {
+      await copyTreeService.generate(tempDir);
+
+      expect(sdkOptions().secretsGuard).toBe(false);
+    });
+
+    it("orders a modified-first run descending so budgets keep the newest files", async () => {
+      await copyTreeService.generate(tempDir, { sort: "modified" });
+
+      expect(sdkOptions()).toMatchObject({ sort: "modified", sortOrder: "desc" });
+    });
+
+    it("leaves sort order unset for non-modified strategies", async () => {
+      await copyTreeService.generate(tempDir, { sort: "path" });
+
+      expect(sdkOptions().sortOrder).toBeUndefined();
+    });
+
+    it("passes the remaining budgets through untouched", async () => {
+      await copyTreeService.generate(tempDir, {
+        maxTotalSize: 1234,
+        maxFileCount: 7,
+        charLimit: 99,
+      });
+
+      expect(sdkOptions()).toMatchObject({
+        maxTotalSize: 1234,
+        maxFileCount: 7,
+        charLimit: 99,
+      });
+    });
+  });
+
+  describe("result mapping", () => {
+    it("forwards budget estimates and the format version to the renderer", async () => {
+      const result = await copyTreeService.generate(tempDir);
+
+      expect(result.outputFormatVersion).toBe("copytree-xml@1");
+      expect(result.stats).toMatchObject({
+        estimatedTokens: 100,
+        estimatedOutputChars: 400,
+        noFilesMatched: false,
+      });
+    });
+
+    it("counts only files the dry run would actually include", async () => {
+      copyMock.mockResolvedValue({
+        output: "",
+        outputFormatVersion: null,
+        manifest: [
+          { path: "a.ts", size: 10, outcome: "included" },
+          { path: "big.bin", size: 900, outcome: "excluded:sizeGate" },
+          { path: "lock.json", size: 40, outcome: "structure-only" },
+          { path: "b.ts", size: 20, outcome: "included" },
+        ],
+        stats: {
+          totalFiles: 4,
+          totalSize: 970,
+          duration: 1,
+          estimatedOutputChars: 0,
+          estimatedTokens: 0,
+          noFilesMatched: false,
+          excluded: { total: 1, byReason: { sizeGate: 1 } },
+        },
+      });
+
+      const result = await copyTreeService.testConfig(tempDir);
+
+      expect(result.files).toEqual([
+        { path: "a.ts", size: 10 },
+        { path: "b.ts", size: 20 },
+      ]);
+      expect(result.includedFiles).toBe(2);
+      expect(result.includedSize).toBe(30);
+      expect(result.excluded).toEqual({ total: 1, byReason: { sizeGate: 1 } });
+    });
+
+    it("surfaces which budget truncated the run", async () => {
+      copyMock.mockResolvedValue({
+        output: "",
+        outputFormatVersion: null,
+        manifest: [],
+        stats: {
+          totalFiles: 0,
+          totalSize: 0,
+          duration: 1,
+          estimatedOutputChars: 0,
+          estimatedTokens: 0,
+          noFilesMatched: false,
+          excluded: { total: 3, byReason: { totalSizeBudget: 3 } },
+          truncated: true,
+          truncatedCount: 3,
+          truncatedBy: "maxTotalSize",
+        },
+      });
+
+      const result = await copyTreeService.testConfig(tempDir);
+
+      expect(result).toMatchObject({
+        truncated: true,
+        truncatedCount: 3,
+        truncatedBy: "maxTotalSize",
+      });
+    });
+
+    it("does not fail a run that reported recoverable scan errors", async () => {
+      copyMock.mockResolvedValue({
+        output: "<context />",
+        outputFormatVersion: "copytree-xml@1",
+        manifest: [],
+        stats: {
+          totalFiles: 2,
+          totalSize: 20,
+          duration: 1,
+          estimatedOutputChars: 0,
+          estimatedTokens: 0,
+          noFilesMatched: false,
+          excluded: { total: 1, byReason: { unreadable: 1 } },
+          scanErrors: ["EACCES: locked.txt"],
+        },
+      });
+
+      const result = await copyTreeService.generate(tempDir);
+
+      expect(result.error).toBeUndefined();
+      expect(result.fileCount).toBe(2);
+    });
+  });
+
+  describe("error message sanitization", () => {
+    it.each([
+      ["ERR_PATH_NOT_FOUND", "Project path is unavailable"],
+      ["ERR_SCOPE_OUTSIDE_ROOT", "Selected paths must stay inside the project"],
+      ["ERR_NO_FILES_MATCHED", "No files matched the current context settings"],
+      ["ERR_CONFIG_INVALID", "Context configuration couldn't be loaded"],
+    ])("maps %s to a static message", async (code, expected) => {
+      copyMock.mockRejectedValue(
+        Object.assign(new Error(`/Users/someone/secret/path exploded`), { code })
+      );
+
+      const result = await copyTreeService.generate(tempDir);
+
+      expect(result.error).toBe(expected);
+    });
+
+    it("never leaks an unrecognized SDK message to the renderer", async () => {
+      copyMock.mockRejectedValue(
+        Object.assign(new Error("/Users/someone/private/repo is bad"), { code: "ERR_WAT" })
+      );
+
+      const result = await copyTreeService.generate(tempDir);
+
+      expect(result.error).toBe("Failed to generate context");
+      expect(result.error).not.toContain("/Users/someone");
+    });
   });
 });

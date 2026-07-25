@@ -442,15 +442,15 @@ export interface RunCommand {
 
 /** CopyTree context generation settings */
 export interface CopyTreeSettings {
-  /** Maximum total context size in bytes (e.g., 1MB, 5MB, 10MB). Undefined = unlimited */
+  /** Maximum total context size in bytes. Undefined falls back to CopyTree's 100MB ceiling */
   maxContextSize?: number;
-  /** Maximum individual file size in bytes. Files larger are skipped */
+  /** Maximum individual file size in bytes. Undefined means no per-file limit */
   maxFileSize?: number;
-  /** Character limit per file for truncation. Files exceeding this will be truncated */
+  /** Character budget across all file content, not per file */
   charLimit?: number;
-  /** Truncation strategy: "all" (no truncation) or "modified" (newest first when limits hit) */
+  /** Retention order when a budget drops files: "all" (path order) or "modified" (newest first) */
   strategy?: "all" | "modified";
-  /** Glob patterns to always include, even if old */
+  /** Glob patterns to always include, overriding excludes and the per-file size limit */
   alwaysInclude?: string[];
   /** Glob patterns to always exclude from context */
   alwaysExclude?: string[];
