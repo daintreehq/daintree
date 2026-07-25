@@ -307,20 +307,67 @@ AppPaletteDialog.Header = function AppPaletteHeader({
   );
 };
 
+/**
+ * Keys the body forwards to the owning palette's keydown handler when the
+ * scroll container itself holds focus. Tab and Shift+Tab are deliberately
+ * absent: the container is a real tab stop (see `tabIndex` below) and palettes
+ * such as the project switcher render controls after it that must stay
+ * reachable by native traversal. PageUp/PageDown/Space are left to the
+ * browser so the region keeps its native scrolling.
+ */
+const BODY_NAVIGATION_KEYS = new Set(["ArrowUp", "ArrowDown", "Home", "End", "Enter"]);
+
 interface AppPaletteBodyProps {
   children: React.ReactNode;
   className?: string;
   maxHeight?: string;
+  /** Accessible name for the focusable results region. */
+  ariaLabel: string;
+  /**
+   * The same active-descendant IDREF the query input carries. Mirrored here so
+   * the active option keeps being announced once focus moves off the input —
+   * only the element holding DOM focus acts as the active-descendant owner, so
+   * carrying it on both is not a double-announcement.
+   */
+  activeDescendant?: string;
+  /**
+   * The palette's input keydown handler. Required rather than optional so a new
+   * consumer cannot silently reintroduce the dead-end scroll region that made
+   * arrow and Enter navigation stop working after Tab (#11431).
+   */
+  onNavigationKeyDown: React.KeyboardEventHandler<HTMLDivElement>;
 }
 
 AppPaletteDialog.Body = function AppPaletteBody({
   children,
   className,
   maxHeight = "max-h-[50vh]",
+  ariaLabel,
+  activeDescendant,
+  onNavigationKeyDown,
 }: AppPaletteBodyProps) {
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      // Only when the scroller itself owns focus. Palette bodies also host
+      // their own controls (the project switcher's scratch section), and Enter
+      // on one of those must activate the button, not confirm a result.
+      if (e.target !== e.currentTarget) return;
+      if (!BODY_NAVIGATION_KEYS.has(e.key)) return;
+      onNavigationKeyDown(e);
+    },
+    [onNavigationKeyDown]
+  );
+
   return (
     <ScrollShadow
+      // Load-bearing for axe's `scrollable-region-focusable` (WCAG 2.1.1): the
+      // overflow container must be reachable by keyboard. Removing it — or
+      // demoting it to -1 — reopens the violation fixed in 8ec243398.
       tabIndex={0}
+      role="group"
+      aria-label={ariaLabel}
+      aria-activedescendant={activeDescendant}
+      onKeyDown={handleKeyDown}
       className={cn(
         maxHeight,
         "min-h-32 transition-[height] motion-reduce:transition-none palette-body-height",
