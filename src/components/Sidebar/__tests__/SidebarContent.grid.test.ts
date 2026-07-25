@@ -280,13 +280,9 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
     it("keeps the main worktree as the only row pinned outside Virtuoso (#11433)", () => {
       // A second pinned slot used to hold whichever worktree happened to sit on
       // `develop`/`trunk`/`next`, which removed it from the counts and the list.
-      // Every worktree other than main now reaches the grid through sidebarItems.
-      const keyboardItemsMemo = source.slice(
-        source.indexOf("const keyboardItems = useMemo"),
-        source.indexOf("const {\n    gridRef,")
-      );
-      expect(keyboardItemsMemo).not.toBe("");
-      expect(keyboardItemsMemo.match(/isPinned: true/g)).toHaveLength(1);
+      // Every other worktree now reaches the grid through sidebarItems. The test
+      // above pins down *which* row stays pinned; this one pins the count.
+      expect(source.match(/isPinned: true/g)).toHaveLength(1);
     });
   });
 
