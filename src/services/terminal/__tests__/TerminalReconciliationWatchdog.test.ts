@@ -679,9 +679,12 @@ describe("TerminalReconciliationWatchdog", () => {
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
       // Every control was repaired on the first tick — the alt pane took none
       // of the per-tick allowance.
-      expect(vi.mocked(deps.reconcileRevealGeometry).mock.calls.map(([id]) => id).sort()).toEqual(
-        controls.map((_, i) => `control${i}`)
-      );
+      expect(
+        vi
+          .mocked(deps.reconcileRevealGeometry)
+          .mock.calls.map(([id]) => id)
+          .sort()
+      ).toEqual(controls.map((_, i) => `control${i}`));
 
       // Far more ticks than the breaker needs to trip on a diverged pane.
       for (let i = 0; i < 12; i++) vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
