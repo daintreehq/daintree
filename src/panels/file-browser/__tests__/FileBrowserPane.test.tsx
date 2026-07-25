@@ -125,7 +125,10 @@ vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
 }));
 
 const { copyContextWithFeedbackMock } = vi.hoisted(() => ({
-  copyContextWithFeedbackMock: vi.fn(() => Promise.resolve()),
+  copyContextWithFeedbackMock:
+    vi.fn<typeof import("@/hooks/useWorktreeActions").copyContextWithFeedback>(() =>
+      Promise.resolve()
+    ),
 }));
 vi.mock("@/hooks/useWorktreeActions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useWorktreeActions")>()),
@@ -986,18 +989,15 @@ describe("folder context menu", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Copy context" }));
     });
-    return copyContextWithFeedbackMock.mock.calls[0]?.[2] as {
-      scopePaths?: string[];
-      includePaths?: string[];
-    };
+    return copyContextWithFeedbackMock.mock.calls[0]?.[2];
   }
 
   it("scopes the copy to the folder instead of building a match pattern", async () => {
     const options = await copyFolderContext();
 
-    expect(options.scopePaths).toEqual([FOLDER_ROW.path]);
+    expect(options?.scopePaths).toEqual([FOLDER_ROW.path]);
     // Patterns are what made the folder copy diverge from a whole-worktree one.
-    expect(options.includePaths).toBeUndefined();
+    expect(options?.includePaths).toBeUndefined();
   });
 
   it("sends the row path untouched, with no escaping or glob suffix", async () => {
@@ -1005,7 +1005,7 @@ describe("folder context menu", () => {
 
     // `src/[draft]` survives verbatim: scope takes literal paths, so escaping
     // it for minimatch would now name a folder that doesn't exist.
-    expect(options.scopePaths?.[0]).toBe(FOLDER_ROW.path);
+    expect(options?.scopePaths?.[0]).toBe(FOLDER_ROW.path);
   });
 
   it("targets the worktree the pane is bound to", async () => {

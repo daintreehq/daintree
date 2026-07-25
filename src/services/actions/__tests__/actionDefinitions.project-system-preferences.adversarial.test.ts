@@ -647,7 +647,7 @@ describe("system action hardening", () => {
       options: { scopePaths: ["src/panels"] },
     });
 
-    const [, options] = mocks.copyTreeClient.generate.mock.calls[0];
+    const options = mocks.copyTreeClient.generate.mock.calls[0]?.[1];
     // These actions validate against their own copy of the options schema, so a
     // field added only to the IPC schema is stripped before it ever leaves here.
     expect(options.scopePaths).toEqual(["src/panels"]);

@@ -1024,7 +1024,7 @@ describe("worktree action hardening", () => {
       activeWorktreeId: "wt-1",
     } as never);
 
-    const [, options] = mocks.copyTreeClient.generateAndCopyFile.mock.calls[0];
+    const options = mocks.copyTreeClient.generateAndCopyFile.mock.calls[0]?.[1];
     // Scope is a literal walk root, filter is a pattern — folding one into the
     // other is what made folder copies ignore the project's ignore rules.
     expect(options.scopePaths).toEqual(["src/panels"]);
