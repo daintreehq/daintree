@@ -91,11 +91,17 @@ describe("GitInitDialog", () => {
     });
   });
 
-  function renderDialog(overrides: { onSuccess?: () => void; onCancel?: () => void } = {}) {
+  function renderDialog(
+    overrides: {
+      onSuccess?: () => void;
+      onCancel?: () => void;
+      directoryPath?: string;
+    } = {}
+  ) {
     return render(
       <GitInitDialog
         isOpen={true}
-        directoryPath="/tmp/new-repo"
+        directoryPath={overrides.directoryPath ?? "/tmp/new-repo"}
         onSuccess={overrides.onSuccess ?? vi.fn()}
         onCancel={overrides.onCancel ?? vi.fn()}
       />
@@ -131,6 +137,23 @@ describe("GitInitDialog", () => {
       );
     });
   });
+
+  // The caption renders as two spans so a deep path ellipsizes its ancestors
+  // instead of its leaf. Measuring the leaf against a normalized path while
+  // slicing it out of the raw one duplicated characters into the visible text.
+  it.each([
+    ["/tmp/projects/new-repo", "/tmp/projects/new-repo"],
+    ["/tmp/projects/new-repo/", "/tmp/projects/new-repo"],
+    ["/tmp/projects/new-repo/.", "/tmp/projects/new-repo"],
+    ["C:\\projects\\new-repo\\", "C:/projects/new-repo"],
+  ])(
+    "renders %s as the destination path with no dropped or duplicated characters",
+    (directoryPath, expected) => {
+      renderDialog({ directoryPath });
+
+      expect(screen.getByTitle(expected).textContent).toBe(expected);
+    }
+  );
 
   it("offers every registry template in order and preselects the default", () => {
     renderDialog();

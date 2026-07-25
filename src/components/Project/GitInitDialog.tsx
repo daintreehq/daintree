@@ -7,7 +7,7 @@ import { FolderGit2 } from "@/components/icons";
 import { projectClient } from "@/clients";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { basename } from "@shared/utils/path";
+import { basename, normalize } from "@shared/utils/path";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import { ProjectEmojiButton } from "./ProjectEmojiButton";
 import {
@@ -61,6 +61,15 @@ export function GitInitDialog({
   // The name is seeded from the folder, so this only ever fires after the user
   // clears the field — the one state where the start button silently disables.
   const isNameMissing = trimmedProjectName === "";
+
+  // The leaf folder is what identifies the project, so it stays pinned while the
+  // ancestors truncate — a plain `truncate` eats the tail and hides it. Both
+  // halves come off the *normalized* path: `basename` normalizes internally, so
+  // slicing the raw string by its length duplicates characters whenever
+  // normalizing shortens the input (a trailing separator renders "…/pproj").
+  const displayPath = normalize(directoryPath);
+  const pathLeaf = basename(displayPath);
+  const pathAncestors = displayPath.slice(0, displayPath.length - pathLeaf.length);
 
   const finalizeSuccess = useCallback(() => {
     if (hasFinalizedSuccessRef.current) {
@@ -218,7 +227,7 @@ export function GitInitDialog({
         {!isInitializing && <AppDialog.CloseButton />}
       </AppDialog.Header>
 
-      <AppDialog.Body className="space-y-4">
+      <AppDialog.Body className="space-y-5">
         <div className="space-y-1.5">
           <label
             htmlFor="git-init-project-name"
@@ -241,17 +250,20 @@ export function GitInitDialog({
               disabled={configDisabled}
               aria-invalid={isNameMissing}
               aria-describedby={isNameMissing ? nameErrorId : undefined}
-              className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50 aria-invalid:border-status-error"
+              className="min-h-9 w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50 aria-invalid:border-status-error"
               placeholder="My project"
             />
           </div>
           {isNameMissing && (
-            <p id={nameErrorId} role="alert" className="text-xs text-status-error">
+            <p id={nameErrorId} role="alert" className="ml-11 text-xs text-status-error">
               Enter a project name
             </p>
           )}
-          <p className="truncate text-xs font-mono text-daintree-text/40" title={directoryPath}>
-            {directoryPath}
+          <p className="ml-11 flex text-xs font-mono text-daintree-text/50" title={displayPath}>
+            <span className="min-w-0 truncate">{pathAncestors}</span>
+            {/* Pinned against the ancestors, but still capped: a leaf wider than
+                the dialog would otherwise overflow into a horizontal scroll. */}
+            <span className="max-w-full shrink-0 truncate">{pathLeaf}</span>
           </p>
         </div>
 
@@ -266,7 +278,7 @@ export function GitInitDialog({
               if (isGitignoreTemplateId(e.target.value)) setGitignoreTemplate(e.target.value);
             }}
             disabled={configDisabled}
-            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
+            className="min-h-9 w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
           >
             {GITIGNORE_TEMPLATE_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -276,38 +288,38 @@ export function GitInitDialog({
           </select>
         </div>
 
-        <div className="space-y-1">
+        <div className="space-y-3">
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
               checked={createInitialCommit}
               onChange={(e) => setCreateInitialCommit(e.target.checked)}
               disabled={configDisabled}
-              className="rounded border-daintree-border accent-daintree-accent"
+              className="h-4 w-4 shrink-0 rounded border-daintree-border accent-daintree-accent"
             />
             <span className="text-sm text-daintree-text/70">Create initial commit</span>
           </label>
-        </div>
 
-        {createInitialCommit && (
-          <div className="space-y-1.5">
-            <label
-              htmlFor="git-init-commit-message"
-              className="text-sm font-medium text-daintree-text/70"
-            >
-              Initial commit message
-            </label>
-            <input
-              id="git-init-commit-message"
-              type="text"
-              value={initialCommitMessage}
-              onChange={(e) => setInitialCommitMessage(e.target.value)}
-              disabled={configDisabled}
-              placeholder="Initial commit"
-              className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
-            />
-          </div>
-        )}
+          {createInitialCommit && (
+            <div className="space-y-1.5">
+              <label
+                htmlFor="git-init-commit-message"
+                className="text-sm font-medium text-daintree-text/70"
+              >
+                Initial commit message
+              </label>
+              <input
+                id="git-init-commit-message"
+                type="text"
+                value={initialCommitMessage}
+                onChange={(e) => setInitialCommitMessage(e.target.value)}
+                disabled={configDisabled}
+                placeholder="Initial commit"
+                className="min-h-9 w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
+              />
+            </div>
+          )}
+        </div>
 
         {showProgress && (
           <div className="rounded-lg bg-muted/50 p-4 min-h-[120px] max-h-[300px] overflow-y-auto font-mono text-sm">
