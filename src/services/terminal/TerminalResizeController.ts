@@ -569,7 +569,10 @@ export class TerminalResizeController {
    *
    * @returns true once a fresh measurement landed (whether or not a resize was
    * needed); false when the box is not measurable yet (zero/occluded/transitional
-   * layout) so the reveal sweep retries on a later frame.
+   * layout) so the reveal sweep retries on a later frame. The boolean is
+   * measurability, NOT convergence — an alt-buffer pane reports true without
+   * touching geometry at all, so no caller may treat it as proof the grid now
+   * matches the container.
    */
   reconcileGeometryFresh(id: string): boolean {
     const managed = this.deps.getInstance(id);

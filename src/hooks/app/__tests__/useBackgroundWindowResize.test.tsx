@@ -11,6 +11,16 @@ const onBackgroundResizeMock = vi.hoisted(() =>
 const applyBackgroundWindowResizeMock = vi.hoisted(() => vi.fn());
 const resetBackgroundResizeBasisMock = vi.hoisted(() => vi.fn());
 
+type LifecyclePhase = "cached" | "active" | "revealed";
+
+const subscribeProjectViewLifecycleMock = vi.hoisted(() =>
+  vi.fn<(cb: (phase: LifecyclePhase) => void) => () => void>()
+);
+
+vi.mock("@/lib/viewCacheState", () => ({
+  subscribeProjectViewLifecycle: subscribeProjectViewLifecycleMock,
+}));
+
 vi.stubGlobal("window", {
   ...globalThis.window,
   electron: {
@@ -35,15 +45,24 @@ function setVisibility(state: "visible" | "hidden") {
 
 describe("useBackgroundWindowResize", () => {
   let lastCallback: ((payload: ResizePayload) => void) | null = null;
+  let emitPhase: (phase: LifecyclePhase) => void;
   let unsubscribe: ReturnType<typeof vi.fn>;
+  let unsubscribeLifecycle: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     unsubscribe = vi.fn();
+    unsubscribeLifecycle = vi.fn();
     lastCallback = null;
+    const phaseHandlers: Array<(phase: LifecyclePhase) => void> = [];
+    emitPhase = (phase) => phaseHandlers.forEach((handler) => handler(phase));
     onBackgroundResizeMock.mockImplementation((cb) => {
       lastCallback = cb;
       return unsubscribe as () => void;
+    });
+    subscribeProjectViewLifecycleMock.mockImplementation((cb) => {
+      phaseHandlers.push(cb);
+      return unsubscribeLifecycle as () => void;
     });
     setVisibility("hidden");
   });
@@ -94,11 +113,38 @@ describe("useBackgroundWindowResize", () => {
     expect(resetBackgroundResizeBasisMock).not.toHaveBeenCalled();
   });
 
-  it("unsubscribes and removes the visibility listener on unmount", () => {
+  it("resets the basis on every reactivation phase, not just reveal", () => {
+    // A switch superseded mid-flight delivers warm-activated alone, so keying
+    // the reset on "revealed" would strand the anchor for that view.
+    renderHook(() => useBackgroundWindowResize());
+
+    act(() => {
+      emitPhase("active");
+    });
+    expect(resetBackgroundResizeBasisMock).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      emitPhase("revealed");
+    });
+    expect(resetBackgroundResizeBasisMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reset the basis when the view is cached", () => {
+    renderHook(() => useBackgroundWindowResize());
+
+    act(() => {
+      emitPhase("cached");
+    });
+
+    expect(resetBackgroundResizeBasisMock).not.toHaveBeenCalled();
+  });
+
+  it("unsubscribes from both signals and removes the visibility listener on unmount", () => {
     const { unmount } = renderHook(() => useBackgroundWindowResize());
     unmount();
 
     expect(unsubscribe).toHaveBeenCalled();
+    expect(unsubscribeLifecycle).toHaveBeenCalled();
 
     setVisibility("visible");
     document.dispatchEvent(new Event("visibilitychange"));

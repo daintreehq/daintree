@@ -1,5 +1,6 @@
 import { Terminal, IBufferRange } from "@xterm/xterm";
 import { isMac } from "@/lib/platform";
+import { isProjectViewCached } from "@/lib/viewCacheState";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import type { AgentState } from "@/types";
@@ -1707,9 +1708,17 @@ class TerminalInstanceService {
    * time it's seen. Every event computes absolute targets from that anchor,
    * so repeated resizes never compound and a terminal skipped in one pass
    * (resize-locked) still lands on the correct size in the next.
+   *
+   * Gated on `isProjectViewCached()` as well as page visibility (#11443).
+   * Caching a project view is `removeChildView` + `setVisible(false)`, and
+   * neither flips `document.visibilityState` for a child WebContentsView, so
+   * the original visibility-only guard early-returned for every genuinely
+   * backgrounded view — the one case this method exists to serve. The reset
+   * stays on the "not cached AND visible" branch: a cached view that still
+   * reports "visible" must keep its session anchor, not drop it.
    */
   applyBackgroundWindowResize(width: number, height: number): void {
-    if (document.visibilityState === "visible") {
+    if (!isProjectViewCached() && document.visibilityState === "visible") {
       // Queued delivery after reactivation — real layout owns geometry again.
       this.backgroundResizeSession = null;
       return;
@@ -1726,6 +1735,18 @@ class TerminalInstanceService {
     const heightRatio = height / session.basis.height;
     for (const [id, managed] of this.instances) {
       if (!managed.isOpened) continue;
+      // Never move the PTY out from under a live alt-screen TUI while the view
+      // is backgrounded (#11443). This path deliberately never reflows xterm,
+      // and the alternate buffer never reflows on resize anyway — so a
+      // PTY-only resize leaves the app painting a wider frame into a narrower
+      // grid, and that mangled frame is permanent: on reattach
+      // `applyDeferredResize` re-asserts the size the PTY already has, which
+      // dedupes into no second SIGWINCH, so the app never redraws to fix it.
+      // Main-buffer panes are safe — their reflow at wake re-wraps correctly.
+      // An alt pane keeps xterm and the PTY mutually consistent at the stale
+      // size until reattach, where the ResizeObserver-driven path resizes both
+      // together and delivers a genuine SIGWINCH.
+      if (managed.isAltBuffer) continue;
       let origin = session.origin.get(id);
       if (!origin) {
         if (managed.lastWidth <= 0 || managed.lastHeight <= 0) continue;
