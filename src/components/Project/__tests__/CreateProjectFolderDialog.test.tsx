@@ -82,7 +82,7 @@ async function renderDialog() {
   // The dialog resolves the home directory on open; wait for it to land, or the
   // Create button stays disabled on a missing parent path.
   await waitFor(() =>
-    expect(screen.getByLabelText<HTMLInputElement>(/location/i).value).toBe("/Users/test")
+    expect(screen.getByLabelText<HTMLInputElement>(/parent directory/i).value).toBe("/Users/test")
   );
   return { onClose, ...result };
 }
@@ -143,7 +143,7 @@ describe("CreateProjectFolderDialog identity", () => {
     fireEvent.click(screen.getByText("pick-unicorn"));
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^create folder$/i }));
     });
 
     expect(createProjectFolderMock).toHaveBeenCalledWith("/Users/test", "my-api", "🦄");
@@ -155,7 +155,7 @@ describe("CreateProjectFolderDialog identity", () => {
     fireEvent.change(folderInput(), { target: { value: "my-api" } });
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^create folder$/i }));
     });
 
     expect(createProjectFolderMock).toHaveBeenCalledWith(

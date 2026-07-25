@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { FolderOpen, AlertTriangle, CheckCircle2, HelpCircle, type LucideIcon } from "lucide-react";
 import { basename, dirname, join, normalize } from "@shared/utils/path";
 import { validateFolderName } from "@shared/utils/folderName";
@@ -15,6 +15,12 @@ import {
   useProjectRelocationStore,
   type PendingProjectRelocation,
 } from "@/store/projectRelocationStore";
+import {
+  FIELD_LABEL_CLASS,
+  FIELD_INPUT_CLASS,
+  FIELD_READONLY_INPUT_CLASS,
+  FIELD_BROWSE_BUTTON_CLASS,
+} from "./projectDialogFields";
 
 /** NFC + separator normalization for comparing two folder paths for equality. */
 function normPath(value: string): string {
@@ -66,10 +72,8 @@ const CONTINUITY_PRESENTATION: Record<
   },
 };
 
-const INPUT_CLASS =
-  "w-full rounded-[var(--radius-md)] border border-daintree-border bg-muted/50 px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 focus:border-daintree-accent aria-invalid:border-status-error";
-const READONLY_INPUT_CLASS =
-  "flex-1 rounded-[var(--radius-md)] border border-daintree-border bg-muted/50 px-3 py-1.5 text-sm font-mono text-daintree-text/70 truncate";
+const INPUT_CLASS = FIELD_INPUT_CLASS;
+const READONLY_INPUT_CLASS = FIELD_READONLY_INPUT_CLASS;
 
 function MoveOrRenameProjectDialogInner({
   pending,
@@ -94,6 +98,7 @@ function MoveOrRenameProjectDialogInner({
   // Bumped on every fetch so a superseded response (folder edited again mid-flight)
   // can't replace a newer preview — the #9575 stale-request guard.
   const previewReqId = useRef(0);
+  const folderErrorId = useId();
 
   const trimmedName = displayName.trim();
   const displayNameChanged = trimmedName !== "" && trimmedName !== pending.name;
@@ -270,7 +275,7 @@ function MoveOrRenameProjectDialogInner({
     >
       <div className="space-y-4" data-testid="move-or-rename-project-dialog">
         <div className="space-y-1.5">
-          <label className="text-sm font-medium text-daintree-text/80" htmlFor="relocate-name">
+          <label className={FIELD_LABEL_CLASS} htmlFor="relocate-name">
             Display name
           </label>
           <input
@@ -279,7 +284,7 @@ function MoveOrRenameProjectDialogInner({
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
             className={INPUT_CLASS}
-            placeholder="My Awesome Project"
+            placeholder="My project"
             data-testid="relocate-name-input"
           />
         </div>
@@ -287,7 +292,7 @@ function MoveOrRenameProjectDialogInner({
         {isReattach ? (
           <>
             <div className="space-y-1.5">
-              <span className="text-sm font-medium text-daintree-text/80">Original location</span>
+              <span className={FIELD_LABEL_CLASS}>Original location</span>
               <p
                 className="text-xs font-mono text-daintree-text/50 break-all"
                 title={pending.oldPath}
@@ -296,10 +301,7 @@ function MoveOrRenameProjectDialogInner({
               </p>
             </div>
             <div className="space-y-1.5">
-              <label
-                className="text-sm font-medium text-daintree-text/80"
-                htmlFor="relocate-existing"
-              >
+              <label className={FIELD_LABEL_CLASS} htmlFor="relocate-existing">
                 Where is the folder now?
               </label>
               <div className="flex gap-2">
@@ -314,13 +316,12 @@ function MoveOrRenameProjectDialogInner({
                 />
                 <Button
                   variant="outline"
-                  size="sm"
                   onClick={handleBrowseReattach}
                   disabled={isApplying}
-                  className="shrink-0 gap-1.5"
+                  className={FIELD_BROWSE_BUTTON_CLASS}
                   data-testid="relocate-browse-existing"
                 >
-                  <FolderOpen className="h-3.5 w-3.5" />
+                  <FolderOpen className="h-4 w-4" />
                   Browse
                 </Button>
               </div>
@@ -329,10 +330,7 @@ function MoveOrRenameProjectDialogInner({
         ) : (
           <>
             <div className="space-y-1.5">
-              <label
-                className="text-sm font-medium text-daintree-text/80"
-                htmlFor="relocate-parent"
-              >
+              <label className={FIELD_LABEL_CLASS} htmlFor="relocate-parent">
                 Parent folder
               </label>
               <div className="flex gap-2">
@@ -347,22 +345,18 @@ function MoveOrRenameProjectDialogInner({
                 />
                 <Button
                   variant="outline"
-                  size="sm"
                   onClick={handleBrowseParent}
                   disabled={isApplying}
-                  className="shrink-0 gap-1.5"
+                  className={FIELD_BROWSE_BUTTON_CLASS}
                   data-testid="relocate-browse-parent"
                 >
-                  <FolderOpen className="h-3.5 w-3.5" />
+                  <FolderOpen className="h-4 w-4" />
                   Browse
                 </Button>
               </div>
             </div>
             <div className="space-y-1.5">
-              <label
-                className="text-sm font-medium text-daintree-text/80"
-                htmlFor="relocate-folder"
-              >
+              <label className={FIELD_LABEL_CLASS} htmlFor="relocate-folder">
                 Folder name
               </label>
               <input
@@ -371,12 +365,13 @@ function MoveOrRenameProjectDialogInner({
                 value={folderName}
                 onChange={(e) => setFolderName(e.target.value)}
                 aria-invalid={folderNameError != null}
+                aria-describedby={folderNameError ? folderErrorId : undefined}
                 className={INPUT_CLASS}
                 placeholder="my-project"
                 data-testid="relocate-folder-input"
               />
               {folderNameError && (
-                <p role="alert" className="text-xs text-status-error">
+                <p id={folderErrorId} role="alert" className="text-xs text-status-error">
                   {folderNameError}
                 </p>
               )}

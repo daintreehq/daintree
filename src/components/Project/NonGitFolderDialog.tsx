@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { FolderOpen } from "@/components/icons";
+import { basename } from "@shared/utils/path";
+import { PathCaption } from "./projectDialogFields";
 import { GitInitDialog } from "./GitInitDialog";
 import type { ProjectCreationIdentity } from "@shared/types";
 
@@ -21,11 +23,6 @@ interface NonGitFolderDialogProps {
   onOpenWithoutGit: () => void;
   onInitSuccess: (identity: ProjectCreationIdentity) => void;
   onCancel: () => void;
-}
-
-function folderName(directoryPath: string): string {
-  const segments = directoryPath.split(/[/\\]/).filter(Boolean);
-  return segments[segments.length - 1] ?? directoryPath;
 }
 
 /**
@@ -69,13 +66,14 @@ export function NonGitFolderDialog({
     <AppDialog isOpen={isOpen} onClose={onCancel} size="md">
       <AppDialog.Header>
         <AppDialog.Title icon={<FolderOpen className="h-5 w-5 text-daintree-text/70" />}>
-          Open &lsquo;{folderName(directoryPath)}&rsquo;?
+          {/* A root path ("/", "C:\") has no leaf — name it by the path itself. */}
+          Open &lsquo;{basename(directoryPath) || directoryPath}&rsquo;?
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
       <AppDialog.Body className="space-y-3">
-        <div className="text-sm text-muted-foreground truncate">{directoryPath}</div>
+        <PathCaption path={directoryPath} />
         <p className="text-sm text-daintree-text/70">
           This folder isn&rsquo;t a git repository. Open it as-is and terminals, agents, recipes,
           and the file browser all work — worktrees, review, and diffs stay unavailable until it

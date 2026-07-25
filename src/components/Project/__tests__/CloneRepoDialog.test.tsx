@@ -188,8 +188,9 @@ describe("CloneRepoDialog", () => {
   it("renders input fields when opened", () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    expect(screen.getByPlaceholderText("owner/repo or repository URL")).toBeTruthy();
-    expect(screen.getByPlaceholderText("Select a directory...")).toBeTruthy();
+    expect(screen.getByLabelText(/repository url/i)).toBeTruthy();
+    expect(screen.getByLabelText(/parent directory/i)).toBeTruthy();
+    expect(screen.getByLabelText(/folder name/i)).toBeTruthy();
     expect(screen.getByText("Clone")).toBeTruthy();
   });
 
