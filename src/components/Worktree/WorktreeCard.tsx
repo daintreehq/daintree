@@ -29,6 +29,7 @@ import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { cn } from "../../lib/utils";
+import { isExternalWorktree } from "@/lib/worktreeFilters";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { getAgentSettingsEntry } from "@/types";
@@ -186,9 +187,15 @@ export function WorktreeCard({
       ? resourceEnvironments?.[worktree.worktreeMode]?.icon
       : undefined;
 
-  const isPinned = useWorktreeFilterStore((state) => state.pinnedWorktrees.includes(worktree.id));
+  const isPinnedStored = useWorktreeFilterStore((state) =>
+    state.pinnedWorktrees.includes(worktree.id)
+  );
   const pinWorktree = useWorktreeFilterStore((state) => state.pinWorktree);
   const unpinWorktree = useWorktreeFilterStore((state) => state.unpinWorktree);
+  const isExternal = isExternalWorktree(worktree);
+  // Pinning can't lift an external worktree out of the bottom partition, so a
+  // leftover pin entry must not render as pinned either (#11434).
+  const isPinned = isPinnedStored && !isExternal;
 
   const isCollapsed = useWorktreeFilterStore((state) =>
     state.collapsedWorktrees.includes(worktree.id)
@@ -747,7 +754,7 @@ export function WorktreeCard({
     onCompareDiff: () => useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),
     onRunRecipe: (recipeId) => void handleRunRecipe(recipeId),
     onSaveLayout,
-    onTogglePin: handleTogglePin,
+    onTogglePin: isExternal ? undefined : handleTogglePin,
     onToggleCollapse: canCollapse ? () => toggleWorktreeCollapsed(worktree.id) : undefined,
     isCollapsed: effectiveIsCollapsed,
     onLaunchAgent,

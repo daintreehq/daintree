@@ -91,9 +91,9 @@ export interface WorktreeSnapshot {
   isCurrent: boolean;
   /**
    * Whether this is the main worktree (project permanent worktree).
-   * Determined by canonical path match with project root, not git primary status.
+   * Taken from git's first `worktree list --porcelain` entry, which is always
+   * the main worktree — not a path match against the project root (#2251).
    * Main worktrees are protected from deletion and cleanup operations.
-   * False when project root path is unavailable (no protection applied).
    */
   isMainWorktree?: boolean;
   gitDir?: string;
@@ -244,6 +244,13 @@ export interface WorktreeSnapshot {
 
   /** Cached display label for the environment (e.g., "Docker", "Akash") */
   worktreeEnvironmentLabel?: string;
+
+  /**
+   * True when the worktree lives outside `dirname(projectRootPath)` — git
+   * reports it, but Daintree did not place it (mirrors `Worktree.isExternal`).
+   * `undefined` when the boundary is unknown; only `true` means external.
+   */
+  isExternal?: boolean;
 
   /** True when the worktree path is mounted via \\wsl$\ or \\wsl.localhost\. */
   isWslPath?: boolean;

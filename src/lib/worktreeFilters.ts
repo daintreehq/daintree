@@ -271,6 +271,15 @@ export function matchesFilters(
   return true;
 }
 
+/**
+ * Only an explicit `true` counts. `undefined` means the workspace host couldn't
+ * determine the containment boundary, and treating that as external would demote
+ * every worktree in the project on a transient path-resolution failure (#2251).
+ */
+export function isExternalWorktree(worktree: Worktree | WorktreeState): boolean {
+  return worktree.isExternal === true;
+}
+
 export function sortWorktrees<T extends Worktree | WorktreeState>(
   worktrees: T[],
   orderBy: OrderBy,
@@ -286,9 +295,17 @@ export function sortWorktrees<T extends Worktree | WorktreeState>(
     if (a.isMainWorktree && !b.isMainWorktree) return -1;
     if (!a.isMainWorktree && b.isMainWorktree) return 1;
 
+    // Worktrees git reports from outside the project sink below everything the
+    // project owns. Ahead of the pin check on purpose: a stale pin entry (or one
+    // added before the worktree was classified) must not lift an external
+    // worktree into the pinned area at the top (#11434).
+    const aExternal = isExternalWorktree(a);
+    const bExternal = isExternalWorktree(b);
+    if (aExternal !== bExternal) return aExternal ? 1 : -1;
+
     // Pinned worktrees come before unpinned (after main)
-    const aPinned = pinnedIndex.has(a.id);
-    const bPinned = pinnedIndex.has(b.id);
+    const aPinned = pinnedIndex.has(a.id) && !aExternal;
+    const bPinned = pinnedIndex.has(b.id) && !bExternal;
     if (aPinned && !bPinned) return -1;
     if (!aPinned && bPinned) return 1;
 
@@ -343,12 +360,26 @@ export function sortWorktreesByRelevance<T extends Worktree | WorktreeState>(
   if (!query.trim()) return sorted;
 
   const scores = new Map(sorted.map((w) => [w.id, scoreWorktree(w, query)]));
-  // Stable sort preserves sortWorktrees order as tiebreaker
-  return [...sorted].sort((a, b) => scores.get(b.id)! - scores.get(a.id)!);
+  // Stable sort preserves sortWorktrees order as tiebreaker. The external
+  // partition is re-applied as the primary key: a strong query match must not
+  // pull an outside-the-project worktree back above the project's own (#11434).
+  return [...sorted].sort((a, b) => {
+    const aExternal = isExternalWorktree(a);
+    const bExternal = isExternalWorktree(b);
+    if (aExternal !== bExternal) return aExternal ? 1 : -1;
+    return scores.get(b.id)! - scores.get(a.id)!;
+  });
 }
 
+/**
+ * Section identity for grouped mode. `"external"` is a location bucket, not a
+ * branch type — `getWorktreeType` never returns it, so it stays outside
+ * `WorktreeTypeId` (which the type filters and display-name table exhaust).
+ */
+export type WorktreeGroupId = WorktreeTypeId | "external";
+
 export interface GroupedSection<T> {
-  type: WorktreeTypeId;
+  type: WorktreeGroupId;
   displayName: string;
   worktrees: T[];
 }
@@ -395,8 +426,16 @@ export function groupByType<T extends Worktree | WorktreeState>(
   pinnedWorktrees: string[] = []
 ): GroupedSection<T>[] {
   const groups = new Map<WorktreeTypeId, T[]>();
+  // Pulled out before branch grouping: section order outranks the per-group
+  // comparator, so an external feature worktree left in "Features" would still
+  // render above the project's own bugfixes (#11434).
+  const external: T[] = [];
 
   for (const worktree of worktrees) {
+    if (isExternalWorktree(worktree)) {
+      external.push(worktree);
+      continue;
+    }
     const type = getWorktreeType(worktree);
     const existing = groups.get(type) ?? [];
     existing.push(worktree);
@@ -419,6 +458,14 @@ export function groupByType<T extends Worktree | WorktreeState>(
         worktrees: items,
       });
     }
+  }
+
+  if (external.length > 0) {
+    sections.push({
+      type: "external",
+      displayName: "Outside the project",
+      worktrees: sortWorktrees(external, orderBy, pinnedWorktrees),
+    });
   }
 
   return sections;
@@ -473,6 +520,7 @@ export function findIntegrationWorktree<T extends Worktree | WorktreeState>(
       (w) =>
         w.id !== mainWorktreeId &&
         !w.isMainWorktree &&
+        !isExternalWorktree(w) &&
         w.branch != null &&
         (INTEGRATION_BRANCH_NAMES as readonly string[]).includes(w.branch.toLowerCase())
     ) ?? null

@@ -134,9 +134,11 @@ export interface Worktree {
 
   /**
    * Whether this is the main worktree (project permanent worktree).
-   * Determined by canonical path match with project root, not git primary status.
+   * Taken from git's first `worktree list --porcelain` entry, which is always
+   * the main worktree — not a path match against the project root (#2251: the
+   * path-canonicalization variant failed closed and dropped delete protection
+   * for every row when the root was unavailable).
    * Main worktrees are protected from deletion and cleanup operations.
-   * False when project root path is unavailable (no protection applied).
    */
   isMainWorktree?: boolean;
 
@@ -329,6 +331,17 @@ export interface Worktree {
 
   /** Cached display label for the environment (e.g., "Docker", "Akash") */
   worktreeEnvironmentLabel?: string;
+
+  /**
+   * True when `path` falls outside `dirname(projectRootPath)` — the boundary
+   * every Daintree-created worktree is structurally confined to, since
+   * `validatePathPattern` rejects any pattern that escapes `{parent-dir}` and
+   * `assertWorktreePathContained` enforces it on create. Marks a worktree git
+   * reports but Daintree did not place (e.g. an agent's scratch worktree).
+   * `undefined` when the boundary can't be determined; consumers must treat
+   * only `true` as external so an unresolvable root can never flag the list.
+   */
+  isExternal?: boolean;
 
   /**
    * True when the worktree path is mounted via WSL (\\wsl$\… or

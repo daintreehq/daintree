@@ -7,6 +7,7 @@ import { STATE_LABELS, STATE_PRIORITY } from "../terminalStateConfig";
 import { BranchLabel } from "../BranchLabel";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Sprout, Pin, BellOff, RefreshCw } from "lucide-react";
+import { FolderOutput } from "@/components/icons";
 import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 import { IssueBadge } from "./IssueBadge";
 import { PRBadge } from "./PRBadge";
@@ -14,7 +15,7 @@ import { EnvironmentPopover } from "./EnvironmentPopover";
 import { DevServerIndicator } from "./DevServerIndicator";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { CollapsedAlarmPill } from "./CollapsedAlarmPill";
-import { isLiveDevServerStatus } from "@/lib/worktreeFilters";
+import { isExternalWorktree, isLiveDevServerStatus } from "@/lib/worktreeFilters";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import { WorktreeActionsToolbar } from "./WorktreeActionsToolbar";
 import { MainWorktreeSecondaryRow } from "./MainWorktreeSecondaryRow";
@@ -220,6 +221,7 @@ export function WorktreeHeader({
     (worktree.matchedForgeProviderId != null || worktree.linked?.providerId != null)
   );
   const isMainStandardLayout = !!(isMainOnStandardBranch && !hasDisplayTitle);
+  const isExternal = isExternalWorktree(worktree);
 
   const prState = worktree.linked?.pr?.state;
   const isPrLive = prState !== undefined && prState !== "closed" && prState !== "declined";
@@ -321,6 +323,7 @@ export function WorktreeHeader({
         </div>
 
         {((isPinned && !isMainWorktree) ||
+          isExternal ||
           isProjectNotificationsMuted ||
           (worktree.worktreeMode && worktree.worktreeMode !== "local") ||
           resourceStatusLabel ||
@@ -333,6 +336,28 @@ export function WorktreeHeader({
                 className="w-3.5 h-3.5 text-daintree-text/40 shrink-0 pointer-events-none"
                 aria-label="Pinned"
               />
+            )}
+            {isExternal && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    role="img"
+                    aria-label={`External worktree at ${worktree.path}`}
+                    className="shrink-0 leading-none"
+                  >
+                    <FolderOutput
+                      className="w-3.5 h-3.5 text-daintree-text/40"
+                      aria-hidden="true"
+                    />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-xs">
+                  <span className="block">Outside the project directory</span>
+                  <span className="mt-0.5 block font-mono text-[11px] break-all">
+                    {worktree.path}
+                  </span>
+                </TooltipContent>
+              </Tooltip>
             )}
             {isProjectNotificationsMuted && (
               <BellOff

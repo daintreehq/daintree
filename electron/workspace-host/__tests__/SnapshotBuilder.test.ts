@@ -57,6 +57,7 @@ function makeHost(overrides: Partial<SnapshotBuilderHost> = {}): SnapshotBuilder
     fetchNetworkFailed: false,
     isFetchInFlight: false,
     matchedForgeProviderId: null,
+    isExternal: undefined,
     isWslPath: false,
     wslDistro: undefined,
     wslPosixPath: undefined,
@@ -211,5 +212,15 @@ describe("SnapshotBuilder", () => {
 
     const stamped = makeHost({ workingTreeChangedAt: 1_725_000_000_000 });
     expect(new SnapshotBuilder(stamped).build().workingTreeChangedAt).toBe(1_725_000_000_000);
+  });
+
+  it("passes isExternal through without collapsing false into undefined", () => {
+    // Unlike the neighbouring `|| undefined` flags, false ("inside the boundary")
+    // and undefined ("boundary unknown") are distinct states downstream.
+    expect(new SnapshotBuilder(makeHost({ isExternal: true })).build().isExternal).toBe(true);
+    expect(new SnapshotBuilder(makeHost({ isExternal: false })).build().isExternal).toBe(false);
+    expect(
+      new SnapshotBuilder(makeHost({ isExternal: undefined })).build().isExternal
+    ).toBeUndefined();
   });
 });

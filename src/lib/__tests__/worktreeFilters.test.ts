@@ -16,9 +16,11 @@ import {
   compareWorktreeNames,
   matchesDevServerFilter,
   isLiveDevServerStatus,
+  isExternalWorktree,
   type DerivedWorktreeMeta,
   type FilterState,
 } from "../worktreeFilters";
+import type { OrderBy } from "@/store/worktreeFilterStore";
 import type { Worktree } from "@shared/types/worktree";
 import type {
   StatusFilter,
@@ -407,6 +409,54 @@ describe("sortWorktreesByRelevance", () => {
     // Both score 4 (name starts-with), main first via sortWorktrees tiebreaker
     expect(result[0]!.id).toBe("1");
     expect(result[1]!.id).toBe("2");
+  });
+
+  it("keeps external worktrees last even when they score higher", () => {
+    const worktrees = [
+      // Scores higher: issueTitle starts-with "auth" beats a mere contains match.
+      createMockWorktree({
+        id: "ext",
+        name: "scratch",
+        issueTitle: "Auth rewrite",
+        isExternal: true,
+      }),
+      createMockWorktree({ id: "int", name: "feature", issueTitle: "Fix database auth" }),
+    ];
+
+    const result = sortWorktreesByRelevance(worktrees, "auth", "alpha");
+
+    expect(result.map((w) => w.id)).toEqual(["int", "ext"]);
+  });
+
+  it("still ranks external worktrees among themselves by score", () => {
+    const worktrees = [
+      createMockWorktree({
+        id: "ext-low",
+        name: "scratch",
+        issueTitle: "Fix database auth",
+        isExternal: true,
+      }),
+      createMockWorktree({
+        id: "ext-high",
+        name: "bench",
+        issueTitle: "Auth rewrite",
+        isExternal: true,
+      }),
+      createMockWorktree({ id: "int", name: "feature", issueTitle: "Unrelated" }),
+    ];
+
+    const result = sortWorktreesByRelevance(worktrees, "auth", "alpha");
+
+    expect(result.map((w) => w.id)).toEqual(["int", "ext-high", "ext-low"]);
+  });
+});
+
+describe("isExternalWorktree", () => {
+  it("treats only an explicit true as external", () => {
+    expect(isExternalWorktree(createMockWorktree({ isExternal: true }))).toBe(true);
+    expect(isExternalWorktree(createMockWorktree({ isExternal: false }))).toBe(false);
+    expect(isExternalWorktree(createMockWorktree({ isExternal: undefined }))).toBe(false);
+    expect(isExternalWorktree(createMockWorktree())).toBe(false);
   });
 });
 
@@ -914,6 +964,89 @@ describe("sortWorktrees", () => {
       expect(sorted.map((w) => w.name)).toEqual(["a", "b"]);
     });
   });
+
+  describe("external worktrees", () => {
+    const orderModes: OrderBy[] = ["alpha", "created", "recent", "manual"];
+
+    it.each(orderModes)("sinks external worktrees below internal ones (%s)", (orderBy) => {
+      const worktrees = [
+        createMockWorktree({
+          id: "ext",
+          name: "a-external",
+          isExternal: true,
+          createdAt: 9000,
+          lastActivityTimestamp: 9000,
+        }),
+        createMockWorktree({
+          id: "int",
+          name: "z-internal",
+          createdAt: 1000,
+          lastActivityTimestamp: 1000,
+        }),
+      ];
+
+      const sorted = sortWorktrees(worktrees, orderBy, [], ["ext", "int"]);
+
+      expect(sorted.map((w) => w.id)).toEqual(["int", "ext"]);
+    });
+
+    it("keeps the main worktree above external worktrees", () => {
+      const worktrees = [
+        createMockWorktree({ id: "ext", name: "a-external", isExternal: true }),
+        createMockWorktree({ id: "main", name: "z-main", isMainWorktree: true }),
+      ];
+
+      const sorted = sortWorktrees(worktrees, "alpha", []);
+
+      expect(sorted.map((w) => w.id)).toEqual(["main", "ext"]);
+    });
+
+    it("ignores a pin entry on an external worktree", () => {
+      const worktrees = [
+        createMockWorktree({ id: "ext", name: "a-external", isExternal: true }),
+        createMockWorktree({ id: "int", name: "z-internal" }),
+      ];
+
+      const sorted = sortWorktrees(worktrees, "alpha", ["ext"]);
+
+      expect(sorted.map((w) => w.id)).toEqual(["int", "ext"]);
+    });
+
+    it("keeps pin ordering among internal worktrees while external stays last", () => {
+      const worktrees = [
+        createMockWorktree({ id: "ext", name: "a-external", isExternal: true }),
+        createMockWorktree({ id: "int-a", name: "b-internal" }),
+        createMockWorktree({ id: "int-b", name: "c-internal" }),
+      ];
+
+      const sorted = sortWorktrees(worktrees, "alpha", ["int-b"]);
+
+      expect(sorted.map((w) => w.id)).toEqual(["int-b", "int-a", "ext"]);
+    });
+
+    it("orders external worktrees among themselves by the active sort mode", () => {
+      const worktrees = [
+        createMockWorktree({ id: "ext-z", name: "z-external", isExternal: true }),
+        createMockWorktree({ id: "ext-a", name: "a-external", isExternal: true }),
+        createMockWorktree({ id: "int", name: "m-internal" }),
+      ];
+
+      const sorted = sortWorktrees(worktrees, "alpha", []);
+
+      expect(sorted.map((w) => w.id)).toEqual(["int", "ext-a", "ext-z"]);
+    });
+
+    it("does not demote a worktree whose classification is unknown", () => {
+      const worktrees = [
+        createMockWorktree({ id: "unknown", name: "a-unknown", isExternal: undefined }),
+        createMockWorktree({ id: "internal", name: "z-internal", isExternal: false }),
+      ];
+
+      const sorted = sortWorktrees(worktrees, "alpha", []);
+
+      expect(sorted.map((w) => w.id)).toEqual(["unknown", "internal"]);
+    });
+  });
 });
 
 describe("sortWorktrees manual order", () => {
@@ -1027,6 +1160,46 @@ describe("groupByType", () => {
     expect(groups.length).toBe(1);
     expect(groups.every((g) => g.worktrees.length > 0)).toBe(true);
   });
+
+  it("collects external worktrees into a trailing section instead of their branch type", () => {
+    // Section order outranks the per-group comparator, so leaving an external
+    // feature worktree in "Features" would render it above internal bugfixes.
+    const worktrees = [
+      createMockWorktree({ id: "ext-feat", branch: "feature/scratch", isExternal: true }),
+      createMockWorktree({ id: "int-bug", branch: "bugfix/b" }),
+      createMockWorktree({ id: "int-feat", branch: "feature/a" }),
+    ];
+
+    const groups = groupByType(worktrees, "alpha");
+
+    const lastSection = groups[groups.length - 1]!;
+    expect(lastSection.worktrees.map((w) => w.id)).toEqual(["ext-feat"]);
+    expect(groups.slice(0, -1).flatMap((g) => g.worktrees.map((w) => w.id))).toEqual([
+      "int-feat",
+      "int-bug",
+    ]);
+  });
+
+  it("omits the external section when nothing is external", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", branch: "feature/a" }),
+      createMockWorktree({ id: "2", branch: "bugfix/b", isExternal: false }),
+    ];
+
+    const groups = groupByType(worktrees, "alpha");
+
+    expect(groups.some((g) => g.type === "external")).toBe(false);
+  });
+
+  it("keeps the branch type of an external worktree reportable independently", () => {
+    const external = createMockWorktree({ id: "ext", branch: "feature/scratch", isExternal: true });
+
+    const groups = groupByType([external], "alpha");
+
+    // Grouped into the location bucket, but the branch taxonomy is untouched.
+    expect(groups.map((g) => g.type)).toEqual(["external"]);
+    expect(getWorktreeType(external)).toBe("feature");
+  });
 });
 
 describe("hasAnyFilters", () => {
@@ -1124,6 +1297,27 @@ describe("findIntegrationWorktree", () => {
     const worktrees = [createMockWorktree({ id: "main", branch: "develop", isMainWorktree: true })];
     const result = findIntegrationWorktree(worktrees, "main");
     expect(result).toBeNull();
+  });
+
+  it("skips an external worktree on an integration branch", () => {
+    // The integration slot renders above the divider, so admitting an external
+    // worktree there would pin it to the top — the exact #11434 repro.
+    const worktrees = [
+      createMockWorktree({ id: "main", branch: "main", isMainWorktree: true }),
+      createMockWorktree({ id: "ext-dev", branch: "develop", isExternal: true }),
+    ];
+    const result = findIntegrationWorktree(worktrees, "main");
+    expect(result).toBeNull();
+  });
+
+  it("still finds a later internal integration worktree past an external one", () => {
+    const worktrees = [
+      createMockWorktree({ id: "main", branch: "main", isMainWorktree: true }),
+      createMockWorktree({ id: "ext-dev", branch: "develop", isExternal: true }),
+      createMockWorktree({ id: "int-dev", branch: "develop" }),
+    ];
+    const result = findIntegrationWorktree(worktrees, "main");
+    expect(result?.id).toBe("int-dev");
   });
 
   it("returns the first match when multiple integration branches exist", () => {

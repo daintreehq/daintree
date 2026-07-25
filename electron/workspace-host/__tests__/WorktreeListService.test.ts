@@ -302,4 +302,139 @@ describe("WorktreeListService", () => {
       expect(worktrees[1].prunableReason).toBe("stale");
     });
   });
+
+  describe("mapToWorktrees external classification", () => {
+    const projectRoot = path.resolve("/projects/my-repo");
+
+    it("flags a worktree outside the repository's parent directory", async () => {
+      service.setGit(mockGit, projectRoot);
+      const raw = [
+        { path: projectRoot, branch: "main", bare: false, isMainWorktree: true },
+        {
+          path: path.resolve("/var/tmp/scratch/bench-baseline"),
+          branch: "develop",
+          bare: false,
+          isMainWorktree: false,
+        },
+      ];
+
+      const worktrees = await service.mapToWorktrees(raw);
+
+      expect(worktrees[0].isExternal).toBe(false);
+      expect(worktrees[1].isExternal).toBe(true);
+    });
+
+    it("treats worktrees anywhere under the parent directory as internal", async () => {
+      service.setGit(mockGit, projectRoot);
+      const parentDir = path.dirname(projectRoot);
+      const raw = [
+        { path: projectRoot, branch: "main", bare: false, isMainWorktree: true },
+        {
+          path: path.join(parentDir, "my-repo-worktrees", "feature-a"),
+          branch: "feature/a",
+          bare: false,
+          isMainWorktree: false,
+        },
+        {
+          path: path.join(parentDir, "somewhere", "deeply", "nested"),
+          branch: "feature/b",
+          bare: false,
+          isMainWorktree: false,
+        },
+      ];
+
+      const worktrees = await service.mapToWorktrees(raw);
+
+      expect(worktrees.map((w) => w.isExternal)).toEqual([false, false, false]);
+    });
+
+    it("does not admit a sibling whose name merely extends the parent directory", async () => {
+      service.setGit(mockGit, projectRoot);
+      const parentDir = path.dirname(projectRoot);
+      const raw = [
+        { path: projectRoot, branch: "main", bare: false, isMainWorktree: true },
+        {
+          path: `${parentDir}-other${path.sep}feature`,
+          branch: "feature/a",
+          bare: false,
+          isMainWorktree: false,
+        },
+      ];
+
+      const worktrees = await service.mapToWorktrees(raw);
+
+      expect(worktrees[1].isExternal).toBe(true);
+    });
+
+    it("leaves classification unset for every worktree when projectRootPath is null", async () => {
+      service.setGit(mockGit, null);
+      const raw = [
+        { path: projectRoot, branch: "main", bare: false, isMainWorktree: true },
+        {
+          path: path.resolve("/var/tmp/scratch/bench-baseline"),
+          branch: "develop",
+          bare: false,
+          isMainWorktree: false,
+        },
+      ];
+
+      const worktrees = await service.mapToWorktrees(raw);
+
+      // Unknown boundary must never resolve to "everything is external" (#2251).
+      expect(worktrees.every((w) => w.isExternal === undefined)).toBe(true);
+    });
+
+    it("leaves classification unset when the repository sits at the filesystem root", async () => {
+      // The parent of a filesystem-root repo is the root itself, which would
+      // accept every path on the system — the same case `assertWorktreePathContained`
+      // refuses rather than degrading to an open boundary.
+      service.setGit(mockGit, path.resolve("/"));
+      const raw = [
+        { path: path.resolve("/"), branch: "main", bare: false, isMainWorktree: true },
+        {
+          path: path.resolve("/var/tmp/scratch/bench-baseline"),
+          branch: "develop",
+          bare: false,
+          isMainWorktree: false,
+        },
+      ];
+
+      const worktrees = await service.mapToWorktrees(raw);
+
+      expect(worktrees.every((w) => w.isExternal === undefined)).toBe(true);
+    });
+
+    it("resolves a relative porcelain path against the main worktree, not the host cwd", async () => {
+      // Git 2.48+ `worktree.useRelativePaths` emits linked worktrees relative to
+      // the repository while the main entry stays absolute.
+      service.setGit(mockGit, projectRoot);
+      const raw = [
+        { path: projectRoot, branch: "main", bare: false, isMainWorktree: true },
+        {
+          path: path.join("..", "my-repo-worktrees", "feature-a"),
+          branch: "feature/a",
+          bare: false,
+          isMainWorktree: false,
+        },
+      ];
+
+      const worktrees = await service.mapToWorktrees(raw);
+
+      expect(worktrees[1].id).toBe(
+        path.resolve(projectRoot, "..", "my-repo-worktrees", "feature-a")
+      );
+      expect(worktrees[1].path).toBe(worktrees[1].id);
+      expect(worktrees[1].isExternal).toBe(false);
+    });
+
+    it("falls back to cwd resolution for a relative path with no absolute main entry", async () => {
+      service.setGit(mockGit, projectRoot);
+      const relative = path.join("detached", "worktree");
+      const raw = [{ path: relative, branch: "feature/a", bare: false, isMainWorktree: false }];
+
+      const worktrees = await service.mapToWorktrees(raw);
+
+      expect(worktrees[0].id).toBe(path.resolve(relative));
+    });
+  });
 });

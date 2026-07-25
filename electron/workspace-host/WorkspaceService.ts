@@ -824,6 +824,7 @@ export class WorkspaceService {
           existingMonitor.name = wt.name;
           existingMonitor.isCurrent = isActive;
           existingMonitor.isMainWorktree = wt.isMainWorktree ?? false;
+          existingMonitor.isExternal = wt.isExternal;
           // Keep the base-branch divergence fallback fresh if the main worktree
           // switched branches since this monitor was created.
           existingMonitor.setMainBranch(this.mainBranch);
@@ -2637,6 +2638,9 @@ export class WorkspaceService {
         isDetached: false,
         isCurrent: false,
         isMainWorktree: false,
+        // `assertWorktreePathContained` ran above, so this path is provably
+        // inside the boundary — no need to re-derive it from the root here.
+        isExternal: false,
         gitDir: (await getGitDir(canonicalPath)) || undefined,
       };
       const canonicalWorktreeId = createdWorktree.id;
