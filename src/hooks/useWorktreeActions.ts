@@ -8,10 +8,7 @@ import { formatBytes } from "@/lib/formatBytes";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionSource } from "@shared/types/actions";
-import type {
-  CopyTreeBudgetStats,
-  CopyTreeExclusionReason,
-} from "@shared/types/ipc/copyTree";
+import type { CopyTreeBudgetStats, CopyTreeExclusionReason } from "@shared/types/ipc/copyTree";
 
 export function formatCopyResultMessage(payload: {
   fileCount: number;

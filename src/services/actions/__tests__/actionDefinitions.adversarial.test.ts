@@ -1020,10 +1020,9 @@ describe("worktree action hardening", () => {
     const copyTree = actions.get("worktree.copyTree")!();
     mocks.copyTreeClient.generateAndCopyFile.mockResolvedValueOnce({ fileCount: 2 });
 
-    await copyTree.run(
-      { scopePaths: ["src/panels"], includePaths: ["**/*.ts"] },
-      { activeWorktreeId: "wt-1" } as never
-    );
+    await copyTree.run({ scopePaths: ["src/panels"], includePaths: ["**/*.ts"] }, {
+      activeWorktreeId: "wt-1",
+    } as never);
 
     const [, options] = mocks.copyTreeClient.generateAndCopyFile.mock.calls[0];
     // Scope is a literal walk root, filter is a pattern — folding one into the
