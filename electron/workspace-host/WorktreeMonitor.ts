@@ -246,6 +246,10 @@ export class WorktreeMonitor {
   private _pendingPollPromise: Promise<void> | null = null;
   private _pollAbortController: AbortController = new AbortController();
 
+  // Tri-state on purpose: undefined means the containment boundary was unknown,
+  // which must stay distinct from a confirmed-internal false.
+  private _isExternal: boolean | undefined;
+
   // WSL routing state (Windows only)
   private _isWslPath: boolean = false;
   private _wslDistro: string | undefined;
@@ -292,6 +296,7 @@ export class WorktreeMonitor {
     this._gitDir = worktree.gitDir;
     this._isCurrent = worktree.isCurrent;
     this._isMainWorktree = Boolean(worktree.isMainWorktree);
+    this._isExternal = worktree.isExternal;
     this._isDetached = Boolean(worktree.isDetached);
     this._head = worktree.head;
     this.gitWatchEnabled = config.gitWatchEnabled ?? true;
@@ -570,6 +575,9 @@ export class WorktreeMonitor {
       },
       get matchedForgeProviderId() {
         return monitor._matchedForgeProviderId;
+      },
+      get isExternal() {
+        return monitor._isExternal;
       },
       get isWslPath() {
         return monitor._isWslPath;
@@ -1026,6 +1034,14 @@ export class WorktreeMonitor {
 
   set isMainWorktree(value: boolean) {
     this._isMainWorktree = value;
+  }
+
+  get isExternal(): boolean | undefined {
+    return this._isExternal;
+  }
+
+  set isExternal(value: boolean | undefined) {
+    this._isExternal = value;
   }
 
   get isRunning(): boolean {

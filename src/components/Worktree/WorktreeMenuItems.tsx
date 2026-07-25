@@ -50,6 +50,7 @@ import {
   Zap,
 } from "lucide-react";
 import { Folders, Workflow } from "@/components/icons";
+import { isExternalWorktree } from "@/lib/worktreeFilters";
 import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
 import type { PluginContextMenuItemEntry } from "@/hooks/usePluginContextMenuItems";
 
@@ -530,7 +531,7 @@ export function WorktreeMenuItems({
         Copy Path
       </C.Item>
 
-      {onTogglePin && !worktree.isMainWorktree && (
+      {onTogglePin && !worktree.isMainWorktree && !isExternalWorktree(worktree) && (
         <C.Item onSelect={onTogglePin}>
           {isPinned ? (
             <>

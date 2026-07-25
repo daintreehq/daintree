@@ -114,6 +114,45 @@ describe("getVisibleWorktreesForCycling", () => {
     expect(ordered.map((w) => w.id)).toEqual(["main", "dev", "wt-a", "wt-b"]);
   });
 
+  it("cycles to external worktrees last and never into the integration slot (#11434)", () => {
+    // Keyboard cycling must match the rendered order, and an external worktree
+    // on develop must not claim the integration slot ahead of everything else.
+    setWorktrees([
+      createSnapshot({
+        id: "ext",
+        name: "bench-baseline",
+        branch: "develop",
+        path: "/private/tmp/scratch/bench-baseline",
+        isExternal: true,
+        createdAt: 300,
+      }),
+      createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
+      createSnapshot({ id: "wt-a", name: "alpha", branch: "feature/alpha", createdAt: 200 }),
+    ]);
+
+    const ordered = getVisibleWorktreesForCycling();
+
+    expect(ordered.map((w) => w.id)).toEqual(["main", "wt-a", "ext"]);
+  });
+
+  it("keeps external worktrees last in grouped mode", () => {
+    useWorktreeFilterStore.setState({ groupByType: true, orderBy: "alpha" });
+    setWorktrees([
+      createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
+      createSnapshot({
+        id: "ext-feat",
+        name: "aaa-scratch",
+        branch: "feature/scratch",
+        isExternal: true,
+      }),
+      createSnapshot({ id: "int-bug", name: "zzz-bug", branch: "bugfix/z" }),
+    ]);
+
+    const ordered = getVisibleWorktreesForCycling();
+
+    expect(ordered.map((w) => w.id)).toEqual(["main", "int-bug", "ext-feat"]);
+  });
+
   it("sorts non-main worktrees alphabetically when orderBy is alpha", () => {
     useWorktreeFilterStore.setState({ orderBy: "alpha" });
     setWorktrees([

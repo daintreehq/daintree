@@ -1543,3 +1543,39 @@ describe("WorktreeHeader blocking-op passive indicator (#10921)", () => {
     expect(screen.queryByRole("button", { name: /^Abort / })).toBeNull();
   });
 });
+
+describe("WorktreeHeader external indicator", () => {
+  const externalPath = "/private/tmp/claude-501/session/scratchpad/bench-baseline";
+  const externalWorktree: WorktreeState = {
+    ...baseWorktree,
+    path: externalPath,
+    isExternal: true,
+  };
+
+  it("names the worktree's location so 'where' is discoverable, not just 'that'", () => {
+    renderHeader({ worktree: externalWorktree });
+
+    const indicator = screen.getByRole("img", { name: /external worktree/i });
+    expect(indicator.getAttribute("aria-label")).toContain(externalPath);
+  });
+
+  it("stays visible on a collapsed card", () => {
+    renderHeader({ worktree: externalWorktree, isCollapsed: true });
+
+    expect(screen.getByRole("img", { name: /external worktree/i })).toBeDefined();
+  });
+
+  it("stays visible in the grid variant", () => {
+    renderHeader({ worktree: externalWorktree, variant: "grid" });
+
+    expect(screen.getByRole("img", { name: /external worktree/i })).toBeDefined();
+  });
+
+  it("is absent for an internal worktree and for unknown classification", () => {
+    renderHeader({ worktree: { ...baseWorktree, isExternal: false } });
+    expect(screen.queryByRole("img", { name: /external worktree/i })).toBeNull();
+
+    renderHeader({ worktree: { ...baseWorktree, isExternal: undefined } });
+    expect(screen.queryByRole("img", { name: /external worktree/i })).toBeNull();
+  });
+});

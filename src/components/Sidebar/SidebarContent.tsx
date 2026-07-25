@@ -79,6 +79,7 @@ import {
   sortWorktreesByRelevance,
   groupByType,
   findIntegrationWorktree,
+  isExternalWorktree,
   scoreWorktree,
   computeChipCounts,
   type DerivedWorktreeMeta,
@@ -1259,6 +1260,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const sidebarItems = useMemo<SidebarFlatItem[]>(() => {
     const items: SidebarFlatItem[] = [];
     const pinnedSet = new Set(pinnedWorktrees);
+    // External worktrees sort below the pinned area regardless of a leftover pin
+    // entry, so their rows must not claim pinned affordances either (#11434).
+    const isRowPinned = (w: WorktreeState) => pinnedSet.has(w.id) && !isExternalWorktree(w);
     let nextRowIndex = firstScrollableRowIndex;
 
     // Deleted worktrees anchor their row to the live neighbour it sat above
@@ -1311,7 +1315,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             worktreeId: w.id,
             ariaRowIndex: nextRowIndex++,
             rowIndex: orderIndex.get(w.id) ?? -1,
-            isPinned: pinnedSet.has(w.id),
+            isPinned: isRowPinned(w),
             mode: "static",
           });
         }
@@ -1335,7 +1339,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         worktreeId: w.id,
         ariaRowIndex: nextRowIndex++,
         rowIndex: i,
-        isPinned: pinnedSet.has(w.id),
+        isPinned: isRowPinned(w),
         mode: "sortable",
       });
     }

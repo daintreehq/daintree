@@ -66,6 +66,7 @@ export interface SnapshotBuilderHost {
   readonly fetchNetworkFailed: boolean;
   readonly isFetchInFlight: boolean;
   readonly matchedForgeProviderId: string | null;
+  readonly isExternal: boolean | undefined;
   readonly isWslPath: boolean;
   readonly wslDistro: string | undefined;
   readonly wslPosixPath: string | undefined;
@@ -176,6 +177,10 @@ export class SnapshotBuilder {
       // serializes the correct value, never a stale cached copy.
       isFetchInFlight: this.host.isFetchInFlight || undefined,
       matchedForgeProviderId: this.host.matchedForgeProviderId ?? undefined,
+      // Passed through verbatim rather than `|| undefined` like the flags above:
+      // false ("inside the boundary") and undefined ("boundary unknown") are
+      // distinct states, and collapsing them would lose that.
+      isExternal: this.host.isExternal,
       isWslPath: this.host.isWslPath || undefined,
       wslDistro: this.host.wslDistro,
       wslPosixPath: this.host.wslPosixPath,

@@ -1,6 +1,7 @@
-import { resolve as pathResolve } from "path";
+import { dirname, isAbsolute, resolve as pathResolve } from "path";
 import type { SimpleGit } from "simple-git";
 import type { Worktree } from "../../shared/types/worktree.js";
+import { isPathInside } from "../../shared/utils/path.js";
 import { getGitDir } from "../utils/gitUtils.js";
 
 const WORKTREE_LIST_CACHE_TTL_MS = 15_000;
@@ -180,7 +181,49 @@ export class WorktreeListService {
     }
   }
 
+  /**
+   * Directory every Daintree-created worktree is confined to, used to classify
+   * `isExternal`. Returns undefined when no boundary can be trusted: no project
+   * root, or a repo at the filesystem root (where the parent is the root itself
+   * and would accept every path on the system — same rejection as
+   * `assertWorktreePathContained`). Undefined means "unknown", so callers leave
+   * `isExternal` unset rather than flagging every worktree (#2251).
+   */
+  private getContainmentBoundary(): string | undefined {
+    if (!this.projectRootPath) return undefined;
+    const resolvedRoot = pathResolve(this.projectRootPath);
+    const parentDir = dirname(resolvedRoot);
+    return parentDir === resolvedRoot ? undefined : parentDir;
+  }
+
+  /**
+   * The main worktree is the project's own by definition and is never external,
+   * whatever the path math says. That matters when the opened project IS a
+   * linked worktree: the boundary is then that worktree's parent, which the
+   * repo's main worktree legitimately sits outside of. Deriving the flag purely
+   * from paths would badge the project's own main worktree as external — the
+   * failure mode #2251 was reverted for.
+   *
+   * A relative porcelain path stays unclassified. Git 2.48+'s
+   * `worktree.useRelativePaths` records linked worktrees relative to
+   * `$GIT_COMMON_DIR/worktrees/<id>/`, an admin directory whose id the porcelain
+   * output doesn't carry, so `normalizedPath` is untrustworthy here and the
+   * honest answer is "unknown" rather than a badge derived from a bad path.
+   */
+  private static classifyExternal(
+    wt: RawWorktreeRecord,
+    normalizedPath: string,
+    boundary: string | undefined
+  ): boolean | undefined {
+    if (boundary === undefined) return undefined;
+    if (wt.isMainWorktree) return false;
+    if (!isAbsolute(wt.path)) return undefined;
+    return !isPathInside(normalizedPath, boundary);
+  }
+
   mapToWorktrees(rawWorktrees: RawWorktreeRecord[]): Promise<Worktree[]> {
+    const boundary = this.getContainmentBoundary();
+
     return Promise.all(
       rawWorktrees.map(async (wt) => {
         const normalizedPath = pathResolve(wt.path);
@@ -204,6 +247,7 @@ export class WorktreeListService {
           isDetached: wt.isDetached,
           isCurrent: false,
           isMainWorktree: wt.isMainWorktree,
+          isExternal: WorktreeListService.classifyExternal(wt, normalizedPath, boundary),
           gitDir: (await getGitDir(normalizedPath)) || undefined,
           isLocked: wt.isLocked,
           lockReason: wt.lockReason,

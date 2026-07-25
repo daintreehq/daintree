@@ -13,6 +13,7 @@ export {
   FileText, // view selected file path in the read-only file viewer
   FolderGit2, // git worktree (single)
   FolderOpen, // reveal in file manager (Finder / Explorer / file manager)
+  FolderOutput, // worktree living outside the project directory (external)
   Folders, // copy tree / file hierarchy capture (two overlapping folders)
   GitPullRequest, // forge provider / code-host plugin category
   History, // resume closed session / session history

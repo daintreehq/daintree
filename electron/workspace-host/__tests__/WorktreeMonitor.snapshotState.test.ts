@@ -973,4 +973,47 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
   });
+
+  describe("external classification (#11434)", () => {
+    // The monitor copies selected Worktree fields into private state rather than
+    // retaining the object, so a field it doesn't copy never reaches a snapshot.
+    it("carries the constructor's classification into the snapshot", () => {
+      const external = new WorktreeMonitor(
+        { ...TEST_WORKTREE, isExternal: true },
+        TEST_CONFIG,
+        makeCallbacks(),
+        "main"
+      );
+      const internal = new WorktreeMonitor(
+        { ...TEST_WORKTREE, isExternal: false },
+        TEST_CONFIG,
+        makeCallbacks(),
+        "main"
+      );
+
+      expect(external.getSnapshot().isExternal).toBe(true);
+      expect(internal.getSnapshot().isExternal).toBe(false);
+    });
+
+    it("keeps an unknown classification unknown rather than coercing it to false", () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+
+      expect(monitor.getSnapshot().isExternal).toBeUndefined();
+    });
+
+    it("reflects a reconciled classification through the setter", () => {
+      const monitor = new WorktreeMonitor(
+        { ...TEST_WORKTREE, isExternal: false },
+        TEST_CONFIG,
+        makeCallbacks(),
+        "main"
+      );
+
+      monitor.isExternal = true;
+      expect(monitor.getSnapshot().isExternal).toBe(true);
+
+      monitor.isExternal = undefined;
+      expect(monitor.getSnapshot().isExternal).toBeUndefined();
+    });
+  });
 });
