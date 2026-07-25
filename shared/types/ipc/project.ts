@@ -121,6 +121,21 @@ export interface ProjectStatusEntry {
   activeAgentCount: number;
   waitingAgentCount: number;
   processCount: number;
+  /**
+   * Waiting agents whose `waitingReason` is `"error"` — settled after a blocking
+   * failure, where input may not unblock them. A subset of
+   * {@link ProjectStatusEntry.waitingAgentCount}, never additional to it: the
+   * switcher reports "needs input" for the remainder and "blocked" for these,
+   * so double-counting would overstate both.
+   */
+  blockedAgentCount: number;
+  /**
+   * Epoch ms of the earliest state change among this project's waiting agents,
+   * so the switcher can age a wait ("oldest 42m") instead of only asserting one
+   * exists. Absent when nothing is waiting, or when no waiting terminal carried
+   * a `lastStateChange` (a pre-detection boot window).
+   */
+  oldestWaitingSince?: number;
 }
 
 /** Project status map pushed from main process, keyed by project ID */

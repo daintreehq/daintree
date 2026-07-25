@@ -142,17 +142,31 @@ export function ProjectSwitcher() {
     [projectSwitcher]
   );
 
-  // Reads the uncapped, unscoped agent totals rather than `results` — that
-  // array is scoped for presentation (modal browse drops projects whose
-  // process count hasn't landed yet), which would blink the badge off.
+  // Reads the totals across every non-active project rather than `results`,
+  // which is ordered and filtered for presentation.
   const badgeStatus = useMemo(() => {
-    const { activeAgentCount, waitingAgentCount } = projectSwitcher.nonActiveAgentCounts;
+    const { activeAgentCount, waitingAgentCount, attentionProjectCount } =
+      projectSwitcher.nonActiveAgentCounts;
 
+    // Waiting counts PROJECTS, not agents: the number answers "how many places
+    // need me?", which stays legible when eight agents pile up in one repo. An
+    // agent tally there would read as eight separate obligations.
     if (waitingAgentCount > 0) {
-      return { color: "bg-state-waiting", pulse: false, count: waitingAgentCount };
+      return {
+        color: "bg-state-waiting",
+        pulse: false,
+        count: attentionProjectCount,
+        label: `${attentionProjectCount} project${attentionProjectCount === 1 ? "" : "s"} waiting for input`,
+      };
     }
+    // Work in progress isn't an obligation, so it stays an agent count.
     if (activeAgentCount > 0) {
-      return { color: "bg-activity-active", pulse: true, count: activeAgentCount };
+      return {
+        color: "bg-activity-active",
+        pulse: true,
+        count: activeAgentCount,
+        label: `${activeAgentCount} background agent${activeAgentCount === 1 ? "" : "s"} working`,
+      };
     }
     return null;
   }, [projectSwitcher.nonActiveAgentCounts]);
@@ -363,7 +377,7 @@ export function ProjectSwitcher() {
               {badgeStatus && (
                 <span
                   role="status"
-                  aria-label={`${badgeStatus.count} background agent${badgeStatus.count === 1 ? "" : "s"} ${badgeStatus.pulse ? "working" : "waiting"}`}
+                  aria-label={badgeStatus.label}
                   className={cn(
                     "absolute top-1 right-1 h-2 w-2 rounded-full ring-2 ring-[var(--color-surface-panel-elevated)]",
                     badgeStatus.color,

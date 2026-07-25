@@ -108,7 +108,9 @@ export class ProjectStatsService {
         !eb ||
         ea.processCount !== eb.processCount ||
         ea.activeAgentCount !== eb.activeAgentCount ||
-        ea.waitingAgentCount !== eb.waitingAgentCount
+        ea.waitingAgentCount !== eb.waitingAgentCount ||
+        ea.blockedAgentCount !== eb.blockedAgentCount ||
+        ea.oldestWaitingSince !== eb.oldestWaitingSince
       ) {
         return false;
       }
@@ -143,14 +145,17 @@ export class ProjectStatsService {
 
       if (this.generation !== gen) return;
 
-      const agentCounts = new Map<string, { active: number; waiting: number }>();
+      const agentCounts = new Map<
+        string,
+        { active: number; waiting: number; blocked: number; oldestWaitingSince: number | null }
+      >();
       // Per-project count of Daintree Assistant "help" PTYs. The PTY host tallies
       // them into `terminalCount`, but the assistant is tooling-internal — it must
       // be netted out of `processCount` and never appear in the agent counts the
       // switcher shows (#10989).
       const helpProcessCounts = new Map<string, number>();
       for (const id of projectIds) {
-        agentCounts.set(id, { active: 0, waiting: 0 });
+        agentCounts.set(id, { active: 0, waiting: 0, blocked: 0, oldestWaitingSince: null });
         helpProcessCounts.set(id, 0);
       }
       const availability = getAgentAvailabilityStore();
@@ -186,6 +191,22 @@ export class ProjectStatsService {
 
         if (terminal.agentState === "waiting") {
           counts.waiting += 1;
+          // `"error"` means the agent settled after a blocking failure, where
+          // input may not unblock it — a materially different ask than an empty
+          // prompt. Counted as a subset of `waiting`, never in addition to it.
+          if (terminal.waitingReason === "error") {
+            counts.blocked += 1;
+          }
+          // Age the wait from the transition into `waiting`. Terminals that
+          // haven't recorded one yet (boot window before detection commits)
+          // still count toward `waiting` but can't contribute an age.
+          const since = terminal.lastStateChange;
+          if (typeof since === "number" && since > 0) {
+            counts.oldestWaitingSince =
+              counts.oldestWaitingSince === null
+                ? since
+                : Math.min(counts.oldestWaitingSince, since);
+          }
         } else if (terminal.agentState === "working") {
           counts.active += 1;
         }
@@ -195,7 +216,12 @@ export class ProjectStatsService {
       for (const entry of statsResults) {
         if (entry.status === "fulfilled") {
           const [id, ptyStats] = entry.value;
-          const counts = agentCounts.get(id) ?? { active: 0, waiting: 0 };
+          const counts = agentCounts.get(id) ?? {
+            active: 0,
+            waiting: 0,
+            blocked: 0,
+            oldestWaitingSince: null,
+          };
           const helpCount = helpProcessCounts.get(id) ?? 0;
           statusMap[id] = {
             // Net out the assistant help PTY the host counted but the switcher
@@ -203,6 +229,10 @@ export class ProjectStatsService {
             processCount: Math.max(0, ptyStats.terminalCount - helpCount),
             activeAgentCount: counts.active,
             waitingAgentCount: counts.waiting,
+            blockedAgentCount: counts.blocked,
+            ...(counts.oldestWaitingSince !== null
+              ? { oldestWaitingSince: counts.oldestWaitingSince }
+              : {}),
           };
         }
       }

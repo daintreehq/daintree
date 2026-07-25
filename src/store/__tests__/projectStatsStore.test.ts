@@ -39,8 +39,18 @@ describe("projectStatsStore", () => {
     expect(onStatsUpdatedMock).toHaveBeenCalledOnce();
 
     const payload: ProjectStatusMap = {
-      "proj-1": { activeAgentCount: 2, waitingAgentCount: 1, processCount: 3 },
-      "proj-2": { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+      "proj-1": {
+        activeAgentCount: 2,
+        waitingAgentCount: 1,
+        blockedAgentCount: 0,
+        processCount: 3,
+      },
+      "proj-2": {
+        activeAgentCount: 0,
+        waitingAgentCount: 0,
+        blockedAgentCount: 0,
+        processCount: 0,
+      },
     };
 
     capturedCallback!(payload);
@@ -65,10 +75,10 @@ describe("projectStatsStore", () => {
 
   it("setStats replaces the entire stats map", () => {
     const first: ProjectStatusMap = {
-      a: { activeAgentCount: 1, waitingAgentCount: 0, processCount: 1 },
+      a: { activeAgentCount: 1, waitingAgentCount: 0, blockedAgentCount: 0, processCount: 1 },
     };
     const second: ProjectStatusMap = {
-      b: { activeAgentCount: 0, waitingAgentCount: 2, processCount: 4 },
+      b: { activeAgentCount: 0, waitingAgentCount: 2, blockedAgentCount: 0, processCount: 4 },
     };
 
     useProjectStatsStore.getState().setStats(first);

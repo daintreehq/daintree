@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/context-menu";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { formatTimeAgo } from "@/utils/timeAgo";
+import { getProjectRowStatus, type ProjectRowTone } from "@/lib/projectRowStatus";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
 import { useOverlayClaim } from "@/hooks";
@@ -43,10 +44,12 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { defaultScratchName } from "@shared/utils/scratchName";
 import type {
   DeleteAllScratchesSnapshot,
+  ProjectSectionKey,
   ProjectSwitcherMode,
   SearchableProject,
   SearchableScratch,
 } from "@/hooks/useProjectSwitcherPalette";
+import { PROJECT_SECTION_LABELS } from "@/hooks/useProjectSwitcherPalette";
 import { useUIStore } from "@/store/uiStore";
 import {
   useProjectSettingsStore,
@@ -152,41 +155,49 @@ interface ProjectListItemProps {
   onHoverProjectEnd?: (pointerType: string) => void;
 }
 
-function StatusDot({ project }: { project: SearchableProject }) {
-  const hasActive = project.activeAgentCount > 0;
-  const hasWaiting = project.waitingAgentCount > 0;
-  const hasProcesses = project.processCount > 0;
+const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
+  blocked: "text-status-danger/80",
+  waiting: "text-activity-waiting",
+  working: "text-activity-working",
+  running: "text-daintree-text/50",
+  muted: "text-daintree-text/50",
+};
 
-  if (hasActive) {
-    return (
-      <div
-        className="w-1.5 h-1.5 rounded-full bg-activity-active animate-activity-pulse shrink-0"
-        aria-label="Agents working"
-      />
-    );
-  }
-  if (hasWaiting) {
-    return (
-      <div
-        className="w-1.5 h-1.5 rounded-full bg-status-warning shrink-0"
-        aria-label="Agents waiting"
-      />
-    );
-  }
-  if (hasProcesses || project.isBackground) {
-    return (
-      <div
-        className="w-1.5 h-1.5 rounded-full bg-status-success shrink-0"
-        aria-label="Running in background"
-      />
-    );
-  }
-  return (
-    <div
-      className="w-1.5 h-1.5 rounded-full border border-daintree-text/20 shrink-0"
-      aria-label="Idle"
-    />
-  );
+const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
+  blocked: "bg-status-danger",
+  waiting: "bg-status-warning",
+  working: "bg-activity-active animate-activity-pulse",
+  running: "bg-status-success",
+  muted: "border border-daintree-text/20",
+};
+
+/**
+ * The dot repeats the status line's tone rather than encoding anything on its
+ * own — status must never be colour-only, and the sentence beside it already
+ * carries the meaning for anyone who can't separate these hues.
+ */
+function StatusDot({ tone }: { tone: ProjectRowTone }) {
+  return <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", ROW_DOT_CLASS[tone])} />;
+}
+
+/** Matches the resolution of the wait ages on screen — they change by the minute. */
+const WAIT_AGE_TICK_MS = 60_000;
+
+/**
+ * Re-renders once a minute so wait ages advance while the palette sits open.
+ *
+ * Ages are derived from a timestamp at render time, and the stats service
+ * suppresses broadcasts whose payload hasn't changed — so without a tick, an
+ * agent that has been waiting eleven minutes keeps reading "just now" for as
+ * long as nothing else happens.
+ */
+function useWaitAgeTick(active: boolean): void {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => setTick((value) => value + 1), WAIT_AGE_TICK_MS);
+    return () => clearInterval(id);
+  }, [active]);
 }
 
 function ProjectListItem({
@@ -216,35 +227,13 @@ function ProjectListItem({
   );
   const isProjectNotificationsMuted = areProjectNotificationsMuted(notificationOverrides);
 
-  const { secondaryText, secondaryClass } = (() => {
-    if (project.isMissing)
-      return { secondaryText: "Directory not found", secondaryClass: "text-status-warning/70" };
-    if (project.activeAgentCount > 0)
-      return { secondaryText: "Agent working\u2026", secondaryClass: "text-activity-working" };
-    if (project.waitingAgentCount > 0)
-      return { secondaryText: "Agent waiting…", secondaryClass: "text-activity-waiting" };
-    // Auto-closed by the background-idle sweep (#10830) — surface the distinct
-    // "parked" label instead of a plain time-ago so the user understands why the
-    // project left active state and that reopening restores it.
-    if (project.status === "closed" && project.autoParkedAt)
-      return {
-        secondaryText: "Suspended to free memory",
-        secondaryClass: "text-daintree-text/50",
-      };
-    if (project.lastOpened > 0)
-      return {
-        secondaryText: formatTimeAgo(project.lastOpened),
-        secondaryClass: "text-daintree-text/50",
-      };
-    return { secondaryText: project.displayPath, secondaryClass: "text-daintree-text/50" };
-  })();
+  const status = getProjectRowStatus(project);
 
   const row = (
     <div
       id={`project-option-${project.id}`}
       role="option"
       aria-selected={isSelected}
-      aria-disabled={project.isMissing || undefined}
       className={cn(
         "group relative w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent",
         "aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2 aria-selected:before:w-[2px] aria-selected:before:rounded-r aria-selected:before:bg-daintree-accent aria-selected:before:content-['']",
@@ -252,18 +241,18 @@ function ProjectListItem({
           ? cn("text-daintree-text", isSelected && "bg-overlay-raised border-overlay")
           : project.isMissing
             ? cn(
-                "text-daintree-text/50",
+                "text-daintree-text/50 cursor-pointer",
                 isSelected ? "bg-overlay-raised border-overlay" : "hover:bg-overlay-subtle"
               )
             : isSelected
               ? "bg-overlay-raised border-overlay text-daintree-text cursor-pointer"
               : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text cursor-pointer"
       )}
-      onClick={() => !project.isActive && !project.isMissing && onSelect(project)}
+      onClick={() => !project.isActive && onSelect(project)}
       onPointerEnter={onHoverProject ? (e) => onHoverProject(project.id, e.pointerType) : undefined}
       onPointerLeave={onHoverProjectEnd ? (e) => onHoverProjectEnd(e.pointerType) : undefined}
     >
-      <StatusDot project={project} />
+      <StatusDot tone={status.tone} />
 
       <div
         className={cn(
@@ -298,10 +287,15 @@ function ProjectListItem({
           )}
         </div>
 
-        <div className="flex items-center min-w-0 mt-0.5">
-          <span className={cn("truncate text-[11px] leading-none", secondaryClass)}>
-            {secondaryText}
+        <div className="flex items-center gap-1 min-w-0 mt-0.5">
+          <span className={cn("truncate text-[11px] leading-none", ROW_TONE_CLASS[status.tone])}>
+            {status.text}
           </span>
+          {status.pathHint && (
+            <span className="truncate text-[11px] leading-none text-daintree-text/35 shrink">
+              {`· ${status.pathHint}`}
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -395,16 +389,10 @@ function ProjectListItem({
   );
 }
 
-interface TemporalSection {
-  key: string;
+interface ProjectSection {
+  key: ProjectSectionKey;
   label: string | null;
   items: SearchableProject[];
-}
-
-function getTemporalBucket(timestamp: number, todayStart: number, weekStart: number): string {
-  if (timestamp >= todayStart) return "today";
-  if (timestamp >= weekStart) return "this-week";
-  return "older";
 }
 
 interface ProjectListContentProps {
@@ -413,7 +401,6 @@ interface ProjectListContentProps {
   query: string;
   onSelect: (project: SearchableProject) => void;
   listRef: React.RefObject<HTMLDivElement | null>;
-  mode?: ProjectSwitcherMode;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onFreeMemoryProject?: (projectId: string) => void;
@@ -432,7 +419,6 @@ function ProjectListContent({
   query,
   onSelect,
   listRef,
-  mode,
   onStopProject,
   onCloseProject,
   onFreeMemoryProject,
@@ -446,42 +432,34 @@ function ProjectListContent({
 }: ProjectListContentProps) {
   const isSearching = query.trim().length > 0;
 
-  const sections = useMemo<TemporalSection[] | null>(() => {
-    if (isSearching || results.length === 0 || mode === "modal") return null;
+  // Mounted here, once for the whole list, rather than per row: sixty timers in
+  // a hundred-project list would all fire for the same reason.
+  useWaitAgeTick(results.length > 0);
 
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const dayOfWeek = now.getDay();
-    const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-    const weekStart = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate() - mondayOffset
-    ).getTime();
+  // Bands are contiguous runs of `results`, never a re-filter of it. The hook
+  // has already sorted by section, so walking the array once and cutting where
+  // `section` changes reproduces the grouping without building a second,
+  // narrower list — the thing that stranded the highlight and let Enter commit
+  // an off-screen project (#11071). Every row in every band is still a row of
+  // `results`, at the same index the arrow keys use.
+  const sections = useMemo<ProjectSection[] | null>(() => {
+    if (isSearching || results.length === 0) return null;
 
-    const current = results.filter((p) => p.isActive);
-    const pinned = results.filter((p) => p.isPinned && !p.isActive);
-    const remaining = results.filter((p) => !p.isActive && !p.isPinned);
-
-    const buckets: Record<string, SearchableProject[]> = {
-      today: [],
-      "this-week": [],
-      older: [],
-    };
-    for (const p of remaining) {
-      buckets[getTemporalBucket(p.lastOpened, todayStart, weekStart)]!.push(p);
+    const bands: ProjectSection[] = [];
+    for (const project of results) {
+      const last = bands.at(-1);
+      if (last && last.key === project.section) {
+        last.items.push(project);
+      } else {
+        bands.push({
+          key: project.section,
+          label: PROJECT_SECTION_LABELS[project.section],
+          items: [project],
+        });
+      }
     }
-
-    return [
-      current.length > 0 ? { key: "current", label: null, items: current } : null,
-      pinned.length > 0 ? { key: "pinned", label: "Pinned", items: pinned } : null,
-      buckets.today!.length > 0 ? { key: "today", label: "Today", items: buckets.today! } : null,
-      buckets["this-week"]!.length > 0
-        ? { key: "this-week", label: "This Week", items: buckets["this-week"]! }
-        : null,
-      buckets.older!.length > 0 ? { key: "older", label: "Older", items: buckets.older! } : null,
-    ].filter((s): s is TemporalSection => s !== null);
-  }, [results, isSearching, mode]);
+    return bands;
+  }, [results, isSearching]);
 
   // `results` is already scoped by the hook to exactly the rows this mode
   // renders, so it doubles as the arrow-key domain. Never re-filter it here:
@@ -519,16 +497,14 @@ function ProjectListContent({
             <div className="px-3 py-8 text-center text-daintree-text/50 text-sm">
               {query.trim() ? (
                 <div>{`No projects match "${query}"`}</div>
-              ) : mode === "modal" ? (
-                "No active projects"
               ) : (
-                "No projects available — add one below"
+                "Open a project to get started"
               )}
             </div>
           </div>
         ) : sections ? (
           sections.map((section, sectionIdx) => {
-            const isActiveSection = section.items[0]?.isActive;
+            const isActiveSection = section.key === "current";
             const isLast = sectionIdx === sections.length - 1;
 
             return (
@@ -1133,7 +1109,6 @@ function ProjectPaletteInner({
           query={query}
           onSelect={onSelect}
           listRef={listRef}
-          mode={mode}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
           onFreeMemoryProject={onFreeMemoryProject}

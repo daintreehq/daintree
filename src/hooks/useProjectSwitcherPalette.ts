@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef, useDeferredValue } from "react";
 import { rankProjectMatches } from "@/lib/projectSwitcherSearch";
+import { buildDisplayPaths } from "@/lib/projectDisplayPath";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
@@ -40,6 +41,34 @@ export type DeleteAllScratchesSnapshot = ReadonlyArray<
   Readonly<Pick<SearchableScratch, "id" | "name">>
 >;
 
+/**
+ * Band a project renders under in browse. Ordered exactly as the sections
+ * appear, so the flat `results` array can be sorted by section index and the
+ * component can emit a header wherever the key changes — sections stay a *view*
+ * over the one array the arrow keys walk, never a second, narrower list
+ * (#11071).
+ */
+export const PROJECT_SECTION_ORDER = [
+  "current",
+  "attention",
+  "activity",
+  "pinned",
+  "recent",
+  "unavailable",
+] as const;
+
+export type ProjectSectionKey = (typeof PROJECT_SECTION_ORDER)[number];
+
+/** Header text per band. `current` is deliberately unlabelled. */
+export const PROJECT_SECTION_LABELS: Record<ProjectSectionKey, string | null> = {
+  current: null,
+  attention: "Needs attention",
+  activity: "Activity",
+  pinned: "Pinned",
+  recent: "Recent",
+  unavailable: "Unavailable",
+};
+
 export interface SearchableProject {
   id: string;
   name: string;
@@ -57,8 +86,14 @@ export interface SearchableProject {
   frecencyScore: number;
   activeAgentCount: number;
   waitingAgentCount: number;
+  /** Waiting agents blocked on an error — a subset of `waitingAgentCount`. */
+  blockedAgentCount: number;
+  /** Epoch ms the oldest current wait began, absent when nothing is waiting. */
+  oldestWaitingSince?: number;
   processCount: number;
   displayPath: string;
+  /** Browse band. Not meaningful while searching, where rank order wins. */
+  section: ProjectSectionKey;
 }
 
 export interface UseProjectSwitcherPaletteReturn {
@@ -67,9 +102,9 @@ export interface UseProjectSwitcherPaletteReturn {
   query: string;
   /**
    * The projects the palette renders, in render order — and the only array
-   * `selectedIndex` may be read against. In modal browse this is scoped to the
-   * projects the user can switch between right now; the dropdown and every
-   * search list the full set.
+   * `selectedIndex` may be read against. Every mode lists every registered
+   * project: browse is section-ordered (see {@link PROJECT_SECTION_ORDER}) and
+   * search is rank-ordered, but neither is scoped or capped.
    */
   results: SearchableProject[];
   /** True while `deferredQuery` has not yet caught up to `query` — the results shown are from the previous query. */
@@ -78,8 +113,7 @@ export interface UseProjectSwitcherPaletteReturn {
    * The currently active project as a `SearchableProject`, with stats and
    * pin/missing flags enriched. Decoupled from `results` so callers (e.g. the
    * toolbar pill context menu) can read pin/processCount/etc. even when the
-   * active project sits outside the 15-item results window or is filtered out
-   * by the current `query`.
+   * active project is filtered out by the current `query`.
    */
   activeProject: SearchableProject | null;
   /**
@@ -152,7 +186,12 @@ export interface UseProjectSwitcherPaletteReturn {
    * process count (the two arrive from separate `ProjectStatsService` calls)
    * would otherwise drop out of the toolbar badge for a beat.
    */
-  nonActiveAgentCounts: { activeAgentCount: number; waitingAgentCount: number };
+  nonActiveAgentCounts: {
+    activeAgentCount: number;
+    waitingAgentCount: number;
+    /** Non-active projects with at least one waiting agent — the badge's number. */
+    attentionProjectCount: number;
+  };
   /** Scratch (one-off agent workspace) view-models, sorted by lastOpened desc. */
   scratchResults: SearchableScratch[];
   /**
@@ -194,37 +233,77 @@ export interface UseProjectSwitcherPaletteReturn {
   isDeletingOriginalScratch: boolean;
 }
 
-const MAX_RESULTS = 15;
-
 /**
- * Modal browse lists only the projects the user can switch between right now.
- * Deliberately not named "switchable": the active project matches too, and
- * `selectProject` is a no-op for it.
+ * Assign a project to its browse band. Attention outranks activity outranks
+ * habit: a project whose agents are blocked or waiting is the most actionable
+ * destination on screen regardless of how often it's opened, and the pinned and
+ * recent bands below it are ordered by frecency rather than raw recency so the
+ * list reflects durable use instead of whatever was touched last.
  */
-function isVisibleInModalBrowse(project: SearchableProject): boolean {
-  return project.isActive || project.isBackground || project.processCount > 0;
+function sectionForProject(project: SearchableProject): ProjectSectionKey {
+  if (project.isActive) return "current";
+  if (project.isMissing) return "unavailable";
+  if (project.waitingAgentCount > 0) return "attention";
+  if (project.activeAgentCount > 0 || project.processCount > 0) return "activity";
+  if (project.isPinned) return "pinned";
+  return "recent";
 }
 
 /**
- * Builds the palette's one array — the rows that render AND the rows the
- * arrow keys walk. Rank (when searching), then scope, then cap: the cap
- * belongs to the eligible set, so a background project sitting past the first
- * 15 unscoped rows still surfaces in modal browse.
+ * Order within a band. Attention sorts blocked-first then oldest-wait-first, so
+ * the agent that has been stuck longest is the one Enter lands on. Activity
+ * sorts by how much is running. Everything else is frecency, which already
+ * blends recency and frequency with a 14-day half-life.
+ */
+function compareWithinSection(a: SearchableProject, b: SearchableProject): number {
+  const section = a.section;
+  if (section === "attention") {
+    if (a.blockedAgentCount !== b.blockedAgentCount) {
+      return b.blockedAgentCount - a.blockedAgentCount;
+    }
+    const aSince = a.oldestWaitingSince ?? Number.POSITIVE_INFINITY;
+    const bSince = b.oldestWaitingSince ?? Number.POSITIVE_INFINITY;
+    if (aSince !== bSince) return aSince - bSince;
+    if (a.waitingAgentCount !== b.waitingAgentCount) {
+      return b.waitingAgentCount - a.waitingAgentCount;
+    }
+  } else if (section === "activity") {
+    const aWork = a.activeAgentCount;
+    const bWork = b.activeAgentCount;
+    if (aWork !== bWork) return bWork - aWork;
+    if (a.processCount !== b.processCount) return b.processCount - a.processCount;
+  } else if (a.frecencyScore !== b.frecencyScore) {
+    return b.frecencyScore - a.frecencyScore;
+  }
+  if (a.lastOpened !== b.lastOpened) return b.lastOpened - a.lastOpened;
+  return a.name.localeCompare(b.name);
+}
+
+/**
+ * Builds the palette's one array — the rows that render AND the rows the arrow
+ * keys walk. Browse is section-ordered so the component can slice it into bands
+ * without ever building a second array; search is pure rank order across every
+ * registered project.
  *
- * `isSearching` tracks the live query while `rankQuery` is the deferred one:
- * the moment the user types, browse scope lifts, even though the ranking is
- * still catching up. Deriving both from the deferred query would flash
- * "No projects match" over a scoped-empty list on the first keystroke.
+ * There is no result cap and no per-mode scoping. Both were real dead ends: the
+ * cap made project 16 unreachable without recalling its name, and scoping modal
+ * browse to live projects meant the same keystroke showed a different universe
+ * than the title-bar dropdown, silently switching to the full set the moment a
+ * character was typed.
+ *
+ * `isSearching` tracks the live query while `rankQuery` is the deferred one, so
+ * the browse-to-search transition doesn't flash "No projects match" over the
+ * previous list on the first keystroke.
  */
 function buildResults(
-  sortedProjects: SearchableProject[],
-  mode: ProjectSwitcherMode,
+  browseOrdered: SearchableProject[],
   rankQuery: string,
   isSearching: boolean
 ): SearchableProject[] {
-  const ranked = rankQuery.trim() ? rankProjectMatches(rankQuery, sortedProjects) : sortedProjects;
-  const scoped = mode === "modal" && !isSearching ? ranked.filter(isVisibleInModalBrowse) : ranked;
-  return scoped.slice(0, MAX_RESULTS);
+  if (isSearching && rankQuery.trim()) {
+    return rankProjectMatches(rankQuery, browseOrdered);
+  }
+  return browseOrdered;
 }
 
 /**
@@ -311,15 +390,34 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         const ids = useProjectStore.getState().projects.map((p) => p.id);
         if (ids.length === 0) return;
         return projectClient.getBulkStats(ids).then((bulk) => {
-          const map: ProjectStatusMap = {};
+          // Seed only — never overwrite.
+          //
+          // `ProjectStatsService` is the authoritative producer: it alone nets
+          // out the assistant help PTY (#10989) and computes the blocked/aged
+          // breakdown, and it suppresses broadcasts whose payload is unchanged.
+          // That suppression is what makes an overwrite here unrecoverable — a
+          // stale bulk response landing after a newer push would stick until the
+          // underlying counts happened to change again.
+          //
+          // Bulk exists to cover the one gap the push model leaves: a renderer
+          // that has never received a broadcast has nothing to show. So fill
+          // absent entries and leave every present one alone.
+          const previous = useProjectStatsStore.getState().stats;
+          const seeded: ProjectStatusMap = { ...previous };
+          let changed = false;
           for (const [id, entry] of Object.entries(bulk)) {
-            map[id] = {
+            if (previous[id] !== undefined) continue;
+            seeded[id] = {
               activeAgentCount: entry.activeAgentCount,
               waitingAgentCount: entry.waitingAgentCount,
+              // Bulk cannot distinguish an error-blocked wait from a prompt, and
+              // guessing would put a red row on screen that no agent earned.
+              blockedAgentCount: 0,
               processCount: entry.processCount,
             };
+            changed = true;
           }
-          useProjectStatsStore.getState().setStats(map);
+          if (changed) useProjectStatsStore.getState().setStats(seeded);
         });
       })
       .catch(() => {
@@ -327,6 +425,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         // timestamp. This background freshness pull must never surface an error.
       });
   }, [isOpen, loadProjects, loadScratches]);
+
+  const displayPathById = useMemo(() => buildDisplayPaths(projects), [projects]);
 
   const searchableProjects = useMemo<SearchableProject[]>(() => {
     return projects.map((p) => {
@@ -337,15 +437,14 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       // A scratch switch clears the project pointer without demoting or
       // broadcasting the row it left, so the pre-scratch project reaches us still
       // marked "active" while nothing is active. Untreated it is neither active
-      // nor background, and `isVisibleInModalBrowse` drops it from the list until
-      // the async reload lands — main makes the same repair on its next read once
-      // the canonical pointer is null (#11085). View-relative by design: a project
+      // nor background — main makes the same repair on its next read once the
+      // canonical pointer is null (#11085). View-relative by design: a project
       // another window owns isn't this view's either.
       const isStaleActive = !isActive && p.status === "active";
       const isBackground =
         p.status === "background" || isStaleActive || (!isActive && !isMissing && hasProcesses);
 
-      return {
+      const project: SearchableProject = {
         id: p.id,
         name: p.name,
         path: p.path,
@@ -361,11 +460,16 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         frecencyScore: p.frecencyScore ?? 3.0,
         activeAgentCount: stats?.activeAgentCount ?? 0,
         waitingAgentCount: stats?.waitingAgentCount ?? 0,
+        blockedAgentCount: stats?.blockedAgentCount ?? 0,
+        oldestWaitingSince: stats?.oldestWaitingSince,
         processCount: stats?.processCount ?? 0,
-        displayPath: p.path.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? p.path,
+        displayPath: displayPathById.get(p.id) ?? p.path,
+        section: "recent",
       };
+      project.section = sectionForProject(project);
+      return project;
     });
-  }, [projects, projectStats, currentProject?.id]);
+  }, [projects, projectStats, currentProject?.id, displayPathById]);
 
   useEffect(() => {
     if (!isOpen || searchableProjects.length === 0) return;
@@ -384,22 +488,87 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const nonActiveAgentCounts = useMemo(() => {
     let activeAgentCount = 0;
     let waitingAgentCount = 0;
+    // Projects, not agents. The badge answers "how many places need me?" — a
+    // number that stays legible while eight agents wait in one repo, where an
+    // agent tally would read as eight separate obligations.
+    let attentionProjectCount = 0;
     for (const project of searchableProjects) {
       if (project.isActive) continue;
       activeAgentCount += project.activeAgentCount;
       waitingAgentCount += project.waitingAgentCount;
+      if (project.waitingAgentCount > 0) attentionProjectCount += 1;
     }
-    return { activeAgentCount, waitingAgentCount };
+    return { activeAgentCount, waitingAgentCount, attentionProjectCount };
   }, [searchableProjects]);
 
-  const sortedProjects = useMemo<SearchableProject[]>(() => {
+  const liveBrowseOrder = useMemo<SearchableProject[]>(() => {
     return [...searchableProjects].sort((a, b) => {
-      if (a.lastOpened !== b.lastOpened) {
-        return b.lastOpened - a.lastOpened;
+      if (a.section !== b.section) {
+        return PROJECT_SECTION_ORDER.indexOf(a.section) - PROJECT_SECTION_ORDER.indexOf(b.section);
       }
-      return a.name.localeCompare(b.name);
+      return compareWithinSection(a, b);
     });
   }, [searchableProjects]);
+
+  // Layout is frozen for the lifetime of an open palette; content stays live.
+  //
+  // Browse ranks on agent state, and agent state changes constantly — an agent
+  // finishing mid-read would otherwise pull its project out of "Needs attention"
+  // and drop it several rows down, moving every row under the pointer between
+  // the moment the user decided to click and the moment they clicked.
+  //
+  // Both the sequence AND each row's band are frozen, because they're one
+  // decision: the component cuts section headers from contiguous runs, so a row
+  // that kept its frozen slot while its band changed underneath would split its
+  // old band in two and print that header twice. Counts, ages and status text
+  // are read fresh every render, so rows still update in place.
+  const frozenLayoutRef = useRef<{
+    order: string[];
+    sections: Map<string, ProjectSectionKey>;
+  } | null>(null);
+  if (!isOpen) frozenLayoutRef.current = null;
+  else if (frozenLayoutRef.current === null) {
+    frozenLayoutRef.current = {
+      order: liveBrowseOrder.map((project) => project.id),
+      sections: new Map(liveBrowseOrder.map((project) => [project.id, project.section])),
+    };
+  }
+
+  const browseOrdered = useMemo<SearchableProject[]>(() => {
+    const frozen = frozenLayoutRef.current;
+    if (!frozen) return liveBrowseOrder;
+
+    const byId = new Map(liveBrowseOrder.map((project) => [project.id, project]));
+    const held = (project: SearchableProject): SearchableProject => {
+      const section = frozen.sections.get(project.id);
+      return section === undefined || section === project.section
+        ? project
+        : { ...project, section };
+    };
+
+    const ordered: SearchableProject[] = [];
+    for (const id of frozen.order) {
+      const project = byId.get(id);
+      if (project) {
+        ordered.push(held(project));
+        byId.delete(id);
+      }
+    }
+    // A project registered while the palette is open has no frozen slot, so it
+    // takes its live band and joins the end of it.
+    for (const project of liveBrowseOrder) {
+      if (byId.has(project.id)) ordered.push(project);
+    }
+
+    // Regroup by band. The sort is stable, so this only moves rows across bands
+    // — within a band the frozen sequence survives untouched. Doing it here
+    // rather than trusting the freeze makes contiguity structural: the component
+    // cuts headers at every section change, so a band appearing twice would
+    // print its header twice, and a late arrival must not be able to cause that.
+    return ordered.sort(
+      (a, b) => PROJECT_SECTION_ORDER.indexOf(a.section) - PROJECT_SECTION_ORDER.indexOf(b.section)
+    );
+  }, [liveBrowseOrder]);
 
   // Clearing the box reverts to browse immediately rather than holding the
   // deferred ranking for a commit — otherwise browse would flash the stale
@@ -407,8 +576,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const resultsQuery = isSearching ? deferredQuery : "";
 
   const results = useMemo<SearchableProject[]>(
-    () => buildResults(sortedProjects, mode, resultsQuery, isSearching),
-    [sortedProjects, mode, resultsQuery, isSearching]
+    () => buildResults(browseOrdered, resultsQuery, isSearching),
+    [browseOrdered, resultsQuery, isSearching]
   );
 
   // The selected PROJECT is the state; its index is derived. Tracking an index
@@ -426,8 +595,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   }, [results, selectedProjectId]);
 
   // Decoupled from `results` so the toolbar pill keeps the active project's
-  // pin/process state even when search filters exclude it or it sits outside
-  // the MAX_RESULTS window.
+  // pin/process state even when the current search filters it out.
   const activeProject = useMemo<SearchableProject | null>(
     () => searchableProjects.find((p) => p.isActive) ?? null,
     [searchableProjects]
@@ -465,17 +633,15 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         setDropdownIsOpen(true);
       }
       setQuery("");
-      // Preselect the MRU switch target — the first row that isn't the project
-      // we're already in — against the list the palette is about to render.
-      // `mode` state hasn't committed yet, so `results` still describes the mode
-      // we're leaving; build the destination list instead. From a scratch there
-      // is no active row, so this lands on row 1 (the project used just before
-      // the scratch) rather than skipping past it (#11085).
-      const initialResults = buildResults(sortedProjects, nextMode, "", false);
-      const initial = initialResults.find((project) => !project.isActive) ?? initialResults[0];
+      // Preselect the first row that isn't the project we're already in, so
+      // open-then-Enter is a one-two return. Both modes render the same
+      // section-ordered browse list now, so this is `browseOrdered` regardless
+      // of which surface is opening. From a scratch there is no active row, so
+      // it lands on row 1 rather than skipping past it (#11085).
+      const initial = browseOrdered.find((project) => !project.isActive) ?? browseOrdered[0];
       setSelectedProjectId(initial?.id ?? null);
     },
-    [sortedProjects]
+    [browseOrdered]
   );
 
   const close = useCallback(() => {
@@ -522,11 +688,24 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const selectProject = useCallback(
     async (project: SearchableProject) => {
-      if (project.isActive || project.isMissing) {
-        return;
-      }
+      if (project.isActive) return;
 
       close();
+
+      // A project whose folder moved used to be an inert row: selecting it did
+      // nothing at all, with no feedback explaining why. Route it to the
+      // relocation dialog instead, so the obvious gesture repairs the thing the
+      // row is complaining about. Inlined rather than calling the shared
+      // `openRelocationDialog` below it, which isn't bound yet at this point.
+      if (project.isMissing) {
+        openRelocation({
+          projectId: project.id,
+          mode: "reattach",
+          oldPath: project.path,
+          name: project.name,
+        });
+        return;
+      }
 
       if (project.isBackground) {
         void reopenProject(project.id);
@@ -534,7 +713,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         void switchProject(project.id);
       }
     },
-    [close, switchProject, reopenProject]
+    [close, switchProject, reopenProject, openRelocation]
   );
 
   const clearPendingPrefetchTimer = useCallback(() => {
