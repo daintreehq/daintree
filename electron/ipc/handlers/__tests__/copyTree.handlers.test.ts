@@ -483,30 +483,38 @@ describe("copyTree handlers", () => {
         seam: "testConfig" as const,
         payload: {},
         optionsArgIndex: 1,
+        acceptsRuntimeOptions: true,
       },
       {
         channel: CHANNELS.COPYTREE_GENERATE,
         seam: "generateContext" as const,
         payload: {},
         optionsArgIndex: 1,
+        acceptsRuntimeOptions: true,
       },
       {
         channel: CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE,
         seam: "generateContext" as const,
         payload: {},
         optionsArgIndex: 1,
+        acceptsRuntimeOptions: true,
       },
       {
         channel: CHANNELS.COPYTREE_INJECT,
         seam: "generateContext" as const,
         payload: { terminalId: "term-1" },
         optionsArgIndex: 1,
+        acceptsRuntimeOptions: true,
       },
       {
+        // The listing takes no per-call options: it answers for the project's
+        // merged settings alone so its whole-root dry run stays comparable with
+        // the bundle it predicts (#11446).
         channel: CHANNELS.COPYTREE_GET_FILE_TREE,
         seam: "getContextFileTree" as const,
         payload: {},
         optionsArgIndex: 2,
+        acceptsRuntimeOptions: false,
       },
     ];
 
@@ -515,91 +523,118 @@ describe("copyTree handlers", () => {
       await handler(mockEvent, { worktreeId: "wt-1", options: {}, ...extraPayload });
     }
 
-    describe.each(MERGE_CALL_SITES)("$channel", ({ channel, seam, payload, optionsArgIndex }) => {
-      it("merges the sender window's project settings, not the globally current project's", async () => {
-        aimGlobalSourcesAtGlobalProject();
-        const seams = registerWithScope({
-          windowScopedPvm: makePvm(SENDER_PROJECT),
-          depsPvm: makePvm(GLOBAL_PROJECT),
+    describe.each(MERGE_CALL_SITES)(
+      "$channel",
+      ({ channel, seam, payload, optionsArgIndex, acceptsRuntimeOptions }) => {
+        it("merges the sender window's project settings, not the globally current project's", async () => {
+          aimGlobalSourcesAtGlobalProject();
+          const seams = registerWithScope({
+            windowScopedPvm: makePvm(SENDER_PROJECT),
+            depsPvm: makePvm(GLOBAL_PROJECT),
+          });
+
+          await invoke(channel, payload);
+
+          const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
+          expect(mergedOptions.maxTotalSize).toBe(senderSettings.copyTreeSettings.maxContextSize);
+          expect(mergedOptions.maxTotalSize).not.toBe(
+            globalSettings.copyTreeSettings.maxContextSize
+          );
+          expect(mergedOptions.always).toEqual(senderSettings.copyTreeSettings.alwaysInclude);
+          expect(mergedOptions.exclude).toEqual(senderSettings.excludedPaths);
+          expect(mergedOptions.exclude).not.toContain(globalSettings.excludedPaths[0]);
+          expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(SENDER_PROJECT);
+          expect(projectStoreMock.getCurrentProjectId).not.toHaveBeenCalled();
         });
 
-        await invoke(channel, payload);
+        it("applies no project settings when the sender's view is unbound", async () => {
+          aimGlobalSourcesAtGlobalProject();
+          const depsPvm = makePvm(GLOBAL_PROJECT);
+          const seams = registerWithScope({ windowScopedPvm: makePvm(null), depsPvm });
 
-        const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
-        expect(mergedOptions.maxTotalSize).toBe(senderSettings.copyTreeSettings.maxContextSize);
-        expect(mergedOptions.maxTotalSize).not.toBe(globalSettings.copyTreeSettings.maxContextSize);
-        expect(mergedOptions.always).toEqual(senderSettings.copyTreeSettings.alwaysInclude);
-        expect(mergedOptions.exclude).toEqual(senderSettings.excludedPaths);
-        expect(mergedOptions.exclude).not.toContain(globalSettings.excludedPaths[0]);
-        expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(SENDER_PROJECT);
-        expect(projectStoreMock.getCurrentProjectId).not.toHaveBeenCalled();
-      });
+          await invoke(channel, payload);
 
-      it("applies no project settings when the sender's view is unbound", async () => {
-        aimGlobalSourcesAtGlobalProject();
-        const depsPvm = makePvm(GLOBAL_PROJECT);
-        const seams = registerWithScope({ windowScopedPvm: makePvm(null), depsPvm });
-
-        await invoke(channel, payload);
-
-        // An unbound view must not inherit the global current project's settings
-        // from ANY source, so nothing back-fills the empty runtime options.
-        expect(seams[seam]).toHaveBeenCalledTimes(1);
-        const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
-        expect(mergedOptions).toEqual({});
-        expect(depsPvm.getProjectIdForWebContents).not.toHaveBeenCalled();
-        expect(projectStoreMock.getProjectSettings).not.toHaveBeenCalled();
-        expect(projectStoreMock.getCurrentProjectId).not.toHaveBeenCalled();
-      });
-
-      it("keeps the sender's project settings when the view is evicted mid-request", async () => {
-        aimGlobalSourcesAtGlobalProject();
-        // The view's binding survives until the handler awaits the workspace,
-        // then eviction drops it — the settings must already be pinned by then.
-        let boundProject: string | null = SENDER_PROJECT;
-        const seams = registerWithScope({
-          windowScopedPvm: { getProjectIdForWebContents: vi.fn(() => boundProject) },
-          depsPvm: makePvm(GLOBAL_PROJECT),
-          onWorkspaceCall: () => {
-            boundProject = null;
-          },
+          // An unbound view must not inherit the global current project's settings
+          // from ANY source, so nothing back-fills the empty runtime options.
+          expect(seams[seam]).toHaveBeenCalledTimes(1);
+          const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
+          expect(mergedOptions).toEqual({});
+          expect(depsPvm.getProjectIdForWebContents).not.toHaveBeenCalled();
+          expect(projectStoreMock.getProjectSettings).not.toHaveBeenCalled();
+          expect(projectStoreMock.getCurrentProjectId).not.toHaveBeenCalled();
         });
 
-        await invoke(channel, payload);
+        it("keeps the sender's project settings when the view is evicted mid-request", async () => {
+          aimGlobalSourcesAtGlobalProject();
+          // The view's binding survives until the handler awaits the workspace,
+          // then eviction drops it — the settings must already be pinned by then.
+          let boundProject: string | null = SENDER_PROJECT;
+          const seams = registerWithScope({
+            windowScopedPvm: { getProjectIdForWebContents: vi.fn(() => boundProject) },
+            depsPvm: makePvm(GLOBAL_PROJECT),
+            onWorkspaceCall: () => {
+              boundProject = null;
+            },
+          });
 
-        const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
-        expect(mergedOptions.exclude).toEqual(senderSettings.excludedPaths);
-        expect(mergedOptions.maxTotalSize).toBe(senderSettings.copyTreeSettings.maxContextSize);
-        expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(SENDER_PROJECT);
-      });
+          await invoke(channel, payload);
 
-      it("carries scoped folder paths through validation to the service", async () => {
-        aimGlobalSourcesAtGlobalProject();
-        const seams = registerWithScope({
-          windowScopedPvm: makePvm(SENDER_PROJECT),
-          depsPvm: makePvm(GLOBAL_PROJECT),
+          const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
+          expect(mergedOptions.exclude).toEqual(senderSettings.excludedPaths);
+          expect(mergedOptions.maxTotalSize).toBe(senderSettings.copyTreeSettings.maxContextSize);
+          expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(SENDER_PROJECT);
         });
 
-        await invoke(channel, { ...payload, options: { scopePaths: ["src/panels"] } });
+        it.runIf(acceptsRuntimeOptions)(
+          "carries scoped folder paths through validation to the service",
+          async () => {
+            aimGlobalSourcesAtGlobalProject();
+            const seams = registerWithScope({
+              windowScopedPvm: makePvm(SENDER_PROJECT),
+              depsPvm: makePvm(GLOBAL_PROJECT),
+            });
 
-        const [, mergedOptions] = seams[seam].mock.calls[0];
-        // A field missing from the schema is dropped silently by Zod, so the
-        // folder copy would degrade to a whole-worktree copy with no error.
-        expect(mergedOptions.scopePaths).toEqual(["src/panels"]);
-      });
+            await invoke(channel, { ...payload, options: { scopePaths: ["src/panels"] } });
 
-      it("falls back to the current project when no project-scoped view manager exists", async () => {
-        projectStoreMock.getCurrentProjectId.mockReturnValue(GLOBAL_PROJECT);
-        const seams = registerWithScope({ withSenderWindow: false });
+            const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
+            // A field missing from the schema is dropped silently by Zod, so the
+            // folder copy would degrade to a whole-worktree copy with no error.
+            expect(mergedOptions.scopePaths).toEqual(["src/panels"]);
+          }
+        );
 
-        await invoke(channel, payload);
+        it.skipIf(acceptsRuntimeOptions)(
+          "never lets a caller scope the listing's dry run",
+          async () => {
+            aimGlobalSourcesAtGlobalProject();
+            const seams = registerWithScope({
+              windowScopedPvm: makePvm(SENDER_PROJECT),
+              depsPvm: makePvm(GLOBAL_PROJECT),
+            });
 
-        const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
-        expect(mergedOptions.maxTotalSize).toBe(globalSettings.copyTreeSettings.maxContextSize);
-        expect(mergedOptions.always).toEqual(globalSettings.copyTreeSettings.alwaysInclude);
-        expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(GLOBAL_PROJECT);
-      });
-    });
+            await invoke(channel, { ...payload, options: { scopePaths: ["src/panels"] } });
+
+            // The listing's budgets are recomputed over whatever the walk saw, so
+            // a scoped listing would answer for a subtree while the bundle is
+            // built from the root — the disagreement the channel exists to end.
+            const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
+            expect(mergedOptions.scopePaths).toBeUndefined();
+          }
+        );
+
+        it("falls back to the current project when no project-scoped view manager exists", async () => {
+          projectStoreMock.getCurrentProjectId.mockReturnValue(GLOBAL_PROJECT);
+          const seams = registerWithScope({ withSenderWindow: false });
+
+          await invoke(channel, payload);
+
+          const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
+          expect(mergedOptions.maxTotalSize).toBe(globalSettings.copyTreeSettings.maxContextSize);
+          expect(mergedOptions.always).toEqual(globalSettings.copyTreeSettings.alwaysInclude);
+          expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(GLOBAL_PROJECT);
+        });
+      }
+    );
   });
 });
 

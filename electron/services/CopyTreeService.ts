@@ -296,6 +296,10 @@ class CopyTreeService {
         ...this.buildSdkOptions(options, controller.signal),
         config,
         dryRun: true,
+        // Merged options can carry `scopePaths` (a folder copy sets it), and
+        // honoring it here would reintroduce exactly the subtree-recomputed
+        // budgets this method avoids.
+        scope: undefined,
       });
       // A cancel that landed during the walk must not produce a tree. The
       // signal is passed to `copy()`, but the check is repeated here so

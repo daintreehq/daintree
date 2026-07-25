@@ -284,6 +284,17 @@ describe("CopyTreeService.getFileTree", () => {
     expect(options.dryRun).toBe(true);
   });
 
+  it("drops scoped paths a caller merged into the listing options", async () => {
+    // A folder copy sets `scopePaths`; if those same merged options ever reach
+    // the listing it must still walk the root, or the picker goes back to
+    // predicting a different bundle than generation produces.
+    await fs.mkdir(path.join(tempDir, "src"), { recursive: true });
+
+    await copyTreeService.getFileTree(tempDir, "src", { scopePaths: ["src"] });
+
+    expect(sdkOptions().scope).toBeUndefined();
+  });
+
   it("selects files under exactly the options generation would use", async () => {
     // Comparing the two option objects — rather than spot-checking the
     // listing's — is what actually proves parity. If the listing built its
