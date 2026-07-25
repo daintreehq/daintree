@@ -242,6 +242,26 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     expect(defaultProps.onSelect).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps modifier shortcuts working from the results region", () => {
+    // The region forwards the raw event, so Meta+Enter must still reach the
+    // new-window branch rather than degrading to a plain switch.
+    const onSelectNewWindow = vi.fn();
+    render(<ProjectSwitcherPalette {...defaultProps} onSelectNewWindow={onSelectNewWindow} />);
+    fireEvent.keyDown(screen.getByTestId("palette-body"), { key: "Enter", metaKey: true });
+
+    expect(onSelectNewWindow).toHaveBeenCalledTimes(1);
+    expect(onSelectNewWindow).toHaveBeenCalledWith(defaultProps.results[0]);
+    expect(defaultProps.onSelect).not.toHaveBeenCalled();
+  });
+
+  it("closes the active project on Meta+Backspace from the results region", () => {
+    const onCloseProject = vi.fn();
+    render(<ProjectSwitcherPalette {...defaultProps} onCloseProject={onCloseProject} />);
+    fireEvent.keyDown(screen.getByTestId("palette-body"), { key: "Backspace", metaKey: true });
+
+    expect(onCloseProject).toHaveBeenCalledWith("p1");
+  });
+
   it("mirrors the input's active descendant onto the results region", () => {
     render(<ProjectSwitcherPalette {...defaultProps} selectedIndex={1} />);
     const activeDescendant = screen

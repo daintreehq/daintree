@@ -315,7 +315,18 @@ AppPaletteDialog.Header = function AppPaletteHeader({
  * reachable by native traversal. PageUp/PageDown/Space are left to the
  * browser so the region keeps its native scrolling.
  */
-const BODY_NAVIGATION_KEYS = new Set(["ArrowUp", "ArrowDown", "Home", "End", "Enter"]);
+const BODY_NAVIGATION_KEYS = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "Home",
+  "End",
+  "Enter",
+  // Palettes bind modified Backspace to a row action (the project switcher
+  // advertises ⌘⌫ to close a project). Forwarding it keeps the footer hint
+  // honest once focus is on the region; palettes that ignore the key are
+  // unaffected, and unmodified Backspace still falls through untouched.
+  "Backspace",
+]);
 
 interface AppPaletteBodyProps {
   children: React.ReactNode;

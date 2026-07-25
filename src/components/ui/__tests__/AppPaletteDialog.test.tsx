@@ -354,15 +354,29 @@ describe("AppPaletteDialog.Body results region (#11431)", () => {
     }
   );
 
-  it.each(["Tab", "PageDown", "PageUp", " ", "Escape"])(
-    "leaves %s to its native behaviour",
-    (key) => {
-      const onNavigationKeyDown = vi.fn();
-      fireEvent.keyDown(renderBody(onNavigationKeyDown), { key });
+  it.each([
+    ["Tab", false],
+    ["Tab", true],
+    ["PageDown", false],
+    ["PageUp", false],
+    [" ", false],
+    ["Escape", false],
+  ])("leaves %s (shift: %s) to its native behaviour", (key, shiftKey) => {
+    const onNavigationKeyDown = vi.fn();
+    const notCancelled = fireEvent.keyDown(renderBody(onNavigationKeyDown), { key, shiftKey });
 
-      expect(onNavigationKeyDown).not.toHaveBeenCalled();
-    }
-  );
+    expect(onNavigationKeyDown).not.toHaveBeenCalled();
+    // Not merely unhandled — uncancelled, so Tab still traverses and
+    // Page/Space still scroll the region.
+    expect(notCancelled).toBe(true);
+  });
+
+  it("forwards modified Backspace so row shortcuts survive the focus move", () => {
+    const onNavigationKeyDown = vi.fn();
+    fireEvent.keyDown(renderBody(onNavigationKeyDown), { key: "Backspace", metaKey: true });
+
+    expect(onNavigationKeyDown).toHaveBeenCalledTimes(1);
+  });
 
   it("ignores navigation keys raised by controls nested inside the region", () => {
     // Enter on the scratch-section style buttons must activate the button, not
