@@ -26,6 +26,15 @@ describe("appProtocol utilities", () => {
       expect(getMimeType("hero.avif")).toBe("image/avif");
     });
 
+    it("maps APNG to its own image type rather than the octet-stream fallback", () => {
+      // An .apng is a valid PNG, but nosniff on daintree-file:// means the
+      // declared type is final: falling back to application/octet-stream would
+      // stop Chromium decoding it in an <img> even though it can animate it.
+      expect(getMimeType("animation.apng")).toBe("image/apng");
+      expect(getMimeType("ANIMATION.APNG")).toBe("image/apng");
+      expect(getMimeType("PHOTO.AVIF")).toBe("image/avif");
+    });
+
     it("should return video MIME types for containers Chromium plays natively", () => {
       // Drives the daintree-file:// handler's video-vs-buffered routing AND the
       // Content-Type on streamed responses — nosniff makes a wrong type fatal.

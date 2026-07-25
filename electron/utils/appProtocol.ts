@@ -46,6 +46,10 @@ const MIME_TYPES: Record<string, string> = {
   ".css": "text/css",
   ".json": "application/json",
   ".png": "image/png",
+  // Distinct from image/png so nosniff doesn't block the load: an unmapped
+  // extension falls through to application/octet-stream below, which Chromium
+  // refuses to decode as an image once nosniff is set.
+  ".apng": "image/apng",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".gif": "image/gif",

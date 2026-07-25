@@ -1677,6 +1677,27 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     expect(fs.open).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["image/avif", "/project/big.avif"],
+    ["image/apng", "/project/big.apng"],
+  ])("extends the raster ceiling to %s", async (mimeType, filePath) => {
+    // Both decode to pixels like every other raster format, so they belong on
+    // the image ceiling — an animated APNG in particular passes 512 KB quickly.
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({ size: 5 * 1024 * 1024 } as Awaited<
+      ReturnType<typeof fs.stat>
+    >);
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue(mimeType);
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest(filePath, "/project"));
+
+    expect(response.status).toBe(200);
+    expect(fs.open).toHaveBeenCalledTimes(1);
+  });
+
   it("still rejects an image beyond the image ceiling with 413", async () => {
     const fs = await import("fs/promises");
     vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
