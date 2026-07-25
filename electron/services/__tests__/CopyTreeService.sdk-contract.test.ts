@@ -206,6 +206,20 @@ describe("CopyTreeService against the installed CopyTree", () => {
       // Never the SDK's own message — it carries the absolute path.
       expect(result.error).not.toContain(tempDir);
     });
+
+    it("blames the folder, not the project, when only the folder is missing", async () => {
+      const missingFolder = await copyTreeService.testConfig(tempDir, {
+        scopePaths: ["does/not/exist"],
+      });
+      const missingProject = await copyTreeService.testConfig(
+        path.join(tempDir, "no-such-project")
+      );
+
+      // The SDK reuses ERR_PATH_NOT_FOUND for both, so a shared message would
+      // send someone with a stale tree row off checking their project setup.
+      expect(missingFolder.error).not.toBe(missingProject.error);
+      expect(missingFolder.error).toMatch(/folder/i);
+    });
   });
 
   it("reports truncation when a character budget bites", async () => {

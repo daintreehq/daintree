@@ -247,13 +247,29 @@ describe("copyContextWithFeedback", () => {
       expect(empty.message).not.toMatch(/ignore/i);
     });
 
-    it("does not blame ignore rules when the user's own settings dropped the files", async () => {
-      const update = await copyFolderYielding({
-        excluded: { total: 3, byReason: { sizeGate: 2, optionExclude: 1 } },
+    it("stops short of a single cause when the exclusions are mixed", async () => {
+      const pure = await copyFolderYielding({
+        excluded: { total: 2, byReason: { gitignore: 2 } },
+      });
+      const mixed = await copyFolderYielding({
+        excluded: { total: 3, byReason: { gitignore: 1, sizeGate: 2 } },
       });
 
-      expect(update.message).not.toMatch(/ignore/i);
-      expect(update.message).toMatch(/settings/i);
+      // Half the files hitting a size limit doesn't make "everything is
+      // ignored" true, so the mixed case must not reuse the confident wording.
+      expect(mixed.message).not.toBe(pure.message);
+      expect(mixed.message).toMatch(/settings/i);
+    });
+
+    it("says the files couldn't be read when that's the only reason", async () => {
+      const update = await copyFolderYielding({
+        excluded: { total: 2, byReason: { unreadable: 2 } },
+      });
+
+      // A folder deleted between render and click reads as unreadable; blaming
+      // ignore rules or settings would send the user to the wrong place.
+      expect(update.message).not.toMatch(/ignore|settings/i);
+      expect(update.message).toMatch(/read/i);
     });
 
     it("leaves a non-empty folder copy on the normal success path", async () => {
@@ -313,6 +329,33 @@ describe("copyContextWithFeedback", () => {
       });
 
       expect(mixed).not.toBe(pure);
+    });
+
+    it("does not upgrade an inconsistent count into the strongest claim", () => {
+      const consistent = describeEmptyFolderCopy({
+        excluded: { total: 2, byReason: { gitignore: 2 } },
+      });
+      // Should the SDK ever double-count, an ignore tally above the total is a
+      // sign the accounting is wrong — not licence to assert "all ignored".
+      const overcounted = describeEmptyFolderCopy({
+        excluded: { total: 2, byReason: { gitignore: 3 } },
+      });
+
+      expect(overcounted).not.toBe(consistent);
+    });
+
+    it("reports an all-unreadable folder as unreadable, not as filtered", () => {
+      const unreadable = describeEmptyFolderCopy({
+        excluded: { total: 2, byReason: { unreadable: 2 } },
+      });
+      const mixed = describeEmptyFolderCopy({
+        excluded: { total: 2, byReason: { unreadable: 1, gitignore: 1 } },
+      });
+
+      expect(unreadable).not.toBe(mixed);
+      expect(unreadable).not.toBe(
+        describeEmptyFolderCopy({ excluded: { total: 0, byReason: {} } })
+      );
     });
   });
 

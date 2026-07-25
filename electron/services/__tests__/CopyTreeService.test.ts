@@ -428,6 +428,8 @@ describe("CopyTreeService", () => {
     });
 
     it("treats an empty scope list as no scoping rather than an empty walk", async () => {
+      // Unreachable through IPC — both option schemas reject an empty list —
+      // but the service must not invent a scope of nothing if one slips past.
       await copyTreeService.generate(tempDir, { scopePaths: [] });
 
       expect(sdkOptions().scope).toBeUndefined();

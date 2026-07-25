@@ -36,6 +36,16 @@ const ERROR_CODE_MESSAGES: Record<string, string> = {
   EACCES: "Can't read the project files",
 };
 
+/**
+ * The SDK reuses `ERR_PATH_NOT_FOUND` for the project root and for a scope
+ * entry, and only the error's own type tells them apart. A folder the user
+ * picked from a stale tree row is the common case, and "Project path is
+ * unavailable" would send them looking at the wrong thing.
+ */
+const SCOPE_ERROR_MESSAGES: Record<string, string> = {
+  ERR_PATH_NOT_FOUND: "That folder no longer exists",
+};
+
 const CANCELLED_MESSAGE = "Context generation cancelled";
 const CONFIG_FAILED_MESSAGE = "Context configuration couldn't be loaded";
 const GENERATE_FAILED_MESSAGE = "Failed to generate context";
@@ -505,6 +515,13 @@ class CopyTreeService {
       // otherwise resolve to an inherited function and fail structured clone on
       // its way to the renderer.
       const code = (error as Error & { code?: string }).code;
+      if (
+        error.name === "ScopeError" &&
+        typeof code === "string" &&
+        Object.hasOwn(SCOPE_ERROR_MESSAGES, code)
+      ) {
+        return SCOPE_ERROR_MESSAGES[code];
+      }
       if (typeof code === "string" && Object.hasOwn(ERROR_CODE_MESSAGES, code)) {
         return ERROR_CODE_MESSAGES[code];
       }

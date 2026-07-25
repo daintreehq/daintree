@@ -163,7 +163,8 @@ export function registerWorktreeContextActions(
               "Worktree-relative minimatch patterns to scope the context to. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'."
             ),
           scopePaths: z
-            .array(z.string())
+            .array(z.string().min(1))
+            .min(1)
             .optional()
             .describe(
               "Worktree-relative literal file or directory paths to walk — not patterns, so pass 'src/panels', not 'src/panels/**'. Ignore rules still resolve from the worktree root, so the result matches what a whole-worktree copy would have returned for that subtree. Prefer this over includePaths when selecting a folder."

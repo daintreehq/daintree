@@ -55,14 +55,19 @@ export function describeEmptyFolderCopy(stats?: CopyTreeBudgetStats | null): str
     return "This folder doesn't contain any files";
   }
 
-  const ignored = IGNORE_RULE_REASONS.reduce(
-    (sum, reason) => sum + (byReason?.[reason] ?? 0),
-    0
-  );
+  // Nothing was ruled out — the files couldn't be opened at all, which usually
+  // means the folder moved or its permissions changed since the tree was read.
+  if ((byReason?.unreadable ?? 0) === total) {
+    return "The files in this folder couldn't be read";
+  }
 
-  return ignored > 0 && ignored >= total
+  const ignored = IGNORE_RULE_REASONS.reduce((sum, reason) => sum + (byReason?.[reason] ?? 0), 0);
+
+  // Only claim a single cause when it accounts for every exclusion; a mixed set
+  // gets the neutral wording rather than a confident half-truth.
+  return ignored === total
     ? "Every file in this folder is excluded by an ignore rule"
-    : "Every file in this folder was filtered out by your context settings";
+    : "Every file in this folder was excluded by ignore rules or context settings";
 }
 
 export async function copyContextWithFeedback(
