@@ -11,6 +11,16 @@ export interface CopyTreeOptions {
   /** Explicit file/folder paths to include (used by file picker modal) */
   includePaths?: string[];
 
+  /**
+   * Literal worktree-relative file or directory paths to walk, used by the file
+   * browser's folder context menu. Unlike `includePaths` these are not patterns
+   * — nothing is escaped or globbed — and the ignore stack is still resolved
+   * from the worktree root down, so a scoped run yields exactly what a full run
+   * would have yielded for that subtree. Composes with `filter`/`includePaths`
+   * rather than replacing them.
+   */
+  scopePaths?: string[];
+
   /** Git filtering - only include files modified in working directory (staged + unstaged changes, excludes untracked files) */
   modified?: boolean;
   /** Git filtering - only include files changed since specified commit/branch */

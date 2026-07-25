@@ -94,8 +94,42 @@ vi.mock("@/store/slices", () => ({
   flushPanelPersistence: flushPanelPersistenceMock,
 }));
 
+// The stub renders the pane's own row context menu for one synthetic directory
+// row, which is the only way to reach "Copy context" without the real tree.
+// Radix is swapped for plain buttons below so the item is directly clickable.
+const FOLDER_ROW = {
+  path: "src/[draft]",
+  name: "[draft]",
+  isDirectory: true,
+  depth: 0,
+  isExpanded: false,
+};
 vi.mock("../FileTreeView", () => ({
-  FileTreeView: () => <div data-testid="file-tree-view" role="tree" tabIndex={-1} />,
+  FileTreeView: ({ rowContextMenu }: { rowContextMenu?: (row: unknown) => React.ReactNode }) => (
+    <div data-testid="file-tree-view" role="tree" tabIndex={-1}>
+      {rowContextMenu?.(FOLDER_ROW)}
+    </div>
+  ),
+}));
+
+vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/context-menu")>()),
+  ContextMenuItem: ({
+    children,
+    onSelect,
+  }: {
+    children: React.ReactNode;
+    onSelect?: () => void;
+  }) => <button onClick={onSelect}>{children}</button>,
+  ContextMenuSeparator: () => null,
+}));
+
+const { copyContextWithFeedbackMock } = vi.hoisted(() => ({
+  copyContextWithFeedbackMock: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("@/hooks/useWorktreeActions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useWorktreeActions")>()),
+  copyContextWithFeedback: copyContextWithFeedbackMock,
 }));
 
 // The header's copy affordance raises the pane's clipboard-failure toast. Only
@@ -167,6 +201,7 @@ beforeEach(() => {
   readMock.mockResolvedValue({ content: "hello" });
   flushPanelPersistenceMock.mockReset();
   notifyMock.mockReset();
+  copyContextWithFeedbackMock.mockClear();
   // Module-global and never reset by the store itself, so a message left by an
   // earlier test would satisfy the next one's announcement assertion.
   useAnnouncerStore.setState({ polite: null, assertive: null });
@@ -942,5 +977,50 @@ describe("tree-header root path copy (#11407)", () => {
     expect(copyButton().className).not.toBe(idle);
     // The successful retry raises no second toast.
     expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("folder context menu", () => {
+  async function copyFolderContext() {
+    renderPane();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy context" }));
+    });
+    return copyContextWithFeedbackMock.mock.calls[0]?.[2] as {
+      scopePaths?: string[];
+      includePaths?: string[];
+    };
+  }
+
+  it("scopes the copy to the folder instead of building a match pattern", async () => {
+    const options = await copyFolderContext();
+
+    expect(options.scopePaths).toEqual([FOLDER_ROW.path]);
+    // Patterns are what made the folder copy diverge from a whole-worktree one.
+    expect(options.includePaths).toBeUndefined();
+  });
+
+  it("sends the row path untouched, with no escaping or glob suffix", async () => {
+    const options = await copyFolderContext();
+
+    const sent = options.scopePaths?.[0] ?? "";
+    // `src/[draft]` survives verbatim: scope takes literal paths, so escaping it
+    // for minimatch would now look for a folder that doesn't exist.
+    expect(sent).not.toContain("\\");
+    expect(sent).not.toContain("*");
+    expect(sent).toBe(FOLDER_ROW.path);
+  });
+
+  it("targets the worktree the pane is bound to", async () => {
+    renderPane();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy context" }));
+    });
+
+    expect(copyContextWithFeedbackMock).toHaveBeenCalledWith(
+      "wt-1",
+      "context-menu",
+      expect.anything()
+    );
   });
 });

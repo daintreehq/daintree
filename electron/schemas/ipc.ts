@@ -470,6 +470,7 @@ export const CopyTreeOptionsSchema = z
     exclude: z.union([z.string(), z.array(z.string())]).optional(),
     always: z.array(z.string()).optional(),
     includePaths: z.array(z.string()).optional(),
+    scopePaths: z.array(z.string()).optional(),
     modified: z.boolean().optional(),
     changed: z.string().optional(),
     maxFileSize: z.number().int().positive().optional(),

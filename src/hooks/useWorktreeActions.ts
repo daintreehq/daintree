@@ -8,6 +8,10 @@ import { formatBytes } from "@/lib/formatBytes";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionSource } from "@shared/types/actions";
+import type {
+  CopyTreeBudgetStats,
+  CopyTreeExclusionReason,
+} from "@shared/types/ipc/copyTree";
 
 export function formatCopyResultMessage(payload: {
   fileCount: number;
@@ -24,10 +28,47 @@ export function formatCopyResultMessage(payload: {
   return `Copied ${fileCount} files${sizeStr ? ` (${sizeStr})` : ""}${formatStr} to clipboard`;
 }
 
+/**
+ * Reasons that mean "a rule the project already lives by kept this out", as
+ * opposed to a limit the user set in Daintree's own context settings. Only
+ * used to explain a zero-file folder copy — the SDK's `scopeFilter` reason is
+ * declared but never emitted, so nothing may wait on it.
+ */
+const IGNORE_RULE_REASONS: CopyTreeExclusionReason[] = [
+  "gitignore",
+  "copytreeignore",
+  "globalGitignore",
+  "gitInfoExclude",
+  "configExclude",
+];
+
+/**
+ * Why a folder copy came back empty. Without this the toast reports "Copied 0
+ * files", which reads as a failure for the common case of right-clicking a
+ * folder that the project ignores wholesale (`node_modules`, `dist`).
+ */
+export function describeEmptyFolderCopy(stats?: CopyTreeBudgetStats | null): string {
+  const byReason = stats?.excluded?.byReason;
+  const total = stats?.excluded?.total ?? 0;
+
+  if (total <= 0) {
+    return "This folder doesn't contain any files";
+  }
+
+  const ignored = IGNORE_RULE_REASONS.reduce(
+    (sum, reason) => sum + (byReason?.[reason] ?? 0),
+    0
+  );
+
+  return ignored > 0 && ignored >= total
+    ? "Every file in this folder is excluded by an ignore rule"
+    : "Every file in this folder was filtered out by your context settings";
+}
+
 export async function copyContextWithFeedback(
   worktreeId: string,
   source: ActionSource,
-  options?: { modified?: boolean; includePaths?: string[] }
+  options?: { modified?: boolean; includePaths?: string[]; scopePaths?: string[] }
 ): Promise<void> {
   // Direct store call: this is a spinner-then-update pattern that depends on
   // an unconditional toast id. notify() returns "" when notifications are
@@ -35,11 +76,12 @@ export async function copyContextWithFeedback(
   // updateNotification handoff below. The user just clicked "copy context",
   // so feedback is required regardless of quiet-hour preferences.
   const store = useNotificationStore.getState();
+  const isFolderCopy = Boolean(options?.scopePaths?.length || options?.includePaths?.length);
   const toastId = store.addNotification({
     type: "info",
     message: options?.modified
       ? "Copying modified files…"
-      : options?.includePaths?.length
+      : isFolderCopy
         ? "Copying folder context…"
         : "Copying context…",
     priority: "high",
@@ -49,7 +91,12 @@ export async function copyContextWithFeedback(
   try {
     const result = await actionService.dispatch(
       "worktree.copyTree",
-      { worktreeId, modified: options?.modified, includePaths: options?.includePaths },
+      {
+        worktreeId,
+        modified: options?.modified,
+        includePaths: options?.includePaths,
+        scopePaths: options?.scopePaths,
+      },
       { source }
     );
 
@@ -69,9 +116,22 @@ export async function copyContextWithFeedback(
 
     const payload = result.result as {
       fileCount: number;
-      stats?: { totalSize?: number } | null;
+      stats?: (CopyTreeBudgetStats & { totalSize?: number }) | null;
       format?: string;
     };
+
+    // A folder the project ignores wholesale still resolves and copies cleanly,
+    // it just yields nothing — so say why instead of reporting a bare zero.
+    if (isFolderCopy && payload.fileCount === 0) {
+      store.updateNotification(toastId, {
+        type: "info",
+        title: "No files copied",
+        message: describeEmptyFolderCopy(payload.stats),
+        duration: 5000,
+        dismissed: false,
+      });
+      return;
+    }
 
     store.updateNotification(toastId, {
       type: "success",

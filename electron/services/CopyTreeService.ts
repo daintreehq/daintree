@@ -432,6 +432,11 @@ class CopyTreeService {
       format: options.format || "xml",
 
       filter: options.includePaths || options.filter || undefined,
+      // Literal paths, not patterns, and orthogonal to `filter`: the walk starts
+      // here but the ignore stack is still built from the root down, so a folder
+      // copy drops what a whole-project copy would have dropped. Both
+      // `scopeIgnores*` escape hatches stay off for that reason.
+      scope: options.scopePaths?.length ? options.scopePaths : undefined,
       exclude: options.exclude || undefined,
       always: options.always,
       respectGitignore: true,

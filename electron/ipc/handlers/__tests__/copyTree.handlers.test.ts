@@ -573,6 +573,21 @@ describe("copyTree handlers", () => {
         expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(SENDER_PROJECT);
       });
 
+      it("carries scoped folder paths through validation to the service", async () => {
+        aimGlobalSourcesAtGlobalProject();
+        const seams = registerWithScope({
+          windowScopedPvm: makePvm(SENDER_PROJECT),
+          depsPvm: makePvm(GLOBAL_PROJECT),
+        });
+
+        await invoke(channel, { ...payload, options: { scopePaths: ["src/panels"] } });
+
+        const [, mergedOptions] = seams[seam].mock.calls[0];
+        // A field missing from the schema is dropped silently by Zod, so the
+        // folder copy would degrade to a whole-worktree copy with no error.
+        expect(mergedOptions.scopePaths).toEqual(["src/panels"]);
+      });
+
       it("falls back to the current project when no project-scoped view manager exists", async () => {
         projectStoreMock.getCurrentProjectId.mockReturnValue(GLOBAL_PROJECT);
         const seams = registerWithScope({ withSenderWindow: false });
