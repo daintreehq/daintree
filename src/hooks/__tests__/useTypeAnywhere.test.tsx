@@ -490,6 +490,27 @@ describe("useTypeAnywhere", () => {
       }
     });
 
+    it("re-locates a pane the rescue branch renamed the locator away from", () => {
+      setPanels([agentPanel("a1", { isVisible: false })]);
+      focusOffscreenTerminal("a1");
+      renderHook(() => useTypeAnywhere());
+
+      press("h");
+      expect(pingTerminal).toHaveBeenCalledTimes(1);
+
+      // Focus leaves the terminal entirely and the rescue repoints the pill at
+      // its own target, so nothing on screen still names a1.
+      document.body.innerHTML += `<div id="elsewhere" tabindex="0"></div>`;
+      document.getElementById("elsewhere")?.focus();
+      press("e");
+      expect(useTypingLocatorStore.getState().label).toContain("Claude");
+
+      focusOffscreenTerminal("a1");
+      press("y");
+
+      expect(pingTerminal).toHaveBeenCalledTimes(2);
+    });
+
     it("locates each pane separately when focus moves between them", () => {
       setPanels([
         agentPanel("a1", { isVisible: false }),

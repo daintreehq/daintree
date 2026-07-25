@@ -87,18 +87,33 @@ export function useTerminalVisibilityObserver({
             new DOMRect(0, 0, window.innerWidth, window.innerHeight)
         );
 
-        // Commit what that geometry established rather than dropping the
-        // callback: a stale hide is positive proof the pane IS on screen. When
-        // the store already agrees this is a no-op (both writes early-return on
-        // an unchanged value), so the only case it changes is a store stuck
-        // hidden — which nothing else repairs for a FOCUSED pane, since
-        // getTerminalRefreshTier answers FOCUSED before it ever consults
-        // isVisible and the reconciliation watchdog only repairs at BACKGROUND
-        // (#11445).
-        const isVisible = isStaleHide || entry.isIntersecting;
+        if (isStaleHide) {
+          // Overlapping geometry alone is NOT proof the pane renders: the dock
+          // parks live panes in a fixed 0,0 box under content-visibility:hidden
+          // (DockPanelOffscreenContainer), which overlaps the root at full size
+          // while drawing nothing. Ask the engine — the same checkVisibility
+          // gate the resize controller's fit() uses — before treating a stale
+          // hide as an upgrade; without that confirmation keep suppressing and
+          // wait for the next reading, exactly as before.
+          const el = containerRef.current;
+          const rendersNow =
+            el !== null && (typeof el.checkVisibility !== "function" || el.checkVisibility());
+          if (!rendersNow) return;
 
-        updateVisibility(id, isVisible);
-        terminalInstanceService.setVisible(id, isVisible, gen);
+          // Commit what the geometry established rather than dropping the
+          // callback. When the store already agrees this is a no-op (both
+          // writes early-return on an unchanged value), so the only case it
+          // changes is a store stuck hidden — which nothing else repairs for a
+          // FOCUSED pane, since getTerminalRefreshTier answers FOCUSED before
+          // it ever consults isVisible and the reconciliation watchdog only
+          // repairs at BACKGROUND (#11445).
+          updateVisibility(id, true);
+          terminalInstanceService.setVisible(id, true, gen);
+          return;
+        }
+
+        updateVisibility(id, entry.isIntersecting);
+        terminalInstanceService.setVisible(id, entry.isIntersecting, gen);
       },
       {
         // Grid-scoped root: when mounted inside the grid, the pre-warm margin

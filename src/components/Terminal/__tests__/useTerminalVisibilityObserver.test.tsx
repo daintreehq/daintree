@@ -169,6 +169,30 @@ describe("useTerminalVisibilityObserver", () => {
     expect(mocks.setVisible).toHaveBeenCalledWith("t1", true, 1);
   });
 
+  it("does not upgrade a parked pane whose box overlaps but renders nothing", () => {
+    const { updateVisibility, container } = setup({ containerRect: ON_SCREEN });
+    // The dock parks live panes in a fixed 0,0 box under
+    // content-visibility:hidden — full-size overlap, nothing drawn.
+    container.checkVisibility = () => false;
+
+    FakeIntersectionObserver.instances[0]!.deliver(false);
+
+    expect(updateVisibility).not.toHaveBeenCalled();
+    expect(mocks.setVisible).not.toHaveBeenCalled();
+  });
+
+  it("spends no layout on a superseded callback", () => {
+    const { container } = setup();
+    const measure = vi.spyOn(container, "getBoundingClientRect");
+
+    mocks.getAttachGeneration.mockReturnValue(2);
+    FakeIntersectionObserver.instances[0]!.deliver(false);
+
+    // The generation check runs first precisely so a dead mount site cannot
+    // force a reflow it will never use.
+    expect(measure).not.toHaveBeenCalled();
+  });
+
   it("resumes writing after an attach that landed post-capture (#11445)", () => {
     const { view, updateVisibility } = setup();
     const first = FakeIntersectionObserver.instances[0]!;
