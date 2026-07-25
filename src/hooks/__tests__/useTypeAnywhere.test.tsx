@@ -61,6 +61,7 @@ vi.mock("@/components/Panel/panelFocusRegistry", () => ({
 import { useTypeAnywhere } from "../useTypeAnywhere";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useTypingLocatorStore } from "@/store/typingLocatorStore";
+import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 
 function agentPanel(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -389,6 +390,84 @@ describe("useTypeAnywhere", () => {
 
       expect(pingTerminal).toHaveBeenCalledWith("sh");
       expect(useTypingLocatorStore.getState().label).toContain("zsh");
+    });
+
+    it("locates once per episode, not once per keystroke", () => {
+      setPanels([agentPanel("a1", { isVisible: false })]);
+      focusOffscreenTerminal("a1");
+      const host = document.querySelector<HTMLElement>('[data-panel-id="a1"]');
+      const scrollIntoView = vi.fn();
+      host!.scrollIntoView = scrollIntoView;
+      renderHook(() => useTypeAnywhere());
+      const revisionBefore = useTypingLocatorStore.getState().revision;
+
+      press("h");
+      press("e");
+      press("y");
+
+      // Each ping advances pingSeq, and the worktree card mounts a fresh receipt
+      // overlay per advance — three pings is three background flashes.
+      expect(pingTerminal).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(useTypingLocatorStore.getState().revision - revisionBefore).toBe(1);
+    });
+
+    it("starts a new episode once the pane has been seen on screen again", () => {
+      setPanels([agentPanel("a1", { isVisible: false })]);
+      focusOffscreenTerminal("a1");
+      renderHook(() => useTypeAnywhere());
+
+      press("h");
+      expect(pingTerminal).toHaveBeenCalledTimes(1);
+
+      // The reveal lands: a keystroke into the now-visible pane closes the
+      // episode without locating anything.
+      setPanels([agentPanel("a1", { isVisible: true })]);
+      press("e");
+      expect(pingTerminal).toHaveBeenCalledTimes(1);
+
+      // Scrolled away again — the user is typing blind once more.
+      setPanels([agentPanel("a1", { isVisible: false })]);
+      press("y");
+      expect(pingTerminal).toHaveBeenCalledTimes(2);
+    });
+
+    it("re-locates a still-hidden pane once the locator has faded", () => {
+      vi.useFakeTimers();
+      try {
+        setPanels([agentPanel("a1", { isVisible: false })]);
+        focusOffscreenTerminal("a1");
+        renderHook(() => useTypeAnywhere());
+
+        press("h");
+        press("e");
+        expect(pingTerminal).toHaveBeenCalledTimes(1);
+
+        // Past the pill's dwell nothing on screen still names the pane, so a
+        // keystroke landing off-screen has earned a fresh locate.
+        vi.advanceTimersByTime(UI_TRANSIENT_HINT_DWELL_MS + 1);
+        press("y");
+
+        expect(pingTerminal).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("locates each pane separately when focus moves between them", () => {
+      setPanels([
+        agentPanel("a1", { isVisible: false }),
+        agentPanel("a2", { isVisible: false, title: "Codex" }),
+      ]);
+      focusOffscreenTerminal("a1");
+      renderHook(() => useTypeAnywhere());
+
+      press("h");
+      focusOffscreenTerminal("a2");
+      press("i");
+
+      expect(pingTerminal).toHaveBeenNthCalledWith(1, "a1");
+      expect(pingTerminal).toHaveBeenNthCalledWith(2, "a2");
     });
   });
 

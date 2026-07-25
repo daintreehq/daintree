@@ -270,6 +270,51 @@ describe("XtermAdapter lifecycle", () => {
     expect((cwdProvider as () => string)()).toBe("/repo/next");
   });
 
+  it("announces each attach after forcing the service visible (#11445)", async () => {
+    const onAttached = vi.fn();
+
+    renderAdapter({ onAttached });
+
+    await waitFor(() => expect(onAttached).toHaveBeenCalledTimes(1));
+
+    // The pane re-arms its visibility observer on this signal, so it has to
+    // land after the attach that bumped the generation — and after the forced
+    // service-side visibility, so the two never disagree at the moment the
+    // observer re-captures.
+    const attachOrder = mocks.terminalInstanceService.attach.mock.invocationCallOrder[0]!;
+    const visibleOrder = mocks.terminalInstanceService.setVisible.mock.invocationCallOrder[0]!;
+    const attachedOrder = onAttached.mock.invocationCallOrder[0]!;
+    expect(attachedOrder).toBeGreaterThan(attachOrder);
+    expect(attachedOrder).toBeGreaterThan(visibleOrder);
+  });
+
+  it("does not re-announce an attach when only hot callbacks change (#11445)", async () => {
+    const onAttached = vi.fn();
+
+    const view = renderAdapter({ onAttached, onInput: vi.fn() });
+    await waitFor(() => expect(onAttached).toHaveBeenCalledTimes(1));
+
+    view.rerender(
+      <Suspense fallback={null}>
+        <XtermAdapter
+          terminalId="term-1"
+          launchAgentId="claude"
+          onReady={vi.fn()}
+          onExit={vi.fn()}
+          onInput={vi.fn()}
+          onAttached={onAttached}
+          getRefreshTier={() => TerminalRefreshTier.FOCUSED}
+          cwd="/repo/initial"
+        />
+      </Suspense>
+    );
+
+    // A re-announce with no attach behind it would re-arm the observer for
+    // nothing, and an identity-unstable callback would do it on every render.
+    expect(onAttached).toHaveBeenCalledTimes(1);
+    expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the latest input and exit callbacks without reinstalling the terminal", async () => {
     const firstOnInput = vi.fn();
     const secondOnInput = vi.fn();

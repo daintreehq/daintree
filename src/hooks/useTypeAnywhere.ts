@@ -9,6 +9,7 @@ import { useTypingLocatorStore } from "@/store/typingLocatorStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
+import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import {
   findPanelIdForElement,
@@ -51,7 +52,8 @@ function isFocusInHybridInput(terminalId: string): boolean {
  *
  *  - **Locate.** A real terminal owns focus but its pane is scrolled out of the
  *    grid viewport. The destination is legitimate — the user just cannot see it.
- *    Scroll it back, pulse it, name it. The event is never touched.
+ *    Scroll it back, pulse it, name it — once per episode, not once per
+ *    keystroke. The event is never touched.
  *
  *  - **Rescue.** Nothing useful owns focus, so the keystroke is about to be
  *    eaten. Route it into the draft of the last agent the user typed to, focus
@@ -67,6 +69,7 @@ export function useTypeAnywhere(): void {
   // never churns; all state is read imperatively at event time anyway.
   const handlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
   const focusFrameRef = useRef<number | null>(null);
+  const locateEpisodeRef = useRef<{ panelId: string; at: number } | null>(null);
 
   useEffect(() => {
     handlerRef.current = (e: KeyboardEvent) => {
@@ -89,7 +92,30 @@ export function useTypeAnywhere(): void {
         // (TerminalPane), rooted at the grid scroll container. Its rootMargin
         // pre-warms a full row, so this only fires for panes that are
         // meaningfully off-screen — not near-misses.
-        if (panel === undefined || panel.isVisible !== false) return;
+        if (panel === undefined || panel.isVisible !== false) {
+          // The pane is on screen (or gone), so whatever episode was running has
+          // ended — the next time it goes off-screen deserves a fresh locate.
+          locateEpisodeRef.current = null;
+          return;
+        }
+
+        // Locating is one action per episode, not per keystroke. Without this
+        // the receipt flash on the worktree card re-fires for every character
+        // (pingTerminal advances pingSeq unconditionally), which is the same
+        // per-keystroke flashing the card's border-accent guard already avoids
+        // (#11445). The window matches the locator pill's dwell so an episode
+        // lasts exactly as long as the affordance naming the pane: once that
+        // has faded, a keystroke still landing off-screen has earned a new one.
+        const episode = locateEpisodeRef.current;
+        const now = Date.now();
+        if (
+          episode !== null &&
+          episode.panelId === panelId &&
+          now - episode.at < UI_TRANSIENT_HINT_DWELL_MS
+        ) {
+          return;
+        }
+        locateEpisodeRef.current = { panelId, at: now };
 
         scrollPanelIntoView(panelId);
         panelStore.pingTerminal(panelId);
