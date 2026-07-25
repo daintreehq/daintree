@@ -3278,12 +3278,7 @@ _eventBusOn("window:reclaim-memory", () => {
   if (isE2EFaultMode) {
     performance.mark("daintree-e2e-reclaim-memory");
   }
-  // A cached project view is detached, not page-hidden — `visibilityState`
-  // stays "visible" for its whole background life (#11443), so the visibility
-  // check alone excluded exactly the views worth reclaiming. `_viewCached` is
-  // the latch this file already keeps for that; it clears on warm activation,
-  // so a reactivated view stops qualifying immediately.
-  if (!_viewCached && document.visibilityState !== "hidden") return;
+  if (document.visibilityState !== "hidden") return;
   const reclaim = () => (globalThis as unknown as { gc?: () => void }).gc?.();
   if (typeof requestIdleCallback === "function") {
     requestIdleCallback(reclaim, { timeout: 5_000 });

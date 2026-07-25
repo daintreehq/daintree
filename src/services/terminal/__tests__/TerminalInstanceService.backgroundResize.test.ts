@@ -66,7 +66,7 @@ type BackgroundResizeTestService = {
   applyBackgroundWindowResize: (width: number, height: number) => void;
   resetBackgroundResizeBasis: () => void;
   resizeController: {
-    resizePtyOnly: (
+    applyBackgroundResize: (
       id: string,
       width: number,
       height: number
@@ -95,7 +95,7 @@ function setCached(cached: boolean) {
 
 describe("TerminalInstanceService applyBackgroundWindowResize", () => {
   let service: BackgroundResizeTestService;
-  let resizePtyOnlySpy: ReturnType<typeof vi.spyOn>;
+  let applyBackgroundResizeSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -105,14 +105,14 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
       });
     service.instances.clear();
     service.resetBackgroundResizeBasis();
-    resizePtyOnlySpy = vi
-      .spyOn(service.resizeController, "resizePtyOnly")
+    applyBackgroundResizeSpy = vi
+      .spyOn(service.resizeController, "applyBackgroundResize")
       .mockReturnValue(null) as ReturnType<typeof vi.spyOn>;
     // The production state this method exists to serve: main has detached and
     // hidden the view, but a child WebContentsView keeps reporting "visible"
-    // (#11443). Every case below therefore runs against visibilityState
-    // "visible" — under the old visibility-only guard the whole suite would
-    // no-op.
+    // (#11443). Cases that assert a resize is applied therefore only pass
+    // because the guard consults the cache signal — under the old
+    // visibility-only guard they would all no-op.
     setViewport(1000, 700, "visible");
     setCached(true);
   });
@@ -128,9 +128,9 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
 
     service.applyBackgroundWindowResize(1200, 840);
 
-    expect(resizePtyOnlySpy).toHaveBeenCalledTimes(2);
-    expect(resizePtyOnlySpy).toHaveBeenCalledWith("a", 800 * 1.2, 600 * 1.2);
-    expect(resizePtyOnlySpy).toHaveBeenCalledWith("b", 400 * 1.2, 300 * 1.2);
+    expect(applyBackgroundResizeSpy).toHaveBeenCalledTimes(2);
+    expect(applyBackgroundResizeSpy).toHaveBeenCalledWith("a", 800 * 1.2, 600 * 1.2);
+    expect(applyBackgroundResizeSpy).toHaveBeenCalledWith("b", 400 * 1.2, 300 * 1.2);
   });
 
   it("no-ops only once the view is neither cached nor page-hidden", () => {
@@ -139,18 +139,18 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
     setCached(false);
     setViewport(1000, 700, "visible");
     service.applyBackgroundWindowResize(1200, 840);
-    expect(resizePtyOnlySpy).not.toHaveBeenCalled();
+    expect(applyBackgroundResizeSpy).not.toHaveBeenCalled();
 
     // Either signal alone is enough to keep scaling: a minimized window that
     // was never cached, and a cached view that still reports "visible".
     setViewport(1000, 700, "hidden");
     service.applyBackgroundWindowResize(1200, 840);
-    expect(resizePtyOnlySpy).toHaveBeenCalledTimes(1);
+    expect(applyBackgroundResizeSpy).toHaveBeenCalledTimes(1);
 
     setCached(true);
     setViewport(1000, 700, "visible");
     service.applyBackgroundWindowResize(1200, 840);
-    expect(resizePtyOnlySpy).toHaveBeenCalledTimes(2);
+    expect(applyBackgroundResizeSpy).toHaveBeenCalledTimes(2);
   });
 
   it("skips alt-buffer panes so xterm and the PTY never split while backgrounded", () => {
@@ -165,7 +165,7 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
 
     service.applyBackgroundWindowResize(1200, 840);
 
-    expect(resizePtyOnlySpy.mock.calls.map((call) => call[0])).toEqual(["main"]);
+    expect(applyBackgroundResizeSpy.mock.calls.map((call) => call[0])).toEqual(["main"]);
   });
 
   it("scales a pane that leaves the alternate screen mid-session from its pre-background size", () => {
@@ -176,12 +176,12 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
     service.instances.set("a", managed);
 
     service.applyBackgroundWindowResize(1200, 840);
-    expect(resizePtyOnlySpy).not.toHaveBeenCalled();
+    expect(applyBackgroundResizeSpy).not.toHaveBeenCalled();
 
     managed.isAltBuffer = false;
     service.applyBackgroundWindowResize(1500, 700);
 
-    expect(resizePtyOnlySpy).toHaveBeenCalledWith("a", 800 * 1.5, 600 * 1.0);
+    expect(applyBackgroundResizeSpy).toHaveBeenCalledWith("a", 800 * 1.5, 600 * 1.0);
   });
 
   it("anchors repeated resizes to the session origin — targets are absolute, never compounded", () => {
@@ -192,21 +192,21 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
 
     // Both events scale the captured 800x600 origin against the 1000x700
     // viewport snapshot, regardless of what earlier events applied.
-    expect(resizePtyOnlySpy).toHaveBeenNthCalledWith(1, "a", 800 * 1.2, 600 * 1.2);
-    expect(resizePtyOnlySpy).toHaveBeenNthCalledWith(2, "a", 800 * 1.5, 600 * 1.0);
+    expect(applyBackgroundResizeSpy).toHaveBeenNthCalledWith(1, "a", 800 * 1.2, 600 * 1.2);
+    expect(applyBackgroundResizeSpy).toHaveBeenNthCalledWith(2, "a", 800 * 1.5, 600 * 1.0);
   });
 
   it("a terminal skipped in one pass still lands on the correct absolute size in the next", () => {
     const managed = makeManaged({ lastWidth: 800, lastHeight: 600 });
     service.instances.set("a", managed);
 
-    // First pass skipped (e.g. resize-locked) — resizePtyOnly returns null
+    // First pass skipped (e.g. resize-locked) — applyBackgroundResize returns null
     // and lastWidth is untouched. The origin snapshot must keep the second
     // pass anchored to the original viewport, not an advanced basis.
     service.applyBackgroundWindowResize(1200, 840);
     service.applyBackgroundWindowResize(1500, 1400);
 
-    expect(resizePtyOnlySpy).toHaveBeenLastCalledWith("a", 800 * 1.5, 600 * 2.0);
+    expect(applyBackgroundResizeSpy).toHaveBeenLastCalledWith("a", 800 * 1.5, 600 * 2.0);
   });
 
   it("resetBackgroundResizeBasis restores the live viewport as the basis", () => {
@@ -216,7 +216,7 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
     service.resetBackgroundResizeBasis();
     service.applyBackgroundWindowResize(1300, 770);
 
-    expect(resizePtyOnlySpy).toHaveBeenLastCalledWith("a", 800 * 1.3, 600 * 1.1);
+    expect(applyBackgroundResizeSpy).toHaveBeenLastCalledWith("a", 800 * 1.3, 600 * 1.1);
   });
 
   it("an uncached, visible delivery resets the basis for the next background session", () => {
@@ -230,13 +230,13 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
     setCached(false);
     setViewport(1300, 770, "visible");
     service.applyBackgroundWindowResize(1200, 840);
-    const callsBeforeNextSession = resizePtyOnlySpy.mock.calls.length;
+    const callsBeforeNextSession = applyBackgroundResizeSpy.mock.calls.length;
 
     setCached(true);
     service.applyBackgroundWindowResize(1560, 385);
 
-    expect(resizePtyOnlySpy).toHaveBeenLastCalledWith("a", 800 * 1.2, 600 * 0.5);
-    expect(resizePtyOnlySpy.mock.calls.length).toBe(callsBeforeNextSession + 1);
+    expect(applyBackgroundResizeSpy).toHaveBeenLastCalledWith("a", 800 * 1.2, 600 * 0.5);
+    expect(applyBackgroundResizeSpy.mock.calls.length).toBe(callsBeforeNextSession + 1);
   });
 
   it("keeps the anchor across a cached delivery that still reports visible", () => {
@@ -249,7 +249,7 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
     setViewport(1200, 840, "visible");
     service.applyBackgroundWindowResize(1500, 700);
 
-    expect(resizePtyOnlySpy).toHaveBeenLastCalledWith("a", 800 * 1.5, 600 * 1.0);
+    expect(applyBackgroundResizeSpy).toHaveBeenLastCalledWith("a", 800 * 1.5, 600 * 1.0);
   });
 
   it("skips unopened and never-measured terminals", () => {
@@ -259,8 +259,8 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
 
     service.applyBackgroundWindowResize(1200, 840);
 
-    expect(resizePtyOnlySpy).toHaveBeenCalledTimes(1);
-    expect(resizePtyOnlySpy).toHaveBeenCalledWith(
+    expect(applyBackgroundResizeSpy).toHaveBeenCalledTimes(1);
+    expect(applyBackgroundResizeSpy).toHaveBeenCalledWith(
       "eligible",
       expect.any(Number),
       expect.any(Number)
@@ -275,7 +275,7 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
     service.applyBackgroundWindowResize(0, 840);
     service.applyBackgroundWindowResize(-100, 840);
 
-    expect(resizePtyOnlySpy).not.toHaveBeenCalled();
+    expect(applyBackgroundResizeSpy).not.toHaveBeenCalled();
   });
 
   it("invalid bounds do not corrupt the session for a following valid event", () => {
@@ -284,7 +284,7 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
     service.applyBackgroundWindowResize(0, 0);
     service.applyBackgroundWindowResize(1200, 840);
 
-    expect(resizePtyOnlySpy).toHaveBeenCalledWith("a", 800 * 1.2, 600 * 1.2);
+    expect(applyBackgroundResizeSpy).toHaveBeenCalledWith("a", 800 * 1.2, 600 * 1.2);
   });
 
   it("captures the origin for a terminal measured only after the session started", () => {
@@ -292,13 +292,13 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
     service.instances.set("late", managed);
 
     service.applyBackgroundWindowResize(1200, 840);
-    expect(resizePtyOnlySpy).not.toHaveBeenCalled();
+    expect(applyBackgroundResizeSpy).not.toHaveBeenCalled();
 
     managed.lastWidth = 500;
     managed.lastHeight = 400;
     service.applyBackgroundWindowResize(1500, 700);
 
-    expect(resizePtyOnlySpy).toHaveBeenCalledWith("late", 500 * 1.5, 400 * 1.0);
+    expect(applyBackgroundResizeSpy).toHaveBeenCalledWith("late", 500 * 1.5, 400 * 1.0);
   });
 
   it("no-ops when the stale viewport reports zero dimensions", () => {
@@ -307,6 +307,6 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
 
     service.applyBackgroundWindowResize(1200, 840);
 
-    expect(resizePtyOnlySpy).not.toHaveBeenCalled();
+    expect(applyBackgroundResizeSpy).not.toHaveBeenCalled();
   });
 });

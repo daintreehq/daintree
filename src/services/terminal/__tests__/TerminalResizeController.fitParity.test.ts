@@ -414,7 +414,7 @@ describe("TerminalResizeController ↔ FitAddon column parity (#11095)", () => {
     const controller = makeController(managed);
 
     const proposal = fitAddon.proposeDimensions();
-    const applied = controller.resizePtyOnly("t1", CONTAINER.width, CONTAINER.height);
+    const applied = controller.applyBackgroundResize("t1", CONTAINER.width, CONTAINER.height);
 
     expect(applied).toEqual({ cols: proposal!.cols, rows: proposal!.rows });
   });

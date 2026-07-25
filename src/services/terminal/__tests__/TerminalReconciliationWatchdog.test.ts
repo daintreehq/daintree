@@ -662,33 +662,46 @@ describe("TerminalReconciliationWatchdog", () => {
       setRenderPaused(alt, false);
       setGrid(alt, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
       instances.set("alt", alt);
+      // Diverged main-buffer controls, iterated after the alt pane. If the alt
+      // pane merely skipped the call while still consuming a heavy-repair slot,
+      // one control would be starved every tick.
+      const controls: ManagedTerminal[] = [];
+      for (let i = 0; i < WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK; i++) {
+        const control = makeManaged({ isAltBuffer: false });
+        setRenderPaused(control, false);
+        setGrid(control, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+        instances.set(`control${i}`, control);
+        controls.push(control);
+      }
       const deps = makeDeps(instances);
       watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      // Every control was repaired on the first tick — the alt pane took none
+      // of the per-tick allowance.
+      expect(vi.mocked(deps.reconcileRevealGeometry).mock.calls.map(([id]) => id).sort()).toEqual(
+        controls.map((_, i) => `control${i}`)
+      );
 
       // Far more ticks than the breaker needs to trip on a diverged pane.
       for (let i = 0; i < 12; i++) vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
 
-      expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+      expect(vi.mocked(deps.reconcileRevealGeometry).mock.calls.some(([id]) => id === "alt")).toBe(
+        false
+      );
       expect(alt.geometryRepairAttempts ?? 0).toBe(0);
       expect(alt.geometryRepairGaveUp).toBeFalsy();
-      // The DEV diagnostic still reports the divergence — excluding the pane
-      // from the repair loop must not also blind the log — but the breaker,
-      // whose whole job is to stop a repair that keeps failing, must never
-      // record a failure for a repair that was never attempted.
-      expect(
-        vi.mocked(logWarn).mock.calls.some((call) => String(call[0]).includes("giving up"))
-      ).toBe(false);
-      expect(
-        vi
-          .mocked(logWarn)
-          .mock.calls.some((call) => String(call[0]).includes("divergence for on-screen terminal"))
-      ).toBe(false);
+      // The controls prove the breaker still works on panes that CAN be
+      // repaired, so the alt pane's clean counters aren't a dead watchdog.
+      expect(controls.every((control) => control.geometryRepairGaveUp === true)).toBe(true);
 
       // Leaving the alternate screen restores repair eligibility, proving the
       // exclusion is keyed on live buffer mode and left no latched state.
       alt.isAltBuffer = false;
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
-      expect(deps.reconcileRevealGeometry).toHaveBeenCalledWith("alt");
+      expect(vi.mocked(deps.reconcileRevealGeometry).mock.calls.some(([id]) => id === "alt")).toBe(
+        true
+      );
       expect(alt.geometryRepairAttempts).toBe(1);
     });
 

@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
 /**
@@ -32,7 +32,12 @@ export function useBackgroundWindowResize(): void {
       terminalInstanceService.resetBackgroundResizeBasis();
     });
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
+      // Must match the service's own predicate exactly. Restoring a minimized
+      // window while this view is STILL cached is not a return to live layout:
+      // dropping the anchor there would re-snapshot the stale viewport while
+      // each terminal's `lastWidth` already holds an applied, scaled value, and
+      // every later event would compound off it.
+      if (!isProjectViewCached() && document.visibilityState === "visible") {
         terminalInstanceService.resetBackgroundResizeBasis();
       }
     };
