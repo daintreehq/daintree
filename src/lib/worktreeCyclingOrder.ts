@@ -8,7 +8,6 @@ import { computeChipState } from "@/components/Worktree/utils/computeChipState";
 import type { WorktreeLifecycleStage } from "@/components/Worktree/WorktreeCard/hooks/useWorktreeStatus";
 import {
   compareWorktreeNames,
-  findIntegrationWorktree,
   groupByType,
   matchesFilters,
   matchesQuickStateFilter,
@@ -187,7 +186,6 @@ export function getVisibleWorktreesForCycling(
   }
 
   const mainWorktree = rawWorktrees.find((w) => w.isMainWorktree) ?? rawWorktrees[0] ?? null;
-  const integrationWorktree = findIntegrationWorktree(rawWorktrees, mainWorktree?.id);
 
   const filters: FilterState = {
     query,
@@ -201,9 +199,7 @@ export function getVisibleWorktreesForCycling(
 
   const hasFacetFiltersActive = filterState.hasFacetFilters();
 
-  const nonMain = rawWorktrees.filter(
-    (w) => w.id !== mainWorktree?.id && w.id !== integrationWorktree?.id
-  );
+  const nonMain = rawWorktrees.filter((w) => w.id !== mainWorktree?.id);
 
   const filtered = nonMain.filter((worktree) => {
     const derived = derivedMetaMap.get(worktree.id);
@@ -274,29 +270,5 @@ export function getVisibleWorktreesForCycling(
       topPinned.push(mainWorktree);
     }
   }
-  if (integrationWorktree && worktreeMatchesQuery(integrationWorktree, query)) {
-    const intDerived = derivedMetaMap.get(integrationWorktree.id) ?? {
-      terminalCount: 0,
-      hasWorkingAgent: false,
-      hasWaitingAgent: false,
-      hasCompletedAgent: false,
-      hasExitedAgent: false,
-      hasMergeConflict: false,
-      chipState: null,
-    };
-    if (
-      !hasFacetFiltersActive ||
-      matchesFilters(
-        integrationWorktree,
-        filters,
-        intDerived,
-        integrationWorktree.id === activeWorktreeId,
-        devServerSessions
-      )
-    ) {
-      topPinned.push(integrationWorktree);
-    }
-  }
-
   return [...topPinned, ...scrollableList];
 }

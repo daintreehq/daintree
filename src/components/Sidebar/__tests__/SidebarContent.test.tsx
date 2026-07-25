@@ -63,7 +63,26 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
   });
 
   it("exports totalCount from the filter useMemo alongside filteredWorktrees", () => {
-    expect(source).toContain("totalCount: nonMain.length");
+    expect(source).toContain("totalCount: nonMainWorktrees.length");
+  });
+
+  it("derives every non-main count and the filtered list from one shared array (#11433)", () => {
+    // The quick-state bar read "All 0" above a visible worktree because the
+    // counts carried a branch-name exclusion the rendered list did not. Every
+    // consumer now reads the same `nonMainWorktrees` memo, so they cannot
+    // disagree about which worktrees exist.
+    expect(source).toMatch(
+      /const nonMainWorktrees = useMemo\(\s*\(\) =>\s*deferredWorktrees\.filter\(\(w\) => w\.id !== mainWorktree\?\.id\)/
+    );
+    // quick-state counts, chip counts, the main card aggregate, and the list.
+    expect(source).toMatch(/for \(const w of nonMainWorktrees\)/);
+    expect(source).toMatch(/computeChipCounts\(\s*nonMainWorktrees,/);
+    expect(source).toMatch(/const nonMainCount = nonMainWorktrees\.length;/);
+    expect(source).toMatch(/const filtered = nonMainWorktrees\.filter\(/);
+    // No second, branch-derived exclusion anywhere in the sidebar: neither the
+    // removed helper nor a fresh hardcoded list of "integration" branch names.
+    expect(source).not.toMatch(/integrationWorktree|findIntegrationWorktree/);
+    expect(source).not.toMatch(/["'](?:develop|trunk|next)["']/);
   });
 
   it("computes showScope from the instant live-query filter state and count comparison", () => {

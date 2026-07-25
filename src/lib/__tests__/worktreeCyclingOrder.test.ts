@@ -102,16 +102,61 @@ describe("getVisibleWorktreesForCycling", () => {
     expect(getVisibleWorktreesForCycling()).toEqual([]);
   });
 
-  it("places main worktree first and integration second", () => {
+  it("places main worktree first and sorts every other worktree normally (#11433)", () => {
+    // A worktree on `develop` used to be yanked out of the sorted list and
+    // pinned to slot 1 purely because of its branch name. It is an ordinary
+    // worktree: with alpha ordering it belongs between "bravo" and "echo",
+    // not immediately after main.
+    useWorktreeFilterStore.setState({ orderBy: "alpha" });
     setWorktrees([
-      createSnapshot({ id: "wt-b", name: "bravo", branch: "feature/bravo", createdAt: 100 }),
+      createSnapshot({ id: "wt-b", name: "bravo", branch: "feature/bravo" }),
       createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
-      createSnapshot({ id: "dev", name: "develop", branch: "develop" }),
-      createSnapshot({ id: "wt-a", name: "alpha", branch: "feature/alpha", createdAt: 200 }),
+      createSnapshot({ id: "dev", name: "charlie", branch: "develop" }),
+      createSnapshot({ id: "wt-a", name: "alpha", branch: "feature/alpha" }),
+      createSnapshot({ id: "wt-e", name: "echo", branch: "feature/echo" }),
     ]);
 
-    const ordered = getVisibleWorktreesForCycling();
-    expect(ordered.map((w) => w.id)).toEqual(["main", "dev", "wt-a", "wt-b"]);
+    const ordered = getVisibleWorktreesForCycling().map((w) => w.id);
+    expect(ordered).toEqual(["main", "wt-a", "wt-b", "dev", "wt-e"]);
+    // Appears exactly once — never both pinned and in the scrollable list.
+    expect(ordered.filter((id) => id === "dev")).toHaveLength(1);
+  });
+
+  it("subjects a worktree on an integration-style branch to quickStateFilter (#11433)", () => {
+    // The pinned slot bypassed quick-state filtering entirely, so a `develop`
+    // worktree stayed visible under "working" with no working agent — while
+    // simultaneously being excluded from the counts that drive the filter bar.
+    useWorktreeFilterStore.setState({ quickStateFilter: "working" });
+    setWorktrees([
+      createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
+      createSnapshot({ id: "dev", name: "develop", branch: "develop" }),
+      createSnapshot({ id: "wt-working", name: "working", branch: "feature/working" }),
+    ]);
+    usePanelStore.setState({
+      panelsById: {
+        "term-working": {
+          id: "term-working",
+          kind: "terminal",
+          type: "terminal",
+          title: "T",
+          cwd: "/repo",
+          cols: 80,
+          rows: 24,
+          worktreeId: "wt-working",
+          location: "grid",
+          hasPty: true,
+          isVisible: true,
+          agentState: "working",
+          detectedAgentId: "claude",
+        } as unknown as ReturnType<typeof usePanelStore.getState>["panelsById"][string],
+      },
+      panelIds: ["term-working"],
+      panelIdsByWorktreeId: { "wt-working": ["term-working"] },
+    } as never);
+
+    const ids = getVisibleWorktreesForCycling().map((w) => w.id);
+    expect(ids).toContain("wt-working");
+    expect(ids).not.toContain("dev");
   });
 
   it("cycles to external worktrees last and never into the integration slot (#11434)", () => {
@@ -233,13 +278,13 @@ describe("getVisibleWorktreesForCycling", () => {
     expect(ids[0]).toBe("main");
   });
 
-  it("applies the live text query filter to main and integration worktrees", () => {
+  it("applies the live text query filter to the main and scrollable worktrees", () => {
     // Cycling mirrors the sidebar's visible list, which filters on the instant
     // liveQuery — not the debounced persisted query.
     useWorktreeFilterStore.setState({ liveQuery: "alpha" });
     setWorktrees([
       createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
-      createSnapshot({ id: "dev", name: "develop", branch: "develop" }),
+      createSnapshot({ id: "wt-bravo", name: "bravo", branch: "feature/bravo" }),
       createSnapshot({ id: "wt-alpha", name: "alpha", branch: "feature/alpha" }),
     ]);
 
