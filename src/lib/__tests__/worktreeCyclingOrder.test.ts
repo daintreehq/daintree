@@ -65,6 +65,33 @@ function setWorktrees(snaps: WorktreeSnapshot[]): void {
   });
 }
 
+// Parks a single working-agent terminal on `worktreeId` so that worktree
+// derives `hasWorkingAgent` and satisfies the "working" quick-state filter.
+function setWorkingAgentPanel(worktreeId: string): void {
+  const panelId = `term-${worktreeId}`;
+  usePanelStore.setState({
+    panelsById: {
+      [panelId]: {
+        id: panelId,
+        kind: "terminal",
+        type: "terminal",
+        title: "T",
+        cwd: "/repo",
+        cols: 80,
+        rows: 24,
+        worktreeId,
+        location: "grid",
+        hasPty: true,
+        isVisible: true,
+        agentState: "working",
+        detectedAgentId: "claude",
+      } as unknown as ReturnType<typeof usePanelStore.getState>["panelsById"][string],
+    },
+    panelIds: [panelId],
+    panelIdsByWorktreeId: { [worktreeId]: [panelId] },
+  } as never);
+}
+
 function resetFilterStore(): void {
   useWorktreeFilterStore.setState({
     query: "",
@@ -132,27 +159,7 @@ describe("getVisibleWorktreesForCycling", () => {
       createSnapshot({ id: "dev", name: "develop", branch: "develop" }),
       createSnapshot({ id: "wt-working", name: "working", branch: "feature/working" }),
     ]);
-    usePanelStore.setState({
-      panelsById: {
-        "term-working": {
-          id: "term-working",
-          kind: "terminal",
-          type: "terminal",
-          title: "T",
-          cwd: "/repo",
-          cols: 80,
-          rows: 24,
-          worktreeId: "wt-working",
-          location: "grid",
-          hasPty: true,
-          isVisible: true,
-          agentState: "working",
-          detectedAgentId: "claude",
-        } as unknown as ReturnType<typeof usePanelStore.getState>["panelsById"][string],
-      },
-      panelIds: ["term-working"],
-      panelIdsByWorktreeId: { "wt-working": ["term-working"] },
-    } as never);
+    setWorkingAgentPanel("wt-working");
 
     const ids = getVisibleWorktreesForCycling().map((w) => w.id);
     expect(ids).toContain("wt-working");
@@ -249,27 +256,7 @@ describe("getVisibleWorktreesForCycling", () => {
       createSnapshot({ id: "wt-working", name: "working", branch: "feature/working" }),
       createSnapshot({ id: "wt-idle", name: "idle", branch: "feature/idle" }),
     ]);
-    usePanelStore.setState({
-      panelsById: {
-        "term-working": {
-          id: "term-working",
-          kind: "terminal",
-          type: "terminal",
-          title: "T",
-          cwd: "/repo",
-          cols: 80,
-          rows: 24,
-          worktreeId: "wt-working",
-          location: "grid",
-          hasPty: true,
-          isVisible: true,
-          agentState: "working",
-          detectedAgentId: "claude",
-        } as unknown as ReturnType<typeof usePanelStore.getState>["panelsById"][string],
-      },
-      panelIds: ["term-working"],
-      panelIdsByWorktreeId: { "wt-working": ["term-working"] },
-    } as never);
+    setWorkingAgentPanel("wt-working");
 
     const ids = getVisibleWorktreesForCycling().map((w) => w.id);
     expect(ids).toContain("wt-working");
