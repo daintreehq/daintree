@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDaintreeFileUrl,
+  isAudioFilePath,
   isImageFilePath,
   isSvgFilePath,
+  isUnsupportedAudioFilePath,
   isUnsupportedVideoFilePath,
   isVideoFilePath,
 } from "../filePreviewKinds";
@@ -94,6 +96,93 @@ describe("filePreviewKinds", () => {
     it("is disjoint from the playable set", () => {
       for (const path of ["clip.mp4", "clip.webm", "clip.m4v", "clip.ogv"]) {
         expect(isUnsupportedVideoFilePath(path)).toBe(false);
+      }
+    });
+  });
+
+  describe("isAudioFilePath", () => {
+    it.each([
+      "track.mp3",
+      "track.wav",
+      "track.flac",
+      "track.ogg",
+      "track.oga",
+      "track.opus",
+      // m4a/aac ride the same proprietary-codec build that makes mp4 play.
+      "track.m4a",
+      "track.aac",
+      "TRACK.MP3",
+      "a/b/c.take 2.flac",
+    ])("accepts %s", (path) => {
+      expect(isAudioFilePath(path)).toBe(true);
+    });
+
+    it.each([
+      "track.wma",
+      "track.aiff",
+      "track.mid",
+      "track.mp3.txt",
+      "track",
+      "photo.png",
+      "notes.md",
+    ])("rejects %s", (path) => {
+      expect(isAudioFilePath(path)).toBe(false);
+    });
+
+    it("claims .ogg while video keeps .ogv", () => {
+      // The two Ogg spellings are split across the classifiers; overlapping
+      // them would make the pane's branch order decide which player appears.
+      expect(isAudioFilePath("sound.ogg")).toBe(true);
+      expect(isVideoFilePath("sound.ogg")).toBe(false);
+      expect(isVideoFilePath("clip.ogv")).toBe(true);
+      expect(isAudioFilePath("clip.ogv")).toBe(false);
+    });
+
+    it("never overlaps the image or video classifiers", () => {
+      for (const path of ["track.mp3", "track.flac", "track.m4a", "track.opus"]) {
+        expect(isImageFilePath(path)).toBe(false);
+        expect(isSvgFilePath(path)).toBe(false);
+        expect(isVideoFilePath(path)).toBe(false);
+      }
+    });
+  });
+
+  describe("isUnsupportedAudioFilePath", () => {
+    it.each([
+      "track.wma",
+      "track.aiff",
+      "track.aif",
+      "track.mid",
+      "track.midi",
+      "track.amr",
+      "TRACK.WMA",
+    ])("accepts %s", (path) => {
+      expect(isUnsupportedAudioFilePath(path)).toBe(true);
+    });
+
+    it("is disjoint from the playable set in both directions", () => {
+      // An extension in both sets would make the pane's branch order decide
+      // between a working player and a "can't play" message.
+      for (const path of ["track.mp3", "track.wav", "track.flac", "track.m4a", "track.aac"]) {
+        expect(isUnsupportedAudioFilePath(path)).toBe(false);
+      }
+      for (const path of [
+        "track.wma",
+        "track.aiff",
+        "track.aif",
+        "track.mid",
+        "track.midi",
+        "track.amr",
+      ]) {
+        expect(isAudioFilePath(path)).toBe(false);
+      }
+    });
+
+    it("does not overlap the unsupported video set", () => {
+      // Both feed the same "can't play this format" branch, so an extension in
+      // both would make the pane's copy depend on check order.
+      for (const path of ["clip.mov", "clip.mkv", "clip.avi", "clip.wmv"]) {
+        expect(isUnsupportedAudioFilePath(path)).toBe(false);
       }
     });
   });

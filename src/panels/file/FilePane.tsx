@@ -28,11 +28,15 @@ import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy, type RevealCopy } from "@/components/FileViewer/revealCopy";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
+import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
 import {
+  isAudioFilePath,
   isImageFilePath,
   isSvgFilePath,
+  isUnsupportedAudioFilePath,
   isUnsupportedVideoFilePath,
   isVideoFilePath,
+  UNSUPPORTED_AUDIO_MESSAGE,
   UNSUPPORTED_VIDEO_MESSAGE,
 } from "@/components/FileViewer/filePreviewKinds";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
@@ -111,11 +115,11 @@ function isUnderRoot(filePath: string, rootPath: string): boolean {
   return toForwardSlashes(filePath).startsWith(root);
 }
 
-// "image", "svg", and "video" are terminal preview states: an image is handed
-// to the `daintree-file://` protocol as an <img> src, an SVG is read as text,
-// sanitized, then inlined, and a video streams from the same protocol into a
-// <video> element. None has readable text content.
-type LoadState = "idle" | "loading" | "loaded" | "error" | "image" | "svg" | "video";
+// "image", "svg", "video", and "audio" are terminal preview states: an image is
+// handed to the `daintree-file://` protocol as an <img> src, an SVG is read as
+// text, sanitized, then inlined, and video/audio are fetched from the same
+// protocol into a blob the media element plays. None has readable text content.
+type LoadState = "idle" | "loading" | "loaded" | "error" | "image" | "svg" | "video" | "audio";
 
 // Which external surface a toolbar action aims the current file at. `reveal` is
 // always offered; `browser`/`editor` is the mode-dependent open button.
@@ -475,13 +479,33 @@ export function FilePane({
         return;
       }
 
-      // Containers Chromium can't demux get a truthful "can't play" message
+      // Audio takes the same protocol-to-blob route as video — the text path
+      // would reject it with a misleading size/binary error.
+      if (isAudioFilePath(filePath)) {
+        setContent(null);
+        setSanitizedSvg(null);
+        // Only an explicit load (open, toolbar Refresh) re-requests the media —
+        // a silent background pass must not remount the player and reset
+        // playback while someone is listening.
+        if (!silent) setReloadNonce((nonce) => nonce + 1);
+        setLoadState("audio");
+        setErrorCode(null);
+        setErrorMessage(null);
+        return;
+      }
+
+      // Formats Chromium can't decode get a truthful "can't play" message
       // instead of falling through to the text path's size cap.
-      if (isUnsupportedVideoFilePath(filePath)) {
+      const unsupportedMediaMessage = isUnsupportedVideoFilePath(filePath)
+        ? UNSUPPORTED_VIDEO_MESSAGE
+        : isUnsupportedAudioFilePath(filePath)
+          ? UNSUPPORTED_AUDIO_MESSAGE
+          : null;
+      if (unsupportedMediaMessage) {
         setContent(null);
         setSanitizedSvg(null);
         setErrorCode("BINARY_FILE");
-        setErrorMessage(UNSUPPORTED_VIDEO_MESSAGE);
+        setErrorMessage(unsupportedMediaMessage);
         setLoadState("error");
         return;
       }
@@ -901,9 +925,9 @@ export function FilePane({
             <p className="text-sm text-muted-foreground">
               {errorMessage ?? FILE_READ_ERROR_MESSAGES[errorCode]}
             </p>
-            {/* An unsupported container is deterministic — retrying the same
+            {/* An unsupported format is deterministic — retrying the same
                 extension can never succeed, so the action would be dead. */}
-            {!isUnsupportedVideoFilePath(filePath) && (
+            {!isUnsupportedVideoFilePath(filePath) && !isUnsupportedAudioFilePath(filePath) && (
               <button
                 type="button"
                 onClick={() => loadFile(false)}
@@ -944,6 +968,22 @@ export function FilePane({
               setLoadState("error");
             }}
             maxHeightClassName="max-h-full"
+          />
+        )}
+
+        {filePath && viewMode !== "diff" && loadState === "audio" && (
+          <FileAudioPreview
+            filePath={filePath}
+            rootPath={effectiveRootPath}
+            label={fileName ?? filePath}
+            reloadKey={reloadNonce}
+            onError={(error) => {
+              // An allowlisted extension can still hold a codec Chromium lacks;
+              // name that instead of implying the file is missing.
+              setErrorCode(error?.code ?? "BINARY_FILE");
+              setErrorMessage(error?.title ?? "This audio file couldn't be played");
+              setLoadState("error");
+            }}
           />
         )}
 

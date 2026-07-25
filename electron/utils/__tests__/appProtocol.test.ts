@@ -45,6 +45,37 @@ describe("appProtocol utilities", () => {
       expect(getMimeType("CLIP.MP4")).toBe("video/mp4");
     });
 
+    it("should return audio MIME types Chromium accepts for playable formats", () => {
+      // Same routing + nosniff stakes as video above. `audio/flac` is the
+      // spelling Chromium answers canPlayType for — the `audio/x-flac` alias
+      // returns "" and would leave the file unplayable.
+      expect(getMimeType("track.mp3")).toBe("audio/mpeg");
+      expect(getMimeType("track.wav")).toBe("audio/wav");
+      expect(getMimeType("track.flac")).toBe("audio/flac");
+      expect(getMimeType("track.ogg")).toBe("audio/ogg");
+      expect(getMimeType("track.oga")).toBe("audio/ogg");
+      expect(getMimeType("track.m4a")).toBe("audio/mp4");
+      expect(getMimeType("track.aac")).toBe("audio/aac");
+      expect(getMimeType("TRACK.FLAC")).toBe("audio/flac");
+    });
+
+    it("should declare .opus without a codecs parameter", () => {
+      // The extension names the Ogg container, not what is inside it, so
+      // promising codecs="opus" would misdescribe a mislabelled Vorbis file.
+      expect(getMimeType("track.opus")).toBe("audio/ogg");
+    });
+
+    it("should not map audio Chromium can't decode to an audio MIME", () => {
+      // Mapping these would route them into the streaming path and hand the
+      // pane an <audio> element that can only fail.
+      expect(getMimeType("track.wma")).toBe("application/octet-stream");
+      expect(getMimeType("track.aiff")).toBe("application/octet-stream");
+      expect(getMimeType("track.aif")).toBe("application/octet-stream");
+      expect(getMimeType("track.mid")).toBe("application/octet-stream");
+      expect(getMimeType("track.midi")).toBe("application/octet-stream");
+      expect(getMimeType("track.amr")).toBe("application/octet-stream");
+    });
+
     it("should not map containers Chromium can't demux to a video MIME", () => {
       // mov/mkv/avi/wmv are excluded from the playable set — mapping them to
       // video/* would route them into the streaming path and a broken <video>.

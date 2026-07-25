@@ -2069,6 +2069,12 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
     vi.mocked(fs.open).mockResolvedValue(
       makeVideoHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
     );
+    // Pinned here rather than inherited: clearAllMocks keeps implementations,
+    // so a stat left over from an earlier describe would silently decide the
+    // buffered-fallback cases below.
+    vi.mocked(fs.stat).mockResolvedValue({
+      size: VIDEO_BYTES.length,
+    } as Awaited<ReturnType<typeof fs.stat>>);
     const appProtocol = await import("../../utils/appProtocol.js");
     vi.mocked(appProtocol.getMimeType).mockReturnValue("video/mp4");
   });
@@ -2092,6 +2098,107 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
       start: 0,
       end: size - 1,
       autoClose: true,
+    });
+  });
+
+  describe("audio streaming (#11425)", () => {
+    // Audio joined the streaming route because the buffered core caps normal
+    // files at 512 KB — every real track would have 413'd before reaching the
+    // renderer.
+    it("streams an audio file far past the buffered cap instead of 413ing", async () => {
+      const size = 8 * 1024 * 1024;
+      const handle = makeVideoHandle(VIDEO_BYTES, { size });
+      await installHandle(handle);
+      const appProtocol = await import("../../utils/appProtocol.js");
+      vi.mocked(appProtocol.getMimeType).mockReturnValue("audio/mpeg");
+
+      const handler = await captureHandler();
+      const response = await handler(makeVideoRequest("/project/track.mp3", "/project"));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Length")).toBe(String(size));
+      expect(response.headers.get("Content-Type")).toBe("audio/mpeg");
+      expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+      expect(handle.readFile).not.toHaveBeenCalled();
+    });
+
+    it("serves a ranged audio request from the same stream path", async () => {
+      const appProtocol = await import("../../utils/appProtocol.js");
+      vi.mocked(appProtocol.getMimeType).mockReturnValue("audio/flac");
+
+      const handler = await captureHandler();
+      const response = await handler(
+        makeVideoRequest("/project/track.flac", "/project", { range: "bytes=4-9" })
+      );
+
+      expect(response.status).toBe(206);
+      expect(response.headers.get("Content-Range")).toBe(`bytes 4-9/${String(VIDEO_BYTES.length)}`);
+      expect(await response.text()).toBe("456789");
+    });
+
+    it("routes an audio-suffixed alias of a non-media file through the buffered path", async () => {
+      // On Windows O_NOFOLLOW is a no-op, so an in-root `track.mp3 → notes.txt`
+      // symlink opens fine — classification must follow the canonical target so
+      // the read stays capped instead of streaming uncapped under an audio MIME.
+      const fs = await import("fs/promises");
+      const appProtocol = await import("../../utils/appProtocol.js");
+      const alias = path.normalize("/project/track.mp3");
+      const target = path.normalize("/project/notes.txt");
+      vi.mocked(fs.realpath).mockImplementation((p) =>
+        Promise.resolve(p === alias ? target : (p as string))
+      );
+      vi.mocked(appProtocol.getMimeType).mockImplementation((p: string) =>
+        p.endsWith(".mp3") ? "audio/mpeg" : "text/plain"
+      );
+      vi.mocked(fs.stat).mockResolvedValue({ size: 4 } as Awaited<ReturnType<typeof fs.stat>>);
+      const bufferedHandle = {
+        readFile: vi.fn().mockResolvedValue(Buffer.from("data")),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(fs.open).mockResolvedValue(
+        bufferedHandle as unknown as Awaited<ReturnType<typeof fs.open>>
+      );
+
+      const handler = await captureHandler();
+      const response = await handler(makeVideoRequest("/project/track.mp3", "/project"));
+
+      // A 200 with the canonical text MIME — not a 500 from an unconfigured
+      // buffered handle, which would let this pass without proving anything.
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toBe("text/plain");
+      expect(response.headers.get("Accept-Ranges")).toBeNull();
+      expect(bufferedHandle.readFile).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects an oversize audio alias of a text file with 413 before opening it", async () => {
+      // The cap is the whole point of routing the alias back to the buffered
+      // core; a size past it must be refused rather than read.
+      const fs = await import("fs/promises");
+      const appProtocol = await import("../../utils/appProtocol.js");
+      const alias = path.normalize("/project/track.mp3");
+      const target = path.normalize("/project/notes.txt");
+      vi.mocked(fs.realpath).mockImplementation((p) =>
+        Promise.resolve(p === alias ? target : (p as string))
+      );
+      vi.mocked(appProtocol.getMimeType).mockImplementation((p: string) =>
+        p.endsWith(".mp3") ? "audio/mpeg" : "text/plain"
+      );
+      vi.mocked(fs.stat).mockResolvedValue({
+        size: 5 * 1024 * 1024,
+      } as Awaited<ReturnType<typeof fs.stat>>);
+      const bufferedHandle = {
+        readFile: vi.fn(),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(fs.open).mockResolvedValue(
+        bufferedHandle as unknown as Awaited<ReturnType<typeof fs.open>>
+      );
+
+      const handler = await captureHandler();
+      const response = await handler(makeVideoRequest("/project/track.mp3", "/project"));
+
+      expect(response.status).toBe(413);
+      expect(bufferedHandle.readFile).not.toHaveBeenCalled();
     });
   });
 

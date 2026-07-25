@@ -21,8 +21,9 @@ import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { DiffFileSidebar } from "@/components/FileViewer/DiffFileSidebar";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
-import type { VideoPreviewError } from "@/components/FileViewer/FileVideoPreview";
-import { isVideoFilePath } from "@/components/FileViewer/filePreviewKinds";
+import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
+import type { MediaPreviewError } from "@/components/FileViewer/useMediaBlobUrl";
+import { isAudioFilePath, isVideoFilePath } from "@/components/FileViewer/filePreviewKinds";
 import { ImageDiffViewer, isImageDiffCandidate } from "@/components/FileViewer/ImageDiffViewer";
 import { DiffViewer, FULL_FILE_MAX_LINES } from "@/components/Worktree/DiffViewer";
 import type { FullFileUnavailableReason } from "@/components/Worktree/DiffViewer";
@@ -65,9 +66,14 @@ const FULL_FILE_FALLBACK_MESSAGES: Record<FullFileUnavailableReason, string> = {
 
 // Used when the preview reports a failure it can't name — a decode error gives
 // the media element no detail beyond "this didn't play".
-const GENERIC_VIDEO_ERROR: VideoPreviewError = {
+const GENERIC_VIDEO_ERROR: MediaPreviewError = {
   title: "This video couldn't be played",
   description: "The container is supported but the codec may not be — Refresh to try again.",
+};
+
+const GENERIC_AUDIO_ERROR: MediaPreviewError = {
+  title: "This audio file couldn't be played",
+  description: "The format is supported but the codec may not be — Refresh to try again.",
 };
 
 // Mirrors the ladder the modal used, so the preference keeps meaning the same
@@ -269,19 +275,19 @@ export function DiffPane({
   const currentEntry = currentIndex === -1 ? undefined : changeSet?.[currentIndex];
   const isViewed = currentEntry ? viewedSet.has(currentEntry.viewedKey) : false;
 
-  // Forces a fresh media request in video mode — the diff content hooks don't
-  // carry video bytes, so Refresh has to re-request the protocol URL itself.
-  const [videoReloadNonce, setVideoReloadNonce] = useState(0);
+  // Forces a fresh media request in video/audio mode — the diff content hooks
+  // don't carry media bytes, so Refresh has to re-request the protocol URL.
+  const [mediaReloadNonce, setMediaReloadNonce] = useState(0);
   // An allowlisted container can still hold a codec Chromium lacks, or the
   // file may be unreadable — surface that instead of a dead native control.
   // Holds the preview's specific reason (e.g. too large) when it gives one.
-  const [videoPlaybackError, setVideoPlaybackError] = useState<VideoPreviewError | null>(null);
+  const [mediaPlaybackError, setMediaPlaybackError] = useState<MediaPreviewError | null>(null);
   useEffect(() => {
     // Any change to the playback attempt's identity — file, resolved root, or
     // an explicit refresh — gets a fresh attempt. absolutePath covers a
     // worktree move that filePath (relative) alone would miss.
-    setVideoPlaybackError(null);
-  }, [filePath, absolutePath, worktreePath, videoReloadNonce]);
+    setMediaPlaybackError(null);
+  }, [filePath, absolutePath, worktreePath, mediaReloadNonce]);
 
   const [pathCopied, setPathCopied] = useState(false);
   const handleCopyPath = useCallback(() => {
@@ -401,10 +407,12 @@ export function DiffPane({
   const isImageMode = Boolean(
     filePath && fileStatus && isImageDiffCandidate(filePath) && panel?.diffSource !== "base-branch"
   );
-  // Videos show only the current working-tree version (no side-by-side diff —
-  // the media pipeline has no cheap "old vs new frame" comparison), so unlike
+  // Media shows only the current working-tree version (no side-by-side diff —
+  // the media pipeline has no cheap "old vs new" comparison), so unlike
   // isImageMode this applies to every diff source, base-branch included.
   const isVideoMode = Boolean(filePath && isVideoFilePath(filePath));
+  const isAudioMode = Boolean(filePath && isAudioFilePath(filePath));
+  const isMediaMode = isVideoMode || isAudioMode;
   // Sentinels the viewer turns into empty states rather than a rendered diff.
   // `NO_CHANGES`/`ERROR` gate the pane's own branches below; the binary and
   // oversized ones matter to the full-file scope, which has nothing to expand
@@ -432,9 +440,11 @@ export function DiffPane({
       ? { available: false, reason: "This view already shows the whole image" }
       : isVideoMode
         ? { available: false, reason: "This view already shows the whole video" }
-        : !hasDiff
-          ? { available: false, reason: "There's no diff to expand yet" }
-          : { available: true };
+        : isAudioMode
+          ? { available: false, reason: "This view already shows the whole audio file" }
+          : !hasDiff
+            ? { available: false, reason: "There's no diff to expand yet" }
+            : { available: true };
 
   // The hunks and the file on disk must describe the same revision. Once the
   // store reports the file changed, they demonstrably don't: the check inside
@@ -470,10 +480,10 @@ export function DiffPane({
   // Only the diff is retried: clearing it drops `hasDiff`, which disables the
   // source hook and invalidates its read, and the source is fetched again when
   // the new diff lands. Retrying both here would issue that read twice. The
-  // video nonce bump is a no-op outside video mode (nothing renders it).
+  // media nonce bump is a no-op outside media mode (nothing renders it).
   const refreshAll = useCallback(() => {
     retry();
-    setVideoReloadNonce((nonce) => nonce + 1);
+    setMediaReloadNonce((nonce) => nonce + 1);
   }, [retry]);
 
   // One line explaining why a requested whole-file view isn't on screen. The
@@ -529,7 +539,7 @@ export function DiffPane({
   const toolbar = filePath ? (
     <>
       <FileViewerToolbar.Root>
-        {!isImageMode && !isVideoMode && (
+        {!isImageMode && !isMediaMode && (
           <div role="group" aria-label="Diff layout">
             <SegmentedToggle<DiffViewType>
               options={[
@@ -553,7 +563,7 @@ export function DiffPane({
         )}
         <FileViewerToolbar.Path path={filePath} copied={pathCopied} onCopy={handleCopyPath} />
         <FileViewerToolbar.Actions>
-          {!isImageMode && !isVideoMode && (
+          {!isImageMode && !isMediaMode && (
             <FileViewerToolbar.IconButton
               label="Wrap long lines"
               pressed={diffWrapLines}
@@ -742,37 +752,49 @@ export function DiffPane({
 
             {filePath &&
               subject &&
-              isVideoMode &&
+              isMediaMode &&
               (fileStatus === "deleted" || !absolutePath ? (
                 <div className="flex h-full w-full items-center justify-center p-6">
                   <EmptyState
                     variant="zero-data"
                     scale="canvas"
                     title="No working-tree version to play"
-                    description="This video was deleted, and the diff view can only play the current file."
+                    description={
+                      isAudioMode
+                        ? "This audio file was deleted, and the diff view can only play the current file."
+                        : "This video was deleted, and the diff view can only play the current file."
+                    }
                   />
                 </div>
-              ) : videoPlaybackError !== null ? (
+              ) : mediaPlaybackError !== null ? (
                 <div className="flex h-full w-full items-center justify-center p-6">
                   <EmptyState
                     variant="zero-data"
                     scale="canvas"
-                    title={videoPlaybackError.title}
-                    description={videoPlaybackError.description}
+                    title={mediaPlaybackError.title}
+                    description={mediaPlaybackError.description}
                   />
                 </div>
+              ) : isAudioMode ? (
+                <FileAudioPreview
+                  filePath={absolutePath}
+                  rootPath={worktreePath}
+                  label={fileName ?? filePath}
+                  reloadKey={mediaReloadNonce}
+                  onError={(error) => setMediaPlaybackError(error ?? GENERIC_AUDIO_ERROR)}
+                />
               ) : (
                 <FileVideoPreview
                   filePath={absolutePath}
                   rootPath={worktreePath}
                   label={fileName ?? filePath}
-                  reloadKey={videoReloadNonce}
-                  onError={(error) => setVideoPlaybackError(error ?? GENERIC_VIDEO_ERROR)}
+                  reloadKey={mediaReloadNonce}
+                  onError={(error) => setMediaPlaybackError(error ?? GENERIC_VIDEO_ERROR)}
                   maxHeightClassName="max-h-full"
                 />
               ))}
 
-            {filePath && subject && !isImageMode && !isVideoMode && content && (
+            {filePath && subject && !isImageMode && !isMediaMode && content && (
               <DiffViewer
                 diff={content}
                 viewType={diffViewType}
@@ -785,7 +807,7 @@ export function DiffPane({
               />
             )}
 
-            {filePath && subject && !isImageMode && !isVideoMode && !content && (
+            {filePath && subject && !isImageMode && !isMediaMode && !content && (
               <div className="p-4 space-y-3">
                 <Skeleton label="Loading diff">
                   <SkeletonBone className="h-7 w-3/4" />

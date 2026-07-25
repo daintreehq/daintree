@@ -38,7 +38,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 function renderViewer(
   filePath: string | null,
-  opts: { sidebarCollapsed?: boolean; onToggleSidebar?: () => void } = {}
+  opts: { sidebarCollapsed?: boolean; onToggleSidebar?: () => void; revision?: string } = {}
 ) {
   const fileName = filePath ? (filePath.split("/").pop() ?? filePath) : "";
   return render(
@@ -48,7 +48,7 @@ function renderViewer(
         rootPath="/repo"
         fileName={fileName}
         relativePath={filePath ? fileName : null}
-        revision="r1"
+        revision={opts.revision ?? "r1"}
         sidebarCollapsed={opts.sidebarCollapsed ?? false}
         onToggleSidebar={opts.onToggleSidebar ?? vi.fn()}
         treeSidebarId="file-tree-column"
@@ -286,5 +286,79 @@ describe("FileBrowserViewer video preview (#11382)", () => {
     expect(container.querySelector("video")).toBeNull();
     expect(readMock).not.toHaveBeenCalled();
     expect(screen.getByText(/Can't play this video format/)).toBeTruthy();
+  });
+});
+
+describe("FileBrowserViewer audio preview (#11425)", () => {
+  // Same fetch/object-URL boundary as the video suite above.
+  const audioFetchMock = vi.fn();
+  beforeEach(() => {
+    audioFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      blob: () => Promise.resolve(new Blob(["x"])),
+    });
+    vi.stubGlobal("fetch", audioFetchMock);
+    URL.createObjectURL = vi.fn(() => "blob:app://daintree/audio-preview");
+    URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    audioFetchMock.mockReset();
+  });
+
+  it("renders an <audio> for a playable format without reading the file as text", async () => {
+    const { container } = renderViewer("/repo/media/track.flac");
+
+    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+    expect(String(audioFetchMock.mock.calls[0]?.[0])).toContain("daintree-file://");
+    expect(container.querySelector("audio")?.getAttribute("src")).toMatch(/^blob:/);
+    expect(readMock).not.toHaveBeenCalled();
+  });
+
+  it("shows a format message for audio Chromium can't decode, not the binary error", async () => {
+    const { container } = renderViewer("/repo/media/track.mid");
+    await act(async () => {});
+
+    expect(container.querySelector("audio")).toBeNull();
+    expect(readMock).not.toHaveBeenCalled();
+    expect(screen.getByText(/Can't play this audio format/)).toBeTruthy();
+  });
+
+  it("keeps the same player across a revision tick rather than refetching", async () => {
+    // `revision` bumps on every worktree write; keying the player on it would
+    // restart the track whenever an agent touches an unrelated file. Object
+    // URLs are unique here so a remount can't masquerade as continuity.
+    let objectUrlSequence = 0;
+    URL.createObjectURL = vi.fn(() => `blob:app://daintree/audio-${objectUrlSequence++}`);
+
+    const { container, rerender } = renderViewer("/repo/media/track.mp3", { revision: "r1" });
+    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+    const firstNode = container.querySelector("audio");
+    const firstSrc = firstNode?.getAttribute("src");
+    expect(audioFetchMock).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <TooltipProvider>
+        <FileBrowserViewer
+          filePath="/repo/media/track.mp3"
+          rootPath="/repo"
+          fileName="track.mp3"
+          relativePath="track.mp3"
+          revision="r2"
+          sidebarCollapsed={false}
+          onToggleSidebar={vi.fn()}
+          treeSidebarId="file-tree-column"
+        />
+      </TooltipProvider>
+    );
+    await act(async () => {});
+
+    // The very same element, still on its original blob — not a fresh one that
+    // happens to look alike.
+    expect(container.querySelector("audio")).toBe(firstNode);
+    expect(container.querySelector("audio")?.getAttribute("src")).toBe(firstSrc);
+    expect(audioFetchMock).toHaveBeenCalledTimes(1);
   });
 });

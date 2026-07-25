@@ -16,11 +16,15 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
 import { ZoomableImage } from "@/components/FileViewer/ZoomableImage";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
+import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
 import {
   isImageFilePath,
   isSvgFilePath,
+  isAudioFilePath,
+  isUnsupportedAudioFilePath,
   isUnsupportedVideoFilePath,
   isVideoFilePath,
+  UNSUPPORTED_AUDIO_MESSAGE,
   UNSUPPORTED_VIDEO_MESSAGE,
 } from "@/components/FileViewer/filePreviewKinds";
 import { MarkdownViewer } from "@/components/Markdown/MarkdownViewer";
@@ -78,6 +82,7 @@ type ViewerState =
   | { status: "svg"; markup: string | null }
   | { status: "image" }
   | { status: "video" }
+  | { status: "audio" }
   | { status: "error"; message: string };
 
 // Markdown gets a Source/Rendered switch mirroring FilePane's toggle. Typed at
@@ -148,10 +153,21 @@ export function FileBrowserViewer({
       return;
     }
 
-    // Containers Chromium can't demux get a truthful "can't play" message
+    // Audio takes the same protocol-to-blob route as video.
+    if (isAudioFilePath(filePath)) {
+      setState({ status: "audio" });
+      return;
+    }
+
+    // Formats Chromium can't decode get a truthful "can't play" message
     // instead of falling through to the text path's size cap.
     if (isUnsupportedVideoFilePath(filePath)) {
       setState({ status: "error", message: UNSUPPORTED_VIDEO_MESSAGE });
+      return;
+    }
+
+    if (isUnsupportedAudioFilePath(filePath)) {
+      setState({ status: "error", message: UNSUPPORTED_AUDIO_MESSAGE });
       return;
     }
 
@@ -480,6 +496,26 @@ export function FileBrowserViewer({
                 })
               }
               maxHeightClassName="max-h-full"
+            />
+          </div>
+        );
+
+      case "audio":
+        return (
+          <div className="h-full w-full overflow-auto">
+            {/* Deliberately NOT keyed on `revision`, for the same reason as
+                video above: a worktree write elsewhere must not restart the
+                track someone is listening to. */}
+            <FileAudioPreview
+              filePath={filePath}
+              rootPath={rootPath}
+              label={fileName}
+              onError={(error) =>
+                setState({
+                  status: "error",
+                  message: error?.title ?? "This audio file couldn't be played",
+                })
+              }
             />
           </div>
         );

@@ -223,7 +223,7 @@ function buildDaintreeFileErrorHeaders(): Record<string, string> {
   };
 }
 
-// Videos are streamed, not buffered, so the whole-file caps above don't apply —
+// Media is streamed, not buffered, so the whole-file caps above don't apply —
 // no response ever holds more than a stream chunk in memory (the caps exist to
 // bound buffered bytes reaching the renderer, a model that doesn't fit ranged
 // streaming; see maxBytesForFile). Every range form is served exactly as
@@ -233,8 +233,11 @@ function buildDaintreeFileErrorHeaders(): Record<string, string> {
 // issues follow-up ranges), so a server-side chunk clamp truncates playback at
 // the clamp — verified against Electron 42 / Chromium 148. Backpressure on the
 // response stream keeps main-process memory chunk-bounded regardless of size.
-function isVideoMimeType(mimeType: string): boolean {
-  return mimeType.startsWith("video/");
+// Audio rides the same path as video: a 4 MB podcast episode would 413 against
+// the 512 KB buffered cap, and the renderer plays both through the same
+// fetch-to-blob flow (#11425).
+function isMediaMimeType(mimeType: string): boolean {
+  return mimeType.startsWith("video/") || mimeType.startsWith("audio/");
 }
 
 type ParsedByteRange = { start: number; end: number } | "unsatisfiable" | null;
@@ -243,7 +246,7 @@ type ParsedByteRange = { start: number; end: number } | "unsatisfiable" | null;
  * Parse a single-range `Range: bytes=…` header against a known file size.
  * Null means "serve the whole file as 200": header absent, non-bytes unit,
  * syntactically malformed, multi-range, or inverted — RFC 9110 permits
- * ignoring all of these, and Chromium's <video> only sends single ranges.
+ * ignoring all of these, and Chromium's media elements only send single ranges.
  * "unsatisfiable" means a well-formed range no byte can satisfy (416).
  */
 function parseByteRange(rangeHeader: string | null, size: number): ParsedByteRange {
@@ -280,10 +283,10 @@ function parseByteRange(rangeHeader: string | null, size: number): ParsedByteRan
 }
 
 /**
- * Serve an already-containment-checked video file as a Range-aware stream.
+ * Serve an already-containment-checked media file as a Range-aware stream.
  *
  * Bypasses readContainedDaintreeFile's buffer-and-cap core deliberately:
- * <video> seeks via byte ranges and a multi-hundred-MB recording must never be
+ * media seeks via byte ranges and a multi-hundred-MB recording must never be
  * read whole. The open-and-stream flow keeps the same TOCTOU discipline as
  * diffMedia.ts's readWorkingSide — O_NOFOLLOW rejects a final-component
  * symlink swap after the realpath check, O_NONBLOCK (no-op on Windows) keeps a
@@ -291,7 +294,7 @@ function parseByteRange(rangeHeader: string | null, size: number): ParsedByteRan
  * stat rejects anything that isn't a regular file. Range bounds derive from
  * that fd stat, so they describe the exact file that was opened.
  */
-async function streamContainedVideoFile(
+async function streamContainedMediaFile(
   normalizedFile: string,
   mimeType: string,
   request: GlobalRequest
@@ -519,7 +522,7 @@ async function readContainedDaintreeFile(
 /**
  * The origin allowed to read this daintree-file:// response via cross-origin
  * fetch(), or null for everyone else. The scheme is corsEnabled so the file
- * viewer can fetch() video bytes for blob-URL playback, but eligibility alone
+ * viewer can fetch() media bytes for blob-URL playback, but eligibility alone
  * must not grant reads: a browser panel hosting an arbitrary remote site
  * shares the scheme registration, and echoing its origin here would hand it
  * the user's local files. Only the trusted app document qualifies — app:// in
@@ -598,21 +601,21 @@ function createDaintreeFileRequestCore() {
       const normalizedRoot = path.normalize(rootPath);
       const normalizedFile = path.normalize(filePath);
 
-      // Videos take the streaming path instead of the buffer-and-cap core.
-      // Classification must come from the canonical path, not the request
+      // Audio and video take the streaming path instead of the buffer-and-cap
+      // core. Classification must come from the canonical path, not the request
       // path: on Windows O_NOFOLLOW is a no-op, so a final-component symlink
       // (`clip.mp4` → `notes.txt`) opens fine, and request-path routing would
-      // stream a non-video uncapped under a video MIME. On POSIX ELOOP rejects
-      // that symlink at open, so the two spellings agree either way.
-      if (isVideoMimeType(getMimeType(normalizedFile))) {
+      // stream a non-media file uncapped under a media MIME. On POSIX ELOOP
+      // rejects that symlink at open, so the two spellings agree either way.
+      if (isMediaMimeType(getMimeType(normalizedFile))) {
         const contained = await resolveContainedRealPath(normalizedRoot, normalizedFile);
         if (contained instanceof Response) return contained;
         const realMimeType = getMimeType(contained.realFile);
-        if (isVideoMimeType(realMimeType)) {
-          return await streamContainedVideoFile(normalizedFile, realMimeType, request);
+        if (isMediaMimeType(realMimeType)) {
+          return await streamContainedMediaFile(normalizedFile, realMimeType, request);
         }
-        // A video-suffixed alias of a non-video — fall through to the buffered
-        // path, which redoes containment and applies its usual caps.
+        // A media-suffixed alias of a non-media file — fall through to the
+        // buffered path, which redoes containment and applies its usual caps.
       }
 
       const result = await readContainedDaintreeFile(normalizedRoot, normalizedFile, true);

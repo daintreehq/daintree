@@ -35,6 +35,18 @@ const VIDEO_EXTENSIONS = new Set(["mp4", "m4v", "webm", "ogv"]);
 // falling through to the text path's misleading size/binary errors.
 const UNSUPPORTED_VIDEO_EXTENSIONS = new Set(["mov", "mkv", "avi", "wmv"]);
 
+// Audio Chromium decodes natively. m4a/aac are in because stock Electron builds
+// ffmpeg with proprietary codecs (the same reason mp4/m4v play above) —
+// canPlayType("audio/mp4; codecs=\"mp4a.40.2\"") answers "probably" on
+// Electron 42 / Chromium 148. `ogg` is audio, not video: the video side claims
+// `ogv`, so the two never collide.
+const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "flac", "ogg", "oga", "opus", "m4a", "aac"]);
+
+// Audio Chromium has no decoder for, at any MIME spelling. Classified so the
+// viewer says "can't play this format" rather than falling through to the text
+// path's "Binary file — cannot display".
+const UNSUPPORTED_AUDIO_EXTENSIONS = new Set(["wma", "aiff", "aif", "mid", "midi", "amr"]);
+
 function extensionOf(filePath: string): string {
   return filePath.split(".").pop()?.toLowerCase() ?? "";
 }
@@ -63,6 +75,24 @@ export function isUnsupportedVideoFilePath(filePath: string): boolean {
 /** Copy for containers in the unsupported set — shared so both panes say the same thing. */
 export const UNSUPPORTED_VIDEO_MESSAGE =
   "Can't play this video format — only MP4, WebM, and Ogg are supported";
+
+/** Audio Chromium plays natively — served via daintree-file:// to an <audio> element. */
+export function isAudioFilePath(filePath: string): boolean {
+  return AUDIO_EXTENSIONS.has(extensionOf(filePath));
+}
+
+/** Audio formats Chromium can't decode — recognized only to explain why they won't play. */
+export function isUnsupportedAudioFilePath(filePath: string): boolean {
+  return UNSUPPORTED_AUDIO_EXTENSIONS.has(extensionOf(filePath));
+}
+
+/**
+ * Copy for audio in the unsupported set, shared by the panes that classify it.
+ * DiffPane deliberately doesn't: like unsupported video, it leaves these to the
+ * diff view's own binary fallback rather than claiming a player it won't show.
+ */
+export const UNSUPPORTED_AUDIO_MESSAGE =
+  "Can't play this audio format — only MP3, WAV, FLAC, Ogg, Opus, M4A, and AAC are supported";
 
 /**
  * URL for the custom `daintree-file://` protocol, which serves a file from
