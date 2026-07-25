@@ -732,7 +732,6 @@ port.on("message", async (rawMsg: any) => {
             result: {
               includedFiles: 0,
               includedSize: 0,
-              excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
               error: formatErrorMessage(error, "Failed to test CopyTree config"),
             },
           });

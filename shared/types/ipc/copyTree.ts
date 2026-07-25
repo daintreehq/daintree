@@ -16,13 +16,19 @@ export interface CopyTreeOptions {
   /** Git filtering - only include files changed since specified commit/branch */
   changed?: string;
 
-  /** Size limits */
+  /**
+   * Per-file size gate in bytes. Files above it are never opened and are
+   * reported under `excluded.byReason.sizeGate`. `always` patterns override it.
+   * Left unset no configurable gate applies, but CopyTree's own 10MB
+   * memory-safety ceiling still does and nothing lifts that.
+   */
   maxFileSize?: number;
   maxTotalSize?: number;
   maxFileCount?: number;
 
   /** Formatting */
   withLineNumbers?: boolean;
+  /** Character budget across all file content, not per file */
   charLimit?: number;
 
   /** Sorting strategy for file selection when limits are exceeded */
@@ -79,21 +85,76 @@ export interface CopyTreeTestConfigPayload {
   options?: CopyTreeTestConfigOptions;
 }
 
+/**
+ * Why a file did not make it into the context. Mirrors the SDK's stable
+ * exclusion reason keys — machine-readable, never prose, and additive.
+ */
+export type CopyTreeExclusionReason =
+  | "gitignore"
+  | "copytreeignore"
+  | "globalGitignore"
+  | "gitInfoExclude"
+  | "configExclude"
+  | "optionExclude"
+  | "filterPattern"
+  | "testExclude"
+  | "binaryExtension"
+  | "sizeGate"
+  | "totalSizeBudget"
+  | "fileCountBudget"
+  | "charBudget"
+  | "scopeFilter"
+  | "gitFilter"
+  | "duplicate"
+  | "unreadable";
+
+/**
+ * Exclusion accounting for a run. A pruned directory counts as a single
+ * exclusion standing in for its whole subtree.
+ */
+export interface CopyTreeExclusionSummary {
+  /** How many entries were excluded */
+  total: number;
+  /** Counts keyed by reason */
+  byReason: Partial<Record<CopyTreeExclusionReason, number>>;
+}
+
+/** Which budget dropped files first */
+export type CopyTreeTruncatedBy = "maxFileCount" | "maxTotalSize" | "charLimit";
+
+/** Budget and estimate reporting shared by real runs and dry runs */
+export interface CopyTreeBudgetStats {
+  /**
+   * Output characters. Measured on a real run, estimated on a dry run where
+   * the estimate is biased high.
+   */
+  estimatedOutputChars?: number;
+  /** Rough token count (chars/4), accurate to roughly ±20% */
+  estimatedTokens?: number;
+  /** True when nothing matched — a valid outcome, not an error */
+  noFilesMatched?: boolean;
+  /** What didn't make it, and why */
+  excluded?: CopyTreeExclusionSummary;
+  /** Whether a budget dropped files */
+  truncated?: boolean;
+  /** How many files a budget dropped or cut short */
+  truncatedCount?: number;
+  /** Which budget bit first — not necessarily the only one that bit */
+  truncatedBy?: CopyTreeTruncatedBy;
+  /**
+   * The retained set is larger than `maxTotalSize`. Happens when the first file
+   * alone exceeds the budget and is kept anyway, so it can be true even when
+   * nothing was truncated.
+   */
+  budgetExceeded?: boolean;
+}
+
 /** Result from CopyTree dry run test */
-export interface CopyTreeTestConfigResult {
+export interface CopyTreeTestConfigResult extends CopyTreeBudgetStats {
   /** Number of files that would be included */
   includedFiles: number;
   /** Total size of included files in bytes */
   includedSize: number;
-  /** Number of files excluded (broken down by reason) */
-  excluded: {
-    /** Files excluded by age/size truncation */
-    byTruncation: number;
-    /** Files excluded by size limit */
-    bySize: number;
-    /** Files excluded by patterns */
-    byPattern: number;
-  };
   /** Optional list of included file paths (for detailed preview) */
   files?: Array<{ path: string; size: number }>;
   /** Error message if dry run failed */
@@ -115,8 +176,13 @@ export interface CopyTreeResult {
   fileCount: number;
   /** Error message if generation failed */
   error?: string;
+  /**
+   * Version of the emitted format, e.g. `copytree-xml@1`. The output shape is a
+   * compatibility surface agents are prompted against, so it is versioned.
+   */
+  outputFormatVersion?: string | null;
   /** Generation statistics */
-  stats?: {
+  stats?: CopyTreeBudgetStats & {
     totalSize: number;
     duration: number;
   };
@@ -124,18 +190,16 @@ export interface CopyTreeResult {
 
 /** Progress update during CopyTree generation */
 export interface CopyTreeProgress {
-  /** Current stage name (e.g., 'FileDiscoveryStage', 'FormatterStage') */
+  /**
+   * Stage label. SDK-sourced events carry a stable pipeline identifier
+   * ('discover', 'load', 'format', …) and fall back to 'unknown'; the renderer
+   * also synthesizes its own local states before generation starts.
+   */
   stage: string;
   /** Progress percentage (0-1) */
   progress: number;
   /** Human-readable progress message */
   message: string;
-  /** Files processed so far (if known) */
-  filesProcessed?: number;
-  /** Total files estimated (if known) */
-  totalFiles?: number;
-  /** Current file being processed (if known) */
-  currentFile?: string;
   /** Optional trace ID to track event chains */
   traceId?: string;
 }

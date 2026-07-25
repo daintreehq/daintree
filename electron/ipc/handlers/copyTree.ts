@@ -458,7 +458,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
       // Content was written to the temp file; renderer callers read only
       // fileCount/stats/error, so drop it to avoid cloning a second copy.
-      return { content: "", fileCount: result.fileCount, stats: result.stats };
+      return {
+        content: "",
+        fileCount: result.fileCount,
+        stats: result.stats,
+        outputFormatVersion: result.outputFormatVersion,
+      };
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to copy context file");
       console.error(`[${traceId}] Failed to save/copy context file:`, errorMessage);
@@ -466,6 +471,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         content: "",
         fileCount: result.fileCount,
         stats: result.stats,
+        outputFormatVersion: result.outputFormatVersion,
         error: `Failed to copy file to clipboard: ${errorMessage}`,
       };
     }
@@ -612,7 +618,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       console.log(`[${traceId}] CopyTree inject completed successfully`);
       // The renderer reads only fileCount/stats; drop the (possibly multi-MB)
       // content so the contextBridge doesn't clone a second copy into the heap.
-      return { content: "", fileCount: result.fileCount, stats: result.stats };
+      return {
+        content: "",
+        fileCount: result.fileCount,
+        stats: result.stats,
+        outputFormatVersion: result.outputFormatVersion,
+      };
     } finally {
       contextInjectionTracker.finishInjection(validated.terminalId, injectionId);
     }
@@ -706,7 +717,6 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return {
         includedFiles: 0,
         includedSize: 0,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
         error: "Invalid payload",
       };
     }
@@ -717,7 +727,6 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return {
         includedFiles: 0,
         includedSize: 0,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
         error: "Workspace client not initialized",
       };
     }
@@ -734,7 +743,6 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return {
         includedFiles: 0,
         includedSize: 0,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
         error: `Worktree not found: ${validated.worktreeId}`,
       };
     }

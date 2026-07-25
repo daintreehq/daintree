@@ -75,7 +75,6 @@ export class WorkspaceCopyTreeClient {
       return {
         includedFiles: 0,
         includedSize: 0,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
         error: "No workspace host for path",
       };
     }
@@ -103,7 +102,6 @@ export class WorkspaceCopyTreeClient {
       return {
         includedFiles: 0,
         includedSize: 0,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
         error: formatErrorMessage(error, "Failed to generate context"),
       };
     } finally {
