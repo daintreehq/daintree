@@ -1003,12 +1003,9 @@ describe("folder context menu", () => {
   it("sends the row path untouched, with no escaping or glob suffix", async () => {
     const options = await copyFolderContext();
 
-    const sent = options.scopePaths?.[0] ?? "";
-    // `src/[draft]` survives verbatim: scope takes literal paths, so escaping it
-    // for minimatch would now look for a folder that doesn't exist.
-    expect(sent).not.toContain("\\");
-    expect(sent).not.toContain("*");
-    expect(sent).toBe(FOLDER_ROW.path);
+    // `src/[draft]` survives verbatim: scope takes literal paths, so escaping
+    // it for minimatch would now name a folder that doesn't exist.
+    expect(options.scopePaths?.[0]).toBe(FOLDER_ROW.path);
   });
 
   it("targets the worktree the pane is bound to", async () => {

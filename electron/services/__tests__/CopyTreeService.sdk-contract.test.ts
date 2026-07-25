@@ -123,6 +123,8 @@ describe("CopyTreeService against the installed CopyTree", () => {
       await fs.mkdir(path.join(tempDir, "src"), { recursive: true });
       await fs.writeFile(path.join(tempDir, "src", "kept.ts"), "export const kept = 1;\n");
       await fs.writeFile(path.join(tempDir, "src", "generated.ts"), "export const gen = 1;\n");
+      // A dotfile is the case a `folder/**` glob quietly misses.
+      await fs.writeFile(path.join(tempDir, "src", ".eslintrc.json"), "{}\n");
       await fs.mkdir(path.join(tempDir, "docs"), { recursive: true });
       await fs.writeFile(path.join(tempDir, "docs", "sibling.ts"), "export const s = 1;\n");
     }
@@ -163,8 +165,41 @@ describe("CopyTreeService against the installed CopyTree", () => {
       const paths = result.files?.map((file) => file.path) ?? [];
       expect(paths).not.toContain("docs/sibling.ts");
       expect(paths).not.toContain("small.ts");
+      // Non-empty first, or the "all under src/" check below passes vacuously.
+      expect(paths).toContain("src/kept.ts");
       // Root-relative, so an agent's @-reference to the emitted path resolves.
       expect(paths.every((filePath) => filePath.startsWith("src/"))).toBe(true);
+    });
+
+    it("includes a dotfile that a folder glob would silently skip", async () => {
+      await buildProject();
+
+      const result = await copyTreeService.testConfig(tempDir, { scopePaths: ["src"] });
+
+      // `src/**` does not match dotfiles, so the old pattern-based folder copy
+      // dropped .eslintrc/.env-style files without reporting them anywhere.
+      expect(result.files?.map((file) => file.path)).toContain("src/.eslintrc.json");
+    });
+
+    it("does not account for files outside the folder as exclusions", async () => {
+      await buildProject();
+
+      const result = await copyTreeService.testConfig(tempDir, { scopePaths: ["src"] });
+
+      // A whole-project walk narrowed by a pattern books every unmatched file
+      // as `filterPattern`, which would make "why was this empty" misreport.
+      expect(result.excluded?.byReason.filterPattern ?? 0).toBe(0);
+      expect(result.excluded?.byReason.gitignore).toBeGreaterThan(0);
+    });
+
+    it("walks a single file target, which a folder glob turns into no match", async () => {
+      await buildProject();
+
+      const result = await copyTreeService.testConfig(tempDir, {
+        scopePaths: ["src/kept.ts"],
+      });
+
+      expect(result.files?.map((file) => file.path)).toEqual(["src/kept.ts"]);
     });
 
     it("takes the folder name literally instead of reading it as a pattern", async () => {
