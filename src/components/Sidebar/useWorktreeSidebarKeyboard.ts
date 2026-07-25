@@ -6,8 +6,8 @@ export type SidebarRowItemRef = {
   kind: "row";
   worktreeId: string;
   /**
-   * Pinned rows (main worktree, integration branch) live outside the
-   * virtualized list — they're always mounted, so navigating to one must
+   * Pinned rows — currently just the main worktree — live outside the
+   * virtualized list; they're always mounted, so navigating to one must
    * NOT call `virtuosoRef.scrollToIndex`.
    */
   isPinned?: boolean;

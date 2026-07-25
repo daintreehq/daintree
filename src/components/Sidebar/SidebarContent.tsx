@@ -78,7 +78,6 @@ import {
   sortWorktrees,
   sortWorktreesByRelevance,
   groupByType,
-  findIntegrationWorktree,
   isExternalWorktree,
   scoreWorktree,
   computeChipCounts,
@@ -849,16 +848,20 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     [deferredWorktrees]
   );
 
-  const integrationWorktree = useMemo(
-    () => findIntegrationWorktree(deferredWorktrees, mainWorktree?.id),
+  // Single source for every "worktrees other than the main card" set below —
+  // quick-state counts, chip counts, the main card's aggregate, and the
+  // filtered list all read this one array so they can never disagree about
+  // which worktrees exist. #11433 was exactly that drift: a second, branch-name
+  // derived exclusion removed a worktree from the counts while it stayed on
+  // screen, so the filter bar read "All 0" above a visible row.
+  const nonMainWorktrees = useMemo(
+    () => deferredWorktrees.filter((w) => w.id !== mainWorktree?.id),
     [deferredWorktrees, mainWorktree]
   );
 
   const quickStateCounts = useMemo(() => {
-    const counts = { all: 0, working: 0, waiting: 0, finished: 0 };
-    for (const w of deferredWorktrees) {
-      if (w.id === mainWorktree?.id || w.id === integrationWorktree?.id) continue;
-      counts.all++;
+    const counts = { all: nonMainWorktrees.length, working: 0, waiting: 0, finished: 0 };
+    for (const w of nonMainWorktrees) {
       const meta = derivedMetaMap.get(w.id);
       if (!meta) continue;
       if (matchesQuickStateFilter("working", meta)) counts.working++;
@@ -866,14 +869,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       if (matchesQuickStateFilter("finished", meta)) counts.finished++;
     }
     return counts;
-  }, [deferredWorktrees, derivedMetaMap, mainWorktree, integrationWorktree]);
+  }, [nonMainWorktrees, derivedMetaMap]);
 
   const chipCounts = useMemo(() => {
-    const nonMain = deferredWorktrees.filter(
-      (w) => w.id !== mainWorktree?.id && w.id !== integrationWorktree?.id
-    );
     return computeChipCounts(
-      nonMain,
+      nonMainWorktrees,
       derivedMetaMap,
       activeWorktreeId,
       {
@@ -888,10 +888,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       devServerSessions
     );
   }, [
-    deferredWorktrees,
+    nonMainWorktrees,
     derivedMetaMap,
-    mainWorktree,
-    integrationWorktree,
     activeWorktreeId,
     deferredQuery,
     statusFilters,
@@ -904,7 +902,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   ]);
 
   const mainWorktreeAggregateCounts = useMemo(() => {
-    const nonMainCount = deferredWorktrees.length - 1 - (integrationWorktree ? 1 : 0);
+    const nonMainCount = nonMainWorktrees.length;
     if (
       nonMainCount === 0 &&
       quickStateCounts.working === 0 &&
@@ -919,7 +917,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       waiting: quickStateCounts.waiting,
       finished: quickStateCounts.finished,
     };
-  }, [deferredWorktrees.length, integrationWorktree, quickStateCounts]);
+  }, [nonMainWorktrees.length, quickStateCounts]);
 
   const { filteredWorktrees, groupedSections, hasResultsWithoutQuickState, totalCount } =
     useMemo(() => {
@@ -933,12 +931,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         devServerFilters,
       };
 
-      // Filter non-main worktrees only (exclude main and integration by ID)
-      const nonMain = deferredWorktrees.filter(
-        (w) => w.id !== mainWorktree?.id && w.id !== integrationWorktree?.id
-      );
       let withoutQuickStateMatch = false;
-      const filtered = nonMain.filter((worktree) => {
+      const filtered = nonMainWorktrees.filter((worktree) => {
         const derived = derivedMetaMap.get(worktree.id) ?? {
           terminalCount: 0,
           hasWorkingAgent: false,
@@ -1017,7 +1011,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           filteredWorktrees: sorted,
           groupedSections: groupByType(sorted, orderBy, validPinnedWorktrees),
           hasResultsWithoutQuickState: withoutQuickStateMatch,
-          totalCount: nonMain.length,
+          totalCount: nonMainWorktrees.length,
         };
       }
 
@@ -1025,10 +1019,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         filteredWorktrees: sorted,
         groupedSections: null,
         hasResultsWithoutQuickState: withoutQuickStateMatch,
-        totalCount: nonMain.length,
+        totalCount: nonMainWorktrees.length,
       };
     }, [
       deferredWorktrees,
+      nonMainWorktrees,
       deferredQuery,
       orderBy,
       isGroupedByType,
@@ -1043,8 +1038,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       alwaysShowWaiting,
       pinnedWorktrees,
       manualOrder,
-      mainWorktree,
-      integrationWorktree,
       derivedMetaMap,
       activeWorktreeId,
       quickStateFilter,
@@ -1143,28 +1136,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       ));
   const mainVisible = mainMatchesQueryPre && mainMatchesFacetsPre;
 
-  const integrationMatchesQueryPre =
-    integrationWorktree && worktreeMatchesQueryPre(integrationWorktree);
-  const integrationMatchesFacetsPre =
-    !hasFacetFiltersActive ||
-    (integrationWorktree &&
-      matchesFilters(
-        integrationWorktree,
-        pinnedFiltersPre,
-        derivedMetaMap.get(integrationWorktree.id) ?? {
-          terminalCount: 0,
-          hasWorkingAgent: false,
-          hasWaitingAgent: false,
-          hasCompletedAgent: false,
-          hasExitedAgent: false,
-          hasMergeConflict: false,
-          chipState: null,
-        },
-        integrationWorktree.id === activeWorktreeId,
-        devServerSessions
-      ));
-  const integrationVisible = integrationMatchesQueryPre && integrationMatchesFacetsPre;
-
   const hasQuery = liveQuery.trim().length > 0;
   const isSortDisabled = isGroupedByType || hasQuery;
   useEffect(() => {
@@ -1229,17 +1200,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   }, [dragDisabledReason]);
 
   const mainRowIndex = mainVisible ? 1 : 0;
-  const integrationRowIndex = integrationVisible ? mainRowIndex + 1 : mainRowIndex;
-  const firstScrollableRowIndex = integrationRowIndex + 1;
+  const firstScrollableRowIndex = mainRowIndex + 1;
 
-  // Total rows in the grid — pinned rows + group header rows + data rows.
+  // Total rows in the grid — the main row + group header rows + data rows.
   // Group header rows count toward aria-rowcount because they carry role="row".
   // Deleted rows carry `role="row"` too, so they count — a collapsed group is
   // one row no matter how many worktrees it holds.
   const deletedRowCount =
     deletedWorktrees.size >= DELETED_WORKTREE_GROUP_THRESHOLD ? 1 : deletedWorktrees.size;
   const ariaRowCount =
-    integrationRowIndex +
+    mainRowIndex +
     (groupedSections
       ? groupedSections.reduce((n, s) => n + 1 + s.worktrees.length, 0)
       : filteredWorktrees.length) +
@@ -1381,17 +1351,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     [scrollIndicatorScrollerRef]
   );
 
-  // The pinned main + integration rows live OUTSIDE the Virtuoso surface but
-  // INSIDE the role="grid" container, so keyboard navigation must visit them
-  // before descending into the virtualized list. They carry isPinned so the
-  // hook skips scrollToIndex (they're always rendered, never windowed).
+  // The pinned main row lives OUTSIDE the Virtuoso surface but INSIDE the
+  // role="grid" container, so keyboard navigation must visit it before
+  // descending into the virtualized list. It carries isPinned so the hook
+  // skips scrollToIndex (it's always rendered, never windowed).
   const keyboardItems = useMemo<SidebarKeyboardItem[]>(() => {
     const items: SidebarKeyboardItem[] = [];
     if (mainVisible && mainWorktree) {
       items.push({ kind: "row", worktreeId: mainWorktree.id, isPinned: true });
-    }
-    if (integrationVisible && integrationWorktree) {
-      items.push({ kind: "row", worktreeId: integrationWorktree.id, isPinned: true });
     }
     for (const item of sidebarItems) {
       items.push(
@@ -1399,7 +1366,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       );
     }
     return items;
-  }, [sidebarItems, mainVisible, mainWorktree, integrationVisible, integrationWorktree]);
+  }, [sidebarItems, mainVisible, mainWorktree]);
 
   const {
     gridRef,
@@ -1642,7 +1609,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     );
   }
 
-  const hasNonMainWorktrees = deferredWorktrees.length > 1;
+  const hasNonMainWorktrees = nonMainWorktrees.length > 0;
   const showQuickStateEmptyState =
     filteredWorktrees.length === 0 &&
     quickStateFilter !== "all" &&
@@ -1845,30 +1812,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           </div>
         )}
 
-        {/* Integration branch (develop/trunk/next) — pinned below main, subject to text search and facet filters */}
-        {integrationVisible && (
-          <div
-            role="rowgroup"
-            className="shrink-0"
-            style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
-          >
-            <StaticWorktreeRow
-              key={integrationWorktree.id}
-              worktreeId={integrationWorktree.id}
-              activeWorktreeId={activeWorktreeId}
-              focusedWorktreeId={focusedWorktreeId}
-              keyboardCursorId={keyboardCursorId}
-              totalWorktreeCount={deferredWorktrees.length}
-              selectWorktree={selectWorktree}
-              worktreeActions={worktreeActions}
-              availability={availability}
-              agentSettings={agentSettings}
-              homeDir={homeDir}
-              ariaRowIndex={integrationRowIndex}
-            />
-          </div>
-        )}
-
         {pendingCreationRows && (
           <div role="rowgroup" className="shrink-0">
             {pendingCreationRows}
@@ -1960,7 +1903,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           ) : filteredWorktrees.length === 0 &&
             hasFilters &&
             hasNonMainWorktrees &&
-            !(mainVisible || integrationVisible) ? (
+            !mainVisible ? (
             <EmptyState
               variant="filtered-empty"
               scale="sidebar"

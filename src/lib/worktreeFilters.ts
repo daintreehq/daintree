@@ -483,50 +483,6 @@ export function hasAnyFilters(filters: FilterState): boolean {
   );
 }
 
-export function filterTriageWorktrees<T extends Worktree | WorktreeState>(
-  worktrees: T[],
-  derivedMetaMap: Map<string, DerivedWorktreeMeta>,
-  mainWorktreeId: string | undefined,
-  integrationWorktreeId: string | undefined,
-  query: string
-): T[] {
-  const nonMain = worktrees.filter(
-    (w) => w.id !== mainWorktreeId && w.id !== integrationWorktreeId
-  );
-  return nonMain.filter((w) => {
-    const meta = derivedMetaMap.get(w.id);
-    if (!meta) return false;
-    const qualifies = meta.hasWaitingAgent || meta.hasMergeConflict;
-    if (!qualifies) return false;
-    if (query.trim().length > 0) {
-      const exactNum = parseExactNumber(query);
-      if (exactNum !== null) {
-        return w.issueNumber === exactNum || w.linked?.pr?.ref.number === exactNum;
-      }
-      return scoreWorktree(w, query) > 0;
-    }
-    return true;
-  });
-}
-
-export const INTEGRATION_BRANCH_NAMES = ["develop", "trunk", "next"] as const;
-
-export function findIntegrationWorktree<T extends Worktree | WorktreeState>(
-  worktrees: T[],
-  mainWorktreeId: string | undefined
-): T | null {
-  return (
-    worktrees.find(
-      (w) =>
-        w.id !== mainWorktreeId &&
-        !w.isMainWorktree &&
-        !isExternalWorktree(w) &&
-        w.branch != null &&
-        (INTEGRATION_BRANCH_NAMES as readonly string[]).includes(w.branch.toLowerCase())
-    ) ?? null
-  );
-}
-
 export interface ChipCounts {
   status: Record<StatusFilter, number>;
   branchType: Record<TypeFilter, number>;
