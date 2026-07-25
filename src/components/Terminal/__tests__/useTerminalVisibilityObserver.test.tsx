@@ -28,6 +28,7 @@ class FakeIntersectionObserver implements IntersectionObserver {
   observed: Element[] = [];
   readonly root: Document | Element | null;
   readonly rootMargin: string;
+  readonly scrollMargin: string = "0px";
   readonly thresholds: readonly number[];
 
   constructor(
