@@ -66,31 +66,39 @@ export function useTerminalVisibilityObserver({
         // Don't update visibility during drag - CSS transforms cause false negatives
         if (isDraggingRef.current || !entry) return;
 
-        // Suppress stale `false` readings that would freeze a visible terminal
-        // at the BACKGROUND tier (#9780). Confirm against fresh element and root
-        // geometry, read before any write to avoid a redundant layout reflow.
-        if (
-          isStaleHiddenReading(
-            entry,
-            () => containerRef.current?.getBoundingClientRect(),
-            () =>
-              gridScrollRoot?.getBoundingClientRect() ??
-              new DOMRect(0, 0, window.innerWidth, window.innerHeight)
-          )
-        )
-          return;
-
         // A callback queued from a previous mount site (warm-swap reattach)
         // must not write at all. setVisible already drops it via its
         // generation guard — dropping the store write under the same
         // condition keeps store and service from diverging permanently
         // (#10416). The live mount re-arms on `attachEpoch` instead of
         // adopting the newer generation here, so a superseded observer's
-        // retained callback keeps failing this check.
+        // retained callback keeps failing this check. Checked before the
+        // geometry reads below so a superseded callback costs no layout.
         if (terminalInstanceService.getAttachGeneration(id) !== gen) return;
 
-        updateVisibility(id, entry.isIntersecting);
-        terminalInstanceService.setVisible(id, entry.isIntersecting, gen);
+        // Stale `false` readings would freeze a visible terminal at the
+        // BACKGROUND tier (#9780). Confirm against fresh element and root
+        // geometry, read before any write to avoid a redundant layout reflow.
+        const isStaleHide = isStaleHiddenReading(
+          entry,
+          () => containerRef.current?.getBoundingClientRect(),
+          () =>
+            gridScrollRoot?.getBoundingClientRect() ??
+            new DOMRect(0, 0, window.innerWidth, window.innerHeight)
+        );
+
+        // Commit what that geometry established rather than dropping the
+        // callback: a stale hide is positive proof the pane IS on screen. When
+        // the store already agrees this is a no-op (both writes early-return on
+        // an unchanged value), so the only case it changes is a store stuck
+        // hidden — which nothing else repairs for a FOCUSED pane, since
+        // getTerminalRefreshTier answers FOCUSED before it ever consults
+        // isVisible and the reconciliation watchdog only repairs at BACKGROUND
+        // (#11445).
+        const isVisible = isStaleHide || entry.isIntersecting;
+
+        updateVisibility(id, isVisible);
+        terminalInstanceService.setVisible(id, isVisible, gen);
       },
       {
         // Grid-scoped root: when mounted inside the grid, the pre-warm margin

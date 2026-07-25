@@ -9,7 +9,7 @@ import { useTypingLocatorStore } from "@/store/typingLocatorStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
-import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
+import { UI_PALETTE_EXIT_DURATION, UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import {
   findPanelIdForElement,
@@ -22,6 +22,16 @@ import {
 
 /** Best-effort focus retry budget — the draft is already safe by the time we try. */
 const FOCUS_ATTEMPT_FRAMES = 30;
+
+/**
+ * How long one locate episode suppresses repeats for the same pane. Matches the
+ * locator pill's full on-screen life (TypingLocator clears the label at dwell +
+ * exit), so an episode lasts exactly as long as the affordance naming the pane:
+ * while the user can still read where their typing is going there is nothing to
+ * re-announce, and once it is gone a keystroke still landing off-screen earns a
+ * fresh locate.
+ */
+export const LOCATE_EPISODE_MS = UI_TRANSIENT_HINT_DWELL_MS + UI_PALETTE_EXIT_DURATION;
 
 /**
  * Panel ids are opaque and may contain characters that are not selector-safe,
@@ -103,15 +113,17 @@ export function useTypeAnywhere(): void {
         // the receipt flash on the worktree card re-fires for every character
         // (pingTerminal advances pingSeq unconditionally), which is the same
         // per-keystroke flashing the card's border-accent guard already avoids
-        // (#11445). The window matches the locator pill's dwell so an episode
-        // lasts exactly as long as the affordance naming the pane: once that
-        // has faded, a keystroke still landing off-screen has earned a new one.
+        // (#11445).
         const episode = locateEpisodeRef.current;
         const now = Date.now();
+        const elapsed = episode === null ? 0 : now - episode.at;
         if (
           episode !== null &&
           episode.panelId === panelId &&
-          now - episode.at < UI_TRANSIENT_HINT_DWELL_MS
+          // A backward wall-clock step (NTP correction, manual change) must not
+          // strand the pane un-locatable until real time catches up.
+          elapsed >= 0 &&
+          elapsed < LOCATE_EPISODE_MS
         ) {
           return;
         }
@@ -185,6 +197,9 @@ export function useTypeAnywhere(): void {
       useTypingLocatorStore
         .getState()
         .showLocator(`Typing into ${getTerminalDisplayTitle(target, "compact")}`);
+      // The pill now names the rescue target, so any locate episode it replaced
+      // is over — returning to that pane deserves to be announced again.
+      locateEpisodeRef.current = null;
 
       // The pane's own focus effect drives the editor focus, but the editor is a
       // lazy chunk and its worktree may still be mounting — so poll until DOM

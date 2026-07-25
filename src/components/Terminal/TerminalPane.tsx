@@ -691,10 +691,9 @@ function TerminalPaneComponent({
   // Calling it here too is redundant and breaks in React StrictMode (dev),
   // where the effect's cleanup captures the same generation as the active
   // mount, bypassing the stale-generation guard and hiding the terminal.
-  // Deliberately NOT keyed on attachEpoch: a bare observer re-arm would run
-  // this hook's cleanup while the pane is still mounted, and its captured
-  // generation would match the live attach — writing a spurious false.
-  useUnmountVisibilityCleanup(id, restartKey, updateVisibility);
+  // The epoch re-captures the generation this mount owns without re-running the
+  // cleanup itself — see the hook for why those two have to stay separate.
+  useUnmountVisibilityCleanup(id, restartKey, updateVisibility, attachEpoch);
 
   const handleReady = useCallback(() => {}, []);
 

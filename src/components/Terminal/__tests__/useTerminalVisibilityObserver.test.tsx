@@ -22,20 +22,32 @@ vi.mock("@/services/TerminalInstanceService", () => ({
  * superseded observer's queued reading can still be delivered by hand — the
  * #10416 scenario the generation guard exists for.
  */
-class FakeIntersectionObserver {
+class FakeIntersectionObserver implements IntersectionObserver {
   static instances: FakeIntersectionObserver[] = [];
   disconnected = false;
   observed: Element[] = [];
+  readonly root: Document | Element | null;
+  readonly rootMargin: string;
+  readonly thresholds: readonly number[];
 
   constructor(
     private callback: IntersectionObserverCallback,
-    readonly options?: IntersectionObserverInit
+    options?: IntersectionObserverInit
   ) {
+    this.root = options?.root ?? null;
+    this.rootMargin = options?.rootMargin ?? "0px";
+    this.thresholds = options?.threshold === undefined ? [0] : [options.threshold].flat();
     FakeIntersectionObserver.instances.push(this);
   }
 
   observe(el: Element) {
     this.observed.push(el);
+  }
+
+  unobserve() {}
+
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
   }
 
   disconnect() {
@@ -44,11 +56,23 @@ class FakeIntersectionObserver {
 
   /** Deliver a reading as the browser would, batched entries and all. */
   deliver(...isIntersecting: boolean[]) {
-    const entries = isIntersecting.map(
-      (flag) => ({ isIntersecting: flag }) as IntersectionObserverEntry
-    );
+    const target = this.observed[0] ?? document.createElement("div");
+    const entries = isIntersecting.map((flag) => {
+      // Only `isIntersecting` is read by the observer; the rest is filled in so
+      // the fixture is a real entry rather than a cast-away partial.
+      const rect = new DOMRect(0, 0, 0, 0);
+      return {
+        boundingClientRect: rect,
+        intersectionRatio: flag ? 1 : 0,
+        intersectionRect: rect,
+        isIntersecting: flag,
+        rootBounds: null,
+        target,
+        time: 0,
+      };
+    });
     act(() => {
-      this.callback(entries, this as unknown as IntersectionObserver);
+      this.callback(entries, this);
     });
   }
 }
@@ -96,8 +120,7 @@ describe("useTerminalVisibilityObserver", () => {
 
   beforeEach(() => {
     FakeIntersectionObserver.instances = [];
-    globalThis.IntersectionObserver =
-      FakeIntersectionObserver as unknown as typeof IntersectionObserver;
+    globalThis.IntersectionObserver = FakeIntersectionObserver;
     mocks.getAttachGeneration.mockReturnValue(1);
   });
 
@@ -124,13 +147,26 @@ describe("useTerminalVisibilityObserver", () => {
     expect(mocks.setVisible).toHaveBeenCalledWith("t1", false, 1);
   });
 
-  it("suppresses a stale hide for an element still on screen (#9780)", () => {
+  it("never commits a hide for an element fresh geometry puts on screen (#9780)", () => {
     const { updateVisibility } = setup({ containerRect: ON_SCREEN });
 
     FakeIntersectionObserver.instances[0]!.deliver(false);
 
-    expect(updateVisibility).not.toHaveBeenCalled();
-    expect(mocks.setVisible).not.toHaveBeenCalled();
+    expect(updateVisibility).not.toHaveBeenCalledWith("t1", false);
+    expect(mocks.setVisible).not.toHaveBeenCalledWith("t1", false, expect.anything());
+  });
+
+  it("repairs a store stuck hidden when geometry proves the pane on screen", () => {
+    const { updateVisibility } = setup({ containerRect: ON_SCREEN });
+
+    // The re-armed observer's first reading can itself be the Chromium
+    // false-negative. Dropping it would leave a store that entered hidden stuck
+    // there until some later threshold crossing — and nothing else repairs a
+    // focused pane.
+    FakeIntersectionObserver.instances[0]!.deliver(false);
+
+    expect(updateVisibility).toHaveBeenCalledWith("t1", true);
+    expect(mocks.setVisible).toHaveBeenCalledWith("t1", true, 1);
   });
 
   it("resumes writing after an attach that landed post-capture (#11445)", () => {
@@ -209,6 +245,43 @@ describe("useTerminalVisibilityObserver", () => {
     expect(updateVisibility).not.toHaveBeenCalled();
   });
 
+  it("tracks drag state changes without re-arming the observer", () => {
+    const container = document.createElement("div");
+    container.getBoundingClientRect = () => OFF_SCREEN;
+    const containerRef = { current: container };
+    const updateVisibility = vi.fn();
+
+    const view = renderHook(
+      ({ isDragging }: { isDragging: boolean }) =>
+        useTerminalVisibilityObserver({
+          id: "t1",
+          restartKey: 0,
+          attachEpoch: 0,
+          isDragging,
+          gridScrollRoot: null,
+          containerRef,
+          updateVisibility,
+        }),
+      { initialProps: { isDragging: false } }
+    );
+
+    act(() => {
+      view.rerender({ isDragging: true });
+    });
+    FakeIntersectionObserver.instances[0]!.deliver(false);
+    expect(updateVisibility).not.toHaveBeenCalled();
+
+    act(() => {
+      view.rerender({ isDragging: false });
+    });
+    FakeIntersectionObserver.instances[0]!.deliver(false);
+    expect(updateVisibility).toHaveBeenCalledWith("t1", false);
+
+    // Drag state must ride a ref: re-arming on it would run the observer's
+    // cleanup on drag START, which is what the mirrored ref exists to avoid.
+    expect(FakeIntersectionObserver.instances).toHaveLength(1);
+  });
+
   it("disconnects the live observer on unmount", () => {
     const { view } = setup();
 
@@ -221,9 +294,9 @@ describe("useTerminalVisibilityObserver", () => {
     const root = document.createElement("div");
     setup({ gridScrollRoot: root });
 
-    const options = FakeIntersectionObserver.instances[0]!.options;
-    expect(options?.root).toBe(root);
+    const observer = FakeIntersectionObserver.instances[0]!;
+    expect(observer.root).toBe(root);
     // Outside the grid there is no pre-warm margin; inside it there must be one.
-    expect(options?.rootMargin).not.toBe("0px");
+    expect(observer.rootMargin).not.toBe("0px");
   });
 });

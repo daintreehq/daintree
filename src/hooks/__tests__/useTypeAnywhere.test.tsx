@@ -58,10 +58,9 @@ vi.mock("@/components/Panel/panelFocusRegistry", () => ({
   focusPanelInput: (id: string) => focusPanelInput(id),
 }));
 
-import { useTypeAnywhere } from "../useTypeAnywhere";
+import { useTypeAnywhere, LOCATE_EPISODE_MS } from "../useTypeAnywhere";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useTypingLocatorStore } from "@/store/typingLocatorStore";
-import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 
 function agentPanel(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -432,7 +431,25 @@ describe("useTypeAnywhere", () => {
       expect(pingTerminal).toHaveBeenCalledTimes(2);
     });
 
-    it("re-locates a still-hidden pane once the locator has faded", () => {
+    it("keeps suppressing while the locator is still on screen", () => {
+      vi.useFakeTimers();
+      try {
+        setPanels([agentPanel("a1", { isVisible: false })]);
+        focusOffscreenTerminal("a1");
+        renderHook(() => useTypeAnywhere());
+
+        press("h");
+        // Still inside the pill's life, so the pane is already named on screen.
+        vi.advanceTimersByTime(LOCATE_EPISODE_MS - 1);
+        press("e");
+
+        expect(pingTerminal).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("re-locates a still-hidden pane once the locator has cleared", () => {
       vi.useFakeTimers();
       try {
         setPanels([agentPanel("a1", { isVisible: false })]);
@@ -443,10 +460,29 @@ describe("useTypeAnywhere", () => {
         press("e");
         expect(pingTerminal).toHaveBeenCalledTimes(1);
 
-        // Past the pill's dwell nothing on screen still names the pane, so a
-        // keystroke landing off-screen has earned a fresh locate.
-        vi.advanceTimersByTime(UI_TRANSIENT_HINT_DWELL_MS + 1);
+        // The pill has been cleared, so nothing on screen still names the pane
+        // and a keystroke landing off-screen has earned a fresh locate.
+        vi.advanceTimersByTime(LOCATE_EPISODE_MS);
         press("y");
+
+        expect(pingTerminal).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("starts a new episode after a backward wall-clock step", () => {
+      vi.useFakeTimers();
+      try {
+        setPanels([agentPanel("a1", { isVisible: false })]);
+        focusOffscreenTerminal("a1");
+        renderHook(() => useTypeAnywhere());
+
+        press("h");
+        // An NTP correction must not strand the pane un-locatable until real
+        // time catches back up to the episode stamp.
+        vi.setSystemTime(Date.now() - 60_000);
+        press("e");
 
         expect(pingTerminal).toHaveBeenCalledTimes(2);
       } finally {
@@ -465,9 +501,13 @@ describe("useTypeAnywhere", () => {
       press("h");
       focusOffscreenTerminal("a2");
       press("i");
+      // Coming straight back is a new context: the pill now names a2.
+      focusOffscreenTerminal("a1");
+      press("o");
 
       expect(pingTerminal).toHaveBeenNthCalledWith(1, "a1");
       expect(pingTerminal).toHaveBeenNthCalledWith(2, "a2");
+      expect(pingTerminal).toHaveBeenNthCalledWith(3, "a1");
     });
   });
 
