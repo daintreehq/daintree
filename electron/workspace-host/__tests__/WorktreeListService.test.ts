@@ -324,6 +324,35 @@ describe("WorktreeListService", () => {
       expect(worktrees[1].isExternal).toBe(true);
     });
 
+    it("never flags the main worktree, even when it sits outside the boundary", async () => {
+      // Opening a linked worktree as the project puts the boundary at that
+      // worktree's parent, which the repo's own main worktree legitimately sits
+      // outside of. The project's main worktree is never "outside the project".
+      const linkedRoot = path.resolve("/projects/my-repo-worktrees/feature-a");
+      service.setGit(mockGit, linkedRoot);
+      const raw = [
+        {
+          path: path.resolve("/projects/my-repo"),
+          branch: "main",
+          bare: false,
+          isMainWorktree: true,
+        },
+        { path: linkedRoot, branch: "feature/a", bare: false, isMainWorktree: false },
+        {
+          path: path.resolve("/var/tmp/scratch/bench-baseline"),
+          branch: "develop",
+          bare: false,
+          isMainWorktree: false,
+        },
+      ];
+
+      const worktrees = await service.mapToWorktrees(raw);
+
+      expect(worktrees[0].isExternal).toBe(false);
+      expect(worktrees[1].isExternal).toBe(false);
+      expect(worktrees[2].isExternal).toBe(true);
+    });
+
     it("treats worktrees anywhere under the parent directory as internal", async () => {
       service.setGit(mockGit, projectRoot);
       const parentDir = path.dirname(projectRoot);
@@ -404,14 +433,15 @@ describe("WorktreeListService", () => {
       expect(worktrees.every((w) => w.isExternal === undefined)).toBe(true);
     });
 
-    it("resolves a relative porcelain path against the main worktree, not the host cwd", async () => {
-      // Git 2.48+ `worktree.useRelativePaths` emits linked worktrees relative to
-      // the repository while the main entry stays absolute.
+    it("leaves a relative porcelain path unclassified rather than guessing", async () => {
+      // Git 2.48+ `worktree.useRelativePaths` records linked worktrees relative
+      // to `$GIT_COMMON_DIR/worktrees/<id>/`, an admin dir the porcelain output
+      // doesn't name — so the resolved path can't be trusted to classify against.
       service.setGit(mockGit, projectRoot);
       const raw = [
         { path: projectRoot, branch: "main", bare: false, isMainWorktree: true },
         {
-          path: path.join("..", "my-repo-worktrees", "feature-a"),
+          path: path.join("..", "..", "..", "my-repo-worktrees", "feature-a"),
           branch: "feature/a",
           bare: false,
           isMainWorktree: false,
@@ -420,21 +450,8 @@ describe("WorktreeListService", () => {
 
       const worktrees = await service.mapToWorktrees(raw);
 
-      expect(worktrees[1].id).toBe(
-        path.resolve(projectRoot, "..", "my-repo-worktrees", "feature-a")
-      );
-      expect(worktrees[1].path).toBe(worktrees[1].id);
-      expect(worktrees[1].isExternal).toBe(false);
-    });
-
-    it("falls back to cwd resolution for a relative path with no absolute main entry", async () => {
-      service.setGit(mockGit, projectRoot);
-      const relative = path.join("detached", "worktree");
-      const raw = [{ path: relative, branch: "feature/a", bare: false, isMainWorktree: false }];
-
-      const worktrees = await service.mapToWorktrees(raw);
-
-      expect(worktrees[0].id).toBe(path.resolve(relative));
+      expect(worktrees[0].isExternal).toBe(false);
+      expect(worktrees[1].isExternal).toBeUndefined();
     });
   });
 });

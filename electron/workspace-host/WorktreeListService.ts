@@ -197,28 +197,36 @@ export class WorktreeListService {
   }
 
   /**
-   * Base for resolving a relative porcelain path. Git 2.48+'s
-   * `worktree.useRelativePaths` emits linked worktrees relative to the
-   * repository while the main worktree entry stays absolute, so that entry —
-   * not `projectRootPath`, which may itself be a linked worktree — is the
-   * correct base. Bare `pathResolve` would resolve against the host process
-   * cwd and mint a bogus worktree id.
+   * The main worktree is the project's own by definition and is never external,
+   * whatever the path math says. That matters when the opened project IS a
+   * linked worktree: the boundary is then that worktree's parent, which the
+   * repo's main worktree legitimately sits outside of. Deriving the flag purely
+   * from paths would badge the project's own main worktree as external — the
+   * failure mode #2251 was reverted for.
+   *
+   * A relative porcelain path stays unclassified. Git 2.48+'s
+   * `worktree.useRelativePaths` records linked worktrees relative to
+   * `$GIT_COMMON_DIR/worktrees/<id>/`, an admin directory whose id the porcelain
+   * output doesn't carry, so `normalizedPath` is untrustworthy here and the
+   * honest answer is "unknown" rather than a badge derived from a bad path.
    */
-  private static getRelativePathBase(rawWorktrees: RawWorktreeRecord[]): string | undefined {
-    const mainEntry = rawWorktrees.find((wt) => wt.isMainWorktree);
-    return mainEntry && isAbsolute(mainEntry.path) ? mainEntry.path : undefined;
+  private static classifyExternal(
+    wt: RawWorktreeRecord,
+    normalizedPath: string,
+    boundary: string | undefined
+  ): boolean | undefined {
+    if (boundary === undefined) return undefined;
+    if (wt.isMainWorktree) return false;
+    if (!isAbsolute(wt.path)) return undefined;
+    return !isPathInside(normalizedPath, boundary);
   }
 
   mapToWorktrees(rawWorktrees: RawWorktreeRecord[]): Promise<Worktree[]> {
     const boundary = this.getContainmentBoundary();
-    const relativeBase = WorktreeListService.getRelativePathBase(rawWorktrees);
 
     return Promise.all(
       rawWorktrees.map(async (wt) => {
-        const normalizedPath =
-          isAbsolute(wt.path) || !relativeBase
-            ? pathResolve(wt.path)
-            : pathResolve(relativeBase, wt.path);
+        const normalizedPath = pathResolve(wt.path);
         let name: string;
         if (wt.isMainWorktree) {
           name = normalizedPath.split(/[/\\]/).pop() || "Main";
@@ -239,7 +247,7 @@ export class WorktreeListService {
           isDetached: wt.isDetached,
           isCurrent: false,
           isMainWorktree: wt.isMainWorktree,
-          isExternal: boundary === undefined ? undefined : !isPathInside(normalizedPath, boundary),
+          isExternal: WorktreeListService.classifyExternal(wt, normalizedPath, boundary),
           gitDir: (await getGitDir(normalizedPath)) || undefined,
           isLocked: wt.isLocked,
           lockReason: wt.lockReason,
