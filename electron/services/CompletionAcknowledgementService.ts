@@ -1,4 +1,6 @@
 import type { ProjectStatusMap } from "../../shared/types/ipc/project.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { logWarn } from "../utils/logger.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
 
 /**
@@ -58,7 +60,20 @@ export class CompletionAcknowledgementService {
 
   start(): void {
     if (this.timer !== null) return;
-    this.timer = setInterval(() => this.sample(), COMPLETION_ACK_SAMPLE_INTERVAL_MS);
+    // try/catch is load-bearing: this runs on a bare timer, so an uncaught
+    // throw reaches `uncaughtException` and takes the app down. The sample
+    // races project removal — `markSeen` throws "Project not found" when the
+    // row is deleted between the observed-id read and the stamp — and a lost
+    // acknowledgement is a far smaller failure than a relaunch.
+    this.timer = setInterval(() => {
+      try {
+        this.sample();
+      } catch (error) {
+        logWarn("completion-ack.sample.error", {
+          error: formatErrorMessage(error, "CompletionAcknowledgementService.sample threw"),
+        });
+      }
+    }, COMPLETION_ACK_SAMPLE_INTERVAL_MS);
   }
 
   stop(): void {
