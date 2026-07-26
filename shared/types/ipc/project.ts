@@ -110,6 +110,20 @@ export interface BulkProjectStatsEntry extends ProjectStats {
   blockedAgentCount: number;
   /** Earliest transition into `waiting`, absent when nothing is waiting. */
   oldestWaitingSince?: number;
+  /** Agents settled in `completed` — finished work awaiting review. */
+  completedAgentCount: number;
+  /**
+   * Completed agents the user hasn't seen yet — their completion postdates the
+   * project's acknowledgement watermark. Subset of
+   * {@link BulkProjectStatsEntry.completedAgentCount}.
+   */
+  unacknowledgedCompletedAgentCount: number;
+  /** Earliest unacknowledged completion, absent when everything was seen. */
+  oldestUnacknowledgedCompletionAt?: number;
+  /** Latest unacknowledged completion, absent when everything was seen. */
+  latestUnacknowledgedCompletionAt?: number;
+  /** Latest completion regardless of acknowledgement, absent when none. */
+  latestCompletionAt?: number;
   /**
    * Measured resident memory (MB) of this project's terminal process trees —
    * each shell plus every descendant (dev servers, agents, language servers),
@@ -145,6 +159,36 @@ export interface ProjectStatusEntry {
    * a `lastStateChange` (a pre-detection boot window).
    */
   oldestWaitingSince?: number;
+  /** Agents settled in `completed` — finished work awaiting review. */
+  completedAgentCount: number;
+  /**
+   * Completed agents the user hasn't seen yet: their transition into
+   * `completed` postdates the project's acknowledgement watermark
+   * (`Project.lastCompletionSeenAt`). Holds the project in the switcher's
+   * "Needs attention" band with no time-based expiry — work finished while the
+   * user was away stays surfaced until actually seen. A subset of
+   * {@link ProjectStatusEntry.completedAgentCount}.
+   */
+  unacknowledgedCompletedAgentCount: number;
+  /**
+   * Earliest unacknowledged completion (epoch ms). Oldest-first ordering in
+   * the attention band's review tier — prevents review starvation under a
+   * stream of newer completions. Absent when everything was seen.
+   */
+  oldestUnacknowledgedCompletionAt?: number;
+  /** Latest unacknowledged completion (epoch ms), for "just finished" copy. */
+  latestUnacknowledgedCompletionAt?: number;
+  /**
+   * Latest completion regardless of acknowledgement (epoch ms) — drives the
+   * muted "Agent finished · 2h ago" line after the work has been seen.
+   */
+  latestCompletionAt?: number;
+  /**
+   * Latest transition into `working` (epoch ms). Secondary ordering key for
+   * the Running band. Absent when nothing is working or no working terminal
+   * carried a `lastStateChange`.
+   */
+  latestWorkingSince?: number;
 }
 
 /**
