@@ -190,7 +190,7 @@ export class TerminalResizeController {
       if (managed && managed.pendingBackgroundResize) {
         const { width, height } = managed.pendingBackgroundResize;
         managed.pendingBackgroundResize = undefined;
-        this.resizePtyOnly(id, width, height);
+        this.applyBackgroundResize(id, width, height);
       }
     }
   }
@@ -279,7 +279,7 @@ export class TerminalResizeController {
       return null;
     }
 
-    // Mirrors resizePtyOnly's guard: a non-finite box would otherwise poison the
+    // Mirrors applyBackgroundResize's guard: a non-finite box would otherwise poison the
     // pixel cache and deliver a garbage grid to the PTY.
     if (!Number.isFinite(width) || !Number.isFinite(height)) {
       return null;
@@ -312,7 +312,7 @@ export class TerminalResizeController {
       // read 0x0 from the DOM, so we compute cols/rows from cached cell
       // metrics instead. Settled agents still coalesce the PTY notification,
       // but the hidden xterm grid remains untouched until wake reconciliation.
-      const dims = this.resizePtyFromCachedCellMetrics(managed, width, height, wasAtBottom);
+      const dims = this.resizeGridFromCachedCellMetrics(managed, width, height, wasAtBottom);
       if (dims) {
         this.sendPtyOnlyResize(id, dims.cols, dims.rows);
       }
@@ -406,23 +406,46 @@ export class TerminalResizeController {
   }
 
   /**
-   * PTY-only resize from explicit pixel dimensions — never reflows xterm.
-   * Entry point for backgrounded project views (#10415), whose terminals may
-   * still carry `isVisible === true` from before the view was detached and
-   * would otherwise take the foreground path's xterm reflow while hidden.
-   * Delivers the PTY resize directly instead of through `sendPtyResize` —
-   * the settled-strategy timer would schedule a `terminal.resize()` in a
-   * hidden (possibly frozen) renderer, and the burst it coalesces was
-   * already debounced in Main. A pending settled timer is cleared since its
-   * stale geometry is superseded. The deferred xterm reflow is reconciled
-   * at wake via `applyDeferredResize`.
+   * Atomic xterm+PTY resize from explicit pixel dimensions. Entry point for
+   * backgrounded project views (#10415), whose terminals may still carry
+   * `isVisible === true` from before the view was detached. Delivers the PTY
+   * resize directly instead of through `sendPtyResize` — the settled-strategy
+   * timer would schedule a `terminal.resize()` in a hidden (possibly frozen)
+   * renderer, and the burst it coalesces was already debounced in Main. A
+   * pending settled timer is cleared since its stale geometry is superseded.
+   *
+   * Both grids move together (#11443). Resizing the PTY alone leaves the app
+   * emitting cursor-addressed output sized for the new width while the parser
+   * still holds the old grid, and the renderer keeps writing every byte while
+   * the view is cached — so those sequences land on the wrong rows. Nothing
+   * recovers them: reflow re-wraps text but cannot undo an erase applied to
+   * the wrong line, and the wake-time re-assert of a size the PTY already has
+   * dedupes in `TerminalProcess.resize`, so no corrective SIGWINCH ever
+   * arrives. This is the same pair `applyDeferredResize` used to run at wake,
+   * moved to the moment the geometry actually changes — identical work, off
+   * the switch-back critical path, with no window where the grids disagree.
    */
-  resizePtyOnly(id: string, width: number, height: number): { cols: number; rows: number } | null {
+  applyBackgroundResize(
+    id: string,
+    width: number,
+    height: number
+  ): { cols: number; rows: number } | null {
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
       return null;
     }
     const managed = this.deps.getInstance(id);
     if (!managed) return null;
+    // Choke point for the alt-screen exclusion: a live full-screen TUI paints an
+    // absolutely-positioned frame that xterm never reflows, and racing its own
+    // SIGWINCH redraw is the #10805/#10632 corruption. Leaving BOTH grids at the
+    // stale size keeps them consistent until real layout returns on reattach.
+    // Enforced here rather than only at the caller because a resize stashed in
+    // `pendingBackgroundResize` while main-buffer is replayed by `lockResize`
+    // long after the pane may have entered the alternate screen.
+    if (managed.isAltBuffer) {
+      managed.pendingBackgroundResize = undefined;
+      return null;
+    }
     if (this.isResizeLocked(id)) {
       managed.pendingBackgroundResize = { width, height };
       return null;
@@ -433,8 +456,8 @@ export class TerminalResizeController {
       // A foreground debounce/settled request updates the pixel and grid
       // caches before it commits. If backgrounding then supplies that same
       // box, cancelling the queued xterm work must not also discard the PTY
-      // half of the resize. Reassert the cached target directly; this entry
-      // point deliberately never reflows a hidden xterm.
+      // half of the resize. Reassert the cached target directly — the grid
+      // caches already describe this box, so xterm needs no further work.
       if (
         hadPendingResize &&
         Number.isInteger(managed.latestCols) &&
@@ -448,20 +471,25 @@ export class TerminalResizeController {
     }
     const buffer = managed.terminal.buffer.active;
     const wasAtBottom = buffer.viewportY >= buffer.baseY;
-    const dims = this.resizePtyFromCachedCellMetrics(managed, width, height, wasAtBottom);
+    const dims = this.resizeGridFromCachedCellMetrics(managed, width, height, wasAtBottom);
     if (dims) {
       this.clearSettledTimer(id);
+      // xterm first, then the PTY: the app must never receive SIGWINCH for a
+      // grid the parser has not adopted yet.
+      this.resizeTerminal(managed, dims.cols, dims.rows);
       terminalClient.resize(id, dims.cols, dims.rows);
+      this.pinToBottomAfterResize(managed);
     }
     return dims;
   }
 
-  // Computes cols/rows from cached cell metrics with no DOM reads and
-  // deliberately skips terminal.resize() — paint is paused for these
-  // terminals, so deferring the buffer reflow to wake time avoids work the
-  // user never sees. Pure computation + state update; the caller delivers
-  // the PTY resize so each path picks its own strategy handling.
-  private resizePtyFromCachedCellMetrics(
+  // Computes cols/rows from cached cell metrics with no DOM reads — a detached
+  // view has no live layout to measure. Pure computation + state update; the
+  // caller decides whether to apply the grid. `applyBackgroundResize` reflows
+  // xterm and then resizes the PTY; `resize`'s background-unfocused branch
+  // sends the PTY resize only and leaves the content-visibility:hidden pane's
+  // xterm grid for wake reconciliation.
+  private resizeGridFromCachedCellMetrics(
     managed: ManagedTerminal,
     width: number,
     height: number,
@@ -569,7 +597,10 @@ export class TerminalResizeController {
    *
    * @returns true once a fresh measurement landed (whether or not a resize was
    * needed); false when the box is not measurable yet (zero/occluded/transitional
-   * layout) so the reveal sweep retries on a later frame.
+   * layout) so the reveal sweep retries on a later frame. The boolean is
+   * measurability, NOT convergence — an alt-buffer pane reports true without
+   * touching geometry at all, so no caller may treat it as proof the grid now
+   * matches the container.
    */
   reconcileGeometryFresh(id: string): boolean {
     const managed = this.deps.getInstance(id);

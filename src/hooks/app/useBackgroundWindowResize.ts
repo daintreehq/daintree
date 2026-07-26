@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
 /**
@@ -9,8 +10,16 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
  * detached WebContentsViews otherwise never learn the window size changed.
  * The geometry math lives in `terminalInstanceService.applyBackgroundWindowResize`.
  * Subscribes unconditionally on mount — PTY resize is idempotent and needs no
- * hydration gate. The visibilitychange listener resets the scaling basis when
- * the view returns to the foreground, where real layout owns geometry again.
+ * hydration gate.
+ *
+ * Two independent signals return the view to live layout, and each has to
+ * reset the scaling basis (#11443). `visibilitychange` covers a real window
+ * minimize/restore; it never fires for a cached child WebContentsView, so the
+ * project-view lifecycle covers the switch-back. `active` (warm-activated),
+ * not `revealed`, is the one that must clear it — a switch superseded
+ * mid-flight only ever gets warm-activated — with `revealed` kept as a
+ * defensive backstop. Resetting twice is harmless; the basis is re-snapshotted
+ * from the live viewport on the next background session.
  */
 export function useBackgroundWindowResize(): void {
   useEffect(() => {
@@ -18,14 +27,24 @@ export function useBackgroundWindowResize(): void {
       if (!payload) return;
       terminalInstanceService.applyBackgroundWindowResize(payload.width, payload.height);
     });
+    const unsubscribeLifecycle = subscribeProjectViewLifecycle((phase) => {
+      if (phase === "cached") return;
+      terminalInstanceService.resetBackgroundResizeBasis();
+    });
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
+      // Must match the service's own predicate exactly. Restoring a minimized
+      // window while this view is STILL cached is not a return to live layout:
+      // dropping the anchor there would re-snapshot the stale viewport while
+      // each terminal's `lastWidth` already holds an applied, scaled value, and
+      // every later event would compound off it.
+      if (!isProjectViewCached() && document.visibilityState === "visible") {
         terminalInstanceService.resetBackgroundResizeBasis();
       }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       unsubscribe();
+      unsubscribeLifecycle();
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, []);
