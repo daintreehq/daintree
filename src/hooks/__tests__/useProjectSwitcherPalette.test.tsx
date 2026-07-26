@@ -43,6 +43,12 @@ const {
         waitingAgentCount: number;
         blockedAgentCount?: number;
         oldestWaitingSince?: number;
+        completedAgentCount?: number;
+        unacknowledgedCompletedAgentCount?: number;
+        oldestUnacknowledgedCompletionAt?: number;
+        latestUnacknowledgedCompletionAt?: number;
+        latestCompletionAt?: number;
+        latestWorkingSince?: number;
         processCount: number;
       }
     >,
@@ -142,6 +148,12 @@ const emptyBulkStats = (projectIds: string[]) => {
       waitingAgentCount: number;
       blockedAgentCount: number;
       oldestWaitingSince?: number;
+      completedAgentCount: number;
+      unacknowledgedCompletedAgentCount: number;
+      oldestUnacknowledgedCompletionAt?: number;
+      latestUnacknowledgedCompletionAt?: number;
+      latestCompletionAt?: number;
+      latestWorkingSince?: number;
     }
   > = {};
   for (const id of projectIds) {
@@ -154,6 +166,8 @@ const emptyBulkStats = (projectIds: string[]) => {
       activeAgentCount: 0,
       waitingAgentCount: 0,
       blockedAgentCount: 0,
+      completedAgentCount: 0,
+      unacknowledgedCompletedAgentCount: 0,
     };
   }
   return result;
@@ -1534,10 +1548,11 @@ describe("useProjectSwitcherPalette", () => {
       expect(sectionOf("active")).toBe("current");
       expect(sectionOf("waiting")).toBe("attention");
       expect(sectionOf("blocked")).toBe("attention");
-      expect(sectionOf("working")).toBe("activity");
-      expect(sectionOf("processes")).toBe("activity");
+      expect(sectionOf("working")).toBe("running");
+      // Bare leftover processes are residency, not intent — no Running slot.
+      expect(sectionOf("processes")).toBe("other");
       expect(sectionOf("pinnedProj")).toBe("pinned");
-      expect(sectionOf("idle")).toBe("recent");
+      expect(sectionOf("idle")).toBe("other");
       expect(sectionOf("gone")).toBe("unavailable");
 
       // Bands appear in priority order and each appears exactly once.
@@ -1545,14 +1560,251 @@ describe("useProjectSwitcherPalette", () => {
       for (const project of result.current.results) {
         if (bands.at(-1) !== project.section) bands.push(project.section);
       }
-      expect(bands).toEqual([
-        "current",
-        "attention",
-        "activity",
-        "pinned",
-        "recent",
-        "unavailable",
+      expect(bands).toEqual(["current", "attention", "pinned", "running", "other", "unavailable"]);
+    });
+
+    it("holds a project with unseen completed work in the attention band", async () => {
+      const projects = [base("reviewMe"), base("ackd"), base("idle")];
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {
+        reviewMe: {
+          activeAgentCount: 0,
+          waitingAgentCount: 0,
+          processCount: 1,
+          completedAgentCount: 1,
+          unacknowledgedCompletedAgentCount: 1,
+          oldestUnacknowledgedCompletionAt: 5_000,
+          latestUnacknowledgedCompletionAt: 5_000,
+        },
+        // Acknowledged completion falls through — reviewed work stays quiet.
+        ackd: {
+          activeAgentCount: 0,
+          waitingAgentCount: 0,
+          processCount: 1,
+          completedAgentCount: 1,
+          unacknowledgedCompletedAgentCount: 0,
+          latestCompletionAt: 4_000,
+        },
+      };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+
+      const sectionOf = (id: string) => result.current.results.find((p) => p.id === id)?.section;
+      expect(sectionOf("reviewMe")).toBe("attention");
+      expect(sectionOf("ackd")).toBe("other");
+    });
+
+    it("sorts attention as blocked, then waits, then oldest-first review", async () => {
+      const projects = [base("newDone"), base("oldDone"), base("waitProj"), base("blockedProj")];
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      const completion = (at: number) => ({
+        activeAgentCount: 0,
+        waitingAgentCount: 0,
+        processCount: 0,
+        completedAgentCount: 1,
+        unacknowledgedCompletedAgentCount: 1,
+        oldestUnacknowledgedCompletionAt: at,
+        latestUnacknowledgedCompletionAt: at,
+      });
+      projectStatsState.stats = {
+        newDone: completion(9_000),
+        oldDone: completion(1_000),
+        waitProj: {
+          activeAgentCount: 0,
+          waitingAgentCount: 1,
+          processCount: 0,
+          oldestWaitingSince: 8_000,
+        },
+        blockedProj: {
+          activeAgentCount: 0,
+          waitingAgentCount: 1,
+          blockedAgentCount: 1,
+          processCount: 0,
+          oldestWaitingSince: 50_000,
+        },
+      };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(4);
+      });
+
+      // Severity tiers: blocked → waiting → review; review is oldest-first so
+      // a completion can't starve below a stream of newer ones.
+      expect(result.current.results.map((p) => p.id)).toEqual([
+        "blockedProj",
+        "waitProj",
+        "oldDone",
+        "newDone",
       ]);
+    });
+
+    it("sorts pinned projects alphabetically, ignoring recency and frecency", async () => {
+      const projects = [
+        base("zulu", { pinned: true, lastOpened: 9_000, frecencyScore: 50.0 }),
+        base("alpha", { pinned: true, lastOpened: 100, frecencyScore: 1.0 }),
+      ];
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {};
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+
+      // A hidden adaptive score reordering a user-curated set reads as rows
+      // moving on their own — alphabetical wins over every usage signal.
+      expect(result.current.results.map((p) => p.id)).toEqual(["alpha", "zulu"]);
+    });
+
+    it("orders Running by agent count, then the freshest working transition", async () => {
+      const projects = [
+        base("staleWork", { lastOpened: 9_000 }),
+        base("freshWork", { lastOpened: 100 }),
+        base("busiest", { lastOpened: 50 }),
+      ];
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {
+        staleWork: {
+          activeAgentCount: 1,
+          waitingAgentCount: 0,
+          processCount: 0,
+          latestWorkingSince: 1_000,
+        },
+        freshWork: {
+          activeAgentCount: 1,
+          waitingAgentCount: 0,
+          processCount: 0,
+          latestWorkingSince: 9_000,
+        },
+        busiest: {
+          activeAgentCount: 3,
+          waitingAgentCount: 0,
+          processCount: 0,
+          latestWorkingSince: 500,
+        },
+      };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+
+      // busiest leads on agent count; between equals, the freshest working
+      // transition wins even though its lastOpened is older.
+      expect(result.current.results.map((p) => p.id)).toEqual([
+        "busiest",
+        "freshWork",
+        "staleWork",
+      ]);
+    });
+
+    it("seeds Running order from bulk stats when no push has arrived", async () => {
+      const projects = [base("first", { lastOpened: 9_000 }), base("second", { lastOpened: 100 })];
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      // Cold renderer: nothing pushed yet — the bulk seed is the only source.
+      projectStatsState.stats = {};
+      const bulk = emptyBulkStats(projects.map((p) => p.id));
+      bulk.first!.activeAgentCount = 1;
+      bulk.first!.latestWorkingSince = 1_000;
+      bulk.second!.activeAgentCount = 1;
+      bulk.second!.latestWorkingSince = 9_000;
+      getBulkStatsMock.mockResolvedValue(bulk);
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(
+          result.current.results.every((project) => project.latestWorkingSince !== undefined)
+        ).toBe(true);
+      });
+
+      // The first open froze its layout before the seed landed; the seed's
+      // ordering takes effect on the next capture.
+      act(() => {
+        result.current.close();
+      });
+      act(() => {
+        result.current.open("modal");
+      });
+
+      // Without latestWorkingSince riding the bulk contract, this would fall
+      // back to lastOpened and invert — potentially for the whole session,
+      // since unchanged pushes are suppressed.
+      expect(result.current.results.map((p) => p.id)).toEqual(["second", "first"]);
+    });
+
+    it("never preselects an unavailable row while an available one exists", async () => {
+      const projects = [
+        base("active", { status: "active" }),
+        base("gone", { status: "missing" }),
+        base("healthy"),
+      ];
+      projectState.projects = projects;
+      projectState.currentProject = { id: "active" };
+      projectStatsState.stats = {};
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+
+      const selected = result.current.results[result.current.selectedIndex]!;
+      // Enter-on-open must land on a switchable row, never the relocation
+      // dialog a missing row would open.
+      expect(selected.id).toBe("healthy");
+    });
+
+    it("still preselects something when every other project is missing", async () => {
+      const projects = [base("active", { status: "active" }), base("gone", { status: "missing" })];
+      projectState.projects = projects;
+      projectState.currentProject = { id: "active" };
+      projectStatsState.stats = {};
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+
+      const selected = result.current.results[result.current.selectedIndex]!;
+      // The fallback chain lands on the missing row rather than nothing — a
+      // selectable row is required for the keyboard contract, and selecting it
+      // routes to relocation, which is the only useful action left.
+      expect(selected.id).toBe("gone");
     });
 
     it("sorts attention by blocked first, then by the oldest wait", async () => {
@@ -1653,10 +1905,10 @@ describe("useProjectSwitcherPalette", () => {
       await waitFor(() => {
         expect(result.current.results.map((p) => p.id)).toEqual(["first", "late"]);
       });
-      expect(result.current.results[1]!.section).toBe("recent");
+      expect(result.current.results[1]!.section).toBe("other");
 
       // Its agents start working. A late arrival left outside the freeze would
-      // jump into the activity band above "first"; a frozen one stays put.
+      // jump into the running band above "first"; a frozen one stays put.
       act(() => {
         projectStatsState.stats = {
           late: { activeAgentCount: 2, waitingAgentCount: 0, processCount: 2 },
@@ -1665,7 +1917,7 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       expect(result.current.results.map((p) => p.id)).toEqual(["first", "late"]);
-      expect(result.current.results[1]!.section).toBe("recent");
+      expect(result.current.results[1]!.section).toBe("other");
       expect(result.current.results[1]!.activeAgentCount).toBe(2);
     });
 
@@ -2025,7 +2277,7 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.nonActiveAgentCounts.waitingAgentCount).toBe(2);
       });
       // One project needs attention, not two agents' worth of obligation.
-      expect(result.current.nonActiveAgentCounts.attentionProjectCount).toBe(1);
+      expect(result.current.nonActiveAgentCounts.waitingProjectCount).toBe(1);
     });
   });
 });

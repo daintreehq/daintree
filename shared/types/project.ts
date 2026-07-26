@@ -83,6 +83,13 @@ export interface Project {
   /** Timestamp (ms) of last frecency update */
   lastAccessedAt?: number;
   /**
+   * Epoch ms up to which the user has seen this project's completed agents
+   * (stamped after a 2s focused dwell on the project). Completions newer than
+   * this hold the project in the switcher's "Needs attention" band, with no
+   * time-based expiry. Absent = nothing acknowledged yet.
+   */
+  lastCompletionSeenAt?: number;
+  /**
    * Timestamp (ms) the background-idle auto-close reclaimed this project's
    * memory and marked it `closed`. Absent for projects closed manually or still
    * open; the project switcher surfaces it as a distinct "Suspended to free

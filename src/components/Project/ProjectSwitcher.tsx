@@ -145,7 +145,7 @@ export function ProjectSwitcher() {
   // Reads the totals across every non-active project rather than `results`,
   // which is ordered and filtered for presentation.
   const badgeStatus = useMemo(() => {
-    const { activeAgentCount, waitingAgentCount, attentionProjectCount } =
+    const { activeAgentCount, waitingAgentCount, waitingProjectCount } =
       projectSwitcher.nonActiveAgentCounts;
 
     // Waiting counts PROJECTS, not agents: the number answers "how many places
@@ -155,7 +155,7 @@ export function ProjectSwitcher() {
       return {
         color: "bg-state-waiting",
         pulse: false,
-        label: `${attentionProjectCount} project${attentionProjectCount === 1 ? "" : "s"} waiting for input`,
+        label: `${waitingProjectCount} project${waitingProjectCount === 1 ? "" : "s"} waiting for input`,
       };
     }
     // Work in progress isn't an obligation, so it stays an agent count.

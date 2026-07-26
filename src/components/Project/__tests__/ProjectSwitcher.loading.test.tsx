@@ -31,7 +31,7 @@ vi.mock("@/hooks/useKeybinding", () => ({
 }));
 
 const paletteState = vi.hoisted(() => ({
-  nonActiveAgentCounts: { activeAgentCount: 0, waitingAgentCount: 0, attentionProjectCount: 0 },
+  nonActiveAgentCounts: { activeAgentCount: 0, waitingAgentCount: 0, waitingProjectCount: 0 },
 }));
 
 vi.mock("@/hooks", async () => {
@@ -365,7 +365,7 @@ describe("ProjectSwitcher background-agent badge", () => {
     paletteState.nonActiveAgentCounts = {
       activeAgentCount: 0,
       waitingAgentCount: 0,
-      attentionProjectCount: 0,
+      waitingProjectCount: 0,
     };
   });
 
@@ -378,7 +378,7 @@ describe("ProjectSwitcher background-agent badge", () => {
     paletteState.nonActiveAgentCounts = {
       activeAgentCount: 0,
       waitingAgentCount: 8,
-      attentionProjectCount: 1,
+      waitingProjectCount: 1,
     };
     const { getByRole } = render(<ProjectSwitcher />);
     const label = getByRole("status").getAttribute("aria-label");
@@ -390,7 +390,7 @@ describe("ProjectSwitcher background-agent badge", () => {
     paletteState.nonActiveAgentCounts = {
       activeAgentCount: 5,
       waitingAgentCount: 1,
-      attentionProjectCount: 1,
+      waitingProjectCount: 1,
     };
     const { getByRole } = render(<ProjectSwitcher />);
     const label = getByRole("status").getAttribute("aria-label");
@@ -403,7 +403,7 @@ describe("ProjectSwitcher background-agent badge", () => {
     paletteState.nonActiveAgentCounts = {
       activeAgentCount: 3,
       waitingAgentCount: 0,
-      attentionProjectCount: 0,
+      waitingProjectCount: 0,
     };
     const { getByRole } = render(<ProjectSwitcher />);
     expect(getByRole("status").getAttribute("aria-label")).toContain("3 background agents working");

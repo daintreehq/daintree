@@ -13,6 +13,7 @@ import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { logError } from "@/utils/logger";
 import type { Project, Scratch } from "@shared/types";
 import type { ProjectStatusMap } from "@shared/types/ipc/project";
+import { decayFrecencyScore, FRECENCY_COLD_START } from "@shared/utils/frecency";
 import { projectClient, scratchClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
@@ -51,21 +52,30 @@ export type DeleteAllScratchesSnapshot = ReadonlyArray<
 export const PROJECT_SECTION_ORDER = [
   "current",
   "attention",
-  "activity",
   "pinned",
-  "recent",
+  "running",
+  "other",
   "unavailable",
 ] as const;
 
 export type ProjectSectionKey = (typeof PROJECT_SECTION_ORDER)[number];
 
-/** Header text per band. `current` is deliberately unlabelled. */
+/**
+ * Header text per band. `current` is deliberately unlabelled.
+ *
+ * "Other projects", not "Recent" or "Frequent": the band is the residual
+ * catch-all — frecency-ordered, holding never-opened projects and acknowledged
+ * completions alike — so any label naming a sort order would be a lie the row
+ * timestamps immediately expose. "Running" requires live agents; projects with
+ * only bare processes fall through to Pinned/Other, where their status line
+ * still says "Process running".
+ */
 export const PROJECT_SECTION_LABELS: Record<ProjectSectionKey, string | null> = {
   current: null,
   attention: "Needs attention",
-  activity: "Activity",
   pinned: "Pinned",
-  recent: "Recent",
+  running: "Running",
+  other: "Other projects",
   unavailable: "Unavailable",
 };
 
@@ -83,6 +93,10 @@ export interface SearchableProject {
   isBackground: boolean;
   isMissing: boolean;
   isPinned: boolean;
+  /**
+   * Effective (read-time decayed) frecency, computed against one shared `now`
+   * per list build — never the raw persisted snapshot.
+   */
   frecencyScore: number;
   activeAgentCount: number;
   waitingAgentCount: number;
@@ -90,6 +104,18 @@ export interface SearchableProject {
   blockedAgentCount: number;
   /** Epoch ms the oldest current wait began, absent when nothing is waiting. */
   oldestWaitingSince?: number;
+  /** Agents settled in `completed` — finished work awaiting review. */
+  completedAgentCount: number;
+  /** Completions the user hasn't seen yet — a subset of `completedAgentCount`. */
+  unacknowledgedCompletedAgentCount: number;
+  /** Earliest unseen completion, absent when everything was seen. */
+  oldestUnacknowledgedCompletionAt?: number;
+  /** Latest unseen completion, absent when everything was seen. */
+  latestUnacknowledgedCompletionAt?: number;
+  /** Latest completion regardless of acknowledgement, absent when none. */
+  latestCompletionAt?: number;
+  /** Latest transition into `working`, absent when nothing is working. */
+  latestWorkingSince?: number;
   processCount: number;
   displayPath: string;
   /** Browse band. Not meaningful while searching, where rank order wins. */
@@ -189,8 +215,13 @@ export interface UseProjectSwitcherPaletteReturn {
   nonActiveAgentCounts: {
     activeAgentCount: number;
     waitingAgentCount: number;
-    /** Non-active projects with at least one waiting agent — the badge's number. */
-    attentionProjectCount: number;
+    /**
+     * Non-active projects with at least one WAITING agent — the badge's
+     * number. Deliberately narrower than the switcher's attention band, which
+     * also holds unreviewed completions: the badge is an interruption signal,
+     * and nagging the tray for every finished agent would train it away.
+     */
+    waitingProjectCount: number;
   };
   /** Scratch (one-off agent workspace) view-models, sorted by lastOpened desc. */
   scratchResults: SearchableScratch[];
@@ -234,44 +265,93 @@ export interface UseProjectSwitcherPaletteReturn {
 }
 
 /**
- * Assign a project to its browse band. Attention outranks activity outranks
- * habit: a project whose agents are blocked or waiting is the most actionable
- * destination on screen regardless of how often it's opened, and the pinned and
- * recent bands below it are ordered by frecency rather than raw recency so the
- * list reflects durable use instead of whatever was touched last.
+ * Assign a project to its browse band. Actionable work first, then explicit
+ * user intent, then non-actionable system activity, then habit:
+ *
+ * - `attention` is the action queue — agents blocked, waiting on input, or
+ *   finished-and-unreviewed. A completed agent has handed responsibility back
+ *   to the user, which outranks agents that are merely running.
+ * - `pinned` sits above `running`: an explicit pin is a stronger signal than
+ *   the operational fact that something is executing. A pinned running project
+ *   stays in Pinned; its status line still says "Agent running".
+ * - `running` requires live agents. Bare leftover processes are residency, not
+ *   intent — those projects fall through to Pinned/Other.
  */
 function sectionForProject(project: SearchableProject): ProjectSectionKey {
   if (project.isActive) return "current";
   if (project.isMissing) return "unavailable";
-  if (project.waitingAgentCount > 0) return "attention";
-  if (project.activeAgentCount > 0 || project.processCount > 0) return "activity";
+  if (
+    project.waitingAgentCount > 0 ||
+    project.blockedAgentCount > 0 ||
+    project.unacknowledgedCompletedAgentCount > 0
+  ) {
+    return "attention";
+  }
   if (project.isPinned) return "pinned";
-  return "recent";
+  if (project.activeAgentCount > 0) return "running";
+  return "other";
 }
 
 /**
- * Order within a band. Attention sorts blocked-first then oldest-wait-first, so
- * the agent that has been stuck longest is the one Enter lands on. Activity
- * sorts by how much is running. Everything else is frecency, which already
- * blends recency and frequency with a 14-day half-life.
+ * Severity tier inside the attention band: blocked outranks waiting outranks
+ * ready-for-review. Blocked agents may not restart on input; waiting agents
+ * are stalled on the user; completed agents are done and can wait their turn.
+ */
+function attentionClass(project: SearchableProject): number {
+  if (project.blockedAgentCount > 0) return 0;
+  if (project.waitingAgentCount > 0) return 1;
+  return 2;
+}
+
+/**
+ * Order within a band.
+ *
+ * - Attention: severity tier, then oldest-first within it — the agent stuck or
+ *   finished longest is the one Enter lands on, and oldest-first review means
+ *   a completion can't starve below a stream of newer ones.
+ * - Pinned/Unavailable: alphabetical. Pinning is user-curated — reordering a
+ *   curated set by a hidden score reads as rows moving on their own.
+ * - Running: most work first, then freshest working transition.
+ * - Other (and the single-row current): effective frecency.
  */
 function compareWithinSection(a: SearchableProject, b: SearchableProject): number {
   const section = a.section;
   if (section === "attention") {
-    if (a.blockedAgentCount !== b.blockedAgentCount) {
-      return b.blockedAgentCount - a.blockedAgentCount;
+    const aClass = attentionClass(a);
+    const bClass = attentionClass(b);
+    if (aClass !== bClass) return aClass - bClass;
+    if (aClass === 2) {
+      const aOldest = a.oldestUnacknowledgedCompletionAt ?? Number.POSITIVE_INFINITY;
+      const bOldest = b.oldestUnacknowledgedCompletionAt ?? Number.POSITIVE_INFINITY;
+      if (aOldest !== bOldest) return aOldest - bOldest;
+      if (a.unacknowledgedCompletedAgentCount !== b.unacknowledgedCompletedAgentCount) {
+        return b.unacknowledgedCompletedAgentCount - a.unacknowledgedCompletedAgentCount;
+      }
+    } else {
+      if (a.blockedAgentCount !== b.blockedAgentCount) {
+        return b.blockedAgentCount - a.blockedAgentCount;
+      }
+      const aSince = a.oldestWaitingSince ?? Number.POSITIVE_INFINITY;
+      const bSince = b.oldestWaitingSince ?? Number.POSITIVE_INFINITY;
+      if (aSince !== bSince) return aSince - bSince;
+      if (a.waitingAgentCount !== b.waitingAgentCount) {
+        return b.waitingAgentCount - a.waitingAgentCount;
+      }
     }
-    const aSince = a.oldestWaitingSince ?? Number.POSITIVE_INFINITY;
-    const bSince = b.oldestWaitingSince ?? Number.POSITIVE_INFINITY;
-    if (aSince !== bSince) return aSince - bSince;
-    if (a.waitingAgentCount !== b.waitingAgentCount) {
-      return b.waitingAgentCount - a.waitingAgentCount;
+  } else if (section === "pinned" || section === "unavailable") {
+    // Alphabetical primary AND the only tie-breaks: falling through to
+    // lastOpened would quietly reintroduce the adaptive reordering the
+    // alphabetical choice exists to avoid.
+    const byName = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    if (byName !== 0) return byName;
+    return a.id.localeCompare(b.id);
+  } else if (section === "running") {
+    if (a.activeAgentCount !== b.activeAgentCount) {
+      return b.activeAgentCount - a.activeAgentCount;
     }
-  } else if (section === "activity") {
-    const aWork = a.activeAgentCount;
-    const bWork = b.activeAgentCount;
-    if (aWork !== bWork) return bWork - aWork;
-    if (a.processCount !== b.processCount) return b.processCount - a.processCount;
+    const aWorking = a.latestWorkingSince ?? 0;
+    const bWorking = b.latestWorkingSince ?? 0;
+    if (aWorking !== bWorking) return bWorking - aWorking;
   } else if (a.frecencyScore !== b.frecencyScore) {
     return b.frecencyScore - a.frecencyScore;
   }
@@ -413,6 +493,20 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
               ...(entry.oldestWaitingSince !== undefined
                 ? { oldestWaitingSince: entry.oldestWaitingSince }
                 : {}),
+              completedAgentCount: entry.completedAgentCount,
+              unacknowledgedCompletedAgentCount: entry.unacknowledgedCompletedAgentCount,
+              ...(entry.oldestUnacknowledgedCompletionAt !== undefined
+                ? { oldestUnacknowledgedCompletionAt: entry.oldestUnacknowledgedCompletionAt }
+                : {}),
+              ...(entry.latestUnacknowledgedCompletionAt !== undefined
+                ? { latestUnacknowledgedCompletionAt: entry.latestUnacknowledgedCompletionAt }
+                : {}),
+              ...(entry.latestCompletionAt !== undefined
+                ? { latestCompletionAt: entry.latestCompletionAt }
+                : {}),
+              ...(entry.latestWorkingSince !== undefined
+                ? { latestWorkingSince: entry.latestWorkingSince }
+                : {}),
               processCount: entry.processCount,
             };
             changed = true;
@@ -429,6 +523,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const displayPathById = useMemo(() => buildDisplayPaths(projects), [projects]);
 
   const searchableProjects = useMemo<SearchableProject[]>(() => {
+    // One `now` for the whole build keeps every row's effective score on the
+    // same clock. Ordering between untouched projects is invariant as time
+    // passes (all scores decay by the same factor), so computing at build time
+    // rather than on a tick is exact, not an approximation.
+    const frecencyNow = Date.now();
     return projects.map((p) => {
       const stats = projectStats[p.id];
       const isActive = p.id === currentProject?.id;
@@ -457,14 +556,24 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         isBackground,
         isMissing,
         isPinned: p.pinned ?? false,
-        frecencyScore: p.frecencyScore ?? 3.0,
+        frecencyScore: decayFrecencyScore(
+          p.frecencyScore ?? FRECENCY_COLD_START,
+          p.lastAccessedAt ?? 0,
+          frecencyNow
+        ),
         activeAgentCount: stats?.activeAgentCount ?? 0,
         waitingAgentCount: stats?.waitingAgentCount ?? 0,
         blockedAgentCount: stats?.blockedAgentCount ?? 0,
         oldestWaitingSince: stats?.oldestWaitingSince,
+        completedAgentCount: stats?.completedAgentCount ?? 0,
+        unacknowledgedCompletedAgentCount: stats?.unacknowledgedCompletedAgentCount ?? 0,
+        oldestUnacknowledgedCompletionAt: stats?.oldestUnacknowledgedCompletionAt,
+        latestUnacknowledgedCompletionAt: stats?.latestUnacknowledgedCompletionAt,
+        latestCompletionAt: stats?.latestCompletionAt,
+        latestWorkingSince: stats?.latestWorkingSince,
         processCount: stats?.processCount ?? 0,
         displayPath: displayPathById.get(p.id) ?? p.path,
-        section: "recent",
+        section: "other",
       };
       project.section = sectionForProject(project);
       return project;
@@ -488,17 +597,19 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const nonActiveAgentCounts = useMemo(() => {
     let activeAgentCount = 0;
     let waitingAgentCount = 0;
-    // Projects, not agents. The badge answers "how many places need me?" — a
-    // number that stays legible while eight agents wait in one repo, where an
-    // agent tally would read as eight separate obligations.
-    let attentionProjectCount = 0;
+    // Projects, not agents. The badge answers "how many places are waiting on
+    // me?" — a number that stays legible while eight agents wait in one repo,
+    // where an agent tally would read as eight separate obligations. Waiting
+    // only, not the full attention band: unreviewed completions surface in the
+    // switcher, but the tray badge is reserved for interruptions.
+    let waitingProjectCount = 0;
     for (const project of searchableProjects) {
       if (project.isActive) continue;
       activeAgentCount += project.activeAgentCount;
       waitingAgentCount += project.waitingAgentCount;
-      if (project.waitingAgentCount > 0) attentionProjectCount += 1;
+      if (project.waitingAgentCount > 0) waitingProjectCount += 1;
     }
-    return { activeAgentCount, waitingAgentCount, attentionProjectCount };
+    return { activeAgentCount, waitingAgentCount, waitingProjectCount };
   }, [searchableProjects]);
 
   const liveBrowseOrder = useMemo<SearchableProject[]>(() => {
@@ -662,12 +773,19 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       // not `browseOrdered`, which is still holding the previous session's
       // frozen shape at this point.
       setFrozenLayout(captureLayout(liveBrowseOrder));
-      // Preselect the first row that isn't the project we're already in, so
-      // open-then-Enter is a one-two return. Both modes render the same
-      // section-ordered browse list now, so this is the browse order regardless
-      // of which surface is opening. From a scratch there is no active row, so
-      // it lands on row 1 rather than skipping past it (#11085).
-      const initial = liveBrowseOrder.find((project) => !project.isActive) ?? liveBrowseOrder[0];
+      // Preselect the first ENABLED row that isn't the project we're already
+      // in, so open-then-Enter is a one-two return that never defaults onto an
+      // Unavailable row (selecting one opens the relocation dialog — the right
+      // response to a click, the wrong one to a reflexive Enter). Both modes
+      // render the same section-ordered browse list now, so this is the browse
+      // order regardless of which surface is opening. From a scratch there is
+      // no active row, so it lands on row 1 rather than skipping past it
+      // (#11085); an all-missing list still preselects something rather than
+      // nothing.
+      const initial =
+        liveBrowseOrder.find((project) => !project.isActive && !project.isMissing) ??
+        liveBrowseOrder.find((project) => !project.isActive) ??
+        liveBrowseOrder[0];
       setSelectedProjectId(initial?.id ?? null);
     },
     [liveBrowseOrder, captureLayout]

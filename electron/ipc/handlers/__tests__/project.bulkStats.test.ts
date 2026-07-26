@@ -69,6 +69,8 @@ vi.mock("../../../services/ProjectStore.js", () => ({
     getAllProjects: vi.fn(() => []),
     getCurrentProject: vi.fn(() => null),
     updateProjectStatus: vi.fn(),
+    updateProject: vi.fn(),
+    getLastCompletionSeenMap: vi.fn(() => new Map<string, number>()),
   },
 }));
 

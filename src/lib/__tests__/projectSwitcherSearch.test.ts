@@ -17,8 +17,10 @@ function makeProject(
     activeAgentCount: 0,
     waitingAgentCount: 0,
     blockedAgentCount: 0,
+    completedAgentCount: 0,
+    unacknowledgedCompletedAgentCount: 0,
     processCount: 0,
-    section: "recent",
+    section: "other",
     displayPath: overrides.path.split("/").filter(Boolean).pop() ?? overrides.path,
     ...overrides,
   };

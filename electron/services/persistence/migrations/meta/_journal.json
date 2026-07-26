@@ -64,6 +64,13 @@
       "when": 1784500000000,
       "tag": "0008_add_project_git_backed",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1785050000000,
+      "tag": "0009_completion_seen_and_frecency_rebase",
+      "breakpoints": true
     }
   ]
 }

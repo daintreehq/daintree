@@ -15,6 +15,13 @@ export const projects = sqliteTable(
     pinned: integer("pinned").notNull().default(0),
     frecencyScore: real("frecency_score").notNull().default(3.0),
     lastAccessedAt: integer("last_accessed_at").notNull().default(0),
+    // Epoch ms up to which the user has seen this project's completed agents:
+    // stamped after the project has been current in a focused window for a
+    // 2s dwell. Completions with a later lastStateChange are "unacknowledged"
+    // and hold the project in the switcher's Needs attention band — there is
+    // deliberately no time-based expiry, so work finished while the user was
+    // away stays surfaced until actually seen. Null = nothing ever seen.
+    lastCompletionSeenAt: integer("last_completion_seen_at"),
     // Timestamp (ms) the background-idle auto-close swept this project to `closed`.
     // Null for projects closed manually or still open; drives the distinct
     // "Suspended to free memory" label in the project switcher. Cleared when the

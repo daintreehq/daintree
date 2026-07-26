@@ -169,7 +169,9 @@ function makeProject(overrides: Partial<SearchableProject> = {}): SearchableProj
     activeAgentCount: 0,
     waitingAgentCount: 0,
     blockedAgentCount: 0,
-    section: "recent",
+    completedAgentCount: 0,
+    unacknowledgedCompletedAgentCount: 0,
+    section: "other",
     displayPath:
       (overrides.path ?? "/tmp/test").replace(/\\/g, "/").split("/").filter(Boolean).pop() ??
       overrides.path ??

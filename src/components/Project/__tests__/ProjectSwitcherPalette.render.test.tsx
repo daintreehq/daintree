@@ -126,7 +126,7 @@ import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 const { ProjectSwitcherPalette } = await import("../ProjectSwitcherPalette");
 
 function makeProject(overrides: Partial<SearchableProject> = {}): SearchableProject {
-  // Deliberately dumb: `section` defaults to "recent" and must be stated
+  // Deliberately dumb: `section` defaults to "other" and must be stated
   // explicitly by band tests. Deriving it here would restate the hook's
   // classification rules, so a fixture could keep rendering the intended bands
   // while the real `sectionForProject` drifted — the component tests would stay
@@ -147,7 +147,9 @@ function makeProject(overrides: Partial<SearchableProject> = {}): SearchableProj
     activeAgentCount: 0,
     waitingAgentCount: 0,
     blockedAgentCount: 0,
-    section: "recent",
+    completedAgentCount: 0,
+    unacknowledgedCompletedAgentCount: 0,
+    section: "other",
     displayPath:
       (overrides.path ?? "/tmp/test").replace(/\\/g, "/").split("/").filter(Boolean).pop() ??
       overrides.path ??
@@ -195,14 +197,14 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
       />
     );
     // A project that needs the user outranks one that is merely busy.
-    expect(screen.getByText("3 need input")).toBeTruthy();
+    expect(screen.getByText("3 agents need input")).toBeTruthy();
   });
 
   it("singularises a lone waiting agent", () => {
     render(
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ waitingAgentCount: 1 })]} />
     );
-    expect(screen.getByText("1 needs input")).toBeTruthy();
+    expect(screen.getByText("Agent needs input")).toBeTruthy();
   });
 
   it("ages the oldest wait", () => {
@@ -217,7 +219,7 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
         ]}
       />
     );
-    expect(screen.getByText("2 need input · oldest 42m")).toBeTruthy();
+    expect(screen.getByText("2 agents need input · oldest waiting 42m")).toBeTruthy();
   });
 
   it("reports blocked agents alongside the plain waits, not instead of them", () => {
@@ -229,7 +231,7 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
     );
     // An agent stopped on an error is a different ask than one at a prompt, but
     // the two still waiting must not vanish behind it.
-    expect(screen.getByText("2 need input · 1 blocked")).toBeTruthy();
+    expect(screen.getByText("2 agents need input · 1 blocked")).toBeTruthy();
   });
 
   it("reports running agents when nothing is waiting", () => {
@@ -239,22 +241,22 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
     expect(screen.getByText("2 agents running")).toBeTruthy();
   });
 
-  it("shows relative time when lastOpened > 0 and no agents active", () => {
+  it("labels the relative time as an opened time when nothing is running", () => {
     const twoHoursAgo = Date.now() - 2 * 3600000;
     render(
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ lastOpened: twoHoursAgo })]} />
     );
-    expect(screen.getByText("2h ago")).toBeTruthy();
+    expect(screen.getByText("Opened 2h ago")).toBeTruthy();
   });
 
-  it("falls back to displayPath when lastOpened is 0", () => {
+  it("names the state, not the path, when the project was never opened", () => {
     render(
       <ProjectSwitcherPalette
         {...baseProps}
         results={[makeProject({ path: "/home/user/my-project", displayPath: "my-project" })]}
       />
     );
-    expect(screen.getByText("my-project")).toBeTruthy();
+    expect(screen.getByText("Not opened yet")).toBeTruthy();
   });
 
   it("shows 'Suspended to free memory' for an auto-parked closed project", () => {
@@ -269,10 +271,10 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
     );
     // The parked label wins over the plain time-ago for an auto-closed project.
     expect(screen.getByText("Suspended to free memory")).toBeTruthy();
-    expect(screen.queryByText("2h ago")).toBeNull();
+    expect(screen.queryByText(/Opened 2h ago/)).toBeNull();
   });
 
-  it("shows time-ago (not the parked label) for a closed project without the marker", () => {
+  it("shows the opened time (not the parked label) for a closed project without the marker", () => {
     const twoHoursAgo = Date.now() - 2 * 3600000;
     render(
       <ProjectSwitcherPalette
@@ -280,7 +282,7 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
         results={[makeProject({ status: "closed", lastOpened: twoHoursAgo })]}
       />
     );
-    expect(screen.getByText("2h ago")).toBeTruthy();
+    expect(screen.getByText("Opened 2h ago")).toBeTruthy();
     expect(screen.queryByText("Suspended to free memory")).toBeNull();
   });
 });
@@ -294,7 +296,7 @@ describe("ProjectSwitcherPalette status conveyance", () => {
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ waitingAgentCount: 2 })]} />
     );
 
-    expect(screen.getByText("2 need input")).toBeTruthy();
+    expect(screen.getByText("2 agents need input")).toBeTruthy();
     expect(screen.queryByLabelText("Agents waiting")).toBeNull();
     expect(screen.queryByLabelText("Idle")).toBeNull();
   });
@@ -369,14 +371,6 @@ describe("ProjectSwitcherPalette modal mode", () => {
       lastOpened: now,
     }),
     makeProject({
-      id: "bg",
-      name: "Background Project",
-      isBackground: true,
-      processCount: 1,
-      section: "activity",
-      lastOpened: now - 1800000,
-    }),
-    makeProject({
       id: "pinned",
       name: "Pinned Project",
       isPinned: true,
@@ -391,15 +385,24 @@ describe("ProjectSwitcherPalette modal mode", () => {
       lastOpened: now - 4000000,
     }),
     makeProject({
+      id: "bg",
+      name: "Background Project",
+      isBackground: true,
+      activeAgentCount: 1,
+      processCount: 1,
+      section: "running",
+      lastOpened: now - 1800000,
+    }),
+    makeProject({
       id: "recent",
       name: "Recent Project",
-      section: "recent",
+      section: "other",
       lastOpened: now - 7200000,
     }),
     makeProject({
       id: "old",
       name: "Old Project",
-      section: "recent",
+      section: "other",
       lastOpened: now - 14 * 24 * 3600000,
     }),
   ];
@@ -476,11 +479,14 @@ describe("ProjectSwitcherPalette modal mode", () => {
     const headers = Array.from(list.querySelectorAll("div"))
       .map((el) => el.textContent?.trim())
       .filter(
-        (text): text is string => text === "Activity" || text === "Pinned" || text === "Recent"
+        (text): text is string =>
+          text === "Pinned" || text === "Running" || text === "Other projects"
       );
-    expect(headers[0]).toBe("Activity");
-    expect(headers).toContain("Pinned");
-    expect(headers).toContain("Recent");
+    // Pinned above Running: an explicit pin outranks the operational fact
+    // that something is executing.
+    expect(headers[0]).toBe("Pinned");
+    expect(headers).toContain("Running");
+    expect(headers).toContain("Other projects");
   });
 
   it("shows Remove hint in dropdown mode footer", () => {

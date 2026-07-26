@@ -126,4 +126,92 @@ describe("computeProjectAgentCounts", () => {
     expect(counts.get("p1")!.active).toBe(0);
     expect(counts.has("other")).toBe(false);
   });
+
+  it("tallies completed agents with oldest/latest completion timestamps", () => {
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [
+        agent({ id: "a", agentState: "completed", lastStateChange: 500 }),
+        agent({ id: "b", agentState: "completed", lastStateChange: 900 }),
+        agent({ id: "c", agentState: "working", lastStateChange: 950 }),
+      ]
+    );
+
+    const p1 = counts.get("p1")!;
+    expect(p1.completed).toBe(2);
+    expect(p1.unacknowledgedCompleted).toBe(2);
+    expect(p1.oldestUnacknowledgedCompletionAt).toBe(500);
+    expect(p1.latestUnacknowledgedCompletionAt).toBe(900);
+    expect(p1.latestCompletionAt).toBe(900);
+  });
+
+  it("splits completions across the acknowledgement watermark", () => {
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [
+        agent({ id: "a", agentState: "completed", lastStateChange: 500 }),
+        agent({ id: "b", agentState: "completed", lastStateChange: 900 }),
+      ],
+      new Map([["p1", 600]])
+    );
+
+    const p1 = counts.get("p1")!;
+    expect(p1.completed).toBe(2);
+    // Only the completion after the watermark is unacknowledged.
+    expect(p1.unacknowledgedCompleted).toBe(1);
+    expect(p1.oldestUnacknowledgedCompletionAt).toBe(900);
+    expect(p1.latestUnacknowledgedCompletionAt).toBe(900);
+    // The all-completions timestamp keeps the acknowledged one.
+    expect(p1.latestCompletionAt).toBe(900);
+  });
+
+  it("a watermark at the exact completion time acknowledges it (seen-up-to is inclusive)", () => {
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "a", agentState: "completed", lastStateChange: 900 })],
+      new Map([["p1", 900]])
+    );
+
+    const p1 = counts.get("p1")!;
+    expect(p1.unacknowledgedCompleted).toBe(0);
+    expect(p1.oldestUnacknowledgedCompletionAt).toBeNull();
+  });
+
+  it("never expires an unacknowledged completion by age", () => {
+    // A completion from arbitrarily long ago stays unacknowledged until the
+    // watermark passes it — elapsed time is not an acknowledgement.
+    const ancient = 1; // epoch + 1ms
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "a", agentState: "completed", lastStateChange: ancient })],
+      new Map()
+    );
+
+    expect(counts.get("p1")!.unacknowledgedCompleted).toBe(1);
+    expect(counts.get("p1")!.oldestUnacknowledgedCompletionAt).toBe(ancient);
+  });
+
+  it("counts a completion with no transition timestamp as completed but not unacknowledged", () => {
+    const counts = computeProjectAgentCounts(["p1"], [agent({ id: "a", agentState: "completed" })]);
+
+    const p1 = counts.get("p1")!;
+    // Without a timestamp it can never clear a watermark, so surfacing it as
+    // unacknowledged would create a permanent attention row.
+    expect(p1.completed).toBe(1);
+    expect(p1.unacknowledgedCompleted).toBe(0);
+    expect(p1.latestCompletionAt).toBeNull();
+  });
+
+  it("records the latest working transition for Running-band ordering", () => {
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [
+        agent({ id: "a", agentState: "working", lastStateChange: 100 }),
+        agent({ id: "b", agentState: "working", lastStateChange: 700 }),
+        agent({ id: "c", agentState: "waiting", lastStateChange: 999 }),
+      ]
+    );
+
+    expect(counts.get("p1")!.latestWorkingSince).toBe(700);
+  });
 });

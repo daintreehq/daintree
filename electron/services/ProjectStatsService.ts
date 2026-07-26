@@ -59,6 +59,16 @@ export class ProjectStatsService {
     void this.computeAndBroadcast();
   }
 
+  /**
+   * The most recent pushed status map. The completion acknowledger reads this
+   * to decide whether the observed project has anything left to acknowledge —
+   * cheaper than re-tallying terminals on its sampling tick, and any lag is
+   * self-healing (the stamp waits one tick behind the broadcast).
+   */
+  getLastBroadcast(): ProjectStatusMap {
+    return this.lastBroadcast;
+  }
+
   stop(): void {
     // Always bump generation so an in-flight computeAndBroadcast — including
     // one started by a pre-start refresh() — is invalidated before any
@@ -110,7 +120,13 @@ export class ProjectStatsService {
         ea.activeAgentCount !== eb.activeAgentCount ||
         ea.waitingAgentCount !== eb.waitingAgentCount ||
         ea.blockedAgentCount !== eb.blockedAgentCount ||
-        ea.oldestWaitingSince !== eb.oldestWaitingSince
+        ea.oldestWaitingSince !== eb.oldestWaitingSince ||
+        ea.completedAgentCount !== eb.completedAgentCount ||
+        ea.unacknowledgedCompletedAgentCount !== eb.unacknowledgedCompletedAgentCount ||
+        ea.oldestUnacknowledgedCompletionAt !== eb.oldestUnacknowledgedCompletionAt ||
+        ea.latestUnacknowledgedCompletionAt !== eb.latestUnacknowledgedCompletionAt ||
+        ea.latestCompletionAt !== eb.latestCompletionAt ||
+        ea.latestWorkingSince !== eb.latestWorkingSince
       ) {
         return false;
       }
@@ -145,7 +161,14 @@ export class ProjectStatsService {
 
       if (this.generation !== gen) return;
 
-      const agentCounts = computeProjectAgentCounts(projectIds, allTerminals);
+      // Acknowledgement watermarks ride the same project rows already fetched.
+      const seenMap = new Map<string, number>();
+      for (const project of allProjects) {
+        if (typeof project.lastCompletionSeenAt === "number" && project.lastCompletionSeenAt > 0) {
+          seenMap.set(project.id, project.lastCompletionSeenAt);
+        }
+      }
+      const agentCounts = computeProjectAgentCounts(projectIds, allTerminals, seenMap);
 
       const statusMap: ProjectStatusMap = {};
       for (const entry of statsResults) {
@@ -162,6 +185,20 @@ export class ProjectStatsService {
             blockedAgentCount: counts.blocked,
             ...(counts.oldestWaitingSince !== null
               ? { oldestWaitingSince: counts.oldestWaitingSince }
+              : {}),
+            completedAgentCount: counts.completed,
+            unacknowledgedCompletedAgentCount: counts.unacknowledgedCompleted,
+            ...(counts.oldestUnacknowledgedCompletionAt !== null
+              ? { oldestUnacknowledgedCompletionAt: counts.oldestUnacknowledgedCompletionAt }
+              : {}),
+            ...(counts.latestUnacknowledgedCompletionAt !== null
+              ? { latestUnacknowledgedCompletionAt: counts.latestUnacknowledgedCompletionAt }
+              : {}),
+            ...(counts.latestCompletionAt !== null
+              ? { latestCompletionAt: counts.latestCompletionAt }
+              : {}),
+            ...(counts.latestWorkingSince !== null
+              ? { latestWorkingSince: counts.latestWorkingSince }
               : {}),
           };
         }

@@ -6,6 +6,10 @@ import type { MemoryRollup, MemoryRollupProject } from "../../../../shared/types
 import { ProjectStatsService } from "../../../services/ProjectStatsService.js";
 import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
 import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
+import { projectStore } from "../../../services/ProjectStore.js";
+import { CompletionAcknowledgementService } from "../../../services/CompletionAcknowledgementService.js";
+import { getWindowRegistry } from "../../../window/windowRef.js";
+import { BrowserWindow } from "electron";
 
 let projectStatsServiceInstance: ProjectStatsService | null = null;
 
@@ -32,6 +36,37 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     projectStatsService.stop();
     projectStatsServiceInstance = null;
   });
+
+  // Acknowledgement watermark for completed agents: the project the user has
+  // had on screen (focused window, active view) for a continuous dwell stops
+  // counting its completions as unacknowledged. Lives beside the stats service
+  // because the two are one feedback loop — the push surfaces completions, the
+  // dwell clears them, the refresh pushes the cleared state.
+  const completionAcknowledger = new CompletionAcknowledgementService({
+    getObservedProjectId: () => {
+      // Harness guard: unit tests mock the electron module without
+      // BrowserWindow; an unfocused null is the correct reading there.
+      if (typeof BrowserWindow?.getFocusedWindow !== "function") return null;
+      const focused = BrowserWindow.getFocusedWindow();
+      if (!focused || focused.isDestroyed() || focused.isMinimized() || !focused.isVisible()) {
+        return null;
+      }
+      const ctx = getWindowRegistry()?.getByWindowId(focused.id);
+      if (!ctx) return null;
+      // Only the focused window's OWN view manager may answer. The global
+      // current-project pointer names whichever window switched most recently
+      // (#11101) — falling back to it could acknowledge a project the focused
+      // window isn't showing. A window without a view manager observes nothing.
+      return ctx.services.projectViewManager?.getActiveProjectId() ?? null;
+    },
+    getStatusMap: () => projectStatsService.getLastBroadcast(),
+    markSeen: (projectId, seenUpTo) => {
+      projectStore.updateProject(projectId, { lastCompletionSeenAt: seenUpTo });
+    },
+    onAcknowledged: () => projectStatsService.refresh(),
+  });
+  completionAcknowledger.start();
+  handlers.push(() => completionAcknowledger.stop());
 
   const handleProjectGetStats = async (projectId: string) => {
     if (typeof projectId !== "string" || !projectId) {
@@ -91,7 +126,11 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       }
     }
 
-    const agentCounts = computeProjectAgentCounts(uniqueIds, allTerminals);
+    const agentCounts = computeProjectAgentCounts(
+      uniqueIds,
+      allTerminals,
+      projectStore.getLastCompletionSeenMap()
+    );
 
     const result: BulkProjectStats = {};
     for (const entry of statsResults) {
@@ -119,6 +158,20 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
           blockedAgentCount: counts.blocked,
           ...(counts.oldestWaitingSince !== null
             ? { oldestWaitingSince: counts.oldestWaitingSince }
+            : {}),
+          completedAgentCount: counts.completed,
+          unacknowledgedCompletedAgentCount: counts.unacknowledgedCompleted,
+          ...(counts.oldestUnacknowledgedCompletionAt !== null
+            ? { oldestUnacknowledgedCompletionAt: counts.oldestUnacknowledgedCompletionAt }
+            : {}),
+          ...(counts.latestUnacknowledgedCompletionAt !== null
+            ? { latestUnacknowledgedCompletionAt: counts.latestUnacknowledgedCompletionAt }
+            : {}),
+          ...(counts.latestCompletionAt !== null
+            ? { latestCompletionAt: counts.latestCompletionAt }
+            : {}),
+          ...(counts.latestWorkingSince !== null
+            ? { latestWorkingSince: counts.latestWorkingSince }
             : {}),
           terminalMemoryMB: hasMeasured ? Math.round(measured!.memoryKb / 1024) : undefined,
           topProcess: top

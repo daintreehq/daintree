@@ -29,6 +29,7 @@ import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboar
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getAgentConfig } from "@/config/agents";
 import { LAUNCHABLE_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
+import { decayFrecencyScore, FRECENCY_COLD_START } from "@shared/utils/frecency";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import type { AgentAvailabilityState } from "../../../shared/types/ipc/system";
@@ -55,12 +56,20 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   const projects = useProjectStore((state) => state.projects);
   const switchProject = useProjectStore((state) => state.switchProject);
 
-  const recentProjects = useMemo(
-    () => [...projects].sort((a, b) => (b.frecencyScore ?? 0) - (a.frecencyScore ?? 0)).slice(0, 5),
-    [projects]
-  );
+  // Effective (read-time decayed) scores against one shared now — comparing
+  // raw persisted scores compares snapshots frozen on different dates, which
+  // let months-dormant projects hold the top slots. Same transform as the
+  // project switcher, so the two surfaces can never disagree on order.
+  const topProjects = useMemo(() => {
+    const now = Date.now();
+    const effective = (p: (typeof projects)[number]) =>
+      decayFrecencyScore(p.frecencyScore ?? FRECENCY_COLD_START, p.lastAccessedAt ?? 0, now);
+    return [...projects]
+      .sort((a, b) => effective(b) - effective(a) || (b.lastOpened ?? 0) - (a.lastOpened ?? 0))
+      .slice(0, 5);
+  }, [projects]);
 
-  const hasProjects = recentProjects.length > 0;
+  const hasProjects = topProjects.length > 0;
   const { checklist } = gettingStarted;
 
   const visibleShortcutTips = useMemo(
@@ -139,7 +148,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
           </div>
         )}
 
-        {hasProjects && <RecentProjects projects={recentProjects} onSelect={switchProject} />}
+        {hasProjects && <TopProjects projects={topProjects} onSelect={switchProject} />}
 
         <NudgeSequencer
           showChecklist={!!showChecklist}
@@ -332,7 +341,7 @@ function NudgeSequencer({
   return null;
 }
 
-function RecentProjects({
+function TopProjects({
   projects,
   onSelect,
 }: {
@@ -341,8 +350,10 @@ function RecentProjects({
 }) {
   return (
     <div className="w-full">
+      {/* "Your projects", not "Recent projects": the list is ranked by decayed
+          use, and each row already shows its own true "opened X ago". */}
       <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider mb-3">
-        Recent projects
+        Your projects
       </h3>
       <div className="space-y-1">
         {projects.map((project) => (

@@ -158,6 +158,10 @@ interface ProjectListItemProps {
 const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
   blocked: "text-status-danger/80",
   waiting: "text-activity-waiting",
+  // Finished-awaiting-review: the completed-state hue, distinct from both the
+  // warning of a wait and the success-green of a healthy process. Never danger
+  // — completion is the desired outcome, not a fault.
+  review: "text-activity-completed",
   working: "text-activity-working",
   running: "text-daintree-text/50",
   muted: "text-daintree-text/50",
@@ -166,6 +170,7 @@ const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
 const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
   blocked: "bg-status-danger",
   waiting: "bg-status-warning",
+  review: "bg-activity-completed",
   working: "bg-activity-active animate-activity-pulse",
   running: "bg-status-success",
   muted: "border border-daintree-text/20",
