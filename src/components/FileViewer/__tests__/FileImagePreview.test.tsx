@@ -75,3 +75,86 @@ describe("FileImagePreview SVG inlining", () => {
     expect(img?.getAttribute("src")).toContain("daintree-file://");
   });
 });
+
+/**
+ * The protocol URL is a pure function of path and root, so a rewritten image is
+ * never refetched without a changing token (#11451). `Cache-Control: no-store`
+ * on the response only governs a request that actually happens.
+ */
+describe("FileImagePreview cache busting", () => {
+  function renderRaster(cacheBust?: string) {
+    return render(
+      <FileImagePreview
+        filePath="/repo/assets/logo.png"
+        rootPath="/repo"
+        alt="logo.png"
+        sanitizedSvg={null}
+        cacheBust={cacheBust}
+      />
+    );
+  }
+
+  function parseSrc(container: HTMLElement): URL {
+    const src = container.querySelector("img")?.getAttribute("src");
+    if (!src) throw new Error("img not rendered");
+    return new URL(src);
+  }
+
+  it("leaves the URL untouched when no token is supplied", () => {
+    // Callers with nothing to invalidate against must not get a phantom param.
+    const { container } = renderRaster();
+
+    expect(parseSrc(container).searchParams.has("v")).toBe(false);
+  });
+
+  it("carries an opaque token through without disturbing path or root", () => {
+    const token = "7 &v=x/?#";
+    const canonical = parseSrc(renderRaster().container);
+    cleanup();
+
+    const busted = parseSrc(renderRaster(token).container);
+
+    // Round-trips intact — an unencoded token would inject extra params and
+    // corrupt the path/root the protocol handler resolves against.
+    expect(busted.searchParams.get("v")).toBe(token);
+    expect(busted.searchParams.get("path")).toBe(canonical.searchParams.get("path"));
+    expect(busted.searchParams.get("root")).toBe(canonical.searchParams.get("root"));
+  });
+
+  it("swaps the src in place when the token changes, without remounting", () => {
+    // Remounting would drop the painted frame and flash empty mid-refresh; the
+    // point is to change the URL while the element survives.
+    const { container, rerender } = renderRaster("1");
+    const img = container.querySelector("img");
+    const before = parseSrc(container).searchParams.get("v");
+
+    rerender(
+      <FileImagePreview
+        filePath="/repo/assets/logo.png"
+        rootPath="/repo"
+        alt="logo.png"
+        sanitizedSvg={null}
+        cacheBust="2"
+      />
+    );
+
+    expect(parseSrc(container).searchParams.get("v")).not.toBe(before);
+    expect(container.querySelector("img")).toBe(img);
+  });
+
+  it("ignores the token when SVG markup is inlined", () => {
+    // Inlined SVG has no URL to bust — it is re-read and re-sanitized upstream.
+    const { container } = render(
+      <FileImagePreview
+        filePath="/repo/assets/icon.svg"
+        rootPath="/repo"
+        alt="icon.svg"
+        sanitizedSvg={`<svg xmlns="${SVG_NS}"><rect /></svg>`}
+        cacheBust="9"
+      />
+    );
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("svg rect")).not.toBeNull();
+  });
+});

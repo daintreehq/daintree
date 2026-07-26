@@ -296,6 +296,34 @@ export function FilePane({
     [filePath, diffWorktreePath]
   );
 
+  // The containing worktree's "something moved on disk" signal, resolved off the
+  // same containment path as the diff subject rather than `panel.worktreeId`.
+  // Two ticks, because neither is sufficient alone: `worktreeChanges.lastUpdated`
+  // misses writes into gitignored folders (git status never moves), and the raw
+  // filesystem tick misses nothing but says nothing about git. Whichever moved
+  // most recently wins, matching FileBrowserPane (#11330). Scalar for the same
+  // reason as `localChangeStatus` — an object would re-render on every poll.
+  // `undefined` when the file is in no known worktree: no watcher covers it, so
+  // there is simply no live signal to give.
+  const changeTick = useWorktreeStore(
+    useCallback(
+      (state): number | undefined => {
+        if (!diffWorktreePath) return undefined;
+        for (const worktree of state.worktrees.values()) {
+          if (normalize(worktree.path) !== normalize(diffWorktreePath)) continue;
+          return (
+            Math.max(
+              worktree.worktreeChanges?.lastUpdated ?? 0,
+              state.workingTreeChangedAtById.get(worktree.id) ?? 0
+            ) || undefined
+          );
+        }
+        return undefined;
+      },
+      [diffWorktreePath]
+    )
+  );
+
   // Scalar status, never the change entry: `changes` is rebuilt wholesale every
   // poll tick, so returning the object would re-render the pane on each tick —
   // the same Object.is bail-out `selectDiffFreshnessKey` relies on (#8635).
@@ -415,9 +443,12 @@ export function FilePane({
   const [pathCopied, setPathCopied] = useState(false);
   // Sandboxed-iframe preview URL for HTML files (#11191), minted by files:read.
   const [htmlPreviewUrl, setHtmlPreviewUrl] = useState<string | null>(null);
-  // Bumped on every successful (re)load so the (cross-origin) preview frame
-  // re-navigates — a rewritten report re-renders on refresh/focus. Bumping on
-  // every load, not just entry-file changes, keeps relative assets fresh too.
+  // Reload generation for every surface whose content lives behind a URL rather
+  // than in React state: the sandboxed HTML preview frame, the media players,
+  // and the raster <img>. Their URLs are pure functions of path and root, so
+  // without a changing token a rewritten file is never re-requested. Bumped on
+  // every successful load, not just entry-file changes, so relative assets stay
+  // fresh too. Never a `loadFile` dependency — that would re-trigger the load.
   const [reloadNonce, setReloadNonce] = useState(0);
   // Which surface a toolbar Refresh press is currently spinning for (or null).
   // The mode is captured at click so a mode switch mid-refresh doesn't settle
@@ -463,6 +494,11 @@ export function FilePane({
       if (isImageFilePath(filePath) && !isSvgFilePath(filePath)) {
         setContent(null);
         setSanitizedSvg(null);
+        // Unconditionally, unlike the media branches below: a still image has no
+        // playback or reader position to protect, so a silent background pass
+        // should show the new bytes rather than preserve the old ones. Without
+        // this the <img> URL never changes and even toolbar Refresh is inert.
+        setReloadNonce((nonce) => nonce + 1);
         setLoadState("image");
         setErrorCode(null);
         setErrorMessage(null);
@@ -624,22 +660,61 @@ export function FilePane({
     wasDiffModeRef.current = viewMode === "diff";
   }, [viewMode, loadFile]);
 
-  // Agents rewrite files while the user reads them: silently re-read when the
-  // pane regains focus or the app window returns to the foreground.
+  // Agents rewrite files while the user watches, and the pane stays focused the
+  // whole time — so focus regain alone can't be the only live signal. Re-read
+  // silently whenever the containing worktree reports a change.
+  //
+  // Identity travels with the tick so only a genuine disk write triggers this: a
+  // path or root switch changes the tick too, but already has its own explicit
+  // load, and firing here as well would read the same file twice.
+  const lastChangeSignalRef = useRef({
+    filePath,
+    worktreePath: diffWorktreePath,
+    tick: changeTick,
+    viewMode,
+  });
+  useEffect(() => {
+    const previous = lastChangeSignalRef.current;
+    lastChangeSignalRef.current = {
+      filePath,
+      worktreePath: diffWorktreePath,
+      tick: changeTick,
+      viewMode,
+    };
+    // Diff owns its own freshness — useDiffContent subscribes to the same store
+    // and raises a stale banner — and leaving Diff already re-reads source, so a
+    // tick on either side of that transition would only duplicate the work.
+    if (viewMode === "diff" || previous.viewMode === "diff") return;
+    if (!filePath || !diffWorktreePath || changeTick === undefined) return;
+    if (previous.filePath !== filePath || previous.worktreePath !== diffWorktreePath) return;
+    if (previous.tick === changeTick) return;
+    loadFile(true);
+  }, [filePath, diffWorktreePath, changeTick, viewMode, loadFile]);
+
+  // Which surfaces a background re-read may replace. Images and inlined SVG join
+  // "loaded" because both are cheap to re-request and show nothing but the file.
+  // Video, audio and PDF are deliberately absent: their reload key only moves on
+  // an explicit load, so a silent pass here would be inert for them anyway, and
+  // widening it would reset playback or a reader's page on an unrelated write.
+  const reloadsSilently =
+    loadState === "loaded" || loadState === "image" || loadState === "svg";
+
+  // Still worth re-reading on focus regain: a write that landed while no watcher
+  // covered the file (opened outside every known worktree) has no tick at all.
   const wasFocusedRef = useRef(isFocused);
   useEffect(() => {
-    if (isFocused && !wasFocusedRef.current && loadState === "loaded") {
+    if (isFocused && !wasFocusedRef.current && reloadsSilently) {
       loadFile(true);
     }
     wasFocusedRef.current = isFocused;
-  }, [isFocused, loadState, loadFile]);
+  }, [isFocused, reloadsSilently, loadFile]);
 
   useEffect(() => {
-    if (loadState !== "loaded") return;
+    if (!reloadsSilently) return;
     const handleWindowFocus = () => loadFile(true);
     window.addEventListener("focus", handleWindowFocus);
     return () => window.removeEventListener("focus", handleWindowFocus);
-  }, [loadState, loadFile]);
+  }, [reloadsSilently, loadFile]);
 
   // Route Cmd+F to the source view's find bar while this pane is focused
   // (no-op in rendered markdown, matching the dialog).
@@ -966,6 +1041,7 @@ export function FilePane({
             rootPath={effectiveRootPath}
             alt={fileName ?? filePath}
             sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
+            cacheBust={String(reloadNonce)}
             onError={() => {
               setErrorCode("NOT_FOUND");
               setLoadState("error");

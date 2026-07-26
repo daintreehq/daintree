@@ -14,6 +14,14 @@ interface FileImagePreviewProps {
    * raw SVG must never reach this component.
    */
   sanitizedSvg?: string | null;
+  /**
+   * Opaque token appended to the raster `daintree-file://` URL. The protocol URL
+   * is otherwise a pure function of path and root, so a rewritten image on disk
+   * is never refetched — `Cache-Control: no-store` only governs a request that
+   * actually happens. Changing this changes the URL, which is what asks for one.
+   * Ignored for inlined SVG, which is re-read and re-sanitized upstream.
+   */
+  cacheBust?: string;
   onError?: () => void;
   /** Height cap for the preview surface — dialogs and panes want different ones. */
   maxHeightClassName?: string;
@@ -96,6 +104,7 @@ export function FileImagePreview({
   rootPath,
   alt,
   sanitizedSvg,
+  cacheBust,
   onError,
   maxHeightClassName = "max-h-[70vh]",
 }: FileImagePreviewProps) {
@@ -113,9 +122,15 @@ export function FileImagePreview({
       ) : (
         <img
           // Keyed by path so switching files remounts rather than showing the
-          // previous image until the new one decodes.
+          // previous image until the new one decodes. Deliberately not keyed by
+          // cacheBust: a rewritten image swaps its bytes in place, and the old
+          // frame stays painted until the new one decodes.
           key={filePath}
-          src={buildDaintreeFileUrl(filePath, rootPath)}
+          src={
+            cacheBust === undefined
+              ? buildDaintreeFileUrl(filePath, rootPath)
+              : `${buildDaintreeFileUrl(filePath, rootPath)}&v=${encodeURIComponent(cacheBust)}`
+          }
           alt={alt}
           className={`max-w-full ${maxHeightClassName} object-contain rounded`}
           draggable={false}

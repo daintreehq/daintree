@@ -60,11 +60,24 @@ vi.mock("@/store/preferencesStore", () => ({
 }));
 // Mutable so a test can seed a worktree whose change list makes the file
 // locally changed — the Diff option's only trigger (#11274).
+// Field names mirror WorktreeSnapshot / WorktreeViewState exactly: the live
+// change tick (#11451) reads `id` off the snapshot to index the side map, so a
+// seeded worktree missing one silently resolves no tick at all.
 interface WorktreeLike {
+  id?: string;
   path: string;
-  worktreeChanges?: { changes: Array<{ path: string; status: string }> } | null;
+  worktreeChanges?: {
+    changes: Array<{ path: string; status: string }>;
+    lastUpdated?: number;
+  } | null;
 }
-const worktreeState = vi.hoisted(() => ({ worktrees: new Map<string, unknown>() }));
+const worktreeState = vi.hoisted(() => ({
+  worktrees: new Map<string, unknown>(),
+  // The raw filesystem-write tick, keyed by worktree id and stored beside the
+  // snapshots rather than on them (#11330). Absent here, the pane's change-tick
+  // selector would throw on `.get`.
+  workingTreeChangedAtById: new Map<string, number>(),
+}));
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: unknown) => unknown) => selector(worktreeState),
 }));
@@ -154,6 +167,7 @@ beforeEach(() => {
   useDiffContentMock.mockReset();
   useDiffContentMock.mockReturnValue({ content: undefined, stale: false, retry: vi.fn() });
   worktreeState.worktrees.clear();
+  worktreeState.workingTreeChangedAtById.clear();
   // Reset per test so a prior test's read call can't satisfy a later
   // toHaveBeenCalledWith assertion (cross-test contamination).
   readMock.mockReset();
@@ -1619,5 +1633,301 @@ describe("FilePane toolbar refresh spin (#11323)", () => {
       refreshIcon(container).dispatchEvent(new Event("animationiteration", { bubbles: true }));
     });
     expect(refreshIcon(container).classList.contains("animate-spin")).toBe(false);
+  });
+});
+
+// #11451: the pane had no live signal at all. Text only re-read on focus
+// regain — never while the pane stayed focused, which is exactly when an agent
+// is rewriting the file — and images, whose URL is a pure function of path and
+// root, never re-read even on an explicit Refresh.
+describe("FilePane live disk refresh (#11451)", () => {
+  const OUTER_ID = "wt-outer";
+  const INNER_ID = "wt-inner";
+
+  function seedWorktree(
+    id: string,
+    path: string,
+    ticks: { git?: number; fs?: number } = {}
+  ): void {
+    const seeded: WorktreeLike = {
+      id,
+      path,
+      worktreeChanges: ticks.git === undefined ? null : { changes: [], lastUpdated: ticks.git },
+    };
+    worktreeState.worktrees.set(id, seeded);
+    if (ticks.fs !== undefined) worktreeState.workingTreeChangedAtById.set(id, ticks.fs);
+  }
+
+  function paneElement(isFocused = false) {
+    return (
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title="index.ts"
+          isFocused={isFocused}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  async function renderPane(options: {
+    filePath?: string;
+    worktreeId?: string;
+    fileViewMode?: string;
+    isFocused?: boolean;
+  }) {
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: options.filePath ?? "/repo/src/index.ts",
+      worktreeId: options.worktreeId ?? OUTER_ID,
+      fileViewMode: options.fileViewMode,
+    };
+    const view = render(paneElement(options.isFocused));
+    // Can't wait on readMock — image and media paths short-circuit before it.
+    await act(async () => {});
+    return view;
+  }
+
+  /** The mocked store is a plain object, so a tick only lands on re-render. */
+  async function commitTick(rerender: (ui: ReactNode) => void, isFocused = false) {
+    await act(async () => {
+      rerender(paneElement(isFocused));
+    });
+  }
+
+  function imageSrc(container: HTMLElement): string {
+    const src = container.querySelector("img")?.getAttribute("src");
+    if (!src) throw new Error("image preview not rendered");
+    return src;
+  }
+
+  function loadingSkeleton(container: HTMLElement): Element | null {
+    return container.querySelector('[role="status"][aria-label="Loading file"]');
+  }
+
+  it("re-reads the file when the containing worktree's git-status tick moves", async () => {
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    readMock.mockResolvedValue({ content: "v1" });
+    const { rerender } = await renderPane({});
+    const initialReads = readMock.mock.calls.length;
+
+    seedWorktree(OUTER_ID, "/repo", { git: 200 });
+    await commitTick(rerender);
+
+    expect(readMock.mock.calls.length).toBe(initialReads + 1);
+  });
+
+  it("re-reads the file when only the raw filesystem-write tick moves", async () => {
+    // A write into a gitignored folder never moves git status, so the git tick
+    // alone would leave the pane stale — the reason both signals are combined.
+    seedWorktree(OUTER_ID, "/repo", { fs: 100 });
+    readMock.mockResolvedValue({ content: "v1" });
+    const { rerender } = await renderPane({});
+    const initialReads = readMock.mock.calls.length;
+
+    seedWorktree(OUTER_ID, "/repo", { fs: 200 });
+    await commitTick(rerender);
+
+    expect(readMock.mock.calls.length).toBe(initialReads + 1);
+  });
+
+  it("takes its tick from the deepest worktree containing the file, not the panel's", async () => {
+    // `file.openPanel` stamps the *active* worktree id even when the file lives
+    // in another one, so trusting `panel.worktreeId` would watch the wrong tree.
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    seedWorktree(INNER_ID, "/repo/packages/app", { git: 100 });
+    readMock.mockResolvedValue({ content: "v1" });
+    const { rerender } = await renderPane({
+      filePath: "/repo/packages/app/src/index.ts",
+      worktreeId: OUTER_ID,
+    });
+    const initialReads = readMock.mock.calls.length;
+
+    // The panel's own worktree moving is not this file's business.
+    seedWorktree(OUTER_ID, "/repo", { git: 200 });
+    await commitTick(rerender);
+    expect(readMock.mock.calls.length).toBe(initialReads);
+
+    seedWorktree(INNER_ID, "/repo/packages/app", { git: 200 });
+    await commitTick(rerender);
+    expect(readMock.mock.calls.length).toBe(initialReads + 1);
+  });
+
+  it("stays quiet for a file outside every known worktree", async () => {
+    // No watcher covers it, so there is no tick to resolve — it must degrade to
+    // no live signal rather than reading on every unrelated worktree update.
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    readMock.mockResolvedValue({ content: "v1" });
+    const { rerender } = await renderPane({ filePath: "/elsewhere/notes.txt" });
+    const initialReads = readMock.mock.calls.length;
+
+    seedWorktree(OUTER_ID, "/repo", { git: 200, fs: 300 });
+    await commitTick(rerender);
+
+    expect(readMock.mock.calls.length).toBe(initialReads);
+  });
+
+  it("keeps the current viewer on screen while a tick's re-read is in flight", async () => {
+    // The whole point of a background re-read: no skeleton swap, so the reader
+    // keeps their content and scroll position while the new bytes land.
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    readMock.mockResolvedValue({ content: "v1" });
+    const { container, rerender } = await renderPane({});
+    const viewerBefore = container.querySelector('[data-testid="code-viewer-mock"]');
+    expect(viewerBefore).not.toBeNull();
+
+    let resolveRead!: (value: { content: string }) => void;
+    readMock.mockReturnValueOnce(
+      new Promise<{ content: string }>((resolve) => {
+        resolveRead = resolve;
+      })
+    );
+    seedWorktree(OUTER_ID, "/repo", { git: 200 });
+    await commitTick(rerender);
+
+    expect(loadingSkeleton(container)).toBeNull();
+    // Same node, not merely an equivalent one — a remount would reset scroll.
+    expect(container.querySelector('[data-testid="code-viewer-mock"]')).toBe(viewerBefore);
+
+    await act(async () => {
+      resolveRead({ content: "v2" });
+    });
+  });
+
+  it("re-requests a raster image on a worktree tick", async () => {
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    const { container, rerender } = await renderPane({ filePath: "/repo/assets/logo.png" });
+    const before = imageSrc(container);
+
+    seedWorktree(OUTER_ID, "/repo", { git: 200 });
+    await commitTick(rerender);
+
+    // The URL must actually change: identical `src` lets Chromium skip the
+    // fetch entirely, which is why `Cache-Control: no-store` alone never helped.
+    expect(imageSrc(container)).not.toBe(before);
+    expect(readMock).not.toHaveBeenCalled();
+  });
+
+  it("re-requests a raster image on toolbar Refresh", async () => {
+    // The headline symptom: the icon spun and the image never reloaded.
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    const { container } = await renderPane({ filePath: "/repo/assets/logo.png" });
+    const before = imageSrc(container);
+
+    await act(async () => {
+      Array.from(container.querySelectorAll("button"))
+        .find((b) => b.getAttribute("aria-label") === "Refresh")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(imageSrc(container)).not.toBe(before);
+  });
+
+  it("re-requests a raster image when the pane regains focus", async () => {
+    // Both focus effects gated on "loaded", which no image ever reaches.
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    const { container, rerender } = await renderPane({
+      filePath: "/repo/assets/logo.png",
+      isFocused: false,
+    });
+    const before = imageSrc(container);
+
+    await commitTick(rerender, true);
+
+    expect(imageSrc(container)).not.toBe(before);
+  });
+
+  it("re-reads and re-sanitizes an SVG on a worktree tick", async () => {
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+    });
+    const { container, rerender } = await renderPane({ filePath: "/repo/assets/icon.svg" });
+    await waitFor(() => expect(container.querySelector("svg rect")).not.toBeNull());
+
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><circle /></svg>',
+    });
+    seedWorktree(OUTER_ID, "/repo", { git: 200 });
+    await commitTick(rerender);
+
+    // Inlined markup, so freshness rides React state rather than a URL.
+    await waitFor(() => expect(container.querySelector("svg circle")).not.toBeNull());
+    expect(container.querySelector("svg rect")).toBeNull();
+  });
+
+  it("leaves the hidden source alone while Diff owns the surface", async () => {
+    // useDiffContent subscribes to the same store and raises its own stale
+    // banner; re-reading source nobody can see would just duplicate the work.
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    worktreeState.worktrees.set(OUTER_ID, {
+      id: OUTER_ID,
+      path: "/repo",
+      worktreeChanges: {
+        changes: [{ path: "/repo/src/index.ts", status: "modified" }],
+        lastUpdated: 100,
+      },
+    } satisfies WorktreeLike);
+    useDiffContentMock.mockReturnValue({ content: "diff", stale: false, retry: vi.fn() });
+    readMock.mockResolvedValue({ content: "v1" });
+    const { rerender } = await renderPane({ fileViewMode: "diff" });
+    const initialReads = readMock.mock.calls.length;
+
+    worktreeState.worktrees.set(OUTER_ID, {
+      id: OUTER_ID,
+      path: "/repo",
+      worktreeChanges: {
+        changes: [{ path: "/repo/src/index.ts", status: "modified" }],
+        lastUpdated: 200,
+      },
+    } satisfies WorktreeLike);
+    await commitTick(rerender);
+
+    expect(readMock.mock.calls.length).toBe(initialReads);
+  });
+
+  describe("media keeps playing across a tick", () => {
+    // Same fetch-to-blob boundary the video/audio suites above stub: Chromium's
+    // custom-scheme media loader can't do follow-up range requests.
+    const mediaFetchMock = vi.fn();
+    const realCreateObjectURL = URL.createObjectURL;
+    const realRevokeObjectURL = URL.revokeObjectURL;
+    beforeEach(() => {
+      mediaFetchMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        blob: () => Promise.resolve(new Blob(["x"])),
+      });
+      vi.stubGlobal("fetch", mediaFetchMock);
+      URL.createObjectURL = vi.fn(() => "blob:app://daintree/media-preview");
+      URL.revokeObjectURL = vi.fn();
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      mediaFetchMock.mockReset();
+      URL.createObjectURL = realCreateObjectURL;
+      URL.revokeObjectURL = realRevokeObjectURL;
+    });
+
+    it("keeps the same <video> element rather than refetching", async () => {
+      // A worktree-wide tick fires on any write; remounting here would restart
+      // playback every time an agent touched an unrelated file.
+      seedWorktree(OUTER_ID, "/repo", { git: 100 });
+      const { container, rerender } = await renderPane({ filePath: "/repo/media/demo.mp4" });
+      await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+      const playerBefore = container.querySelector("video");
+      const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+      seedWorktree(OUTER_ID, "/repo", { git: 200, fs: 300 });
+      await commitTick(rerender);
+
+      expect(container.querySelector("video")).toBe(playerBefore);
+      expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore);
+    });
   });
 });
