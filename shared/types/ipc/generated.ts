@@ -1211,7 +1211,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "project-history:peek": {
-    args: [direction: import("./project.js").ProjectHistoryDirection];
+    args: [];
     result: import("./project.js").ProjectHistoryTarget | null;
   };
   "project-relocation:apply": {

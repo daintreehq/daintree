@@ -137,24 +137,28 @@ describe("useProjectMruSwitcher", () => {
     expect(peekMock).not.toHaveBeenCalled();
   });
 
-  it("steps back on Cmd+Alt+=", () => {
+  it("switches on Cmd+Alt+=", () => {
     renderHook(() => useProjectMruSwitcher());
 
     act(() => {
       keyDown("Equal");
     });
 
-    expect(peekMock).toHaveBeenCalledWith("back");
+    expect(peekMock).toHaveBeenCalledTimes(1);
   });
 
-  it("steps forward when Shift is held", () => {
+  it("leaves Cmd+Shift+Alt+= free", () => {
     renderHook(() => useProjectMruSwitcher());
 
+    let event: KeyboardEvent | undefined;
     act(() => {
-      keyDown("Equal", { shiftKey: true });
+      event = keyDown("Equal", { shiftKey: true });
     });
 
-    expect(peekMock).toHaveBeenCalledWith("forward");
+    // A toggle has no inverse, so the shifted combo must fall through rather
+    // than being swallowed by a handler with nothing left to do.
+    expect(event?.defaultPrevented).toBe(false);
+    expect(peekMock).not.toHaveBeenCalled();
   });
 
   it("accepts numpad add and leaves numpad subtract free", () => {
@@ -163,7 +167,7 @@ describe("useProjectMruSwitcher", () => {
     act(() => {
       keyDown("NumpadAdd");
     });
-    expect(peekMock).toHaveBeenCalledWith("back");
+    expect(peekMock).toHaveBeenCalledTimes(1);
 
     peekMock.mockClear();
     let event: KeyboardEvent | undefined;
@@ -182,7 +186,7 @@ describe("useProjectMruSwitcher", () => {
       event = keyDown("Equal", { repeat: true });
     });
 
-    // Holding the keys down must not machine-gun through the whole stack, but
+    // Holding the keys down must not machine-gun through repeated switches, but
     // the event is still swallowed so nothing else acts on it.
     expect(event?.defaultPrevented).toBe(true);
     expect(peekMock).not.toHaveBeenCalled();
@@ -227,7 +231,7 @@ describe("useProjectMruSwitcher", () => {
 
     // Terminals are where this shortcut is most useful, so the editable-target
     // guard must not treat xterm's DOM as a text field.
-    expect(peekMock).toHaveBeenCalledWith("back");
+    expect(peekMock).toHaveBeenCalledTimes(1);
     term.remove();
   });
 
@@ -244,11 +248,11 @@ describe("useProjectMruSwitcher", () => {
       keyDown("Equal", { target: helper });
     });
 
-    expect(peekMock).toHaveBeenCalledWith("back");
+    expect(peekMock).toHaveBeenCalledTimes(1);
     term.remove();
   });
 
-  it("surfaces a failed step with a retry", async () => {
+  it("surfaces a failed switch with a retry", async () => {
     peekMock.mockRejectedValueOnce(new Error("switch failed"));
     renderHook(() => useProjectMruSwitcher());
 

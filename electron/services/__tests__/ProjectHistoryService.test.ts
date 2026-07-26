@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { ProjectHistoryService } from "../ProjectHistoryService.js";
+import {
+  ProjectHistoryService,
+  disposeProjectHistory,
+  getProjectHistory,
+} from "../ProjectHistoryService.js";
 
 const always = () => true;
 
@@ -7,77 +11,72 @@ function visit(history: ProjectHistoryService, ...projectIds: string[]): void {
   for (const projectId of projectIds) history.record(projectId);
 }
 
+/**
+ * How a real switch folds in: the outgoing project is recorded before the
+ * incoming one, exactly as the view-swap path does. Peeking in isolation would
+ * miss whether the pair leaves the list able to answer the next press.
+ */
+function switchTo(history: ProjectHistoryService, projectId: string): void {
+  const outgoing = history.current();
+  if (outgoing) history.record(outgoing);
+  history.record(projectId);
+}
+
+/** Press the toggle: resolve a target, then switch to it the way the app does. */
+function pressToggle(history: ProjectHistoryService): string | null {
+  const target = history.peekLast(always);
+  if (target) switchTo(history, target);
+  return target;
+}
+
 describe("ProjectHistoryService", () => {
-  it("walks back further than two projects", () => {
-    // The defect this replaces: recency-based switching bounced between the two
-    // most recent projects forever, so a third was unreachable.
+  it("returns to where you started after two presses, from any depth", () => {
+    // The property the shortcut exists for. A cursor that advanced on every
+    // press had it only for two projects: from a third, two presses landed
+    // somewhere new and the key stopped being pressable without looking.
+    for (const depth of [2, 3, 5]) {
+      const history = new ProjectHistoryService();
+      const projects = Array.from({ length: depth }, (_, i) => `p${i}`);
+      visit(history, ...projects);
+
+      const origin = history.current();
+      pressToggle(history);
+      expect(history.current()).not.toBe(origin);
+      pressToggle(history);
+
+      expect(history.current()).toBe(origin);
+    }
+  });
+
+  it("alternates between exactly two projects however long you keep pressing", () => {
     const history = new ProjectHistoryService();
     visit(history, "a", "b", "c");
 
-    expect(history.peek("back", always)).toBe("b");
-    history.record("b");
-    expect(history.peek("back", always)).toBe("a");
-    history.record("a");
-    // Past the oldest entry the ring comes round rather than dead-ending.
-    expect(history.peek("back", always)).toBe("c");
+    const visited: string[] = [];
+    for (let press = 0; press < 6; press++) {
+      visited.push(pressToggle(history)!);
+    }
+
+    // "c" is where we started, so the pair is c/b — never drifting onto "a".
+    expect(visited).toEqual(["b", "c", "b", "c", "b", "c"]);
+    // Toggling reorders but never grows.
+    expect(new Set(history.snapshot().entries)).toEqual(new Set(["a", "b", "c"]));
   });
 
-  it("alternates between two projects on repeated back presses", () => {
-    // The behaviour people actually use, and the one the pre-stack shortcut
-    // had. Losing it to strict browser semantics would have been a downgrade
-    // for the common case in exchange for depth nobody asked for.
+  it("retargets the toggle after an unrelated switch", () => {
+    // Going somewhere by other means — palette, menu, agent jump — has to
+    // reseat the toggle, or it would still point at a project two switches ago.
     const history = new ProjectHistoryService();
     visit(history, "a", "b");
+    switchTo(history, "c");
 
-    const visited: string[] = [];
-    for (let press = 0; press < 4; press++) {
-      const target = history.peek("back", always);
-      expect(target).not.toBeNull();
-      history.record(target!);
-      visited.push(target!);
-    }
-
-    expect(visited).toEqual(["a", "b", "a", "b"]);
-    // Alternating must not grow or rewrite the ring.
-    expect(history.snapshot().entries).toEqual(["a", "b"]);
+    expect(history.peekLast(always)).toBe("b");
   });
 
-  it("cycles through three projects without stranding the cursor", () => {
-    const history = new ProjectHistoryService();
-    visit(history, "a", "b", "c");
-
-    const visited: string[] = [];
-    for (let press = 0; press < 6; press++) {
-      const target = history.peek("back", always)!;
-      history.record(target);
-      visited.push(target);
-    }
-
-    expect(visited).toEqual(["b", "a", "c", "b", "a", "c"]);
-    expect(history.snapshot().entries).toEqual(["a", "b", "c"]);
-  });
-
-  it("cycles forward as the mirror of cycling back", () => {
-    const history = new ProjectHistoryService();
-    visit(history, "a", "b", "c");
-
-    const visited: string[] = [];
-    for (let press = 0; press < 6; press++) {
-      const target = history.peek("forward", always)!;
-      history.record(target);
-      visited.push(target);
-    }
-
-    expect(visited).toEqual(["a", "b", "c", "a", "b", "c"]);
-    expect(history.snapshot().entries).toEqual(["a", "b", "c"]);
-  });
-
-  it("holds its invariants across a long random walk", () => {
-    // The cyclic neighbour check in `record` is the subtlest part of this
-    // service: a wrap lands somewhere non-adjacent by index, and getting the
-    // inference wrong rewrites the ring underneath the user. Hand-picked
-    // sequences can't cover the interleavings, so this walks a mix of steps and
-    // off-ring jumps and asserts the structure holds throughout.
+  it("holds its invariants across a long mixed walk", () => {
+    // Toggles interleaved with off-list jumps: the arrangement that previously
+    // stranded navigation, since a project reachable two ways could end up
+    // recorded twice and the second copy was indistinguishable from the first.
     const history = new ProjectHistoryService();
     visit(history, "a", "b", "c", "d", "e");
 
@@ -85,180 +84,130 @@ describe("ProjectHistoryService", () => {
     const rand = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
 
     for (let move = 0; move < 200; move++) {
-      const roll = rand();
-      if (roll < 0.45) {
-        const target = history.peek("back", always);
-        if (target) history.record(target);
-      } else if (roll < 0.9) {
-        const target = history.peek("forward", always);
-        if (target) history.record(target);
+      if (rand() < 0.7) {
+        pressToggle(history);
       } else {
-        history.record(`jump-${Math.floor(rand() * 4)}`);
+        switchTo(history, `jump-${Math.floor(rand() * 4)}`);
       }
 
-      const { entries, cursor } = history.snapshot();
-      // The cursor always addresses a real entry.
-      expect(cursor).toBeGreaterThanOrEqual(0);
-      expect(cursor).toBeLessThan(entries.length);
-      // No entry is ever its own neighbour, or a step would go nowhere visible.
-      for (let index = 1; index < entries.length; index++) {
-        expect(entries[index]).not.toBe(entries[index - 1]);
-      }
+      const { entries } = history.snapshot();
+      // A project recorded twice would make "the last project" ambiguous.
+      expect(new Set(entries).size).toBe(entries.length);
+      // Whatever we last switched to is where the window is.
+      expect(entries[0]).toBe(history.current());
+      // Uniqueness and a non-self target hold for any fixed offset into the
+      // list, so they cannot tell the right target from a deeper one. Pin the
+      // target to the entry immediately behind the head — the property two
+      // presses actually depend on.
+      expect(history.peekLast(always)).toBe(entries[1]);
     }
   });
 
-  it("goes nowhere when the ring holds only the current project", () => {
+  it("keeps its ordering and its toggle target at the size cap", () => {
+    // Trimming and promotion meet only once the list is full, and only there
+    // can promoting a deep entry interact with dropping the tail.
+    const history = new ProjectHistoryService();
+    for (let i = 0; i < 60; i++) history.record(`p${i}`);
+    const full = history.snapshot().entries;
+    const deep = full.at(-1)!;
+
+    history.record(deep);
+    const after = history.snapshot().entries;
+
+    expect(after.length).toBe(full.length);
+    expect(new Set(after)).toEqual(new Set(full));
+    expect(after[0]).toBe(deep);
+    // Promoting from the tail must leave the previous head one step behind, or
+    // the toggle would skip it.
+    expect(history.peekLast(always)).toBe(full[0]);
+  });
+
+  it("keeps a window's history separate from another window's, and drops it on close", () => {
+    const first = getProjectHistory(1);
+    expect(getProjectHistory(1)).toBe(first);
+
+    visit(first, "a", "b");
+    const second = getProjectHistory(2);
+    visit(second, "c", "d");
+
+    // A shared instance would let one window's toggle jump into a project the
+    // other window visited.
+    expect(second).not.toBe(first);
+    expect(first.peekLast(always)).toBe("a");
+    expect(second.peekLast(always)).toBe("c");
+
+    disposeProjectHistory(1);
+
+    // Window ids are recycled; inheriting the previous occupant's history would
+    // point Back at projects this window never visited.
+    expect(getProjectHistory(1).snapshot().entries).toEqual([]);
+    expect(getProjectHistory(2).snapshot().entries).toEqual(second.snapshot().entries);
+
+    disposeProjectHistory(2);
+  });
+
+  it("has nowhere to go from a window that has only seen one project", () => {
     const history = new ProjectHistoryService();
     visit(history, "a");
 
-    // Wrapping onto yourself is not a step; the caller treats it as a no-op.
-    expect(history.peek("back", always)).toBe("a");
+    expect(history.peekLast(always)).toBeNull();
     expect(history.current()).toBe("a");
-  });
-
-  it("offers forward to the entry ahead of the cursor", () => {
-    const history = new ProjectHistoryService();
-    visit(history, "a", "b", "c");
-    history.record("b");
-
-    expect(history.peek("forward", always)).toBe("c");
-  });
-
-  it("moves the cursor rather than growing when a step lands on a neighbour", () => {
-    const history = new ProjectHistoryService();
-    visit(history, "a", "b", "c");
-    history.record("b");
-    history.record("a");
-
-    // Three visits, three entries — walking back must not append.
-    expect(history.snapshot()).toEqual({ entries: ["a", "b", "c"], cursor: 0 });
-  });
-
-  it("inserts a new project beside the cursor, not at the end", () => {
-    // Back must keep meaning "where I came from". Appending to the tail would
-    // point it at whatever happened to be visited last instead.
-    const history = new ProjectHistoryService();
-    visit(history, "a", "b", "c");
-    history.record("b");
-    history.record("d");
-
-    expect(history.snapshot()).toEqual({ entries: ["a", "b", "d", "c"], cursor: 2 });
-    expect(history.peek("back", always)).toBe("b");
-  });
-
-  it("never holds the same project twice", () => {
-    // Duplicates are what make a cursor ambiguous: the same id at both ends of
-    // the ring cannot be told apart, so a step lands on the wrong occurrence or
-    // loops onto itself and strands the shortcut.
-    const history = new ProjectHistoryService();
-    visit(history, "a", "b", "c", "d");
-    history.record("c");
-    history.record("a");
-    history.record("d");
-
-    const { entries } = history.snapshot();
-    expect(new Set(entries).size).toBe(entries.length);
-  });
-
-  it("keeps stepping after revisiting a project already in the ring", () => {
-    const history = new ProjectHistoryService();
-    visit(history, "a", "b", "c", "d");
-    history.record("c");
-    // An explicit jump back to the far end used to append a second copy, after
-    // which stepping onward landed on that copy and went nowhere.
-    history.record("a");
-
-    const forward = history.peek("forward", always);
-    expect(forward).not.toBe("a");
-    expect(forward).not.toBeNull();
-    history.record(forward!);
-    expect(history.current()).toBe(forward);
   });
 
   it("ignores a redundant switch to the project already showing", () => {
     const history = new ProjectHistoryService();
     visit(history, "a", "b");
+    const before = history.snapshot();
+
     history.record("b");
 
-    expect(history.snapshot()).toEqual({ entries: ["a", "b"], cursor: 1 });
+    expect(history.snapshot()).toEqual(before);
   });
 
-  it("does not mistake a repeat visit for a step onto an identical neighbour", () => {
-    // a → b → a leaves the cursor on the first entry. Recording "a" again is a
-    // no-op, not a step backwards off the start of the stack.
+  it("promotes a revisited project instead of recording it twice", () => {
     const history = new ProjectHistoryService();
-    visit(history, "a", "b", "a");
-    expect(history.snapshot().cursor).toBe(0);
+    visit(history, "a", "b", "c", "d");
+    history.record("b");
 
-    history.record("a");
-    expect(history.snapshot()).toEqual({ entries: ["a", "b"], cursor: 0 });
+    expect(history.snapshot().entries).toEqual(["b", "d", "c", "a"]);
   });
 
-  it("toggles cleanly between two projects without growing", () => {
-    const history = new ProjectHistoryService();
-    visit(history, "a", "b", "a", "b", "a", "b");
-
-    expect(history.snapshot()).toEqual({ entries: ["a", "b"], cursor: 1 });
-  });
-
-  it("completes the round trip a real navigation makes", () => {
-    // peek → switch → record is how every step actually runs. Testing peek in
-    // isolation misses the case where the target peek chose is one the cursor
-    // cannot reach, which would branch instead of stepping.
-    const history = new ProjectHistoryService();
-    visit(history, "a", "b", "c");
-
-    for (let step = 0; step < 2; step++) {
-      const target = history.peek("back", always);
-      expect(target).not.toBeNull();
-      history.record(target!);
-    }
-
-    expect(history.snapshot()).toEqual({ entries: ["a", "b", "c"], cursor: 0 });
-    expect(history.peek("forward", always)).toBe("b");
-  });
-
-  it("steps cleanly past a removed project instead of branching", () => {
+  it("demotes the toggle onto the next survivor when its target is removed", () => {
     const history = new ProjectHistoryService();
     visit(history, "a", "gone", "c");
-    const exists = (id: string) => id !== "gone";
 
-    const target = history.peek("back", exists);
-    expect(target).toBe("a");
-    history.record(target!);
-
-    // The removed entry is pruned, so "a" is genuinely adjacent by the time the
-    // switch lands. Skipping over it instead would leave the cursor stranded
-    // and forward unavailable.
-    expect(history.snapshot()).toEqual({ entries: ["a", "c"], cursor: 0 });
-    expect(history.peek("forward", exists)).toBe("c");
+    // Without pruning the toggle would resolve to a project that no longer
+    // exists, and the press would silently do nothing.
+    expect(history.peekLast((id) => id !== "gone")).toBe("a");
+    expect(history.snapshot().entries).toEqual(["c", "a"]);
   });
 
-  it("collapses duplicates a removal exposes", () => {
-    const history = new ProjectHistoryService();
-    visit(history, "a", "gone", "a", "b");
-
-    // Pruning "gone" would otherwise leave [a, a, b], where the neighbour of
-    // the first "a" is another "a" and stepping goes nowhere visible.
-    const target = history.peek("back", (id) => id !== "gone");
-
-    expect(history.snapshot().entries).toEqual(["a", "b"]);
-    expect(target).toBe("a");
-  });
-
-  it("keeps the cursor addressable when its own project is removed", () => {
+  it("survives the project at its head being removed", () => {
+    // Only reachable when the project the window is in is deleted under it.
+    // Which of the survivors it then offers is arbitrary — what matters is that
+    // it offers a real one rather than the deleted id or nothing at all.
     const history = new ProjectHistoryService();
     visit(history, "a", "b", "gone");
+    const exists = (id: string) => id !== "gone";
 
-    history.peek("back", (id) => id !== "gone");
-    const snapshot = history.snapshot();
+    const target = history.peekLast(exists);
 
-    expect(snapshot.entries).toEqual(["a", "b"]);
-    expect(snapshot.cursor).toBeGreaterThanOrEqual(0);
-    expect(snapshot.cursor).toBeLessThan(snapshot.entries.length);
+    expect(target).not.toBeNull();
+    expect(exists(target!)).toBe(true);
+    // Which survivor it lands on is arbitrary, but pruning must not reshuffle:
+    // recency order is the contract every other caller reads.
+    expect(history.snapshot().entries).toEqual(["b", "a"]);
   });
 
-  it("reports the project the cursor is on", () => {
+  it("reports nowhere to go when only the current project survives", () => {
+    const history = new ProjectHistoryService();
+    visit(history, "gone", "c");
+
+    expect(history.peekLast((id) => id !== "gone")).toBeNull();
+    expect(history.current()).toBe("c");
+  });
+
+  it("reports the project the window is in", () => {
     const history = new ProjectHistoryService();
     expect(history.current()).toBeNull();
 
@@ -269,55 +218,35 @@ describe("ProjectHistoryService", () => {
     expect(history.current()).toBe("a");
   });
 
-  it("skips entries whose project has been removed", () => {
-    const history = new ProjectHistoryService();
-    visit(history, "a", "gone", "c");
-
-    const exists = (id: string) => id !== "gone";
-    // A removed project must not become a dead end that eats every press.
-    expect(history.peek("back", exists)).toBe("a");
-  });
-
-  it("reports nowhere to go when only the current project survives", () => {
-    const history = new ProjectHistoryService();
-    visit(history, "gone", "c");
-
-    // Pruning leaves a single entry, so the ring wraps onto the project already
-    // showing — the caller reads that as nothing to do.
-    expect(history.peek("back", (id) => id !== "gone")).toBe("c");
-  });
-
-  it("stops growing while keeping the newest entries and a valid cursor", () => {
+  it("stops growing while keeping the newest visits", () => {
     const shortRun = new ProjectHistoryService();
     for (let i = 0; i < 200; i++) shortRun.record(`p${i}`);
     const bounded = shortRun.snapshot().entries.length;
 
     const history = new ProjectHistoryService();
     for (let i = 0; i < 400; i++) history.record(`p${i}`);
-    const snapshot = history.snapshot();
+    const { entries } = history.snapshot();
 
-    // Twice the visits, same length — the stack is bounded, not proportional.
-    expect(snapshot.entries.length).toBe(bounded);
+    // Twice the visits, same length — bounded, not proportional.
+    expect(entries.length).toBe(bounded);
     expect(bounded).toBeLessThan(200);
-    // Trimming happens at the old end, so the newest visit survives and the
-    // cursor still addresses it.
-    expect(snapshot.entries.at(-1)).toBe("p399");
-    expect(snapshot.cursor).toBe(snapshot.entries.length - 1);
-    expect(snapshot.entries).not.toContain("p0");
+    // Trimming happens at the far end, so the toggle still works after it.
+    expect(entries[0]).toBe("p399");
+    expect(entries[1]).toBe("p398");
+    expect(entries).not.toContain("p0");
   });
 
   it("ignores an empty project id", () => {
     const history = new ProjectHistoryService();
     history.record("");
 
-    expect(history.snapshot()).toEqual({ entries: [], cursor: -1 });
+    expect(history.snapshot().entries).toEqual([]);
   });
 
   it("has nowhere to go from an empty history", () => {
     const history = new ProjectHistoryService();
 
-    expect(history.peek("back", always)).toBeNull();
-    expect(history.peek("forward", always)).toBeNull();
+    expect(history.peekLast(always)).toBeNull();
     expect(history.current()).toBeNull();
   });
 });

@@ -454,12 +454,13 @@ async function activateProjectView(
   // every real switch takes: `ProjectSwitchService` only runs on the legacy
   // non-PVM fallback, so recording there alone left history empty in normal
   // use. `windowId` comes from the captured operation, so a second window
-  // records into its own ring rather than the first window's.
+  // records into its own list rather than the first window's.
   //
-  // The outgoing project is recorded first. Nothing records the project a
-  // window opens on — that load never reaches this path — so without this the
-  // ring would start at the first destination and the most common flow of all,
-  // open on A, switch to B, press Back, would find nowhere to go.
+  // The outgoing project is recorded first, so it lands directly behind the
+  // incoming one and becomes the toggle target. Nothing else records the
+  // project a window opens on — that load never reaches this path — so without
+  // it the most common flow of all, open on A and switch to B, would leave the
+  // toggle with nowhere to go.
   if (windowId !== undefined) {
     const history = getProjectHistory(windowId);
     if (outgoingProjectId) history.record(outgoingProjectId);

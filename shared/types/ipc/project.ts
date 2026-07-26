@@ -147,12 +147,9 @@ export interface ProjectStatusEntry {
   oldestWaitingSince?: number;
 }
 
-/** Direction of a step around the project-history ring. */
-export type ProjectHistoryDirection = "back" | "forward";
-
 /**
- * Where a step around the project-history ring would land. Main resolves it;
- * the renderer performs the switch through its ordinary path.
+ * The project this window was in before the current one. Main resolves it; the
+ * renderer performs the switch through its ordinary path.
  */
 export interface ProjectHistoryTarget {
   projectId: string;

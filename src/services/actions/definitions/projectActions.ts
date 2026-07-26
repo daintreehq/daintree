@@ -7,7 +7,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { notify, EVENT_KIND_TO_SETTING_KEY, EVENT_KIND_LABEL } from "@/lib/notify";
 import type { NotificationEventKind } from "@/lib/notify";
-import { switchProjectByHistory } from "@/lib/projectHistoryNav";
+import { switchToLastProject } from "@/lib/projectHistoryNav";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export function registerProjectActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
@@ -25,26 +25,18 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     },
   }));
 
+  // Id kept from when this was one half of a cycle pair; renaming it would
+  // orphan any binding a user has already customised.
   actions.set("project.mruCycleOlder", () => ({
     id: "project.mruCycleOlder",
-    title: "Go Back to Previous Project",
-    description: "Cycle back through the projects this window has visited",
+    title: "Switch to Last Project",
+    description:
+      "Switch to the project this window was in before the current one. Running it again returns to where you started.",
     category: "project",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: () => switchProjectByHistory("back"),
-  }));
-
-  actions.set("project.mruCycleNewer", () => ({
-    id: "project.mruCycleNewer",
-    title: "Go Forward to Next Project",
-    description: "Cycle forward through the projects this window has visited",
-    category: "project",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: () => switchProjectByHistory("forward"),
+    run: () => switchToLastProject(),
   }));
 
   actions.set("project.add", () => ({

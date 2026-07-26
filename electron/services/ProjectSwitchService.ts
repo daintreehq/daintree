@@ -90,8 +90,12 @@ export class ProjectSwitchService {
 
       // The legacy non-PVM fallback still has to feed history; the normal path
       // records from `activateProjectView`, which this branch never reaches.
+      // Outgoing first so it sits directly behind the incoming project and
+      // becomes the toggle target, matching the PVM path.
       if (this.windowId !== null) {
-        getProjectHistory(this.windowId).record(projectId);
+        const history = getProjectHistory(this.windowId);
+        if (previousProjectId) history.record(previousProjectId);
+        history.record(projectId);
       }
 
       const updatedProject = projectStore.getProjectById(projectId);

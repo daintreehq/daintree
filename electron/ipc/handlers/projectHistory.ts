@@ -1,23 +1,10 @@
 import { projectStore } from "../../services/ProjectStore.js";
 import { getProjectHistory } from "../../services/ProjectHistoryService.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
-import type {
-  ProjectHistoryDirection,
-  ProjectHistoryTarget,
-} from "../../../shared/types/ipc/project.js";
-import { defineIpcNamespace, op, ValidationError } from "../define.js";
+import type { ProjectHistoryTarget } from "../../../shared/types/ipc/project.js";
+import { defineIpcNamespace, op } from "../define.js";
 import { resolveScopedProjectForIpcContext } from "../projectContext.js";
 import { PROJECT_HISTORY_METHOD_CHANNELS } from "./projectHistory.preload.js";
-
-/**
- * Reject rather than coerce. TypeScript does not police what a renderer puts on
- * the wire, and quietly mapping a malformed value onto "back" would turn a bug
- * into a silent, state-changing navigation.
- */
-function parseDirection(value: unknown): ProjectHistoryDirection {
-  if (value === "back" || value === "forward") return value;
-  throw new ValidationError(`Invalid history direction: ${String(value)}`);
-}
 
 const projectExists = (projectId: string): boolean =>
   Boolean(projectStore.getProjectById(projectId));
@@ -39,7 +26,7 @@ export function createProjectHistoryNamespace(deps: HandlerDependencies) {
     projectExists(projectId) ? { projectId } : null;
 
   /**
-   * Resolve a step without performing it.
+   * Resolve the toggle target without performing the switch.
    *
    * The switch is left to the renderer, which routes it through the same
    * `project:switch` IPC the palette uses. That path owns the view swap, the
@@ -49,10 +36,7 @@ export function createProjectHistoryNamespace(deps: HandlerDependencies) {
    * resolved to whichever window happened to own the globally-registered
    * handler dependencies rather than the one that pressed the key.
    */
-  const resolveStep = (
-    ctx: IpcContext,
-    direction: ProjectHistoryDirection
-  ): ProjectHistoryTarget | null => {
+  const resolveLastProject = (ctx: IpcContext): ProjectHistoryTarget | null => {
     const windowId = ctx.senderWindow?.id ?? deps.mainWindow?.id;
     if (windowId === undefined) return null;
 
@@ -60,18 +44,19 @@ export function createProjectHistoryNamespace(deps: HandlerDependencies) {
     const currentProjectId = resolveCurrentProjectId(ctx);
 
     // Seed from where the window actually is. A window that hasn't switched
-    // since launch has an empty stack, and without this Back would do nothing
-    // until the user had already switched twice. Idempotent once seeded.
+    // since launch has an empty list, and without this the head would name
+    // whatever another route recorded rather than the project on screen.
+    // Idempotent once seeded.
     if (currentProjectId) history.record(currentProjectId);
 
-    // From a scratch there is no current project on the stack, so Back means
-    // "return to the project I left" — the cursor itself, not one behind it.
-    if (!currentProjectId && direction === "back") {
-      const target = history.current();
-      return target && projectExists(target) ? describe(target) : null;
-    }
-
-    const targetId = history.peek(direction, projectExists);
+    // From a scratch there is no current project to occupy the head, so the
+    // project to return to is the head itself, not the entry behind it. Pruned
+    // either way: an unpruned head deleted since the last switch would answer
+    // every press with a project that no longer exists, stranding the toggle on
+    // a survivor sitting right behind it.
+    const targetId = currentProjectId
+      ? history.peekLast(projectExists)
+      : history.current(projectExists);
     if (!targetId) return null;
 
     return describe(targetId);
@@ -80,12 +65,9 @@ export function createProjectHistoryNamespace(deps: HandlerDependencies) {
   return defineIpcNamespace({
     name: "projectHistory",
     ops: {
-      peek: op(
-        PROJECT_HISTORY_METHOD_CHANNELS.peek,
-        async (ctx, direction: ProjectHistoryDirection) =>
-          resolveStep(ctx, parseDirection(direction)),
-        { withContext: true }
-      ),
+      peek: op(PROJECT_HISTORY_METHOD_CHANNELS.peek, async (ctx) => resolveLastProject(ctx), {
+        withContext: true,
+      }),
     },
   });
 }

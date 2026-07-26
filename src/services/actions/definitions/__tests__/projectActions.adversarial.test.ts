@@ -60,9 +60,9 @@ beforeEach(() => {
 
 describe("projectActions adversarial", () => {
   describe("history navigation", () => {
-    // Destination selection belongs to the main-process history service; these
-    // actions only have to hand it the right direction and stay dispatchable
-    // from the command palette.
+    // Destination selection belongs to the main-process history service; this
+    // action only has to reach it and stay dispatchable from the command
+    // palette.
     function mockHistory() {
       const peek = vi.fn().mockResolvedValue(null);
       // Node environment: no jsdom window, so the bridge is stubbed on globalThis.
@@ -72,22 +72,13 @@ describe("projectActions adversarial", () => {
       return peek;
     }
 
-    it("project.mruCycleOlder steps back", async () => {
+    it("project.mruCycleOlder asks main for the last project", async () => {
       const peek = mockHistory();
       const { run } = setupActions();
 
       await run("project.mruCycleOlder");
 
-      expect(peek).toHaveBeenCalledWith("back");
-    });
-
-    it("project.mruCycleNewer steps forward", async () => {
-      const peek = mockHistory();
-      const { run } = setupActions();
-
-      await run("project.mruCycleNewer");
-
-      expect(peek).toHaveBeenCalledWith("forward");
+      expect(peek).toHaveBeenCalledTimes(1);
     });
 
     it("does not throw when there is nowhere to go", async () => {

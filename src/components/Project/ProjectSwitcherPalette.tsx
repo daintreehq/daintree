@@ -236,7 +236,14 @@ function ProjectListItem({
       aria-selected={isSelected}
       className={cn(
         "group relative w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent",
-        "aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2 aria-selected:before:w-[2px] aria-selected:before:rounded-r aria-selected:before:bg-daintree-accent aria-selected:before:content-['']",
+        // The accent bar is always laid out and only its opacity changes, so it
+        // rides the same transition as the row background. Toggling `content`
+        // instead meant the pseudo-element popped into existence with nothing to
+        // transition, and the bar arrived at the new row while the highlight was
+        // still fading in behind it. Duration and easing are deliberately left
+        // to match `transition-colors` above — a tier of its own would only move
+        // the desync rather than remove it.
+        "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-[''] before:opacity-0 before:transition-opacity aria-selected:before:opacity-100",
         project.isActive
           ? cn("text-daintree-text", isSelected && "bg-overlay-raised border-overlay")
           : project.isMissing

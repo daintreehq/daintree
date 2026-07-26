@@ -33,6 +33,9 @@ vi.mock("../../../../services/ScratchStore.js", () => ({
 
 const projectStoreMock = vi.hoisted(() => ({
   clearCurrentProject: vi.fn(),
+  // Read just before the pointer is cleared, to record the departing project in
+  // this window's history so `Cmd+Alt+=` can leave the scratch again.
+  getCurrentProjectId: vi.fn<() => string | null>(() => null),
 }));
 
 vi.mock("../../../../services/ProjectStore.js", () => ({
@@ -60,6 +63,10 @@ vi.mock("../../../utils.js", async (importOriginal) => {
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../../channels.js";
 import { registerScratchHandlers } from "../index.js";
+import {
+  getProjectHistory,
+  disposeProjectHistory,
+} from "../../../../services/ProjectHistoryService.js";
 import type { HandlerDependencies } from "../../../types.js";
 
 function getHandler(channel: string) {
@@ -103,6 +110,21 @@ describe("scratch:switch refreshes the File-menu project gates", () => {
     expect(refreshProjectMenuStateMock.mock.invocationCallOrder[0]).toBeGreaterThan(
       projectStoreMock.clearCurrentProject.mock.invocationCallOrder[0]
     );
+  });
+
+  it("records the departing project so the shortcut can leave the scratch again", async () => {
+    projectStoreMock.getCurrentProjectId.mockReturnValue("project-a");
+    const deps = { mainWindow: { id: 77 } } as unknown as HandlerDependencies;
+    disposeProjectHistory(77);
+    registerScratchHandlers(deps);
+
+    await getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, "scratch-1");
+
+    // A scratch can never be a history entry, so this is the only point that
+    // can capture where the window came from. Without it, entering a scratch as
+    // the first move of a session leaves `Cmd+Alt+=` with nowhere to go.
+    expect(getProjectHistory(77).snapshot().entries).toEqual(["project-a"]);
+    disposeProjectHistory(77);
   });
 
   it("does not refresh when the scratch does not exist", async () => {

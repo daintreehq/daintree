@@ -168,8 +168,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
 | Open project switcher | `⌘+⌥+P` | `Ctrl+Alt+P` |
-| Go back to previous project | `⌘+⌥+=` | `Ctrl+Alt+=` |
-| Go forward to next project | `⌘+⇧+⌥+=` | `Ctrl+Shift+Alt+=` |
+| Switch to last project | `⌘+⌥+=` | `Ctrl+Alt+=` |
 
 ## Git
 
