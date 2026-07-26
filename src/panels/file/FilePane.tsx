@@ -696,8 +696,7 @@ export function FilePane({
   // Video, audio and PDF are deliberately absent: their reload key only moves on
   // an explicit load, so a silent pass here would be inert for them anyway, and
   // widening it would reset playback or a reader's page on an unrelated write.
-  const reloadsSilently =
-    loadState === "loaded" || loadState === "image" || loadState === "svg";
+  const reloadsSilently = loadState === "loaded" || loadState === "image" || loadState === "svg";
 
   // Still worth re-reading on focus regain: a write that landed while no watcher
   // covered the file (opened outside every known worktree) has no tick at all.

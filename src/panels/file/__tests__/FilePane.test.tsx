@@ -1644,11 +1644,7 @@ describe("FilePane live disk refresh (#11451)", () => {
   const OUTER_ID = "wt-outer";
   const INNER_ID = "wt-inner";
 
-  function seedWorktree(
-    id: string,
-    path: string,
-    ticks: { git?: number; fs?: number } = {}
-  ): void {
+  function seedWorktree(id: string, path: string, ticks: { git?: number; fs?: number } = {}): void {
     const seeded: WorktreeLike = {
       id,
       path,
