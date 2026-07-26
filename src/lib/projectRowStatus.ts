@@ -73,7 +73,12 @@ export function getProjectRowStatus(
     const needingInput = project.waitingAgentCount - blocked;
 
     const parts: string[] = [];
-    if (needingInput > 0) parts.push(pluralAgents(needingInput, "Needs input", "need input"));
+    // Both halves carry their count. Eliding it from one of them produced lines
+    // like "Needs input · 1 blocked", where the same number is spelled out on
+    // one side and implied on the other.
+    if (needingInput > 0) {
+      parts.push(needingInput === 1 ? "1 needs input" : `${needingInput} need input`);
+    }
     if (blocked > 0) parts.push(`${blocked} blocked`);
     // `oldestWaitingSince` is the earliest transition across ALL waits, blocked
     // or not, so it can only ever be labelled as the oldest wait. Attaching it

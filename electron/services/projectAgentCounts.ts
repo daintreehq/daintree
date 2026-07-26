@@ -1,3 +1,5 @@
+import type { AgentState, WaitingReason } from "../../shared/types/agent.js";
+import type { PanelKind } from "../../shared/types/panel.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 
 /** Per-project agent tallies derived from the live terminal list. */
@@ -16,15 +18,22 @@ export interface ProjectAgentCounts {
   helpTerminals: number;
 }
 
-/** The subset of a terminal record these tallies read. */
+/**
+ * The subset of a terminal record these tallies read.
+ *
+ * The state fields keep their real unions rather than widening to `string`: the
+ * blocked-vs-waiting split turns entirely on `waitingReason === "error"`, and a
+ * widened field would let that comparison quietly become dead code the day the
+ * union is renamed.
+ */
 export interface CountableTerminal {
   id?: string;
   projectId?: string;
-  kind?: string;
+  kind?: PanelKind;
   isTrashed?: boolean;
   hasPty?: boolean;
-  agentState?: string;
-  waitingReason?: string;
+  agentState?: AgentState;
+  waitingReason?: WaitingReason;
   lastStateChange?: number;
   detectedAgentId?: string;
   launchAgentId?: string;

@@ -538,6 +538,27 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     []
   );
 
+  // Fold projects that appeared after the freeze into it, at the position the
+  // renderer already gives them (end of their live band). Without this they are
+  // the one part of the list still re-banding on every stats push, so the freeze
+  // the palette advertises would hold for the session's original rows only.
+  useEffect(() => {
+    if (!frozenLayout) return;
+    const arrivals = liveBrowseOrder.filter((project) => !frozenLayout.sections.has(project.id));
+    if (arrivals.length === 0) return;
+    setFrozenLayout((previous) => {
+      if (!previous) return previous;
+      const order = [...previous.order];
+      const sections = new Map(previous.sections);
+      for (const project of arrivals) {
+        if (sections.has(project.id)) continue;
+        order.push(project.id);
+        sections.set(project.id, project.section);
+      }
+      return { order, sections };
+    });
+  }, [liveBrowseOrder, frozenLayout]);
+
   const browseOrdered = useMemo<SearchableProject[]>(() => {
     const frozen = frozenLayout;
     if (!frozen) return liveBrowseOrder;
@@ -697,7 +718,13 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const selectProject = useCallback(
     async (project: SearchableProject) => {
-      if (project.isActive) return;
+      // Picking the project already on screen is a "never mind", not a dead
+      // end: there is nothing to switch to, but leaving the palette open with
+      // no feedback reads as a swallowed keypress. Mirrors `selectScratch`.
+      if (project.isActive) {
+        close();
+        return;
+      }
 
       close();
 

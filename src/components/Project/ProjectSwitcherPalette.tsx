@@ -245,7 +245,10 @@ function ProjectListItem({
         // the desync rather than remove it.
         "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-[''] before:opacity-0 before:transition-opacity aria-selected:before:opacity-100",
         project.isActive
-          ? cn("text-daintree-text", isSelected && "bg-overlay-raised border-overlay")
+          ? cn(
+              "text-daintree-text cursor-pointer",
+              isSelected && "bg-overlay-raised border-overlay"
+            )
           : project.isMissing
             ? cn(
                 "text-daintree-text/50 cursor-pointer",
@@ -255,7 +258,10 @@ function ProjectListItem({
               ? "bg-overlay-raised border-overlay text-daintree-text cursor-pointer"
               : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text cursor-pointer"
       )}
-      onClick={() => !project.isActive && onSelect(project)}
+      // The current project is selectable too: picking where you already are is
+      // a "never mind", and the handler closes the palette rather than sitting
+      // there doing nothing.
+      onClick={() => onSelect(project)}
       onPointerEnter={onHoverProject ? (e) => onHoverProject(project.id, e.pointerType) : undefined}
       onPointerLeave={onHoverProjectEnd ? (e) => onHoverProjectEnd(e.pointerType) : undefined}
     >
@@ -299,7 +305,7 @@ function ProjectListItem({
             {status.text}
           </span>
           {status.pathHint && (
-            <span className="truncate text-[11px] leading-none text-daintree-text/35 shrink">
+            <span className="truncate text-[11px] leading-none text-daintree-text/50 shrink">
               {`· ${status.pathHint}`}
             </span>
           )}
@@ -408,6 +414,8 @@ interface ProjectListContentProps {
   query: string;
   onSelect: (project: SearchableProject) => void;
   listRef: React.RefObject<HTMLDivElement | null>;
+  /** Whether this surface offers "Add Project…" — decides what the empty state can name. */
+  canAddProject: boolean;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onFreeMemoryProject?: (projectId: string) => void;
@@ -426,6 +434,7 @@ function ProjectListContent({
   query,
   onSelect,
   listRef,
+  canAddProject,
   onStopProject,
   onCloseProject,
   onFreeMemoryProject,
@@ -501,11 +510,19 @@ function ProjectListContent({
       <div ref={listRef} id="project-list" role="listbox" aria-label="Projects">
         {results.length === 0 ? (
           <div className="p-2">
-            <div className="px-3 py-8 text-center text-daintree-text/50 text-sm">
+            <div
+              className="px-3 py-8 text-center text-daintree-text/50 text-sm"
+              data-testid="project-empty-state"
+            >
               {query.trim() ? (
                 <div>{`No projects match "${query}"`}</div>
+              ) : canAddProject ? (
+                // Names the button sitting directly below this list.
+                "Add a project to get started"
               ) : (
-                "Open a project to get started"
+                // The modal mounts without the add/clone callbacks, so naming
+                // them here would point at an action this surface can't run.
+                "Open a project from the File menu to get started"
               )}
             </div>
           </div>
@@ -513,11 +530,18 @@ function ProjectListContent({
           sections.map((section, sectionIdx) => {
             const isActiveSection = section.key === "current";
             const isLast = sectionIdx === sections.length - 1;
+            const headerId = `project-section-${section.key}`;
 
+            // Bands wrap options, so they can't be bare `div`s inside the
+            // listbox: a labelled band is a `group` named by its own visible
+            // header, and an unlabelled one flattens away so its rows stay
+            // owned by the listbox (an unnamed `group` is an ARIA violation).
             return (
-              <div key={section.key}>
+              <div key={section.key} role="presentation">
                 {sectionIdx > 0 && <div className="h-[3px] bg-tint/[0.08]" />}
                 <div
+                  role={section.label ? "group" : "presentation"}
+                  aria-labelledby={section.label ? headerId : undefined}
                   className={cn(
                     "px-2 py-1.5",
                     sectionIdx === 0 && "pt-2",
@@ -526,7 +550,10 @@ function ProjectListContent({
                   )}
                 >
                   {section.label && (
-                    <div className="px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none">
+                    <div
+                      id={headerId}
+                      className="px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none"
+                    >
                       {section.label}
                     </div>
                   )}
@@ -536,7 +563,9 @@ function ProjectListContent({
             );
           })
         ) : (
-          <div className="p-2">{results.map((project) => renderItem(project))}</div>
+          <div className="p-2" role="presentation">
+            {results.map((project) => renderItem(project))}
+          </div>
         )}
       </div>
     </>
@@ -1116,6 +1145,7 @@ function ProjectPaletteInner({
           query={query}
           onSelect={onSelect}
           listRef={listRef}
+          canAddProject={Boolean(onAddProject)}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
           onFreeMemoryProject={onFreeMemoryProject}

@@ -69,7 +69,9 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
-    expect(status.text).toBe("Needs input · 1 blocked · oldest 42m");
+    // Both halves count the agents they describe — one of them spelling the
+    // number out while the other implied it read as two different measures.
+    expect(status.text).toBe("1 needs input · 1 blocked · oldest 42m");
   });
 
   it("clamps a blocked count that exceeds the waits it is drawn from", () => {
@@ -85,7 +87,7 @@ describe("getProjectRowStatus", () => {
   it("ranks a wait above work in progress", () => {
     const status = getProjectRowStatus(project({ waitingAgentCount: 1, activeAgentCount: 4 }), NOW);
 
-    expect(status.text).toBe("Needs input");
+    expect(status.text).toBe("1 needs input");
     expect(status.tone).toBe("waiting");
   });
 
@@ -104,7 +106,7 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
-    expect(status.text).toBe("Needs input · 7m");
+    expect(status.text).toBe("1 needs input · 7m");
   });
 
   it("omits the age when no wait timestamp arrived", () => {

@@ -31,6 +31,7 @@ import { registerProjectHistoryHandlers } from "../projectHistory.js";
 import {
   getProjectHistory,
   disposeProjectHistory,
+  resetProjectHistory,
 } from "../../../services/ProjectHistoryService.js";
 import type { HandlerDependencies } from "../../types.js";
 
@@ -66,7 +67,9 @@ describe("projectHistory IPC", () => {
     ipcHandlers.clear();
     vi.clearAllMocks();
     existingProjectIds.clear();
-    disposeProjectHistory(WINDOW_ID);
+    // Reset, not dispose: disposing tombstones the id, and the tombstone is
+    // exactly what stops a closed window's history from recording again.
+    resetProjectHistory(WINDOW_ID);
     projectStoreMock.getProjectById.mockImplementation((id: string) =>
       existingProjectIds.has(id) ? { id } : undefined
     );

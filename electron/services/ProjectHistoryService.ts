@@ -36,6 +36,7 @@ const MAX_ENTRIES = 50;
  */
 export class ProjectHistoryService {
   private entries: string[] = [];
+  private disposed = false;
 
   /**
    * Promote a project to the head of the list.
@@ -46,7 +47,7 @@ export class ProjectHistoryService {
    * currently is, without either needing to know what the other already did.
    */
   record(projectId: string): void {
-    if (!projectId) return;
+    if (this.disposed || !projectId) return;
     if (this.entries[0] === projectId) return;
 
     const existing = this.entries.indexOf(projectId);
@@ -87,6 +88,15 @@ export class ProjectHistoryService {
     this.entries = this.entries.filter((projectId) => exists(projectId));
   }
 
+  /**
+   * Retire the list for good. Records that arrive afterwards are dropped rather
+   * than rebuilding a history for a window that no longer exists.
+   */
+  dispose(): void {
+    this.disposed = true;
+    this.entries.length = 0;
+  }
+
   /** Test/diagnostic view of the list. */
   snapshot(): { entries: string[] } {
     return { entries: [...this.entries] };
@@ -95,8 +105,25 @@ export class ProjectHistoryService {
 
 const historyByWindow = new Map<number, ProjectHistoryService>();
 
+/**
+ * Ids of windows that have been unregistered.
+ *
+ * Every caller records *after* awaiting the view swap, so a window closed
+ * mid-switch is already unregistered by the time its own switch records. An
+ * unguarded lookup would then create a second entry that nothing disposes
+ * again — a permanent one, and one that hands the next window to be given this
+ * id a history it never visited. Cleared by {@link resetProjectHistory} when a
+ * live window claims the id, which is the only way back to a recording history.
+ */
+const disposedWindowIds = new Set<number>();
+
+/** Handed to callers that arrive after the window is gone. Records nothing. */
+const inertHistory = new ProjectHistoryService();
+inertHistory.dispose();
+
 /** Per-window history, created on first use. */
 export function getProjectHistory(windowId: number): ProjectHistoryService {
+  if (disposedWindowIds.has(windowId)) return inertHistory;
   let history = historyByWindow.get(windowId);
   if (!history) {
     history = new ProjectHistoryService();
@@ -107,5 +134,16 @@ export function getProjectHistory(windowId: number): ProjectHistoryService {
 
 /** Drop a closed window's history so it can't outlive the window. */
 export function disposeProjectHistory(windowId: number): void {
+  historyByWindow.get(windowId)?.dispose();
   historyByWindow.delete(windowId);
+  disposedWindowIds.add(windowId);
+}
+
+/**
+ * Hand a window id back a live, empty history. Called when a window registers,
+ * so a recycled id records again from scratch instead of staying inert.
+ */
+export function resetProjectHistory(windowId: number): void {
+  historyByWindow.delete(windowId);
+  disposedWindowIds.delete(windowId);
 }

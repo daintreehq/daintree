@@ -1631,6 +1631,44 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.results[0]!.waitingAgentCount).toBe(0);
     });
 
+    it("holds a project that arrives after the freeze just as still", async () => {
+      projectState.projects = [base("first")];
+      projectState.currentProject = null;
+      projectStatsState.stats = {};
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["first"]));
+
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(1);
+      });
+
+      // A second window registers a project while this palette sits open.
+      act(() => {
+        projectState.projects = [base("first"), base("late")];
+        rerender();
+      });
+      await waitFor(() => {
+        expect(result.current.results.map((p) => p.id)).toEqual(["first", "late"]);
+      });
+      expect(result.current.results[1]!.section).toBe("recent");
+
+      // Its agents start working. A late arrival left outside the freeze would
+      // jump into the activity band above "first"; a frozen one stays put.
+      act(() => {
+        projectStatsState.stats = {
+          late: { activeAgentCount: 2, waitingAgentCount: 0, processCount: 2 },
+        };
+        rerender();
+      });
+
+      expect(result.current.results.map((p) => p.id)).toEqual(["first", "late"]);
+      expect(result.current.results[1]!.section).toBe("recent");
+      expect(result.current.results[1]!.activeAgentCount).toBe(2);
+    });
+
     it("re-bands on the next open", async () => {
       const projects = [base("waiting"), base("idle")];
       projectState.projects = projects;
@@ -1850,6 +1888,26 @@ describe("useProjectSwitcherPalette", () => {
         projectState.switchProject.mock.calls[0]?.[0] ??
         projectState.reopenProject.mock.calls[0]?.[0];
       expect(target).toBe(highlighted.id);
+    });
+
+    it("treats picking the current project as a dismissal, not a dead end", async () => {
+      const result = await openIn("modal");
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+
+      const current = result.current.results.find((project) => project.isActive)!;
+
+      act(() => {
+        void result.current.selectProject(current);
+      });
+
+      await waitFor(() => {
+        expect(result.current.isOpen).toBe(false);
+      });
+      // Nothing to switch to — but the palette must not just sit there.
+      expect(projectState.switchProject).not.toHaveBeenCalled();
+      expect(projectState.reopenProject).not.toHaveBeenCalled();
     });
 
     it("preselects the first row that isn't the active project, in either mode", async () => {

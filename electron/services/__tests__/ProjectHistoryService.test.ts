@@ -3,6 +3,7 @@ import {
   ProjectHistoryService,
   disposeProjectHistory,
   getProjectHistory,
+  resetProjectHistory,
 } from "../ProjectHistoryService.js";
 
 const always = () => true;
@@ -144,6 +145,32 @@ describe("ProjectHistoryService", () => {
     expect(getProjectHistory(2).snapshot().entries).toEqual(second.snapshot().entries);
 
     disposeProjectHistory(2);
+    resetProjectHistory(1);
+    resetProjectHistory(2);
+  });
+
+  it("does not rebuild a history for a window that has already closed", () => {
+    const history = getProjectHistory(3);
+    visit(history, "a", "b");
+
+    disposeProjectHistory(3);
+
+    // Every record site runs after the view swap it is reporting, so a window
+    // closed mid-switch records once more on its way out. That record must not
+    // put an entry back that nothing will ever dispose again.
+    getProjectHistory(3).record("c");
+
+    expect(getProjectHistory(3).snapshot().entries).toEqual([]);
+    expect(getProjectHistory(3).peekLast(always)).toBeNull();
+
+    // And the id stays inert until a live window claims it, so the next window
+    // handed this id can't inherit the dead one's destinations.
+    resetProjectHistory(3);
+    const recycled = getProjectHistory(3);
+    recycled.record("d");
+    expect(recycled.snapshot().entries).toEqual(["d"]);
+
+    resetProjectHistory(3);
   });
 
   it("has nowhere to go from a window that has only seen one project", () => {

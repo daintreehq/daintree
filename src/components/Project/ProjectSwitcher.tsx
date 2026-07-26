@@ -155,7 +155,6 @@ export function ProjectSwitcher() {
       return {
         color: "bg-state-waiting",
         pulse: false,
-        count: attentionProjectCount,
         label: `${attentionProjectCount} project${attentionProjectCount === 1 ? "" : "s"} waiting for input`,
       };
     }
@@ -164,7 +163,6 @@ export function ProjectSwitcher() {
       return {
         color: "bg-activity-active",
         pulse: true,
-        count: activeAgentCount,
         label: `${activeAgentCount} background agent${activeAgentCount === 1 ? "" : "s"} working`,
       };
     }

@@ -66,6 +66,7 @@ import { registerScratchHandlers } from "../index.js";
 import {
   getProjectHistory,
   disposeProjectHistory,
+  resetProjectHistory,
 } from "../../../../services/ProjectHistoryService.js";
 import type { HandlerDependencies } from "../../../types.js";
 
@@ -115,7 +116,9 @@ describe("scratch:switch refreshes the File-menu project gates", () => {
   it("records the departing project so the shortcut can leave the scratch again", async () => {
     projectStoreMock.getCurrentProjectId.mockReturnValue("project-a");
     const deps = { mainWindow: { id: 77 } } as unknown as HandlerDependencies;
-    disposeProjectHistory(77);
+    // Reset rather than dispose: a disposed id stays tombstoned and refuses to
+    // record, which is the guard against a closed window's late switch.
+    resetProjectHistory(77);
     registerScratchHandlers(deps);
 
     await getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, "scratch-1");

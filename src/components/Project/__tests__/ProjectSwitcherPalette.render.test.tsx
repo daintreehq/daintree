@@ -202,7 +202,7 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
     render(
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ waitingAgentCount: 1 })]} />
     );
-    expect(screen.getByText("Needs input")).toBeTruthy();
+    expect(screen.getByText("1 needs input")).toBeTruthy();
   });
 
   it("ages the oldest wait", () => {
@@ -429,9 +429,17 @@ describe("ProjectSwitcherPalette modal mode", () => {
     expect(screen.queryByText("Older")).toBeNull();
   });
 
-  it("names the next action when there are no projects at all", () => {
-    render(<ProjectSwitcherPalette {...modalProps} results={[]} />);
-    expect(screen.getByText("Open a project to get started")).toBeTruthy();
+  it("names an action the surface it is rendered in can actually perform", () => {
+    // The modal mounts without the add/clone callbacks, so an empty state that
+    // pointed at "Add Project…" would name a button that isn't there.
+    const { unmount } = render(<ProjectSwitcherPalette {...modalProps} results={[]} />);
+    const modalCopy = screen.getByTestId("project-empty-state").textContent;
+    expect(screen.queryByText("Add Project…")).toBeNull();
+    unmount();
+
+    render(<ProjectSwitcherPalette {...dropdownProps} results={[]} />);
+    expect(screen.getByText("Add Project…")).toBeTruthy();
+    expect(screen.getByTestId("project-empty-state").textContent).not.toBe(modalCopy);
   });
 
   it("does not show management action buttons in modal mode", () => {

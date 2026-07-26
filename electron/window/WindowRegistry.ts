@@ -6,7 +6,10 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { SurfaceViewManager } from "./SurfaceViewManager.js";
 import type { SurfacePortBroker } from "./SurfacePortBroker.js";
 import { DisposableStore } from "../utils/lifecycle.js";
-import { disposeProjectHistory } from "../services/ProjectHistoryService.js";
+import {
+  disposeProjectHistory,
+  resetProjectHistory,
+} from "../services/ProjectHistoryService.js";
 
 /**
  * Narrow structural type for the Electron `app` module — exposes only the
@@ -92,6 +95,11 @@ export class WindowRegistry {
 
     this.windows.set(windowId, ctx);
     this.webContentsIndex.set(webContentsId, windowId);
+
+    // Lift the tombstone `unregister` left on this id. Until it is lifted the
+    // id's history refuses to record, which is what keeps a switch completing
+    // after its window closed from resurrecting one.
+    resetProjectHistory(windowId);
 
     // Cold-start fallback: claim primary on first registration so getPrimary()
     // returns a sane value before any focus event fires.
