@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const notifyMock = vi.hoisted(() => vi.fn());
 const projectState = vi.hoisted(() => ({
@@ -18,9 +18,6 @@ import { switchToLastProject } from "../projectHistoryNav";
 const peekMock = vi.fn();
 
 beforeEach(() => {
-  // The in-flight guard is module state cleared by a timer, so each test has to
-  // start from a released guard and hand one back (see afterEach).
-  vi.useFakeTimers();
   notifyMock.mockClear();
   peekMock.mockReset();
   projectState.currentProject = { id: "current" };
@@ -34,13 +31,6 @@ beforeEach(() => {
   (globalThis as unknown as { window: unknown }).window = {
     electron: { projectHistory: { peek: peekMock } },
   };
-});
-
-afterEach(() => {
-  // Release the guard on the same fake clock that armed it; swapping back to
-  // real timers first would strand it and every later test would no-op.
-  vi.advanceTimersByTime(60_000);
-  vi.useRealTimers();
 });
 
 describe("switchToLastProject", () => {
@@ -60,24 +50,17 @@ describe("switchToLastProject", () => {
     expect(projectState.switchProject).toHaveBeenCalledWith("target");
   });
 
-  it("ignores a second press fired before the first switch commits", async () => {
+  it("keeps firing on rapid repeated presses", async () => {
     peekMock.mockResolvedValue({ projectId: "target" });
 
-    await switchToLastProject();
-    await switchToLastProject();
+    for (let press = 0; press < 4; press++) await switchToLastProject();
 
-    // `switchProject` is fire-and-forget — main swaps the view out from under
-    // this renderer, and only folds the switch into history once that lands. A
-    // second press would peek the unchanged history, be handed the same
-    // destination, and pay for a second view swap into the project already
-    // loading.
-    expect(projectState.switchProject).toHaveBeenCalledTimes(1);
-
-    // The guard is a failsafe, not a latch: a switch that dies before the swap
-    // must not leave the shortcut dead.
-    vi.advanceTimersByTime(60_000);
-    await switchToLastProject();
-    expect(projectState.switchProject).toHaveBeenCalledTimes(2);
+    // Ping-ponging is the point of the key, and it is faster than a view swap.
+    // An in-flight guard here rides in an LRU-cached view rather than dying
+    // with it, so it survives in the view the user toggles back into and eats
+    // the next press. Rate limiting belongs to the project store, which already
+    // supersedes transitions by request id.
+    expect(projectState.switchProject).toHaveBeenCalledTimes(4);
   });
 
   it("reopens rather than switches when the destination is backgrounded", async () => {
