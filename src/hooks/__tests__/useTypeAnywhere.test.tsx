@@ -58,7 +58,7 @@ vi.mock("@/components/Panel/panelFocusRegistry", () => ({
   focusPanelInput: (id: string) => focusPanelInput(id),
 }));
 
-import { useTypeAnywhere } from "../useTypeAnywhere";
+import { useTypeAnywhere, LOCATE_EPISODE_MS } from "../useTypeAnywhere";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useTypingLocatorStore } from "@/store/typingLocatorStore";
 
@@ -389,6 +389,146 @@ describe("useTypeAnywhere", () => {
 
       expect(pingTerminal).toHaveBeenCalledWith("sh");
       expect(useTypingLocatorStore.getState().label).toContain("zsh");
+    });
+
+    it("locates once per episode, not once per keystroke", () => {
+      setPanels([agentPanel("a1", { isVisible: false })]);
+      focusOffscreenTerminal("a1");
+      const host = document.querySelector<HTMLElement>('[data-panel-id="a1"]');
+      const scrollIntoView = vi.fn();
+      host!.scrollIntoView = scrollIntoView;
+      renderHook(() => useTypeAnywhere());
+      const revisionBefore = useTypingLocatorStore.getState().revision;
+
+      press("h");
+      press("e");
+      press("y");
+
+      // Each ping advances pingSeq, and the worktree card mounts a fresh receipt
+      // overlay per advance — three pings is three background flashes.
+      expect(pingTerminal).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(useTypingLocatorStore.getState().revision - revisionBefore).toBe(1);
+    });
+
+    it("starts a new episode once the pane has been seen on screen again", () => {
+      setPanels([agentPanel("a1", { isVisible: false })]);
+      focusOffscreenTerminal("a1");
+      renderHook(() => useTypeAnywhere());
+
+      press("h");
+      expect(pingTerminal).toHaveBeenCalledTimes(1);
+
+      // The reveal lands: a keystroke into the now-visible pane closes the
+      // episode without locating anything.
+      setPanels([agentPanel("a1", { isVisible: true })]);
+      press("e");
+      expect(pingTerminal).toHaveBeenCalledTimes(1);
+
+      // Scrolled away again — the user is typing blind once more.
+      setPanels([agentPanel("a1", { isVisible: false })]);
+      press("y");
+      expect(pingTerminal).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps suppressing while the locator is still on screen", () => {
+      vi.useFakeTimers();
+      try {
+        setPanels([agentPanel("a1", { isVisible: false })]);
+        focusOffscreenTerminal("a1");
+        renderHook(() => useTypeAnywhere());
+
+        press("h");
+        // Still inside the pill's life, so the pane is already named on screen.
+        vi.advanceTimersByTime(LOCATE_EPISODE_MS - 1);
+        press("e");
+
+        expect(pingTerminal).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("re-locates a still-hidden pane once the locator has cleared", () => {
+      vi.useFakeTimers();
+      try {
+        setPanels([agentPanel("a1", { isVisible: false })]);
+        focusOffscreenTerminal("a1");
+        renderHook(() => useTypeAnywhere());
+
+        press("h");
+        press("e");
+        expect(pingTerminal).toHaveBeenCalledTimes(1);
+
+        // The pill has been cleared, so nothing on screen still names the pane
+        // and a keystroke landing off-screen has earned a fresh locate.
+        vi.advanceTimersByTime(LOCATE_EPISODE_MS);
+        press("y");
+
+        expect(pingTerminal).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("starts a new episode after a backward wall-clock step", () => {
+      vi.useFakeTimers();
+      try {
+        setPanels([agentPanel("a1", { isVisible: false })]);
+        focusOffscreenTerminal("a1");
+        renderHook(() => useTypeAnywhere());
+
+        press("h");
+        // An NTP correction must not strand the pane un-locatable until real
+        // time catches back up to the episode stamp.
+        vi.setSystemTime(Date.now() - 60_000);
+        press("e");
+
+        expect(pingTerminal).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("re-locates a pane the rescue branch renamed the locator away from", () => {
+      setPanels([agentPanel("a1", { isVisible: false })]);
+      focusOffscreenTerminal("a1");
+      renderHook(() => useTypeAnywhere());
+
+      press("h");
+      expect(pingTerminal).toHaveBeenCalledTimes(1);
+
+      // Focus leaves the terminal entirely and the rescue repoints the pill at
+      // its own target, so nothing on screen still names a1.
+      document.body.innerHTML += `<div id="elsewhere" tabindex="0"></div>`;
+      document.getElementById("elsewhere")?.focus();
+      press("e");
+      expect(useTypingLocatorStore.getState().label).toContain("Claude");
+
+      focusOffscreenTerminal("a1");
+      press("y");
+
+      expect(pingTerminal).toHaveBeenCalledTimes(2);
+    });
+
+    it("locates each pane separately when focus moves between them", () => {
+      setPanels([
+        agentPanel("a1", { isVisible: false }),
+        agentPanel("a2", { isVisible: false, title: "Codex" }),
+      ]);
+      focusOffscreenTerminal("a1");
+      renderHook(() => useTypeAnywhere());
+
+      press("h");
+      focusOffscreenTerminal("a2");
+      press("i");
+      // Coming straight back is a new context: the pill now names a2.
+      focusOffscreenTerminal("a1");
+      press("o");
+
+      expect(pingTerminal).toHaveBeenNthCalledWith(1, "a1");
+      expect(pingTerminal).toHaveBeenNthCalledWith(2, "a2");
+      expect(pingTerminal).toHaveBeenNthCalledWith(3, "a1");
     });
   });
 

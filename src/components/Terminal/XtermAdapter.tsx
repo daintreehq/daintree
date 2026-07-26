@@ -32,6 +32,12 @@ export interface XtermAdapterProps {
   onReady?: () => void;
   onExit?: (exitCode: number) => void;
   onInput?: (data: string) => void;
+  /**
+   * Fired once per live `attach()`, after the service has been told the
+   * terminal is visible. Lets the owning pane re-arm anything that captured an
+   * attach generation before this async setup landed (#11445).
+   */
+  onAttached?: () => void;
   className?: string;
   getRefreshTier?: () => TerminalRefreshTier;
   cwd?: string;
@@ -51,6 +57,7 @@ export function XtermAdapter({
   onReady,
   onExit,
   onInput,
+  onAttached,
   className,
   getRefreshTier,
   cwd,
@@ -76,6 +83,7 @@ export function XtermAdapter({
   const onReadyRef = useRef(onReady);
   const onExitRef = useRef(onExit);
   const onInputRef = useRef(onInput);
+  const onAttachedRef = useRef(onAttached);
   const cwdRef = useRef(cwd);
 
   useLayoutEffect(() => {
@@ -84,8 +92,9 @@ export function XtermAdapter({
     onReadyRef.current = onReady;
     onExitRef.current = onExit;
     onInputRef.current = onInput;
+    onAttachedRef.current = onAttached;
     cwdRef.current = cwd;
-  }, [launchAgentId, detectedAgentId, onReady, onExit, onInput, cwd]);
+  }, [launchAgentId, detectedAgentId, onReady, onExit, onInput, onAttached, cwd]);
 
   const stableOnInput = useCallback((data: string) => {
     onInputRef.current?.(data);
@@ -286,6 +295,11 @@ export function XtermAdapter({
       // Force visibility immediately on mount - don't wait for IntersectionObserver.
       // This prevents data from being dropped during the brief window before the observer fires.
       terminalInstanceService.setVisible(terminalId, true);
+      // Announce the generation this attach produced. The pane's visibility
+      // observer captured one before this async setup resumed, and only the
+      // service flag was forced above — the store field it owns would otherwise
+      // stay frozen behind the stale capture (#11445).
+      onAttachedRef.current?.();
 
       if (!managed.keyHandlerInstalled) {
         const writeWordJump = (event: KeyboardEvent, sequence: string): boolean => {

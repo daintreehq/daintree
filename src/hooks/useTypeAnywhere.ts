@@ -9,6 +9,7 @@ import { useTypingLocatorStore } from "@/store/typingLocatorStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
+import { UI_PALETTE_EXIT_DURATION, UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import {
   findPanelIdForElement,
@@ -21,6 +22,16 @@ import {
 
 /** Best-effort focus retry budget — the draft is already safe by the time we try. */
 const FOCUS_ATTEMPT_FRAMES = 30;
+
+/**
+ * How long one locate episode suppresses repeats for the same pane. Matches the
+ * locator pill's full on-screen life (TypingLocator clears the label at dwell +
+ * exit), so an episode lasts exactly as long as the affordance naming the pane:
+ * while the user can still read where their typing is going there is nothing to
+ * re-announce, and once it is gone a keystroke still landing off-screen earns a
+ * fresh locate.
+ */
+export const LOCATE_EPISODE_MS = UI_TRANSIENT_HINT_DWELL_MS + UI_PALETTE_EXIT_DURATION;
 
 /**
  * Panel ids are opaque and may contain characters that are not selector-safe,
@@ -51,7 +62,8 @@ function isFocusInHybridInput(terminalId: string): boolean {
  *
  *  - **Locate.** A real terminal owns focus but its pane is scrolled out of the
  *    grid viewport. The destination is legitimate — the user just cannot see it.
- *    Scroll it back, pulse it, name it. The event is never touched.
+ *    Scroll it back, pulse it, name it — once per episode, not once per
+ *    keystroke. The event is never touched.
  *
  *  - **Rescue.** Nothing useful owns focus, so the keystroke is about to be
  *    eaten. Route it into the draft of the last agent the user typed to, focus
@@ -67,6 +79,7 @@ export function useTypeAnywhere(): void {
   // never churns; all state is read imperatively at event time anyway.
   const handlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
   const focusFrameRef = useRef<number | null>(null);
+  const locateEpisodeRef = useRef<{ panelId: string; at: number } | null>(null);
 
   useEffect(() => {
     handlerRef.current = (e: KeyboardEvent) => {
@@ -89,7 +102,32 @@ export function useTypeAnywhere(): void {
         // (TerminalPane), rooted at the grid scroll container. Its rootMargin
         // pre-warms a full row, so this only fires for panes that are
         // meaningfully off-screen — not near-misses.
-        if (panel === undefined || panel.isVisible !== false) return;
+        if (panel === undefined || panel.isVisible !== false) {
+          // The pane is on screen (or gone), so whatever episode was running has
+          // ended — the next time it goes off-screen deserves a fresh locate.
+          locateEpisodeRef.current = null;
+          return;
+        }
+
+        // Locating is one action per episode, not per keystroke. Without this
+        // the receipt flash on the worktree card re-fires for every character
+        // (pingTerminal advances pingSeq unconditionally), which is the same
+        // per-keystroke flashing the card's own border flash already guards
+        // against (#11445).
+        const episode = locateEpisodeRef.current;
+        const now = Date.now();
+        const elapsed = episode === null ? 0 : now - episode.at;
+        if (
+          episode !== null &&
+          episode.panelId === panelId &&
+          // A backward wall-clock step (NTP correction, manual change) must not
+          // strand the pane un-locatable until real time catches up.
+          elapsed >= 0 &&
+          elapsed < LOCATE_EPISODE_MS
+        ) {
+          return;
+        }
+        locateEpisodeRef.current = { panelId, at: now };
 
         scrollPanelIntoView(panelId);
         panelStore.pingTerminal(panelId);
@@ -159,6 +197,9 @@ export function useTypeAnywhere(): void {
       useTypingLocatorStore
         .getState()
         .showLocator(`Typing into ${getTerminalDisplayTitle(target, "compact")}`);
+      // The pill now names the rescue target, so any locate episode it replaced
+      // is over — returning to that pane deserves to be announced again.
+      locateEpisodeRef.current = null;
 
       // The pane's own focus effect drives the editor focus, but the editor is a
       // lazy chunk and its worktree may still be mounting — so poll until DOM
