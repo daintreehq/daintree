@@ -2,10 +2,18 @@ import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { formatTimeAgo } from "@/utils/timeAgo";
 
 /** Visual weight of a row's status line. Maps to status tokens, never the accent. */
-export type ProjectRowTone = "blocked" | "waiting" | "working" | "running" | "muted";
+export type ProjectRowTone = "blocked" | "waiting" | "review" | "working" | "running" | "muted";
+
+/**
+ * Wording boundary between "just finished" and plain "finished" on a
+ * ready-for-review line. Copy only — it never affects band membership,
+ * ordering, or acknowledgement, so being wrong here costs a word, not an
+ * event.
+ */
+export const JUST_FINISHED_MS = 15 * 60_000;
 
 export interface ProjectRowStatus {
-  /** Status sentence, or the fallback time-ago when nothing is running. */
+  /** Status sentence, or the fallback "Opened …" line when nothing is running. */
   text: string;
   tone: ProjectRowTone;
   /**
@@ -31,6 +39,21 @@ export function formatWaitAge(sinceMs: number, nowMs: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+/**
+ * Age for one end of a "3m–2h ago" completion range. Sub-minute clamps to
+ * "1m" rather than "just now" — a range needs two comparable durations, and
+ * "just now–2h ago" doesn't parse as one.
+ */
+function formatRangeAge(sinceMs: number, nowMs: number): string {
+  const age = formatWaitAge(sinceMs, nowMs);
+  return age === "just now" ? "1m" : age;
+}
+
+/** "3m" → "3m ago", "just now" stays bare — "just now ago" is not a phrase. */
+function agoPhrase(age: string): string {
+  return age === "just now" ? age : `${age} ago`;
+}
+
 function pluralAgents(count: number, singular: string, plural: string): string {
   return count === 1 ? singular : `${count} ${plural}`;
 }
@@ -39,11 +62,12 @@ function pluralAgents(count: number, singular: string, plural: string): string {
  * The one status line a switcher row shows.
  *
  * Ordered by what would make someone act: a blocked agent first (it has stopped
- * and input may not restart it), then agents waiting on the user, then work in
- * progress, then dormant states. Counts and ages are carried through rather than
- * collapsed to "Agent waiting…" — one waiting agent and eight are different
- * situations, and a wait that started forty minutes ago is a different situation
- * from one that started forty seconds ago.
+ * and input may not restart it), then agents waiting on the user, then finished
+ * work awaiting review, then work in progress, then dormant states. Counts and
+ * ages are carried through rather than collapsed to "Agent waiting…" — one
+ * waiting agent and eight are different situations, and a wait that started
+ * forty minutes ago is a different situation from one that started forty
+ * seconds ago.
  */
 export function getProjectRowStatus(
   project: SearchableProject,
@@ -73,17 +97,28 @@ export function getProjectRowStatus(
     const needingInput = project.waitingAgentCount - blocked;
 
     const parts: string[] = [];
-    // Both halves carry their count. Eliding it from one of them produced lines
-    // like "Needs input · 1 blocked", where the same number is spelled out on
-    // one side and implied on the other.
     if (needingInput > 0) {
-      parts.push(needingInput === 1 ? "1 needs input" : `${needingInput} need input`);
+      // The subject rides the sentence ("Agent needs input", "3 agents need
+      // input") — a bare "1 needs input" made the reader supply the noun.
+      parts.push(needingInput === 1 ? "Agent needs input" : `${needingInput} agents need input`);
+      if (blocked > 0) parts.push(`${blocked} blocked`);
+      // `oldestWaitingSince` is the earliest transition across ALL waits,
+      // blocked or not, so it can only ever be labelled as the oldest wait.
+      // Attaching it to a blocked count would date a fresh block by an older
+      // prompt's clock.
+      if (age) {
+        parts.push(
+          project.waitingAgentCount > 1
+            ? `oldest waiting ${age}`
+            : age === "just now"
+              ? age
+              : `waiting ${age}`
+        );
+      }
+    } else {
+      parts.push(blocked === 1 ? "Agent blocked" : `${blocked} agents blocked`);
+      if (age) parts.push(blocked > 1 ? `oldest ${age}` : age);
     }
-    if (blocked > 0) parts.push(`${blocked} blocked`);
-    // `oldestWaitingSince` is the earliest transition across ALL waits, blocked
-    // or not, so it can only ever be labelled as the oldest wait. Attaching it
-    // to a blocked count would date a fresh block by an older prompt's clock.
-    if (age) parts.push(project.waitingAgentCount > 1 ? `oldest ${age}` : age);
 
     return withHint({
       text: parts.join(" · "),
@@ -100,11 +135,67 @@ export function getProjectRowStatus(
     });
   }
 
+  // Finished work the user hasn't seen — the hand-back the attention band
+  // exists for. States the action ("ready for review") and how fresh the
+  // hand-back is, so a 3-minute-old completion and a 2-hour-old one stop
+  // rendering identically.
+  if (project.unacknowledgedCompletedAgentCount > 0) {
+    const count = project.unacknowledgedCompletedAgentCount;
+    const latest = project.latestUnacknowledgedCompletionAt;
+    const oldest = project.oldestUnacknowledgedCompletionAt;
+
+    if (count === 1) {
+      const at = latest ?? oldest;
+      if (at === undefined) {
+        return withHint({ text: "Ready for review", tone: "review" });
+      }
+      const finishedAge = formatWaitAge(at, nowMs);
+      const text =
+        nowMs - at < JUST_FINISHED_MS
+          ? finishedAge === "just now"
+            ? "Ready for review · just finished"
+            : `Ready for review · just finished ${agoPhrase(finishedAge)}`
+          : `Ready for review · finished ${agoPhrase(finishedAge)}`;
+      return withHint({ text, tone: "review" });
+    }
+
+    const lead = `${count} agents ready for review`;
+    if (latest === undefined || oldest === undefined) {
+      return withHint({ text: lead, tone: "review" });
+    }
+    // Newest-to-oldest range; collapses when both round to the same value.
+    const newestAge = formatRangeAge(latest, nowMs);
+    const oldestAge = formatRangeAge(oldest, nowMs);
+    const text =
+      newestAge === oldestAge
+        ? `${lead} · ${oldestAge} ago`
+        : `${lead} · ${newestAge}–${oldestAge} ago`;
+    return withHint({ text, tone: "review" });
+  }
+
   if (project.activeAgentCount > 0) {
     return withHint({
       text: pluralAgents(project.activeAgentCount, "Agent running", "agents running"),
       tone: "working",
     });
+  }
+
+  // Everything completed has been seen: drop the action phrase and mute. The
+  // fact is still worth a line — it explains why the shell is open.
+  if (project.completedAgentCount > 0) {
+    const age =
+      project.latestCompletionAt !== undefined
+        ? agoPhrase(formatWaitAge(project.latestCompletionAt, nowMs))
+        : null;
+    const text =
+      project.completedAgentCount === 1
+        ? age
+          ? `Agent finished · ${age}`
+          : "Agent finished"
+        : age
+          ? `${project.completedAgentCount} agents finished · latest ${age}`
+          : `${project.completedAgentCount} agents finished`;
+    return withHint({ text, tone: "muted" });
   }
 
   if (project.processCount > 0) {
@@ -120,9 +211,12 @@ export function getProjectRowStatus(
     return withHint({ text: "Suspended to free memory", tone: "muted" });
   }
 
+  // "Opened", explicitly: the browse band is frecency-ordered, so a bare
+  // "13h ago" read as a sort key it isn't. The verb turns it back into what it
+  // is — one useful fact about the row.
   if (project.lastOpened > 0) {
-    return withHint({ text: formatTimeAgo(project.lastOpened), tone: "muted" });
+    return withHint({ text: `Opened ${formatTimeAgo(project.lastOpened)}`, tone: "muted" });
   }
 
-  return { text: project.displayPath, tone: "muted" };
+  return withHint({ text: "Not opened yet", tone: "muted" });
 }
