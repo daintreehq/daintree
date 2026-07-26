@@ -466,6 +466,15 @@ export function FilePane({
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
   const codeViewerRef = useRef<CodeViewerHandle>(null);
+  // Whether something readable for the *current* file is already on screen.
+  // A silent refresh may only swallow a failure when there is good content to
+  // preserve — otherwise the pane would sit on a skeleton forever, waiting for
+  // a load that already failed. Reset per identity, since content from the
+  // previous file is not something worth keeping.
+  const hasGoodViewRef = useRef(false);
+  useEffect(() => {
+    hasGoodViewRef.current = false;
+  }, [filePath, effectiveRootPath]);
 
   useEffect(() => {
     return () => {
@@ -585,8 +594,13 @@ export function FilePane({
               setLoadState("svg");
               setErrorCode(null);
               setErrorMessage(null);
-            } else {
+              hasGoodViewRef.current = true;
+            } else if (!silent || !hasGoodViewRef.current) {
               // The file read fine; its contents just aren't safe to inline.
+              // A background pass catching a half-written file mid-save would
+              // read as sanitizer rejection, so keep the last good drawing
+              // rather than replacing it — the same bargain the text path's
+              // transient-failure guard below makes.
               setErrorCode("INVALID_PATH");
               setErrorMessage(sanitized.error);
               setLoadState("error");
@@ -604,6 +618,7 @@ export function FilePane({
           setLoadState("loaded");
           setErrorCode(null);
           setErrorMessage(null);
+          hasGoodViewRef.current = true;
         })
         .catch((error: unknown) => {
           if (requestRef.current !== requestId) return;
@@ -611,9 +626,12 @@ export function FilePane({
           // Silent background refreshes keep showing the last good content on
           // transient failures, but a permanently-gone file (deleted, perms
           // revoked) must surface rather than display stale text forever.
+          // Only worth swallowing when there is good content to keep: a silent
+          // pass that supersedes the very first read would otherwise strand the
+          // pane on its skeleton with nothing left to settle it.
           const permanent =
             code === "NOT_FOUND" || code === "PERMISSION" || code === "OUTSIDE_ROOT";
-          if (silent && !permanent) return;
+          if (silent && !permanent && hasGoodViewRef.current) return;
           setErrorCode(code);
           setErrorMessage(null);
           setLoadState("error");
@@ -669,7 +687,8 @@ export function FilePane({
   // load, and firing here as well would read the same file twice.
   const lastChangeSignalRef = useRef({
     filePath,
-    worktreePath: diffWorktreePath,
+    readRoot: effectiveRootPath,
+    watchRoot: diffWorktreePath,
     tick: changeTick,
     viewMode,
   });
@@ -677,7 +696,8 @@ export function FilePane({
     const previous = lastChangeSignalRef.current;
     lastChangeSignalRef.current = {
       filePath,
-      worktreePath: diffWorktreePath,
+      readRoot: effectiveRootPath,
+      watchRoot: diffWorktreePath,
       tick: changeTick,
       viewMode,
     };
@@ -686,10 +706,17 @@ export function FilePane({
     // tick on either side of that transition would only duplicate the work.
     if (viewMode === "diff" || previous.viewMode === "diff") return;
     if (!filePath || !diffWorktreePath || changeTick === undefined) return;
-    if (previous.filePath !== filePath || previous.worktreePath !== diffWorktreePath) return;
-    if (previous.tick === changeTick) return;
+    // What the pane reads, versus what it watches. Only a change to the former
+    // implies an explicit load already happened — `loadFile` is keyed on those
+    // two alone, so acquiring a watcher moves `watchRoot` while leaving the read
+    // identity untouched, and nothing else would re-read.
+    if (previous.filePath !== filePath || previous.readRoot !== effectiveRootPath) return;
+    // A newly resolved worktree counts as a signal in its own right: whatever
+    // happened to the file before anything was watching it is exactly what the
+    // pane cannot otherwise know about.
+    if (previous.watchRoot === diffWorktreePath && previous.tick === changeTick) return;
     loadFile(true);
-  }, [filePath, diffWorktreePath, changeTick, viewMode, loadFile]);
+  }, [filePath, effectiveRootPath, diffWorktreePath, changeTick, viewMode, loadFile]);
 
   // Which surfaces a background re-read may replace. Images and inlined SVG join
   // "loaded" because both are cheap to re-request and show nothing but the file.

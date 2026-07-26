@@ -11,6 +11,7 @@ import { describe, it, expect } from "vitest";
 import { render, cleanup } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { FileImagePreview } from "../FileImagePreview";
+import { buildDaintreeFileUrl } from "../filePreviewKinds";
 
 afterEach(cleanup);
 
@@ -94,29 +95,40 @@ describe("FileImagePreview cache busting", () => {
     );
   }
 
-  function parseSrc(container: HTMLElement): URL {
+  function rawSrc(container: HTMLElement): string {
     const src = container.querySelector("img")?.getAttribute("src");
     if (!src) throw new Error("img not rendered");
-    return new URL(src);
+    return src;
+  }
+
+  function parseSrc(container: HTMLElement): URL {
+    return new URL(rawSrc(container));
+  }
+
+  /** The one parameter the token adds, whatever it happens to be named. */
+  function addedParam(busted: URL, canonical: URL): [string, string] {
+    const extra = [...busted.searchParams].filter(([key]) => !canonical.searchParams.has(key));
+    expect(extra).toHaveLength(1);
+    return extra[0];
   }
 
   it("leaves the URL untouched when no token is supplied", () => {
-    // Callers with nothing to invalidate against must not get a phantom param.
+    // Whole-URL equality, so a phantom `&…=undefined` fails no matter its name.
     const { container } = renderRaster();
 
-    expect(parseSrc(container).searchParams.has("v")).toBe(false);
+    expect(rawSrc(container)).toBe(buildDaintreeFileUrl("/repo/assets/logo.png", "/repo"));
   });
 
   it("carries an opaque token through without disturbing path or root", () => {
-    const token = "7 &v=x/?#";
+    // Reserved characters throughout: unencoded, this would inject extra
+    // parameters and corrupt the path/root the protocol resolves against.
+    const token = "7 &root=/etc/?#";
     const canonical = parseSrc(renderRaster().container);
     cleanup();
 
     const busted = parseSrc(renderRaster(token).container);
 
-    // Round-trips intact — an unencoded token would inject extra params and
-    // corrupt the path/root the protocol handler resolves against.
-    expect(busted.searchParams.get("v")).toBe(token);
+    expect(addedParam(busted, canonical)[1]).toBe(token);
     expect(busted.searchParams.get("path")).toBe(canonical.searchParams.get("path"));
     expect(busted.searchParams.get("root")).toBe(canonical.searchParams.get("root"));
   });
@@ -126,7 +138,7 @@ describe("FileImagePreview cache busting", () => {
     // point is to change the URL while the element survives.
     const { container, rerender } = renderRaster("1");
     const img = container.querySelector("img");
-    const before = parseSrc(container).searchParams.get("v");
+    const before = rawSrc(container);
 
     rerender(
       <FileImagePreview
@@ -138,7 +150,7 @@ describe("FileImagePreview cache busting", () => {
       />
     );
 
-    expect(parseSrc(container).searchParams.get("v")).not.toBe(before);
+    expect(rawSrc(container)).not.toBe(before);
     expect(container.querySelector("img")).toBe(img);
   });
 
