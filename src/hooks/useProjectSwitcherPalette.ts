@@ -268,11 +268,11 @@ interface FrozenLayout {
   order: string[];
   sections: Map<string, ProjectSectionKey>;
   /**
-   * Rows whose band this freeze guessed at because no stats entry had reached
-   * the view yet, or `null` once the layout reflects real data. Non-null only
-   * between a cold `open()` and the single regroup that resolves it.
+   * True while this freeze is still a guess: it was taken before any stats
+   * reached the view, so every band in it is a placeholder. Cleared by the one
+   * regroup that resolves the session.
    */
-  coldStatsProjectIds: ReadonlySet<string> | null;
+  isProvisional: boolean;
 }
 
 /**
@@ -650,18 +650,15 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // A session that opened before any stats reached this view froze a guess, not
   // a decision: with no entry every row reads as zero agents and lands in
   // "Other", so the palette shows one ungrouped band and only re-bands on the
-  // next open (#11452). `coldStatsProjectIds` records the rows that guess
-  // covered, so the first real data for them can regroup the list in place.
+  // next open (#11452). Such a session stays provisional until real data lands,
+  // and is then regrouped once, in place.
   const [frozenLayout, setFrozenLayout] = useState<FrozenLayout | null>(null);
 
   const captureLayout = useCallback(
-    (
-      projects: SearchableProject[],
-      coldStatsProjectIds: ReadonlySet<string> | null = null
-    ): FrozenLayout => ({
+    (projects: SearchableProject[], isProvisional = false): FrozenLayout => ({
       order: projects.map((project) => project.id),
       sections: new Map(projects.map((project) => [project.id, project.section])),
-      coldStatsProjectIds,
+      isProvisional,
     }),
     []
   );
@@ -673,25 +670,30 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   useEffect(() => {
     if (!frozenLayout) return;
 
-    // A cold session's freeze is a placeholder. Once every row it guessed at
-    // has real data — or has gone away — recapture the whole layout so bands
-    // AND within-band order come from `liveBrowseOrder`'s real sort, then drop
-    // the marker. Holding out for all of them keeps the regroup a single
-    // decision rather than a trickle of rows moving under the pointer; if one
-    // never resolves the session simply behaves as it does today.
-    const { coldStatsProjectIds } = frozenLayout;
-    if (coldStatsProjectIds) {
-      const liveIds = new Set(liveBrowseOrder.map((project) => project.id));
-      const hydrated = [...coldStatsProjectIds].every(
-        (id) => !liveIds.has(id) || projectStats[id] !== undefined
+    // A provisional freeze is a placeholder. Once no row is still a guess,
+    // recapture the whole layout so bands AND within-band order come from
+    // `liveBrowseOrder`'s real sort, and stop being provisional.
+    //
+    // Judged against the rows that are live now, not a set captured at open: a
+    // project that registers while the session is still provisional would
+    // otherwise be folded in at its own guessed band and then locked there by
+    // the recapture, reproducing this very bug for that row. Reading live also
+    // means a project that goes away simply stops holding the regroup up.
+    //
+    // Waiting for all of them keeps the regroup one decision rather than a
+    // trickle of rows moving under the pointer; if a row never resolves, the
+    // session just behaves as it did before this fix.
+    if (frozenLayout.isProvisional) {
+      const stillGuessing = liveBrowseOrder.some(
+        (project) =>
+          !project.isActive && !project.isMissing && projectStats[project.id] === undefined
       );
-      if (hydrated) {
-        setFrozenLayout((previous) => {
+      if (!stillGuessing) {
+        setFrozenLayout((previous) =>
           // Identity, not truthiness: an effect left over from a previous open
-          // session must not consume this one's marker.
-          if (!previous || previous.coldStatsProjectIds !== coldStatsProjectIds) return previous;
-          return captureLayout(liveBrowseOrder);
-        });
+          // session must not recapture this one with a stale order.
+          previous === frozenLayout ? captureLayout(liveBrowseOrder) : previous
+        );
         return;
       }
     }
@@ -707,7 +709,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         order.push(project.id);
         sections.set(project.id, project.section);
       }
-      // Spread, so a session still waiting on its first stats stays cold.
+      // Spread, so a session still waiting on its first stats stays provisional
+      // and folds this arrival into its pending regroup.
       return { ...previous, order, sections };
     });
   }, [liveBrowseOrder, frozenLayout, projectStats, captureLayout]);
@@ -815,22 +818,20 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       // not `browseOrdered`, which is still holding the previous session's
       // frozen shape at this point.
       //
-      // Cold means EVERY stats-sensitive row is unkeyed, not that the map is
-      // empty: a keyed all-zero entry is real data about an idle project, and
-      // one unkeyed row among settled ones is a project main hasn't reported
-      // yet — neither should unlock rows the user is already looking at.
-      // Active and unavailable rows are banded without stats, so they can't
-      // tell us anything about hydration; pinned rows can, since attention
+      // Provisional means EVERY stats-sensitive row is unkeyed, not that the
+      // map is empty: a keyed all-zero entry is real data about an idle
+      // project, and one unkeyed row among settled ones is a project main
+      // hasn't reported yet — neither should unlock rows the user is already
+      // looking at. Active and unavailable rows are banded without stats, so
+      // they say nothing about hydration; pinned rows do, since attention
       // outranks a pin.
-      const statsSensitiveIds = liveBrowseOrder
-        .filter((project) => !project.isActive && !project.isMissing)
-        .map((project) => project.id);
-      const coldStatsProjectIds =
-        statsSensitiveIds.length > 0 &&
-        statsSensitiveIds.every((id) => projectStats[id] === undefined)
-          ? new Set(statsSensitiveIds)
-          : null;
-      setFrozenLayout(captureLayout(liveBrowseOrder, coldStatsProjectIds));
+      const statsSensitive = liveBrowseOrder.filter(
+        (project) => !project.isActive && !project.isMissing
+      );
+      const isProvisional =
+        statsSensitive.length > 0 &&
+        statsSensitive.every((project) => projectStats[project.id] === undefined);
+      setFrozenLayout(captureLayout(liveBrowseOrder, isProvisional));
       // Preselect the first ENABLED row that isn't the project we're already
       // in, so open-then-Enter is a one-two return that never defaults onto an
       // Unavailable row (selecting one opens the relocation dialog — the right

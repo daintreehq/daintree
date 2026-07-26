@@ -1940,6 +1940,112 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.results[1]!.activeAgentCount).toBe(3);
     });
 
+    it("regroups a project that registers while the session is still a guess", async () => {
+      const first = base("first");
+      const late = base("late");
+      projectState.projects = [first];
+      projectState.currentProject = null;
+      projectStatsState.stats = {};
+      getBulkStatsMock.mockResolvedValue({});
+
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+
+      // Registered before anything hydrated, so it joins the pending regroup
+      // rather than being locked at the band its missing stats implied.
+      act(() => {
+        projectState.projects = [first, late];
+        rerender();
+      });
+      act(() => {
+        projectStatsState.stats = {
+          first: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+        };
+        rerender();
+      });
+      expect(result.current.results.find((p) => p.id === "late")!.section).toBe("other");
+
+      act(() => {
+        projectStatsState.stats = {
+          first: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+          late: { activeAgentCount: 2, waitingAgentCount: 0, processCount: 2 },
+        };
+        rerender();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results.find((p) => p.id === "late")!.section).toBe("running");
+      });
+    });
+
+    it("waits for every guessed row, and a removed one stops holding it up", async () => {
+      const first = base("first");
+      const removed = base("removed");
+      projectState.projects = [first, removed];
+      projectState.currentProject = null;
+      projectStatsState.stats = {};
+      getBulkStatsMock.mockResolvedValue({});
+
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+
+      // One row resolves, the other has not: a partial answer must not move
+      // rows, or the list would regroup in installments under the pointer.
+      act(() => {
+        projectStatsState.stats = {
+          first: { activeAgentCount: 2, waitingAgentCount: 0, processCount: 2 },
+        };
+        rerender();
+      });
+      expect(result.current.results.find((p) => p.id === "first")!.section).toBe("other");
+      expect(result.current.results.find((p) => p.id === "first")!.activeAgentCount).toBe(2);
+
+      // The unresolved row goes away, so nothing is a guess any more.
+      act(() => {
+        projectState.projects = [first];
+        rerender();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results[0]!.section).toBe("running");
+      });
+    });
+
+    it("treats an active-only stats map as a guess for the rows that can switch", async () => {
+      const projects = [base("active", { status: "active" }), base("busy")];
+      projectState.projects = projects;
+      projectState.currentProject = { id: "active" };
+      // The active row is keyed, but nothing is known about the switch target,
+      // so this session is still a guess despite a non-empty map.
+      projectStatsState.stats = {
+        active: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+      };
+      const bulk = emptyBulkStats(projects.map((p) => p.id));
+      bulk.busy!.activeAgentCount = 2;
+      getBulkStatsMock.mockResolvedValue(bulk);
+
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      expect(result.current.results.find((p) => p.id === "busy")!.section).toBe("other");
+
+      await waitFor(() => {
+        expect(setStatsMock).toHaveBeenCalled();
+      });
+      act(() => {
+        rerender();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results.find((p) => p.id === "busy")!.section).toBe("running");
+      });
+    });
+
     it("holds a project that arrives after the freeze just as still", async () => {
       projectState.projects = [base("first")];
       projectState.currentProject = null;
