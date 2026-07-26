@@ -466,14 +466,16 @@ export function FilePane({
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
   const codeViewerRef = useRef<CodeViewerHandle>(null);
-  // Whether something readable for the *current* file is already on screen.
-  // A silent refresh may only swallow a failure when there is good content to
-  // preserve — otherwise the pane would sit on a skeleton forever, waiting for
-  // a load that already failed. Reset per identity, since content from the
-  // previous file is not something worth keeping.
-  const hasGoodViewRef = useRef(false);
+  // The state the last good view of the *current* file settled into, or null if
+  // there has not been one. A silent refresh may only swallow a failure when
+  // there is good content to preserve, and swallowing has to restore this
+  // rather than merely return: the silent read may have superseded an explicit
+  // one that already switched the pane to its skeleton, and nothing else is
+  // left to settle it. Reset per identity — the previous file's content is not
+  // something worth keeping.
+  const lastGoodStateRef = useRef<LoadState | null>(null);
   useEffect(() => {
-    hasGoodViewRef.current = false;
+    lastGoodStateRef.current = null;
   }, [filePath, effectiveRootPath]);
 
   useEffect(() => {
@@ -594,13 +596,15 @@ export function FilePane({
               setLoadState("svg");
               setErrorCode(null);
               setErrorMessage(null);
-              hasGoodViewRef.current = true;
-            } else if (!silent || !hasGoodViewRef.current) {
+              lastGoodStateRef.current = "svg";
+            } else if (silent && lastGoodStateRef.current !== null) {
+              // A background pass catching a half-written file mid-save reads
+              // as a sanitizer rejection, so keep the last good drawing rather
+              // than replacing it — the same bargain the text path's transient
+              // -failure guard below makes.
+              setLoadState(lastGoodStateRef.current);
+            } else {
               // The file read fine; its contents just aren't safe to inline.
-              // A background pass catching a half-written file mid-save would
-              // read as sanitizer rejection, so keep the last good drawing
-              // rather than replacing it — the same bargain the text path's
-              // transient-failure guard below makes.
               setErrorCode("INVALID_PATH");
               setErrorMessage(sanitized.error);
               setLoadState("error");
@@ -618,7 +622,7 @@ export function FilePane({
           setLoadState("loaded");
           setErrorCode(null);
           setErrorMessage(null);
-          hasGoodViewRef.current = true;
+          lastGoodStateRef.current = "loaded";
         })
         .catch((error: unknown) => {
           if (requestRef.current !== requestId) return;
@@ -626,12 +630,16 @@ export function FilePane({
           // Silent background refreshes keep showing the last good content on
           // transient failures, but a permanently-gone file (deleted, perms
           // revoked) must surface rather than display stale text forever.
-          // Only worth swallowing when there is good content to keep: a silent
-          // pass that supersedes the very first read would otherwise strand the
-          // pane on its skeleton with nothing left to settle it.
+          // Only worth swallowing when there is good content to keep — and it
+          // has to be restored rather than merely left alone: this read may
+          // have superseded an explicit one that already showed the skeleton,
+          // in which case nothing else would ever settle it.
           const permanent =
             code === "NOT_FOUND" || code === "PERMISSION" || code === "OUTSIDE_ROOT";
-          if (silent && !permanent && hasGoodViewRef.current) return;
+          if (silent && !permanent && lastGoodStateRef.current !== null) {
+            setLoadState(lastGoodStateRef.current);
+            return;
+          }
           setErrorCode(code);
           setErrorMessage(null);
           setLoadState("error");

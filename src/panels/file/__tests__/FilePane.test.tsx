@@ -954,7 +954,7 @@ describe("FilePane diff mode (#11274)", () => {
   const WORKTREE_ID = "wt-1";
   const WORKTREE_PATH = "/repo";
 
-  function seedWorktree(changes: Array<{ path: string; status: string }> | null) {
+  function seedWorktree(changes: Array<{ path: string; status: GitStatus }> | null) {
     const worktree: WorktreeLike = {
       id: WORKTREE_ID,
       path: WORKTREE_PATH,
@@ -1965,6 +1965,36 @@ describe("FilePane live disk refresh (#11451)", () => {
     await commitTick(rerender);
 
     expect(container.querySelector("svg rect")).not.toBeNull();
+  });
+
+  it("settles the pane when a failing tick read supersedes an explicit refresh", async () => {
+    // Refresh shows the skeleton, then a tick's silent read supersedes it and
+    // fails transiently. Swallowing that failure outright would leave nothing
+    // to settle the pane: the explicit read is already stale, so the skeleton
+    // and the toolbar spin would stay up forever.
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    readMock.mockResolvedValue({ content: "v1" });
+    const { container, rerender } = await renderPane({});
+
+    const explicit = deferred<{ content: string }>();
+    readMock.mockReturnValueOnce(explicit.promise);
+    await act(async () => {
+      Array.from(container.querySelectorAll("button"))
+        .find((b) => b.getAttribute("aria-label") === "Refresh")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(loadingSkeleton(container)).not.toBeNull();
+
+    // The tick's read supersedes the explicit one, then fails transiently.
+    readMock.mockRejectedValueOnce(new Error("EBUSY"));
+    seedWorktree(OUTER_ID, "/repo", { git: 200 });
+    await commitTick(rerender);
+    await act(async () => {
+      explicit.resolve({ content: "v1" });
+    });
+
+    expect(loadingSkeleton(container)).toBeNull();
+    expect(viewerContent(container)).toBe("v1");
   });
 
   it("surfaces unusable SVG markup on the first read rather than hanging", async () => {

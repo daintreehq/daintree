@@ -105,11 +105,11 @@ describe("FileImagePreview cache busting", () => {
     return new URL(rawSrc(container));
   }
 
-  /** The one parameter the token adds, whatever it happens to be named. */
-  function addedParam(busted: URL, canonical: URL): [string, string] {
+  /** The value of the one parameter the token adds, whatever it is named. */
+  function addedParamValue(busted: URL, canonical: URL): string | undefined {
     const extra = [...busted.searchParams].filter(([key]) => !canonical.searchParams.has(key));
     expect(extra).toHaveLength(1);
-    return extra[0];
+    return extra[0]?.[1];
   }
 
   it("leaves the URL untouched when no token is supplied", () => {
@@ -128,7 +128,7 @@ describe("FileImagePreview cache busting", () => {
 
     const busted = parseSrc(renderRaster(token).container);
 
-    expect(addedParam(busted, canonical)[1]).toBe(token);
+    expect(addedParamValue(busted, canonical)).toBe(token);
     expect(busted.searchParams.get("path")).toBe(canonical.searchParams.get("path"));
     expect(busted.searchParams.get("root")).toBe(canonical.searchParams.get("root"));
   });
