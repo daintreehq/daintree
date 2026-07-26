@@ -132,12 +132,14 @@ export function openDb(
     const db = drizzle(sqlite, { schema });
     migrate(db, { migrationsFolder: migrationsFolder ?? getMigrationsFolder() });
 
-    // Backfill: rows whose last_accessed_at is still the column default (0) get
-    // bumped to "now" so the first access doesn't crash the frecency score from
-    // its initial value down to ~0 due to the time-decay term.
-    sqlite
-      .prepare("UPDATE projects SET last_accessed_at = ? WHERE last_accessed_at = 0")
-      .run(Date.now());
+    // Backfill: rows whose last_accessed_at is still the column default (0)
+    // take their last_opened as the score's valid-at timestamp. Migration 0009
+    // already does this once; this catches any row minted through a path that
+    // skipped the stamp. last_opened, never "now": the score of a project
+    // untouched since May must decay from May, not restart fresh on boot —
+    // frozen-at-write scores masquerading as current is the exact staleness
+    // bug the read-time decay rework removed.
+    sqlite.exec("UPDATE projects SET last_accessed_at = last_opened WHERE last_accessed_at = 0");
 
     // Tighten the whole family once here: migrate()/the backfill above are the
     // first WAL-mode writes, so -wal/-shm exist by now, and an existing 0o644

@@ -235,7 +235,7 @@ describe("openDb (integration)", () => {
     }
   });
 
-  it("backfills last_accessed_at = 0 rows to the current timestamp without disturbing non-zero rows", () => {
+  it("backfills last_accessed_at = 0 rows from last_opened without disturbing non-zero rows", () => {
     const dbPath = path.join(tmpDir, "backfill.db");
     // First open creates the schema.
     const setup = openDb(dbPath, migrationsFolder);
@@ -243,26 +243,88 @@ describe("openDb (integration)", () => {
       .prepare(
         "INSERT INTO projects (id, path, name, emoji, last_opened, pinned, frecency_score, last_accessed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
       )
-      .run("zero", "/tmp/zero", "zero", "🌲", 1, 0, 3.0, 0);
+      .run("zero", "/tmp/zero", "zero", "🌲", 4567, 0, 3.0, 0);
     setup.sqlite
       .prepare(
         "INSERT INTO projects (id, path, name, emoji, last_opened, pinned, frecency_score, last_accessed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
       )
-      .run("nonzero", "/tmp/nonzero", "nonzero", "🌴", 1, 0, 3.0, 9999);
+      .run("nonzero", "/tmp/nonzero", "nonzero", "🌴", 4567, 0, 3.0, 9999);
     setup.sqlite.close();
 
-    const before = Date.now();
     const { sqlite } = openDb(dbPath, migrationsFolder);
     try {
+      // last_opened, never "now": a dormant project's score must keep decaying
+      // from when it was really last touched, not restart fresh on boot.
       const zeroRow = sqlite
         .prepare("SELECT last_accessed_at FROM projects WHERE id = ?")
         .get("zero") as { last_accessed_at: number };
-      expect(zeroRow.last_accessed_at).toBeGreaterThanOrEqual(before);
+      expect(zeroRow.last_accessed_at).toBe(4567);
 
       const nonZeroRow = sqlite
         .prepare("SELECT last_accessed_at FROM projects WHERE id = ?")
         .get("nonzero") as { last_accessed_at: number };
       expect(nonZeroRow.last_accessed_at).toBe(9999);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("0009 rebase: scales pre-4-day scores and backfills timestamps on upgrade", async () => {
+    // Simulate a real upgrade: build a DB with migrations applied only through
+    // 0008, seed rows shaped like a long-lived install, then reopen with the
+    // full folder so 0009 alone runs against existing data.
+    const truncatedFolder = path.join(tmpDir, "migrations-through-0008");
+    fs.mkdirSync(path.join(truncatedFolder, "meta"), { recursive: true });
+    const journal = JSON.parse(
+      fs.readFileSync(path.join(migrationsFolder, "meta", "_journal.json"), "utf8")
+    ) as { entries: { idx: number; tag: string }[] };
+    const keptEntries = journal.entries.filter((entry) => entry.idx <= 8);
+    for (const entry of keptEntries) {
+      const file = `${entry.tag}.sql`;
+      fs.copyFileSync(path.join(migrationsFolder, file), path.join(truncatedFolder, file));
+    }
+    fs.writeFileSync(
+      path.join(truncatedFolder, "meta", "_journal.json"),
+      JSON.stringify({ ...journal, entries: keptEntries })
+    );
+
+    const dbPath = path.join(tmpDir, "upgrade.db");
+    const old = openDb(dbPath, truncatedFolder);
+    const insert = old.sqlite.prepare(
+      "INSERT INTO projects (id, path, name, emoji, last_opened, pinned, frecency_score, last_accessed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    );
+    // A heavily-used project bumped recently, and a legacy row that predates
+    // the timestamp column (last_accessed_at still 0).
+    insert.run(
+      "heavy",
+      "/tmp/heavy",
+      "heavy",
+      "🌲",
+      1_700_000_000_000,
+      0,
+      1218.1,
+      1_700_000_000_000
+    );
+    insert.run("legacy", "/tmp/legacy", "legacy", "🌴", 1_650_000_000_000, 0, 26.5, 0);
+    old.sqlite.close();
+
+    const { sqlite } = openDb(dbPath, migrationsFolder);
+    try {
+      const rows = sqlite
+        .prepare("SELECT id, frecency_score, last_accessed_at FROM projects ORDER BY id")
+        .all() as { id: string; frecency_score: number; last_accessed_at: number }[];
+      const heavy = rows.find((r) => r.id === "heavy")!;
+      const legacy = rows.find((r) => r.id === "legacy")!;
+
+      // Rate conversion 14d → 4d: steady-state scores shrink by the ratio of
+      // per-access steady states, ≈0.3036. Timestamps are left alone so the
+      // read-time decay applies the idle gap honestly.
+      expect(heavy.frecency_score).toBeCloseTo(1218.1 * 0.3036062767938871, 3);
+      expect(heavy.last_accessed_at).toBe(1_700_000_000_000);
+
+      expect(legacy.frecency_score).toBeCloseTo(26.5 * 0.3036062767938871, 3);
+      // The 0-timestamp row is rebased onto last_opened, not "now".
+      expect(legacy.last_accessed_at).toBe(1_650_000_000_000);
     } finally {
       sqlite.close();
     }
@@ -308,7 +370,9 @@ describe("openDb (integration)", () => {
       };
       expect(row.id).toBe("old");
       expect(row.pinned).toBe(0);
-      expect(row.frecency_score).toBeCloseTo(3.0);
+      // The adopted column default (3.0) then rides the 0009 rate rebase like
+      // every other pre-existing score.
+      expect(row.frecency_score).toBeCloseTo(3.0 * 0.3036062767938871);
       // Backfill must have replaced the column-default 0 with a real timestamp.
       expect(row.last_accessed_at).toBeGreaterThan(0);
 

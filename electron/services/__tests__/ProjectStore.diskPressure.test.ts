@@ -21,6 +21,7 @@ const CREATE_TABLES_SQL = `
     pinned INTEGER NOT NULL DEFAULT 0,
     frecency_score REAL NOT NULL DEFAULT 3.0,
     last_accessed_at INTEGER NOT NULL DEFAULT 0,
+    last_completion_seen_at INTEGER,
     auto_parked_at INTEGER,
     stats_commit_count INTEGER,
     stats_issue_count INTEGER,
@@ -116,7 +117,9 @@ describe("ProjectStore disk pressure suppression", () => {
     projectId = generateProjectId(alphaCanonical);
     otherProjectId = generateProjectId(betaCanonical);
 
-    seededLastAccessedAt = Date.now() - 60_000;
+    // Outside the 5-minute access debounce, so an unsuppressed bump is
+    // expected to actually add its increment.
+    seededLastAccessedAt = Date.now() - 10 * 60_000;
     seededLastOpened = seededLastAccessedAt;
 
     sqlite = new Database(":memory:");
@@ -236,6 +239,28 @@ describe("ProjectStore disk pressure suppression", () => {
     expect(result.frecencyScore ?? 0).toBeGreaterThan(seededFrecencyScore);
     expect(result.lastAccessedAt ?? 0).toBeGreaterThanOrEqual(seededLastAccessedAt);
   });
+
+  it("switching back inside the debounce window re-bases the score without incrementing", async () => {
+    setWritesSuppressed(false);
+
+    // Simulate having left the project moments ago: lastOpened is fresh while
+    // the score timestamp is old. Rapid A↔B toggling must not accrue rank.
+    const justLeft = Date.now() - 30_000;
+    db.update(schema.projects)
+      .set({ lastOpened: justLeft })
+      .where(eq(schema.projects.id, projectId))
+      .run();
+
+    await store.setCurrentProject(projectId);
+
+    const row = db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).get();
+    // Re-based to now (timestamp advances, decay applied) but no +1 increment.
+    expect(row?.lastAccessedAt).toBeGreaterThan(seededLastAccessedAt);
+    expect(row?.frecencyScore).toBeLessThanOrEqual(seededFrecencyScore);
+    expect(row?.frecencyScore).toBeGreaterThan(seededFrecencyScore - 0.01);
+    // lastOpened still tracks the real open, debounced or not.
+    expect(row?.lastOpened).toBeGreaterThan(justLeft);
+  });
 });
 
 describe("ProjectStore transaction mode", () => {
@@ -257,7 +282,9 @@ describe("ProjectStore transaction mode", () => {
     projectId = generateProjectId(alphaCanonical);
     otherProjectId = generateProjectId(betaCanonical);
 
-    seededLastAccessedAt = Date.now() - 60_000;
+    // Outside the 5-minute access debounce, so an unsuppressed bump is
+    // expected to actually add its increment.
+    seededLastAccessedAt = Date.now() - 10 * 60_000;
     seededLastOpened = seededLastAccessedAt;
 
     sqlite = new Database(":memory:");

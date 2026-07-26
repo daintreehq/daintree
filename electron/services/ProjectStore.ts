@@ -48,7 +48,7 @@ import {
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
 import { isInRepoRecipeId } from "../../shared/utils/recipeFilename.js";
 
-import { computeFrecencyScore, FRECENCY_COLD_START } from "./frecency.js";
+import { bumpFrecencyScore, decayFrecencyScore, FRECENCY_COLD_START } from "./frecency.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
 import { rewriteProjectStatePaths } from "./projectPathStateRewrite.js";
 import { rewriteAgentSessionPathsForProject } from "./pty/agentSessionHistory.js";
@@ -137,6 +137,8 @@ function rowToProject(row: ProjectRow): Project {
   project.frecencyScore =
     typeof row.frecencyScore === "number" ? row.frecencyScore : FRECENCY_COLD_START;
   project.lastAccessedAt = typeof row.lastAccessedAt === "number" ? row.lastAccessedAt : 0;
+  if (typeof row.lastCompletionSeenAt === "number")
+    project.lastCompletionSeenAt = row.lastCompletionSeenAt;
   if (typeof row.autoParkedAt === "number") project.autoParkedAt = row.autoParkedAt;
   // Only `false` is carried: null means git-backed, and so does absence.
   if (row.gitBacked === false) project.gitBacked = false;
@@ -588,9 +590,12 @@ export class ProjectStore {
       return modeChanged ? this.updateProject(existing.id, { gitBacked: nextGitBacked }) : existing;
     }
 
-    const newScore = computeFrecencyScore(
+    // The pre-update lastOpened is the debounce clock: re-adding a project you
+    // left moments ago must not count as fresh engagement.
+    const newScore = bumpFrecencyScore(
       existing.frecencyScore ?? FRECENCY_COLD_START,
       existing.lastAccessedAt ?? 0,
+      existing.lastOpened ?? 0,
       now
     );
     return this.updateProject(existing.id, {
@@ -793,6 +798,7 @@ export class ProjectStore {
       pinned: number;
       frecencyScore: number;
       lastAccessedAt: number;
+      lastCompletionSeenAt: number;
       autoParkedAt: number | null;
       gitBacked: boolean | null;
     }> = {};
@@ -808,6 +814,8 @@ export class ProjectStore {
     if (updates.pinned !== undefined) set.pinned = updates.pinned ? 1 : 0;
     if (updates.frecencyScore !== undefined) set.frecencyScore = updates.frecencyScore;
     if (updates.lastAccessedAt !== undefined) set.lastAccessedAt = updates.lastAccessedAt;
+    if (updates.lastCompletionSeenAt !== undefined)
+      set.lastCompletionSeenAt = updates.lastCompletionSeenAt;
     if ("autoParkedAt" in updates) set.autoParkedAt = updates.autoParkedAt ?? null;
     // Keyed on presence, not on `!== undefined`: promoting a lightweight
     // workspace clears the flag by passing `undefined`, which an existence-blind
@@ -1000,7 +1008,19 @@ export class ProjectStore {
       );
     }
 
-    return rows.map(rowToProject);
+    // The SQL orderBy pre-sorts on the raw persisted score, but raw scores are
+    // snapshots frozen at different lastAccessedAt dates and must never be
+    // compared directly — decay both to one shared `now` first. One `now` for
+    // the whole list keeps the comparison internally consistent.
+    const projects = rows.map(rowToProject);
+    const now = Date.now();
+    projects.sort((a, b) => {
+      const scoreA = decayFrecencyScore(a.frecencyScore ?? 0, a.lastAccessedAt ?? 0, now);
+      const scoreB = decayFrecencyScore(b.frecencyScore ?? 0, b.lastAccessedAt ?? 0, now);
+      if (scoreA !== scoreB) return scoreB - scoreA;
+      return (b.lastOpened ?? 0) - (a.lastOpened ?? 0);
+    });
+    return projects;
   }
 
   async getProjectByPath(projectPath: string): Promise<Project | null> {
@@ -1031,6 +1051,30 @@ export class ProjectStore {
     const db = getSharedDb();
     const row = db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).get();
     return row ? rowToProject(row) : null;
+  }
+
+  /**
+   * Acknowledgement watermarks for the completed-agent tallies: project id →
+   * epoch ms up to which the user has seen that project's completions. Only
+   * projects with a stamp appear. Read on every stats compute, so it selects
+   * the two columns it needs rather than hydrating full rows.
+   */
+  getLastCompletionSeenMap(): Map<string, number> {
+    const db = getSharedDb();
+    const rows = db
+      .select({
+        id: projectsTable.id,
+        lastCompletionSeenAt: projectsTable.lastCompletionSeenAt,
+      })
+      .from(projectsTable)
+      .all();
+    const map = new Map<string, number>();
+    for (const row of rows) {
+      if (typeof row.lastCompletionSeenAt === "number" && row.lastCompletionSeenAt > 0) {
+        map.set(row.id, row.lastCompletionSeenAt);
+      }
+    }
+    return map;
   }
 
   async checkMissingProjects(): Promise<string[]> {
@@ -1271,11 +1315,15 @@ export class ProjectStore {
     // critical state updates (currentProjectId pointer + active/background
     // status) unconditional — those are session state the user depends on.
     const writesSuppressed = getWritesSuppressed();
+    // Debounced on the incoming project's pre-switch lastOpened: bouncing
+    // between two projects inside the window keeps re-basing the score to now
+    // but adds no increment, so toggling can't out-rank real engagement.
     const newScore = writesSuppressed
       ? null
-      : computeFrecencyScore(
+      : bumpFrecencyScore(
           project.frecencyScore ?? FRECENCY_COLD_START,
           project.lastAccessedAt ?? 0,
+          project.lastOpened ?? 0,
           now
         );
 
