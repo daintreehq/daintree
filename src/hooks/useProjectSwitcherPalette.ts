@@ -215,8 +215,13 @@ export interface UseProjectSwitcherPaletteReturn {
   nonActiveAgentCounts: {
     activeAgentCount: number;
     waitingAgentCount: number;
-    /** Non-active projects with at least one waiting agent — the badge's number. */
-    attentionProjectCount: number;
+    /**
+     * Non-active projects with at least one WAITING agent — the badge's
+     * number. Deliberately narrower than the switcher's attention band, which
+     * also holds unreviewed completions: the badge is an interruption signal,
+     * and nagging the tray for every finished agent would train it away.
+     */
+    waitingProjectCount: number;
   };
   /** Scratch (one-off agent workspace) view-models, sorted by lastOpened desc. */
   scratchResults: SearchableScratch[];
@@ -499,6 +504,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
               ...(entry.latestCompletionAt !== undefined
                 ? { latestCompletionAt: entry.latestCompletionAt }
                 : {}),
+              ...(entry.latestWorkingSince !== undefined
+                ? { latestWorkingSince: entry.latestWorkingSince }
+                : {}),
               processCount: entry.processCount,
             };
             changed = true;
@@ -589,17 +597,19 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const nonActiveAgentCounts = useMemo(() => {
     let activeAgentCount = 0;
     let waitingAgentCount = 0;
-    // Projects, not agents. The badge answers "how many places need me?" — a
-    // number that stays legible while eight agents wait in one repo, where an
-    // agent tally would read as eight separate obligations.
-    let attentionProjectCount = 0;
+    // Projects, not agents. The badge answers "how many places are waiting on
+    // me?" — a number that stays legible while eight agents wait in one repo,
+    // where an agent tally would read as eight separate obligations. Waiting
+    // only, not the full attention band: unreviewed completions surface in the
+    // switcher, but the tray badge is reserved for interruptions.
+    let waitingProjectCount = 0;
     for (const project of searchableProjects) {
       if (project.isActive) continue;
       activeAgentCount += project.activeAgentCount;
       waitingAgentCount += project.waitingAgentCount;
-      if (project.waitingAgentCount > 0) attentionProjectCount += 1;
+      if (project.waitingAgentCount > 0) waitingProjectCount += 1;
     }
-    return { activeAgentCount, waitingAgentCount, attentionProjectCount };
+    return { activeAgentCount, waitingAgentCount, waitingProjectCount };
   }, [searchableProjects]);
 
   const liveBrowseOrder = useMemo<SearchableProject[]>(() => {

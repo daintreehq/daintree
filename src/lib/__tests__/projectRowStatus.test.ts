@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getProjectRowStatus, formatWaitAge, JUST_FINISHED_MS } from "../projectRowStatus";
+import { getProjectRowStatus, formatWaitAge } from "../projectRowStatus";
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 
 const NOW = 1_700_000_000_000;
@@ -130,19 +130,42 @@ describe("getProjectRowStatus", () => {
     expect(status.tone).toBe("review");
   });
 
-  it("drops 'just' once the completion is no longer fresh", () => {
-    const at = NOW - JUST_FINISHED_MS - 60_000;
-    const status = getProjectRowStatus(
+  it("keeps 'just' right up to the freshness boundary and drops it at the boundary", () => {
+    // Fixed behavioral inputs, deliberately not derived from the production
+    // constant: a completion 14 minutes old is still "just finished", one 15
+    // minutes old is not. Catches both a shifted boundary and < becoming <=.
+    const fresh = getProjectRowStatus(
       project({
         completedAgentCount: 1,
         unacknowledgedCompletedAgentCount: 1,
-        latestUnacknowledgedCompletionAt: at,
-        oldestUnacknowledgedCompletionAt: at,
+        latestUnacknowledgedCompletionAt: NOW - 14 * 60_000,
+        oldestUnacknowledgedCompletionAt: NOW - 14 * 60_000,
       }),
       NOW
     );
+    expect(fresh.text).toBe("Ready for review · just finished 14m ago");
 
-    expect(status.text).toBe("Ready for review · finished 16m ago");
+    const boundary = getProjectRowStatus(
+      project({
+        completedAgentCount: 1,
+        unacknowledgedCompletedAgentCount: 1,
+        latestUnacknowledgedCompletionAt: NOW - 15 * 60_000,
+        oldestUnacknowledgedCompletionAt: NOW - 15 * 60_000,
+      }),
+      NOW
+    );
+    expect(boundary.text).toBe("Ready for review · finished 15m ago");
+
+    const stale = getProjectRowStatus(
+      project({
+        completedAgentCount: 1,
+        unacknowledgedCompletedAgentCount: 1,
+        latestUnacknowledgedCompletionAt: NOW - 16 * 60_000,
+        oldestUnacknowledgedCompletionAt: NOW - 16 * 60_000,
+      }),
+      NOW
+    );
+    expect(stale.text).toBe("Ready for review · finished 16m ago");
   });
 
   it("elides the redundant timestamp on a seconds-old completion", () => {
@@ -173,6 +196,21 @@ describe("getProjectRowStatus", () => {
 
     expect(status.text).toBe("3 agents ready for review · 3m–2h ago");
     expect(status.tone).toBe("review");
+  });
+
+  it("renders a swapped range newest-first anyway", () => {
+    // A malformed payload with latest < oldest must not read "2h–3m ago".
+    const status = getProjectRowStatus(
+      project({
+        completedAgentCount: 2,
+        unacknowledgedCompletedAgentCount: 2,
+        latestUnacknowledgedCompletionAt: NOW - 2 * 3600_000,
+        oldestUnacknowledgedCompletionAt: NOW - 3 * 60_000,
+      }),
+      NOW
+    );
+
+    expect(status.text).toBe("2 agents ready for review · 3m–2h ago");
   });
 
   it("collapses the range when completions round to the same age", () => {

@@ -164,8 +164,10 @@ export function getProjectRowStatus(
       return withHint({ text: lead, tone: "review" });
     }
     // Newest-to-oldest range; collapses when both round to the same value.
-    const newestAge = formatRangeAge(latest, nowMs);
-    const oldestAge = formatRangeAge(oldest, nowMs);
+    // The producer keeps latest >= oldest, but this formatter is defensive
+    // everywhere else — a swapped pair must not render as "2h–3m ago".
+    const newestAge = formatRangeAge(Math.max(latest, oldest), nowMs);
+    const oldestAge = formatRangeAge(Math.min(latest, oldest), nowMs);
     const text =
       newestAge === oldestAge
         ? `${lead} · ${oldestAge} ago`

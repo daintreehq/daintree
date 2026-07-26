@@ -53,11 +53,11 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       }
       const ctx = getWindowRegistry()?.getByWindowId(focused.id);
       if (!ctx) return null;
-      // Per-window active view when the window has one; the global pointer is
-      // only trustworthy as a single-window fallback (#11101).
-      const viewManager = ctx.services.projectViewManager;
-      if (viewManager) return viewManager.getActiveProjectId();
-      return projectStore.getCurrentProjectId();
+      // Only the focused window's OWN view manager may answer. The global
+      // current-project pointer names whichever window switched most recently
+      // (#11101) — falling back to it could acknowledge a project the focused
+      // window isn't showing. A window without a view manager observes nothing.
+      return ctx.services.projectViewManager?.getActiveProjectId() ?? null;
     },
     getStatusMap: () => projectStatsService.getLastBroadcast(),
     markSeen: (projectId, seenUpTo) => {
@@ -169,6 +169,9 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
             : {}),
           ...(counts.latestCompletionAt !== null
             ? { latestCompletionAt: counts.latestCompletionAt }
+            : {}),
+          ...(counts.latestWorkingSince !== null
+            ? { latestWorkingSince: counts.latestWorkingSince }
             : {}),
           terminalMemoryMB: hasMeasured ? Math.round(measured!.memoryKb / 1024) : undefined,
           topProcess: top

@@ -144,7 +144,16 @@ vi.mock("@/components/ui/button", () => ({
 }));
 
 // Mock projectStore
-const mockProjects = [
+const mockProjects: Array<{
+  id: string;
+  name: string;
+  path: string;
+  emoji: string;
+  lastOpened: number;
+  frecencyScore: number;
+  lastAccessedAt?: number;
+  color?: string;
+}> = [
   {
     id: "p1",
     name: "Project Alpha",
@@ -299,7 +308,7 @@ describe("WelcomeScreen", () => {
     expect(screen.getByText("A habitat for your AI agents.")).toBeTruthy();
   });
 
-  it("suppresses hero for returning users with recent projects", () => {
+  it("suppresses hero for returning users with projects", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
     expect(screen.queryByText("Welcome to Daintree")).toBeNull();
@@ -368,14 +377,14 @@ describe("WelcomeScreen", () => {
     expect(switchProjectMock).toHaveBeenCalledWith("p1");
   });
 
-  it("shows project path and time ago for recent projects", () => {
+  it("shows project path and time ago for listed projects", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
     expect(screen.getByText("/alpha")).toBeTruthy();
     expect(screen.getByText("3000ms ago")).toBeTruthy();
   });
 
-  it("limits recent projects to 5 most recent in descending order", () => {
+  it("limits the project list to the top 5 by effective score", () => {
     const manyProjects = Array.from({ length: 8 }, (_, i) => ({
       id: `p${i}`,
       name: `Project ${i}`,
@@ -835,7 +844,7 @@ describe("WelcomeScreen", () => {
     expect(projectsIdx).toBeLessThan(checklistIdx);
   });
 
-  it("shows checklist without recent projects for first-time users", () => {
+  it("shows checklist without a project list for first-time users", () => {
     storeState = { ...storeState, projects: [] };
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 

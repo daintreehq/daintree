@@ -126,7 +126,7 @@ import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 const { ProjectSwitcherPalette } = await import("../ProjectSwitcherPalette");
 
 function makeProject(overrides: Partial<SearchableProject> = {}): SearchableProject {
-  // Deliberately dumb: `section` defaults to "recent" and must be stated
+  // Deliberately dumb: `section` defaults to "other" and must be stated
   // explicitly by band tests. Deriving it here would restate the hook's
   // classification rules, so a fixture could keep rendering the intended bands
   // while the real `sectionForProject` drifted — the component tests would stay

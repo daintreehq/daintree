@@ -124,6 +124,8 @@ export interface BulkProjectStatsEntry extends ProjectStats {
   latestUnacknowledgedCompletionAt?: number;
   /** Latest completion regardless of acknowledgement, absent when none. */
   latestCompletionAt?: number;
+  /** Latest transition into `working`, absent when nothing is working. */
+  latestWorkingSince?: number;
   /**
    * Measured resident memory (MB) of this project's terminal process trees —
    * each shell plus every descendant (dev servers, agents, language servers),

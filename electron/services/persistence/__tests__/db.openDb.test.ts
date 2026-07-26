@@ -293,8 +293,10 @@ describe("openDb (integration)", () => {
     const insert = old.sqlite.prepare(
       "INSERT INTO projects (id, path, name, emoji, last_opened, pinned, frecency_score, last_accessed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     );
-    // A heavily-used project bumped recently, and a legacy row that predates
-    // the timestamp column (last_accessed_at still 0).
+    // A heavily-used project bumped recently, a legacy row that predates the
+    // timestamp column (last_accessed_at still 0), a row carrying the old
+    // runtime backfill's boot-stamp (timestamp NEWER than its last open), and
+    // a never-opened row still holding the untouched 3.0 seed.
     insert.run(
       "heavy",
       "/tmp/heavy",
@@ -306,6 +308,17 @@ describe("openDb (integration)", () => {
       1_700_000_000_000
     );
     insert.run("legacy", "/tmp/legacy", "legacy", "🌴", 1_650_000_000_000, 0, 26.5, 0);
+    insert.run(
+      "bootstamped",
+      "/tmp/bootstamped",
+      "bootstamped",
+      "🌵",
+      1_650_000_000_000,
+      0,
+      26.5,
+      1_784_000_000_000
+    );
+    insert.run("seeded", "/tmp/seeded", "seeded", "🌱", 1_700_000_000_000, 0, 3.0, 0);
     old.sqlite.close();
 
     const { sqlite } = openDb(dbPath, migrationsFolder);
@@ -325,6 +338,19 @@ describe("openDb (integration)", () => {
       expect(legacy.frecency_score).toBeCloseTo(26.5 * 0.3036062767938871, 3);
       // The 0-timestamp row is rebased onto last_opened, not "now".
       expect(legacy.last_accessed_at).toBe(1_650_000_000_000);
+
+      // The pre-0009 runtime backfill stamped zero timestamps with a BOOT
+      // time, leaving score valid-at newer than the project's last open — the
+      // exact shape that let dormant projects rank as fresh. 0009 rebases it.
+      const bootstamped = rows.find((r) => r.id === "bootstamped")!;
+      expect(bootstamped.last_accessed_at).toBe(1_650_000_000_000);
+      expect(bootstamped.frecency_score).toBeCloseTo(26.5 * 0.3036062767938871, 3);
+
+      // An untouched 3.0 seed becomes the new 0.5 prior, not 3.0 × scale —
+      // registration was never evidence of three accesses.
+      const seeded = rows.find((r) => r.id === "seeded")!;
+      expect(seeded.frecency_score).toBeCloseTo(0.5);
+      expect(seeded.last_accessed_at).toBe(1_700_000_000_000);
     } finally {
       sqlite.close();
     }
@@ -370,9 +396,10 @@ describe("openDb (integration)", () => {
       };
       expect(row.id).toBe("old");
       expect(row.pinned).toBe(0);
-      // The adopted column default (3.0) then rides the 0009 rate rebase like
-      // every other pre-existing score.
-      expect(row.frecency_score).toBeCloseTo(3.0 * 0.3036062767938871);
+      // An exact 3.0 is the untouched seed (a bumped score lands there with
+      // probability zero), so 0009 rewrites it to the new 0.5 prior instead of
+      // rate-scaling it like accumulated history.
+      expect(row.frecency_score).toBeCloseTo(0.5);
       // Backfill must have replaced the column-default 0 with a real timestamp.
       expect(row.last_accessed_at).toBeGreaterThan(0);
 

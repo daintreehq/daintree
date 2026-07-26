@@ -42,7 +42,12 @@ export interface CompletionAcknowledgementDeps {
  * Polling rather than event wiring: the observed project is a function of
  * window focus, view activation, and project switches, which have no single
  * event source across windows. A 1s sample of in-memory state is cheap,
- * uniform, and cannot leak subscriptions.
+ * uniform, and cannot leak subscriptions. Known bound: a focus blip shorter
+ * than one sample interval is invisible, so "continuous" is proven only at
+ * sample granularity — the dwell can be short by strictly less than one
+ * second, against a threshold chosen with that slack in mind. Sub-second
+ * focus round-trips while the same project stays active read as continued
+ * attention, which is close enough to the truth not to buy event plumbing.
  */
 export class CompletionAcknowledgementService {
   private timer: ReturnType<typeof setInterval> | null = null;
