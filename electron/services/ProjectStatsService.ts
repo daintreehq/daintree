@@ -69,6 +69,34 @@ export class ProjectStatsService {
     return this.lastBroadcast;
   }
 
+  /**
+   * Replay the retained status map to a single freshly-loaded view (cold start,
+   * LRU restore, crash reload, DevTools refresh), mirroring
+   * `pushRunHistorySnapshotTo`. `computeAndBroadcast` suppresses unchanged
+   * payloads, so a view that attaches while the fleet is static — waiting,
+   * blocked and completed-unreviewed agents are exactly the states that stop
+   * transitioning — would otherwise never receive a first broadcast at all.
+   *
+   * An empty map is skipped: the initial compute is deferred off the
+   * first-interactive path, so `lastBroadcast` is `{}` for a window after boot,
+   * and "nothing computed yet" is indistinguishable on the wire from "no
+   * projects". Sending it carries no information and can only clobber a store
+   * the renderer's own bulk seed already filled.
+   *
+   * Best-effort, not durable transport: the renderer attaches its listener from
+   * a React effect, so this send can land first and be dropped. The palette's
+   * open-time bulk pull remains the guaranteed hydration path.
+   */
+  pushSnapshotTo(webContents: Electron.WebContents): void {
+    if (webContents.isDestroyed()) return;
+    if (Object.keys(this.lastBroadcast).length === 0) return;
+    try {
+      webContents.send(CHANNELS.PROJECT_STATS_UPDATED, this.lastBroadcast);
+    } catch {
+      // Silently ignore send failures during window initialization/disposal.
+    }
+  }
+
   stop(): void {
     // Always bump generation so an in-flight computeAndBroadcast — including
     // one started by a pre-start refresh() — is invalidated before any

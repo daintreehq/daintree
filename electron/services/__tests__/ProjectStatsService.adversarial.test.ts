@@ -51,6 +51,13 @@ function makePtyClient(): FakePtyClient {
   };
 }
 
+function makeWebContents() {
+  return {
+    isDestroyed: vi.fn<() => boolean>(() => false),
+    send: vi.fn<(channel: string, payload: unknown) => void>(),
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
@@ -552,6 +559,62 @@ describe("ProjectStatsService adversarial", () => {
     const after2 = broadcastMock.mock.calls.length;
 
     expect(after2).toBe(after1);
+    svc.stop();
+  });
+
+  it("replays the retained snapshot to a view that missed every broadcast", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    const [liveChannel, livePayload] = broadcastMock.mock.calls[0]!;
+
+    // The fleet goes static: the next compute produces the same map and is
+    // suppressed, so a view loading now never receives a first broadcast.
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+
+    const wc = makeWebContents();
+    svc.pushSnapshotTo(wc as never);
+
+    // Same channel and same payload as the live broadcast, so the replay lands
+    // on the listener the renderer already has attached.
+    expect(wc.send.mock.calls).toEqual([[liveChannel, livePayload]]);
+    svc.stop();
+  });
+
+  it("does not replay before the deferred initial compute has produced a map", () => {
+    const svc = new ProjectStatsService(makePtyClient() as never);
+    const wc = makeWebContents();
+
+    // `{}` here means "nothing computed yet", which is indistinguishable on the
+    // wire from "no projects" — sending it would only clobber a renderer that
+    // seeded itself from bulk stats.
+    svc.pushSnapshotTo(wc as never);
+
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("skips a destroyed view and swallows a send that throws", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const destroyed = makeWebContents();
+    destroyed.isDestroyed.mockReturnValue(true);
+    svc.pushSnapshotTo(destroyed as never);
+    expect(destroyed.send).not.toHaveBeenCalled();
+
+    const racing = makeWebContents();
+    racing.send.mockImplementation(() => {
+      throw new Error("Object has been destroyed");
+    });
+    expect(() => svc.pushSnapshotTo(racing as never)).not.toThrow();
     svc.stop();
   });
 
