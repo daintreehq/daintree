@@ -16,7 +16,9 @@ function makeProject(
     frecencyScore: 3.0,
     activeAgentCount: 0,
     waitingAgentCount: 0,
+    blockedAgentCount: 0,
     processCount: 0,
+    section: "recent",
     displayPath: overrides.path.split("/").filter(Boolean).pop() ?? overrides.path,
     ...overrides,
   };

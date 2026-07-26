@@ -38,7 +38,13 @@ const {
   const projectStatsState = {
     stats: {} as Record<
       string,
-      { activeAgentCount: number; waitingAgentCount: number; processCount: number }
+      {
+        activeAgentCount: number;
+        waitingAgentCount: number;
+        blockedAgentCount?: number;
+        oldestWaitingSince?: number;
+        processCount: number;
+      }
     >,
   };
 
@@ -46,10 +52,8 @@ const {
     projectStatsState.stats = stats;
   });
 
-  // Modal browse lists only projects the user can switch to right now, so a
-  // fixture that is not `currentProject` needs a reason to be listed —
-  // "background" is the realistic one. A "closed"/idle non-current project is
-  // correctly absent from `results` (#11071).
+  // Browse lists every registered project in both modes; "background" is just
+  // the realistic status for a fixture that isn't the current project.
   const defaultProjects: ProjectFixture[] = [
     {
       id: "project-1",
@@ -136,6 +140,8 @@ const emptyBulkStats = (projectIds: string[]) => {
       processIds: number[];
       activeAgentCount: number;
       waitingAgentCount: number;
+      blockedAgentCount: number;
+      oldestWaitingSince?: number;
     }
   > = {};
   for (const id of projectIds) {
@@ -147,6 +153,7 @@ const emptyBulkStats = (projectIds: string[]) => {
       processIds: [],
       activeAgentCount: 0,
       waitingAgentCount: 0,
+      blockedAgentCount: 0,
     };
   }
   return result;
@@ -427,7 +434,7 @@ describe("useProjectSwitcherPalette", () => {
       expect(selected?.id).toBe(multipleProjects[1]!.id);
     });
 
-    it("sorts by lastOpened, ignoring frecencyScore", async () => {
+    it("orders browse by frecency, not raw lastOpened", async () => {
       const projectsWithMismatchedScores = [
         {
           id: "project-a",
@@ -467,9 +474,11 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.results).toHaveLength(2);
       });
 
-      // project-b has lower frecency but higher lastOpened — should come first
-      expect(result.current.results[0]!.id).toBe("project-b");
-      expect(result.current.results[1]!.id).toBe("project-a");
+      // project-a was opened longer ago but is used far more often. Browse
+      // reflects durable use, so a project touched once yesterday no longer
+      // outranks the one worked in every day.
+      expect(result.current.results[0]!.id).toBe("project-a");
+      expect(result.current.results[1]!.id).toBe("project-b");
     });
   });
 
@@ -869,12 +878,11 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.activeProject?.path).toBe("/repo/p1");
     });
 
-    it("keeps activeProject populated even when the active project sits outside the 15-item results cap", async () => {
-      // Build 20 projects with the active project at the back of the MRU list
-      // (lowest lastOpened). With MAX_RESULTS=15, the active project should
-      // NOT appear in results, but activeProject must still expose it.
+    it("renders every project and floats the active one to the top", async () => {
+      // The stalest project by lastOpened used to be unreachable in browse once
+      // the list exceeded fifteen. Being the active project is now what decides
+      // its position, and nothing decides its absence.
       const projects = Array.from({ length: 20 }, (_, i) => makeProject(i + 1));
-      // Make project-20 the most-stale entry so it falls outside the 15 window.
       projects[19] = { ...projects[19]!, lastOpened: 0 };
       projectState.projects = projects;
       projectState.currentProject = { id: "project-20" };
@@ -886,12 +894,9 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.activeProject?.id).toBe("project-20");
       });
 
-      const idsInResults = result.current.results.map((p) => p.id);
-      expect(idsInResults).not.toContain("project-20");
-      expect(result.current.results).toHaveLength(15);
+      expect(result.current.results).toHaveLength(20);
+      expect(result.current.results[0]!.id).toBe("project-20");
       expect(result.current.activeProject?.isActive).toBe(true);
-      // Fields the pill context-menu reads must remain populated even when
-      // the active project sits outside the results window.
       expect(result.current.activeProject?.path).toBe("/repo/p20");
       expect(result.current.activeProject?.processCount).toBe(0);
     });
@@ -1330,6 +1335,7 @@ describe("useProjectSwitcherPalette", () => {
           processIds: [1, 2],
           activeAgentCount: 1,
           waitingAgentCount: 3,
+          blockedAgentCount: 0,
         },
       });
 
@@ -1341,7 +1347,87 @@ describe("useProjectSwitcherPalette", () => {
 
       await waitFor(() => {
         expect(setStatsMock).toHaveBeenCalledWith({
-          "project-1": { activeAgentCount: 1, waitingAgentCount: 3, processCount: 2 },
+          "project-1": {
+            activeAgentCount: 1,
+            waitingAgentCount: 3,
+            blockedAgentCount: 0,
+            processCount: 2,
+          },
+        });
+      });
+    });
+
+    it("seeds only projects the push store has never heard of", async () => {
+      // Bulk stats can't tell an error-blocked wait from a prompt and don't net
+      // out the assistant PTY, and the push service suppresses unchanged
+      // payloads — so a bulk write landing on top of a push would stick until
+      // the underlying counts happened to move again. Bulk fills gaps only.
+      projectStatsState.stats = {
+        "project-1": {
+          activeAgentCount: 0,
+          waitingAgentCount: 3,
+          blockedAgentCount: 2,
+          oldestWaitingSince: 1_000,
+          processCount: 2,
+        },
+      };
+      getBulkStatsMock.mockResolvedValue({
+        "project-1": {
+          processCount: 99,
+          terminalCount: 99,
+          estimatedMemoryMB: 0,
+          terminalTypes: {},
+          processIds: [],
+          activeAgentCount: 99,
+          waitingAgentCount: 99,
+          blockedAgentCount: 9,
+        },
+      });
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(getBulkStatsMock).toHaveBeenCalled();
+      });
+      // Nothing was absent, so nothing was written.
+      expect(setStatsMock).not.toHaveBeenCalled();
+      expect(result.current.results[0]?.blockedAgentCount).toBe(2);
+    });
+
+    it("seeds a project the push store has no entry for", async () => {
+      projectStatsState.stats = {};
+      getBulkStatsMock.mockResolvedValue({
+        "project-1": {
+          processCount: 2,
+          terminalCount: 2,
+          estimatedMemoryMB: 10,
+          terminalTypes: {},
+          processIds: [],
+          activeAgentCount: 1,
+          waitingAgentCount: 3,
+          blockedAgentCount: 0,
+        },
+      });
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(setStatsMock).toHaveBeenCalledWith({
+          "project-1": {
+            activeAgentCount: 1,
+            waitingAgentCount: 3,
+            // Bulk cannot know this, and guessing would paint a row red.
+            blockedAgentCount: 0,
+            processCount: 2,
+          },
         });
       });
     });
@@ -1395,13 +1481,267 @@ describe("useProjectSwitcherPalette", () => {
     });
   });
 
-  // #11071: modal browse used to render a narrower list than the one
-  // selectedIndex walked, so arrowing could land on a project that was never
-  // on screen — no highlight, and Enter switched to an off-screen project.
-  // `results` is now the single array the palette scopes, renders and indexes.
-  describe("modal browse scope — issue #11071", () => {
-    // MRU order interleaves a closed project between the two the modal shows,
-    // which is exactly the arrangement that stranded the selection.
+  // Classification is tested here, against raw projects plus pushed stats,
+  // rather than through the component — a component fixture that restates the
+  // banding rules would go on passing while this logic drifted.
+  describe("section classification", () => {
+    const base = (id: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      name: id,
+      path: `/repo/${id}`,
+      emoji: "🌲",
+      lastOpened: 100,
+      frecencyScore: 3.0,
+      status: "closed" as const,
+      ...extra,
+    });
+
+    it("bands every project by what it needs, not by when it was opened", async () => {
+      const projects = [
+        base("active", { status: "active" }),
+        base("waiting"),
+        base("blocked"),
+        base("working"),
+        base("processes"),
+        base("pinnedProj", { pinned: true }),
+        base("idle"),
+        base("gone", { status: "missing" }),
+      ];
+      projectState.projects = projects;
+      projectState.currentProject = { id: "active" };
+      projectStatsState.stats = {
+        waiting: { activeAgentCount: 0, waitingAgentCount: 2, processCount: 0 },
+        blocked: {
+          activeAgentCount: 0,
+          waitingAgentCount: 1,
+          blockedAgentCount: 1,
+          processCount: 0,
+        },
+        working: { activeAgentCount: 3, waitingAgentCount: 0, processCount: 0 },
+        processes: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 2 },
+      };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(projects.length);
+      });
+
+      const sectionOf = (id: string) => result.current.results.find((p) => p.id === id)?.section;
+      expect(sectionOf("active")).toBe("current");
+      expect(sectionOf("waiting")).toBe("attention");
+      expect(sectionOf("blocked")).toBe("attention");
+      expect(sectionOf("working")).toBe("activity");
+      expect(sectionOf("processes")).toBe("activity");
+      expect(sectionOf("pinnedProj")).toBe("pinned");
+      expect(sectionOf("idle")).toBe("recent");
+      expect(sectionOf("gone")).toBe("unavailable");
+
+      // Bands appear in priority order and each appears exactly once.
+      const bands: string[] = [];
+      for (const project of result.current.results) {
+        if (bands.at(-1) !== project.section) bands.push(project.section);
+      }
+      expect(bands).toEqual([
+        "current",
+        "attention",
+        "activity",
+        "pinned",
+        "recent",
+        "unavailable",
+      ]);
+    });
+
+    it("sorts attention by blocked first, then by the oldest wait", async () => {
+      const projects = [base("newWait"), base("oldWait"), base("blockedProj")];
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {
+        newWait: {
+          activeAgentCount: 0,
+          waitingAgentCount: 1,
+          processCount: 0,
+          oldestWaitingSince: 9_000,
+        },
+        oldWait: {
+          activeAgentCount: 0,
+          waitingAgentCount: 1,
+          processCount: 0,
+          oldestWaitingSince: 1_000,
+        },
+        blockedProj: {
+          activeAgentCount: 0,
+          waitingAgentCount: 1,
+          blockedAgentCount: 1,
+          processCount: 0,
+          oldestWaitingSince: 50_000,
+        },
+      };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+
+      // A stopped agent outranks a long wait; among plain waits, oldest first.
+      expect(result.current.results.map((p) => p.id)).toEqual([
+        "blockedProj",
+        "oldWait",
+        "newWait",
+      ]);
+    });
+
+    it("holds the order and the bands still while the palette is open", async () => {
+      const projects = [base("waiting"), base("idle")];
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {
+        waiting: { activeAgentCount: 0, waitingAgentCount: 1, processCount: 0 },
+      };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["waiting", "idle"]));
+
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results[0]!.id).toBe("waiting");
+      });
+      expect(result.current.results[0]!.section).toBe("attention");
+
+      // The agent finishes while the user is reading the list.
+      act(() => {
+        projectStatsState.stats = {
+          waiting: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+        };
+        rerender();
+      });
+
+      // The row keeps its slot and its band, so nothing moves under the pointer.
+      expect(result.current.results[0]!.id).toBe("waiting");
+      expect(result.current.results[0]!.section).toBe("attention");
+      // Content underneath is live, though.
+      expect(result.current.results[0]!.waitingAgentCount).toBe(0);
+    });
+
+    it("holds a project that arrives after the freeze just as still", async () => {
+      projectState.projects = [base("first")];
+      projectState.currentProject = null;
+      projectStatsState.stats = {};
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["first"]));
+
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(1);
+      });
+
+      // A second window registers a project while this palette sits open.
+      act(() => {
+        projectState.projects = [base("first"), base("late")];
+        rerender();
+      });
+      await waitFor(() => {
+        expect(result.current.results.map((p) => p.id)).toEqual(["first", "late"]);
+      });
+      expect(result.current.results[1]!.section).toBe("recent");
+
+      // Its agents start working. A late arrival left outside the freeze would
+      // jump into the activity band above "first"; a frozen one stays put.
+      act(() => {
+        projectStatsState.stats = {
+          late: { activeAgentCount: 2, waitingAgentCount: 0, processCount: 2 },
+        };
+        rerender();
+      });
+
+      expect(result.current.results.map((p) => p.id)).toEqual(["first", "late"]);
+      expect(result.current.results[1]!.section).toBe("recent");
+      expect(result.current.results[1]!.activeAgentCount).toBe(2);
+    });
+
+    it("re-bands on the next open", async () => {
+      const projects = [base("waiting"), base("idle")];
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {
+        waiting: { activeAgentCount: 0, waitingAgentCount: 1, processCount: 0 },
+      };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["waiting", "idle"]));
+
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results[0]!.section).toBe("attention");
+      });
+
+      act(() => {
+        result.current.close();
+      });
+      act(() => {
+        projectStatsState.stats = {
+          waiting: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+        };
+        // A real stats push updates the store and renders; the layout captured
+        // on the next open has to come from that render, not the one before it.
+        rerender();
+      });
+      act(() => {
+        result.current.open("modal");
+      });
+
+      await waitFor(() => {
+        expect(result.current.results.every((p) => p.section !== "attention")).toBe(true);
+      });
+    });
+
+    it("carries pushed blocked and wait-age data through to the row", async () => {
+      const projects = [base("p")];
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {
+        p: {
+          activeAgentCount: 0,
+          waitingAgentCount: 3,
+          blockedAgentCount: 1,
+          oldestWaitingSince: 4_242,
+          processCount: 0,
+        },
+      };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["p"]));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(1);
+      });
+      const row = result.current.results[0]!;
+      expect(row.blockedAgentCount).toBe(1);
+      expect(row.oldestWaitingSince).toBe(4_242);
+      expect(row.section).toBe("attention");
+    });
+  });
+
+  // #11071: browse used to render a narrower list than the one selectedIndex
+  // walked, so arrowing could land on a project that was never on screen — no
+  // highlight, and Enter switched to an off-screen project. `results` is the
+  // single array the palette renders, sections and indexes; the guarantee has
+  // to survive now that browse is section-ordered rather than flat.
+  describe("browse list — issue #11071", () => {
     const interleaved = [
       {
         id: "current",
@@ -1441,10 +1781,10 @@ describe("useProjectSwitcherPalette", () => {
       getBulkStatsMock.mockResolvedValue(emptyBulkStats(interleaved.map((p) => p.id)));
     });
 
-    async function openModal() {
+    async function openIn(mode: "modal" | "dropdown") {
       const { result } = renderHook(() => useProjectSwitcherPalette());
       act(() => {
-        result.current.open("modal");
+        result.current.open(mode);
       });
       await waitFor(() => {
         expect(result.current.isOpen).toBe(true);
@@ -1452,97 +1792,137 @@ describe("useProjectSwitcherPalette", () => {
       return result;
     }
 
-    it("omits an idle project from modal browse even when it is more recent", async () => {
-      const result = await openModal();
-
+    it("lists every project in the same order in both modes", async () => {
+      const modal = await openIn("modal");
       await waitFor(() => {
-        expect(result.current.results.map((p) => p.id)).toEqual(["current", "background"]);
+        expect(modal.current.results).toHaveLength(3);
       });
+      const modalOrder = modal.current.results.map((p) => p.id);
+      const modalSections = modal.current.results.map((p) => p.section);
+
+      const dropdown = await openIn("dropdown");
+      await waitFor(() => {
+        expect(dropdown.current.results).toHaveLength(3);
+      });
+
+      // Compared in order, not as sets: the two surfaces previously agreed on
+      // neither scope nor grouping, and membership alone would not catch that.
+      expect(dropdown.current.results.map((p) => p.id)).toEqual(modalOrder);
+      expect(dropdown.current.results.map((p) => p.section)).toEqual(modalSections);
+      expect(modalOrder).toContain("closed");
     });
 
-    it("lands every arrow step on a project that is actually in results", async () => {
-      const result = await openModal();
+    it("puts the current project first and groups the rest into contiguous sections", async () => {
+      const result = await openIn("modal");
+
       await waitFor(() => {
-        expect(result.current.results).toHaveLength(2);
+        expect(result.current.results).toHaveLength(3);
+      });
+      expect(result.current.results[0]!.section).toBe("current");
+
+      // Sections must never interleave, or the component's contiguous-run
+      // grouping would emit the same header twice.
+      const seen: string[] = [];
+      for (const project of result.current.results) {
+        if (seen.at(-1) !== project.section) seen.push(project.section);
+      }
+      expect(new Set(seen).size).toBe(seen.length);
+    });
+
+    it("visits every result exactly once per cycle and never lands off-list", async () => {
+      const result = await openIn("modal");
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
       });
 
-      // One full cycle in each direction: every stop must be a rendered row.
+      const size = result.current.results.length;
       const visited: string[] = [];
-      for (let step = 0; step < result.current.results.length * 2; step++) {
+      for (let step = 0; step < size; step++) {
         const selected = result.current.results[result.current.selectedIndex];
+        // Asserting "defined" alone would pass even if the selection never
+        // moved — the identities have to be collected and compared.
         expect(selected).toBeDefined();
         visited.push(selected!.id);
         act(() => {
           result.current.selectNext();
         });
       }
-      for (let step = 0; step < result.current.results.length; step++) {
+      expect(new Set(visited).size).toBe(size);
+      expect([...visited].sort()).toEqual(result.current.results.map((p) => p.id).sort());
+
+      // One more step wraps back to where the cycle began.
+      expect(result.current.results[result.current.selectedIndex]!.id).toBe(visited[0]);
+
+      const backwards: string[] = [];
+      for (let step = 0; step < size; step++) {
         act(() => {
           result.current.selectPrevious();
         });
-        expect(result.current.results[result.current.selectedIndex]).toBeDefined();
+        const selected = result.current.results[result.current.selectedIndex];
+        expect(selected).toBeDefined();
+        backwards.push(selected!.id);
       }
-
-      expect(visited).not.toContain("closed");
+      expect(new Set(backwards).size).toBe(size);
     });
 
-    it("confirmSelection switches to the highlighted project, never a scoped-out one", async () => {
-      const result = await openModal();
+    it("confirmSelection switches to the highlighted project", async () => {
+      const result = await openIn("modal");
       await waitFor(() => {
-        expect(result.current.results).toHaveLength(2);
+        expect(result.current.results).toHaveLength(3);
       });
 
-      // Row 2 is the MRU switch target — under the old unscoped index this was
-      // the closed project sitting at results[1].
       const highlighted = result.current.results[result.current.selectedIndex]!;
-      expect(highlighted.id).toBe("background");
+      expect(highlighted.isActive).toBe(false);
 
       act(() => {
         result.current.confirmSelection();
       });
 
       await waitFor(() => {
-        expect(projectState.reopenProject).toHaveBeenCalledWith("background");
+        const called =
+          projectState.switchProject.mock.calls.length +
+          projectState.reopenProject.mock.calls.length;
+        expect(called).toBeGreaterThan(0);
       });
-      expect(projectState.switchProject).not.toHaveBeenCalledWith("closed");
-      expect(projectState.reopenProject).not.toHaveBeenCalledWith("closed");
+      const target =
+        projectState.switchProject.mock.calls[0]?.[0] ??
+        projectState.reopenProject.mock.calls[0]?.[0];
+      expect(target).toBe(highlighted.id);
     });
 
-    it("preselects against the destination list, not the mode being left", async () => {
-      // Only the current project survives modal scope here, so the row-2 rule
-      // MUST resolve against the destination list: counting all projects (or
-      // the outgoing mode's list) would preselect a row modal doesn't have.
-      projectState.projects = [interleaved[0]!, interleaved[1]!];
-      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["current", "closed"]));
+    it("treats picking the current project as a dismissal, not a dead end", async () => {
+      const result = await openIn("modal");
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
 
-      const { result } = renderHook(() => useProjectSwitcherPalette());
+      const current = result.current.results.find((project) => project.isActive)!;
 
       act(() => {
-        result.current.open("dropdown");
+        void result.current.selectProject(current);
       });
-      await waitFor(() => {
-        expect(result.current.results).toHaveLength(2);
-      });
-      // Dropdown lists both, so row 2 is the closed project.
-      expect(result.current.selectedIndex).toBe(1);
-      expect(result.current.results[1]!.id).toBe("closed");
 
-      act(() => {
-        result.current.open("modal");
-      });
       await waitFor(() => {
-        expect(result.current.results).toHaveLength(1);
+        expect(result.current.isOpen).toBe(false);
       });
-      // Modal has a single row — the only valid selection is it.
-      expect(result.current.selectedIndex).toBe(0);
-      expect(result.current.results[0]!.id).toBe("current");
+      // Nothing to switch to — but the palette must not just sit there.
+      expect(projectState.switchProject).not.toHaveBeenCalled();
+      expect(projectState.reopenProject).not.toHaveBeenCalled();
     });
 
-    it("keeps a switchable project past the unscoped window inside modal browse", async () => {
-      // Enough recent idle projects to fill the results cap on their own. The
-      // background project is the stalest of all, so scoping BEFORE the cap is
-      // the only way it survives — capping first would slice it away.
-      const idle = Array.from({ length: 20 }, (_, i) => ({
+    it("preselects the first row that isn't the active project, in either mode", async () => {
+      for (const mode of ["modal", "dropdown"] as const) {
+        const result = await openIn(mode);
+        await waitFor(() => {
+          expect(result.current.results).toHaveLength(3);
+        });
+        expect(result.current.results[result.current.selectedIndex]!.isActive).toBe(false);
+        expect(result.current.selectedIndex).toBe(1);
+      }
+    });
+
+    it("renders projects far past the old fifteen-row cap", async () => {
+      const many = Array.from({ length: 40 }, (_, i) => ({
         id: `idle-${i}`,
         name: `Idle ${i}`,
         path: `/repo/idle-${i}`,
@@ -1551,29 +1931,17 @@ describe("useProjectSwitcherPalette", () => {
         frecencyScore: 1.0,
         status: "closed" as const,
       }));
-      const stale = {
-        id: "stale-background",
-        name: "Stale Background",
-        path: "/repo/stale",
-        emoji: "🌴",
-        lastOpened: 1,
-        frecencyScore: 1.0,
-        status: "background" as const,
-      };
 
-      projectState.projects = [...idle, stale];
+      projectState.projects = many;
       projectState.currentProject = null;
-      getBulkStatsMock.mockResolvedValue(emptyBulkStats([...idle.map((p) => p.id), stale.id]));
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(many.map((p) => p.id)));
 
-      const { result } = renderHook(() => useProjectSwitcherPalette());
-
-      act(() => {
-        result.current.open("modal");
-      });
+      const result = await openIn("modal");
 
       await waitFor(() => {
-        expect(result.current.results.map((p) => p.id)).toEqual(["stale-background"]);
+        expect(result.current.results).toHaveLength(40);
       });
+      expect(result.current.results.map((p) => p.id)).toContain("idle-39");
     });
 
     it("keeps the highlight on the selected project when a row above it disappears", async () => {
@@ -1595,30 +1963,36 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.results).toHaveLength(4);
       });
 
-      // Land on a MIDDLE row: bg-b at index 2.
+      // Land on a middle row so there is a row above it to remove.
       act(() => {
         result.current.selectNext();
       });
-      expect(result.current.results[result.current.selectedIndex]!.id).toBe("bg-b");
-
-      // A row ABOVE the selection goes away — every later row shifts up one.
       act(() => {
-        projectState.projects = withThreeVisible.filter((p) => p.id !== "bg-a");
+        result.current.selectNext();
+      });
+      const held = result.current.results[result.current.selectedIndex]!.id;
+      const above = result.current.results
+        .slice(0, result.current.selectedIndex)
+        .map((p) => p.id)
+        .find((id) => id !== held);
+      expect(above).toBeDefined();
+
+      act(() => {
+        projectState.projects = withThreeVisible.filter((p) => p.id !== above);
         rerender();
       });
 
       await waitFor(() => {
         expect(result.current.results).toHaveLength(3);
       });
-      // The highlight tracks the project, not the slot it used to occupy.
-      expect(result.current.results[result.current.selectedIndex]!.id).toBe("bg-b");
-      expect(result.current.selectedIndex).toBeLessThan(result.current.results.length);
+      // The highlight tracks the PROJECT, not the slot it used to occupy.
+      expect(result.current.results[result.current.selectedIndex]!.id).toBe(held);
     });
 
-    it("still finds a scoped-out project by search", async () => {
-      const result = await openModal();
+    it("finds any project by search regardless of its state", async () => {
+      const result = await openIn("modal");
       await waitFor(() => {
-        expect(result.current.results).toHaveLength(2);
+        expect(result.current.results).toHaveLength(3);
       });
 
       act(() => {
@@ -1630,11 +2004,7 @@ describe("useProjectSwitcherPalette", () => {
       });
     });
 
-    it("keeps a scoped-out project's agents in the badge totals", async () => {
-      // Agent counts and process counts arrive from separate ProjectStatsService
-      // calls, so a waiting agent can land before its process count does. The
-      // badge reads uncapped, unscoped totals so it can't blink off just
-      // because modal browse drops that project for a beat.
+    it("counts non-active agents in the badge totals", async () => {
       getBulkStatsMock.mockResolvedValue({
         ...emptyBulkStats(interleaved.map((p) => p.id)),
         closed: {
@@ -1645,15 +2015,17 @@ describe("useProjectSwitcherPalette", () => {
           processIds: [],
           activeAgentCount: 0,
           waitingAgentCount: 2,
+          blockedAgentCount: 0,
         },
       });
 
-      const result = await openModal();
+      const result = await openIn("modal");
 
       await waitFor(() => {
         expect(result.current.nonActiveAgentCounts.waitingAgentCount).toBe(2);
       });
-      expect(result.current.results.map((p) => p.id)).not.toContain("closed");
+      // One project needs attention, not two agents' worth of obligation.
+      expect(result.current.nonActiveAgentCounts.attentionProjectCount).toBe(1);
     });
   });
 });

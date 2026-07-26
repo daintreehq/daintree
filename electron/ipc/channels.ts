@@ -239,6 +239,7 @@ export const CHANNELS = {
   PROJECT_GET_BULK_STATS: "project:get-bulk-stats",
   PROJECT_GET_NOTIFICATION_OVERRIDES: "project:get-notification-overrides",
   PROJECT_STATS_UPDATED: "project:stats-updated",
+  PROJECT_HISTORY_PEEK: "project-history:peek",
   PROJECT_CREATE_FOLDER: "project:create-folder",
   PROJECT_INIT_GIT: "project:init-git",
   PROJECT_INIT_GIT_GUIDED: "project:init-git-guided",

@@ -70,7 +70,7 @@ vi.mock("@/hooks", async () => {
       confirmRemoveProject: vi.fn(),
       isRemovingProject: false,
       backgroundWaitingCount: 0,
-      nonActiveAgentCounts: { activeAgentCount: 0, waitingAgentCount: 0 },
+      nonActiveAgentCounts: { activeAgentCount: 0, waitingAgentCount: 0, attentionProjectCount: 0 },
       scratchResults: [],
       createScratch: vi.fn(),
       selectScratch: vi.fn(),

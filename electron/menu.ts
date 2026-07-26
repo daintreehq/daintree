@@ -4,6 +4,7 @@ import { projectStore } from "./services/ProjectStore.js";
 import { openExternalUrl } from "./utils/openExternal.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { broadcastProjectSwitchUpdates } from "./ipc/projectSwitchBroadcast.js";
+import { getProjectHistory } from "./services/ProjectHistoryService.js";
 import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
 import { isAssistantOnlyAgentId } from "../shared/config/agentIds.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
@@ -906,6 +907,14 @@ export async function handleDirectoryOpen(
       // departing and activated rows so cached views' MRU timestamps stay
       // fresh; otherwise the next `Cmd+Alt+=` targets the wrong project.
       broadcastProjectSwitchUpdates(previousProjectId, project.id);
+
+      // Third switch entry point, and the one that bypasses `activateProjectView`
+      // entirely. Without this, opening a project from File → Recent Projects as
+      // the very first switch of a session leaves the history holding only the
+      // destination, so `Cmd+Alt+=` has nowhere to go back to.
+      const menuHistory = getProjectHistory(targetWindow.id);
+      if (previousProjectId) menuHistory.record(previousProjectId);
+      menuHistory.record(project.id);
 
       // Notify the activated view of the switch so it refreshes its cache, MRU,
       // and polling, mirroring activateProjectView. Targeted send to the

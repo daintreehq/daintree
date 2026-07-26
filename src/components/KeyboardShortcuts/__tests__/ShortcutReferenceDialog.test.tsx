@@ -60,7 +60,7 @@ const mockBindings: Array<RegisteredKeybindingConfig & { effectiveCombo: string 
     effectiveCombo: "Cmd+Shift+P",
   },
   {
-    actionId: "project.mruCycleNewer",
+    actionId: "file.open",
     combo: "",
     scope: "global",
     priority: 0,
@@ -76,7 +76,7 @@ const mockDisplayCombos: Record<string, string> = {
   "terminal.new": "⌘T",
   "app.settings": "⌘,",
   "action.palette.open": "⌘⇧P",
-  "project.mruCycleNewer": "",
+  "file.open": "",
 };
 
 vi.mock("@/services/KeybindingService", () => {

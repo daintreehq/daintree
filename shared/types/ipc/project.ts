@@ -102,6 +102,15 @@ export interface BulkProjectStatsEntry extends ProjectStats {
   activeAgentCount: number;
   waitingAgentCount: number;
   /**
+   * Waiting agents blocked on an error — a subset of
+   * {@link BulkProjectStatsEntry.waitingAgentCount}. Carried so a renderer that
+   * has never received a pushed status update seeds from the same reading the
+   * push would have given it.
+   */
+  blockedAgentCount: number;
+  /** Earliest transition into `waiting`, absent when nothing is waiting. */
+  oldestWaitingSince?: number;
+  /**
    * Measured resident memory (MB) of this project's terminal process trees —
    * each shell plus every descendant (dev servers, agents, language servers),
    * deduplicated by PID. Undefined when the OS process table couldn't be read;
@@ -121,6 +130,29 @@ export interface ProjectStatusEntry {
   activeAgentCount: number;
   waitingAgentCount: number;
   processCount: number;
+  /**
+   * Waiting agents whose `waitingReason` is `"error"` — settled after a blocking
+   * failure, where input may not unblock them. A subset of
+   * {@link ProjectStatusEntry.waitingAgentCount}, never additional to it: the
+   * switcher reports "needs input" for the remainder and "blocked" for these,
+   * so double-counting would overstate both.
+   */
+  blockedAgentCount: number;
+  /**
+   * Epoch ms of the earliest state change among this project's waiting agents,
+   * so the switcher can age a wait ("oldest 42m") instead of only asserting one
+   * exists. Absent when nothing is waiting, or when no waiting terminal carried
+   * a `lastStateChange` (a pre-detection boot window).
+   */
+  oldestWaitingSince?: number;
+}
+
+/**
+ * The project this window was in before the current one. Main resolves it; the
+ * renderer performs the switch through its ordinary path.
+ */
+export interface ProjectHistoryTarget {
+  projectId: string;
 }
 
 /** Project status map pushed from main process, keyed by project ID */

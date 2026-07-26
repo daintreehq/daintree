@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { switchProjectByMruDirection, type ProjectMruCycleDirection } from "@/lib/projectMruSwitch";
+import { switchToLastProject } from "@/lib/projectHistoryNav";
 
 export type UseProjectMruSwitcherReturn = void;
 
@@ -12,13 +12,6 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return false;
 }
 
-function getTriggerDirection(event: KeyboardEvent): ProjectMruCycleDirection | null {
-  if (event.code === "Equal" || event.code === "NumpadAdd") {
-    return event.shiftKey ? "newer" : "older";
-  }
-  return null;
-}
-
 function consumeEvent(event: KeyboardEvent): void {
   event.preventDefault();
   event.stopPropagation();
@@ -26,30 +19,29 @@ function consumeEvent(event: KeyboardEvent): void {
 }
 
 /**
- * Immediate MRU project switcher.
+ * `Cmd+Alt+=` — toggle to the project this window was in before this one.
  *
- * `Cmd+Alt+=` cycles forward (most-recent non-current project).
- * `Cmd+Shift+Alt+=` inverts direction and cycles backward (least-recent
- * non-current project).
+ * Shift is explicitly not handled: there is no "forward" from a toggle, and
+ * swallowing `Cmd+Shift+Alt+=` would leave a key that consumes the event and
+ * does nothing.
  *
- * Uses capture-phase window listeners so the event fires before xterm's
- * custom key handler and before `KeybindingService` dispatches the matching
- * action. Call `stopPropagation` + `preventDefault` on handled events to
- * prevent double-dispatch.
+ * Uses a capture-phase window listener so the event fires before xterm's custom
+ * key handler and before `KeybindingService` dispatches the matching action.
+ * Handled events get `stopPropagation` + `preventDefault` to prevent
+ * double-dispatch.
  */
 export function useProjectMruSwitcher(): UseProjectMruSwitcherReturn {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.isComposing) return;
-      if (!event.metaKey || !event.altKey) return;
-      const direction = getTriggerDirection(event);
-      if (!direction) return;
+      if (!event.metaKey || !event.altKey || event.shiftKey) return;
+      if (event.code !== "Equal" && event.code !== "NumpadAdd") return;
 
       if (isEditableTarget(event.target)) return;
 
       consumeEvent(event);
       if (event.repeat) return;
-      void switchProjectByMruDirection(direction);
+      void switchToLastProject();
     };
 
     window.addEventListener("keydown", handleKeyDown, { capture: true });

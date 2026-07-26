@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, fireEvent } from "@testing-library/react";
 
 const originalScrollIntoView = Element.prototype.scrollIntoView;
 beforeAll(() => {
@@ -126,6 +126,11 @@ import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 const { ProjectSwitcherPalette } = await import("../ProjectSwitcherPalette");
 
 function makeProject(overrides: Partial<SearchableProject> = {}): SearchableProject {
+  // Deliberately dumb: `section` defaults to "recent" and must be stated
+  // explicitly by band tests. Deriving it here would restate the hook's
+  // classification rules, so a fixture could keep rendering the intended bands
+  // while the real `sectionForProject` drifted — the component tests would stay
+  // green either way. Classification is owned by the hook's own suite.
   return {
     id: "proj-1",
     name: "Test Project",
@@ -141,6 +146,8 @@ function makeProject(overrides: Partial<SearchableProject> = {}): SearchableProj
     processCount: 0,
     activeAgentCount: 0,
     waitingAgentCount: 0,
+    blockedAgentCount: 0,
+    section: "recent",
     displayPath:
       (overrides.path ?? "/tmp/test").replace(/\\/g, "/").split("/").filter(Boolean).pop() ??
       overrides.path ??
@@ -180,21 +187,56 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
     expect(screen.getByText("Directory not found")).toBeTruthy();
   });
 
-  it("shows 'Agent working…' when activeAgentCount > 0", () => {
+  it("reports waiting before working, with the count", () => {
     render(
       <ProjectSwitcherPalette
         {...baseProps}
-        results={[makeProject({ activeAgentCount: 2, waitingAgentCount: 1 })]}
+        results={[makeProject({ activeAgentCount: 2, waitingAgentCount: 3 })]}
       />
     );
-    expect(screen.getByText("Agent working\u2026")).toBeTruthy();
+    // A project that needs the user outranks one that is merely busy.
+    expect(screen.getByText("3 need input")).toBeTruthy();
   });
 
-  it("shows 'Agent waiting…' when only waitingAgentCount > 0", () => {
+  it("singularises a lone waiting agent", () => {
     render(
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ waitingAgentCount: 1 })]} />
     );
-    expect(screen.getByText("Agent waiting…")).toBeTruthy();
+    expect(screen.getByText("1 needs input")).toBeTruthy();
+  });
+
+  it("ages the oldest wait", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({
+            waitingAgentCount: 2,
+            oldestWaitingSince: Date.now() - 42 * 60_000,
+          }),
+        ]}
+      />
+    );
+    expect(screen.getByText("2 need input · oldest 42m")).toBeTruthy();
+  });
+
+  it("reports blocked agents alongside the plain waits, not instead of them", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ waitingAgentCount: 3, blockedAgentCount: 1 })]}
+      />
+    );
+    // An agent stopped on an error is a different ask than one at a prompt, but
+    // the two still waiting must not vanish behind it.
+    expect(screen.getByText("2 need input · 1 blocked")).toBeTruthy();
+  });
+
+  it("reports running agents when nothing is waiting", () => {
+    render(
+      <ProjectSwitcherPalette {...baseProps} results={[makeProject({ activeAgentCount: 2 })]} />
+    );
+    expect(screen.getByText("2 agents running")).toBeTruthy();
   });
 
   it("shows relative time when lastOpened > 0 and no agents active", () => {
@@ -243,41 +285,35 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
   });
 });
 
-describe("ProjectSwitcherPalette status dot", () => {
-  it("renders idle dot for idle projects", () => {
-    render(<ProjectSwitcherPalette {...baseProps} results={[makeProject()]} />);
-    expect(screen.getByLabelText("Idle")).toBeTruthy();
-  });
-
-  it("renders idle dot for missing projects", () => {
-    render(<ProjectSwitcherPalette {...baseProps} results={[makeProject({ isMissing: true })]} />);
-    expect(screen.getByLabelText("Idle")).toBeTruthy();
-  });
-
-  it("renders active dot for projects with active agents", () => {
+describe("ProjectSwitcherPalette status conveyance", () => {
+  // The dot repeats the status line's tone and nothing else. It carries no
+  // accessible name of its own, so status is never announced twice and never
+  // depends on telling two hues apart.
+  it("conveys status as text rather than a labelled dot", () => {
     render(
-      <ProjectSwitcherPalette {...baseProps} results={[makeProject({ activeAgentCount: 1 })]} />
+      <ProjectSwitcherPalette {...baseProps} results={[makeProject({ waitingAgentCount: 2 })]} />
     );
-    expect(screen.getByLabelText("Agents working")).toBeTruthy();
+
+    expect(screen.getByText("2 need input")).toBeTruthy();
+    expect(screen.queryByLabelText("Agents waiting")).toBeNull();
+    expect(screen.queryByLabelText("Idle")).toBeNull();
   });
 
-  it("renders waiting dot for projects with waiting agents", () => {
+  it("keeps a missing project actionable instead of inert", () => {
+    const onSelect = vi.fn();
     render(
-      <ProjectSwitcherPalette {...baseProps} results={[makeProject({ waitingAgentCount: 1 })]} />
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ isMissing: true })]}
+        onSelect={onSelect}
+      />
     );
-    expect(screen.getByLabelText("Agents waiting")).toBeTruthy();
-  });
 
-  it("renders background dot for background projects", () => {
-    render(
-      <ProjectSwitcherPalette {...baseProps} results={[makeProject({ isBackground: true })]} />
-    );
-    expect(screen.getByLabelText("Running in background")).toBeTruthy();
-  });
-
-  it("renders process dot for projects with running processes", () => {
-    render(<ProjectSwitcherPalette {...baseProps} results={[makeProject({ processCount: 1 })]} />);
-    expect(screen.getByLabelText("Running in background")).toBeTruthy();
+    const row = screen.getByText("Directory not found").closest('[role="option"]');
+    expect(row).toBeTruthy();
+    expect(row!.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(row!);
+    expect(onSelect).toHaveBeenCalled();
   });
 });
 
@@ -322,24 +358,48 @@ describe("ProjectSwitcherPalette clone repo button", () => {
 
 describe("ProjectSwitcherPalette modal mode", () => {
   const now = Date.now();
+  // Section-ordered exactly as the hook hands it over: the component's only job
+  // is to cut headers where `section` changes.
   const multiProjects = [
-    makeProject({ id: "active", name: "Active Project", isActive: true, lastOpened: now }),
+    makeProject({
+      id: "active",
+      name: "Active Project",
+      isActive: true,
+      section: "current",
+      lastOpened: now,
+    }),
     makeProject({
       id: "bg",
       name: "Background Project",
       isBackground: true,
+      processCount: 1,
+      section: "activity",
       lastOpened: now - 1800000,
     }),
     makeProject({
       id: "pinned",
       name: "Pinned Project",
       isPinned: true,
+      section: "pinned",
       lastOpened: now - 3600000,
     }),
-    makeProject({ id: "recent", name: "Recent Project", lastOpened: now - 7200000 }),
+    makeProject({
+      id: "pinned2",
+      name: "Second Pinned",
+      isPinned: true,
+      section: "pinned",
+      lastOpened: now - 4000000,
+    }),
+    makeProject({
+      id: "recent",
+      name: "Recent Project",
+      section: "recent",
+      lastOpened: now - 7200000,
+    }),
     makeProject({
       id: "old",
       name: "Old Project",
+      section: "recent",
       lastOpened: now - 14 * 24 * 3600000,
     }),
   ];
@@ -359,18 +419,27 @@ describe("ProjectSwitcherPalette modal mode", () => {
     });
   });
 
-  it("renders a flat list with no temporal section labels in modal mode", () => {
-    const scopedModalResults = multiProjects.filter((p) => p.isActive || p.isBackground);
-    render(<ProjectSwitcherPalette {...modalProps} results={scopedModalResults} />);
-    expect(screen.queryByText("Pinned")).toBeNull();
+  it("sections the modal exactly like the dropdown", () => {
+    // The two surfaces used to disagree about both scope and grouping, so the
+    // same keystroke showed a different universe depending on how it was opened.
+    render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
+    expect(screen.getByText("Pinned")).toBeTruthy();
     expect(screen.queryByText("Today")).toBeNull();
     expect(screen.queryByText("This Week")).toBeNull();
     expect(screen.queryByText("Older")).toBeNull();
   });
 
-  it("shows 'No active projects' when modal mode has no results", () => {
-    render(<ProjectSwitcherPalette {...modalProps} results={[]} />);
-    expect(screen.getByText("No active projects")).toBeTruthy();
+  it("names an action the surface it is rendered in can actually perform", () => {
+    // The modal mounts without the add/clone callbacks, so an empty state that
+    // pointed at "Add Project…" would name a button that isn't there.
+    const { unmount } = render(<ProjectSwitcherPalette {...modalProps} results={[]} />);
+    const modalCopy = screen.getByTestId("project-empty-state").textContent;
+    expect(screen.queryByText("Add Project…")).toBeNull();
+    unmount();
+
+    render(<ProjectSwitcherPalette {...dropdownProps} results={[]} />);
+    expect(screen.getByText("Add Project…")).toBeTruthy();
+    expect(screen.getByTestId("project-empty-state").textContent).not.toBe(modalCopy);
   });
 
   it("does not show management action buttons in modal mode", () => {
@@ -389,9 +458,29 @@ describe("ProjectSwitcherPalette modal mode", () => {
     expect(footer.textContent).toContain("Right-click for more");
   });
 
-  it("shows temporal sections in dropdown mode", () => {
+  it("shows section bands in dropdown mode", () => {
     render(<ProjectSwitcherPalette {...dropdownProps} results={multiProjects} />);
     expect(screen.getByText("Pinned")).toBeTruthy();
+  });
+
+  it("emits one header for a multi-row band, not one per row", () => {
+    render(<ProjectSwitcherPalette {...dropdownProps} results={multiProjects} />);
+    // Two pinned projects sit in one contiguous run, so "Pinned" is printed once.
+    expect(screen.getByText("Second Pinned")).toBeTruthy();
+    expect(screen.getAllByText("Pinned")).toHaveLength(1);
+  });
+
+  it("prints each band header in the order the results arrive", () => {
+    render(<ProjectSwitcherPalette {...dropdownProps} results={multiProjects} />);
+    const list = screen.getByRole("listbox", { name: "Projects" });
+    const headers = Array.from(list.querySelectorAll("div"))
+      .map((el) => el.textContent?.trim())
+      .filter(
+        (text): text is string => text === "Activity" || text === "Pinned" || text === "Recent"
+      );
+    expect(headers[0]).toBe("Activity");
+    expect(headers).toContain("Pinned");
+    expect(headers).toContain("Recent");
   });
 
   it("shows Remove hint in dropdown mode footer", () => {

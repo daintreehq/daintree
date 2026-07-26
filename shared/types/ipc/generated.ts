@@ -1210,6 +1210,10 @@ export interface GeneratedIpcInvokeMap {
     args: [level: "off" | "errors" | "full"];
     result: void;
   };
+  "project-history:peek": {
+    args: [];
+    result: import("./project.js").ProjectHistoryTarget | null;
+  };
   "project-relocation:apply": {
     args: [request: import("../projectRelocation.js").RelocationRequest];
     result: import("../project.js").Project;

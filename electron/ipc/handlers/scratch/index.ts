@@ -19,6 +19,7 @@ import { getWindowForWebContents } from "../../../window/webContentsRegistry.js"
 import { distributePortsToView } from "../../../window/portDistribution.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import { addProjectByPath } from "../projectCrud/crud.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
@@ -114,6 +115,17 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           if (pvm) {
             const result = await pvm.switchTo(scratchId, scratch.path);
             activeView = result.view;
+          }
+
+          // Record the project being left before the pointer is cleared. A
+          // scratch is not a project and can never be a history entry, so this
+          // is the only chance to capture where the window came from — without
+          // it, entering a scratch as the first move of a session leaves
+          // `Cmd+Alt+=` with an empty history and no way back to the project.
+          const departingProjectId = projectStore.getCurrentProjectId();
+          const scratchWindowId = senderWindow?.id ?? deps.mainWindow?.id;
+          if (scratchWindowId !== undefined && departingProjectId) {
+            getProjectHistory(scratchWindowId).record(departingProjectId);
           }
 
           // Now commit canonical pointers — scratch active, project cleared.

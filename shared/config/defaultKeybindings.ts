@@ -877,15 +877,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Alt+=",
     scope: "global",
     priority: 10,
-    description: "Switch project forward",
-    category: "Project",
-  },
-  {
-    actionId: "project.mruCycleNewer",
-    combo: "Cmd+Shift+Alt+=",
-    scope: "global",
-    priority: 10,
-    description: "Switch project backward",
+    description: "Switch to last project",
     category: "Project",
   },
   {
