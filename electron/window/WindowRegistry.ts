@@ -6,10 +6,7 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { SurfaceViewManager } from "./SurfaceViewManager.js";
 import type { SurfacePortBroker } from "./SurfacePortBroker.js";
 import { DisposableStore } from "../utils/lifecycle.js";
-import {
-  disposeProjectHistory,
-  resetProjectHistory,
-} from "../services/ProjectHistoryService.js";
+import { disposeProjectHistory, resetProjectHistory } from "../services/ProjectHistoryService.js";
 
 /**
  * Narrow structural type for the Electron `app` module — exposes only the
