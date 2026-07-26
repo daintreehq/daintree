@@ -485,8 +485,10 @@ export class TerminalResizeController {
 
   // Computes cols/rows from cached cell metrics with no DOM reads — a detached
   // view has no live layout to measure. Pure computation + state update; the
-  // caller applies the grid and delivers the PTY resize so each path picks its
-  // own strategy handling.
+  // caller decides whether to apply the grid. `applyBackgroundResize` reflows
+  // xterm and then resizes the PTY; `resize`'s background-unfocused branch
+  // sends the PTY resize only and leaves the content-visibility:hidden pane's
+  // xterm grid for wake reconciliation.
   private resizeGridFromCachedCellMetrics(
     managed: ManagedTerminal,
     width: number,

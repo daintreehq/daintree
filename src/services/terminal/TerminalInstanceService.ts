@@ -1691,16 +1691,19 @@ class TerminalInstanceService {
   } | null = null;
 
   /**
-   * PTY-tracking resize for a backgrounded project view (#10415). A detached
+   * Window-ratio resize for a backgrounded project view (#10415). A detached
    * WebContentsView keeps its stale viewport until reattach — setBounds()
    * does not propagate while detached and ResizeObservers never fire in a
    * hidden page — so per-panel pixel sizes cannot be re-measured here.
    * Instead each terminal's host size is scaled by the window-bounds ratio,
    * which is exact for 1fr grid tracks and at worst off by ~1 col where
-   * fixed chrome doesn't scale. The PTY-only resize keeps agents wrapping
-   * at the right width the whole time; the wake path
-   * (`fullWakeForVisibilityRestore` → `applyDeferredResize`) reconciles
-   * xterm and corrects any residual error from real layout on reattach.
+   * fixed chrome doesn't scale. `applyBackgroundResize` moves xterm and the
+   * PTY together, so agents wrap at the right width the whole time and the
+   * parser never trails the grid the app is drawing for; alt-screen panes are
+   * excluded and both grids stay at their pre-background size. By reattach
+   * the wake path's `applyDeferredResize` therefore finds cache == current and
+   * early-returns; only `reconcileGeometryFresh` on reveal corrects the
+   * residual error between the scaled estimate and real layout.
    *
    * Scaling is anchored to a per-background-session snapshot: the basis is
    * the stale viewport (which all `lastWidth`/`lastHeight` measurements were
