@@ -234,7 +234,7 @@ describe("ProjectStore.addProject open failures", () => {
   it("succeeds normally for a healthy repository folder", async () => {
     const project = await store.addProject(tmpRoot);
 
-    expect(project.path).toBe(fs.realpathSync(tmpRoot));
+    expect(project.path).toBe(await fs.promises.realpath(tmpRoot));
     expect(gitBehavior.constructed).toBeGreaterThan(0);
   });
 });

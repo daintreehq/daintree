@@ -70,8 +70,7 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
   });
 
   test("diagnostics dock continues working when persistence fails", async () => {
-    const mod = process.platform === "darwin" ? "Meta" : "Control";
-    await ctx.window.keyboard.press(`${mod}+Shift+D`);
+    await ctx.window.keyboard.press("Control+Shift+J");
 
     const dock = ctx.window.locator(SEL.diagnostics.dock);
     await expect(dock).toBeVisible({ timeout: T_MEDIUM });
