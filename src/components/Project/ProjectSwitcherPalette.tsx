@@ -64,7 +64,11 @@ import {
   OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS,
 } from "@/hooks/useProjectSwitcherPalette";
 import { usePreferencesStore } from "@/store/preferencesStore";
-import { isOtherProjectsSortMode, type OtherProjectsSortMode } from "@/lib/projectSort";
+import {
+  isOtherProjectsSortMode,
+  OTHER_PROJECTS_SORT_MODES,
+  type OtherProjectsSortMode,
+} from "@/lib/projectSort";
 import { useUIStore } from "@/store/uiStore";
 import {
   useProjectSettingsStore,
@@ -428,15 +432,17 @@ interface ProjectSection {
   items: SearchableProject[];
 }
 
-const OTHER_PROJECTS_SORT_OPTIONS: readonly {
-  value: OtherProjectsSortMode;
-  label: string;
-  Icon: typeof Flame;
-}[] = [
-  { value: "hottest", label: "Hottest", Icon: Flame },
-  { value: "recent", label: "Recent", Icon: Clock },
-  { value: "alphabetical", label: "A to Z", Icon: ArrowDownAZ },
-];
+// Keyed by mode rather than a list, so the lookup below is total: a new mode in
+// the union is a compile error here until it gets a label and an icon. The menu
+// takes its order from `OTHER_PROJECTS_SORT_MODES`.
+const OTHER_PROJECTS_SORT_OPTIONS: Record<
+  OtherProjectsSortMode,
+  { label: string; Icon: typeof Flame }
+> = {
+  hottest: { label: "Hottest", Icon: Flame },
+  recent: { label: "Recent", Icon: Clock },
+  alphabetical: { label: "A to Z", Icon: ArrowDownAZ },
+};
 
 /**
  * The Other band's header, which doubles as its sort control (#11455). Every
@@ -469,9 +475,7 @@ function OtherProjectsHeader({
   const sortMode = usePreferencesStore((state) => state.projectSwitcherOtherSortMode);
   const setSortMode = usePreferencesStore((state) => state.setProjectSwitcherOtherSortMode);
 
-  const active =
-    OTHER_PROJECTS_SORT_OPTIONS.find((option) => option.value === sortMode) ??
-    OTHER_PROJECTS_SORT_OPTIONS[0];
+  const active = OTHER_PROJECTS_SORT_OPTIONS[sortMode];
   const ActiveIcon = active.Icon;
 
   const handleValueChange = (value: string) => {
@@ -518,12 +522,15 @@ function OtherProjectsHeader({
                 }}
               >
                 <DropdownMenuRadioGroup value={sortMode} onValueChange={handleValueChange}>
-                  {OTHER_PROJECTS_SORT_OPTIONS.map(({ value, label: optionLabel, Icon }) => (
-                    <DropdownMenuRadioItem key={value} value={value}>
-                      <Icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                      {optionLabel}
-                    </DropdownMenuRadioItem>
-                  ))}
+                  {OTHER_PROJECTS_SORT_MODES.map((value) => {
+                    const { label: optionLabel, Icon } = OTHER_PROJECTS_SORT_OPTIONS[value];
+                    return (
+                      <DropdownMenuRadioItem key={value} value={value}>
+                        <Icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                        {optionLabel}
+                      </DropdownMenuRadioItem>
+                    );
+                  })}
                 </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -536,12 +543,15 @@ function OtherProjectsHeader({
        */}
       <ContextMenuContent>
         <ContextMenuRadioGroup value={sortMode} onValueChange={handleValueChange}>
-          {OTHER_PROJECTS_SORT_OPTIONS.map(({ value, label: optionLabel, Icon }) => (
-            <ContextMenuRadioItem key={value} value={value}>
-              <Icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-              {optionLabel}
-            </ContextMenuRadioItem>
-          ))}
+          {OTHER_PROJECTS_SORT_MODES.map((value) => {
+            const { label: optionLabel, Icon } = OTHER_PROJECTS_SORT_OPTIONS[value];
+            return (
+              <ContextMenuRadioItem key={value} value={value}>
+                <Icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                {optionLabel}
+              </ContextMenuRadioItem>
+            );
+          })}
         </ContextMenuRadioGroup>
       </ContextMenuContent>
     </ContextMenu>
