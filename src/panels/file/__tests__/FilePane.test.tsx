@@ -1930,6 +1930,28 @@ describe("FilePane live disk refresh (#11451)", () => {
     expect(imageSrc(container)).not.toBe(before);
   });
 
+  it("retries an image that failed a background refetch when the pane regains focus", async () => {
+    // A refetch racing a half-written PNG fires <img> onError, and the tick that
+    // reported the last write of a burst is the one that lost the race — nothing
+    // else follows it, so without a focus retry the pane sits on "File not
+    // found" for a file that is right there.
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    const { container, rerender } = await renderPane({
+      filePath: "/repo/assets/logo.png",
+      isFocused: false,
+    });
+
+    const img = container.querySelector("img");
+    if (!img) throw new Error("image preview not rendered");
+    fireEvent.error(img);
+    expect(screen.getByText(FILE_READ_ERROR_MESSAGES.NOT_FOUND)).toBeTruthy();
+
+    await commitTick(rerender, true);
+
+    expect(screen.queryByText(FILE_READ_ERROR_MESSAGES.NOT_FOUND)).toBeNull();
+    expect(container.querySelector("img")).not.toBeNull();
+  });
+
   it("re-reads and re-sanitizes an SVG on a worktree tick", async () => {
     seedWorktree(OUTER_ID, "/repo", { git: 100 });
     readMock.mockResolvedValue({
@@ -2082,6 +2104,73 @@ describe("FilePane live disk refresh (#11451)", () => {
     await commitTick(rerender);
 
     expect(readMock.mock.calls.length).toBe(initialReads);
+  });
+
+  describe("rendered HTML across a tick", () => {
+    const PREVIEW_URL = "daintree-html://tok/report.html";
+
+    function htmlNonce(container: HTMLElement): string {
+      const nonce = container
+        .querySelector('[data-testid="html-viewer-mock"]')
+        ?.getAttribute("data-reload-nonce");
+      if (nonce === null || nonce === undefined) throw new Error("html viewer not rendered");
+      return nonce;
+    }
+
+    async function renderRendered() {
+      seedWorktree(OUTER_ID, "/repo", { git: 100 });
+      readMock.mockResolvedValue({ content: "<h1>v1</h1>", htmlPreviewUrl: PREVIEW_URL });
+      const view = await renderPane({
+        filePath: "/repo/dist/report.html",
+        fileViewMode: "rendered",
+      });
+      await waitFor(() => expect(htmlNonce(view.container)).toBeTruthy());
+      return view;
+    }
+
+    it("holds the frame steady when a tick returns identical bytes", async () => {
+      // The nonce is the sandboxed frame's only src input, so bumping it on a
+      // no-op tick re-navigates the page — losing scroll and every bit of
+      // in-page JS state — each time an agent writes an unrelated file.
+      const { container, rerender } = await renderRendered();
+      const before = htmlNonce(container);
+      const readsBefore = readMock.mock.calls.length;
+
+      seedWorktree(OUTER_ID, "/repo", { git: 200 });
+      await commitTick(rerender);
+      await act(async () => {});
+
+      // The re-read really happened; it just had nothing to show for it.
+      expect(readMock.mock.calls.length).toBe(readsBefore + 1);
+      expect(htmlNonce(container)).toBe(before);
+    });
+
+    it("re-navigates the frame when a tick brings new bytes", async () => {
+      const { container, rerender } = await renderRendered();
+      const before = htmlNonce(container);
+
+      readMock.mockResolvedValue({ content: "<h1>v2</h1>", htmlPreviewUrl: PREVIEW_URL });
+      seedWorktree(OUTER_ID, "/repo", { git: 200 });
+      await commitTick(rerender);
+
+      await waitFor(() => expect(htmlNonce(container)).not.toBe(before));
+    });
+
+    it("re-navigates the frame on toolbar Refresh even when the bytes are identical", async () => {
+      // An entry file can be unchanged while a relative asset it pulls in is
+      // not, so the explicit path stays unconditional — it is the only way to
+      // ask for those bytes again.
+      const { container } = await renderRendered();
+      const before = htmlNonce(container);
+
+      await act(async () => {
+        Array.from(container.querySelectorAll("button"))
+          .find((b) => b.getAttribute("aria-label") === "Refresh")
+          ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+
+      await waitFor(() => expect(htmlNonce(container)).not.toBe(before));
+    });
   });
 
   describe("media keeps playing across a tick", () => {

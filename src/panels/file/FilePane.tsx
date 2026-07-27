@@ -474,8 +474,13 @@ export function FilePane({
   // left to settle it. Reset per identity — the previous file's content is not
   // something worth keeping.
   const lastGoodStateRef = useRef<LoadState | null>(null);
+  // The text currently on screen for the *current* identity, so a silent re-read
+  // can tell an actual rewrite from a tick that changed nothing. Reset per
+  // identity alongside the state above.
+  const lastContentRef = useRef<string | null>(null);
   useEffect(() => {
     lastGoodStateRef.current = null;
+    lastContentRef.current = null;
   }, [filePath, effectiveRootPath]);
 
   useEffect(() => {
@@ -612,13 +617,20 @@ export function FilePane({
             return;
           }
           setSanitizedSvg(null);
+          const bytesChanged = lastContentRef.current !== fileContent;
+          lastContentRef.current = fileContent;
           setContent((previous) => (previous === fileContent ? previous : fileContent));
           setHtmlPreviewUrl(previewUrl ?? null);
-          // Re-navigate the preview frame on every successful load so a rewritten
-          // report — or an unchanged entry file whose relative asset changed —
-          // always reflects the latest bytes. reloadNonce isn't a loadFile dep,
-          // so this can't re-trigger the load.
-          setReloadNonce((nonce) => nonce + 1);
+          // Re-navigate the preview frame so a rewritten report — or an unchanged
+          // entry file whose relative asset changed — reflects the latest bytes.
+          // The nonce is the sandboxed frame's only src input, so a silent pass
+          // only bumps it when the bytes actually moved: otherwise every worktree
+          // tick, most of them writes to unrelated files, would throw away the
+          // rendered page's scroll and in-page JS state. Explicit loads (open,
+          // toolbar Refresh) stay unconditional, keeping a manual path for an
+          // asset-only change. reloadNonce isn't a loadFile dep, so neither can
+          // re-trigger the load.
+          if (!silent || bytesChanged) setReloadNonce((nonce) => nonce + 1);
           setLoadState("loaded");
           setErrorCode(null);
           setErrorMessage(null);
@@ -733,22 +745,30 @@ export function FilePane({
   // widening it would reset playback or a reader's page on an unrelated write.
   const reloadsSilently = loadState === "loaded" || loadState === "image" || loadState === "svg";
 
+  // Focus regain also retries a failure. A background re-read that raced a
+  // half-written file lands on an error the ticks can no longer clear — the one
+  // that reported the last write of a burst is the one that failed — so without
+  // this the pane sits on "File not found" for a file that exists until someone
+  // presses Refresh. A file that is genuinely gone just re-errors immediately
+  // through the permanent-code branch.
+  const refetchesOnFocus = reloadsSilently || loadState === "error";
+
   // Still worth re-reading on focus regain: a write that landed while no watcher
   // covered the file (opened outside every known worktree) has no tick at all.
   const wasFocusedRef = useRef(isFocused);
   useEffect(() => {
-    if (isFocused && !wasFocusedRef.current && reloadsSilently) {
+    if (isFocused && !wasFocusedRef.current && refetchesOnFocus) {
       loadFile(true);
     }
     wasFocusedRef.current = isFocused;
-  }, [isFocused, reloadsSilently, loadFile]);
+  }, [isFocused, refetchesOnFocus, loadFile]);
 
   useEffect(() => {
-    if (!reloadsSilently) return;
+    if (!refetchesOnFocus) return;
     const handleWindowFocus = () => loadFile(true);
     window.addEventListener("focus", handleWindowFocus);
     return () => window.removeEventListener("focus", handleWindowFocus);
-  }, [reloadsSilently, loadFile]);
+  }, [refetchesOnFocus, loadFile]);
 
   // Route Cmd+F to the source view's find bar while this pane is focused
   // (no-op in rendered markdown, matching the dialog).
