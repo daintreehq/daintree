@@ -92,6 +92,9 @@ export function memoryPressureTarget(
     return { level: "soft", targetMax: 1 };
   }
   const stepMb = (policy.warningMb - policy.criticalMb) / (cap - 1);
+  // A band narrow enough for the step to underflow to zero has no rungs to
+  // walk; dividing by it would yield NaN and leak out as a bogus target.
+  if (!Number.isFinite(stepMb) || stepMb <= 0) return { level: "soft", targetMax: 1 };
   const steps = Math.floor((availableMb - policy.criticalMb) / stepMb);
   // Clamped for float safety: the band bounds already imply [1, cap - 1].
   const targetMax = Math.min(Math.max(1 + steps, 1), cap - 1);

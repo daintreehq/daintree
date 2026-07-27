@@ -1198,19 +1198,18 @@ export class ResourceProfileService {
           // non-critical
         }
       }
-      // Re-push the reclaim band. It is read off `this.memoryPressurePolicy`,
-      // never off `config`, so it is provably independent of `profile` — the
-      // interactive efficiency→balanced clamp above cannot loosen it the way it
-      // used to (1024→768 at the exact moment memory was lowest, #11469).
-      // Pushing it here anyway keeps the arming self-healing: `start()`'s
-      // one-shot fan-out can miss a window if the provider throws transiently,
-      // and without a repeat push that window's reclaim would stay disarmed for
-      // the rest of the session.
-      try {
-        pvm.setMemoryPressurePolicy(this.memoryPressurePolicy);
-      } catch {
-        // non-critical
-      }
+      // The cached-view reclaim band is deliberately NOT pushed here. Every PVM
+      // is armed once — at `start()` for existing windows, at
+      // `applyCurrentProfileTo()` for each window created later — so no
+      // transition can move it, least of all the interactive
+      // efficiency→balanced clamp above, which used to swap the active floor
+      // 1024→768 at the exact moment memory was lowest (#11469).
+      //
+      // Re-pushing here would not make the arming self-healing anyway: a no-op
+      // transition returns above, and a session sitting at a stable profile
+      // never reaches this loop at all. It would, though, silently re-arm the
+      // `setLowMemoryFreeThresholdMb(null)` escape hatch that six E2E specs rely
+      // on to keep their eviction assertions deterministic.
 
       // Push per-profile paint-gate timeouts (cold and warm). Both cold
       // starts and warm wake fan-outs run measurably slower under efficiency

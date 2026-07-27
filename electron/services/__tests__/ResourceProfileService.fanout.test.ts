@@ -142,14 +142,10 @@ describe("ResourceProfileService fan-out isolation", () => {
       const balanced = RESOURCE_PROFILE_CONFIGS.balanced;
       expect(healthy.setCachedViewLimit).toHaveBeenCalledWith(2);
       expect(healthy.setEfficiencyFreeze).toHaveBeenLastCalledWith(false);
-      // The reclaim band rides along on transitions so a missed start() arm can
-      // heal, but it is read off the service's machine-derived field — never the
-      // profile config — so every push carries the identical pair (#11469).
-      const bands = healthy.setMemoryPressurePolicy.mock.calls.map(([policy]) => policy);
-      expect(bands.length).toBeGreaterThan(0);
-      for (const pushedBand of bands) {
-        expect(pushedBand).toEqual(bands[0]);
-      }
+      // The reclaim band is not part of a transition's fan-out (#11469) — it is
+      // armed once per PVM at start/late-create, so a transition must not touch
+      // it on either the broken or the healthy window.
+      expect(healthy.setMemoryPressurePolicy).not.toHaveBeenCalled();
       expect(healthy.setPaintGateTimeoutMs).toHaveBeenLastCalledWith(balanced.paintGateTimeoutMs);
       expect(healthy.setWarmPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
         balanced.warmPaintGateHardTimeoutMs

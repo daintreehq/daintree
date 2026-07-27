@@ -218,15 +218,6 @@ function expectArmedPolicy(pvm: MockProjectViewManager): void {
   expect(expected.warningMb).toBeGreaterThan(expected.criticalMb);
 }
 
-/** Every push carried the identical band, whatever the profile did. */
-function expectPolicyNeverMoved(pvm: MockProjectViewManager): void {
-  const pushes = pvm.setMemoryPressurePolicy.mock.calls.map(([policy]) => policy);
-  expect(pushes.length).toBeGreaterThan(0);
-  for (const policy of pushes) {
-    expect(policy).toEqual(pushes[0]);
-  }
-}
-
 describe("ResourceProfileService", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -913,11 +904,11 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
-    // The band is owned by the machine's RAM, not the profile: a transition
-    // may re-push it (that keeps arming self-healing) but must never move it.
+    // Armed once at start() and owned by the machine's RAM, not the profile —
+    // an efficiency transition must not re-push or alter it (#11469).
     const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expectArmedPolicy(pvm);
-    expectPolicyNeverMoved(pvm);
+    expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
 
     service.stop();
   });
@@ -953,7 +944,7 @@ describe("ResourceProfileService", () => {
     // let the interactive efficiency→balanced clamp disarm reclaim at the exact
     // moment memory was lowest.
     expectArmedPolicy(pvm);
-    expectPolicyNeverMoved(pvm);
+    expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
 
     service.stop();
   });
@@ -975,7 +966,7 @@ describe("ResourceProfileService", () => {
     // disarm — and no window where memory craters before the profile catches up.
     const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expectArmedPolicy(pvm);
-    expectPolicyNeverMoved(pvm);
+    expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
 
     service.stop();
   });
@@ -1837,11 +1828,11 @@ describe("ResourceProfileService", () => {
     expect(pvmA.setEfficiencyFreeze).toHaveBeenCalledWith(true);
     expect(pvmB.setCachedViewLimit).not.toHaveBeenCalled();
     expect(pvmB.setEfficiencyFreeze).toHaveBeenCalledWith(true);
-    // Both windows carry the same machine-derived band, unmoved by the transition.
+    // Both windows armed once at start(); the transition adds nothing.
     expectArmedPolicy(pvmA);
     expectArmedPolicy(pvmB);
-    expectPolicyNeverMoved(pvmA);
-    expectPolicyNeverMoved(pvmB);
+    expect(pvmA.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
+    expect(pvmB.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
 
     service.stop();
   });
