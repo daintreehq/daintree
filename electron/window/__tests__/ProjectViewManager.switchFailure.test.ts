@@ -36,9 +36,14 @@ function createMockWebContents(opts?: {
   const autoFinish = opts?.autoFinishLoad ?? true;
   const bootstrapProjectId = opts?.bootstrapProjectId ?? null;
 
+  // Electron 42: `close()` tears the native object down synchronously and
+  // fires `destroyed` inside the call. Modelled here so teardown-during-load
+  // is drivable the same way the real webContents drives it (#11458).
+  let destroyed = false;
+
   const wc: MockWc = {
     id,
-    isDestroyed: vi.fn(() => false),
+    isDestroyed: vi.fn(() => destroyed),
     executeJavaScript: vi.fn((code?: string) =>
       String(code ?? "").includes("__DAINTREE_INITIAL_PROJECT__")
         ? Promise.resolve(bootstrapProjectId)
@@ -47,7 +52,9 @@ function createMockWebContents(opts?: {
     loadURL: vi.fn(() => Promise.resolve()),
     focus: vi.fn(),
     invalidate: vi.fn(),
-    close: vi.fn(),
+    close: vi.fn(() => {
+      wc._fireOnce("destroyed");
+    }),
     reload: vi.fn(),
     send: vi.fn(),
     on: vi.fn((event: string, handler: Handler) => {
@@ -73,6 +80,12 @@ function createMockWebContents(opts?: {
     _handlers: handlers,
     _persistentHandlers: persistentHandlers,
     _fireOnce(event: string, ...args: unknown[]) {
+      // Destruction is latched before the handlers run so anything they call
+      // back into sees the same post-close state the real webContents exposes.
+      if (event === "destroyed") {
+        if (destroyed) return;
+        destroyed = true;
+      }
       const list = handlers.get(event);
       if (list && list.length > 0) {
         const h = list.shift()!;
@@ -236,6 +249,16 @@ async function expectRejection(promise: Promise<unknown>): Promise<Error> {
   }
 }
 
+/** The `code` discriminant a load rejection carries, or undefined for an untyped error. */
+function errorCode(err: Error): string | undefined {
+  return (err as { code?: string }).code;
+}
+
+/** The diagnostic `context` bag a load rejection carries (phase, projectId). */
+function errorContext(err: Error): Record<string, unknown> | undefined {
+  return (err as { context?: Record<string, unknown> }).context;
+}
+
 describe("ProjectViewManager — switch failure rollback", () => {
   let manager: ProjectViewManager;
   let win: ReturnType<typeof createMockWindow>;
@@ -350,7 +373,7 @@ describe("ProjectViewManager — switch failure rollback", () => {
 
     await vi.advanceTimersByTimeAsync(LOAD_HARD_MS);
     const err = await errPromise;
-    expect(err.message).toBe("View load timed out");
+    expect(err.message).toContain("View load timed out");
   });
 
   it("ignores non-finite and negative bounds from the setters", async () => {
@@ -383,7 +406,7 @@ describe("ProjectViewManager — switch failure rollback", () => {
 
     await vi.advanceTimersByTimeAsync(LOAD_HARD_MS + 1);
     const err = await errPromise;
-    expect(err.message).toBe("View load timed out");
+    expect(err.message).toContain("View load timed out");
   });
 
   it("does not run crash recovery for a renderer that dies mid-load", async () => {
@@ -617,7 +640,12 @@ describe("ProjectViewManager — switch failure rollback", () => {
     await vi.advanceTimersByTimeAsync(LOAD_HARD_MS - LOAD_SOFT_MS);
 
     const err = await errPromise;
-    expect(err.message).toBe("View load timed out");
+    // Timing out before did-finish-load is the navigation phase. The phase is
+    // what makes a production timeout report actionable — it tells "the page
+    // never navigated" apart from "the renderer loaded but never answered the
+    // bootstrap eval", which one shared hard budget otherwise conflates (#11458).
+    expect(errorCode(err)).toBe("INTERNAL");
+    expect(errorContext(err)).toMatchObject({ phase: "navigation", projectId: "proj-b" });
     expect(manager.getActiveProjectId()).toBe("proj-a");
     expect(failWc.close).toHaveBeenCalled();
     expect(notifyError).toHaveBeenCalledWith(
@@ -699,6 +727,26 @@ describe("ProjectViewManager — switch failure rollback", () => {
     expect(failWc._handlers.get("dom-ready") ?? []).toHaveLength(0);
   });
 
+  it("attributes a timeout after did-finish-load to the bootstrap phase", async () => {
+    // Renderer navigates fine but never answers the bootstrap eval — the same
+    // hard budget expires, but in a different phase than the case above.
+    const stalledWc = createMockWebContents({ autoFinishLoad: false });
+    stalledWc.executeJavaScript.mockImplementation(() => new Promise(() => {}));
+    wcQueue.push(stalledWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    stalledWc._fireOnce("did-finish-load");
+    await vi.advanceTimersByTimeAsync(LOAD_HARD_MS + 1);
+
+    const err = await errPromise;
+    expect(errorCode(err)).toBe("INTERNAL");
+    expect(errorContext(err)).toMatchObject({ phase: "bootstrap", projectId: "proj-b" });
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+  });
+
   it("sets activeProjectId to null when no previous view exists", async () => {
     const freshManager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -717,7 +765,7 @@ describe("ProjectViewManager — switch failure rollback", () => {
     await vi.advanceTimersByTimeAsync(LOAD_HARD_MS + 1);
 
     const err = await errPromise;
-    expect(err.message).toBe("View load timed out");
+    expect(errorContext(err)).toMatchObject({ phase: "navigation" });
     expect(freshManager.getActiveProjectId()).toBeNull();
     expect(notifyError).toHaveBeenCalled();
   });
@@ -743,7 +791,7 @@ describe("ProjectViewManager — switch failure rollback", () => {
 
     await vi.advanceTimersByTimeAsync(LOAD_HARD_MS);
     const err = await errPromise;
-    expect(err.message).toBe("View load timed out");
+    expect(err.message).toContain("View load timed out");
   });
 
   it("switchChain continues after rollback — second switch succeeds", async () => {
@@ -858,5 +906,157 @@ describe("ProjectViewManager — switch failure rollback", () => {
       expect.any(Error),
       expect.objectContaining({ source: "project-switch" })
     );
+  });
+
+  it("cancels a pending cold load when the manager is disposed mid-load", async () => {
+    const pendingWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(pendingWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Window close / app quit: dispose() closes every view, which fires
+    // `destroyed` — the teardown signal none of the four load events deliver.
+    manager.dispose();
+
+    // Settles on microtasks alone. No timer is advanced here, so if the load
+    // promise still hung on the hard deadline this would never resolve — which
+    // is exactly the stall that produced the phantom timeout (#11458).
+    const err = await errPromise;
+    expect(errorCode(err)).toBe("CANCELLED");
+    expect(errorContext(err)).toMatchObject({ projectId: "proj-b" });
+    // An ordinary teardown is not a user-facing failure.
+    expect(notifyError).not.toHaveBeenCalled();
+    // Rollback skipped: dispose() already cleared the pointer and tore down
+    // proj-a's view, so restoring it would resurrect state teardown cleared.
+    expect(manager.getActiveProjectId()).toBeNull();
+  });
+
+  it("skips rollback during teardown even when the load failed before it", async () => {
+    const failWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(failWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    // Closing the webContents aborts the in-flight navigation, so teardown
+    // routinely surfaces as ERR_ABORTED settling the load FIRST — which
+    // deregisters the destroyed listener, so the rejection is an ordinary load
+    // failure, not a cancellation. Gating the teardown branch on the error
+    // class would let this ordering roll back against dead state and report.
+    failWc._fireOnce("did-fail-load", {}, -3, "ERR_ABORTED");
+    manager.dispose();
+
+    const err = await errPromise;
+    // The rejection keeps its truthful classification...
+    expect(errorCode(err)).toBe("INTERNAL");
+    // ...but the host is gone, so nothing is restored and nobody is told.
+    expect(notifyError).not.toHaveBeenCalled();
+    expect(manager.getActiveProjectId()).toBeNull();
+  });
+
+  it("cancels during the bootstrap phase and reports that phase", async () => {
+    const pendingWc = createMockWebContents({ autoFinishLoad: false });
+    // Navigation completes; the bootstrap eval never answers, so teardown
+    // lands while the promise is parked mid-verify.
+    pendingWc.executeJavaScript.mockImplementation(() => new Promise(() => {}));
+    wcQueue.push(pendingWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    pendingWc._fireOnce("did-finish-load");
+    await vi.advanceTimersByTimeAsync(0);
+    manager.dispose();
+
+    const err = await errPromise;
+    expect(errorCode(err)).toBe("CANCELLED");
+    // Cancellation records which stage it interrupted, not just that it happened.
+    expect(errorContext(err)).toMatchObject({ phase: "bootstrap", projectId: "proj-b" });
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+
+  it("wraps a preload failure with the load phase while preserving the original", async () => {
+    const failWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(failWc);
+    const original = new Error("Cannot find module");
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    failWc._fireOnce("preload-error", {}, "/test/preload.cjs", original);
+
+    const err = await errPromise;
+    // Rewrapped for the phase context, with the original kept as the cause —
+    // the message alone would look identical if it were passed through.
+    expect(errorCode(err)).toBe("INTERNAL");
+    expect(errorContext(err)).toMatchObject({ phase: "navigation" });
+    expect((err as { cause?: unknown }).cause).toBe(original);
+    expect(err.message).toBe(original.message);
+  });
+
+  it("still settles when listener cleanup throws on the destroyed webContents", async () => {
+    const pendingWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(pendingWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Electron throws from removeListener on a torn-down webContents — the
+    // hazard webContentsRegistry already guards. Teardown is the one settle
+    // path that always cleans up against a destroyed webContents, so a throw
+    // escaping there would strand the promise pending forever, with `settled`
+    // latched so nothing could ever settle it again.
+    pendingWc.removeListener.mockImplementation(() => {
+      throw new Error("Object has been destroyed");
+    });
+    manager.dispose();
+
+    const err = await errPromise;
+    expect(errorCode(err)).toBe("CANCELLED");
+  });
+
+  it("settles promptly but still rolls back when the view dies and the manager lives", async () => {
+    const doomedWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(doomedWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    doomedWc._fireOnce("destroyed");
+
+    const err = await errPromise;
+    expect(errorCode(err)).toBe("CANCELLED");
+    // The outgoing view is still attached and visible, so the pointer has to
+    // follow it back rather than linger on the destroyed project.
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(notifyError).toHaveBeenCalled();
+  });
+
+  it("ignores a destroyed event that lands after the load already settled", async () => {
+    const wc = createMockWebContents({ autoFinishLoad: false, bootstrapProjectId: "proj-b" });
+    wcQueue.push(wc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    await vi.advanceTimersByTimeAsync(0);
+    wc._fireOnce("did-finish-load");
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(p).resolves.toMatchObject({ isNew: true });
+
+    // Deregistered on every settle path, so the eventual close during normal
+    // eviction has no cancellation handler left to run against a switch that
+    // already succeeded.
+    expect(wc._handlers.get("destroyed") ?? []).toHaveLength(0);
+    wc._fireOnce("destroyed");
+    expect(notifyError).not.toHaveBeenCalled();
   });
 });
