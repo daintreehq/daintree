@@ -286,6 +286,55 @@ interface FrozenLayout {
 }
 
 /**
+ * `layout` with its Other rows re-sorted for `mode` IN THEIR EXISTING SLOTS,
+ * plus those rows' new sequence. Null when the band holds fewer than two rows,
+ * where no order is observable.
+ *
+ * Rewriting slots rather than rebuilding from the live order is the whole
+ * point: a blanket recapture would also adopt live BAND membership, so a
+ * project whose agent finished while the palette was open would jump out of
+ * Needs attention the moment the user touched an unrelated sort control. The
+ * user changed one band's order; nothing else may move.
+ *
+ * Pure, and takes the layout as an argument, so the caller can run it inside a
+ * `setFrozenLayout` updater against whatever layout React has actually applied.
+ */
+function resortOtherBand(
+  layout: FrozenLayout,
+  live: Map<string, SearchableProject>,
+  mode: OtherProjectsSortMode
+): { order: string[]; ids: string[] } | null {
+  const slots: number[] = [];
+  const ids: string[] = [];
+  layout.order.forEach((id, index) => {
+    if (layout.sections.get(id) === "other") {
+      slots.push(index);
+      ids.push(id);
+    }
+  });
+  if (ids.length < 2) return null;
+
+  const resorted = [...ids].sort((a, b) => {
+    const projectA = live.get(a);
+    const projectB = live.get(b);
+    // A row whose project has gone away is dropped downstream anyway; order it
+    // last so this stays a total order rather than an inconsistent one.
+    if (!projectA || !projectB) {
+      if (projectA) return -1;
+      if (projectB) return 1;
+      return a.localeCompare(b);
+    }
+    return compareProjectsByMode(projectA, projectB, mode);
+  });
+
+  const order = [...layout.order];
+  slots.forEach((slot, index) => {
+    order[slot] = resorted[index]!;
+  });
+  return { order, ids: resorted };
+}
+
+/**
  * Assign a project to its browse band. Actionable work first, then explicit
  * user intent, then non-actionable system activity, then habit:
  *
@@ -695,58 +744,65 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // the menu doing nothing.
   //
   // Guarded on the mode having actually changed, via a ref rather than the
-  // effect's own dependencies: `liveBrowseOrder` is a dependency because the
-  // recapture must read the freshly re-sorted order, and without the guard
-  // every stats push would recapture and destroy the freeze outright.
+  // effect's own dependencies: `liveBrowseOrder` and `frozenLayout` are both
+  // dependencies because the re-sort must read the freshly ranked projects
+  // against the layout it is rewriting, and without the guard every stats push
+  // would re-sort and destroy the freeze outright.
   const previousOtherProjectsSortMode = useRef(otherProjectsSortMode);
   useEffect(() => {
     if (previousOtherProjectsSortMode.current === otherProjectsSortMode) return;
     previousOtherProjectsSortMode.current = otherProjectsSortMode;
-    // A change while closed needs no recapture: the next `open()` captures the
-    // new order anyway, and recapturing here would queue it against a stale list.
-    if (!isOpen) return;
+    // A change while closed needs no re-sort: the next `open()` captures the
+    // new order anyway, and re-sorting here would queue it against a stale list.
+    if (!isOpen || !frozenLayout) return;
+
+    const live = new Map(liveBrowseOrder.map((project) => [project.id, project]));
+
+    // Rewritten through an updater, against whatever layout React has applied
+    // rather than the one this render closed over. The sibling effect below
+    // folds newly registered projects in with an updater of its own, and a
+    // plain replacement here would drop an arrival queued behind this click —
+    // it would return at the band's end on the next pass, out of the order the
+    // user just asked for.
+    //
+    // Sections and provisionality are untouched: provisionality describes the
+    // DATA, so a mode change during a cold open must not cancel the pending
+    // one-time regroup (#11452).
     setFrozenLayout((previous) => {
       if (!previous) return previous;
-      // Re-sort the Other rows IN THEIR EXISTING SLOTS rather than recapturing
-      // the whole layout from `liveBrowseOrder`. A blanket recapture would also
-      // adopt live BAND membership, so a project whose agent finished while the
-      // palette was open would jump out of Needs attention the moment the user
-      // touched an unrelated sort control. The user changed one band's order;
-      // nothing else may move.
-      const slots: number[] = [];
-      const ids: string[] = [];
-      previous.order.forEach((id, index) => {
-        if (previous.sections.get(id) === "other") {
-          slots.push(index);
-          ids.push(id);
-        }
-      });
-      if (ids.length < 2) return previous;
-
-      const live = new Map(liveBrowseOrder.map((project) => [project.id, project]));
-      const resorted = [...ids].sort((a, b) => {
-        const projectA = live.get(a);
-        const projectB = live.get(b);
-        // A row whose project has gone away is dropped downstream anyway; order
-        // it last so this stays a total order rather than an inconsistent one.
-        if (!projectA || !projectB) {
-          if (projectA) return -1;
-          if (projectB) return 1;
-          return a.localeCompare(b);
-        }
-        return compareProjectsByMode(projectA, projectB, otherProjectsSortMode);
-      });
-
-      const order = [...previous.order];
-      slots.forEach((slot, index) => {
-        order[slot] = resorted[index]!;
-      });
-      // Sections and provisionality are untouched: provisionality describes the
-      // DATA, so a mode change during a cold open must not cancel the pending
-      // one-time regroup (#11452).
-      return { ...previous, order };
+      const resorted = resortOtherBand(previous, live, otherProjectsSortMode);
+      return resorted ? { ...previous, order: resorted.order } : previous;
     });
-  }, [otherProjectsSortMode, isOpen, liveBrowseOrder]);
+
+    // A band the user just re-ordered is read from the top. The highlight
+    // normally follows its PROJECT across a reorder — the list churns on its
+    // own, and a highlight left addressing whatever row inherited the slot is
+    // how Enter commits a project the user never chose (#11071) — but a mode
+    // they picked a moment ago is not that kind of churn. They asked to see
+    // this band differently; the answer starts at the top of it instead of
+    // chasing their old row down the list.
+    //
+    // Scoped to the band that actually moved: a highlight parked in Needs
+    // attention stays put, since this control never claimed to order that band.
+    // Skipped while searching — the sort control only renders on a browse
+    // header today, so this is what keeps the reset honest if search ever grows
+    // one: query-ranked rows are not sequenced by this preference, and seating
+    // the highlight on a browse-order row would land it anywhere.
+    if (isSearching) return;
+    // Decided against the layout this render saw, unlike the rewrite above. An
+    // arrival is never the row the user had selected, and can only be the new
+    // band top in the same narrow window — so a snapshot costs at most one row
+    // of accuracy there, and buys a pure computation of the target.
+    const resorted = resortOtherBand(frozenLayout, live, otherProjectsSortMode);
+    if (!resorted) return;
+    // Same skip as `open()`'s preselect: a project that went missing while the
+    // palette was open keeps its frozen slot, and a reflexive Enter landing on
+    // it opens the relocation dialog rather than switching projects.
+    const target = resorted.ids.find((id) => live.get(id)?.isMissing === false) ?? resorted.ids[0]!;
+    setSelectedProjectId((previousId) =>
+      previousId !== null && frozenLayout.sections.get(previousId) === "other" ? target : previousId
+    );
+  }, [otherProjectsSortMode, isOpen, liveBrowseOrder, frozenLayout, isSearching]);
 
   // Fold projects that appeared after the freeze into it, at the position the
   // renderer already gives them (end of their live band). Without this they are

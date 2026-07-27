@@ -1549,7 +1549,7 @@ describe("useProjectSwitcherPalette", () => {
     });
 
     const EXPECTED_ORDER: Record<OtherProjectsSortMode, string[]> = {
-      hottest: ["zulu", "alpha", "mike"],
+      mostUsed: ["zulu", "alpha", "mike"],
       recent: ["mike", "zulu", "alpha"],
       alphabetical: ["alpha", "mike", "zulu"],
     };
@@ -1618,7 +1618,7 @@ describe("useProjectSwitcherPalette", () => {
     });
 
     it("re-sorts on the next open when the mode changed while closed", async () => {
-      const view = await openWith("hottest", conflicting());
+      const view = await openWith("mostUsed", conflicting());
       act(() => {
         view.result.current.close();
       });
@@ -1633,6 +1633,10 @@ describe("useProjectSwitcherPalette", () => {
       await waitFor(() => {
         expect(view.result.current.results.map((p) => p.id)).toEqual(["alpha", "mike", "zulu"]);
       });
+      // And the highlight opens on the new order's top row rather than the old
+      // order's — the same promise the in-place reset makes, kept here by
+      // `open()`'s preselect reading the freshly sorted list.
+      expect(view.result.current.results[view.result.current.selectedIndex]?.id).toBe("alpha");
       view.unmount();
     });
 
@@ -1641,7 +1645,7 @@ describe("useProjectSwitcherPalette", () => {
       // finishing mid-read can't move it. Changing an unrelated band's sort
       // order must not become a back door that releases that hold.
       const projects = [base("waiting"), ...conflicting()];
-      setOtherSortMode("hottest");
+      setOtherSortMode("mostUsed");
       projectState.projects = projects;
       projectState.currentProject = null;
       projectStatsState.stats = {
@@ -1679,13 +1683,16 @@ describe("useProjectSwitcherPalette", () => {
       // Other band only, and did not adopt live band membership wholesale.
       expect(result.current.results[0]!.id).toBe("waiting");
       expect(result.current.results[0]!.section).toBe("attention");
+      // The highlight reads the same frozen membership. Deciding it against
+      // LIVE sections would see this row as Other and drag it into the reset.
+      expect(result.current.results[result.current.selectedIndex]?.id).toBe("waiting");
       unmount();
     });
 
     it("re-sorts an already-open palette when the mode changes", async () => {
       // Without an explicit recapture the frozen layout keeps serving the order
       // captured at open(), so the menu would appear to do nothing.
-      const view = await openWith("hottest", conflicting());
+      const view = await openWith("mostUsed", conflicting());
       expect(view.result.current.results.map((p) => p.id)).toEqual(["zulu", "alpha", "mike"]);
 
       act(() => {
@@ -1697,31 +1704,186 @@ describe("useProjectSwitcherPalette", () => {
       });
     });
 
-    it("keeps the highlight on the same project across a mode change", async () => {
-      const view = await openWith("hottest", conflicting());
-      // Walk the highlight down to the last row, where the reorder is
-      // guaranteed to move it to a different index.
+    it("sorts a project that registered mid-session into the new order", async () => {
+      // Arrivals join the freeze at their band's end, which is a position, not
+      // a ranking. The re-sort has to take them with it, or the row the user
+      // watched appear is the one row their chosen order does not describe.
+      const view = await openWith("mostUsed", conflicting());
       act(() => {
-        view.result.current.selectNext();
-        view.result.current.selectNext();
+        projectState.projects = [...conflicting(), base("bravo")];
+        view.rerender();
       });
-      const selectedBefore = view.result.current.results[view.result.current.selectedIndex]?.id;
-      const indexBefore = view.result.current.selectedIndex;
-      expect(selectedBefore).toBe("mike");
+      await waitFor(() => {
+        expect(view.result.current.results.map((p) => p.id)).toEqual([
+          "zulu",
+          "alpha",
+          "mike",
+          "bravo",
+        ]);
+      });
 
       act(() => {
         setOtherSortMode("alphabetical");
       });
 
       await waitFor(() => {
+        expect(view.result.current.results.map((p) => p.id)).toEqual([
+          "alpha",
+          "bravo",
+          "mike",
+          "zulu",
+        ]);
+      });
+      view.unmount();
+    });
+
+    // Two bands above Other, so "top of the Other band" and "top of the list"
+    // are different rows — a reset that merely went to index 0, or that cleared
+    // the selection outright, would be indistinguishable without them.
+    async function openBanded(mode: OtherProjectsSortMode) {
+      const projects = [base("blocked"), base("waiting"), ...conflicting()];
+      setOtherSortMode(mode);
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {
+        blocked: {
+          activeAgentCount: 0,
+          waitingAgentCount: 1,
+          blockedAgentCount: 1,
+          processCount: 0,
+        },
+        waiting: { activeAgentCount: 0, waitingAgentCount: 1, processCount: 0 },
+      };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const view = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        view.result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(view.result.current.results.map((p) => p.id)).toEqual([
+          "blocked",
+          "waiting",
+          ...EXPECTED_ORDER[mode],
+        ]);
+      });
+      return view;
+    }
+
+    const selectedId = (view: Awaited<ReturnType<typeof openBanded>>) =>
+      view.result.current.results[view.result.current.selectedIndex]?.id;
+
+    it("restarts the highlight at the top of the band it just reordered", async () => {
+      const view = await openBanded("mostUsed");
+      // Walk the highlight to the band's last row, so a highlight that merely
+      // followed its project would be provably somewhere else afterwards.
+      act(() => {
+        view.result.current.selectNext();
+        view.result.current.selectNext();
+        view.result.current.selectNext();
+        view.result.current.selectNext();
+      });
+      expect(selectedId(view)).toBe("mike");
+
+      act(() => {
+        setOtherSortMode("alphabetical");
+      });
+
+      await waitFor(() => {
+        expect(view.result.current.results.slice(2).map((p) => p.id)).toEqual([
+          "alpha",
+          "mike",
+          "zulu",
+        ]);
+      });
+      // Asking for a different order is asking to read that band again, not to
+      // be shown where the old row landed in it. The top of the BAND, not of
+      // the list: the two attention rows above it keep their claim on the eye.
+      expect(selectedId(view)).toBe("alpha");
+      expect(view.result.current.selectedIndex).toBe(2);
+      view.unmount();
+    });
+
+    it("leaves a highlight outside that band exactly where it is", async () => {
+      // The control orders the Other band and says nothing about any other, so
+      // a user parked in Needs attention must not be pulled out of it.
+      const view = await openBanded("mostUsed");
+      act(() => {
+        view.result.current.selectNext();
+      });
+      expect(selectedId(view)).toBe("waiting");
+
+      act(() => {
+        setOtherSortMode("alphabetical");
+      });
+
+      await waitFor(() => {
+        expect(view.result.current.results.slice(2).map((p) => p.id)).toEqual([
+          "alpha",
+          "mike",
+          "zulu",
+        ]);
+      });
+      expect(selectedId(view)).toBe("waiting");
+      view.unmount();
+    });
+
+    it("skips a row that went missing while the palette was open", async () => {
+      // Missing rows keep their frozen slot, so the reset can land on one. It
+      // must not: selecting a missing project opens the relocation dialog,
+      // which is the right answer to a click and the wrong one to the Enter
+      // that follows a reflexive reorder (the same skip `open()` makes).
+      const view = await openWith("mostUsed", conflicting());
+      act(() => {
+        view.result.current.selectNext();
+      });
+      expect(selectedId(view)).toBe("alpha");
+
+      act(() => {
+        projectState.projects = conflicting().map((project) =>
+          project.id === "alpha" ? { ...project, status: "missing" as const } : project
+        );
+        view.rerender();
+      });
+
+      act(() => {
+        setOtherSortMode("alphabetical");
+      });
+
+      // Alphabetical puts "alpha" at the top of the band, and it still renders
+      // there — only the highlight steps over it.
+      await waitFor(() => {
         expect(view.result.current.results.map((p) => p.id)).toEqual(["alpha", "mike", "zulu"]);
       });
-      // The index moved but the selection is the project, not the slot — the
-      // highlight must not be left addressing whatever row inherited index 2.
-      expect(view.result.current.selectedIndex).not.toBe(indexBefore);
-      expect(view.result.current.results[view.result.current.selectedIndex]?.id).toBe(
-        selectedBefore
-      );
+      expect(selectedId(view)).toBe("mike");
+      view.unmount();
+    });
+
+    it("leaves a search highlight alone when the mode changes underneath it", async () => {
+      // The component renders no band headers while searching, so the control
+      // is out of reach today — this pins the hook's own contract rather than a
+      // journey. The rows on screen are query-ranked, so the band order this
+      // changed is not what sequenced them, and seating the highlight on a
+      // browse-order row would land it on whatever the search shows there.
+      const view = await openWith("mostUsed", conflicting());
+      act(() => {
+        view.result.current.setQuery("l");
+      });
+      expect(view.result.current.results.map((p) => p.id)).toEqual(["zulu", "alpha"]);
+      // Wrap back to the first match, so the highlight is held explicitly and
+      // is NOT the row a reset would pick — alphabetical would seat it on
+      // "alpha", which is where an unguarded reset lands.
+      act(() => {
+        view.result.current.selectNext();
+        view.result.current.selectNext();
+      });
+      expect(view.result.current.results[view.result.current.selectedIndex]?.id).toBe("zulu");
+
+      act(() => {
+        setOtherSortMode("alphabetical");
+      });
+
+      expect(view.result.current.results[view.result.current.selectedIndex]?.id).toBe("zulu");
     });
   });
 

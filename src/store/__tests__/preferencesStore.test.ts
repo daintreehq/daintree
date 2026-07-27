@@ -788,7 +788,7 @@ describe("preferencesStore migration", () => {
       // The default has to reproduce today's behavior exactly, or shipping the
       // control silently reorders every user's Other band on upgrade.
       const store = await loadStore();
-      expect(store.getState().projectSwitcherOtherSortMode).toBe("hottest");
+      expect(store.getState().projectSwitcherOtherSortMode).toBe("mostUsed");
     });
 
     it("round-trips a non-default choice through storage", async () => {
@@ -818,7 +818,7 @@ describe("preferencesStore migration", () => {
       const options = store.persist.getOptions();
       const migrated = options.migrate?.({ dockDensity: "compact" }, 13) as Record<string, unknown>;
 
-      expect(migrated.projectSwitcherOtherSortMode).toBe("hottest");
+      expect(migrated.projectSwitcherOtherSortMode).toBe("mostUsed");
       expect(migrated.dockDensity).toBe("compact");
     });
 
@@ -835,7 +835,7 @@ describe("preferencesStore migration", () => {
       setStoredState({ dockDensity: "compact" }, 13);
       const store = await loadStore();
 
-      expect(store.getState().projectSwitcherOtherSortMode).toBe("hottest");
+      expect(store.getState().projectSwitcherOtherSortMode).toBe("mostUsed");
       // The migration must not trample the state it is migrating past.
       expect(store.getState().dockDensity).toBe("compact");
     });
@@ -847,12 +847,14 @@ describe("preferencesStore migration", () => {
     });
 
     it("normalises a value outside the closed set", async () => {
-      // Hand-edited or written by a newer build: an unknown mode would leave
-      // the radio group with no checked item and fall through every branch of
-      // the comparator.
-      setStoredState({ projectSwitcherOtherSortMode: "newest" }, 14);
+      // Hand-edited, written by a newer build, or — as here — a mode id this
+      // app renamed. An unknown mode would leave the radio group with no
+      // checked item and fall through every branch of the comparator; letting
+      // it sanitize instead is what lets the rename ship without a migration,
+      // since the retired id resolves to the same mode's new name.
+      setStoredState({ projectSwitcherOtherSortMode: "hottest" }, 14);
       const store = await loadStore();
-      expect(store.getState().projectSwitcherOtherSortMode).toBe("hottest");
+      expect(store.getState().projectSwitcherOtherSortMode).toBe("mostUsed");
     });
   });
 });

@@ -196,8 +196,8 @@ describe("Other projects sort control (#11455)", () => {
     renderPalette(4);
     // The control's first job is naming the order — every row shows a
     // timestamp, so an unlabelled frecency sort reads as broken.
-    expect(trigger().textContent).toContain("Hottest");
-    expect(trigger().getAttribute("aria-label")).toContain("Hottest");
+    expect(trigger().textContent).toContain("Most used");
+    expect(trigger().getAttribute("aria-label")).toContain("Most used");
   });
 
   it("offers every mode as a radio item reflecting the current choice", () => {
@@ -205,11 +205,11 @@ describe("Other projects sort control (#11455)", () => {
     openSortMenu();
 
     const items = screen.getAllByRole("menuitemradio");
-    expect(items.map((el) => el.textContent?.trim())).toEqual(["Hottest", "Recent", "A to Z"]);
+    expect(items.map((el) => el.textContent?.trim())).toEqual(["Most used", "Recent", "A to Z"]);
     // Exactly one checked, and it is the mode the trigger advertises.
     const checked = items.filter((el) => el.getAttribute("aria-checked") === "true");
     expect(checked).toHaveLength(1);
-    expect(checked[0]!.textContent).toContain("Hottest");
+    expect(checked[0]!.textContent).toContain("Most used");
   });
 
   it("writes the chosen mode to the preference and relabels the trigger", () => {

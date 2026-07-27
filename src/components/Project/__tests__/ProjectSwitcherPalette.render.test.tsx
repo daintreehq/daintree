@@ -532,7 +532,7 @@ describe("ProjectSwitcherPalette modal mode", () => {
     it("keeps the band's accessible name free of the mode it is showing", () => {
       // The header id is the group's aria-labelledby target, and that name is
       // computed from the element's whole subtree — nesting the mode inside it
-      // would name the band "Other projects Hottest" to a screen reader.
+      // would name the band "Other projects Most used" to a screen reader.
       render(<ProjectSwitcherPalette {...dropdownProps} results={withOtherRows(4)} />);
       expect(screen.getByRole("group", { name: "Other projects" })).toBeTruthy();
     });

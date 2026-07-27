@@ -368,8 +368,8 @@ describe("WelcomeScreen", () => {
   // The switcher's Other band and this list carry a standing promise never to
   // disagree on order, so this list follows the same preference (#11455).
   describe("follows the project switcher's Other band sort mode — issue #11455", () => {
-    // Alpha is hottest, Beta is oldest and alphabetically last, Gamma sits in
-    // the middle on score — every mode has to pick a different winner.
+    // Alpha is the most used, Beta the most recently opened, Gamma neither —
+    // so the three modes produce three different orders.
     const conflicting = [
       { name: "Project Alpha", lastOpened: 3000, frecencyScore: 10.0 },
       { name: "Project Beta", lastOpened: 9000, frecencyScore: 2.0 },
@@ -397,8 +397,12 @@ describe("WelcomeScreen", () => {
         .setProjectSwitcherOtherSortMode(DEFAULT_OTHER_PROJECTS_SORT_MODE);
     });
 
-    it("ranks by decayed score in hottest", () => {
-      expect(renderWithMode("hottest")).toEqual(["Project Alpha", "Project Gamma", "Project Beta"]);
+    it("ranks by decayed score in most used", () => {
+      expect(renderWithMode("mostUsed")).toEqual([
+        "Project Alpha",
+        "Project Gamma",
+        "Project Beta",
+      ]);
     });
 
     it("ranks by last opened in recent", () => {

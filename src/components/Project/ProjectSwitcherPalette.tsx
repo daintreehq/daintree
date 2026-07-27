@@ -41,7 +41,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ArrowDownAZ, Clock, Flame } from "@/components/icons";
+import { ArrowDownAZ, ChartNoAxesColumn, Clock } from "@/components/icons";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { getProjectRowStatus, type ProjectRowTone } from "@/lib/projectRowStatus";
@@ -437,9 +437,9 @@ interface ProjectSection {
 // takes its order from `OTHER_PROJECTS_SORT_MODES`.
 const OTHER_PROJECTS_SORT_OPTIONS: Record<
   OtherProjectsSortMode,
-  { label: string; Icon: typeof Flame }
+  { label: string; Icon: typeof Clock }
 > = {
-  hottest: { label: "Hottest", Icon: Flame },
+  mostUsed: { label: "Most used", Icon: ChartNoAxesColumn },
   recent: { label: "Recent", Icon: Clock },
   alphabetical: { label: "A to Z", Icon: ArrowDownAZ },
 };
@@ -454,7 +454,7 @@ const OTHER_PROJECTS_SORT_OPTIONS: Record<
  * - The `id` stays on a leaf element holding ONLY the label text. It is the
  *   `aria-labelledby` target for the surrounding `role="group"`, and that name
  *   is computed from the element's whole subtree — nesting the mode inside it
- *   would name the band "Other projects Hottest".
+ *   would name the band "Other projects Most used".
  * - The trigger is `tabIndex={-1}`. Section headers live inside the
  *   `role="listbox"`, where a focusable child is invalid and unreachable
  *   anyway (arrow keys move `aria-activedescendant` across rows, never here).

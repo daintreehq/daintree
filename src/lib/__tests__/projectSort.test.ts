@@ -23,9 +23,9 @@ function order(projects: SortableProject[], mode: OtherProjectsSortMode): string
 }
 
 describe("compareProjectsByMode", () => {
-  it("ranks by decayed score in hottest, ignoring which row was opened last", () => {
+  it("ranks by decayed score in most used, ignoring which row was opened last", () => {
     // Mike is the most recently opened and still ranks last: score leads.
-    expect(order(CONFLICTING, "hottest")).toEqual(["Zulu", "Alpha", "Mike"]);
+    expect(order(CONFLICTING, "mostUsed")).toEqual(["Zulu", "Alpha", "Mike"]);
   });
 
   it("ranks by last opened in recent, ignoring the score entirely", () => {
@@ -52,8 +52,8 @@ describe("compareProjectsByMode", () => {
   });
 
   it("does not consult the score in recent when timestamps tie", () => {
-    // Score is the loudest signal in hottest and must be silent here, or
-    // "Recent" quietly becomes "Hottest with extra steps" on any tie.
+    // Score is the loudest signal in most used and must be silent here, or
+    // "Recent" quietly becomes "Most used with extra steps" on any tie.
     const tied: SortableProject[] = [
       { id: "hi", name: "Zulu", lastOpened: 500, frecencyScore: 99 },
       { id: "lo", name: "Alpha", lastOpened: 500, frecencyScore: 1 },
@@ -61,14 +61,14 @@ describe("compareProjectsByMode", () => {
     expect(order(tied, "recent")).toEqual(["Alpha", "Zulu"]);
   });
 
-  it("reaches the name tie-break before the id in hottest and recent", () => {
+  it("reaches the name tie-break before the id in most used and recent", () => {
     // Ids are opaque and ordered against the names here, so skipping the name
     // comparison would surface them in the wrong order.
     const tied: SortableProject[] = [
       { id: "id-aaa", name: "Zulu", lastOpened: 500, frecencyScore: 5 },
       { id: "id-zzz", name: "Alpha", lastOpened: 500, frecencyScore: 5 },
     ];
-    expect(order(tied, "hottest")).toEqual(["Alpha", "Zulu"]);
+    expect(order(tied, "mostUsed")).toEqual(["Alpha", "Zulu"]);
     expect(order(tied, "recent")).toEqual(["Alpha", "Zulu"]);
   });
 
@@ -80,12 +80,12 @@ describe("compareProjectsByMode", () => {
     expect(order(mixed, "alphabetical")).toEqual(["Alpha", "Zulu"]);
   });
 
-  it("falls back to last opened when scores tie in hottest", () => {
+  it("falls back to last opened when scores tie in most used", () => {
     const tied: SortableProject[] = [
       { id: "older", name: "Older", lastOpened: 100, frecencyScore: 5 },
       { id: "newer", name: "Newer", lastOpened: 900, frecencyScore: 5 },
     ];
-    expect(order(tied, "hottest")).toEqual(["Newer", "Older"]);
+    expect(order(tied, "mostUsed")).toEqual(["Newer", "Older"]);
   });
 
   it.each(OTHER_PROJECTS_SORT_MODES)("breaks a total tie deterministically in %s", (mode) => {
@@ -122,7 +122,17 @@ describe("isOtherProjectsSortMode", () => {
   });
 
   it("rejects values a hand-edited or stale persisted blob could hold", () => {
-    for (const value of ["", "Hottest", "frecency", null, undefined, 0, {}, ["hottest"]]) {
+    for (const value of [
+      "",
+      "hottest",
+      "MostUsed",
+      "frecency",
+      null,
+      undefined,
+      0,
+      {},
+      ["mostUsed"],
+    ]) {
       expect(isOtherProjectsSortMode(value)).toBe(false);
     }
   });

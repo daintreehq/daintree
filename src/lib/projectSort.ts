@@ -8,12 +8,17 @@
  * Pinned (alphabetical), and Running (most work first) each encode a decision
  * this preference must not override.
  */
-export const OTHER_PROJECTS_SORT_MODES = ["hottest", "recent", "alphabetical"] as const;
+export const OTHER_PROJECTS_SORT_MODES = ["mostUsed", "recent", "alphabetical"] as const;
 
 export type OtherProjectsSortMode = (typeof OTHER_PROJECTS_SORT_MODES)[number];
 
-export const DEFAULT_OTHER_PROJECTS_SORT_MODE: OtherProjectsSortMode = "hottest";
+export const DEFAULT_OTHER_PROJECTS_SORT_MODE: OtherProjectsSortMode = "mostUsed";
 
+/**
+ * Also the gate a preference read from disk passes through, which is why the
+ * mode this one renamed (`"hottest"`) needs no migration: it now fails here and
+ * sanitizes to the default, which is that same mode under its new name.
+ */
 export function isOtherProjectsSortMode(value: unknown): value is OtherProjectsSortMode {
   return (
     typeof value === "string" && (OTHER_PROJECTS_SORT_MODES as readonly string[]).includes(value)
@@ -52,10 +57,10 @@ export function compareProjectsByMode(
     return a.id.localeCompare(b.id);
   }
 
-  // Hottest keeps frecency as the primary key; Recent drops it entirely and
+  // Most used keeps frecency as the primary key; Recent drops it entirely and
   // ranks on the timestamp the rows already show. Both then fall through to
   // the same tie-breaks, so switching modes never changes how ties resolve.
-  if (mode === "hottest" && a.frecencyScore !== b.frecencyScore) {
+  if (mode === "mostUsed" && a.frecencyScore !== b.frecencyScore) {
     return b.frecencyScore - a.frecencyScore;
   }
   if (a.lastOpened !== b.lastOpened) return b.lastOpened - a.lastOpened;
