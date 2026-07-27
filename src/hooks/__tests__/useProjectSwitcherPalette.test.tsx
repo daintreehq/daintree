@@ -2574,7 +2574,7 @@ describe("useProjectSwitcherPalette", () => {
       await waitFor(() => {
         expect(result.current.results).toHaveLength(1);
       });
-      const row = result.current.results[0]!;
+      const row = asProject(result.current.results[0]);
       expect(row.blockedAgentCount).toBe(1);
       expect(row.oldestWaitingSince).toBe(4_242);
       expect(row.section).toBe("attention");
@@ -2643,7 +2643,7 @@ describe("useProjectSwitcherPalette", () => {
         expect(modal.current.results).toHaveLength(3);
       });
       const modalOrder = modal.current.results.map((p) => p.id);
-      const modalSections = modal.current.results.map((p) => p.section);
+      const modalSections = modal.current.results.map(asProject).map((p) => p.section);
 
       const dropdown = await openIn("dropdown");
       await waitFor(() => {
@@ -2653,7 +2653,7 @@ describe("useProjectSwitcherPalette", () => {
       // Compared in order, not as sets: the two surfaces previously agreed on
       // neither scope nor grouping, and membership alone would not catch that.
       expect(dropdown.current.results.map((p) => p.id)).toEqual(modalOrder);
-      expect(dropdown.current.results.map((p) => p.section)).toEqual(modalSections);
+      expect(dropdown.current.results.map(asProject).map((p) => p.section)).toEqual(modalSections);
       expect(modalOrder).toContain("closed");
     });
 
@@ -2741,7 +2741,7 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.results).toHaveLength(3);
       });
 
-      const current = result.current.results.find((project) => project.isActive)!;
+      const current = asProject(result.current.results.find((project) => project.isActive));
 
       act(() => {
         void result.current.selectProject(current);
