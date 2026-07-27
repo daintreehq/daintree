@@ -1336,10 +1336,7 @@ describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)"
     });
 
     await restorePanelsPhase(
-      [
-        codexPanel("survivor", { lastActiveAt: 900 }),
-        codexPanel("respawner", { lastActiveAt: 1 }),
-      ],
+      [codexPanel("survivor", { lastActiveAt: 900 }), codexPanel("respawner", { lastActiveAt: 1 })],
       ctx
     );
 
@@ -1367,7 +1364,7 @@ describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)"
     // and must not consume the scope's only slot.
     const ctx = makeContext({
       prefetchedReconnectResults: {
-        alive: { id: "alive", exists: true, hasPty: true } as never,
+        alive: { id: "alive", exists: true, hasPty: true },
       },
     });
 
@@ -1383,10 +1380,7 @@ describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)"
     const ctx = makeContext();
 
     await restorePanelsPhase(
-      [
-        codexPanel("smoke-1", { lastActiveAt: 900 }),
-        codexPanel("real", { lastActiveAt: 1 }),
-      ],
+      [codexPanel("smoke-1", { lastActiveAt: 900 }), codexPanel("real", { lastActiveAt: 1 })],
       ctx
     );
 

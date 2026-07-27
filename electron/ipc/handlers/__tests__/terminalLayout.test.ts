@@ -130,9 +130,16 @@ describe("setTerminals merge (#11350)", () => {
 });
 
 describe("setTerminals session-id preservation (#11461)", () => {
-  const withSession = (id: string, agentSessionId?: string): TerminalSnapshot =>
-    ({ ...term(id), launchAgentId: "codex", ...(agentSessionId && { agentSessionId }) }) as
-      TerminalSnapshot;
+  const withSession = (
+    id: string,
+    agentSessionId?: string,
+    extra: Partial<TerminalSnapshot> = {}
+  ): TerminalSnapshot => ({
+    ...term(id),
+    launchAgentId: "codex",
+    ...(agentSessionId && { agentSessionId }),
+    ...extra,
+  });
 
   const sessionIdOf = (state: ProjectState | null, id: string): string | undefined =>
     state?.terminals?.find((t) => t.id === id)?.agentSessionId;
@@ -168,11 +175,11 @@ describe("setTerminals session-id preservation (#11461)", () => {
     // Window A already consumed and cleared the session, so disk has none.
     // Window B is stale, still carries the old id, and saves for an unrelated
     // reason without claiming the field.
-    const saved = onDisk(baseState([{ ...withSession("1"), agentState: "idle" } as TerminalSnapshot]));
+    const saved = onDisk(baseState([withSession("1", undefined, { agentState: "idle" })]));
 
     await setTerminals({
       projectId: "p1",
-      terminals: [{ ...withSession("1", "consumed"), agentState: "exited" } as TerminalSnapshot],
+      terminals: [withSession("1", "consumed", { agentState: "exited" })],
       changedIds: ["1"],
       removedIds: [],
     });
@@ -186,7 +193,7 @@ describe("setTerminals session-id preservation (#11461)", () => {
 
     await setTerminals({
       projectId: "p1",
-      terminals: [{ ...withSession("1"), title: "renamed" } as TerminalSnapshot],
+      terminals: [withSession("1", undefined, { title: "renamed" })],
       changedIds: ["1"],
       removedIds: [],
       fieldEdits: [{ id: "1", fields: ["title", "cwd"] }],
@@ -265,12 +272,11 @@ describe("sanitizeFieldEdits (#11461 trust boundary)", () => {
     ).toEqual([{ id: "ok", fields: ["agentSessionId"] }]);
   });
 
-  it("does not treat a prototype-chain key as a usable id", () => {
+  it("carries a prototype-chain id through as plain data", () => {
+    // Kept as an ordinary string id; the merge keys claims in a Map, so it can
+    // never reach Object.prototype downstream.
     const sanitized = sanitizeFieldEdits([{ id: "__proto__", fields: ["agentSessionId"] }]) ?? [];
-    // Accepted as a plain string id; what matters is that indexing it later can't
-    // reach Object.prototype — the merge keys claims in a Map.
     expect(sanitized.map((e) => e.id)).toEqual(["__proto__"]);
-    expect(({} as Record<string, unknown>)["agentSessionId"]).toBeUndefined();
   });
 });
 

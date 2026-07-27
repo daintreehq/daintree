@@ -894,7 +894,7 @@ describe("project:switch outgoing agentSessionId field merge (#11461)", () => {
   async function runSwitchWithTerminals(
     existingTerminals: Record<string, unknown>[],
     outgoingState: Record<string, unknown>
-  ): Promise<Record<string, unknown>> {
+  ): Promise<{ id: string; agentSessionId?: string }[]> {
     const mockView = {
       webContents: { id: 100, isDestroyed: () => false, send: vi.fn() },
     };
@@ -930,7 +930,10 @@ describe("project:switch outgoing agentSessionId field merge (#11461)", () => {
     }
     const handler = handleMap.get(CHANNELS.PROJECT_SWITCH);
     await handler!({ sender: { id: 99 } }, "proj-new", outgoingState);
-    return projectStoreMock.saveProjectState.mock.calls[0]?.[1] as Record<string, unknown>;
+    const state = projectStoreMock.saveProjectState.mock.calls[0]?.[1] as {
+      terminals?: { id: string; agentSessionId?: string }[];
+    };
+    return state.terminals ?? [];
   }
 
   const pane = (extra: Record<string, unknown> = {}) => ({
@@ -943,21 +946,17 @@ describe("project:switch outgoing agentSessionId field merge (#11461)", () => {
     ...extra,
   });
 
-  const sessionIdOf = (saved: Record<string, unknown>): string | undefined =>
-    (saved.terminals as { id: string; agentSessionId?: string }[]).find((t) => t.id === "t1")
-      ?.agentSessionId;
-
   it("keeps a shutdown-captured session id the outgoing snapshot omits", async () => {
-    const saved = await runSwitchWithTerminals([pane({ agentSessionId: "captured" })], {
+    const terminals = await runSwitchWithTerminals([pane({ agentSessionId: "captured" })], {
       terminals: [pane({ agentState: "exited" })],
       terminalDelta: { changedIds: ["t1"], removedIds: [] },
     });
 
-    expect(sessionIdOf(saved)).toBe("captured");
+    expect(terminals.find((t) => t.id === "t1")?.agentSessionId).toBe("captured");
   });
 
   it("clears it when the outgoing delta claims the change", async () => {
-    const saved = await runSwitchWithTerminals([pane({ agentSessionId: "consumed" })], {
+    const terminals = await runSwitchWithTerminals([pane({ agentSessionId: "consumed" })], {
       terminals: [pane()],
       terminalDelta: {
         changedIds: ["t1"],
@@ -966,7 +965,7 @@ describe("project:switch outgoing agentSessionId field merge (#11461)", () => {
       },
     });
 
-    expect(sessionIdOf(saved)).toBeUndefined();
+    expect(terminals.find((t) => t.id === "t1")?.agentSessionId).toBeUndefined();
   });
 });
 

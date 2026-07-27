@@ -189,7 +189,9 @@ export function computeIdArrayDelta<T extends { id: string }>(
   }
 
   // Omitted when empty so the common delta keeps its historical shape.
-  return fieldEdits.length > 0 ? { changedIds, removedIds, fieldEdits } : { changedIds, removedIds };
+  return fieldEdits.length > 0
+    ? { changedIds, removedIds, fieldEdits }
+    : { changedIds, removedIds };
 }
 
 export interface IdArrayMergeOptions<T> {

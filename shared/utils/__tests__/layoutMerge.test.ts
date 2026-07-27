@@ -361,12 +361,9 @@ describe("field-level merge for out-of-band fields (#11461)", () => {
     // A missing baseline usually means the writer just created the panel, but it
     // can also mean an earlier save failed or the view was cached across a switch
     // — in which case disk may hold something newer. Silence, not authority.
-    const delta = computeIdArrayDelta(
-      [],
-      [{ id: "new", agentSessionId: "fresh" }] as Snap[],
-      snapEq,
-      ["agentSessionId"]
-    );
+    const added: Snap[] = [{ id: "new", agentSessionId: "fresh" }];
+
+    const delta = computeIdArrayDelta([], added, snapEq, ["agentSessionId"]);
 
     expect(delta.fieldEdits).toBeUndefined();
   });
@@ -374,13 +371,9 @@ describe("field-level merge for out-of-band fields (#11461)", () => {
   it("still persists a genuinely new entry's tracked value", () => {
     // Nothing on disk to defer to, so the unclaimed value stands and creating a
     // panel with a session id (the resume-a-session flow) still records it.
-    const merged = mergeIdArray(
-      [],
-      [{ id: "new", agentSessionId: "fresh" }] as Snap[],
-      ["new"],
-      [],
-      sessionMerge
-    );
+    const added: Snap[] = [{ id: "new", agentSessionId: "fresh" }];
+
+    const merged = mergeIdArray([], added, ["new"], [], sessionMerge);
 
     expect(merged[0]!.agentSessionId).toBe("fresh");
   });

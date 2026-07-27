@@ -122,10 +122,10 @@ function electSuppressedResumeLatestIds(
       existingIds.push(saved.id);
     }
 
+    // A corrupt or missing stamp ranks lowest rather than winning the slot.
+    const savedLastActiveAt = saved.lastActiveAt ?? 0;
     const lastActiveAt =
-      Number.isFinite(saved.lastActiveAt) && (saved.lastActiveAt ?? 0) > 0
-        ? (saved.lastActiveAt as number)
-        : 0;
+      Number.isFinite(savedLastActiveAt) && savedLastActiveAt > 0 ? savedLastActiveAt : 0;
     const currentWinner = winnerByScope.get(scope);
     if (currentWinner === undefined || lastActiveAt > currentWinner.lastActiveAt) {
       winnerByScope.set(scope, { id: saved.id, lastActiveAt });
