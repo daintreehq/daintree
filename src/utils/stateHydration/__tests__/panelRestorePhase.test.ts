@@ -79,8 +79,16 @@ vi.mock("../statePatcher", () => ({
     // resume-latest election (#11461) is assertable through addPanel's args.
     allowResumeLatest: options?.allowResumeLatest ?? true,
   }),
-  resolveRespawnAgentId: (s: TerminalState, kind: string | undefined) =>
-    s.launchAgentId ?? (kind === "agent" ? "claude" : undefined),
+  // Mirrors the real resolver's title recovery (same agent order) so the
+  // election's identity resolution can't silently diverge from production.
+  resolveRespawnAgentId: (s: TerminalState, kind: string | undefined) => {
+    if (s.launchAgentId) return s.launchAgentId;
+    if (kind !== "agent") return undefined;
+    const title = (s.title ?? "").toLowerCase();
+    return ["claude", "antigravity", "gemini", "codex", "opencode"].find((id) =>
+      title.includes(id)
+    );
+  },
   buildArgsForNonPtyRecreation: (s: TerminalState, kind: string) => ({
     cwd: s.cwd ?? "/cwd",
     kind,
@@ -110,19 +118,10 @@ vi.mock("@shared/utils/smokeTestTerminals", () => ({
   isSmokeTestTerminalId: (id: string) => id.startsWith("smoke-"),
 }));
 
-// Only codex/claude declare resume-latest args here, so the election's capability
-// probe is deterministic and an agent without the fallback can be exercised.
-const { buildResumeLatestCommandMock } = vi.hoisted(() => ({
-  buildResumeLatestCommandMock: vi.fn((agentId: string) =>
-    agentId === "codex" || agentId === "claude" ? `${agentId} --resume-latest` : undefined
-  ),
-}));
-
-vi.mock("@shared/types/agentSettings", async () => {
-  const actual =
-    await vi.importActual<typeof import("@shared/types/agentSettings")>("@shared/types/agentSettings");
-  return { ...actual, buildResumeLatestCommand: buildResumeLatestCommandMock };
-});
+// `buildResumeLatestCommand` is deliberately NOT mocked: the election's capability
+// probe should be measured against the real agent configs, so an agent that gains
+// or loses `resumeLatestArgs` is caught here rather than passing against a
+// hand-maintained list.
 
 // Override stagger constants so tests don't have to wait 100ms × N
 // Spy on getRestoreBatchParams so tests can both pin fast/deterministic batches
@@ -1222,8 +1221,9 @@ describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)"
       ctx
     );
 
-    const allowed = [...allowanceById(ctx)].filter(([, allow]) => allow).map(([id]) => id);
-    expect(allowed).toEqual(["b"]);
+    // Asserted as a complete map, not just the allowed subset: a regression that
+    // dropped the losing panes entirely would still leave one `true`.
+    expect(Object.fromEntries(allowanceById(ctx))).toEqual({ a: false, b: true, c: false });
   });
 
   it("gives the slot to the most recently active pane", async () => {
@@ -1344,6 +1344,70 @@ describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)"
     );
 
     expect(allowanceById(ctx).get("respawner")).toBe(true);
+  });
+
+  it("elects for a non-Codex capable agent too", async () => {
+    // Guards against the blast radius narrowing to whatever the tests name: this
+    // resolves capability from the real gemini config, not a mock list.
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [
+        panel("g-old", { kind: "agent", launchAgentId: "gemini", lastActiveAt: 1 }),
+        panel("g-new", { kind: "agent", launchAgentId: "gemini", lastActiveAt: 2 }),
+      ],
+      ctx
+    );
+
+    expect(Object.fromEntries(allowanceById(ctx))).toEqual({ "g-old": false, "g-new": true });
+  });
+
+  it("does not spend the slot on a pane a prefetched probe says is still alive", async () => {
+    // The probe short-circuits reconnect to "found", so this pane never respawns
+    // and must not consume the scope's only slot.
+    const ctx = makeContext({
+      prefetchedReconnectResults: {
+        alive: { id: "alive", exists: true, hasPty: true } as never,
+      },
+    });
+
+    await restorePanelsPhase(
+      [codexPanel("alive", { lastActiveAt: 900 }), codexPanel("cold", { lastActiveAt: 1 })],
+      ctx
+    );
+
+    expect(allowanceById(ctx).get("cold")).toBe(true);
+  });
+
+  it("does not let a smoke-test pane consume a real pane's slot", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [
+        codexPanel("smoke-1", { lastActiveAt: 900 }),
+        codexPanel("real", { lastActiveAt: 1 }),
+      ],
+      ctx
+    );
+
+    expect(allowanceById(ctx).get("real")).toBe(true);
+  });
+
+  it("contends on projectRoot when panes carry no cwd", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [
+        codexPanel("no-cwd-a", { cwd: undefined, lastActiveAt: 1 }),
+        codexPanel("no-cwd-b", { cwd: undefined, lastActiveAt: 2 }),
+      ],
+      ctx
+    );
+
+    expect(Object.fromEntries(allowanceById(ctx))).toEqual({
+      "no-cwd-a": false,
+      "no-cwd-b": true,
+    });
   });
 
   it("does not suppress panes of an agent that has no resume-latest fallback", async () => {

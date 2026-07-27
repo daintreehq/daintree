@@ -37,19 +37,26 @@
  * The old code overwrote every panel's layout on every save, so this is strictly
  * better; fully fixing it needs a field-level merge and is tracked separately.
  *
- * `preserveOnOmission` (#11461) is the narrow, opt-in slice of that field-level
- * merge: a field Main itself can author out-of-band (an agent's captured
- * `agentSessionId`) must not be destroyed just because the writer's entry
- * happened to be flagged changed by an unrelated ambient field. For those fields
- * only, absence from a changed entry means "the writer doesn't know", and a
- * deliberate clear has to be stated explicitly via `clearedFields`.
+ * `fieldLevelMerge` (#11461) is the narrow, opt-in slice of that field-level
+ * merge, for fields Main itself can author out-of-band (an agent's captured
+ * `agentSessionId`). Such a field must not move just because the containing entry
+ * was flagged changed by an unrelated ambient field. For those fields only,
+ * authority is per-field: the incoming value applies when the writer listed the
+ * field in `fieldEdits` (it genuinely changed it since its own baseline), and
+ * otherwise the on-disk value stands — whether the writer omitted the field or
+ * is carrying a stale copy of it.
+ *
+ * Both halves matter. Preserving on omission stops a post-exit save from erasing
+ * a session id the renderer never held; rejecting an unauthored value stops a
+ * stale sibling window from resurrecting one that was deliberately consumed.
  */
 
 /**
- * Fields the writer deliberately cleared on one entry since its baseline. Only
- * meaningful for `preserveOnOmission` fields, where plain absence is ambiguous.
+ * The `fieldLevelMerge` fields a writer actually changed on one entry since its
+ * baseline — set, changed, or cleared. Absence from this list is what tells Main
+ * the writer has no opinion, so plain presence/absence of the value can't.
  */
-export interface IdArrayFieldClear {
+export interface IdArrayFieldEdit {
   id: string;
   fields: string[];
 }
@@ -60,10 +67,10 @@ export interface IdArrayDelta {
   /** Ids present in the writer's baseline but absent from its current array. */
   removedIds: string[];
   /**
-   * Per-entry tombstones for tracked fields that went from a value in the
-   * writer's baseline to absent in its current array. Omitted when empty.
+   * Per-entry field-level authority claims for tracked fields. Omitted when
+   * empty, so the common delta keeps its historical shape.
    */
-  clearedFields?: IdArrayFieldClear[];
+  fieldEdits?: IdArrayFieldEdit[];
 }
 
 function hasStringId(entry: unknown): entry is { id: string } {
@@ -124,19 +131,20 @@ export function deepEqualIgnoringUndefined(left: unknown, right: unknown): boole
  * current array. `equals` decides whether an entry's content changed (identity
  * is by `id`; content equality is caller-defined, e.g. a deep comparison).
  *
- * `trackedClearFields` names the `preserveOnOmission` fields this writer is
- * authoritative about clearing. A field with a value in the baseline and none in
- * the current entry becomes an explicit `clearedFields` tombstone, which is the
- * only way Main can tell a deliberate clear from "not sent" (#11461). Inferring
- * this from the baseline — rather than tracking clear intent in the store — works
- * because the baseline is primed from the on-disk snapshot at hydration, so a
- * value only Main ever knew is absent from both sides and yields no tombstone.
+ * `trackedFields` names the `fieldLevelMerge` fields this writer can speak for. A
+ * tracked field whose value differs from the writer's baseline — set, changed, or
+ * cleared — is reported in `fieldEdits`; one that matches its baseline is not, and
+ * Main then leaves the on-disk value alone (#11461). Deriving authority from the
+ * baseline rather than tracking intent in the store works because the baseline is
+ * primed from the on-disk snapshot at hydration: a value only Main ever knew
+ * matches on both sides and is never claimed. An entry with no baseline at all is
+ * this writer's own addition, so it speaks for every tracked field on it.
  */
 export function computeIdArrayDelta<T extends { id: string }>(
   base: readonly T[],
   current: readonly T[],
   equals: (a: T, b: T) => boolean,
-  trackedClearFields?: readonly (keyof T & string)[]
+  trackedFields?: readonly (keyof T & string)[]
 ): IdArrayDelta {
   const baseById = new Map<string, T>();
   for (const entry of base) {
@@ -145,7 +153,7 @@ export function computeIdArrayDelta<T extends { id: string }>(
 
   const changedIds: string[] = [];
   const changedSeen = new Set<string>();
-  const clearedFields: IdArrayFieldClear[] = [];
+  const fieldEdits: IdArrayFieldEdit[] = [];
   const currentIds = new Set<string>();
   for (const entry of current) {
     if (!hasStringId(entry)) continue;
@@ -155,15 +163,16 @@ export function computeIdArrayDelta<T extends { id: string }>(
       changedSeen.add(entry.id);
       changedIds.push(entry.id);
     }
-    if (prev === undefined || trackedClearFields === undefined) continue;
-    const cleared = trackedClearFields.filter(
-      (field) => prev[field] !== undefined && entry[field] === undefined
-    );
-    if (cleared.length === 0) continue;
-    clearedFields.push({ id: entry.id, fields: [...cleared] });
-    // A tombstone is only honoured for an entry the writer is allowed to touch,
-    // so keep the two lists consistent even if a caller-supplied `equals`
-    // ignores the tracked field.
+    if (trackedFields === undefined) continue;
+    const edited =
+      prev === undefined
+        ? trackedFields.filter((field) => entry[field] !== undefined)
+        : trackedFields.filter((field) => prev[field] !== entry[field]);
+    if (edited.length === 0) continue;
+    fieldEdits.push({ id: entry.id, fields: [...edited] });
+    // A claim is only honoured for an entry the writer is allowed to touch, so
+    // keep the two lists consistent even if a caller-supplied `equals` ignores
+    // the tracked field.
     if (!changedSeen.has(entry.id)) {
       changedSeen.add(entry.id);
       changedIds.push(entry.id);
@@ -178,27 +187,26 @@ export function computeIdArrayDelta<T extends { id: string }>(
   }
 
   // Omitted when empty so the common delta keeps its historical shape.
-  return clearedFields.length > 0
-    ? { changedIds, removedIds, clearedFields }
-    : { changedIds, removedIds };
+  return fieldEdits.length > 0 ? { changedIds, removedIds, fieldEdits } : { changedIds, removedIds };
 }
 
 export interface IdArrayMergeOptions<T> {
   /**
-   * Fields where absence from a changed entry means "the writer doesn't know"
-   * rather than "cleared", so the on-disk value is carried forward.
+   * Fields merged per-field instead of with the containing entry, because Main
+   * can author them out-of-band. The incoming value applies only when the writer
+   * claimed the field in `fieldEdits`.
    */
-  preserveOnOmission: readonly (keyof T & string)[];
-  /** Explicit tombstones that override the preserve rule for a single entry. */
-  clearedFields?: readonly IdArrayFieldClear[];
+  fieldLevelMerge: readonly (keyof T & string)[];
+  /** Per-entry authority claims for those fields, as sent by the writer. */
+  fieldEdits?: readonly IdArrayFieldEdit[];
 }
 
-function buildClearedIndex(
-  clearedFields: readonly IdArrayFieldClear[] | undefined
+function buildFieldEditIndex(
+  fieldEdits: readonly IdArrayFieldEdit[] | undefined
 ): Map<string, Set<string>> {
   const byId = new Map<string, Set<string>>();
-  if (clearedFields === undefined) return byId;
-  for (const entry of clearedFields) {
+  if (fieldEdits === undefined) return byId;
+  for (const entry of fieldEdits) {
     if (!hasStringId(entry) || !Array.isArray(entry.fields)) continue;
     // Union duplicate entries for the same id rather than letting the last win.
     const fields = byId.get(entry.id) ?? new Set<string>();
@@ -211,22 +219,24 @@ function buildClearedIndex(
 }
 
 /**
- * Carry forward on-disk values for `preserveOnOmission` fields the incoming
- * entry omits and did not tombstone. Returns `incoming` untouched when nothing
- * needs carrying, so the common path allocates nothing.
+ * Resolve `fieldLevelMerge` fields against the on-disk entry: a field the writer
+ * claimed keeps its incoming value, and every other one reverts to what is on
+ * disk. That rejects both an omission (which would erase a value the writer never
+ * held) and a stale carried-over value (which would resurrect one another writer
+ * deliberately cleared). Returns `incoming` untouched when the two already agree,
+ * so the common path allocates nothing.
  */
-function preserveOmittedFields<T extends { id: string }>(
+function applyFieldAuthority<T extends { id: string }>(
   incoming: T,
   onDisk: T | undefined,
-  preserveOnOmission: readonly (keyof T & string)[],
-  cleared: ReadonlySet<string> | undefined
+  fieldLevelMerge: readonly (keyof T & string)[],
+  claimed: ReadonlySet<string> | undefined
 ): T {
   if (onDisk === undefined) return incoming;
   let patched: T | undefined;
-  for (const field of preserveOnOmission) {
-    if (incoming[field] !== undefined) continue;
-    if (cleared?.has(field)) continue;
-    if (onDisk[field] === undefined) continue;
+  for (const field of fieldLevelMerge) {
+    if (claimed?.has(field)) continue;
+    if (onDisk[field] === incoming[field]) continue;
     patched = patched ?? { ...incoming };
     patched[field] = onDisk[field];
   }
@@ -249,10 +259,9 @@ function preserveOmittedFields<T extends { id: string }>(
  * Existing entries the writer never knew (not in `incoming`, not in
  * `removedIds`) are appended, preserving sibling additions.
  *
- * `options.preserveOnOmission` narrows the "incoming value wins" rule for the
- * named fields only: an omitted value carries the on-disk one forward unless the
- * writer tombstoned it in `options.clearedFields` (#11461). A defined incoming
- * value always wins, so malformed metadata can never delete live data.
+ * `options.fieldLevelMerge` narrows the "incoming value wins" rule for the named
+ * fields only: they move only where the writer claimed them in
+ * `options.fieldEdits`, and otherwise keep their on-disk value (#11461).
  */
 export function mergeIdArray<T extends { id: string }>(
   existing: readonly T[],
@@ -270,7 +279,7 @@ export function mergeIdArray<T extends { id: string }>(
   const changed = new Set(changedIds);
   const removed = new Set(removedIds);
   const incomingIds = new Set<string>();
-  const clearedById = buildClearedIndex(options?.clearedFields);
+  const claimedById = buildFieldEditIndex(options?.fieldEdits);
 
   const result: T[] = [];
   for (const entry of incoming) {
@@ -283,11 +292,11 @@ export function mergeIdArray<T extends { id: string }>(
       result.push(
         options === undefined
           ? entry
-          : preserveOmittedFields(
+          : applyFieldAuthority(
               entry,
               existingById.get(entry.id),
-              options.preserveOnOmission,
-              clearedById.get(entry.id)
+              options.fieldLevelMerge,
+              claimedById.get(entry.id)
             )
       );
       continue;

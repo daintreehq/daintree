@@ -626,11 +626,14 @@ export function buildArgsForRespawn(
           globalUseAltScreen,
         });
         sessionLostOnRestore = true;
-      } else if (!allowResumeLatest) {
+      } else if (!allowResumeLatest && buildResumeLatestCommand(agentId) !== undefined) {
         // Nothing above rebuilt the command, so `command` still holds
         // `saved.command` — which is itself a persisted resume-latest command
         // whenever an earlier restore used one. Inheriting it would reinstate the
         // very collision this suppression exists to prevent, so launch clean.
+        // The bare capability probe (config-only, so flag-independent and in
+        // agreement with the restore election's) keeps suppression from touching
+        // an agent that has no resume-latest fallback to suppress.
         command = buildLaunchCommandFromFlags(baseCommand, agentId, injectedFromEmpty, {
           clipboardDirectory,
           shareClipboardDirectory,

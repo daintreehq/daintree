@@ -9,14 +9,14 @@ const projectStoreMock = vi.hoisted(() => ({
 
 vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 
-import { terminalLayoutNamespace } from "../terminalLayout.js";
+import { terminalLayoutNamespace, sanitizeFieldEdits } from "../terminalLayout.js";
 
 const setTerminals = terminalLayoutNamespace.ops.setTerminals.handler as (payload: {
   projectId: string;
   terminals: TerminalSnapshot[];
   changedIds?: string[];
   removedIds?: string[];
-  clearedFields?: unknown;
+  fieldEdits?: unknown;
 }) => Promise<void>;
 
 const setTabGroups = terminalLayoutNamespace.ops.setTabGroups.handler as (payload: {
@@ -150,7 +150,7 @@ describe("setTerminals session-id preservation (#11461)", () => {
     expect(sessionIdOf(saved(), "1")).toBe("captured");
   });
 
-  it("clears the stored session id when the writer tombstones it", async () => {
+  it("clears the stored session id when the writer claims the change", async () => {
     const saved = onDisk(baseState([withSession("1", "stale")]));
 
     await setTerminals({
@@ -158,10 +158,27 @@ describe("setTerminals session-id preservation (#11461)", () => {
       terminals: [withSession("1")],
       changedIds: ["1"],
       removedIds: [],
-      clearedFields: [{ id: "1", fields: ["agentSessionId"] }],
+      fieldEdits: [{ id: "1", fields: ["agentSessionId"] }],
     });
 
     expect(sessionIdOf(saved(), "1")).toBeUndefined();
+  });
+
+  it("does not let a stale sibling window resurrect a consumed session id", async () => {
+    // Window A already consumed and cleared the session, so disk has none.
+    // Window B is stale, still carries the old id, and saves for an unrelated
+    // reason without claiming the field.
+    const saved = onDisk(baseState([{ ...withSession("1"), agentState: "idle" } as TerminalSnapshot]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [{ ...withSession("1", "consumed"), agentState: "exited" } as TerminalSnapshot],
+      changedIds: ["1"],
+      removedIds: [],
+    });
+
+    expect(sessionIdOf(saved(), "1")).toBeUndefined();
+    expect(saved()?.terminals?.find((t) => t.id === "1")?.agentState).toBe("exited");
   });
 
   it("ignores field names outside the allowlist", async () => {
@@ -172,7 +189,7 @@ describe("setTerminals session-id preservation (#11461)", () => {
       terminals: [{ ...withSession("1"), title: "renamed" } as TerminalSnapshot],
       changedIds: ["1"],
       removedIds: [],
-      clearedFields: [{ id: "1", fields: ["title", "cwd"] }],
+      fieldEdits: [{ id: "1", fields: ["title", "cwd"] }],
     });
 
     const entry = saved()?.terminals?.find((t) => t.id === "1");
@@ -181,7 +198,7 @@ describe("setTerminals session-id preservation (#11461)", () => {
     expect(entry?.cwd).toBe("/tmp");
   });
 
-  it("survives malformed clear metadata without dropping the stored id", async () => {
+  it("survives malformed claim metadata without dropping the stored id", async () => {
     const saved = onDisk(baseState([withSession("1", "captured")]));
 
     await setTerminals({
@@ -189,7 +206,7 @@ describe("setTerminals session-id preservation (#11461)", () => {
       terminals: [withSession("1")],
       changedIds: ["1"],
       removedIds: [],
-      clearedFields: [null, "nope", { id: 7, fields: ["agentSessionId"] }, { id: "1" }],
+      fieldEdits: [null, "nope", { id: 7, fields: ["agentSessionId"] }, { id: "1" }],
     });
 
     expect(sessionIdOf(saved(), "1")).toBe("captured");
@@ -203,7 +220,7 @@ describe("setTerminals session-id preservation (#11461)", () => {
       terminals: [withSession("1"), withSession("2")],
       changedIds: ["1", "2"],
       removedIds: [],
-      clearedFields: [{ id: "1", fields: ["agentSessionId"] }],
+      fieldEdits: [{ id: "1", fields: ["agentSessionId"] }],
     });
 
     expect(sessionIdOf(saved(), "1")).toBeUndefined();
@@ -216,6 +233,44 @@ describe("setTerminals session-id preservation (#11461)", () => {
     await setTerminals({ projectId: "p1", terminals: [withSession("1")] });
 
     expect(sessionIdOf(saved(), "1")).toBeUndefined();
+  });
+});
+
+describe("sanitizeFieldEdits (#11461 trust boundary)", () => {
+  // Asserted directly: the merge independently ignores unknown fields, so a
+  // handler-level test alone would still pass with the sanitizer bypassed.
+  it("keeps only allowlisted field names", () => {
+    expect(sanitizeFieldEdits([{ id: "1", fields: ["agentSessionId", "title", "cwd"] }])).toEqual([
+      { id: "1", fields: ["agentSessionId"] },
+    ]);
+  });
+
+  it("returns undefined when nothing survives", () => {
+    expect(sanitizeFieldEdits([{ id: "1", fields: ["title"] }])).toBeUndefined();
+    expect(sanitizeFieldEdits([])).toBeUndefined();
+    expect(sanitizeFieldEdits("nope")).toBeUndefined();
+    expect(sanitizeFieldEdits(undefined)).toBeUndefined();
+  });
+
+  it("drops entries with an unusable id or fields list", () => {
+    expect(
+      sanitizeFieldEdits([
+        null,
+        "nope",
+        { id: 7, fields: ["agentSessionId"] },
+        { id: "", fields: ["agentSessionId"] },
+        { id: "ok", fields: "agentSessionId" },
+        { id: "ok", fields: ["agentSessionId"] },
+      ])
+    ).toEqual([{ id: "ok", fields: ["agentSessionId"] }]);
+  });
+
+  it("does not treat a prototype-chain key as a usable id", () => {
+    const sanitized = sanitizeFieldEdits([{ id: "__proto__", fields: ["agentSessionId"] }]) ?? [];
+    // Accepted as a plain string id; what matters is that indexing it later can't
+    // reach Object.prototype — the merge keys claims in a Map.
+    expect(sanitized.map((e) => e.id)).toEqual(["__proto__"]);
+    expect(({} as Record<string, unknown>)["agentSessionId"]).toBeUndefined();
   });
 });
 

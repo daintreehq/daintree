@@ -719,7 +719,7 @@ describe("buildArgsForRespawn", () => {
         { allowResumeLatest: false }
       );
       expect(buildResumeLatestCommandMock).not.toHaveBeenCalled();
-      expect(result.command).not.toBe("claude --continue");
+      expect(result.command).toBe("claude --generated");
       expect(result.sessionLostOnRestore).toBe(true);
     });
 
@@ -745,7 +745,7 @@ describe("buildArgsForRespawn", () => {
         undefined,
         { allowResumeLatest: false }
       );
-      expect(result.command).not.toContain("--continue");
+      expect(result.command).toBe("claude");
       expect(result.sessionLostOnRestore).toBe(true);
     });
 
@@ -792,8 +792,36 @@ describe("buildArgsForRespawn", () => {
         undefined,
         { allowResumeLatest: false }
       );
-      expect(result.command).toContain("--flagged");
+      expect(result.command).toBe("claude --flagged");
       expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("leaves an agent with no resume-latest fallback untouched when suppressed (#11461)", () => {
+      // Suppression may only affect an agent that has a fallback to suppress, so
+      // the option can't quietly rewrite an unrelated agent's saved command.
+      buildResumeLatestCommandMock.mockReturnValue(undefined);
+      const saved = {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        command: "claude --custom-mode",
+      };
+      const allowed = buildArgsForRespawn(saved, "terminal", "/p", undefined, false, "/tmp");
+      const suppressed = buildArgsForRespawn(
+        saved,
+        "terminal",
+        "/p",
+        undefined,
+        false,
+        "/tmp",
+        undefined,
+        { allowResumeLatest: false }
+      );
+
+      expect(suppressed.command).toBe(allowed.command);
+      expect(suppressed.sessionLostOnRestore).toBe(allowed.sessionLostOnRestore);
     });
 
     it("uses resume-latest by default when no allowance is passed (#11461)", () => {

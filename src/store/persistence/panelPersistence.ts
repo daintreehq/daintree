@@ -42,12 +42,14 @@ const BASE_PANEL_FIELDS = [
 ] as const satisfies readonly (keyof PanelSnapshot)[];
 const BASE_PANEL_FIELD_SET: ReadonlySet<string> = new Set(BASE_PANEL_FIELDS);
 
-// Fields Main can author out-of-band, so the delta must state a clear explicitly
-// instead of letting mere absence delete them (#11461). `agentSessionId` is
-// captured by the graceful-shutdown path straight into project state and is never
-// pushed back into the live store, so an ordinary post-exit save omits a value it
-// never had — which must not erase what Main just wrote.
-const TERMINAL_CLEAR_TRACKED_FIELDS = [
+// Fields Main can author out-of-band, so the delta states which of them this
+// renderer actually changed rather than letting the serialized value speak for
+// itself (#11461). `agentSessionId` is captured by the graceful-shutdown path
+// straight into project state and never pushed back into the live store: an
+// ordinary post-exit save omits a value it never had (which must not erase what
+// Main just wrote), and a stale sibling window carries one it no longer owns
+// (which must not resurrect a session another window consumed).
+const TERMINAL_TRACKED_FIELDS = [
   "agentSessionId",
 ] as const satisfies readonly (keyof PanelSnapshot)[];
 
@@ -242,11 +244,11 @@ export class PanelPersistence {
           // Describe what changed relative to this renderer's last-acknowledged
           // baseline so Main merges concurrent writes from sibling windows of
           // the same project instead of clobbering them (#11350).
-          const { changedIds, removedIds, clearedFields } = computeIdArrayDelta(
+          const { changedIds, removedIds, fieldEdits } = computeIdArrayDelta(
             baseline ?? [],
             transformed,
             deepEqualIgnoringUndefined,
-            TERMINAL_CLEAR_TRACKED_FIELDS
+            TERMINAL_TRACKED_FIELDS
           );
           try {
             await this.client.setTerminals(
@@ -254,7 +256,7 @@ export class PanelPersistence {
               transformed,
               changedIds,
               removedIds,
-              clearedFields
+              fieldEdits
             );
             if (collectPerf) {
               const now = typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -453,7 +455,7 @@ export class PanelPersistence {
       this.persistedTerminalsByProject.get(projectId) ?? [],
       snapshots,
       deepEqualIgnoringUndefined,
-      TERMINAL_CLEAR_TRACKED_FIELDS
+      TERMINAL_TRACKED_FIELDS
     );
   }
 

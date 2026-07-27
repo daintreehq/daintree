@@ -67,8 +67,9 @@ function resumeLatestScopeCwd(cwd: string): string {
  * saved entry, so the outcome is deterministic and independent of restore order.
  *
  * Only panes that could actually reach the fallback are candidates: an id-less
- * agent pane, of an agent that declares resume-latest args, with no surviving
- * backend PTY — a live PTY reconnects instead of respawning, so letting one win a
+ * agent pane, of an agent that declares resume-latest args, whose PTY did not
+ * survive. A pane with a live backend record — or a prefetched probe that already
+ * says its PTY exists — reconnects instead of respawning, so letting one win a
  * slot would strand its genuinely-respawning siblings on fresh launches.
  *
  * Scopes with a single candidate are omitted entirely, so the common one-pane
@@ -76,7 +77,11 @@ function resumeLatestScopeCwd(cwd: string): string {
  */
 function electSuppressedResumeLatestIds(
   panels: readonly (TerminalState | undefined)[],
-  context: { projectRoot: string; backendTerminalMap: Map<string, BackendTerminalInfo> }
+  context: {
+    projectRoot: string;
+    backendTerminalMap: Map<string, BackendTerminalInfo>;
+    prefetchedReconnectResults?: Record<string, TerminalReconnectResult>;
+  }
 ): Set<string> {
   const winnerByScope = new Map<string, { id: string; lastActiveAt: number }>();
   const candidateIdsByScope = new Map<string, string[]>();
@@ -87,6 +92,10 @@ function electSuppressedResumeLatestIds(
     // An exact per-pane session id resumes precisely and never consumes a slot.
     if (saved.agentSessionId) continue;
     if (context.backendTerminalMap.has(saved.id)) continue;
+    // A prefetched probe reporting a live PTY takes the reconnect path in
+    // `reconnectWithTimeout`, so this pane never respawns either.
+    const prefetched = context.prefetchedReconnectResults?.[saved.id];
+    if (prefetched?.exists && prefetched.hasPty) continue;
     const kind = inferKind(saved);
     if (kind === "assistant" || !panelKindHasPty(kind)) continue;
     const agentId = resolveRespawnAgentId(saved, kind);
@@ -356,6 +365,7 @@ export async function restorePanelsPhase(
     const resumeLatestSuppressedIds = electSuppressedResumeLatestIds(panels, {
       projectRoot: projectRoot || "",
       backendTerminalMap,
+      prefetchedReconnectResults,
     });
 
     const panelTasks: PanelRestoreTaskEntry[] = [];

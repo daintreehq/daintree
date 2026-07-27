@@ -443,9 +443,9 @@ describe("PanelPersistence", () => {
       persistence.save([createMockTerminal({ id: "a", title: "renamed" })], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const [, , changedIds, , clearedFields] = client.setTerminals.mock.calls[0]!;
+      const [, , changedIds, , fieldEdits] = client.setTerminals.mock.calls[0]!;
       expect(changedIds).toEqual(["a"]);
-      expect(clearedFields).toBeUndefined();
+      expect(fieldEdits).toBeUndefined();
     });
 
     it("sends a session-id tombstone when the renderer drops a known id (#11461)", async () => {
@@ -458,8 +458,8 @@ describe("PanelPersistence", () => {
       persistence.save([createMockTerminal({ id: "a" })], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const [, , , , clearedFields] = client.setTerminals.mock.calls[0]!;
-      expect(clearedFields).toEqual([{ id: "a", fields: ["agentSessionId"] }]);
+      const [, , , , fieldEdits] = client.setTerminals.mock.calls[0]!;
+      expect(fieldEdits).toEqual([{ id: "a", fields: ["agentSessionId"] }]);
     });
 
     it("carries the same tombstone through the project-switch delta (#11461)", async () => {
@@ -473,7 +473,7 @@ describe("PanelPersistence", () => {
         panelToSnapshot(createMockTerminal({ id: "a" })),
       ]);
 
-      expect(delta.clearedFields).toEqual([{ id: "a", fields: ["agentSessionId"] }]);
+      expect(delta.fieldEdits).toEqual([{ id: "a", fields: ["agentSessionId"] }]);
     });
 
     it("marks every panel changed when there is no primed baseline", async () => {
