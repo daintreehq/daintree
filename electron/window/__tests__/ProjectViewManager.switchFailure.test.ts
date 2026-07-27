@@ -640,10 +640,11 @@ describe("ProjectViewManager — switch failure rollback", () => {
     await vi.advanceTimersByTimeAsync(LOAD_HARD_MS - LOAD_SOFT_MS);
 
     const err = await errPromise;
-    // Timing out before did-finish-load is the navigation phase — the message
-    // and context must say so, so a production report can be told apart from a
-    // renderer that loaded but never answered the bootstrap eval (#11458).
-    expect(err.message).toContain("page never finished loading");
+    // Timing out before did-finish-load is the navigation phase. The phase is
+    // what makes a production timeout report actionable — it tells "the page
+    // never navigated" apart from "the renderer loaded but never answered the
+    // bootstrap eval", which one shared 10s budget otherwise conflates (#11458).
+    expect(errorCode(err)).toBe("INTERNAL");
     expect(errorContext(err)).toMatchObject({ phase: "navigation", projectId: "proj-b" });
     expect(manager.getActiveProjectId()).toBe("proj-a");
     expect(failWc.close).toHaveBeenCalled();
@@ -741,7 +742,7 @@ describe("ProjectViewManager — switch failure rollback", () => {
     await vi.advanceTimersByTimeAsync(LOAD_HARD_MS + 1);
 
     const err = await errPromise;
-    expect(err.message).toContain("project bootstrap never reported");
+    expect(errorCode(err)).toBe("INTERNAL");
     expect(errorContext(err)).toMatchObject({ phase: "bootstrap", projectId: "proj-b" });
     expect(manager.getActiveProjectId()).toBe("proj-a");
   });
@@ -764,7 +765,7 @@ describe("ProjectViewManager — switch failure rollback", () => {
     await vi.advanceTimersByTimeAsync(LOAD_HARD_MS + 1);
 
     const err = await errPromise;
-    expect(err.message).toContain("page never finished loading");
+    expect(errorContext(err)).toMatchObject({ phase: "navigation" });
     expect(freshManager.getActiveProjectId()).toBeNull();
     expect(notifyError).toHaveBeenCalled();
   });
@@ -933,6 +934,95 @@ describe("ProjectViewManager — switch failure rollback", () => {
     expect(manager.getActiveProjectId()).toBeNull();
   });
 
+  it("skips rollback during teardown even when the load failed before it", async () => {
+    const failWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(failWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    // Closing the webContents aborts the in-flight navigation, so teardown
+    // routinely surfaces as ERR_ABORTED settling the load FIRST — which
+    // deregisters the destroyed listener, so the rejection is an ordinary load
+    // failure, not a cancellation. Gating the teardown branch on the error
+    // class would let this ordering roll back against dead state and report.
+    failWc._fireOnce("did-fail-load", {}, -3, "ERR_ABORTED");
+    manager.dispose();
+
+    const err = await errPromise;
+    // The rejection keeps its truthful classification...
+    expect(errorCode(err)).toBe("INTERNAL");
+    // ...but the host is gone, so nothing is restored and nobody is told.
+    expect(notifyError).not.toHaveBeenCalled();
+    expect(manager.getActiveProjectId()).toBeNull();
+  });
+
+  it("cancels during the bootstrap phase and reports that phase", async () => {
+    const pendingWc = createMockWebContents({ autoFinishLoad: false });
+    // Navigation completes; the bootstrap eval never answers, so teardown
+    // lands while the promise is parked mid-verify.
+    pendingWc.executeJavaScript.mockImplementation(() => new Promise(() => {}));
+    wcQueue.push(pendingWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    pendingWc._fireOnce("did-finish-load");
+    await vi.advanceTimersByTimeAsync(0);
+    manager.dispose();
+
+    const err = await errPromise;
+    expect(errorCode(err)).toBe("CANCELLED");
+    // Cancellation records which stage it interrupted, not just that it happened.
+    expect(errorContext(err)).toMatchObject({ phase: "bootstrap", projectId: "proj-b" });
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+
+  it("wraps a preload failure with the load phase while preserving the original", async () => {
+    const failWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(failWc);
+    const original = new Error("Cannot find module");
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    failWc._fireOnce("preload-error", {}, "/test/preload.cjs", original);
+
+    const err = await errPromise;
+    // Rewrapped for the phase context, with the original kept as the cause —
+    // the message alone would look identical if it were passed through.
+    expect(errorCode(err)).toBe("INTERNAL");
+    expect(errorContext(err)).toMatchObject({ phase: "navigation" });
+    expect((err as { cause?: unknown }).cause).toBe(original);
+    expect(err.message).toBe(original.message);
+  });
+
+  it("still settles when listener cleanup throws on the destroyed webContents", async () => {
+    const pendingWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(pendingWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Electron throws from removeListener on a torn-down webContents — the
+    // hazard webContentsRegistry already guards. Teardown is the one settle
+    // path that always cleans up against a destroyed webContents, so a throw
+    // escaping there would strand the promise pending forever, with `settled`
+    // latched so nothing could ever settle it again.
+    pendingWc.removeListener.mockImplementation(() => {
+      throw new Error("Object has been destroyed");
+    });
+    manager.dispose();
+
+    const err = await errPromise;
+    expect(errorCode(err)).toBe("CANCELLED");
+  });
+
   it("settles promptly but still rolls back when the view dies and the manager lives", async () => {
     const doomedWc = createMockWebContents({ autoFinishLoad: false });
     wcQueue.push(doomedWc);
@@ -963,10 +1053,10 @@ describe("ProjectViewManager — switch failure rollback", () => {
     await expect(p).resolves.toMatchObject({ isNew: true });
 
     // Deregistered on every settle path, so the eventual close during normal
-    // eviction cannot retroactively cancel a switch that already succeeded.
+    // eviction has no cancellation handler left to run against a switch that
+    // already succeeded.
     expect(wc._handlers.get("destroyed") ?? []).toHaveLength(0);
     wc._fireOnce("destroyed");
-    await expect(p).resolves.toMatchObject({ isNew: true });
     expect(notifyError).not.toHaveBeenCalled();
   });
 });

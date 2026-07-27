@@ -53,8 +53,6 @@ function createMockWebContents(options?: MockWebContentsOptions) {
     // and emits `destroyed` in the same call — the signal a pending loadView
     // races against, so it has to be modelled here rather than only latched.
     close: vi.fn(() => {
-      if (destroyed) return;
-      destroyed = true;
       wc._fire("destroyed");
     }),
     reload: vi.fn(),
@@ -96,6 +94,12 @@ function createMockWebContents(options?: MockWebContentsOptions) {
     // handleDidFinishLoad (→ onViewReady, the production port-broker hook)
     // via wc.on, so firing only once-handlers would silently skip it.
     _fire(event: string, ...args: unknown[]) {
+      // Latched before dispatch and only ever delivered once, matching close()
+      // above, so a directly-fired destruction behaves like a real one.
+      if (event === "destroyed") {
+        if (destroyed) return;
+        destroyed = true;
+      }
       const onceList = onceHandlers.get(event);
       const onceHandler = onceList?.shift();
       onceHandler?.(...args);

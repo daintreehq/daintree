@@ -155,7 +155,17 @@ export function loadView(
       settled = true;
       clearTimeout(softTimeout);
       clearTimeout(hardTimeout);
-      cleanup();
+      try {
+        cleanup();
+      } catch {
+        // Electron can throw from removeListener once the WebContents is torn
+        // down (same hazard webContentsRegistry guards). The teardown path is
+        // the one that always cleans up against a destroyed webContents, and
+        // `settled` is already latched here — letting a throw escape would
+        // skip the settle callback below and strand the promise pending
+        // FOREVER, which is strictly worse than the hard-bound stall being
+        // fixed.
+      }
       fn();
     };
 

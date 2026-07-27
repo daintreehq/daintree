@@ -431,22 +431,33 @@ export async function performSwitch(
     consumePendingFocusIntent(host, projectId);
     cleanupEntry(host, projectId);
 
-    // The load was cancelled by the manager/window going away — window close,
-    // app quit, dispose() landing on a queued switch (#11458). Everything
-    // above is local cleanup that runs either way; everything below restores
-    // the previous view as the visible active one, which teardown has already
-    // torn down — `dispose()` nulled `activeProjectId`, so rolling it back
-    // resurrects what teardown just cleared. Reporting it is wrong too: this
-    // spurious 10s-late error toast is the bug.
+    // The manager/window is going away — window close, app quit, dispose()
+    // landing on a queued switch (#11458). Everything above is local cleanup
+    // that runs either way; everything below restores the previous view as the
+    // visible active one, which teardown has already destroyed: `dispose()`
+    // nulled `activeProjectId`, so rolling it back resurrects what teardown
+    // just cleared. Reporting is wrong too — this spurious error toast
+    // arriving after an ordinary window close is the bug.
     //
-    // Gated on the manager actually being torn down, not on the cancellation
-    // alone: if the view died while the manager lives, the outgoing view is
-    // still attached and visible, so `activeProjectId` must follow it back or
-    // pointer and view disagree — that case keeps the normal rollback below
-    // and still gains the prompt settle. Rethrown either way; a destroyed view
-    // is never a successful switch result.
-    if (isViewLoadCancelled(loadError) && (host.disposed || host.win.isDestroyed())) {
-      logInfo("projectview.coldstart.cancelled", { projectId });
+    // Keyed on host liveness ALONE, deliberately not on the rejection being a
+    // cancellation. `wc.close()` aborts the in-flight navigation, so a
+    // teardown often surfaces as did-fail-load/ERR_ABORTED settling the load
+    // first (the "dominant normal case" loadView's own comment describes) —
+    // which removes the destroyed listener and rejects as INTERNAL. Gating on
+    // the error class would let that far-from-rare ordering fall through to a
+    // full rollback against dead state. Why the load failed and whether the
+    // host survives are independent questions; only the latter belongs here.
+    //
+    // A view dying under a still-live manager is the opposite case: the
+    // outgoing view remains attached and visible, so `activeProjectId` must
+    // follow it back or pointer and view disagree. That keeps the rollback
+    // below, and still gains the prompt settle. Rethrown either way — a
+    // half-loaded view is never a successful switch result.
+    if (host.disposed || host.win.isDestroyed()) {
+      logInfo("projectview.coldstart.abandoned", {
+        projectId,
+        cancelled: isViewLoadCancelled(loadError),
+      });
       throw loadError;
     }
 
