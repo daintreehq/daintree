@@ -43,12 +43,6 @@ type AddPanelFn = HydrationOptions["addPanel"];
 type RestoreTerminalOrderFn = NonNullable<HydrationOptions["restoreTerminalOrder"]>;
 
 /**
- * Rebase a restore arg's `cwd` from a moved worktree's old root to its new one.
- * No-op when the panel's worktree didn't move or the arg carries no cwd. Used on
- * the surviving-PTY paths, whose cwd comes from the live backend record (the old
- * path) rather than the already-rebased `saved.cwd` (#11388).
- */
-/**
  * Scope key component for the resume-latest election: the directory a pane will
  * launch in, normalized lexically so two spellings of one directory share a slot.
  * Deliberately not realpath'd — the election must stay synchronous and the path
@@ -143,6 +137,12 @@ function electSuppressedResumeLatestIds(
   return suppressed;
 }
 
+/**
+ * Rebase a restore arg's `cwd` from a moved worktree's old root to its new one.
+ * No-op when the panel's worktree didn't move or the arg carries no cwd. Used on
+ * the surviving-PTY paths, whose cwd comes from the live backend record (the old
+ * path) rather than the already-rebased `saved.cwd` (#11388).
+ */
 function rebaseMovedArgsCwd(
   args: { cwd?: string },
   move: { oldRoot: string; newRoot: string } | undefined
