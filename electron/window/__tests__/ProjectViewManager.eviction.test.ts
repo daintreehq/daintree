@@ -2967,15 +2967,54 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
   });
 
   it("cascades a limit change straight to its new cap under soft pressure", async () => {
+    // Four views down to one, so the pass must destroy THREE. A one-view budget
+    // leaking onto the "limit-change" path would leave three views standing.
+    const mgr = makeManager(4);
+    mgr.setMemoryPressurePolicy(BAND);
     setAvailableMb(2500);
-    await seedThreeViews(manager);
+
+    const wcA = createMockWebContents();
+    mgr.registerInitialView({ webContents: wcA, setBounds: vi.fn() } as never, "proj-a", "/path/a");
+    for (const id of ["proj-b", "proj-c", "proj-d"]) {
+      await mgr.switchTo(id, `/path/${id}`);
+      await flushImmediates();
+    }
+    expect(mgr.getAllViews().length).toBe(4);
 
     setAvailableMb(1200);
-    manager.setCachedViewLimit(2);
+    mgr.setCachedViewLimit(1);
 
-    // The requested cap is honored exactly — not contracted further by the
-    // soft-band target of 1, and not held back by the one-view budget.
-    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c"]);
+    expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-d"]);
+  });
+
+  it("does not report an assistant-blocked skip while the budget is the limiter", async () => {
+    // A soft pass that merely spent its one-view budget still has ordinary
+    // candidates queued — reporting that as assistant-blocked would misattribute
+    // the overflow in the memory logs.
+    const mgr = makeManager(4);
+    mgr.setMemoryPressurePolicy(BAND);
+    setAvailableMb(2500);
+
+    const wcA = createMockWebContents();
+    mgr.registerInitialView({ webContents: wcA, setBounds: vi.fn() } as never, "proj-a", "/path/a");
+    for (const id of ["proj-b", "proj-c", "proj-d"]) {
+      await mgr.switchTo(id, `/path/${id}`);
+      await flushImmediates();
+    }
+
+    // proj-a is protected; proj-b and proj-c remain ordinary candidates.
+    const wcAssistant = mgr.getAllViews().find((v) => v.projectId === "proj-a")!.view.webContents;
+    assistantBackends.set("proj-a", { terminalId: "t-help-a", webContentsId: wcAssistant.id });
+    liveTerminals.add("t-help-a");
+
+    setAvailableMb(1200);
+    tickPressureCheck(mgr);
+
+    expect(mgr.getAllViews().length).toBe(3);
+    expect(vi.mocked(logInfo)).not.toHaveBeenCalledWith(
+      "projectview.eviction-skipped",
+      expect.anything()
+    );
   });
 
   it("takes only one view per pass even when the cache sits above its cap", async () => {
@@ -3089,18 +3128,33 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     expect(manager.getLowMemoryFreeThresholdMb()).toBeNull();
   });
 
-  it("rejects an inverted or non-finite band rather than half-arming it", () => {
-    manager.setMemoryPressurePolicy({ criticalMb: 2000, warningMb: 1000 });
-    expect(manager.getLowMemoryFreeThresholdMb()).toBeNull();
+  it.each([
+    ["inverted edges", { criticalMb: 2000, warningMb: 1000 }],
+    ["non-finite critical", { criticalMb: Number.NaN, warningMb: 2000 }],
+    ["non-finite warning", { criticalMb: 1000, warningMb: Number.POSITIVE_INFINITY }],
+    ["non-positive critical", { criticalMb: 0, warningMb: 2000 }],
+  ])("rejects a %s band rather than half-arming it", (_label, policy) => {
+    // Re-armed per case so a rejection can't be mistaken for the previous
+    // case's leftover null.
+    manager.setMemoryPressurePolicy(BAND);
+    expect(manager.getLowMemoryFreeThresholdMb()).toBe(BAND.criticalMb);
 
-    manager.setMemoryPressurePolicy({ criticalMb: Number.NaN, warningMb: 2000 });
-    expect(manager.getLowMemoryFreeThresholdMb()).toBeNull();
-
-    manager.setMemoryPressurePolicy({ criticalMb: 0, warningMb: 2000 });
+    manager.setMemoryPressurePolicy(policy);
     expect(manager.getLowMemoryFreeThresholdMb()).toBeNull();
   });
 
-  it("keeps the forced tier-2 reclaim aggressive regardless of band or memory", async () => {
+  it("keeps the forced tier-2 reclaim aggressive under an armed soft band", async () => {
+    // The soft one-view budget must not reach the forced path: tier-2 is the
+    // OOM escape hatch and has to take everything in one call.
+    setAvailableMb(1200);
+    await seedThreeViews(manager);
+    expect(manager.getAllViews().length).toBe(3);
+
+    expect(manager.reclaimCachedViewsUnderPressure()).toBe(2);
+    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+  });
+
+  it("keeps the forced tier-2 reclaim aggressive with no band and ample memory", async () => {
     manager.setMemoryPressurePolicy(null);
     setAvailableMb(64 * 1024);
     await seedThreeViews(manager);

@@ -607,7 +607,9 @@ export class ProjectViewManager {
   }
 
   setCachedViewLimit(n: number): void {
-    const safe = Number.isFinite(n) ? n : 1;
+    // Rounded, not just clamped: the cap counts views, and a fractional limit
+    // would propagate into the pressure ladder's stepping arithmetic.
+    const safe = Number.isFinite(n) ? Math.round(n) : 1;
     this.maxCachedViews = Math.max(1, Math.min(5, safe));
     EvictionController.evictStaleViews(this, "limit-change");
   }

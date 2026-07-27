@@ -142,10 +142,14 @@ describe("ResourceProfileService fan-out isolation", () => {
       const balanced = RESOURCE_PROFILE_CONFIGS.balanced;
       expect(healthy.setCachedViewLimit).toHaveBeenCalledWith(2);
       expect(healthy.setEfficiencyFreeze).toHaveBeenLastCalledWith(false);
-      // The reclaim band is not part of a transition's fan-out (#11469) — it is
-      // pushed once per PVM at start/late-create, so a transition must not
-      // touch it on either the broken or the healthy window.
-      expect(healthy.setMemoryPressurePolicy).not.toHaveBeenCalled();
+      // The reclaim band rides along on transitions so a missed start() arm can
+      // heal, but it is read off the service's machine-derived field — never the
+      // profile config — so every push carries the identical pair (#11469).
+      const bands = healthy.setMemoryPressurePolicy.mock.calls.map(([policy]) => policy);
+      expect(bands.length).toBeGreaterThan(0);
+      for (const pushedBand of bands) {
+        expect(pushedBand).toEqual(bands[0]);
+      }
       expect(healthy.setPaintGateTimeoutMs).toHaveBeenLastCalledWith(balanced.paintGateTimeoutMs);
       expect(healthy.setWarmPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
         balanced.warmPaintGateHardTimeoutMs
@@ -298,6 +302,9 @@ describe("ResourceProfileService fan-out isolation", () => {
         service.applyCurrentProfileTo(pvm as unknown as ProjectViewManager)
       ).not.toThrow();
 
+      // The throwing setter was genuinely reached — without this the rest of the
+      // assertions would pass even if the policy push were dropped entirely.
+      expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledOnce();
       // Every setter after the throwing one still landed with efficiency values.
       const efficiency = RESOURCE_PROFILE_CONFIGS.efficiency;
       expect(pvm.setEfficiencyFreeze).toHaveBeenCalledWith(true);

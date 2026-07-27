@@ -80,16 +80,20 @@ export function memoryPressureTarget(
   policy: MemoryPressurePolicy,
   maxCachedViews: number
 ): MemoryPressureTarget {
+  // Normalized rather than trusted: the return value caps a view count, so a
+  // fractional or non-finite input must not leak out as a fractional target.
+  const cap = Number.isFinite(maxCachedViews) ? Math.max(1, Math.floor(maxCachedViews)) : 1;
+  if (!Number.isFinite(availableMb)) return { level: "none", targetMax: cap };
   if (availableMb < policy.criticalMb) return { level: "critical", targetMax: 1 };
-  if (availableMb >= policy.warningMb) return { level: "none", targetMax: maxCachedViews };
+  if (availableMb >= policy.warningMb) return { level: "none", targetMax: cap };
   // A degenerate band (legacy cliff, or an inverted pair) has no room to step
   // through — the two branches above already classified every reading.
-  if (maxCachedViews <= 1 || policy.warningMb <= policy.criticalMb) {
+  if (cap <= 1 || policy.warningMb <= policy.criticalMb) {
     return { level: "soft", targetMax: 1 };
   }
-  const stepMb = (policy.warningMb - policy.criticalMb) / (maxCachedViews - 1);
+  const stepMb = (policy.warningMb - policy.criticalMb) / (cap - 1);
   const steps = Math.floor((availableMb - policy.criticalMb) / stepMb);
-  // Clamped for float safety: the band bounds already imply [1, max - 1].
-  const targetMax = Math.min(Math.max(1 + steps, 1), maxCachedViews - 1);
+  // Clamped for float safety: the band bounds already imply [1, cap - 1].
+  const targetMax = Math.min(Math.max(1 + steps, 1), cap - 1);
   return { level: "soft", targetMax };
 }

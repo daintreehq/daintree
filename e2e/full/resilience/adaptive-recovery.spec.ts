@@ -8,10 +8,11 @@ import { T_LONG } from "../../helpers/timeouts";
 // pressure. The service normally moves balanced ⇄ performance ⇄ efficiency off
 // real memory/thermal/event-loop signals — CI can't reproduce those reliably,
 // so the fault-mode hook `__daintreeForceResourceProfile` drives `applyProfile`
-// directly. The observable side-effect is the per-profile low-memory floor that
-// `applyProfile` fans out to every window's ProjectViewManager, read back via
-// the existing `__daintreeGetPvm` accessor. Values mirror RESOURCE_PROFILE_CONFIGS
-// (shared/types/resourceProfile.ts): performance→null, balanced→768, efficiency→1024.
+// directly. The observable side-effect is the cached-view reclaim floor on every
+// window's ProjectViewManager, read back via the existing `__daintreeGetPvm`
+// accessor. Since #11469 that floor is derived from the machine's system-memory
+// thresholds rather than the profile, so the assertion is that it stays armed
+// and INVARIANT across transitions — not that it takes any particular value.
 
 let ctx: AppContext;
 let fixtureCleanups: Array<() => void> = [];

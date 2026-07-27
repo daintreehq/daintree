@@ -455,8 +455,8 @@ export class ResourceProfileService {
     if (this.currentProfile === "efficiency") {
       // Efficiency freezes cached views (CPU/timer suppression) but never
       // destroys them. RAM is reclaimed only by evictStaleViews()'s own
-      // lowMemoryFreeThresholdMb floor when free RAM is genuinely low, keeping
-      // the user's working set warm under battery/thermal/CPU-only pressure.
+      // memory-pressure band when free RAM is genuinely low, keeping the
+      // user's working set warm under battery/thermal/CPU-only pressure.
       try {
         pvm.setEfficiencyFreeze(true);
       } catch {
@@ -1164,7 +1164,7 @@ export class ResourceProfileService {
 
     // Freeze cached project views under efficiency to reclaim CPU, but never
     // destroy them to reclaim RAM. Destruction is owned exclusively by
-    // evictStaleViews()'s lowMemoryFreeThresholdMb floor, which clamps to 1
+    // evictStaleViews()'s memory-pressure band, which contracts the cache
     // only when free RAM is genuinely low (independent of profile). This keeps
     // the user's working set warm under battery/thermal/CPU-only pressure,
     // avoiding cold-start storms when switching among many open projects.
@@ -1198,11 +1198,19 @@ export class ResourceProfileService {
           // non-critical
         }
       }
-      // The cached-view reclaim band is deliberately NOT pushed here. It is
-      // set once per PVM (start / applyCurrentProfileTo) from the machine's
-      // system-memory thresholds, so no transition — least of all the
-      // interactive efficiency→balanced clamp above — can loosen or re-arm it
-      // (#11469).
+      // Re-push the reclaim band. It is read off `this.memoryPressurePolicy`,
+      // never off `config`, so it is provably independent of `profile` — the
+      // interactive efficiency→balanced clamp above cannot loosen it the way it
+      // used to (1024→768 at the exact moment memory was lowest, #11469).
+      // Pushing it here anyway keeps the arming self-healing: `start()`'s
+      // one-shot fan-out can miss a window if the provider throws transiently,
+      // and without a repeat push that window's reclaim would stay disarmed for
+      // the rest of the session.
+      try {
+        pvm.setMemoryPressurePolicy(this.memoryPressurePolicy);
+      } catch {
+        // non-critical
+      }
 
       // Push per-profile paint-gate timeouts (cold and warm). Both cold
       // starts and warm wake fan-outs run measurably slower under efficiency

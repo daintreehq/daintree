@@ -173,8 +173,9 @@ describe("memoryPressureTarget", () => {
   });
 
   it("treats the critical edge itself as soft, not critical (strict <)", () => {
-    // The previous single-threshold check used strict `<`; keeping it means the
-    // boundary reading never changes classification under the rewrite.
+    // Only the strict `<` collapse boundary carries over from the previous
+    // single-threshold check — at the edge itself the reading is now soft
+    // (stepped) where it used to mean "no override at all".
     expect(memoryPressureTarget(band.criticalMb, band, 5).level).toBe("soft");
   });
 
@@ -217,6 +218,20 @@ describe("memoryPressureTarget", () => {
 
   it("has no step to take when only the active view fits", () => {
     expect(memoryPressureTarget(1500, band, 1)).toEqual({ level: "soft", targetMax: 1 });
+  });
+
+  it("normalizes a fractional or non-finite cap into a whole view count", () => {
+    // The return value caps a view count, so a bad input must not leak out as
+    // a fractional target that the eviction loop would compare against.
+    expect(memoryPressureTarget(1500, band, 4.7)).toEqual(memoryPressureTarget(1500, band, 4));
+    expect(Number.isInteger(memoryPressureTarget(1500, band, 4.7).targetMax)).toBe(true);
+    expect(memoryPressureTarget(1500, band, Number.NaN).targetMax).toBe(1);
+  });
+
+  it("treats an unreadable availability figure as no pressure", () => {
+    // Unknown must never read as "zero available" — that would collapse the
+    // whole cache on a failed reading.
+    expect(memoryPressureTarget(Number.NaN, band, 5)).toEqual({ level: "none", targetMax: 5 });
   });
 
   it("keeps a usable band on every RAM tier the app ships defaults for", () => {

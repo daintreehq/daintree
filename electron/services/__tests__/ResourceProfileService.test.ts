@@ -53,6 +53,7 @@ import { resolveResourceProfileConfig } from "../../utils/resourceProfileConfig.
 import { resolveWebglThresholds } from "../../utils/webglContextBudget.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
 import { resetMemoryAccountingForTesting } from "../memoryAccounting.js";
+import { getSystemMemoryThresholds } from "../../utils/systemMemory.js";
 import type { MemoryRollup } from "../../../shared/types/pty-host.js";
 
 const EIGHT_GB = 8 * 1024 * 1024 * 1024;
@@ -201,19 +202,29 @@ function makeMockPvm(): MockProjectViewManager {
 }
 
 /**
- * The reclaim band is derived from the host machine's RAM, so its absolute
- * values are not assertable here. What matters is the shape the ladder needs:
- * a positive critical edge with a strictly wider warning edge above it —
- * without that gap there is no soft band to step through (#11469).
+ * Every push must carry the machine's system-memory thresholds — the same
+ * pair that promotes the profile on the memory signal. Asserting the derived
+ * value (os.totalmem() is pinned to 8 GB in beforeEach) rather than merely
+ * "some positive increasing pair" is what catches a hardcoded or
+ * profile-derived band slipping back in (#11469).
  */
 function expectArmedPolicy(pvm: MockProjectViewManager): void {
-  const policy = pvm.setMemoryPressurePolicy.mock.lastCall?.[0] as {
-    criticalMb: number;
-    warningMb: number;
-  };
-  expect(policy).toBeDefined();
-  expect(policy.criticalMb).toBeGreaterThan(0);
-  expect(policy.warningMb).toBeGreaterThan(policy.criticalMb);
+  const expected = getSystemMemoryThresholds(EIGHT_GB / 1024 / 1024);
+  expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledWith({
+    criticalMb: expected.criticalMb,
+    warningMb: expected.warningMb,
+  });
+  // Without a gap between the edges there is no soft band to step through.
+  expect(expected.warningMb).toBeGreaterThan(expected.criticalMb);
+}
+
+/** Every push carried the identical band, whatever the profile did. */
+function expectPolicyNeverMoved(pvm: MockProjectViewManager): void {
+  const pushes = pvm.setMemoryPressurePolicy.mock.calls.map(([policy]) => policy);
+  expect(pushes.length).toBeGreaterThan(0);
+  for (const policy of pushes) {
+    expect(policy).toEqual(pushes[0]);
+  }
 }
 
 describe("ResourceProfileService", () => {
@@ -902,10 +913,11 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
-    // The band is armed once at start() and owned by the machine's RAM, not the
-    // profile — an efficiency transition must not re-push or alter it (#11469).
+    // The band is owned by the machine's RAM, not the profile: a transition
+    // may re-push it (that keeps arming self-healing) but must never move it.
     const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
-    expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
+    expectArmedPolicy(pvm);
+    expectPolicyNeverMoved(pvm);
 
     service.stop();
   });
@@ -940,8 +952,8 @@ describe("ResourceProfileService", () => {
     // #11469 this round trip swapped the active floor 768 ↔ 1024, which is what
     // let the interactive efficiency→balanced clamp disarm reclaim at the exact
     // moment memory was lowest.
-    expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
     expectArmedPolicy(pvm);
+    expectPolicyNeverMoved(pvm);
 
     service.stop();
   });
@@ -962,8 +974,8 @@ describe("ResourceProfileService", () => {
     // now inert above its warning edge on its own, so there is nothing to
     // disarm — and no window where memory craters before the profile catches up.
     const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
-    expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
     expectArmedPolicy(pvm);
+    expectPolicyNeverMoved(pvm);
 
     service.stop();
   });
@@ -1825,9 +1837,11 @@ describe("ResourceProfileService", () => {
     expect(pvmA.setEfficiencyFreeze).toHaveBeenCalledWith(true);
     expect(pvmB.setCachedViewLimit).not.toHaveBeenCalled();
     expect(pvmB.setEfficiencyFreeze).toHaveBeenCalledWith(true);
-    // Both windows armed once at start(); the transition adds nothing.
-    expect(pvmA.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
-    expect(pvmB.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
+    // Both windows carry the same machine-derived band, unmoved by the transition.
+    expectArmedPolicy(pvmA);
+    expectArmedPolicy(pvmB);
+    expectPolicyNeverMoved(pvmA);
+    expectPolicyNeverMoved(pvmB);
 
     service.stop();
   });
