@@ -206,7 +206,7 @@ export function ProjectSwitcher() {
             onQueryChange={projectSwitcher.setQuery}
             onSelectPrevious={projectSwitcher.selectPrevious}
             onSelectNext={projectSwitcher.selectNext}
-            onSelect={projectSwitcher.selectProject}
+            onSelect={projectSwitcher.selectRow}
             onClose={handleDropdownClose}
             onAddProject={projectSwitcher.addProject}
             onCloneRepo={handleCloneRepo}
@@ -288,7 +288,7 @@ export function ProjectSwitcher() {
         onQueryChange={projectSwitcher.setQuery}
         onSelectPrevious={projectSwitcher.selectPrevious}
         onSelectNext={projectSwitcher.selectNext}
-        onSelect={projectSwitcher.selectProject}
+        onSelect={projectSwitcher.selectRow}
         onClose={handleDropdownClose}
         onAddProject={projectSwitcher.addProject}
         onCloneRepo={handleCloneRepo}

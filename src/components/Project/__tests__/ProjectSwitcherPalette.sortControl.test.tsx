@@ -107,7 +107,10 @@ vi.mock("@/utils/timeAgo", () => ({
   formatTimeAgo: () => "1h ago",
 }));
 
-import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
+import type {
+  ProjectSwitcherProjectRow,
+  SearchableProject,
+} from "@/hooks/useProjectSwitcherPalette";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { DEFAULT_OTHER_PROJECTS_SORT_MODE, type OtherProjectsSortMode } from "@/lib/projectSort";
 import { primeRadix } from "@/components/ui/radix-loader";
@@ -124,8 +127,11 @@ beforeEach(() => {
   usePreferencesStore.getState().setProjectSwitcherOtherSortMode(DEFAULT_OTHER_PROJECTS_SORT_MODE);
 });
 
-function makeProject(overrides: Partial<SearchableProject> & { id: string }): SearchableProject {
+function makeProject(
+  overrides: Partial<SearchableProject> & { id: string }
+): ProjectSwitcherProjectRow {
   return {
+    kind: "project",
     name: overrides.id,
     path: `/repo/${overrides.id}`,
     emoji: "🌲",
@@ -144,7 +150,7 @@ function makeProject(overrides: Partial<SearchableProject> & { id: string }): Se
     processCount: 0,
     displayPath: `/repo/${overrides.id}`,
     ...overrides,
-  } as SearchableProject;
+  } as ProjectSwitcherProjectRow;
 }
 
 function renderPalette(otherRows: number) {

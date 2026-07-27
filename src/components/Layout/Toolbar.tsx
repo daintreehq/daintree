@@ -1614,7 +1614,7 @@ export function Toolbar({
                     onQueryChange={projectSwitcher.setQuery}
                     onSelectPrevious={projectSwitcher.selectPrevious}
                     onSelectNext={projectSwitcher.selectNext}
-                    onSelect={projectSwitcher.selectProject}
+                    onSelect={projectSwitcher.selectRow}
                     onHoverProject={projectSwitcher.onHoverProject}
                     onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
                     onClose={handlePillDropdownClose}

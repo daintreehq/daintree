@@ -123,17 +123,22 @@ vi.mock("@/utils/timeAgo", () => ({
   formatTimeAgo: (ts: number) => `${Math.round((Date.now() - ts) / 3600000)}h ago`,
 }));
 
-import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
+import type {
+  ProjectSwitcherProjectRow,
+  ProjectSwitcherScratchRow,
+  SearchableProject,
+} from "@/hooks/useProjectSwitcherPalette";
 
 const { ProjectSwitcherPalette } = await import("../ProjectSwitcherPalette");
 
-function makeProject(overrides: Partial<SearchableProject> = {}): SearchableProject {
+function makeProject(overrides: Partial<SearchableProject> = {}): ProjectSwitcherProjectRow {
   // Deliberately dumb: `section` defaults to "other" and must be stated
   // explicitly by band tests. Deriving it here would restate the hook's
   // classification rules, so a fixture could keep rendering the intended bands
   // while the real `sectionForProject` drifted — the component tests would stay
   // green either way. Classification is owned by the hook's own suite.
   return {
+    kind: "project",
     id: "proj-1",
     name: "Test Project",
     path: "/tmp/test",
@@ -559,5 +564,178 @@ describe("ProjectSwitcherPalette modal mode", () => {
     expect(screen.getByText("Pinned Project")).toBeTruthy();
     expect(screen.getByText("Recent Project")).toBeTruthy();
     expect(screen.getByText("Old Project")).toBeTruthy();
+  });
+});
+
+/**
+ * Scratches in the ranked search list (issue #11466).
+ *
+ * The hook decides membership; what the component owes is that a scratch row
+ * joins the SAME listbox and roving-selection domain the project rows use, that
+ * the pinned browse section stops competing with it, and that nothing on screen
+ * still claims the search covered projects only.
+ */
+describe("ProjectSwitcherPalette scratch search rows", () => {
+  function makeScratchRow(
+    overrides: Partial<ProjectSwitcherScratchRow> & { id: string; name: string }
+  ): ProjectSwitcherScratchRow {
+    return {
+      kind: "scratch",
+      path: `/userData/scratch/${overrides.id}`,
+      createdAt: 0,
+      lastOpened: 0,
+      isActive: false,
+      ...overrides,
+    };
+  }
+
+  const searchProps = {
+    ...dropdownProps,
+    query: "spike",
+    onCreateScratch: vi.fn(),
+    onSelectScratch: vi.fn(),
+  };
+
+  it("gives a scratch row the option id the active descendant resolves against", () => {
+    const scratch = makeScratchRow({ id: "s1", name: "Spike notes" });
+    render(<ProjectSwitcherPalette {...searchProps} results={[scratch]} selectedIndex={0} />);
+
+    const row = screen.getByRole("option", { name: /Spike notes/ });
+    // The palette points aria-activedescendant at this exact id, so a row that
+    // named itself anything else would leave the highlight unresolvable.
+    expect(row.getAttribute("id")).toBe(`project-option-${scratch.id}`);
+    expect(screen.getByTestId("palette-input").getAttribute("aria-activedescendant")).toBe(
+      row.getAttribute("id")
+    );
+  });
+
+  it("marks the highlighted row selected rather than the active workspace", () => {
+    const rows = [
+      makeScratchRow({ id: "s1", name: "Spike one" }),
+      makeScratchRow({ id: "s2", name: "Spike two", isActive: true }),
+    ];
+    render(<ProjectSwitcherPalette {...searchProps} results={rows} selectedIndex={0} />);
+
+    expect(screen.getByRole("option", { name: /Spike one/ }).getAttribute("aria-selected")).toBe(
+      "true"
+    );
+    expect(screen.getByRole("option", { name: /Spike two/ }).getAttribute("aria-selected")).toBe(
+      "false"
+    );
+  });
+
+  it("keeps a scratch row out of the tab order so the arrow keys stay in charge", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...searchProps}
+        results={[makeScratchRow({ id: "s1", name: "Spike notes" })]}
+      />
+    );
+
+    const row = screen.getByRole("option", { name: /Spike notes/ });
+    expect(row.tagName).not.toBe("BUTTON");
+    expect(row.hasAttribute("tabindex")).toBe(false);
+  });
+
+  it("names the row's origin without spending the accent on it", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...searchProps}
+        results={[makeScratchRow({ id: "s1", name: "Spike notes" })]}
+      />
+    );
+
+    const row = screen.getByRole("option", { name: /Spike notes/ });
+    expect(row.textContent).toContain("Scratch");
+  });
+
+  it("commits a scratch row through the same select handler as a project row", () => {
+    const onSelect = vi.fn();
+    const scratch = makeScratchRow({ id: "s1", name: "Spike notes" });
+    render(<ProjectSwitcherPalette {...searchProps} results={[scratch]} onSelect={onSelect} />);
+
+    fireEvent.click(screen.getByRole("option", { name: /Spike notes/ }));
+
+    expect(onSelect).toHaveBeenCalledWith(scratch);
+  });
+
+  it("hides the pinned scratch section while searching so rows are listed once", () => {
+    const scratch = makeScratchRow({ id: "s1", name: "Spike notes" });
+    const { rerender } = render(
+      <ProjectSwitcherPalette
+        {...dropdownProps}
+        query=""
+        results={[]}
+        scratchResults={[scratch]}
+        onCreateScratch={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole("listbox", { name: "Scratch workspaces" })).toBeTruthy();
+
+    rerender(
+      <ProjectSwitcherPalette
+        {...dropdownProps}
+        query="spike"
+        results={[scratch]}
+        scratchResults={[scratch]}
+        onCreateScratch={vi.fn()}
+      />
+    );
+
+    // Hidden, not unmounted — remounting would reset the collapse state the
+    // user set. Either way it must be gone from the accessibility tree, or the
+    // same scratch would be announced twice.
+    expect(screen.queryByRole("listbox", { name: "Scratch workspaces" })).toBeNull();
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+  });
+
+  it("restores the pinned scratch section when the query is cleared", () => {
+    const scratch = makeScratchRow({ id: "s1", name: "Spike notes" });
+    const { rerender } = render(
+      <ProjectSwitcherPalette
+        {...dropdownProps}
+        query="spike"
+        results={[scratch]}
+        scratchResults={[scratch]}
+        onCreateScratch={vi.fn()}
+      />
+    );
+    rerender(
+      <ProjectSwitcherPalette
+        {...dropdownProps}
+        query=""
+        results={[]}
+        scratchResults={[scratch]}
+        onCreateScratch={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByRole("listbox", { name: "Scratch workspaces" })).toBeTruthy();
+  });
+
+  it("names both kinds in the empty state now that both were searched", () => {
+    render(<ProjectSwitcherPalette {...searchProps} results={[]} />);
+
+    const copy = screen.getByTestId("project-empty-state").textContent ?? "";
+    expect(copy).toContain("spike");
+    expect(copy).not.toContain("No projects match");
+  });
+
+  it("drops the project-only shortcut hints while a scratch is highlighted", () => {
+    const { rerender } = render(
+      <ProjectSwitcherPalette {...searchProps} results={[makeProject({ id: "p1" })]} />
+    );
+    expect(screen.getByTestId("palette-footer").textContent).toContain("Remove");
+
+    rerender(
+      <ProjectSwitcherPalette
+        {...searchProps}
+        results={[makeScratchRow({ id: "s1", name: "Spike notes" })]}
+      />
+    );
+
+    // ⌘⌫ removes a project and does nothing to a scratch, so advertising it
+    // here would name a key that has no effect on the highlighted row.
+    expect(screen.getByTestId("palette-footer").textContent).not.toContain("Remove");
   });
 });

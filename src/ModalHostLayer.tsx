@@ -432,7 +432,7 @@ export function ModalHostLayer({
               onQueryChange={projectSwitcherPalette.setQuery}
               onSelectPrevious={projectSwitcherPalette.selectPrevious}
               onSelectNext={projectSwitcherPalette.selectNext}
-              onSelect={projectSwitcherPalette.selectProject}
+              onSelect={projectSwitcherPalette.selectRow}
               onHoverProject={projectSwitcherPalette.onHoverProject}
               onHoverProjectEnd={projectSwitcherPalette.onHoverProjectEnd}
               onClose={projectSwitcherPalette.close}
