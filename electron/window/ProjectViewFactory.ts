@@ -10,6 +10,7 @@ import path from "path";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { AppError, isAppError } from "../utils/errorTypes.js";
 import { logWarn } from "../utils/logger.js";
 import {
   injectSkeletonCss,
@@ -89,14 +90,50 @@ export function createView(host: ProjectViewManager, projectId: string): WebCont
   return view;
 }
 
+/**
+ * Which stage of the cold start a `loadView` rejection happened in. Carried in
+ * the error's `context` so a production report can tell "the page never
+ * navigated" apart from "the page loaded but the renderer never answered the
+ * bootstrap eval" — one hard budget spans both, so the bare message could not
+ * distinguish them (#11458).
+ */
+type LoadPhase = "navigation" | "bootstrap";
+
+/**
+ * True when a `loadView` rejection is the view being torn down mid-load rather
+ * than a genuine load failure. Teardown (window close, app quit, dispose) is a
+ * normal event, so callers must skip rollback and user-facing error reporting
+ * — mirroring the repo-wide convention that abort-shaped errors never reach
+ * `notifyError` (see `handleRetry` in ipc/errorHandlers.ts).
+ *
+ * Keyed on the code alone: `loadView` is the only producer of `CANCELLED` here,
+ * and every other rejection path — including anything thrown by the bootstrap
+ * eval — is wrapped as `INTERNAL` with the original attached as `cause`.
+ */
+export function isViewLoadCancelled(error: unknown): boolean {
+  return isAppError(error) && error.code === "CANCELLED";
+}
+
 export function loadView(
   view: WebContentsView,
   projectId: string,
   timings: LoadViewTimings
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
+    // Captured once: `view.webContents` reads back undefined once the view is
+    // destroyed (electron#50249), and every path below — including the
+    // teardown listener — must keep working past that point.
     const wc = view.webContents;
     let settled = false;
+    let phase: LoadPhase = "navigation";
+
+    const failure = (message: string, cause?: Error) =>
+      new AppError({
+        code: "INTERNAL",
+        message,
+        context: { phase, projectId },
+        cause,
+      });
 
     const softMs = timings.softMs;
     // Guarantee hard >= soft so the soft warning always precedes the hard
@@ -110,6 +147,7 @@ export function loadView(
       wc.removeListener("preload-error", onPreloadError);
       wc.removeListener("render-process-gone", onProcessGone);
       wc.removeListener("dom-ready", onDomReady);
+      wc.removeListener("destroyed", onDestroyed);
     };
 
     const settle = (fn: () => void) => {
@@ -146,21 +184,65 @@ export function loadView(
     // delays any event that would reset it, so a wall-clock backstop is the
     // only bound that holds.
     const hardTimeout = setTimeout(() => {
-      settle(() => reject(new Error("View load timed out")));
+      settle(() =>
+        reject(
+          failure(
+            phase === "bootstrap"
+              ? "View load timed out: project bootstrap never reported"
+              : "View load timed out: page never finished loading"
+          )
+        )
+      );
     }, hardMs);
 
     const onFinish = () => {
+      // Flipped synchronously, before the eval's first await, so a timeout
+      // landing during the round trip is attributed to the bootstrap phase
+      // rather than to navigation. The hard budget deliberately stays
+      // end-to-end — restarting it here would double the worst-case cold start.
+      phase = "bootstrap";
       void verifyProjectBootstrap(wc, projectId).then(
         () => settle(() => resolve()),
-        (error) => settle(() => reject(error))
+        // Always re-wrapped, never passed through: `CANCELLED` must be
+        // reachable only from `onDestroyed`, which is the invariant
+        // `isViewLoadCancelled` keys on.
+        (error: unknown) =>
+          settle(() =>
+            reject(
+              failure(
+                formatErrorMessage(error, "Project view bootstrap verification failed"),
+                error instanceof Error ? error : undefined
+              )
+            )
+          )
       );
     };
     const onFail = (_event: Electron.Event, errorCode: number, errorDescription: string) =>
-      settle(() => reject(new Error(`View load failed: ${errorDescription} (${errorCode})`)));
+      settle(() => reject(failure(`View load failed: ${errorDescription} (${errorCode})`)));
     const onPreloadError = (_event: Electron.Event, _preloadPath: string, error: Error) =>
-      settle(() => reject(error ?? new Error("Preload script failed")));
+      settle(() =>
+        reject(failure(formatErrorMessage(error, "Preload script failed"), error ?? undefined))
+      );
     const onProcessGone = (_event: Electron.Event, details: Electron.RenderProcessGoneDetails) =>
-      settle(() => reject(new Error(`Renderer process gone during load: ${details.reason}`)));
+      settle(() => reject(failure(`Renderer process gone during load: ${details.reason}`)));
+    // Fifth race participant (#11458). Teardown closes the webContents without
+    // firing any of the four load events above, so before this the promise sat
+    // until the full hard timeout and then reported a timeout that never
+    // happened — surfacing a spurious error toast long after an ordinary window
+    // close, and the wait got longer once #11459 widened the hard bound.
+    // `destroyed` is the right granularity: a merely *deactivated*
+    // (cached) view stays alive and must not cancel its own pending load, while
+    // every real teardown path routes through `cleanupEntry` → `wc.close()`.
+    const onDestroyed = () =>
+      settle(() =>
+        reject(
+          new AppError({
+            code: "CANCELLED",
+            message: "Project view load cancelled — view was destroyed",
+            context: { phase, projectId },
+          })
+        )
+      );
 
     // Paint the skeleton on `dom-ready`, NOT before `loadURL`. `insertCSS`
     // and `executeJavaScript` are scoped to the live document, and the
@@ -192,6 +274,7 @@ export function loadView(
     wc.once("preload-error", onPreloadError);
     wc.once("render-process-gone", onProcessGone);
     wc.once("dom-ready", onDomReady);
+    wc.once("destroyed", onDestroyed);
 
     // The document URL is intentionally static (no `?projectId=`): the id
     // travels via additionalArguments so the V8 bytecode cache stays shared

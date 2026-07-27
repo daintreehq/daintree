@@ -16,7 +16,12 @@ import { notifyError } from "../ipc/errorHandlers.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { unfreezeWebContents } from "../utils/webContentsLifecycle.js";
-import { createView, loadView, updateViewBounds } from "./ProjectViewFactory.js";
+import {
+  createView,
+  isViewLoadCancelled,
+  loadView,
+  updateViewBounds,
+} from "./ProjectViewFactory.js";
 import {
   activateView,
   deactivateEntry,
@@ -425,6 +430,25 @@ export async function performSwitch(
     // unrelated switch can't pick it up.
     consumePendingFocusIntent(host, projectId);
     cleanupEntry(host, projectId);
+
+    // The load was cancelled by the manager/window going away — window close,
+    // app quit, dispose() landing on a queued switch (#11458). Everything
+    // above is local cleanup that runs either way; everything below restores
+    // the previous view as the visible active one, which teardown has already
+    // torn down — `dispose()` nulled `activeProjectId`, so rolling it back
+    // resurrects what teardown just cleared. Reporting it is wrong too: this
+    // spurious 10s-late error toast is the bug.
+    //
+    // Gated on the manager actually being torn down, not on the cancellation
+    // alone: if the view died while the manager lives, the outgoing view is
+    // still attached and visible, so `activeProjectId` must follow it back or
+    // pointer and view disagree — that case keeps the normal rollback below
+    // and still gains the prompt settle. Rethrown either way; a destroyed view
+    // is never a successful switch result.
+    if (isViewLoadCancelled(loadError) && (host.disposed || host.win.isDestroyed())) {
+      logInfo("projectview.coldstart.cancelled", { projectId });
+      throw loadError;
+    }
 
     host.activeProjectId = previousProjectId;
     if (previousEntry && !previousEntry.view.webContents.isDestroyed()) {

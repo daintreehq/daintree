@@ -49,8 +49,13 @@ function createMockWebContents(options?: MockWebContentsOptions) {
     loadURL: vi.fn(() => Promise.resolve()),
     focus: vi.fn(),
     invalidate: vi.fn(),
+    // Electron 42 tears the native object down synchronously inside close()
+    // and emits `destroyed` in the same call — the signal a pending loadView
+    // races against, so it has to be modelled here rather than only latched.
     close: vi.fn(() => {
+      if (destroyed) return;
       destroyed = true;
+      wc._fire("destroyed");
     }),
     reload: vi.fn(),
     send: vi.fn(),
@@ -734,6 +739,34 @@ describe("ProjectViewManager — lifecycle invariants", () => {
       await expect(queued).rejects.toThrow("disposed");
       expect(manager.getAllViews()).toEqual([]);
       expect(manager.getActiveProjectId()).toBeNull();
+    });
+
+    it("dispose during a pending cold load cancels it and strands nothing", async () => {
+      const setup = createManager();
+      const { manager, win } = setup;
+
+      // autoFinishLoad: false — the load never completes on its own, so the
+      // switch is still awaiting loadView when teardown lands. Before #11458
+      // nothing settled that promise: it sat for the full 10s timeout and then
+      // reported a timeout that never happened.
+      const bWc = createMockWebContents({ autoFinishLoad: false });
+      wcQueue.push(bWc);
+      const inFlight = manager.switchTo("proj-b", "/b");
+      await flushMicrotasks();
+
+      manager.dispose();
+
+      const err = await inFlight.then(
+        () => new Error("expected the in-flight switch to reject"),
+        (e: unknown) => e
+      );
+      expect((err as { code?: string }).code).toBe("CANCELLED");
+      // The cancellation branch skips rollback, so this is where a stranded
+      // entry or a resurrected pointer would show up.
+      expect(manager.getAllViews()).toEqual([]);
+      expect(manager.getAllWebContentsIds()).toEqual([]);
+      expect(manager.getActiveProjectId()).toBeNull();
+      assertLifecycleInvariants(manager as never, win as never);
     });
 
     it("destroyView survives a view whose webContents getter is already gone (Electron #50249)", async () => {
