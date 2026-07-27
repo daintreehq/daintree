@@ -17,6 +17,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { createApplicationMenu } from "../menu.js";
 import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import { notificationService } from "../services/NotificationService.js";
+import { projectStore } from "../services/ProjectStore.js";
 import { logInfo } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
 import { isDemoMode } from "../setup/environment.js";
@@ -110,7 +111,9 @@ export async function initPerWindowServices(
   finalizeDeferredRegistration();
 
   if (windowRegistry) {
-    notificationService.initialize(windowRegistry);
+    notificationService.initialize(windowRegistry, (projectId) =>
+      projectStore.getProjectById(projectId)
+    );
     ctx.cleanup.add(toDisposable(() => notificationService.detachWindowListeners(win.id)));
   }
   console.log("[MAIN] NotificationService initialized");

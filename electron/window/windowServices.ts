@@ -9,6 +9,7 @@ import { getWorkspaceClient } from "../services/WorkspaceClient.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { createApplicationMenu, handleDirectoryOpen } from "../menu.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
+import { notificationService } from "../services/NotificationService.js";
 import { getMainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { scratchStore } from "../services/ScratchStore.js";
@@ -630,6 +631,7 @@ export async function setupWindowServices(
     // The menu was built before this binding existed, so its project gates
     // resolved against a PVM with no active project. Converge them now (#11136).
     refreshProjectMenuState();
+    notificationService.refreshTitles();
   }
 
   // Load worktrees — prefer initialProjectPath, else restoreProject for

@@ -13,6 +13,7 @@ import { ProjectSwitchService } from "../../../services/ProjectSwitchService.js"
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
 import { broadcastProjectSwitchUpdates } from "../../projectSwitchBroadcast.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
+import { notificationService } from "../../../services/NotificationService.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { logInfo } from "../../../utils/logger.js";
 import {
@@ -79,6 +80,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
         // whatever state we actually landed in — including when the outgoing
         // persist rejects after a visually successful activation.
         refreshProjectMenuState();
+        notificationService.refreshTitles();
       }
       return project;
     }
@@ -101,6 +103,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       return await projectSwitchService.switchProject(projectId);
     } finally {
       refreshProjectMenuState();
+      notificationService.refreshTitles();
     }
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_SWITCH, handleProjectSwitch));
@@ -151,6 +154,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
         await persistOutgoing;
       } finally {
         refreshProjectMenuState();
+        notificationService.refreshTitles();
       }
       return project;
     }
@@ -163,6 +167,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       return await projectSwitchService.reopenProject(projectId);
     } finally {
       refreshProjectMenuState();
+      notificationService.refreshTitles();
     }
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_REOPEN, handleProjectReopen));

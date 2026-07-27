@@ -21,6 +21,7 @@ import { scratchStore } from "../../../services/ScratchStore.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
+import { notificationService } from "../../../services/NotificationService.js";
 import { addProjectByPath } from "../projectCrud/crud.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
 import { createHardenedGit } from "../../../utils/hardenedGit.js";
@@ -137,6 +138,7 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           // A scratch is not a project: the window's PVM now holds a scratch id
           // with no project row, so the File-menu project gates must drop.
           refreshProjectMenuState();
+          notificationService.refreshTitles();
 
           // Tell the PTY host the active workspace changed. PtyClient treats the ID
           // as an opaque string and the path as a working directory, so passing a

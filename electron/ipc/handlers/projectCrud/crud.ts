@@ -11,6 +11,7 @@ import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../
 import { projectRelocationCoordinator } from "../../../services/ProjectRelocationCoordinator.js";
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
+import { notificationService } from "../../../services/NotificationService.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { Project, ProjectAddOptions } from "../../../types/index.js";
 import type { ProjectCreationIdentity } from "../../../../shared/types/project.js";
@@ -143,6 +144,7 @@ export async function removeProjectWithCleanup(
   broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
   // The row is gone, so a window still bound to it no longer has a project open.
   refreshProjectMenuState();
+  notificationService.refreshTitles();
 }
 
 export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () => void {
@@ -221,6 +223,12 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     } = updates;
     const updated = projectStore.updateProject(projectId, safeUpdates);
     broadcastToRenderer(CHANNELS.PROJECT_UPDATED, updated);
+    // A rename leaves the File-menu gates alone — the project is still open —
+    // but every window showing it is now titled with a stale name. Status rides
+    // along because a row turned "closed" here stops naming a window too.
+    if (updates.name !== undefined || updates.status !== undefined) {
+      notificationService.refreshTitles();
+    }
     if (
       updated.inRepoSettings &&
       (updates.name !== undefined || updates.emoji !== undefined || "color" in updates)
@@ -331,6 +339,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
         // closing window's ProjectViewManager still points at this project, so
         // the row's status is what tells the menu resolver it isn't open.
         refreshProjectMenuState();
+        notificationService.refreshTitles();
 
         console.log(
           `[IPC] project:close: Killed ${terminalsKilled} process(es) ` +
