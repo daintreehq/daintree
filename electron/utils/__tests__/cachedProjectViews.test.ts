@@ -4,7 +4,9 @@ import {
   computeDefaultCachedViews,
   effectiveCachedProjectViews,
   isValidCachedProjectViews,
+  memoryPressureTarget,
 } from "../cachedProjectViews.js";
+import { getSystemMemoryThresholds } from "../systemMemory.js";
 
 const GIB = 1024 ** 3;
 
@@ -150,6 +152,100 @@ describe("effectiveCachedProjectViews", () => {
       } else {
         process.env.DAINTREE_E2E_MODE = prev;
       }
+    }
+  });
+});
+
+describe("memoryPressureTarget", () => {
+  const band = { criticalMb: 1024, warningMb: 2048 };
+
+  it("leaves the configured cap alone at or above the warning edge", () => {
+    expect(memoryPressureTarget(band.warningMb, band, 5)).toEqual({ level: "none", targetMax: 5 });
+    expect(memoryPressureTarget(64 * 1024, band, 5)).toEqual({ level: "none", targetMax: 5 });
+  });
+
+  it("collapses to the active view alone below the critical edge", () => {
+    expect(memoryPressureTarget(band.criticalMb - 1, band, 5)).toEqual({
+      level: "critical",
+      targetMax: 1,
+    });
+    expect(memoryPressureTarget(0, band, 5)).toEqual({ level: "critical", targetMax: 1 });
+  });
+
+  it("treats the critical edge itself as soft, not critical (strict <)", () => {
+    // Only the strict `<` collapse boundary carries over from the previous
+    // single-threshold check — at the edge itself the reading is now soft
+    // (stepped) where it used to mean "no override at all".
+    expect(memoryPressureTarget(band.criticalMb, band, 5).level).toBe("soft");
+  });
+
+  it("sheds one view per equal slice of the band", () => {
+    // 5 views over a 1024MB band = one step per 256MB, so the cap walks
+    // 4 → 3 → 2 → 1 as headroom falls, rather than collapsing at one point.
+    const caps = [2047, 1792, 1791, 1536, 1280, 1024].map(
+      (availableMb) => memoryPressureTarget(availableMb, band, 5).targetMax
+    );
+    expect(caps).toEqual([4, 4, 3, 3, 2, 1]);
+  });
+
+  it("is monotonic and stays within [1, max] across the whole band", () => {
+    let previous = 0;
+    for (let availableMb = 0; availableMb <= 3000; availableMb += 7) {
+      const { targetMax } = memoryPressureTarget(availableMb, band, 5);
+      expect(Number.isInteger(targetMax)).toBe(true);
+      expect(targetMax).toBeGreaterThanOrEqual(1);
+      expect(targetMax).toBeLessThanOrEqual(5);
+      expect(targetMax).toBeGreaterThanOrEqual(previous);
+      previous = targetMax;
+    }
+  });
+
+  it("reads the warning edge rather than inferring it from the critical one", () => {
+    // A non-2:1 band proves warningMb is genuinely consumed — a `critical * 2`
+    // derivation would put 1500MB above the band top and report no pressure.
+    const wide = { criticalMb: 500, warningMb: 4000 };
+    expect(memoryPressureTarget(1500, wide, 5).level).toBe("soft");
+    expect(memoryPressureTarget(1500, wide, 5).targetMax).toBeLessThan(5);
+  });
+
+  it("degenerates to the pre-#11469 cliff when both edges coincide", () => {
+    // The legacy single-scalar setter maps to critical === warning: every
+    // reading is either untouched or an immediate collapse, never stepped.
+    const cliff = { criticalMb: 768, warningMb: 768 };
+    expect(memoryPressureTarget(768, cliff, 5)).toEqual({ level: "none", targetMax: 5 });
+    expect(memoryPressureTarget(767, cliff, 5)).toEqual({ level: "critical", targetMax: 1 });
+  });
+
+  it("has no step to take when only the active view fits", () => {
+    expect(memoryPressureTarget(1500, band, 1)).toEqual({ level: "soft", targetMax: 1 });
+  });
+
+  it("normalizes a fractional or non-finite cap into a whole view count", () => {
+    // The return value caps a view count, so a bad input must not leak out as
+    // a fractional target that the eviction loop would compare against.
+    expect(memoryPressureTarget(1500, band, 4.7)).toEqual(memoryPressureTarget(1500, band, 4));
+    expect(Number.isInteger(memoryPressureTarget(1500, band, 4.7).targetMax)).toBe(true);
+    expect(memoryPressureTarget(1500, band, Number.NaN).targetMax).toBe(1);
+  });
+
+  it("treats an unreadable availability figure as no pressure", () => {
+    // Unknown must never read as "zero available" — that would collapse the
+    // whole cache on a failed reading.
+    expect(memoryPressureTarget(Number.NaN, band, 5)).toEqual({ level: "none", targetMax: 5 });
+  });
+
+  it("keeps a usable band on every RAM tier the app ships defaults for", () => {
+    // The ladder needs headroom between the edges to step through; the capped
+    // fractions must never produce a degenerate band on a supported machine.
+    for (const totalGib of [4, 8, 16, 32, 64, 128]) {
+      const thresholds = getSystemMemoryThresholds(totalGib * 1024);
+      expect(thresholds.warningMb).toBeGreaterThan(thresholds.criticalMb);
+      const maxViews = computeDefaultCachedViews(totalGib * GIB);
+      const justUnderWarning = memoryPressureTarget(thresholds.warningMb - 1, thresholds, maxViews);
+      // Crossing the warning edge must cost exactly one cached view, whatever
+      // the machine's tier — that is what makes reclaim start early.
+      expect(justUnderWarning.level).toBe("soft");
+      expect(justUnderWarning.targetMax).toBe(Math.max(maxViews - 1, 1));
     }
   });
 });

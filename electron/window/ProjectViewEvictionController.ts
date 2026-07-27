@@ -12,6 +12,7 @@ import { hasActiveAgent } from "./ProjectViewAgentStateCache.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { EvictionReason, ViewEntry } from "./ProjectViewManagerTypes.js";
 import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
+import { memoryPressureTarget } from "../utils/cachedProjectViews.js";
 
 /** `[projectId, entry, activeAgent, liveAssistantBackend]` — the last two are carried into the eviction log line. */
 type EvictionCandidate = [string, ViewEntry, boolean, boolean];
@@ -106,23 +107,56 @@ export function evictStaleViews(
   // is never mutated, so once pressure subsides the user's setting takes
   // effect on the next eviction.
   const availableMb = getAvailableMemoryMb();
-  const lowMemoryOverride =
-    forcePressure ||
-    (host.lowMemoryFreeThresholdMb != null &&
-      availableMb != null &&
-      availableMb < host.lowMemoryFreeThresholdMb);
-  const effectiveMax = lowMemoryOverride ? 1 : host.maxCachedViews;
-  const effectiveReason: EvictionReason = lowMemoryOverride ? "pressure" : reason;
+  const policy = host.memoryPressurePolicy;
+  const { level, targetMax } =
+    policy != null && availableMb != null
+      ? memoryPressureTarget(availableMb, policy, host.maxCachedViews)
+      : { level: "none" as const, targetMax: host.maxCachedViews };
+
+  // Critical pressure (and the tier-2 forced reclaim) collapses to the active
+  // view in one pass — the pre-#11469 behaviour, kept at exactly the memory
+  // level where it used to fire.
+  const criticalPressure = forcePressure || level === "critical";
+  // Soft-band contraction is driven ONLY by the periodic sweep, so the sampler's
+  // 30s cadence is the settling interval between steps: each tick destroys one
+  // renderer and the next re-reads a genuinely changed availability figure.
+  // Admitting it on the switch (`"lru"`) and `"limit-change"` paths as well
+  // would shed extra views at an unbounded, user-driven rate and would need a
+  // separate cooldown to stay sane.
+  const softPressure = !criticalPressure && level === "soft" && reason === "pressure";
+
+  // `effectiveMax` is the settled target this pass converges toward;
+  // `evictionBudget` is how many views it may actually destroy. They are
+  // separate because "shed one at a time" has to hold even when the cache sits
+  // ABOVE its configured cap (assistant protection, or a paint-gate exclusion
+  // deferring a previous pass) — deriving the budget from the cap would let one
+  // soft tick destroy several renderers.
+  let effectiveMax: number;
+  let evictionBudget: number;
+  if (criticalPressure) {
+    effectiveMax = 1;
+    evictionBudget = Number.POSITIVE_INFINITY;
+  } else if (softPressure) {
+    effectiveMax = targetMax;
+    evictionBudget = 1;
+  } else {
+    effectiveMax = host.maxCachedViews;
+    evictionBudget = Number.POSITIVE_INFINITY;
+  }
+  const effectiveReason: EvictionReason = criticalPressure || softPressure ? "pressure" : reason;
 
   if (host.views.size <= effectiveMax) return 0;
   if (host.activeProjectId === null) return 0;
 
-  if (lowMemoryOverride) {
+  if (criticalPressure || softPressure) {
     logInfo("projectview.pressure-override", {
       availableMb,
-      thresholdMb: host.lowMemoryFreeThresholdMb,
+      thresholdMb: policy?.criticalMb ?? null,
+      warningThresholdMb: policy?.warningMb ?? null,
+      pressureLevel: criticalPressure ? "critical" : "soft",
       configuredMax: host.maxCachedViews,
       effectiveMax,
+      evictionBudget: Number.isFinite(evictionBudget) ? evictionBudget : null,
     });
   }
 
@@ -204,10 +238,12 @@ export function evictStaleViews(
   // not to `hasActiveAgent()` at large, whose views are safe to evict and whose
   // projects would otherwise pin the cache for no benefit.
   //
-  // The floor yields to genuine memory pressure: `lowMemoryOverride` puts these
-  // views back in the pool, but LAST, so every ordinary renderer is reclaimed
-  // before an assistant's work is. Losing the assistant beats an OOM, and the
-  // hibernation capture on that path still preserves the conversation.
+  // The floor yields to genuine memory pressure: critical (or forced) pressure
+  // puts these views back in the pool, but LAST, so every ordinary renderer is
+  // reclaimed before an assistant's work is. Losing the assistant beats an OOM,
+  // and the hibernation capture on that path still preserves the conversation.
+  // A soft-band pass does NOT admit them — shedding one view to trim the cache
+  // must never cost a running assistant its whole PTY process tree (#11157).
   const safeToEvict: EvictionCandidate[] = [];
   const activeAgentFallback: EvictionCandidate[] = [];
   const assistantProtected: EvictionCandidate[] = [];
@@ -222,12 +258,12 @@ export function evictStaleViews(
     }
   }
 
-  const candidates = lowMemoryOverride
+  const candidates = criticalPressure
     ? [...safeToEvict, ...activeAgentFallback, ...assistantProtected]
     : [...safeToEvict, ...activeAgentFallback];
 
   let evictedCount = 0;
-  while (host.views.size > effectiveMax && candidates.length > 0) {
+  while (host.views.size > effectiveMax && candidates.length > 0 && evictedCount < evictionBudget) {
     const [projectId, entry, activeAgent, liveAssistantBackend] = candidates.shift()!;
     const ageMs = Date.now() - entry.lastUsed;
     const memoryKb = memoryFor(entry);
@@ -250,8 +286,15 @@ export function evictStaleViews(
 
   // The cache is deliberately over its cap because protecting a running
   // assistant outranks the limit. Emit it so the extra resident renderers are
-  // attributable — otherwise this reads as a leak in the memory logs.
-  if (!lowMemoryOverride && host.views.size > effectiveMax && assistantProtected.length > 0) {
+  // attributable — otherwise this reads as a leak in the memory logs. Gated on
+  // an exhausted queue so a soft pass that merely spent its one-view budget
+  // (ordinary candidates still waiting) isn't misreported as assistant-blocked.
+  if (
+    !criticalPressure &&
+    host.views.size > effectiveMax &&
+    candidates.length === 0 &&
+    assistantProtected.length > 0
+  ) {
     logInfo("projectview.eviction-skipped", {
       reason: effectiveReason,
       viewCount: host.views.size,
@@ -324,18 +367,23 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
 
 /**
  * Periodic pressure check, piggybacked on the cached-view memory sampler so
- * the `lowMemoryFreeThresholdMb` floor has a trigger that doesn't depend on
- * the user switching projects. Without this, a session idling with several
- * cached views (~100–500 MB each) while free RAM drifts below the floor
- * reclaims nothing until the next cold-start switch or profile-driven
- * `setCachedViewLimit` call. Delegates to `evictStaleViews`, so the LRU
- * ordering, agent protection, and paint-gate exclusions all apply.
+ * the reclaim band has a trigger that doesn't depend on the user switching
+ * projects. Without this, a session idling with several cached views
+ * (~100–500 MB each) while free RAM drifts into the band reclaims nothing
+ * until the next cold-start switch or profile-driven `setCachedViewLimit`
+ * call. Delegates to `evictStaleViews`, so the LRU ordering, agent protection,
+ * and paint-gate exclusions all apply.
+ *
+ * The gate opens at the WARNING edge, not the critical one: this is the only
+ * path that performs soft-band contraction, so gating it on `criticalMb` would
+ * leave the graduated ladder unreachable (#11469).
  */
 export function maybeEvictUnderPressure(host: ProjectViewManager): void {
   if (host.views.size <= 1) return;
-  if (host.lowMemoryFreeThresholdMb == null) return;
+  const policy = host.memoryPressurePolicy;
+  if (policy == null) return;
   const availableMb = getAvailableMemoryMb();
-  if (availableMb == null || availableMb >= host.lowMemoryFreeThresholdMb) return;
+  if (availableMb == null || availableMb >= policy.warningMb) return;
   evictStaleViews(host, "pressure");
 }
 

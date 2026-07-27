@@ -445,7 +445,7 @@ describe("ResourceProfileService adversarial", () => {
       // the renderers suppresses the CPU wake-ups that lag pressure is about).
       const pvm = {
         setCachedViewLimit: vi.fn(),
-        setLowMemoryFreeThresholdMb: vi.fn(),
+        setMemoryPressurePolicy: vi.fn(),
         setEfficiencyFreeze: vi.fn(),
       };
       const { deps } = createDeps({
@@ -476,7 +476,7 @@ describe("ResourceProfileService adversarial", () => {
       // avoids cold-start storms on rapid project switching (#10742).
       const pvm = {
         setCachedViewLimit: vi.fn(),
-        setLowMemoryFreeThresholdMb: vi.fn(),
+        setMemoryPressurePolicy: vi.fn(),
         setEfficiencyFreeze: vi.fn(),
       };
       const { deps } = createDeps({
@@ -1010,7 +1010,7 @@ describe("ResourceProfileService adversarial", () => {
       // have clamped during the efficiency window).
       const pvm = {
         setCachedViewLimit: vi.fn(),
-        setLowMemoryFreeThresholdMb: vi.fn(),
+        setMemoryPressurePolicy: vi.fn(),
         setEfficiencyFreeze: vi.fn(),
       };
       const { deps } = createDeps({
