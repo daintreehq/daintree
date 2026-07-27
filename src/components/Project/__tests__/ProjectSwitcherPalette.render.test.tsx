@@ -506,21 +506,27 @@ describe("ProjectSwitcherPalette modal mode", () => {
       ];
     }
 
-    it("advertises the order once the band is long enough to need it", () => {
-      render(<ProjectSwitcherPalette {...dropdownProps} results={withOtherRows(4)} />);
-      expect(screen.getByTestId("other-projects-sort-trigger")).toBeTruthy();
+    it.each([
+      [0, false],
+      [3, false],
+      [4, true],
+      [6, true],
+    ])("with %i Other rows, shows the control: %s", (rows, shown) => {
+      render(<ProjectSwitcherPalette {...dropdownProps} results={withOtherRows(rows)} />);
+      expect(screen.queryByTestId("other-projects-sort-trigger") !== null).toBe(shown);
     });
 
-    it("stays quiet on a band short enough to read at a glance", () => {
-      render(<ProjectSwitcherPalette {...dropdownProps} results={withOtherRows(3)} />);
-      expect(screen.queryByTestId("other-projects-sort-trigger")).toBeNull();
-    });
-
-    it("puts the control only on the Other band", () => {
+    it("puts the control on the Other band and nowhere else", () => {
       render(<ProjectSwitcherPalette {...dropdownProps} results={withOtherRows(4)} />);
       // Pinned and Running are load-bearing orders this preference must not
-      // claim to govern, so neither header may grow a control.
-      expect(screen.getAllByTestId("other-projects-sort-trigger")).toHaveLength(1);
+      // claim to govern, so neither header may grow a control. Scoped by group
+      // rather than counted globally, which would pass if it had moved bands.
+      const other = screen.getByRole("group", { name: "Other projects" });
+      expect(within(other).getByTestId("other-projects-sort-trigger")).toBeTruthy();
+      for (const band of ["Pinned", "Running"]) {
+        const group = screen.getByRole("group", { name: band });
+        expect(within(group).queryByTestId("other-projects-sort-trigger")).toBeNull();
+      }
     });
 
     it("keeps the band's accessible name free of the mode it is showing", () => {

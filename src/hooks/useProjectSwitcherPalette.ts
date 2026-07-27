@@ -705,13 +705,48 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     // A change while closed needs no recapture: the next `open()` captures the
     // new order anyway, and recapturing here would queue it against a stale list.
     if (!isOpen) return;
-    setFrozenLayout((previous) =>
-      // Provisionality is a property of the DATA, not of the order, so it
-      // survives the recapture — otherwise changing the mode during a cold
-      // open would cancel the pending one-time regroup (#11452).
-      previous ? captureLayout(liveBrowseOrder, previous.isProvisional) : previous
-    );
-  }, [otherProjectsSortMode, isOpen, liveBrowseOrder, captureLayout]);
+    setFrozenLayout((previous) => {
+      if (!previous) return previous;
+      // Re-sort the Other rows IN THEIR EXISTING SLOTS rather than recapturing
+      // the whole layout from `liveBrowseOrder`. A blanket recapture would also
+      // adopt live BAND membership, so a project whose agent finished while the
+      // palette was open would jump out of Needs attention the moment the user
+      // touched an unrelated sort control. The user changed one band's order;
+      // nothing else may move.
+      const slots: number[] = [];
+      const ids: string[] = [];
+      previous.order.forEach((id, index) => {
+        if (previous.sections.get(id) === "other") {
+          slots.push(index);
+          ids.push(id);
+        }
+      });
+      if (ids.length < 2) return previous;
+
+      const live = new Map(liveBrowseOrder.map((project) => [project.id, project]));
+      const resorted = [...ids].sort((a, b) => {
+        const projectA = live.get(a);
+        const projectB = live.get(b);
+        // A row whose project has gone away is dropped downstream anyway; order
+        // it last so this stays a total order rather than an inconsistent one.
+        if (!projectA || !projectB) {
+          if (projectA) return -1;
+          if (projectB) return 1;
+          return a.localeCompare(b);
+        }
+        return compareProjectsByMode(projectA, projectB, otherProjectsSortMode);
+      });
+
+      const order = [...previous.order];
+      slots.forEach((slot, index) => {
+        order[slot] = resorted[index]!;
+      });
+      // Sections and provisionality are untouched: provisionality describes the
+      // DATA, so a mode change during a cold open must not cancel the pending
+      // one-time regroup (#11452).
+      return { ...previous, order };
+    });
+  }, [otherProjectsSortMode, isOpen, liveBrowseOrder]);
 
   // Fold projects that appeared after the freeze into it, at the position the
   // renderer already gives them (end of their live band). Without this they are

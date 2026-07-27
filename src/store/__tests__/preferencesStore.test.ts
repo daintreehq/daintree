@@ -811,6 +811,26 @@ describe("preferencesStore migration", () => {
       expect(reloaded.getState().projectSwitcherOtherSortMode).toBe("recent");
     });
 
+    it("supplies the field in the migration itself, not only in the sanitizer", async () => {
+      // Hydration sanitizes too, so a blob-in/state-out test passes even with
+      // the migration branch deleted. Drive `migrate` directly to pin it.
+      const store = await loadStore();
+      const options = store.persist.getOptions();
+      const migrated = options.migrate?.({ dockDensity: "compact" }, 13) as Record<string, unknown>;
+
+      expect(migrated.projectSwitcherOtherSortMode).toBe("hottest");
+      expect(migrated.dockDensity).toBe("compact");
+    });
+
+    it("leaves an explicit choice alone when migrating", async () => {
+      const store = await loadStore();
+      const migrated = store.persist
+        .getOptions()
+        .migrate?.({ projectSwitcherOtherSortMode: "recent" }, 13) as Record<string, unknown>;
+
+      expect(migrated.projectSwitcherOtherSortMode).toBe("recent");
+    });
+
     it("defaults a pre-v14 blob that predates the field", async () => {
       setStoredState({ dockDensity: "compact" }, 13);
       const store = await loadStore();

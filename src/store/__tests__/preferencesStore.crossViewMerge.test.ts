@@ -120,6 +120,43 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     expect(written.state.reduceAnimations).toBe(true); // sibling's change survived
   });
 
+  // The generic scalar tests above pass even if this specific field is dropped
+  // from the merge, which would silently make the sort mode the one preference
+  // a stale sibling view can clobber (#11455).
+  it("keeps a sibling's sort mode when this view changes an unrelated scalar", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().setDockDensity("normal");
+
+    const disk = readBlob(backing);
+    disk.state.projectSwitcherOtherSortMode = "recent";
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setDockDensity("compact");
+
+    const written = readBlob(backing);
+    expect(written.state.projectSwitcherOtherSortMode).toBe("recent");
+    expect(written.state.dockDensity).toBe("compact");
+  });
+
+  it("keeps this view's sort mode when a sibling changes an unrelated scalar", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().setDockDensity("normal");
+
+    const disk = readBlob(backing);
+    disk.state.reduceAnimations = true;
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setProjectSwitcherOtherSortMode("alphabetical");
+
+    const written = readBlob(backing);
+    expect(written.state.projectSwitcherOtherSortMode).toBe("alphabetical");
+    expect(written.state.reduceAnimations).toBe(true);
+  });
+
   it("does not resurrect a recipe entry this view cleared, and keeps a sibling's", async () => {
     const backing = installLocalStorage({});
     const { usePreferencesStore: store } = await import("../preferencesStore");

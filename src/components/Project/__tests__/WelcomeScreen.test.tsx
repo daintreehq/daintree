@@ -418,6 +418,9 @@ describe("WelcomeScreen", () => {
       // so the list would show whichever projects frecency happened to surface
       // rather than the five this mode actually ranks top.
       usePreferencesStore.getState().setProjectSwitcherOtherSortMode("recent");
+      // The five most recent are 7,6,5,4,3 — all sitting PAST the cap in array
+      // order, and the array is in ascending recency so a cap-then-sort would
+      // return 0..4, the five LEAST recent. Only sorting first can find them.
       storeState = {
         ...storeState,
         projects: Array.from({ length: 8 }, (_, i) => ({
@@ -425,16 +428,16 @@ describe("WelcomeScreen", () => {
           name: `Project ${i}`,
           path: `/path/${i}`,
           emoji: "🌲",
-          // Recency runs opposite to score: the highest-scoring projects are
-          // the least recent, so a cap-then-sort would show 7..3 instead.
-          lastOpened: (8 - i) * 1000,
-          frecencyScore: i,
+          lastOpened: (i + 1) * 1000,
+          // Score runs opposite to recency, so a stray frecency comparison
+          // would also produce a different set.
+          frecencyScore: 8 - i,
         })),
       };
       render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
       const names = screen.getAllByText(/Project \d/).map((el) => el.textContent);
-      expect(names).toEqual(["Project 0", "Project 1", "Project 2", "Project 3", "Project 4"]);
+      expect(names).toEqual(["Project 7", "Project 6", "Project 5", "Project 4", "Project 3"]);
     });
   });
 

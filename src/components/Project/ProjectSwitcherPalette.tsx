@@ -459,10 +459,12 @@ function OtherProjectsHeader({
   headerId,
   label,
   itemCount,
+  onReturnFocus,
 }: {
   headerId: string;
   label: string;
   itemCount: number;
+  onReturnFocus?: () => void;
 }) {
   const sortMode = usePreferencesStore((state) => state.projectSwitcherOtherSortMode);
   const setSortMode = usePreferencesStore((state) => state.setProjectSwitcherOtherSortMode);
@@ -500,7 +502,21 @@ function OtherProjectsHeader({
                   {active.label}
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
+              <DropdownMenuContent
+                align="end"
+                onCloseAutoFocus={(event) => {
+                  // Radix would restore focus to the trigger, which then eats
+                  // ArrowDown and Enter to reopen itself — leaving the palette
+                  // unable to walk or commit a row until focus moved by hand.
+                  // The search box owns those keys, so send focus back there.
+                  //
+                  // Deferred a frame: focusing inside Radix's own focus-restore
+                  // window loses the race with its teardown (same reason
+                  // `ContentPanel`'s rename input defers).
+                  event.preventDefault();
+                  requestAnimationFrame(() => onReturnFocus?.());
+                }}
+              >
                 <DropdownMenuRadioGroup value={sortMode} onValueChange={handleValueChange}>
                   {OTHER_PROJECTS_SORT_OPTIONS.map(({ value, label: optionLabel, Icon }) => (
                     <DropdownMenuRadioItem key={value} value={value}>
@@ -550,6 +566,8 @@ interface ProjectListContentProps {
   onSelectNewWindow?: (project: SearchableProject) => void;
   onHoverProject?: (projectId: string, pointerType: string) => void;
   onHoverProjectEnd?: (pointerType: string) => void;
+  /** Hands focus back to the search box after the sort menu closes. */
+  onReturnFocus?: () => void;
 }
 
 function ProjectListContent({
@@ -569,6 +587,7 @@ function ProjectListContent({
   onSelectNewWindow,
   onHoverProject,
   onHoverProjectEnd,
+  onReturnFocus,
 }: ProjectListContentProps) {
   const isSearching = query.trim().length > 0;
 
@@ -679,6 +698,7 @@ function ProjectListContent({
                         headerId={headerId}
                         label={section.label}
                         itemCount={section.items.length}
+                        onReturnFocus={onReturnFocus}
                       />
                     ) : (
                       <div
@@ -1287,6 +1307,7 @@ function ProjectPaletteInner({
           onSelectNewWindow={onSelectNewWindow}
           onHoverProject={onHoverProject}
           onHoverProjectEnd={onHoverProjectEnd}
+          onReturnFocus={() => inputRef.current?.focus()}
         />
         {(onCreateScratch || (scratchResults && scratchResults.length > 0)) && (
           <>

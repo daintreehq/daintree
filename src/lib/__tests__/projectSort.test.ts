@@ -51,6 +51,35 @@ describe("compareProjectsByMode", () => {
     expect(order(mixed, "alphabetical")).toEqual(["apple", "Banana"]);
   });
 
+  it("does not consult the score in recent when timestamps tie", () => {
+    // Score is the loudest signal in hottest and must be silent here, or
+    // "Recent" quietly becomes "Hottest with extra steps" on any tie.
+    const tied: SortableProject[] = [
+      { id: "hi", name: "Zulu", lastOpened: 500, frecencyScore: 99 },
+      { id: "lo", name: "Alpha", lastOpened: 500, frecencyScore: 1 },
+    ];
+    expect(order(tied, "recent")).toEqual(["Alpha", "Zulu"]);
+  });
+
+  it("reaches the name tie-break before the id in hottest and recent", () => {
+    // Ids are opaque and ordered against the names here, so skipping the name
+    // comparison would surface them in the wrong order.
+    const tied: SortableProject[] = [
+      { id: "id-aaa", name: "Zulu", lastOpened: 500, frecencyScore: 5 },
+      { id: "id-zzz", name: "Alpha", lastOpened: 500, frecencyScore: 5 },
+    ];
+    expect(order(tied, "hottest")).toEqual(["Alpha", "Zulu"]);
+    expect(order(tied, "recent")).toEqual(["Alpha", "Zulu"]);
+  });
+
+  it("does not let score or recency leak into alphabetical", () => {
+    const mixed: SortableProject[] = [
+      { id: "a", name: "Alpha", lastOpened: 1, frecencyScore: 0 },
+      { id: "z", name: "Zulu", lastOpened: 999, frecencyScore: 99 },
+    ];
+    expect(order(mixed, "alphabetical")).toEqual(["Alpha", "Zulu"]);
+  });
+
   it("falls back to last opened when scores tie in hottest", () => {
     const tied: SortableProject[] = [
       { id: "older", name: "Older", lastOpened: 100, frecencyScore: 5 },
