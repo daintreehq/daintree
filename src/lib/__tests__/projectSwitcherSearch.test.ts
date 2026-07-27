@@ -1,6 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { scoreProjectQuery, rankProjectMatches } from "../projectSwitcherSearch";
-import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
+import {
+  scoreProjectQuery,
+  scoreScratchQuery,
+  rankSwitcherMatches,
+} from "../projectSwitcherSearch";
+import type { SearchableProject, SearchableScratch } from "@/hooks/useProjectSwitcherPalette";
+
+function makeScratch(
+  overrides: Partial<SearchableScratch> & { id: string; name: string }
+): SearchableScratch {
+  return {
+    path: `/userData/scratch/${overrides.id}`,
+    createdAt: 0,
+    lastOpened: 0,
+    isActive: false,
+    ...overrides,
+  };
+}
 
 function makeProject(
   overrides: Partial<SearchableProject> & { id: string; name: string; path: string }
@@ -81,7 +97,33 @@ describe("scoreProjectQuery", () => {
   });
 });
 
-describe("rankProjectMatches", () => {
+describe("scoreScratchQuery", () => {
+  it("returns 0 for empty query", () => {
+    expect(scoreScratchQuery("", "scratch")).toBe(0);
+  });
+
+  it("returns 0 when query has no subsequence match", () => {
+    expect(scoreScratchQuery("xyz", "auth-notes")).toBe(0);
+  });
+
+  it("scores name identically to a project whose path contributes nothing", () => {
+    // The two scales have to be directly comparable for the mixed ranker's
+    // score-first ordering to mean anything.
+    expect(scoreScratchQuery("auth", "auth-notes")).toBe(
+      scoreProjectQuery("auth", "auth-notes", "zzz")
+    );
+  });
+
+  it("ignores the path, which for a scratch is a UUID directory", () => {
+    const scratch = makeScratch({ id: "9f8e7d6c", name: "notes" });
+    // A query lifted straight out of the scratch's own folder name must not
+    // surface it — that path is machine-generated, not something a user typed.
+    expect(scoreScratchQuery("9f8e7d6c", scratch.name)).toBe(0);
+    expect(scoreProjectQuery("9f8e7d6c", scratch.name, scratch.path)).toBeGreaterThan(0);
+  });
+});
+
+describe("rankSwitcherMatches", () => {
   const projects = [
     makeProject({ id: "1", name: "daintree-app", path: "/repos/daintree-app", lastOpened: 100 }),
     makeProject({ id: "2", name: "other-project", path: "/repos/other", lastOpened: 200 }),
@@ -89,17 +131,17 @@ describe("rankProjectMatches", () => {
   ];
 
   it("returns empty for empty query", () => {
-    expect(rankProjectMatches("", projects)).toEqual([]);
-    expect(rankProjectMatches("  ", projects)).toEqual([]);
+    expect(rankSwitcherMatches("", projects, [])).toEqual([]);
+    expect(rankSwitcherMatches("  ", projects, [])).toEqual([]);
   });
 
   it("filters out non-matching projects", () => {
-    const results = rankProjectMatches("xyz", projects);
+    const results = rankSwitcherMatches("xyz", projects, []);
     expect(results).toHaveLength(0);
   });
 
   it("ranks exact name substring matches first", () => {
-    const results = rankProjectMatches("daintree", projects);
+    const results = rankSwitcherMatches("daintree", projects, []);
     expect(results.length).toBeGreaterThanOrEqual(2);
     expect(results[0]!.name).toContain("daintree");
   });
@@ -119,13 +161,13 @@ describe("rankProjectMatches", () => {
         frecencyScore: 5.0,
       }),
     ];
-    const results = rankProjectMatches("alpha", tieProjects);
+    const results = rankSwitcherMatches("alpha", tieProjects, []);
     expect(results[0]!.id).toBe("b"); // higher frecencyScore wins
   });
 
   it("trims whitespace from query before matching", () => {
-    const results = rankProjectMatches("  daintree  ", projects);
-    const resultsClean = rankProjectMatches("daintree", projects);
+    const results = rankSwitcherMatches("  daintree  ", projects, []);
+    const resultsClean = rankSwitcherMatches("daintree", projects, []);
     expect(results).toHaveLength(resultsClean.length);
     expect(results.map((r) => r.id)).toEqual(resultsClean.map((r) => r.id));
   });
@@ -134,7 +176,81 @@ describe("rankProjectMatches", () => {
     const many = Array.from({ length: 20 }, (_, i) =>
       makeProject({ id: `p${i}`, name: `project-${i}`, path: `/repos/p${i}`, lastOpened: i })
     );
-    const results = rankProjectMatches("project", many);
+    const results = rankSwitcherMatches("project", many, []);
     expect(results).toHaveLength(20);
+  });
+
+  it("leaves project ordering untouched when a scratch ranks between two projects", () => {
+    // The scratch has to land BETWEEN the projects, or "append the scratches"
+    // would satisfy this too. Frecency also opposes input order, so a ranker
+    // that dropped the tiebreak while merging still fails.
+    const strong = makeProject({ id: "strong", name: "alpha", path: "/repos/alpha" });
+    const weak = makeProject({ id: "weak", name: "a-l-p-h-a", path: "/zzz", frecencyScore: 99 });
+    const scratch = makeScratch({ id: "mid", name: "alpha-spike" });
+
+    const mixed = rankSwitcherMatches("alpha", [weak, strong], [scratch]);
+
+    expect(mixed.map((r) => r.id)).toEqual(["strong", "mid", "weak"]);
+    // And the projects keep the order they had with no scratch in the pool.
+    expect(mixed.filter((r) => r.kind === "project").map((r) => r.id)).toEqual(
+      rankSwitcherMatches("alpha", [weak, strong], []).map((r) => r.id)
+    );
+  });
+
+  it("tags every row with its kind", () => {
+    const results = rankSwitcherMatches(
+      "alpha",
+      [makeProject({ id: "p", name: "alpha-app", path: "/repos/alpha" })],
+      [makeScratch({ id: "s", name: "alpha-notes" })]
+    );
+    expect(results.map((r) => r.kind).sort()).toEqual(["project", "scratch"]);
+  });
+
+  it("filters scratches by the query rather than listing them all", () => {
+    const scratches = [
+      makeScratch({ id: "s1", name: "auth-notes" }),
+      makeScratch({ id: "s2", name: "billing-spike" }),
+    ];
+    const results = rankSwitcherMatches("auth", [], scratches);
+    expect(results.map((r) => r.id)).toEqual(["s1"]);
+  });
+
+  it("puts the project first when a project and a scratch match a name equally", () => {
+    // The path scores 0, so the two land on an EXACT numeric tie and only the
+    // kind tiebreak can order them. Give the project a matching path and it
+    // wins on score instead, leaving the tiebreak untested.
+    const project = makeProject({ id: "p", name: "release", path: "/zzz" });
+    const scratch = makeScratch({ id: "s", name: "release" });
+    expect(scoreProjectQuery("release", project.name, project.path)).toBe(
+      scoreScratchQuery("release", scratch.name)
+    );
+
+    expect(rankSwitcherMatches("release", [project], [scratch]).map((r) => r.id)).toEqual([
+      "p",
+      "s",
+    ]);
+  });
+
+  it("ranks a scratch whose name contains the query above a loosely matching project", () => {
+    // The whole point of the merge: typing a scratch's name has to reach it,
+    // not a project that happened to share the letters in order.
+    const results = rankSwitcherMatches(
+      "auth",
+      [makeProject({ id: "p", name: "a-u-t-h-elper", path: "/repos/auth-adjacent" })],
+      [makeScratch({ id: "s", name: "auth-notes" })]
+    );
+    expect(results[0]!.id).toBe("s");
+  });
+
+  it("breaks scratch-vs-scratch ties on recency", () => {
+    const results = rankSwitcherMatches(
+      "notes",
+      [],
+      [
+        makeScratch({ id: "old", name: "notes", lastOpened: 100 }),
+        makeScratch({ id: "new", name: "notes", lastOpened: 900 }),
+      ]
+    );
+    expect(results.map((r) => r.id)).toEqual(["new", "old"]);
   });
 });

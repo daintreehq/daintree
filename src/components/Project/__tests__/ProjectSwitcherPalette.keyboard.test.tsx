@@ -150,12 +150,18 @@ vi.mock("@/utils/timeAgo", () => ({
   formatTimeAgo: () => "2h ago",
 }));
 
-import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
+import type {
+  ProjectSwitcherProjectRow,
+  ProjectSwitcherRow,
+  ProjectSwitcherScratchRow,
+  SearchableProject,
+} from "@/hooks/useProjectSwitcherPalette";
 
 const { ProjectSwitcherPalette } = await import("../ProjectSwitcherPalette");
 
-function makeProject(overrides: Partial<SearchableProject> = {}): SearchableProject {
+function makeProject(overrides: Partial<SearchableProject> = {}): ProjectSwitcherProjectRow {
   return {
+    kind: "project",
     id: "proj-1",
     name: "Test Project",
     path: "/tmp/test",
@@ -417,7 +423,7 @@ describe("ProjectSwitcherPalette active descendant", () => {
   });
 
   it("Enter selects the project the active descendant points at", () => {
-    const onSelect = vi.fn<(project: SearchableProject) => void>();
+    const onSelect = vi.fn<(row: ProjectSwitcherRow) => void>();
     render(<ProjectSwitcherPalette {...mixedProps} selectedIndex={1} onSelect={onSelect} />);
 
     const input = screen.getByTestId("palette-input");
@@ -431,5 +437,78 @@ describe("ProjectSwitcherPalette active descendant", () => {
     // so this only holds if the highlighted option is really in the DOM.
     expect(activeOption).not.toBeNull();
     expect(activeOption!.textContent).toContain(selectedProject.name);
+  });
+});
+
+/**
+ * Keyboard behaviour on a highlighted scratch row (issue #11466).
+ *
+ * A scratch reached the arrow-key domain, so the two project-only chords have to
+ * stop assuming every row they land on is a project.
+ */
+describe("ProjectSwitcherPalette keyboard on a scratch row", () => {
+  const scratchRow: ProjectSwitcherScratchRow = {
+    kind: "scratch",
+    id: "s1",
+    name: "Spike notes",
+    path: "/userData/scratch/s1",
+    createdAt: 0,
+    lastOpened: 0,
+    isActive: false,
+  };
+
+  const scratchProps = {
+    isOpen: true,
+    query: "spike",
+    results: [scratchRow],
+    selectedIndex: 0,
+    onQueryChange: vi.fn(),
+    onSelectPrevious: vi.fn(),
+    onSelectNext: vi.fn(),
+    onSelect: vi.fn(),
+    onClose: vi.fn(),
+    mode: "modal" as const,
+  };
+
+  beforeEach(() => {
+    scratchProps.onSelect.mockClear();
+  });
+
+  it("commits the scratch on Enter", () => {
+    render(<ProjectSwitcherPalette {...scratchProps} />);
+    fireEvent.keyDown(screen.getByTestId("palette-input"), { key: "Enter" });
+
+    expect(scratchProps.onSelect).toHaveBeenCalledWith(scratchRow);
+  });
+
+  it("falls back to a plain switch on Meta+Enter instead of swallowing it", () => {
+    // A scratch has no second window to open, so the chord must not become a
+    // keypress that does nothing.
+    const onSelectNewWindow = vi.fn();
+    render(<ProjectSwitcherPalette {...scratchProps} onSelectNewWindow={onSelectNewWindow} />);
+    fireEvent.keyDown(screen.getByTestId("palette-input"), { key: "Enter", metaKey: true });
+
+    expect(onSelectNewWindow).not.toHaveBeenCalled();
+    expect(scratchProps.onSelect).toHaveBeenCalledWith(scratchRow);
+  });
+
+  it("leaves Meta+Backspace inert rather than removing by scratch id", () => {
+    // onCloseProject removes a PROJECT. Handing it a scratch id would delete
+    // the wrong thing, and scratch deletion has no confirm to catch it.
+    const onCloseProject = vi.fn();
+    render(<ProjectSwitcherPalette {...scratchProps} onCloseProject={onCloseProject} />);
+    fireEvent.keyDown(screen.getByTestId("palette-input"), { key: "Backspace", metaKey: true });
+
+    expect(onCloseProject).not.toHaveBeenCalled();
+  });
+
+  it("resolves the active descendant to the scratch row on screen", () => {
+    render(<ProjectSwitcherPalette {...scratchProps} />);
+    const activeDescendant = screen
+      .getByTestId("palette-input")
+      .getAttribute("aria-activedescendant");
+
+    expect(activeDescendant).toBe("project-option-s1");
+    expect(document.getElementById(activeDescendant!)).not.toBeNull();
   });
 });

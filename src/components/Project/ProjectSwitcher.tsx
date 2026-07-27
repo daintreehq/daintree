@@ -206,7 +206,7 @@ export function ProjectSwitcher() {
             onQueryChange={projectSwitcher.setQuery}
             onSelectPrevious={projectSwitcher.selectPrevious}
             onSelectNext={projectSwitcher.selectNext}
-            onSelect={projectSwitcher.selectProject}
+            onSelect={projectSwitcher.selectRow}
             onClose={handleDropdownClose}
             onAddProject={projectSwitcher.addProject}
             onCloneRepo={handleCloneRepo}
@@ -229,6 +229,7 @@ export function ProjectSwitcher() {
             onFreeMemoryConfirmClose={() => projectSwitcher.setFreeMemoryConfirmProject(null)}
             onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
             isFreeingMemory={projectSwitcher.isFreeingMemory}
+            rankedSearch={projectSwitcher.isRankedSearch}
             scratchResults={projectSwitcher.scratchResults}
             onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
             onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
@@ -288,7 +289,7 @@ export function ProjectSwitcher() {
         onQueryChange={projectSwitcher.setQuery}
         onSelectPrevious={projectSwitcher.selectPrevious}
         onSelectNext={projectSwitcher.selectNext}
-        onSelect={projectSwitcher.selectProject}
+        onSelect={projectSwitcher.selectRow}
         onClose={handleDropdownClose}
         onAddProject={projectSwitcher.addProject}
         onCloneRepo={handleCloneRepo}
@@ -311,6 +312,7 @@ export function ProjectSwitcher() {
         onFreeMemoryConfirmClose={() => projectSwitcher.setFreeMemoryConfirmProject(null)}
         onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
         isFreeingMemory={projectSwitcher.isFreeingMemory}
+        rankedSearch={projectSwitcher.isRankedSearch}
         scratchResults={projectSwitcher.scratchResults}
         onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
         onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}

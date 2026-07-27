@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef, useDeferredValue } from "react";
-import { rankProjectMatches } from "@/lib/projectSwitcherSearch";
+import { rankSwitcherMatches } from "@/lib/projectSwitcherSearch";
 import { buildDisplayPaths } from "@/lib/projectDisplayPath";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
@@ -132,19 +132,53 @@ export interface SearchableProject {
   section: ProjectSectionKey;
 }
 
+/**
+ * A row of the palette's one list, tagged with what it actually is.
+ *
+ * Flattened rather than wrapped (`{ kind, project }`) so the fields both kinds
+ * share — `id`, `name`, `isActive` — stay reachable at the sites that only care
+ * about identity: the derived index, the arrow-key step, `aria-activedescendant`
+ * and the scroll-into-view query. Only the row renderer and the commit dispatch
+ * need to narrow.
+ *
+ * Scratches are NOT synthesized into a `SearchableProject` with a flag. Sharing
+ * the shape would make every project-only path — the status line, "Pin project",
+ * "Free memory", ⌘⌫ remove — type-reachable with a scratch id behind it.
+ */
+export type ProjectSwitcherProjectRow = { kind: "project" } & SearchableProject;
+export type ProjectSwitcherScratchRow = { kind: "scratch" } & SearchableScratch;
+export type ProjectSwitcherRow = ProjectSwitcherProjectRow | ProjectSwitcherScratchRow;
+
+function toProjectRow(project: SearchableProject): ProjectSwitcherProjectRow {
+  return { kind: "project", ...project };
+}
+
 export interface UseProjectSwitcherPaletteReturn {
   isOpen: boolean;
   mode: ProjectSwitcherMode;
   query: string;
   /**
-   * The projects the palette renders, in render order — and the only array
+   * The rows the palette renders, in render order — and the only array
    * `selectedIndex` may be read against. Every mode lists every registered
    * project: browse is section-ordered (see {@link PROJECT_SECTION_ORDER}) and
    * search is rank-ordered, but neither is scoped or capped.
+   *
+   * Browse rows are all projects; the scratches belong to the pinned section
+   * below the list. Search rows are mixed, so a scratch is reachable by name
+   * from the keyboard (#11466) — narrow on `kind` before touching anything a
+   * scratch doesn't have.
    */
-  results: SearchableProject[];
+  results: ProjectSwitcherRow[];
   /** True while `deferredQuery` has not yet caught up to `query` — the results shown are from the previous query. */
   isFiltering: boolean;
+  /**
+   * True exactly while {@link results} is the ranked list, which is the only
+   * time it carries scratches. Trails `query` by a commit, because the ranking
+   * runs on the deferred query — so a surface that also renders scratches
+   * elsewhere must hide them on THIS, not on a non-empty query, or they would
+   * belong to neither list for a frame.
+   */
+  isRankedSearch: boolean;
   /**
    * The currently active project as a `SearchableProject`, with stats and
    * pin/missing flags enriched. Decoupled from `results` so callers (e.g. the
@@ -164,6 +198,12 @@ export interface UseProjectSwitcherPaletteReturn {
   selectPrevious: () => void;
   selectNext: () => void;
   selectProject: (project: SearchableProject) => void;
+  /**
+   * Commits a row of {@link results}, dispatching on its kind. The palette's
+   * primary select handler — a surface that renders `results` must use this
+   * rather than `selectProject`, which cannot accept a scratch row.
+   */
+  selectRow: (row: ProjectSwitcherRow) => void;
   /**
    * Schedule a 150ms trailing-edge hover prefetch that primes the
    * main-process hydrate cache for `projectId`. Mouse-only — touch and pen
@@ -456,18 +496,30 @@ function compareWithinSection(
  * character was typed.
  *
  * `isSearching` tracks the live query while `rankQuery` is the deferred one, so
- * the browse-to-search transition doesn't flash "No projects match" over the
+ * the browse-to-search transition doesn't flash "No workspaces match" over the
  * previous list on the first keystroke.
+ *
+ * Scratches join the ranking, and only the ranking (#11466). In browse they are
+ * left to the pinned section at the bottom, where create and delete-all live and
+ * spatial predictability is worth more than relevance.
+ *
+ * They join on `rankQuery`, not on the live one, so the frame where the live
+ * query has outrun the deferred one is still pure browse. The pinned section
+ * keys off the same signal ({@link UseProjectSwitcherPaletteReturn.isRankedSearch}),
+ * so for that frame the scratches are simply still down there — never listed
+ * twice, and never briefly absent from both places.
  */
 function buildResults(
+  browseRows: ProjectSwitcherRow[],
   browseOrdered: SearchableProject[],
+  scratches: SearchableScratch[],
   rankQuery: string,
   isSearching: boolean
-): SearchableProject[] {
+): ProjectSwitcherRow[] {
   if (isSearching && rankQuery.trim()) {
-    return rankProjectMatches(rankQuery, browseOrdered);
+    return rankSwitcherMatches(rankQuery, browseOrdered, scratches);
   }
-  return browseOrdered;
+  return browseRows;
 }
 
 /**
@@ -498,7 +550,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // Only stale while a search is still catching up. Clearing the box restores
   // browse in the same commit, so that transition is never "filtering".
   const isFiltering = isSearching && query !== deferredQuery;
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [stopConfirmProjectId, setStopConfirmProjectId] = useState<string | null>(null);
   const [isStoppingProject, setIsStoppingProject] = useState(false);
   const [removeConfirmProject, setRemoveConfirmProject] = useState<SearchableProject | null>(null);
@@ -799,7 +851,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     // palette was open keeps its frozen slot, and a reflexive Enter landing on
     // it opens the relocation dialog rather than switching projects.
     const target = resorted.ids.find((id) => live.get(id)?.isMissing === false) ?? resorted.ids[0]!;
-    setSelectedProjectId((previousId) =>
+    setSelectedRowId((previousId) =>
       previousId !== null && frozenLayout.sections.get(previousId) === "other" ? target : previousId
     );
   }, [otherProjectsSortMode, isOpen, liveBrowseOrder, frozenLayout, isSearching]);
@@ -892,29 +944,59 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     );
   }, [liveBrowseOrder, frozenLayout]);
 
+  // Recency order, which is what the pinned browse section renders. Search takes
+  // this same list but re-ranks it against the query (#11466), so it has to be
+  // built before `results` rather than beside the other scratch callbacks below.
+  const scratchResults = useMemo<SearchableScratch[]>(() => {
+    const list: SearchableScratch[] = scratches.map((s: Scratch) => ({
+      id: s.id,
+      name: s.name,
+      path: s.path,
+      createdAt: s.createdAt,
+      lastOpened: s.lastOpened,
+      isActive: currentScratch?.id === s.id,
+    }));
+    list.sort((a, b) => b.lastOpened - a.lastOpened);
+    return list;
+  }, [scratches, currentScratch?.id]);
+
   // Clearing the box reverts to browse immediately rather than holding the
   // deferred ranking for a commit — otherwise browse would flash the stale
   // search ranking on the way back to an empty query.
   const resultsQuery = isSearching ? deferredQuery : "";
 
-  const results = useMemo<SearchableProject[]>(
-    () => buildResults(browseOrdered, resultsQuery, isSearching),
-    [browseOrdered, resultsQuery, isSearching]
+  // Held apart from `results` so browse keeps a stable array identity across
+  // scratch-store traffic. Folded into the same memo, a rename in the pinned
+  // section below would hand the component a fresh array of identical project
+  // rows, and its scroll-into-view effect would yank the list back to the
+  // highlighted project while the user was reading the section.
+  const browseRows = useMemo<ProjectSwitcherRow[]>(
+    () => browseOrdered.map(toProjectRow),
+    [browseOrdered]
   );
 
-  // The selected PROJECT is the state; its index is derived. Tracking an index
+  // True exactly when `results` is the ranked, scratch-carrying list — which is
+  // one commit behind `isSearching`, since the ranking runs on the deferred
+  // query. The pinned scratch section hides on THIS, never on the live query:
+  // hiding a commit early would leave the scratches nowhere for that frame.
+  const isRankedSearch = isSearching && resultsQuery.trim().length > 0;
+
+  const results = useMemo<ProjectSwitcherRow[]>(
+    () => buildResults(browseRows, browseOrdered, scratchResults, resultsQuery, isSearching),
+    [browseRows, browseOrdered, scratchResults, resultsQuery, isSearching]
+  );
+
+  // The selected ROW is the state; its index is derived. Tracking an index
   // instead would let it outlive the row it pointed at — a list that shrinks
   // under an open palette (a project closing, a stats push) would leave the
-  // index addressing a different project than the user selected, and Enter
-  // would commit that one (#11071). Deriving means the highlight follows the
-  // project across reorders and never addresses a row that isn't rendered.
+  // index addressing a different row than the user selected, and Enter would
+  // commit that one (#11071). Deriving means the highlight follows the row
+  // across reorders and never addresses a row that isn't rendered.
   const selectedIndex = useMemo(() => {
     if (results.length === 0) return 0;
-    const index = selectedProjectId
-      ? results.findIndex((project) => project.id === selectedProjectId)
-      : -1;
+    const index = selectedRowId ? results.findIndex((row) => row.id === selectedRowId) : -1;
     return index >= 0 ? index : 0;
-  }, [results, selectedProjectId]);
+  }, [results, selectedRowId]);
 
   // Decoupled from `results` so the toolbar pill keeps the active project's
   // pin/process state even when the current search filters it out.
@@ -926,7 +1008,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // A new query re-ranks the list, so fall back to the top match.
   useEffect(() => {
     if (query) {
-      setSelectedProjectId(null);
+      setSelectedRowId(null);
     }
   }, [query]);
 
@@ -986,7 +1068,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         liveBrowseOrder.find((project) => !project.isActive && !project.isMissing) ??
         liveBrowseOrder.find((project) => !project.isActive) ??
         liveBrowseOrder[0];
-      setSelectedProjectId(initial?.id ?? null);
+      setSelectedRowId(initial?.id ?? null);
     },
     [liveBrowseOrder, captureLayout, projectStats]
   );
@@ -998,7 +1080,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       setDropdownIsOpen(false);
     }
     setQuery("");
-    setSelectedProjectId(null);
+    setSelectedRowId(null);
     setFrozenLayout(null);
   }, [mode]);
 
@@ -1008,7 +1090,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const step = useCallback(
     (delta: number) => {
       if (results.length === 0) return;
-      setSelectedProjectId((previousId) => {
+      setSelectedRowId((previousId) => {
         const current = previousId ? results.findIndex((project) => project.id === previousId) : -1;
         const from = current >= 0 ? current : 0;
         const next = (from + delta + results.length) % results.length;
@@ -1068,6 +1150,41 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       }
     },
     [close, switchProject, reopenProject, openRelocation]
+  );
+
+  const selectScratch = useCallback(
+    async (scratch: SearchableScratch) => {
+      if (scratch.isActive) {
+        close();
+        return;
+      }
+      close();
+      try {
+        await switchScratchAction(scratch.id);
+      } catch (error) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Couldn't switch scratch",
+          message: formatErrorMessage(error, "Couldn't switch to scratch workspace"),
+        });
+      }
+    },
+    [close, switchScratchAction]
+  );
+
+  // The one commit path for a row of `results`. Both branches are fire-and-
+  // forget by design — each closes the palette first and reports its own
+  // failure, so there is nothing here for a caller to await.
+  const selectRow = useCallback(
+    (row: ProjectSwitcherRow) => {
+      if (row.kind === "scratch") {
+        void selectScratch(row);
+        return;
+      }
+      void selectProject(row);
+    },
+    [selectProject, selectScratch]
   );
 
   const clearPendingPrefetchTimer = useCallback(() => {
@@ -1133,8 +1250,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const confirmSelection = useCallback(() => {
     if (results.length === 0) return;
-    selectProject(results[selectedIndex]!);
-  }, [results, selectedIndex, selectProject]);
+    selectRow(results[selectedIndex]!);
+  }, [results, selectedIndex, selectRow]);
 
   const addProject = useCallback(async () => {
     close();
@@ -1353,19 +1470,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }
   }, [freeMemoryConfirmProject, isFreeingMemory, doFreeMemory]);
 
-  const scratchResults = useMemo<SearchableScratch[]>(() => {
-    const list: SearchableScratch[] = scratches.map((s: Scratch) => ({
-      id: s.id,
-      name: s.name,
-      path: s.path,
-      createdAt: s.createdAt,
-      lastOpened: s.lastOpened,
-      isActive: currentScratch?.id === s.id,
-    }));
-    list.sort((a, b) => b.lastOpened - a.lastOpened);
-    return list;
-  }, [scratches, currentScratch?.id]);
-
   const createScratch = useCallback(
     async (name?: string) => {
       close();
@@ -1447,27 +1551,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       }
     },
     [renameScratchActionStore]
-  );
-
-  const selectScratch = useCallback(
-    async (scratch: SearchableScratch) => {
-      if (scratch.isActive) {
-        close();
-        return;
-      }
-      close();
-      try {
-        await switchScratchAction(scratch.id);
-      } catch (error) {
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "error",
-          title: "Couldn't switch scratch",
-          message: formatErrorMessage(error, "Couldn't switch to scratch workspace"),
-        });
-      }
-    },
-    [close, switchScratchAction]
   );
 
   const removeScratchAction = useCallback(
@@ -1705,6 +1788,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     query,
     results,
     isFiltering,
+    isRankedSearch,
     activeProject,
     selectedIndex,
     open,
@@ -1714,6 +1798,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     selectPrevious,
     selectNext,
     selectProject,
+    selectRow,
     onHoverProject,
     onHoverProjectEnd,
     confirmSelection,

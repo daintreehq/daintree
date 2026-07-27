@@ -140,6 +140,22 @@ import {
   type OtherProjectsSortMode,
 } from "@/lib/projectSort";
 import { useProjectSwitcherPalette } from "../useProjectSwitcherPalette";
+import type { ProjectSwitcherProjectRow, ProjectSwitcherRow } from "../useProjectSwitcherPalette";
+
+/**
+ * Narrows a result row to a project, throwing if it isn't one.
+ *
+ * Search mixes scratches into `results` (#11466), so the project-only fields
+ * these specs read are no longer unconditionally present. Throwing rather than
+ * asserting keeps the failure honest: a spec that expected a project and got a
+ * scratch has found a real defect, not a typing inconvenience.
+ */
+function asProject(row: ProjectSwitcherRow | undefined): ProjectSwitcherProjectRow {
+  if (row?.kind !== "project") {
+    throw new Error(`expected a project row, got ${row?.kind ?? "nothing"}`);
+  }
+  return row;
+}
 
 function setOtherSortMode(mode: OtherProjectsSortMode): void {
   usePreferencesStore.getState().setProjectSwitcherOtherSortMode(mode);
@@ -213,8 +229,8 @@ describe("useProjectSwitcherPalette", () => {
 
     await waitFor(() => {
       expect(result.current.results).toHaveLength(1);
-      expect(result.current.results[0]?.activeAgentCount).toBe(0);
-      expect(result.current.results[0]?.waitingAgentCount).toBe(0);
+      expect(asProject(result.current.results[0]).activeAgentCount).toBe(0);
+      expect(asProject(result.current.results[0]).waitingAgentCount).toBe(0);
     });
   });
 
@@ -251,9 +267,9 @@ describe("useProjectSwitcherPalette", () => {
 
     await waitFor(() => {
       expect(result.current.results).toHaveLength(1);
-      expect(result.current.results[0]?.activeAgentCount).toBe(1);
-      expect(result.current.results[0]?.waitingAgentCount).toBe(1);
-      expect(result.current.results[0]?.processCount).toBe(3);
+      expect(asProject(result.current.results[0]).activeAgentCount).toBe(1);
+      expect(asProject(result.current.results[0]).waitingAgentCount).toBe(1);
+      expect(asProject(result.current.results[0]).processCount).toBe(3);
     });
   });
 
@@ -793,7 +809,7 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       await waitFor(() => {
-        expect(result.current.results[0]?.processCount).toBe(2);
+        expect(asProject(result.current.results[0]).processCount).toBe(2);
       });
 
       await act(async () => {
@@ -1419,7 +1435,7 @@ describe("useProjectSwitcherPalette", () => {
       });
       // Nothing was absent, so nothing was written.
       expect(setStatsMock).not.toHaveBeenCalled();
-      expect(result.current.results[0]?.blockedAgentCount).toBe(2);
+      expect(asProject(result.current.results[0]).blockedAgentCount).toBe(2);
     });
 
     it("seeds a project the push store has no entry for", async () => {
@@ -1604,7 +1620,10 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       const idsIn = (section: string) =>
-        result.current.results.filter((p) => p.section === section).map((p) => p.id);
+        result.current.results
+          .map(asProject)
+          .filter((p) => p.section === section)
+          .map((p) => p.id);
 
       // Blocked outranks a plain wait; a pin outranks recency; most agents
       // first; missing rows are alphabetical. None of these follow the mode.
@@ -1660,7 +1679,7 @@ describe("useProjectSwitcherPalette", () => {
       await waitFor(() => {
         expect(result.current.results[0]!.id).toBe("waiting");
       });
-      expect(result.current.results[0]!.section).toBe("attention");
+      expect(asProject(result.current.results[0]).section).toBe("attention");
 
       // The agent finishes: live state now puts this row in Other, but the
       // freeze keeps it where the user last saw it.
@@ -1670,7 +1689,7 @@ describe("useProjectSwitcherPalette", () => {
         };
         rerender();
       });
-      expect(result.current.results[0]!.section).toBe("attention");
+      expect(asProject(result.current.results[0]).section).toBe("attention");
 
       act(() => {
         setOtherSortMode("alphabetical");
@@ -1682,7 +1701,7 @@ describe("useProjectSwitcherPalette", () => {
       // Still first, still in Needs attention — the mode change reordered the
       // Other band only, and did not adopt live band membership wholesale.
       expect(result.current.results[0]!.id).toBe("waiting");
-      expect(result.current.results[0]!.section).toBe("attention");
+      expect(asProject(result.current.results[0]).section).toBe("attention");
       // The highlight reads the same frozen membership. Deciding it against
       // LIVE sections would see this row as Other and drag it into the reset.
       expect(result.current.results[result.current.selectedIndex]?.id).toBe("waiting");
@@ -1933,7 +1952,8 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.results).toHaveLength(projects.length);
       });
 
-      const sectionOf = (id: string) => result.current.results.find((p) => p.id === id)?.section;
+      const sectionOf = (id: string) =>
+        result.current.results.map(asProject).find((p) => p.id === id)?.section;
       expect(sectionOf("active")).toBe("current");
       expect(sectionOf("waiting")).toBe("attention");
       expect(sectionOf("blocked")).toBe("attention");
@@ -1946,7 +1966,7 @@ describe("useProjectSwitcherPalette", () => {
 
       // Bands appear in priority order and each appears exactly once.
       const bands: string[] = [];
-      for (const project of result.current.results) {
+      for (const project of result.current.results.map(asProject)) {
         if (bands.at(-1) !== project.section) bands.push(project.section);
       }
       expect(bands).toEqual(["current", "attention", "pinned", "running", "other", "unavailable"]);
@@ -1986,7 +2006,8 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.results).toHaveLength(3);
       });
 
-      const sectionOf = (id: string) => result.current.results.find((p) => p.id === id)?.section;
+      const sectionOf = (id: string) =>
+        result.current.results.map(asProject).find((p) => p.id === id)?.section;
       expect(sectionOf("reviewMe")).toBe("attention");
       expect(sectionOf("ackd")).toBe("other");
     });
@@ -2143,7 +2164,9 @@ describe("useProjectSwitcherPalette", () => {
       await waitFor(() => {
         expect(result.current.results.map((p) => p.id)).toEqual(["second", "first"]);
       });
-      expect(result.current.results.every((p) => p.section === "running")).toBe(true);
+      expect(result.current.results.map(asProject).every((p) => p.section === "running")).toBe(
+        true
+      );
     });
 
     it("regroups a cold session in place when stats arrive, then holds", async () => {
@@ -2163,7 +2186,7 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       // The freeze taken at open put everything in one band.
-      expect(result.current.results.every((p) => p.section === "other")).toBe(true);
+      expect(result.current.results.map(asProject).every((p) => p.section === "other")).toBe(true);
 
       await waitFor(() => {
         expect(setStatsMock).toHaveBeenCalled();
@@ -2175,7 +2198,7 @@ describe("useProjectSwitcherPalette", () => {
       // Bands and within-band order both come from the real data, without the
       // user closing and reopening the palette.
       await waitFor(() => {
-        expect(result.current.results.map((p) => [p.id, p.section])).toEqual([
+        expect(result.current.results.map(asProject).map((p) => [p.id, p.section])).toEqual([
           ["stuck", "attention"],
           ["busy", "running"],
           ["quiet", "other"],
@@ -2193,12 +2216,12 @@ describe("useProjectSwitcherPalette", () => {
         rerender();
       });
 
-      expect(result.current.results.map((p) => [p.id, p.section])).toEqual([
+      expect(result.current.results.map(asProject).map((p) => [p.id, p.section])).toEqual([
         ["stuck", "attention"],
         ["busy", "running"],
         ["quiet", "other"],
       ]);
-      expect(result.current.results[2]!.activeAgentCount).toBe(4);
+      expect(asProject(result.current.results[2]).activeAgentCount).toBe(4);
     });
 
     it("never preselects an unavailable row while an available one exists", async () => {
@@ -2307,7 +2330,7 @@ describe("useProjectSwitcherPalette", () => {
       await waitFor(() => {
         expect(result.current.results[0]!.id).toBe("waiting");
       });
-      expect(result.current.results[0]!.section).toBe("attention");
+      expect(asProject(result.current.results[0]).section).toBe("attention");
 
       // The agent finishes while the user is reading the list, and the push
       // that carries it also fills in the row that had no entry at open. A
@@ -2322,11 +2345,11 @@ describe("useProjectSwitcherPalette", () => {
 
       // The row keeps its slot and its band, so nothing moves under the pointer.
       expect(result.current.results[0]!.id).toBe("waiting");
-      expect(result.current.results[0]!.section).toBe("attention");
+      expect(asProject(result.current.results[0]).section).toBe("attention");
       // Content underneath is live, though.
-      expect(result.current.results[0]!.waitingAgentCount).toBe(0);
-      expect(result.current.results[1]!.section).toBe("other");
-      expect(result.current.results[1]!.activeAgentCount).toBe(3);
+      expect(asProject(result.current.results[0]).waitingAgentCount).toBe(0);
+      expect(asProject(result.current.results[1]).section).toBe("other");
+      expect(asProject(result.current.results[1]).activeAgentCount).toBe(3);
     });
 
     it("regroups a project that registers while the session is still a guess", async () => {
@@ -2354,7 +2377,9 @@ describe("useProjectSwitcherPalette", () => {
         };
         rerender();
       });
-      expect(result.current.results.find((p) => p.id === "late")!.section).toBe("other");
+      expect(result.current.results.map(asProject).find((p) => p.id === "late")!.section).toBe(
+        "other"
+      );
 
       act(() => {
         projectStatsState.stats = {
@@ -2365,7 +2390,9 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       await waitFor(() => {
-        expect(result.current.results.find((p) => p.id === "late")!.section).toBe("running");
+        expect(result.current.results.map(asProject).find((p) => p.id === "late")!.section).toBe(
+          "running"
+        );
       });
     });
 
@@ -2390,8 +2417,12 @@ describe("useProjectSwitcherPalette", () => {
         };
         rerender();
       });
-      expect(result.current.results.find((p) => p.id === "first")!.section).toBe("other");
-      expect(result.current.results.find((p) => p.id === "first")!.activeAgentCount).toBe(2);
+      expect(result.current.results.map(asProject).find((p) => p.id === "first")!.section).toBe(
+        "other"
+      );
+      expect(
+        result.current.results.map(asProject).find((p) => p.id === "first")!.activeAgentCount
+      ).toBe(2);
 
       // The unresolved row goes away, so nothing is a guess any more.
       act(() => {
@@ -2400,7 +2431,7 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       await waitFor(() => {
-        expect(result.current.results[0]!.section).toBe("running");
+        expect(asProject(result.current.results[0]).section).toBe("running");
       });
     });
 
@@ -2421,7 +2452,9 @@ describe("useProjectSwitcherPalette", () => {
       act(() => {
         result.current.open("modal");
       });
-      expect(result.current.results.find((p) => p.id === "busy")!.section).toBe("other");
+      expect(result.current.results.map(asProject).find((p) => p.id === "busy")!.section).toBe(
+        "other"
+      );
 
       await waitFor(() => {
         expect(setStatsMock).toHaveBeenCalled();
@@ -2431,7 +2464,9 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       await waitFor(() => {
-        expect(result.current.results.find((p) => p.id === "busy")!.section).toBe("running");
+        expect(result.current.results.map(asProject).find((p) => p.id === "busy")!.section).toBe(
+          "running"
+        );
       });
     });
 
@@ -2461,7 +2496,7 @@ describe("useProjectSwitcherPalette", () => {
       await waitFor(() => {
         expect(result.current.results.map((p) => p.id)).toEqual(["first", "late"]);
       });
-      expect(result.current.results[1]!.section).toBe("other");
+      expect(asProject(result.current.results[1]).section).toBe("other");
 
       // Its agents start working. A late arrival left outside the freeze would
       // jump into the running band above "first"; a frozen one stays put.
@@ -2473,8 +2508,8 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       expect(result.current.results.map((p) => p.id)).toEqual(["first", "late"]);
-      expect(result.current.results[1]!.section).toBe("other");
-      expect(result.current.results[1]!.activeAgentCount).toBe(2);
+      expect(asProject(result.current.results[1]).section).toBe("other");
+      expect(asProject(result.current.results[1]).activeAgentCount).toBe(2);
     });
 
     it("re-bands on the next open", async () => {
@@ -2491,7 +2526,7 @@ describe("useProjectSwitcherPalette", () => {
         result.current.open("modal");
       });
       await waitFor(() => {
-        expect(result.current.results[0]!.section).toBe("attention");
+        expect(asProject(result.current.results[0]).section).toBe("attention");
       });
 
       act(() => {
@@ -2510,7 +2545,9 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       await waitFor(() => {
-        expect(result.current.results.every((p) => p.section !== "attention")).toBe(true);
+        expect(result.current.results.map(asProject).every((p) => p.section !== "attention")).toBe(
+          true
+        );
       });
     });
 
@@ -2537,7 +2574,7 @@ describe("useProjectSwitcherPalette", () => {
       await waitFor(() => {
         expect(result.current.results).toHaveLength(1);
       });
-      const row = result.current.results[0]!;
+      const row = asProject(result.current.results[0]);
       expect(row.blockedAgentCount).toBe(1);
       expect(row.oldestWaitingSince).toBe(4_242);
       expect(row.section).toBe("attention");
@@ -2606,7 +2643,7 @@ describe("useProjectSwitcherPalette", () => {
         expect(modal.current.results).toHaveLength(3);
       });
       const modalOrder = modal.current.results.map((p) => p.id);
-      const modalSections = modal.current.results.map((p) => p.section);
+      const modalSections = modal.current.results.map(asProject).map((p) => p.section);
 
       const dropdown = await openIn("dropdown");
       await waitFor(() => {
@@ -2616,7 +2653,7 @@ describe("useProjectSwitcherPalette", () => {
       // Compared in order, not as sets: the two surfaces previously agreed on
       // neither scope nor grouping, and membership alone would not catch that.
       expect(dropdown.current.results.map((p) => p.id)).toEqual(modalOrder);
-      expect(dropdown.current.results.map((p) => p.section)).toEqual(modalSections);
+      expect(dropdown.current.results.map(asProject).map((p) => p.section)).toEqual(modalSections);
       expect(modalOrder).toContain("closed");
     });
 
@@ -2626,12 +2663,12 @@ describe("useProjectSwitcherPalette", () => {
       await waitFor(() => {
         expect(result.current.results).toHaveLength(3);
       });
-      expect(result.current.results[0]!.section).toBe("current");
+      expect(asProject(result.current.results[0]).section).toBe("current");
 
       // Sections must never interleave, or the component's contiguous-run
       // grouping would emit the same header twice.
       const seen: string[] = [];
-      for (const project of result.current.results) {
+      for (const project of result.current.results.map(asProject)) {
         if (seen.at(-1) !== project.section) seen.push(project.section);
       }
       expect(new Set(seen).size).toBe(seen.length);
@@ -2704,7 +2741,7 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.results).toHaveLength(3);
       });
 
-      const current = result.current.results.find((project) => project.isActive)!;
+      const current = asProject(result.current.results.find((project) => project.isActive));
 
       act(() => {
         void result.current.selectProject(current);

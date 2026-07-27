@@ -696,3 +696,134 @@ describe("deleteAllScratches", () => {
     expect(result.current.deleteAllScratchesConfirm).toHaveLength(seeded.length);
   });
 });
+
+/**
+ * Scratches in switcher search (issue #11466).
+ *
+ * Browse leaves them to the pinned section; a query pulls them into the one
+ * array the palette renders, indexes and walks — so a name typed in full is
+ * reachable by arrow key and committable with Enter, which it never was while
+ * they lived in their own nested listbox.
+ *
+ * The project pool is empty throughout: what these specs pin is membership,
+ * navigation and dispatch. Relative ordering against projects is the ranker's
+ * own contract, covered in `src/lib/__tests__/projectSwitcherSearch.test.ts`.
+ */
+describe("scratches in search results", () => {
+  it("keeps scratches out of the results array while browsing", async () => {
+    seedScratches(2);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    expect(result.current.results).toEqual([]);
+    // Still listed for the pinned browse section, just not as ranked rows.
+    expect(result.current.scratchResults).toHaveLength(2);
+  });
+
+  it("ranks matching scratches into the results array once a query is active", async () => {
+    seedScratches(2);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.setQuery("Spike 2"));
+
+    await waitFor(() => {
+      expect(result.current.results.map((row) => row.id)).toEqual(["scratch-2"]);
+    });
+    expect(result.current.results[0]!.kind).toBe("scratch");
+  });
+
+  it("drops scratches from the results array again when the query is cleared", async () => {
+    seedScratches(2);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.setQuery("Spike"));
+    // Both scratches are present before AND after the deferred render settles,
+    // so a length check alone would not prove the ranking actually ran.
+    await waitFor(() => {
+      expect(result.current.isFiltering).toBe(false);
+      expect(result.current.results).toHaveLength(2);
+    });
+
+    act(() => result.current.setQuery(""));
+
+    await waitFor(() => expect(result.current.results).toEqual([]));
+  });
+
+  it("moves the selection across scratch rows with the arrow-key step", async () => {
+    seedScratches(2);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.setQuery("Spike"));
+    await waitFor(() => {
+      expect(result.current.isFiltering).toBe(false);
+      expect(result.current.results).toHaveLength(2);
+    });
+
+    const first = result.current.results[result.current.selectedIndex]!.id;
+    act(() => result.current.selectNext());
+
+    expect(result.current.results[result.current.selectedIndex]!.id).not.toBe(first);
+  });
+
+  it("keeps ranked results in step with the scratch store under a settled query", async () => {
+    const seeded = seedScratches(2);
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.setQuery("Spike 2"));
+    await waitFor(() => expect(result.current.results.map((row) => row.id)).toEqual(["scratch-2"]));
+
+    // A `scratch:removed` push under an open, settled query. Without the store
+    // feeding the ranked list, the row would linger and Enter would commit a
+    // workspace that no longer exists.
+    scratchState.scratches = [seeded[0]!];
+    rerender();
+
+    await waitFor(() => expect(result.current.results).toEqual([]));
+  });
+
+  it("holds browse rows steady when only the scratches change", async () => {
+    seedScratches(2);
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+    const before = result.current.results;
+    scratchState.scratches = [
+      ...scratchState.scratches,
+      {
+        id: "scratch-3",
+        name: "Spike 3",
+        path: "/tmp/scratches/scratch-3",
+        createdAt: 3_000,
+        lastOpened: 3_000,
+      },
+    ];
+    rerender();
+
+    // Browse ignores scratches, so its array must keep its identity — a fresh
+    // one sends the palette's scroll-into-view effect chasing the highlight
+    // while the user is reading the pinned section.
+    expect(result.current.results).toBe(before);
+  });
+
+  it("switches to the highlighted scratch on confirm rather than a project", async () => {
+    seedScratches(2);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    // "Spike 2" is the inactive one, so a switch is genuinely dispatched.
+    act(() => result.current.setQuery("Spike 2"));
+    await waitFor(() => expect(result.current.results).toHaveLength(1));
+
+    act(() => result.current.confirmSelection());
+
+    await waitFor(() => expect(scratchState.switchScratch).toHaveBeenCalledWith("scratch-2"));
+    expect(useProjectStoreMock.getState().switchProject).not.toHaveBeenCalled();
+  });
+
+  it("matches a scratch on its name and not its generated folder path", async () => {
+    seedScratches(1);
+    const scratchPath = scratchState.scratches[0]!.path;
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.setQuery(scratchPath));
+
+    await waitFor(() => expect(result.current.results).toEqual([]));
+  });
+});

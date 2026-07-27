@@ -56,6 +56,9 @@ import type {
   DeleteAllScratchesSnapshot,
   ProjectSectionKey,
   ProjectSwitcherMode,
+  ProjectSwitcherProjectRow,
+  ProjectSwitcherRow,
+  ProjectSwitcherScratchRow,
   SearchableProject,
   SearchableScratch,
 } from "@/hooks/useProjectSwitcherPalette";
@@ -82,12 +85,17 @@ import {
 export interface ProjectSwitcherPaletteProps {
   isOpen: boolean;
   query: string;
-  results: SearchableProject[];
+  /**
+   * Mixed once a query is active — narrow on `kind` before reading anything a
+   * scratch row doesn't carry.
+   */
+  results: ProjectSwitcherRow[];
   selectedIndex: number;
   onQueryChange: (query: string) => void;
   onSelectPrevious: () => void;
   onSelectNext: () => void;
-  onSelect: (project: SearchableProject) => void;
+  /** Commits any row. Project-only callbacks below stay typed to projects. */
+  onSelect: (row: ProjectSwitcherRow) => void;
   onClose: () => void;
   mode?: ProjectSwitcherMode;
   onAddProject?: () => void;
@@ -124,6 +132,12 @@ export interface ProjectSwitcherPaletteProps {
   onConfirmFreeMemory?: () => void;
   isFreeingMemory?: boolean;
   /** Scratch (one-off agent workspace) results — rendered in their own collapsible section. */
+  /**
+   * True while `results` is the ranked list carrying the scratches, so the
+   * pinned section below can stand down. Trails the query by a commit; defaults
+   * to the live query for callers that don't track it.
+   */
+  rankedSearch?: boolean;
   scratchResults?: SearchableScratch[];
   /** Callback to create and switch to a new scratch. A blank name takes the default. */
   onCreateScratch?: (name?: string) => void;
@@ -159,9 +173,9 @@ export interface ProjectSwitcherPaletteProps {
 }
 
 interface ProjectListItemProps {
-  project: SearchableProject;
+  project: ProjectSwitcherProjectRow;
   isSelected: boolean;
-  onSelect: (project: SearchableProject) => void;
+  onSelect: (row: ProjectSwitcherProjectRow) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onFreeMemoryProject?: (projectId: string) => void;
@@ -426,10 +440,65 @@ function ProjectListItem({
   );
 }
 
+/**
+ * A scratch as a row of the ranked search list (#11466).
+ *
+ * Deliberately NOT the button `ScratchSection` draws. That one is its own
+ * focusable stop in a nested listbox; this one belongs to the palette's roving
+ * selection, so it carries the shared `project-option-` id the scroll query and
+ * `aria-activedescendant` resolve against, and stays out of the tab order.
+ *
+ * "Scratch" rides the secondary line rather than a chip: origin has to be
+ * unambiguous, but it is not the row's headline, and a pill here would be a
+ * second emphasis signal competing with the selection stripe.
+ *
+ * Action-free on purpose. Rename, save-as-project and delete are browse-mode
+ * management — an inline rename editor would have to live inside the array the
+ * arrow keys walk, and scratch delete has no confirm, which is the last thing
+ * that should sit one keystroke away from a highlighted row.
+ */
+function ScratchListItem({
+  scratch,
+  isSelected,
+  onSelect,
+}: {
+  scratch: ProjectSwitcherScratchRow;
+  isSelected: boolean;
+  onSelect: (row: ProjectSwitcherScratchRow) => void;
+}) {
+  return (
+    <div
+      id={`project-option-${scratch.id}`}
+      role="option"
+      aria-selected={isSelected}
+      className={cn(
+        "group relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent cursor-pointer",
+        "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-[''] before:opacity-0 before:transition-opacity aria-selected:before:opacity-100",
+        isSelected
+          ? "bg-overlay-raised border-overlay text-daintree-text"
+          : scratch.isActive
+            ? "text-daintree-text hover:bg-overlay-subtle"
+            : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
+      )}
+      onClick={() => onSelect(scratch)}
+    >
+      <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">
+        <FileText className="h-4 w-4" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="truncate text-sm font-semibold leading-tight">{scratch.name}</div>
+        <div className="truncate text-[11px] leading-none text-daintree-text/50 mt-0.5">
+          {`Scratch · ${formatTimeAgo(scratch.lastOpened)}`}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface ProjectSection {
   key: ProjectSectionKey;
   label: string | null;
-  items: SearchableProject[];
+  items: ProjectSwitcherProjectRow[];
 }
 
 // Keyed by mode rather than a list, so the lookup below is total: a new mode in
@@ -559,10 +628,10 @@ function OtherProjectsHeader({
 }
 
 interface ProjectListContentProps {
-  results: SearchableProject[];
+  results: ProjectSwitcherRow[];
   selectedIndex: number;
   query: string;
-  onSelect: (project: SearchableProject) => void;
+  onSelect: (row: ProjectSwitcherRow) => void;
   listRef: React.RefObject<HTMLDivElement | null>;
   /** Whether this surface offers "Add Project…" — decides what the empty state can name. */
   canAddProject: boolean;
@@ -615,15 +684,21 @@ function ProjectListContent({
     if (isSearching || results.length === 0) return null;
 
     const bands: ProjectSection[] = [];
-    for (const project of results) {
+    for (const row of results) {
+      // Browse is projects only — scratches ride the pinned section below. A
+      // non-project row here would mean that changed, so drop the whole band
+      // layout rather than skipping the row: the flat branch still renders
+      // everything, where dropping one would strand the highlight on a row that
+      // isn't on screen (#11071).
+      if (row.kind !== "project") return null;
       const last = bands.at(-1);
-      if (last && last.key === project.section) {
-        last.items.push(project);
+      if (last && last.key === row.section) {
+        last.items.push(row);
       } else {
         bands.push({
-          key: project.section,
-          label: PROJECT_SECTION_LABELS[project.section],
-          items: [project],
+          key: row.section,
+          label: PROJECT_SECTION_LABELS[row.section],
+          items: [row],
         });
       }
     }
@@ -634,33 +709,38 @@ function ProjectListContent({
   // renders, so it doubles as the arrow-key domain. Never re-filter it here:
   // a second, narrower array is what stranded the highlight and let Enter
   // commit an off-screen project (#11071).
-  const selectedProjectId = results[selectedIndex]?.id;
+  const selectedRowId = results[selectedIndex]?.id;
 
-  const renderItem = (project: SearchableProject) => {
+  const renderItem = (row: ProjectSwitcherRow) => {
+    const isSelected = row.id === selectedRowId;
     return (
-      <div key={project.id} role="presentation">
-        <ProjectListItem
-          project={project}
-          isSelected={project.id === selectedProjectId}
-          onSelect={onSelect}
-          onStopProject={onStopProject}
-          onCloseProject={onCloseProject}
-          onFreeMemoryProject={onFreeMemoryProject}
-          onLocateProject={onLocateProject}
-          onMoveOrRenameProject={onMoveOrRenameProject}
-          onTogglePinProject={onTogglePinProject}
-          onCopyPath={onCopyPath}
-          onSelectNewWindow={onSelectNewWindow}
-          onHoverProject={onHoverProject}
-          onHoverProjectEnd={onHoverProjectEnd}
-        />
+      <div key={`${row.kind}-${row.id}`} role="presentation">
+        {row.kind === "scratch" ? (
+          <ScratchListItem scratch={row} isSelected={isSelected} onSelect={onSelect} />
+        ) : (
+          <ProjectListItem
+            project={row}
+            isSelected={isSelected}
+            onSelect={onSelect}
+            onStopProject={onStopProject}
+            onCloseProject={onCloseProject}
+            onFreeMemoryProject={onFreeMemoryProject}
+            onLocateProject={onLocateProject}
+            onMoveOrRenameProject={onMoveOrRenameProject}
+            onTogglePinProject={onTogglePinProject}
+            onCopyPath={onCopyPath}
+            onSelectNewWindow={onSelectNewWindow}
+            onHoverProject={onHoverProject}
+            onHoverProjectEnd={onHoverProjectEnd}
+          />
+        )}
       </div>
     );
   };
 
   return (
     <>
-      <div ref={listRef} id="project-list" role="listbox" aria-label="Projects">
+      <div ref={listRef} id="project-list" role="listbox" aria-label="Workspaces">
         {results.length === 0 ? (
           <div className="p-2">
             <div
@@ -668,7 +748,10 @@ function ProjectListContent({
               data-testid="project-empty-state"
             >
               {query.trim() ? (
-                <div>{`No projects match "${query}"`}</div>
+                // "Workspaces", not "projects": scratches are ranked into this
+                // same list now, so naming only half of what was searched would
+                // read as a scratch still being findable somewhere else.
+                <div>{`No workspaces match "${query}"`}</div>
               ) : canAddProject ? (
                 // Names the button sitting directly below this list.
                 "Add a project to get started"
@@ -839,6 +922,13 @@ type ScratchEditorState =
 
 interface ScratchSectionProps {
   scratches: SearchableScratch[];
+  /**
+   * True once a query is active, where the ranked list owns the scratches. The
+   * section hides rather than unmounting: remounting would reset `collapsed`,
+   * so a section the user deliberately collapsed would spring back open the
+   * moment they cleared the box.
+   */
+  isSearching: boolean;
   onCreate?: (name?: string) => void;
   onSelect?: (scratch: SearchableScratch) => void;
   onRemove?: (scratchId: string) => void;
@@ -848,15 +938,17 @@ interface ScratchSectionProps {
 }
 
 /**
- * Collapsible "Scratch" section. Defaults to collapsed when there are no
- * scratches yet — discoverable but quiet. Once the user has scratches,
- * defaults to expanded.
+ * Collapsible "Scratch" section, rendered in browse only — searching ranks
+ * scratches into the main list instead (#11466). Defaults to collapsed when
+ * there are no scratches yet — discoverable but quiet. Once the user has
+ * scratches, defaults to expanded.
  *
  * Sort order is purely by `lastOpened` desc (the hook already does this).
  * Scratches deliberately do NOT participate in the project frecency ranking.
  */
 function ScratchSection({
   scratches,
+  isSearching,
   onCreate,
   onSelect,
   onRemove,
@@ -896,6 +988,13 @@ function ScratchSection({
     }
   }, [editor, scratches]);
 
+  // Searching hides this section, and a hidden editor is worse than a closed
+  // one: it still holds its claim on the escape stack, so Escape would cancel
+  // an edit nobody can see instead of closing the palette.
+  useEffect(() => {
+    if (isSearching) setEditor(null);
+  }, [isSearching]);
+
   const closeEditor = useCallback(() => setEditor(null), []);
 
   const handleCreateCommit = useCallback(
@@ -919,7 +1018,7 @@ function ScratchSection({
   const isCreating = editor?.kind === "create";
 
   return (
-    <div className="px-2 py-1.5">
+    <div className="px-2 py-1.5" hidden={isSearching}>
       {/*
        * The trigger stays mounted at zero scratches — only the menu content is
        * conditional. Swapping the button in and out of a ContextMenu as the last
@@ -1092,12 +1191,24 @@ function ScratchSection({
   );
 }
 
-function ProjectSwitcherFooter({ mode }: { mode?: ProjectSwitcherMode }) {
+/**
+ * Every hint here is project-only, so a highlighted scratch row drops them
+ * rather than naming affordances it doesn't have: ⌘↵ falls back to a plain
+ * switch, ⌘⌫ is inert, and a search-mode scratch row carries no context menu.
+ */
+function ProjectSwitcherFooter({
+  mode,
+  isScratchSelected,
+}: {
+  mode?: ProjectSwitcherMode;
+  isScratchSelected: boolean;
+}) {
   const modifiers = useModifierKeys();
 
-  const hint = modifiers.meta
-    ? { keys: "⌘↵", label: "New window" }
-    : { keys: "↵", label: "Switch" };
+  const hint =
+    modifiers.meta && !isScratchSelected
+      ? { keys: "⌘↵", label: "New window" }
+      : { keys: "↵", label: "Switch" };
 
   return (
     <div className="w-full flex items-center justify-between">
@@ -1106,16 +1217,18 @@ function ProjectSwitcherFooter({ mode }: { mode?: ProjectSwitcherMode }) {
           <kbd className={KBD_CLASS}>{hint.keys}</kbd>
           <span className="ml-1.5">{hint.label}</span>
         </span>
-        {mode !== "modal" && (
+        {mode !== "modal" && !isScratchSelected && (
           <span className="text-daintree-text/50">
             <kbd className={KBD_CLASS}>⌘⌫</kbd>
             <span className="ml-1.5">Remove</span>
           </span>
         )}
       </div>
-      <span className="text-daintree-text/50">
-        <span>Right-click for more</span>
-      </span>
+      {!isScratchSelected && (
+        <span className="text-daintree-text/50">
+          <span>Right-click for more</span>
+        </span>
+      )}
     </div>
   );
 }
@@ -1127,11 +1240,11 @@ interface ProjectPaletteInnerProps {
   inputRef: React.RefObject<HTMLInputElement | null>;
   listRef: React.RefObject<HTMLDivElement | null>;
   query: string;
-  results: SearchableProject[];
+  results: ProjectSwitcherRow[];
   selectedIndex: number;
   mode?: ProjectSwitcherMode;
   onQueryChange: (query: string) => void;
-  onSelect: (project: SearchableProject) => void;
+  onSelect: (row: ProjectSwitcherRow) => void;
   onSelectNewWindow?: (project: SearchableProject) => void;
   onClose: () => void;
   onSelectPrevious: () => void;
@@ -1149,6 +1262,12 @@ interface ProjectPaletteInnerProps {
   onCopyPath?: (path: string) => void;
   onHoverProject?: (projectId: string, pointerType: string) => void;
   onHoverProjectEnd?: (pointerType: string) => void;
+  /**
+   * True while `results` is the ranked list carrying the scratches, so the
+   * pinned section below can stand down. Trails the query by a commit; defaults
+   * to the live query for callers that don't track it.
+   */
+  rankedSearch?: boolean;
   scratchResults?: SearchableScratch[];
   onCreateScratch?: (name?: string) => void;
   onSelectScratch?: (scratch: SearchableScratch) => void;
@@ -1184,6 +1303,7 @@ function ProjectPaletteInner({
   onCopyPath,
   onHoverProject,
   onHoverProjectEnd,
+  rankedSearch,
   scratchResults,
   onCreateScratch,
   onSelectScratch,
@@ -1223,9 +1343,12 @@ function ProjectPaletteInner({
           e.stopPropagation();
           if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
             const selected = results[selectedIndex]!;
+            // A scratch has no second window to open, so ⌘↵ falls through to
+            // the plain switch rather than swallowing the keypress.
             if (
               (e.metaKey || e.ctrlKey) &&
               onSelectNewWindow &&
+              selected.kind === "project" &&
               !selected.isActive &&
               !selected.isMissing
             ) {
@@ -1240,19 +1363,18 @@ function ProjectPaletteInner({
           e.stopPropagation();
           onClose();
           break;
-        case "Backspace":
-          if (
-            (e.metaKey || e.ctrlKey) &&
-            onCloseProject &&
-            results.length > 0 &&
-            selectedIndex >= 0 &&
-            selectedIndex < results.length
-          ) {
+        case "Backspace": {
+          // Projects only. Removing a project opens a confirm; deleting a
+          // scratch does not, so wiring this to a highlighted scratch row would
+          // put an unconfirmed destructive action one chord away.
+          const target = results[selectedIndex];
+          if ((e.metaKey || e.ctrlKey) && onCloseProject && target?.kind === "project") {
             e.preventDefault();
             e.stopPropagation();
-            onCloseProject(results[selectedIndex]!.id);
+            onCloseProject(target.id);
           }
           break;
+        }
       }
     },
     [
@@ -1269,6 +1391,11 @@ function ProjectPaletteInner({
 
   const activeResult = results[selectedIndex];
   const activeDescendant = activeResult ? `project-option-${activeResult.id}` : undefined;
+  // The RANKED list owns the scratches, and it trails the box by a commit.
+  // Hiding the pinned section on the live query instead would blank them for
+  // that frame — and for a user whose only workspaces are scratches, that frame
+  // reads as "no matches".
+  const isRankedSearch = rankedSearch ?? query.trim().length > 0;
 
   return (
     <>
@@ -1283,11 +1410,11 @@ function ProjectPaletteInner({
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Search projects…"
+          placeholder="Search workspaces…"
           role="combobox"
           aria-expanded={true}
           aria-haspopup="listbox"
-          aria-label="Search projects"
+          aria-label="Search workspaces"
           aria-controls="project-list"
           aria-activedescendant={activeDescendant}
         />
@@ -1296,7 +1423,7 @@ function ProjectPaletteInner({
       <AppPaletteDialog.Body
         maxHeight={PALETTE_MAX_HEIGHT}
         className="p-0"
-        ariaLabel="Projects"
+        ariaLabel="Workspaces"
         activeDescendant={activeDescendant}
         onNavigationKeyDown={handleKeyDown}
       >
@@ -1321,9 +1448,10 @@ function ProjectPaletteInner({
         />
         {(onCreateScratch || (scratchResults && scratchResults.length > 0)) && (
           <>
-            <div className="h-[3px] bg-tint/[0.08]" />
+            <div className="h-[3px] bg-tint/[0.08]" hidden={isRankedSearch} />
             <ScratchSection
               scratches={scratchResults ?? []}
+              isSearching={isRankedSearch}
               onCreate={onCreateScratch}
               onSelect={onSelectScratch}
               onRemove={onRemoveScratch}
@@ -1396,7 +1524,7 @@ function ProjectPaletteInner({
       )}
 
       <AppPaletteDialog.Footer>
-        <ProjectSwitcherFooter mode={mode} />
+        <ProjectSwitcherFooter mode={mode} isScratchSelected={activeResult?.kind === "scratch"} />
       </AppPaletteDialog.Footer>
     </>
   );
@@ -1445,6 +1573,7 @@ function ModalContent({
         onSelectNewWindow={innerProps.onSelectNewWindow}
         onHoverProject={innerProps.onHoverProject}
         onHoverProjectEnd={innerProps.onHoverProjectEnd}
+        rankedSearch={innerProps.rankedSearch}
         scratchResults={innerProps.scratchResults}
         onCreateScratch={innerProps.onCreateScratch}
         onSelectScratch={innerProps.onSelectScratch}
@@ -1552,6 +1681,7 @@ function DropdownContent({
           onSelectNewWindow={innerProps.onSelectNewWindow}
           onHoverProject={innerProps.onHoverProject}
           onHoverProjectEnd={innerProps.onHoverProjectEnd}
+          rankedSearch={innerProps.rankedSearch}
           scratchResults={innerProps.scratchResults}
           onCreateScratch={innerProps.onCreateScratch}
           onSelectScratch={innerProps.onSelectScratch}
@@ -1601,6 +1731,7 @@ export function ProjectSwitcherPalette({
   onFreeMemoryConfirmClose,
   onConfirmFreeMemory,
   isFreeingMemory = false,
+  rankedSearch,
   scratchResults,
   onCreateScratch,
   onSelectScratch,
@@ -1652,6 +1783,7 @@ export function ProjectSwitcherPalette({
         onOpenProjectSettings={onOpenProjectSettings}
         onDropdownCloseAutoFocus={onDropdownCloseAutoFocus}
         dropdownAlign={dropdownAlign}
+        rankedSearch={rankedSearch}
         scratchResults={scratchResults}
         onCreateScratch={onCreateScratch}
         onSelectScratch={onSelectScratch}
@@ -1688,6 +1820,7 @@ export function ProjectSwitcherPalette({
         onHoverProject={onHoverProject}
         onHoverProjectEnd={onHoverProjectEnd}
         onOpenProjectSettings={onOpenProjectSettings}
+        rankedSearch={rankedSearch}
         scratchResults={scratchResults}
         onCreateScratch={onCreateScratch}
         onSelectScratch={onSelectScratch}
