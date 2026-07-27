@@ -164,7 +164,14 @@ export function setupViewHandlers(
 
     // If the view is still loading, loadView's one-shot handler will handle
     // the failure and trigger rollback — skip crash recovery here.
+    //
+    // `state` alone cannot detect this: performSwitch flips the entry to
+    // "active" before it awaits loadView, so a load-time crash fell through
+    // to full crash recovery (port teardown, reload, even OOM window
+    // recreation) AND then rolled back — two recovery paths for one crash.
+    // `pendingColdSwitch` marks the real in-flight load.
     if (crashEntry?.state === "loading") return;
+    if (projectId && host.pendingColdSwitch?.projectId === projectId) return;
 
     // Synchronously notify subscribers (e.g. PtyClient) so per-window
     // MessagePorts can be torn down before reload re-issues fresh ones.

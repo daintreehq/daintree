@@ -323,9 +323,21 @@ export async function performSwitch(
 
   let visibleAt: number;
   let loadFinishedAt: number;
+  // Mark the window in which the outgoing view is still attached and visible
+  // while the incoming one loads. Cleared in the `finally` below, on both the
+  // success and rollback paths.
+  host.pendingColdSwitch = {
+    projectId,
+    outgoingProjectId: previousEntry?.projectId ?? null,
+  };
   try {
-    // Load the renderer with projectId context
-    await loadView(view, projectId);
+    // Load the renderer with projectId context. Timing is captured here as
+    // primitives so a resource-profile transition mid-load can't retime an
+    // in-flight load, matching the paint gate's capture-at-creation contract.
+    await loadView(view, projectId, {
+      softMs: host.viewLoadTimeoutMs,
+      hardMs: host.viewLoadHardTimeoutMs,
+    });
     loadFinishedAt = performance.now();
 
     // The incoming view is stacked behind the still-visible outgoing view,
@@ -466,6 +478,11 @@ export async function performSwitch(
     notifyError(loadError, { source: "project-switch" });
 
     throw loadError;
+  } finally {
+    // By this point the outgoing view has either been detached (success) or
+    // restored as the active view (rollback), so it no longer needs the
+    // bridge protections.
+    host.pendingColdSwitch = null;
   }
 
   // Explicit focus after swap

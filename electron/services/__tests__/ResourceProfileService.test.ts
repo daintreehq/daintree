@@ -141,6 +141,8 @@ interface MockProjectViewManager {
   setPaintGateHardTimeoutMs: Mock;
   setWarmPaintGateTimeoutMs: Mock;
   setWarmPaintGateHardTimeoutMs: Mock;
+  setViewLoadTimeoutMs: Mock;
+  setViewLoadHardTimeoutMs: Mock;
 }
 interface MockProjectStatsService {
   updatePollInterval: Mock;
@@ -166,6 +168,8 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDe
     setPaintGateHardTimeoutMs: vi.fn(),
     setWarmPaintGateTimeoutMs: vi.fn(),
     setWarmPaintGateHardTimeoutMs: vi.fn(),
+    setViewLoadTimeoutMs: vi.fn(),
+    setViewLoadHardTimeoutMs: vi.fn(),
   };
   const mockProjectStatsService: MockProjectStatsService = {
     updatePollInterval: vi.fn(),
@@ -191,6 +195,8 @@ function makeMockPvm(): MockProjectViewManager {
     setPaintGateHardTimeoutMs: vi.fn(),
     setWarmPaintGateTimeoutMs: vi.fn(),
     setWarmPaintGateHardTimeoutMs: vi.fn(),
+    setViewLoadTimeoutMs: vi.fn(),
+    setViewLoadHardTimeoutMs: vi.fn(),
   };
 }
 
@@ -721,6 +727,12 @@ describe("ResourceProfileService", () => {
       expect(latePvm.setWarmPaintGateHardTimeoutMs).toHaveBeenCalledWith(
         RESOURCE_PROFILE_CONFIGS.efficiency.warmPaintGateHardTimeoutMs
       );
+      expect(latePvm.setViewLoadTimeoutMs).toHaveBeenCalledWith(
+        RESOURCE_PROFILE_CONFIGS.efficiency.viewLoadTimeoutMs
+      );
+      expect(latePvm.setViewLoadHardTimeoutMs).toHaveBeenCalledWith(
+        RESOURCE_PROFILE_CONFIGS.efficiency.viewLoadHardTimeoutMs
+      );
       // Efficiency entry never clamps cached views — it only freezes them.
       expect(latePvm.setCachedViewLimit).not.toHaveBeenCalled();
 
@@ -779,6 +791,12 @@ describe("ResourceProfileService", () => {
     expect(pvm.setWarmPaintGateHardTimeoutMs).toHaveBeenCalledWith(
       RESOURCE_PROFILE_CONFIGS.balanced.warmPaintGateHardTimeoutMs
     );
+    expect(pvm.setViewLoadTimeoutMs).toHaveBeenCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.viewLoadTimeoutMs
+    );
+    expect(pvm.setViewLoadHardTimeoutMs).toHaveBeenCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.viewLoadHardTimeoutMs
+    );
 
     service.stop();
   });
@@ -805,6 +823,12 @@ describe("ResourceProfileService", () => {
     );
     expect(pvm.setWarmPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
       RESOURCE_PROFILE_CONFIGS.efficiency.warmPaintGateHardTimeoutMs
+    );
+    expect(pvm.setViewLoadTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.efficiency.viewLoadTimeoutMs
+    );
+    expect(pvm.setViewLoadHardTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.efficiency.viewLoadHardTimeoutMs
     );
 
     service.stop();
@@ -847,6 +871,12 @@ describe("ResourceProfileService", () => {
     );
     expect(pvm.setWarmPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
       RESOURCE_PROFILE_CONFIGS.balanced.warmPaintGateHardTimeoutMs
+    );
+    expect(pvm.setViewLoadTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.viewLoadTimeoutMs
+    );
+    expect(pvm.setViewLoadHardTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.viewLoadHardTimeoutMs
     );
 
     service.stop();

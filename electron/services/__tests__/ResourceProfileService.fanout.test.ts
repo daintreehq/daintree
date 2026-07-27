@@ -57,6 +57,8 @@ function makeMockPvm() {
     setPaintGateHardTimeoutMs: vi.fn(),
     setWarmPaintGateTimeoutMs: vi.fn(),
     setWarmPaintGateHardTimeoutMs: vi.fn(),
+    setViewLoadTimeoutMs: vi.fn(),
+    setViewLoadHardTimeoutMs: vi.fn(),
   };
 }
 
@@ -149,6 +151,10 @@ describe("ResourceProfileService fan-out isolation", () => {
       expect(healthy.setPaintGateTimeoutMs).toHaveBeenLastCalledWith(balanced.paintGateTimeoutMs);
       expect(healthy.setWarmPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
         balanced.warmPaintGateHardTimeoutMs
+      );
+      expect(healthy.setViewLoadTimeoutMs).toHaveBeenLastCalledWith(balanced.viewLoadTimeoutMs);
+      expect(healthy.setViewLoadHardTimeoutMs).toHaveBeenLastCalledWith(
+        balanced.viewLoadHardTimeoutMs
       );
       // Downstream consumers after the PVM loop still ran.
       expect(pty.setResourceProfile).toHaveBeenLastCalledWith("balanced");
@@ -302,6 +308,29 @@ describe("ResourceProfileService fan-out isolation", () => {
       expect(pvm.setWarmPaintGateTimeoutMs).toHaveBeenCalledWith(efficiency.warmPaintGateTimeoutMs);
       expect(pvm.setWarmPaintGateHardTimeoutMs).toHaveBeenCalledWith(
         efficiency.warmPaintGateHardTimeoutMs
+      );
+      expect(pvm.setViewLoadTimeoutMs).toHaveBeenCalledWith(efficiency.viewLoadTimeoutMs);
+      expect(pvm.setViewLoadHardTimeoutMs).toHaveBeenCalledWith(efficiency.viewLoadHardTimeoutMs);
+    });
+
+    it("a throwing soft view-load setter still lets the hard bound land", () => {
+      // The two bounds must not share a try block: a soft-setter throw that
+      // skipped the hard setter would leave the ceiling on the previous
+      // profile's value while the soft bound moved.
+      const pvm = makeMockPvm();
+      pvm.setViewLoadTimeoutMs.mockImplementation(() => {
+        throw new Error("soft bound exploded");
+      });
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service._forceProfileForTesting("efficiency");
+
+      expect(() =>
+        service.applyCurrentProfileTo(pvm as unknown as ProjectViewManager)
+      ).not.toThrow();
+
+      expect(pvm.setViewLoadHardTimeoutMs).toHaveBeenCalledWith(
+        RESOURCE_PROFILE_CONFIGS.efficiency.viewLoadHardTimeoutMs
       );
     });
   });

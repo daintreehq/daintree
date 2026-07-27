@@ -26,7 +26,17 @@ import { isDemoMode } from "../setup/runtimeFlags.js";
 import { projectStore } from "../services/ProjectStore.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 
-const LOAD_TIMEOUT_MS = 10_000;
+/**
+ * Two-phase load timing, captured per call. The soft bound is observability
+ * only — it logs that the load is far outside the measured distribution and
+ * keeps waiting. The hard bound is the absolute ceiling that abandons the
+ * switch. See `DEFAULT_VIEW_LOAD_*_MS` in ProjectViewManager.ts for the
+ * defaults and `RESOURCE_PROFILE_CONFIGS` for the per-profile values.
+ */
+export interface LoadViewTimings {
+  softMs: number;
+  hardMs: number;
+}
 
 export function createView(host: ProjectViewManager, projectId: string): WebContentsView {
   const ses = session.fromPartition("persist:daintree");
@@ -79,29 +89,65 @@ export function createView(host: ProjectViewManager, projectId: string): WebCont
   return view;
 }
 
-export function loadView(view: WebContentsView, projectId: string): Promise<void> {
+export function loadView(
+  view: WebContentsView,
+  projectId: string,
+  timings: LoadViewTimings
+): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const wc = view.webContents;
     let settled = false;
+
+    const softMs = timings.softMs;
+    // Guarantee hard >= soft so the soft warning always precedes the hard
+    // rejection, regardless of how the two resource-profile setters are
+    // ordered. Mirrors the paint gate's clamp in waitForPaint().
+    const hardMs = Math.max(timings.hardMs, softMs);
 
     const cleanup = () => {
       wc.removeListener("did-finish-load", onFinish);
       wc.removeListener("did-fail-load", onFail);
       wc.removeListener("preload-error", onPreloadError);
       wc.removeListener("render-process-gone", onProcessGone);
+      wc.removeListener("dom-ready", onDomReady);
     };
 
     const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
+      clearTimeout(softTimeout);
+      clearTimeout(hardTimeout);
       cleanup();
       fn();
     };
 
-    const timeout = setTimeout(() => {
+    // Soft tail: log only. A cold load runs ~141ms at p50 and ~454ms at the
+    // observed max, so crossing this bound means something is genuinely
+    // wrong — but "wrong" is not "dead", and abandoning here is what lost
+    // the switch in #11459. Keep waiting for a real event or the hard bound.
+    const armedAt = performance.now();
+    const softTimeout = setTimeout(() => {
+      logWarn("projectview.load.softtimeout", {
+        projectId,
+        waitedMs: softMs,
+        hardMs,
+        // How much later than scheduled this callback actually ran. A large
+        // value means the main process was blocked (concurrent agent CLIs,
+        // git enumeration) rather than the renderer being slow — the two are
+        // indistinguishable from the elapsed time alone, and which one it is
+        // decides whether the fix is here or upstream. Clamped because the
+        // fake timers used in unit tests advance virtual time only.
+        timerLateByMs: Math.max(0, Math.round(performance.now() - armedAt - softMs)),
+      });
+    }, softMs);
+
+    // Hard ceiling: the load is presumed wedged. Deliberately never extended
+    // by progress signals — the main-process stall that delays the load
+    // delays any event that would reset it, so a wall-clock backstop is the
+    // only bound that holds.
+    const hardTimeout = setTimeout(() => {
       settle(() => reject(new Error("View load timed out")));
-    }, LOAD_TIMEOUT_MS);
+    }, hardMs);
 
     const onFinish = () => {
       void verifyProjectBootstrap(wc, projectId).then(
@@ -116,11 +162,6 @@ export function loadView(view: WebContentsView, projectId: string): Promise<void
     const onProcessGone = (_event: Electron.Event, details: Electron.RenderProcessGoneDetails) =>
       settle(() => reject(new Error(`Renderer process gone during load: ${details.reason}`)));
 
-    wc.once("did-finish-load", onFinish);
-    wc.once("did-fail-load", onFail);
-    wc.once("preload-error", onPreloadError);
-    wc.once("render-process-gone", onProcessGone);
-
     // Paint the skeleton on `dom-ready`, NOT before `loadURL`. `insertCSS`
     // and `executeJavaScript` are scoped to the live document, and the
     // navigation that `loadURL` kicks off discards anything injected into the
@@ -129,7 +170,12 @@ export function loadView(view: WebContentsView, projectId: string): Promise<void
     // is correct because each cold start creates a fresh WebContentsView.
     // Re-read the project inside the handler rather than closing over a value
     // captured now, so the freshest name/emoji/color is painted (#9162).
-    wc.once("dom-ready", () => {
+    // Named (not inline) so `cleanup` can detach it: `webContents.close()`
+    // does not remove JS listeners, so a load that fails before dom-ready
+    // would otherwise leave this bound to a view that is being torn down.
+    // Removing it on settle is safe — on the success path dom-ready always
+    // precedes did-finish-load, so it has already fired and self-removed.
+    const onDomReady = () => {
       if (wc.isDestroyed()) return;
       const project = projectStore.getProjectById(projectId);
       // instantReveal drops index.html's 400ms Doherty entry delay: a cold
@@ -139,7 +185,13 @@ export function loadView(view: WebContentsView, projectId: string): Promise<void
       // for the initial app launch (createWindow.ts), where it belongs.
       injectSkeletonCss(wc, project, { instantReveal: true });
       injectSkeletonProjectIdentity(wc, project);
-    });
+    };
+
+    wc.once("did-finish-load", onFinish);
+    wc.once("did-fail-load", onFail);
+    wc.once("preload-error", onPreloadError);
+    wc.once("render-process-gone", onProcessGone);
+    wc.once("dom-ready", onDomReady);
 
     // The document URL is intentionally static (no `?projectId=`): the id
     // travels via additionalArguments so the V8 bytecode cache stays shared
