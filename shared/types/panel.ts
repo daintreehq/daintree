@@ -514,7 +514,9 @@ export interface PtyPanelData extends BasePanelData {
   fallbackChainIndex?: number;
   /**
    * Live-only restore signal. True on first mount when the saved agent session
-   * could not be resumed and a fresh session was launched instead. Drives the
+   * could not be safely resumed — unreachable, or resume-latest suppressed
+   * because a sibling pane owns the slot (#11461) — and a fresh session was
+   * launched instead. Drives the
    * "Session no longer reachable" restart banner. Cleared on restart; never
    * serialized — see `serializePtyPanel`.
    */

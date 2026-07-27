@@ -1,4 +1,5 @@
 import type { IpcInvokeMap } from "../../types/index.js";
+import type { IdArrayFieldClear } from "../../../shared/utils/layoutMerge.js";
 
 // Opt out of `scripts/codegen/ipc-renderer.mjs` — `terminalLayout`'s renderer
 // API uses positional arguments (e.g. `setTerminals(projectId, terminals)`)
@@ -29,11 +30,13 @@ export interface TerminalLayoutPreloadBindings {
   // `changedIds`/`removedIds` describe what this renderer changed relative to
   // its last-persisted baseline so Main can merge concurrent writes from
   // sibling windows of the same project (#11350). Omit both for a full replace.
+  // `clearedFields` tombstones fields Main may author out-of-band (#11461).
   setTerminals(
     projectId: string,
     terminals: TerminalSnapshot[],
     changedIds?: string[],
-    removedIds?: string[]
+    removedIds?: string[],
+    clearedFields?: IdArrayFieldClear[]
   ): Promise<void>;
   getTerminalSizes(projectId: string): Promise<Record<string, { cols: number; rows: number }>>;
   setTerminalSizes(
@@ -74,12 +77,13 @@ export function buildTerminalLayoutPreloadBindings(invoke: Invoker): TerminalLay
       invoke(TERMINAL_LAYOUT_METHOD_CHANNELS.getTerminals, projectId) as Promise<
         TerminalSnapshot[]
       >,
-    setTerminals: (projectId, terminals, changedIds, removedIds) =>
+    setTerminals: (projectId, terminals, changedIds, removedIds, clearedFields) =>
       invoke(TERMINAL_LAYOUT_METHOD_CHANNELS.setTerminals, {
         projectId,
         terminals,
         changedIds,
         removedIds,
+        clearedFields,
       }) as Promise<void>,
     getTerminalSizes: (projectId) =>
       invoke(TERMINAL_LAYOUT_METHOD_CHANNELS.getTerminalSizes, projectId) as Promise<

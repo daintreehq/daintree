@@ -16,6 +16,7 @@ const setTerminals = terminalLayoutNamespace.ops.setTerminals.handler as (payloa
   terminals: TerminalSnapshot[];
   changedIds?: string[];
   removedIds?: string[];
+  clearedFields?: unknown;
 }) => Promise<void>;
 
 const setTabGroups = terminalLayoutNamespace.ops.setTabGroups.handler as (payload: {
@@ -125,6 +126,96 @@ describe("setTerminals merge (#11350)", () => {
     const saved = onDisk(baseState([term("1"), term("2"), term("3")]));
     await setTerminals({ projectId: "p1", terminals: [term("1")] });
     expect(ids(saved()?.terminals)).toEqual(["1"]);
+  });
+});
+
+describe("setTerminals session-id preservation (#11461)", () => {
+  const withSession = (id: string, agentSessionId?: string): TerminalSnapshot =>
+    ({ ...term(id), launchAgentId: "codex", ...(agentSessionId && { agentSessionId }) }) as
+      TerminalSnapshot;
+
+  const sessionIdOf = (state: ProjectState | null, id: string): string | undefined =>
+    state?.terminals?.find((t) => t.id === id)?.agentSessionId;
+
+  it("keeps a shutdown-captured session id when the writer omits it", async () => {
+    const saved = onDisk(baseState([withSession("1", "captured")]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [withSession("1")],
+      changedIds: ["1"],
+      removedIds: [],
+    });
+
+    expect(sessionIdOf(saved(), "1")).toBe("captured");
+  });
+
+  it("clears the stored session id when the writer tombstones it", async () => {
+    const saved = onDisk(baseState([withSession("1", "stale")]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [withSession("1")],
+      changedIds: ["1"],
+      removedIds: [],
+      clearedFields: [{ id: "1", fields: ["agentSessionId"] }],
+    });
+
+    expect(sessionIdOf(saved(), "1")).toBeUndefined();
+  });
+
+  it("ignores field names outside the allowlist", async () => {
+    const saved = onDisk(baseState([withSession("1", "captured")]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [{ ...withSession("1"), title: "renamed" } as TerminalSnapshot],
+      changedIds: ["1"],
+      removedIds: [],
+      clearedFields: [{ id: "1", fields: ["title", "cwd"] }],
+    });
+
+    const entry = saved()?.terminals?.find((t) => t.id === "1");
+    expect(entry?.agentSessionId).toBe("captured");
+    expect(entry?.title).toBe("renamed");
+    expect(entry?.cwd).toBe("/tmp");
+  });
+
+  it("survives malformed clear metadata without dropping the stored id", async () => {
+    const saved = onDisk(baseState([withSession("1", "captured")]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [withSession("1")],
+      changedIds: ["1"],
+      removedIds: [],
+      clearedFields: [null, "nope", { id: 7, fields: ["agentSessionId"] }, { id: "1" }],
+    });
+
+    expect(sessionIdOf(saved(), "1")).toBe("captured");
+  });
+
+  it("does not let one entry's tombstone clear another's session id", async () => {
+    const saved = onDisk(baseState([withSession("1", "keep-a"), withSession("2", "keep-b")]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [withSession("1"), withSession("2")],
+      changedIds: ["1", "2"],
+      removedIds: [],
+      clearedFields: [{ id: "1", fields: ["agentSessionId"] }],
+    });
+
+    expect(sessionIdOf(saved(), "1")).toBeUndefined();
+    expect(sessionIdOf(saved(), "2")).toBe("keep-b");
+  });
+
+  it("full-replace still drops an omitted session id (legacy contract unchanged)", async () => {
+    const saved = onDisk(baseState([withSession("1", "captured")]));
+
+    await setTerminals({ projectId: "p1", terminals: [withSession("1")] });
+
+    expect(sessionIdOf(saved(), "1")).toBeUndefined();
   });
 });
 

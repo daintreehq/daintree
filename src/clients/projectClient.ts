@@ -16,6 +16,7 @@ import type { NotificationSettings } from "@shared/types/ipc/api";
 import type { RelocationPreview, RelocationRequest } from "@shared/types/projectRelocation";
 import type { AgentPreset } from "@shared/config/agentRegistry";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
+import type { IdArrayFieldClear } from "@shared/utils/layoutMerge";
 import type {
   GitInitOptions,
   GitInitResult,
@@ -351,9 +352,16 @@ export const projectClient = {
     projectId: string,
     terminals: TerminalSnapshot[],
     changedIds?: string[],
-    removedIds?: string[]
+    removedIds?: string[],
+    clearedFields?: IdArrayFieldClear[]
   ): Promise<void> => {
-    return window.electron.project.setTerminals(projectId, terminals, changedIds, removedIds);
+    return window.electron.project.setTerminals(
+      projectId,
+      terminals,
+      changedIds,
+      removedIds,
+      clearedFields
+    );
   },
 
   getTerminalSizes: (

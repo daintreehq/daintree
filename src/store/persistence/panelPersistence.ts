@@ -42,6 +42,15 @@ const BASE_PANEL_FIELDS = [
 ] as const satisfies readonly (keyof PanelSnapshot)[];
 const BASE_PANEL_FIELD_SET: ReadonlySet<string> = new Set(BASE_PANEL_FIELDS);
 
+// Fields Main can author out-of-band, so the delta must state a clear explicitly
+// instead of letting mere absence delete them (#11461). `agentSessionId` is
+// captured by the graceful-shutdown path straight into project state and is never
+// pushed back into the live store, so an ordinary post-exit save omits a value it
+// never had — which must not erase what Main just wrote.
+const TERMINAL_CLEAR_TRACKED_FIELDS = [
+  "agentSessionId",
+] as const satisfies readonly (keyof PanelSnapshot)[];
+
 export function panelToSnapshot(
   t: TerminalInstance,
   previousSnapshot?: PanelSnapshot
@@ -233,13 +242,20 @@ export class PanelPersistence {
           // Describe what changed relative to this renderer's last-acknowledged
           // baseline so Main merges concurrent writes from sibling windows of
           // the same project instead of clobbering them (#11350).
-          const { changedIds, removedIds } = computeIdArrayDelta(
+          const { changedIds, removedIds, clearedFields } = computeIdArrayDelta(
             baseline ?? [],
             transformed,
-            deepEqualIgnoringUndefined
+            deepEqualIgnoringUndefined,
+            TERMINAL_CLEAR_TRACKED_FIELDS
           );
           try {
-            await this.client.setTerminals(projectId, transformed, changedIds, removedIds);
+            await this.client.setTerminals(
+              projectId,
+              transformed,
+              changedIds,
+              removedIds,
+              clearedFields
+            );
             if (collectPerf) {
               const now = typeof performance !== "undefined" ? performance.now() : Date.now();
               markRendererPerformance("persistence_terminals_save", {
@@ -436,7 +452,8 @@ export class PanelPersistence {
     return computeIdArrayDelta(
       this.persistedTerminalsByProject.get(projectId) ?? [],
       snapshots,
-      deepEqualIgnoringUndefined
+      deepEqualIgnoringUndefined,
+      TERMINAL_CLEAR_TRACKED_FIELDS
     );
   }
 

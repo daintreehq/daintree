@@ -7,7 +7,11 @@ import {
 import type { HandlerDependencies } from "../types.js";
 import type { TerminalSnapshot, TabGroup } from "../../types/index.js";
 import { defineIpcNamespace, op } from "../define.js";
-import { mergeIdArray, mergeRecord } from "../../../shared/utils/layoutMerge.js";
+import {
+  mergeIdArray,
+  mergeRecord,
+  type IdArrayFieldClear,
+} from "../../../shared/utils/layoutMerge.js";
 import { TERMINAL_LAYOUT_METHOD_CHANNELS } from "./terminalLayout.preload.js";
 
 /**
@@ -32,6 +36,42 @@ function sanitizeIdList(value: unknown): string[] | undefined {
  */
 export function sanitizeTerminals(terminals: unknown[], context: string): TerminalSnapshot[] {
   return filterValidTerminalEntries(terminals, TerminalSnapshotSchema, context);
+}
+
+/**
+ * Fields on a terminal snapshot that Main itself can author, so a renderer delta
+ * has to tombstone them explicitly rather than clearing them by omission
+ * (#11461). Kept to the minimum: only the graceful-shutdown session capture.
+ */
+export const TERMINAL_PRESERVE_ON_OMISSION = [
+  "agentSessionId",
+] as const satisfies readonly (keyof TerminalSnapshot)[];
+
+const TERMINAL_CLEARABLE_FIELD_SET: ReadonlySet<string> = new Set(TERMINAL_PRESERVE_ON_OMISSION);
+
+/**
+ * Coerce untrusted `clearedFields` metadata into the tombstone list the merge
+ * accepts. Entries without a usable id are dropped and field names outside the
+ * allowlist are ignored, so a malformed payload can never delete anything the
+ * renderer isn't entitled to clear. Returns `undefined` when nothing survives so
+ * the merge keeps its cheap path.
+ */
+export function sanitizeClearedFields(value: unknown): IdArrayFieldClear[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const sanitized: IdArrayFieldClear[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const { id, fields } = entry as { id?: unknown; fields?: unknown };
+    if (typeof id !== "string" || !id || !Array.isArray(fields)) continue;
+    const allowed = fields.filter(
+      (field): field is string => typeof field === "string" && TERMINAL_CLEARABLE_FIELD_SET.has(field)
+    );
+    if (allowed.length === 0) continue;
+    sanitized.push({ id, fields: allowed });
+  }
+  return sanitized.length > 0 ? sanitized : undefined;
 }
 
 /**
@@ -103,6 +143,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
         terminals: TerminalSnapshot[];
         changedIds?: string[];
         removedIds?: string[];
+        clearedFields?: IdArrayFieldClear[];
       }): Promise<void> => {
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
@@ -121,6 +162,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
         // Absent metadata = legacy full-replace write.
         const changedIds = sanitizeIdList(payload.changedIds);
         const removedIds = sanitizeIdList(payload.removedIds);
+        const clearedFields = sanitizeClearedFields(payload.clearedFields);
 
         await projectStore.enqueueProjectStateUpdate(projectId, (existingState) => ({
           projectId,
@@ -133,7 +175,11 @@ export const terminalLayoutNamespace = defineIpcNamespace({
                   existingState?.terminals ?? [],
                   validTerminals,
                   changedIds,
-                  removedIds ?? []
+                  removedIds ?? [],
+                  {
+                    preserveOnOmission: TERMINAL_PRESERVE_ON_OMISSION,
+                    clearedFields,
+                  }
                 ),
           tabGroups: existingState?.tabGroups ?? [],
           terminalLayout: existingState?.terminalLayout,

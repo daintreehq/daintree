@@ -457,6 +457,38 @@ export function buildArgsForReconnectedFallback(
   };
 }
 
+/**
+ * Resolve the agent identity a respawn will actually launch under: the legacy
+ * on-disk `agentId`/`type` migration plus the title-based recovery for snapshots
+ * written under the old `kind: "agent"` marker. Shared with restore's
+ * resume-latest election (#11461) so slot eligibility can never disagree with the
+ * command the respawn goes on to build. Pure — safe to call in a pre-pass.
+ */
+export function resolveRespawnAgentId(
+  saved: SavedTerminalData,
+  kind: PanelKind | undefined
+): string | undefined {
+  const savedLaunchAgentId =
+    saved.launchAgentId ?? (saved.type === "claude" ? "claude" : saved.agentId);
+  return inferAgentIdFromTitle(
+    saved.title,
+    kind,
+    resolveAgentId(savedLaunchAgentId),
+    saved.id,
+    "Respawn"
+  );
+}
+
+export interface BuildArgsForRespawnOptions {
+  resolvedAgentBaseCommand?: string;
+  /**
+   * False when a sibling pane already owns this agent+cwd's single resume-latest
+   * slot (#11461). Only suppresses the resume-latest fallback — an exact
+   * per-pane session id still resumes normally.
+   */
+  allowResumeLatest?: boolean;
+}
+
 export function buildArgsForRespawn(
   saved: SavedTerminalData,
   kind: PanelKind,
@@ -465,19 +497,11 @@ export function buildArgsForRespawn(
   reconnectTimedOut: boolean,
   clipboardDirectory: string | undefined,
   projectPresetsByAgent?: Record<string, AgentPreset[]>,
-  resolvedAgentBaseCommand?: string
+  options?: BuildArgsForRespawnOptions
 ): AddTerminalArgs {
-  // Migrate legacy on-disk agentId/type to launchAgentId at the read boundary.
-  const savedLaunchAgentId =
-    saved.launchAgentId ?? (saved.type === "claude" ? "claude" : saved.agentId);
-  let effectiveAgentId = resolveAgentId(savedLaunchAgentId);
-  effectiveAgentId = inferAgentIdFromTitle(
-    saved.title,
-    kind,
-    effectiveAgentId,
-    saved.id,
-    "Respawn"
-  );
+  const resolvedAgentBaseCommand = options?.resolvedAgentBaseCommand;
+  const allowResumeLatest = options?.allowResumeLatest ?? true;
+  const effectiveAgentId = resolveRespawnAgentId(saved, kind);
 
   const isAgentPanel = Boolean(effectiveAgentId);
   const agentId = effectiveAgentId;
@@ -579,9 +603,15 @@ export function buildArgsForRespawn(
       // No session ID was captured (graceful-shutdown pattern match missed or
       // timed out). Try the agent's resume-latest fallback before falling
       // through to a fresh launch so the user keeps their prior conversation.
-      const resumeLatestCmd = resolvedAgentBaseCommand
-        ? buildResumeLatestCommand(agentId, resumeFlags, baseCommand)
-        : buildResumeLatestCommand(agentId, resumeFlags);
+      // Suppressed when a sibling pane owns this agent+cwd's single slot:
+      // resume-latest resolves to the most recent session in scope, so several
+      // panes running it would all land in the SAME conversation (#11461).
+      let resumeLatestCmd: string | undefined;
+      if (allowResumeLatest) {
+        resumeLatestCmd = resolvedAgentBaseCommand
+          ? buildResumeLatestCommand(agentId, resumeFlags, baseCommand)
+          : buildResumeLatestCommand(agentId, resumeFlags);
+      }
       if (resumeLatestCmd) {
         command = resumeLatestCmd;
       } else if (hasPersistedFlags) {
@@ -594,6 +624,16 @@ export function buildArgsForRespawn(
           presetArgs: preset?.args?.join(" "),
           globalSkipPermissions,
           globalUseAltScreen,
+        });
+        sessionLostOnRestore = true;
+      } else if (!allowResumeLatest) {
+        // Nothing above rebuilt the command, so `command` still holds
+        // `saved.command` — which is itself a persisted resume-latest command
+        // whenever an earlier restore used one. Inheriting it would reinstate the
+        // very collision this suppression exists to prevent, so launch clean.
+        command = buildLaunchCommandFromFlags(baseCommand, agentId, injectedFromEmpty, {
+          clipboardDirectory,
+          shareClipboardDirectory,
         });
         sessionLostOnRestore = true;
       }

@@ -1302,6 +1302,7 @@ export interface GeneratedIpcInvokeMap {
         terminals: import("../project.js").PanelSnapshot[];
         changedIds?: string[] | undefined;
         removedIds?: string[] | undefined;
+        clearedFields?: import("../../utils/layoutMerge.js").IdArrayFieldClear[] | undefined;
       },
     ];
     result: void;

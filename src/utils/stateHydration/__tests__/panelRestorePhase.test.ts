@@ -62,7 +62,10 @@ vi.mock("../statePatcher", () => ({
     kind: string,
     _projectRoot?: string,
     _agentSettings?: unknown,
-    reconnectTimedOut?: boolean
+    reconnectTimedOut?: boolean,
+    _clipboardDirectory?: string,
+    _projectPresetsByAgent?: unknown,
+    options?: { allowResumeLatest?: boolean }
   ) => ({
     cwd: s.cwd ?? "/cwd",
     kind,
@@ -72,7 +75,12 @@ vi.mock("../statePatcher", () => ({
     // requested id so the store generates a fresh one (#10440).
     requestedId: reconnectTimedOut ? undefined : s.id,
     launchAgentId: s.launchAgentId,
+    // Not a real AddTerminalArgs field — surfaced on the mock's output so the
+    // resume-latest election (#11461) is assertable through addPanel's args.
+    allowResumeLatest: options?.allowResumeLatest ?? true,
   }),
+  resolveRespawnAgentId: (s: TerminalState, kind: string | undefined) =>
+    s.launchAgentId ?? (kind === "agent" ? "claude" : undefined),
   buildArgsForNonPtyRecreation: (s: TerminalState, kind: string) => ({
     cwd: s.cwd ?? "/cwd",
     kind,
@@ -101,6 +109,20 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 vi.mock("@shared/utils/smokeTestTerminals", () => ({
   isSmokeTestTerminalId: (id: string) => id.startsWith("smoke-"),
 }));
+
+// Only codex/claude declare resume-latest args here, so the election's capability
+// probe is deterministic and an agent without the fallback can be exercised.
+const { buildResumeLatestCommandMock } = vi.hoisted(() => ({
+  buildResumeLatestCommandMock: vi.fn((agentId: string) =>
+    agentId === "codex" || agentId === "claude" ? `${agentId} --resume-latest` : undefined
+  ),
+}));
+
+vi.mock("@shared/types/agentSettings", async () => {
+  const actual =
+    await vi.importActual<typeof import("@shared/types/agentSettings")>("@shared/types/agentSettings");
+  return { ...actual, buildResumeLatestCommand: buildResumeLatestCommandMock };
+});
 
 // Override stagger constants so tests don't have to wait 100ms × N
 // Spy on getRestoreBatchParams so tests can both pin fast/deterministic batches
@@ -1164,5 +1186,188 @@ describe("restorePanelsPhase — panels surviving a worktree move (issue #11388)
     await restorePanelsPhase([panel("t1", { worktreeId: "/old/feature" })], ctx);
 
     expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wA" });
+  });
+});
+
+describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)", () => {
+  /** id → the allowResumeLatest the respawn builder was handed. */
+  function allowanceById(ctx: MockedContext): Map<string, boolean> {
+    const byId = new Map<string, boolean>();
+    for (const [args] of ctx.addPanel.mock.calls as [
+      { requestedId?: string; allowResumeLatest?: boolean },
+    ][]) {
+      if (args.requestedId !== undefined && args.allowResumeLatest !== undefined) {
+        byId.set(args.requestedId, args.allowResumeLatest);
+      }
+    }
+    return byId;
+  }
+
+  const codexPanel = (id: string, overrides: Partial<TerminalState> = {}): TerminalState =>
+    panel(id, { kind: "agent", launchAgentId: "codex", ...overrides });
+
+  beforeEach(() => {
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+  });
+
+  it("allows exactly one of several id-less panes sharing a directory", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [
+        codexPanel("a", { lastActiveAt: 100 }),
+        codexPanel("b", { lastActiveAt: 300 }),
+        codexPanel("c", { lastActiveAt: 200 }),
+      ],
+      ctx
+    );
+
+    const allowed = [...allowanceById(ctx)].filter(([, allow]) => allow).map(([id]) => id);
+    expect(allowed).toEqual(["b"]);
+  });
+
+  it("gives the slot to the most recently active pane", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [codexPanel("older", { lastActiveAt: 5 }), codexPanel("newer", { lastActiveAt: 9 })],
+      ctx
+    );
+
+    expect(allowanceById(ctx).get("newer")).toBe(true);
+    expect(allowanceById(ctx).get("older")).toBe(false);
+  });
+
+  it("breaks a tie in favour of the earlier saved entry", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [codexPanel("first", { lastActiveAt: 7 }), codexPanel("second", { lastActiveAt: 7 })],
+      ctx
+    );
+
+    expect(allowanceById(ctx).get("first")).toBe(true);
+    expect(allowanceById(ctx).get("second")).toBe(false);
+  });
+
+  it("treats a corrupt lastActiveAt as least-recent rather than winning", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [
+        codexPanel("corrupt", { lastActiveAt: Number.NaN }),
+        codexPanel("valid", { lastActiveAt: 1 }),
+      ],
+      ctx
+    );
+
+    expect(allowanceById(ctx).get("valid")).toBe(true);
+    expect(allowanceById(ctx).get("corrupt")).toBe(false);
+  });
+
+  it("leaves a lone id-less pane untouched", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase([codexPanel("solo")], ctx);
+
+    expect(allowanceById(ctx).get("solo")).toBe(true);
+  });
+
+  it("scopes the slot per agent — different agents don't contend", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [codexPanel("cx"), panel("cl", { kind: "agent", launchAgentId: "claude" })],
+      ctx
+    );
+
+    expect(allowanceById(ctx).get("cx")).toBe(true);
+    expect(allowanceById(ctx).get("cl")).toBe(true);
+  });
+
+  it("scopes the slot per directory — different cwds don't contend", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [codexPanel("here", { cwd: "/proj/one" }), codexPanel("there", { cwd: "/proj/two" })],
+      ctx
+    );
+
+    expect(allowanceById(ctx).get("here")).toBe(true);
+    expect(allowanceById(ctx).get("there")).toBe(true);
+  });
+
+  it("groups equivalent spellings of one directory into the same scope", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [
+        codexPanel("plain", { cwd: "/proj/work", lastActiveAt: 2 }),
+        codexPanel("dotted", { cwd: "/proj/work/./", lastActiveAt: 1 }),
+      ],
+      ctx
+    );
+
+    expect(allowanceById(ctx).get("plain")).toBe(true);
+    expect(allowanceById(ctx).get("dotted")).toBe(false);
+  });
+
+  it("does not let a pane with its own session id consume the slot", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [
+        codexPanel("exact", { agentSessionId: "abc", lastActiveAt: 900 }),
+        codexPanel("idless", { lastActiveAt: 1 }),
+      ],
+      ctx
+    );
+
+    // The exact-id pane resumes precisely and never contends, so the id-less one
+    // still gets the fallback despite being far less recent.
+    expect(allowanceById(ctx).get("idless")).toBe(true);
+  });
+
+  it("does not spend the slot on a pane whose PTY survived", async () => {
+    // A live backend reconnects instead of respawning, so it can never reach the
+    // fallback — letting it win would strand the pane that actually respawns.
+    const ctx = makeContext({
+      backendTerminalMap: new Map([["survivor", backend("survivor", { kind: "agent" })]]),
+    });
+
+    await restorePanelsPhase(
+      [
+        codexPanel("survivor", { lastActiveAt: 900 }),
+        codexPanel("respawner", { lastActiveAt: 1 }),
+      ],
+      ctx
+    );
+
+    expect(allowanceById(ctx).get("respawner")).toBe(true);
+  });
+
+  it("does not suppress panes of an agent that has no resume-latest fallback", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [
+        panel("g1", { kind: "agent", launchAgentId: "goose" }),
+        panel("g2", { kind: "agent", launchAgentId: "goose" }),
+      ],
+      ctx
+    );
+
+    // They fall through to a fresh launch individually; no slot to contend for.
+    expect(allowanceById(ctx).get("g1")).toBe(true);
+    expect(allowanceById(ctx).get("g2")).toBe(true);
+  });
+
+  it("does not make plain terminals contend for a slot", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase([panel("t1"), panel("t2")], ctx);
+
+    expect(allowanceById(ctx).get("t1")).toBe(true);
+    expect(allowanceById(ctx).get("t2")).toBe(true);
   });
 });

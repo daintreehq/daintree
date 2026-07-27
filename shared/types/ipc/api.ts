@@ -1,4 +1,5 @@
 import type { PushProgressEvent } from "./gitPush.js";
+import type { IdArrayFieldClear } from "../../utils/layoutMerge.js";
 import type { GitStatus, StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
 import type { TabGroup } from "../panel.js";
@@ -652,12 +653,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * `changedIds`/`removedIds` describe what this renderer changed relative to
      * its last-persisted baseline so Main can merge concurrent writes from
      * sibling windows of the same project (#11350). Omit both for a full replace.
+     * `clearedFields` tombstones fields Main may have authored out-of-band, so
+     * absence alone never erases them (#11461).
      */
     setTerminals(
       projectId: string,
       terminals: TerminalSnapshot[],
       changedIds?: string[],
-      removedIds?: string[]
+      removedIds?: string[],
+      clearedFields?: IdArrayFieldClear[]
     ): Promise<void>;
     /**
      * Get terminal dimensions for a project.

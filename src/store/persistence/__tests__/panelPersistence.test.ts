@@ -145,7 +145,8 @@ describe("PanelPersistence", () => {
           expect.objectContaining({ id: "dock-1" }),
         ]),
         expect.any(Array),
-        expect.any(Array)
+        expect.any(Array),
+        undefined
       );
 
       const savedTerminals = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
@@ -268,7 +269,8 @@ describe("PanelPersistence", () => {
           },
         ],
         expect.any(Array),
-        expect.any(Array)
+        expect.any(Array),
+        undefined
       );
     });
 
@@ -346,7 +348,8 @@ describe("PanelPersistence", () => {
           }),
         ],
         expect.any(Array),
-        expect.any(Array)
+        expect.any(Array),
+        undefined
       );
     });
 
@@ -378,7 +381,8 @@ describe("PanelPersistence", () => {
         "from-option",
         expect.any(Array),
         expect.any(Array),
-        expect.any(Array)
+        expect.any(Array),
+        undefined
       );
     });
 
@@ -413,7 +417,8 @@ describe("PanelPersistence", () => {
         projectId,
         expect.arrayContaining([expect.objectContaining({ title: "Two" })]),
         expect.any(Array),
-        expect.any(Array)
+        expect.any(Array),
+        undefined
       );
     });
   });
@@ -424,6 +429,52 @@ describe("PanelPersistence", () => {
     // comparison would then mark an untouched panel changed on the first save.
     const hydratedBaseline = (...terminals: TerminalInstance[]): TerminalSnapshot[] =>
       terminals.map((t) => JSON.parse(JSON.stringify(panelToSnapshot(t))) as TerminalSnapshot);
+
+    it("sends no session-id tombstone when the baseline never carried one (#11461)", async () => {
+      // The shutdown-capture case: Main wrote the id straight to disk after this
+      // renderer primed, so the renderer omits a value it never held. That must
+      // read as "unknown" — no tombstone — or Main would erase the capture.
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const a = createMockTerminal({ id: "a" });
+      persistence.primeProject(projectId, hydratedBaseline(a));
+
+      persistence.save([createMockTerminal({ id: "a", title: "renamed" })], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , changedIds, , clearedFields] = client.setTerminals.mock.calls[0]!;
+      expect(changedIds).toEqual(["a"]);
+      expect(clearedFields).toBeUndefined();
+    });
+
+    it("sends a session-id tombstone when the renderer drops a known id (#11461)", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const withSession = createMockTerminal({ id: "a", agentSessionId: "sess-1" });
+      persistence.primeProject(projectId, hydratedBaseline(withSession));
+
+      persistence.save([createMockTerminal({ id: "a" })], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , , , clearedFields] = client.setTerminals.mock.calls[0]!;
+      expect(clearedFields).toEqual([{ id: "a", fields: ["agentSessionId"] }]);
+    });
+
+    it("carries the same tombstone through the project-switch delta (#11461)", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const withSession = createMockTerminal({ id: "a", agentSessionId: "sess-1" });
+      persistence.primeProject(projectId, hydratedBaseline(withSession));
+
+      const delta = persistence.computeTerminalDelta(projectId, [
+        panelToSnapshot(createMockTerminal({ id: "a" })),
+      ]);
+
+      expect(delta.clearedFields).toEqual([{ id: "a", fields: ["agentSessionId"] }]);
+    });
 
     it("marks every panel changed when there is no primed baseline", async () => {
       const client = createMockProjectClient();
@@ -606,7 +657,8 @@ describe("PanelPersistence", () => {
           }),
         ],
         expect.any(Array),
-        expect.any(Array)
+        expect.any(Array),
+        undefined
       );
     });
   });
@@ -1145,7 +1197,8 @@ describe("PanelPersistence", () => {
           }),
         ],
         expect.any(Array),
-        expect.any(Array)
+        expect.any(Array),
+        undefined
       );
 
       const saved = client.setTerminals.mock.calls[0]![1][0] as Record<string, unknown>;
