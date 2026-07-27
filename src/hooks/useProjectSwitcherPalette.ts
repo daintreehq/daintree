@@ -6,6 +6,8 @@ import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { usePaletteStore } from "@/store/paletteStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { compareProjectsByMode, type OtherProjectsSortMode } from "@/lib/projectSort";
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { notify } from "@/lib/notify";
 import { closeAndAnnounce } from "@/lib/accessibility";
@@ -78,6 +80,14 @@ export const PROJECT_SECTION_LABELS: Record<ProjectSectionKey, string | null> = 
   other: "Other projects",
   unavailable: "Unavailable",
 };
+
+/**
+ * Rows the Other band needs before its sort control is worth advertising
+ * (#11455). Below this the order is self-evident from the rows themselves, so
+ * the control would be chrome naming something nobody asked about. The
+ * preference still applies — only the visible affordance is gated.
+ */
+export const OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS = 4;
 
 export interface SearchableProject {
   id: string;
@@ -323,9 +333,19 @@ function attentionClass(project: SearchableProject): number {
  * - Pinned/Unavailable: alphabetical. Pinning is user-curated — reordering a
  *   curated set by a hidden score reads as rows moving on their own.
  * - Running: most work first, then freshest working transition.
- * - Other (and the single-row current): effective frecency.
+ * - Other: whichever order the user picked (#11455); effective frecency by
+ *   default, which is what this band has always done.
+ * - Current: effective frecency, though it is a single row either way.
+ *
+ * Only Other reads the preference. The other bands' orders are decisions in
+ * their own right — a user asking for A-Z in the residual band is not asking
+ * for their blocked agents to be alphabetised.
  */
-function compareWithinSection(a: SearchableProject, b: SearchableProject): number {
+function compareWithinSection(
+  a: SearchableProject,
+  b: SearchableProject,
+  otherProjectsSortMode: OtherProjectsSortMode
+): number {
   const section = a.section;
   if (section === "attention") {
     const aClass = attentionClass(a);
@@ -363,6 +383,10 @@ function compareWithinSection(a: SearchableProject, b: SearchableProject): numbe
     const aWorking = a.latestWorkingSince ?? 0;
     const bWorking = b.latestWorkingSince ?? 0;
     if (aWorking !== bWorking) return bWorking - aWorking;
+  } else if (section === "other") {
+    // `frecencyScore` is already read-time decayed here (see `searchableProjects`),
+    // so it is safe to hand straight to the shared comparator.
+    return compareProjectsByMode(a, b, otherProjectsSortMode);
   } else if (a.frecencyScore !== b.frecencyScore) {
     return b.frecencyScore - a.frecencyScore;
   }
@@ -623,14 +647,16 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     return { activeAgentCount, waitingAgentCount, waitingProjectCount };
   }, [searchableProjects]);
 
+  const otherProjectsSortMode = usePreferencesStore((state) => state.projectSwitcherOtherSortMode);
+
   const liveBrowseOrder = useMemo<SearchableProject[]>(() => {
     return [...searchableProjects].sort((a, b) => {
       if (a.section !== b.section) {
         return PROJECT_SECTION_ORDER.indexOf(a.section) - PROJECT_SECTION_ORDER.indexOf(b.section);
       }
-      return compareWithinSection(a, b);
+      return compareWithinSection(a, b, otherProjectsSortMode);
     });
-  }, [searchableProjects]);
+  }, [searchableProjects, otherProjectsSortMode]);
 
   // Layout is frozen for the lifetime of an open palette; content stays live.
   //
@@ -662,6 +688,65 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }),
     []
   );
+
+  // Changing the sort order is the one input that must beat the freeze. The
+  // freeze exists so rows don't move on their own; a mode the user just picked
+  // is the opposite of that, and holding it until the next open would read as
+  // the menu doing nothing.
+  //
+  // Guarded on the mode having actually changed, via a ref rather than the
+  // effect's own dependencies: `liveBrowseOrder` is a dependency because the
+  // recapture must read the freshly re-sorted order, and without the guard
+  // every stats push would recapture and destroy the freeze outright.
+  const previousOtherProjectsSortMode = useRef(otherProjectsSortMode);
+  useEffect(() => {
+    if (previousOtherProjectsSortMode.current === otherProjectsSortMode) return;
+    previousOtherProjectsSortMode.current = otherProjectsSortMode;
+    // A change while closed needs no recapture: the next `open()` captures the
+    // new order anyway, and recapturing here would queue it against a stale list.
+    if (!isOpen) return;
+    setFrozenLayout((previous) => {
+      if (!previous) return previous;
+      // Re-sort the Other rows IN THEIR EXISTING SLOTS rather than recapturing
+      // the whole layout from `liveBrowseOrder`. A blanket recapture would also
+      // adopt live BAND membership, so a project whose agent finished while the
+      // palette was open would jump out of Needs attention the moment the user
+      // touched an unrelated sort control. The user changed one band's order;
+      // nothing else may move.
+      const slots: number[] = [];
+      const ids: string[] = [];
+      previous.order.forEach((id, index) => {
+        if (previous.sections.get(id) === "other") {
+          slots.push(index);
+          ids.push(id);
+        }
+      });
+      if (ids.length < 2) return previous;
+
+      const live = new Map(liveBrowseOrder.map((project) => [project.id, project]));
+      const resorted = [...ids].sort((a, b) => {
+        const projectA = live.get(a);
+        const projectB = live.get(b);
+        // A row whose project has gone away is dropped downstream anyway; order
+        // it last so this stays a total order rather than an inconsistent one.
+        if (!projectA || !projectB) {
+          if (projectA) return -1;
+          if (projectB) return 1;
+          return a.localeCompare(b);
+        }
+        return compareProjectsByMode(projectA, projectB, otherProjectsSortMode);
+      });
+
+      const order = [...previous.order];
+      slots.forEach((slot, index) => {
+        order[slot] = resorted[index]!;
+      });
+      // Sections and provisionality are untouched: provisionality describes the
+      // DATA, so a mode change during a cold open must not cancel the pending
+      // one-time regroup (#11452).
+      return { ...previous, order };
+    });
+  }, [otherProjectsSortMode, isOpen, liveBrowseOrder]);
 
   // Fold projects that appeared after the freeze into it, at the position the
   // renderer already gives them (end of their live band). Without this they are

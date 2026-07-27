@@ -8,6 +8,11 @@ import {
   type PersistWriteMergeContext,
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
+import {
+  DEFAULT_OTHER_PROJECTS_SORT_MODE,
+  isOtherProjectsSortMode,
+  type OtherProjectsSortMode,
+} from "@/lib/projectSort";
 
 export type DockDensity = "compact" | "normal" | "comfortable";
 
@@ -121,6 +126,13 @@ interface PreferencesState {
    * 0 disables auto-cleanup.
    */
   deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds;
+  /**
+   * Sort order for the project switcher's "Other projects" band and the welcome
+   * screen's recent list (#11455). Global rather than per-project: it names how
+   * the user reads their whole project set, not anything about one project.
+   */
+  projectSwitcherOtherSortMode: OtherProjectsSortMode;
+  setProjectSwitcherOtherSortMode: (mode: OtherProjectsSortMode) => void;
   setDeletedWorktreeCleanupSeconds: (value: DeletedWorktreeCleanupSeconds) => void;
   /**
    * Basename globs always hidden in the file browser, across every panel. See
@@ -179,6 +191,9 @@ function sanitizePersistedPreferences(
   if (!isDeletedWorktreeCleanupSeconds(sanitized.deletedWorktreeCleanupSeconds)) {
     sanitized.deletedWorktreeCleanupSeconds = DELETED_WORKTREE_CLEANUP_DEFAULT;
   }
+  if (!isOtherProjectsSortMode(sanitized.projectSwitcherOtherSortMode)) {
+    sanitized.projectSwitcherOtherSortMode = DEFAULT_OTHER_PROJECTS_SORT_MODE;
+  }
   // Absent (new field) → defaults; a hand-edited array is filtered to valid
   // basename patterns; a legitimately empty list is preserved.
   sanitized.fileBrowserAlwaysHiddenPatterns = sanitizeAlwaysHiddenPatterns(
@@ -216,6 +231,7 @@ type PreferencesPersistedState = Pick<
   | "diffFontSize"
   | "markdownWrapLines"
   | "deletedWorktreeCleanupSeconds"
+  | "projectSwitcherOtherSortMode"
   | "lastSelectedWorktreeRecipeIdByProject"
   | "skipPushConfirmByWorktreePath"
   | "fileBrowserAlwaysHiddenPatterns"
@@ -238,6 +254,7 @@ const PREFERENCES_PERSISTED_DEFAULTS: PreferencesPersistedState = {
   diffFontSize: "m",
   markdownWrapLines: true,
   deletedWorktreeCleanupSeconds: DELETED_WORKTREE_CLEANUP_DEFAULT,
+  projectSwitcherOtherSortMode: DEFAULT_OTHER_PROJECTS_SORT_MODE,
   lastSelectedWorktreeRecipeIdByProject: {},
   skipPushConfirmByWorktreePath: {},
   fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN],
@@ -302,6 +319,9 @@ function toPreferencesPersisted(
     )
       ? raw.deletedWorktreeCleanupSeconds
       : d.deletedWorktreeCleanupSeconds,
+    projectSwitcherOtherSortMode: isOtherProjectsSortMode(raw.projectSwitcherOtherSortMode)
+      ? raw.projectSwitcherOtherSortMode
+      : d.projectSwitcherOtherSortMode,
     lastSelectedWorktreeRecipeIdByProject: normalizeRecipeMap(
       raw.lastSelectedWorktreeRecipeIdByProject
     ),
@@ -401,6 +421,11 @@ function mergePreferencesPersistedWrite({
         inc.deletedWorktreeCleanupSeconds,
         disk.deletedWorktreeCleanupSeconds
       ),
+      projectSwitcherOtherSortMode: pickFieldByWriterDelta(
+        base.projectSwitcherOtherSortMode,
+        inc.projectSwitcherOtherSortMode,
+        disk.projectSwitcherOtherSortMode
+      ),
       lastSelectedWorktreeRecipeIdByProject: mergeRecordByWriterDelta(
         base.lastSelectedWorktreeRecipeIdByProject,
         inc.lastSelectedWorktreeRecipeIdByProject,
@@ -482,6 +507,8 @@ export const usePreferencesStore = create<PreferencesState>()(
         }),
       deletedWorktreeCleanupSeconds: DELETED_WORKTREE_CLEANUP_DEFAULT,
       setDeletedWorktreeCleanupSeconds: (value) => set({ deletedWorktreeCleanupSeconds: value }),
+      projectSwitcherOtherSortMode: DEFAULT_OTHER_PROJECTS_SORT_MODE,
+      setProjectSwitcherOtherSortMode: (mode) => set({ projectSwitcherOtherSortMode: mode }),
       fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN],
       setFileBrowserAlwaysHiddenPatterns: (patterns) =>
         set({ fileBrowserAlwaysHiddenPatterns: sanitizeAlwaysHiddenPatterns(patterns) }),
@@ -493,7 +520,7 @@ export const usePreferencesStore = create<PreferencesState>()(
       storage: createSafeJSONStorage<PreferencesPersistedState>({
         mergeOnWrite: mergePreferencesPersistedWrite,
       }),
-      version: 13,
+      version: 14,
       // Explicit persisted subset — matches the pre-existing default (setters are
       // dropped by JSON serialization); named so the write merge (#11351) has a
       // typed persisted shape to reconcile.
@@ -514,6 +541,7 @@ export const usePreferencesStore = create<PreferencesState>()(
         diffFontSize: state.diffFontSize,
         markdownWrapLines: state.markdownWrapLines,
         deletedWorktreeCleanupSeconds: state.deletedWorktreeCleanupSeconds,
+        projectSwitcherOtherSortMode: state.projectSwitcherOtherSortMode,
         lastSelectedWorktreeRecipeIdByProject: state.lastSelectedWorktreeRecipeIdByProject,
         skipPushConfirmByWorktreePath: state.skipPushConfirmByWorktreePath,
         fileBrowserAlwaysHiddenPatterns: state.fileBrowserAlwaysHiddenPatterns,
@@ -625,6 +653,11 @@ export const usePreferencesStore = create<PreferencesState>()(
             persisted.deletedWorktreeCleanupSeconds = DELETED_WORKTREE_CLEANUP_DEFAULT;
           }
         }
+        if (version < 14 && isRecord(persisted)) {
+          if (!isOtherProjectsSortMode(persisted.projectSwitcherOtherSortMode)) {
+            persisted.projectSwitcherOtherSortMode = DEFAULT_OTHER_PROJECTS_SORT_MODE;
+          }
+        }
         return persisted as PreferencesState;
       },
     }
@@ -635,5 +668,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; fileBrowserAlwaysHiddenPatterns: string[] }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; fileBrowserAlwaysHiddenPatterns: string[] }",
 });

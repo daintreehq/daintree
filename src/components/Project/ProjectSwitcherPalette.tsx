@@ -29,9 +29,19 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ArrowDownAZ, Clock, Flame } from "@/components/icons";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { getProjectRowStatus, type ProjectRowTone } from "@/lib/projectRowStatus";
@@ -49,7 +59,16 @@ import type {
   SearchableProject,
   SearchableScratch,
 } from "@/hooks/useProjectSwitcherPalette";
-import { PROJECT_SECTION_LABELS } from "@/hooks/useProjectSwitcherPalette";
+import {
+  PROJECT_SECTION_LABELS,
+  OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS,
+} from "@/hooks/useProjectSwitcherPalette";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import {
+  isOtherProjectsSortMode,
+  OTHER_PROJECTS_SORT_MODES,
+  type OtherProjectsSortMode,
+} from "@/lib/projectSort";
 import { useUIStore } from "@/store/uiStore";
 import {
   useProjectSettingsStore,
@@ -413,6 +432,132 @@ interface ProjectSection {
   items: SearchableProject[];
 }
 
+// Keyed by mode rather than a list, so the lookup below is total: a new mode in
+// the union is a compile error here until it gets a label and an icon. The menu
+// takes its order from `OTHER_PROJECTS_SORT_MODES`.
+const OTHER_PROJECTS_SORT_OPTIONS: Record<
+  OtherProjectsSortMode,
+  { label: string; Icon: typeof Flame }
+> = {
+  hottest: { label: "Hottest", Icon: Flame },
+  recent: { label: "Recent", Icon: Clock },
+  alphabetical: { label: "A to Z", Icon: ArrowDownAZ },
+};
+
+/**
+ * The Other band's header, which doubles as its sort control (#11455). Every
+ * row in the band prints a timestamp, so an unlabelled frecency order reads as
+ * broken — the control's first job is naming the order, changing it second.
+ *
+ * Two structural constraints shape the markup:
+ *
+ * - The `id` stays on a leaf element holding ONLY the label text. It is the
+ *   `aria-labelledby` target for the surrounding `role="group"`, and that name
+ *   is computed from the element's whole subtree — nesting the mode inside it
+ *   would name the band "Other projects Hottest".
+ * - The trigger is `tabIndex={-1}`. Section headers live inside the
+ *   `role="listbox"`, where a focusable child is invalid and unreachable
+ *   anyway (arrow keys move `aria-activedescendant` across rows, never here).
+ *   Right-click reaches the same options, matching every other secondary
+ *   action in this palette.
+ */
+function OtherProjectsHeader({
+  headerId,
+  label,
+  itemCount,
+  onReturnFocus,
+}: {
+  headerId: string;
+  label: string;
+  itemCount: number;
+  onReturnFocus?: () => void;
+}) {
+  const sortMode = usePreferencesStore((state) => state.projectSwitcherOtherSortMode);
+  const setSortMode = usePreferencesStore((state) => state.setProjectSwitcherOtherSortMode);
+
+  const active = OTHER_PROJECTS_SORT_OPTIONS[sortMode];
+  const ActiveIcon = active.Icon;
+
+  const handleValueChange = (value: string) => {
+    if (isOtherProjectsSortMode(value)) setSortMode(value);
+  };
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          role="presentation"
+          className="flex items-center justify-between px-3 py-1 text-[10px] font-medium text-daintree-text/40 select-none"
+        >
+          <div id={headerId} className="tracking-wider uppercase">
+            {label}
+          </div>
+          {itemCount >= OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  data-testid="other-projects-sort-trigger"
+                  aria-label={`Sort other projects, currently ${active.label}`}
+                  className="flex shrink-0 items-center gap-1 text-daintree-text/40 hover:text-daintree-text/60 transition-colors"
+                >
+                  <ActiveIcon className="w-3 h-3" aria-hidden="true" />
+                  {active.label}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                onCloseAutoFocus={(event) => {
+                  // Radix would restore focus to the trigger, which then eats
+                  // ArrowDown and Enter to reopen itself — leaving the palette
+                  // unable to walk or commit a row until focus moved by hand.
+                  // The search box owns those keys, so send focus back there.
+                  //
+                  // Deferred a frame: focusing inside Radix's own focus-restore
+                  // window loses the race with its teardown (same reason
+                  // `ContentPanel`'s rename input defers).
+                  event.preventDefault();
+                  requestAnimationFrame(() => onReturnFocus?.());
+                }}
+              >
+                <DropdownMenuRadioGroup value={sortMode} onValueChange={handleValueChange}>
+                  {OTHER_PROJECTS_SORT_MODES.map((value) => {
+                    const { label: optionLabel, Icon } = OTHER_PROJECTS_SORT_OPTIONS[value];
+                    return (
+                      <DropdownMenuRadioItem key={value} value={value}>
+                        <Icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                        {optionLabel}
+                      </DropdownMenuRadioItem>
+                    );
+                  })}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+      </ContextMenuTrigger>
+      {/*
+       * Right-click keeps the options reachable below the row threshold, where
+       * the visible trigger hides itself — the preference still applies there.
+       */}
+      <ContextMenuContent>
+        <ContextMenuRadioGroup value={sortMode} onValueChange={handleValueChange}>
+          {OTHER_PROJECTS_SORT_MODES.map((value) => {
+            const { label: optionLabel, Icon } = OTHER_PROJECTS_SORT_OPTIONS[value];
+            return (
+              <ContextMenuRadioItem key={value} value={value}>
+                <Icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                {optionLabel}
+              </ContextMenuRadioItem>
+            );
+          })}
+        </ContextMenuRadioGroup>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
 interface ProjectListContentProps {
   results: SearchableProject[];
   selectedIndex: number;
@@ -431,6 +576,8 @@ interface ProjectListContentProps {
   onSelectNewWindow?: (project: SearchableProject) => void;
   onHoverProject?: (projectId: string, pointerType: string) => void;
   onHoverProjectEnd?: (pointerType: string) => void;
+  /** Hands focus back to the search box after the sort menu closes. */
+  onReturnFocus?: () => void;
 }
 
 function ProjectListContent({
@@ -450,6 +597,7 @@ function ProjectListContent({
   onSelectNewWindow,
   onHoverProject,
   onHoverProjectEnd,
+  onReturnFocus,
 }: ProjectListContentProps) {
   const isSearching = query.trim().length > 0;
 
@@ -554,14 +702,22 @@ function ProjectListContent({
                     isActiveSection && "bg-overlay-subtle"
                   )}
                 >
-                  {section.label && (
-                    <div
-                      id={headerId}
-                      className="px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none"
-                    >
-                      {section.label}
-                    </div>
-                  )}
+                  {section.label &&
+                    (section.key === "other" ? (
+                      <OtherProjectsHeader
+                        headerId={headerId}
+                        label={section.label}
+                        itemCount={section.items.length}
+                        onReturnFocus={onReturnFocus}
+                      />
+                    ) : (
+                      <div
+                        id={headerId}
+                        className="px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none"
+                      >
+                        {section.label}
+                      </div>
+                    ))}
                   {section.items.map(renderItem)}
                 </div>
               </div>
@@ -1161,6 +1317,7 @@ function ProjectPaletteInner({
           onSelectNewWindow={onSelectNewWindow}
           onHoverProject={onHoverProject}
           onHoverProjectEnd={onHoverProjectEnd}
+          onReturnFocus={() => inputRef.current?.focus()}
         />
         {(onCreateScratch || (scratchResults && scratchResults.length > 0)) && (
           <>

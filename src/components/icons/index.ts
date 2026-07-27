@@ -9,8 +9,11 @@ export * from "./brands";
 // Each was chosen to fit the metaphor.
 export {
   Activity, // project pulse / live activity heartbeat
+  ArrowDownAZ, // alphabetical sort order (A to Z)
   BellDot, // watch alert / notify on completion
+  Clock, // recency sort order (most recently opened first)
   FileText, // view selected file path in the read-only file viewer
+  Flame, // frecency sort order ("hottest" — decayed access score)
   FolderGit2, // git worktree (single)
   FolderOpen, // reveal in file manager (Finder / Explorer / file manager)
   FolderOutput, // worktree living outside the project directory (external)

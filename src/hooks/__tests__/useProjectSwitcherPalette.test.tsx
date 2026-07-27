@@ -133,7 +133,17 @@ vi.mock("@/hooks/useCopyWithFeedback", () => ({
 }));
 
 import { usePaletteStore } from "@/store/paletteStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import {
+  DEFAULT_OTHER_PROJECTS_SORT_MODE,
+  OTHER_PROJECTS_SORT_MODES,
+  type OtherProjectsSortMode,
+} from "@/lib/projectSort";
 import { useProjectSwitcherPalette } from "../useProjectSwitcherPalette";
+
+function setOtherSortMode(mode: OtherProjectsSortMode): void {
+  usePreferencesStore.getState().setProjectSwitcherOtherSortMode(mode);
+}
 
 const emptyBulkStats = (projectIds: string[]) => {
   const result: Record<
@@ -1498,6 +1508,223 @@ describe("useProjectSwitcherPalette", () => {
   // Classification is tested here, against raw projects plus pushed stats,
   // rather than through the component — a component fixture that restates the
   // banding rules would go on passing while this logic drifted.
+  describe("Other band sort mode — issue #11455", () => {
+    const base = (id: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      name: id,
+      path: `/repo/${id}`,
+      emoji: "🌲",
+      lastOpened: 100,
+      frecencyScore: 3.0,
+      status: "closed" as const,
+      ...extra,
+    });
+
+    // Every signal disagrees, so each mode must produce a different order.
+    const conflicting = () => [
+      base("zulu", { lastOpened: 300, frecencyScore: 9.0 }),
+      base("alpha", { lastOpened: 100, frecencyScore: 3.0 }),
+      base("mike", { lastOpened: 500, frecencyScore: 1.0 }),
+    ];
+
+    async function openWith(mode: OtherProjectsSortMode, projects: ReturnType<typeof base>[]) {
+      setOtherSortMode(mode);
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {};
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const view = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        view.result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(view.result.current.results).toHaveLength(projects.length);
+      });
+      return view;
+    }
+
+    afterEach(() => {
+      setOtherSortMode(DEFAULT_OTHER_PROJECTS_SORT_MODE);
+    });
+
+    const EXPECTED_ORDER: Record<OtherProjectsSortMode, string[]> = {
+      hottest: ["zulu", "alpha", "mike"],
+      recent: ["mike", "zulu", "alpha"],
+      alphabetical: ["alpha", "mike", "zulu"],
+    };
+
+    it.each(OTHER_PROJECTS_SORT_MODES)("orders the Other band for %s", async (mode) => {
+      const view = await openWith(mode, conflicting());
+      expect(view.result.current.results.map((p) => p.id)).toEqual(EXPECTED_ORDER[mode]);
+      view.unmount();
+    });
+
+    // The load-bearing orders belong to their bands, not to this preference:
+    // asking for A-Z in the residual band is not asking for it everywhere, and
+    // asking for Recent must not un-sort a user-curated pinned set.
+    it.each(OTHER_PROJECTS_SORT_MODES)("leaves every other band untouched in %s", async (mode) => {
+      const projects = [
+        // Attention: severity then oldest first — the reverse of every mode here.
+        base("zBlocked", { lastOpened: 9_000, frecencyScore: 50.0 }),
+        base("aWaiting", { lastOpened: 100, frecencyScore: 1.0 }),
+        // Pinned: alphabetical.
+        base("zPinned", { pinned: true, lastOpened: 9_000, frecencyScore: 50.0 }),
+        base("aPinned", { pinned: true, lastOpened: 100, frecencyScore: 1.0 }),
+        // Running: most work first.
+        base("aOneAgent", { lastOpened: 9_000, frecencyScore: 50.0 }),
+        base("zThreeAgents", { lastOpened: 100, frecencyScore: 1.0 }),
+        // Unavailable: alphabetical.
+        base("zGone", { status: "missing", lastOpened: 9_000, frecencyScore: 50.0 }),
+        base("aGone", { status: "missing", lastOpened: 100, frecencyScore: 1.0 }),
+        ...conflicting(),
+      ];
+      setOtherSortMode(mode);
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {
+        zBlocked: {
+          activeAgentCount: 0,
+          waitingAgentCount: 1,
+          blockedAgentCount: 1,
+          processCount: 0,
+        },
+        aWaiting: { activeAgentCount: 0, waitingAgentCount: 1, processCount: 0 },
+        aOneAgent: { activeAgentCount: 1, waitingAgentCount: 0, processCount: 0 },
+        zThreeAgents: { activeAgentCount: 3, waitingAgentCount: 0, processCount: 0 },
+      };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const { result, unmount } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(projects.length);
+      });
+
+      const idsIn = (section: string) =>
+        result.current.results.filter((p) => p.section === section).map((p) => p.id);
+
+      // Blocked outranks a plain wait; a pin outranks recency; most agents
+      // first; missing rows are alphabetical. None of these follow the mode.
+      expect(idsIn("attention")).toEqual(["zBlocked", "aWaiting"]);
+      expect(idsIn("pinned")).toEqual(["aPinned", "zPinned"]);
+      expect(idsIn("running")).toEqual(["zThreeAgents", "aOneAgent"]);
+      expect(idsIn("unavailable")).toEqual(["aGone", "zGone"]);
+      // Only the residual band tracks the preference.
+      expect(idsIn("other")).toEqual(EXPECTED_ORDER[mode]);
+      unmount();
+    });
+
+    it("re-sorts on the next open when the mode changed while closed", async () => {
+      const view = await openWith("hottest", conflicting());
+      act(() => {
+        view.result.current.close();
+      });
+
+      act(() => {
+        setOtherSortMode("alphabetical");
+      });
+      act(() => {
+        view.result.current.open("modal");
+      });
+
+      await waitFor(() => {
+        expect(view.result.current.results.map((p) => p.id)).toEqual(["alpha", "mike", "zulu"]);
+      });
+      view.unmount();
+    });
+
+    it("re-sorts the Other band without disturbing a frozen band", async () => {
+      // The freeze holds a row in the band it had at open, so an agent
+      // finishing mid-read can't move it. Changing an unrelated band's sort
+      // order must not become a back door that releases that hold.
+      const projects = [base("waiting"), ...conflicting()];
+      setOtherSortMode("hottest");
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {
+        waiting: { activeAgentCount: 0, waitingAgentCount: 1, processCount: 0 },
+      };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const { result, rerender, unmount } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results[0]!.id).toBe("waiting");
+      });
+      expect(result.current.results[0]!.section).toBe("attention");
+
+      // The agent finishes: live state now puts this row in Other, but the
+      // freeze keeps it where the user last saw it.
+      act(() => {
+        projectStatsState.stats = {
+          waiting: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+        };
+        rerender();
+      });
+      expect(result.current.results[0]!.section).toBe("attention");
+
+      act(() => {
+        setOtherSortMode("alphabetical");
+      });
+
+      await waitFor(() => {
+        expect(result.current.results.slice(1).map((p) => p.id)).toEqual(["alpha", "mike", "zulu"]);
+      });
+      // Still first, still in Needs attention — the mode change reordered the
+      // Other band only, and did not adopt live band membership wholesale.
+      expect(result.current.results[0]!.id).toBe("waiting");
+      expect(result.current.results[0]!.section).toBe("attention");
+      unmount();
+    });
+
+    it("re-sorts an already-open palette when the mode changes", async () => {
+      // Without an explicit recapture the frozen layout keeps serving the order
+      // captured at open(), so the menu would appear to do nothing.
+      const view = await openWith("hottest", conflicting());
+      expect(view.result.current.results.map((p) => p.id)).toEqual(["zulu", "alpha", "mike"]);
+
+      act(() => {
+        setOtherSortMode("alphabetical");
+      });
+
+      await waitFor(() => {
+        expect(view.result.current.results.map((p) => p.id)).toEqual(["alpha", "mike", "zulu"]);
+      });
+    });
+
+    it("keeps the highlight on the same project across a mode change", async () => {
+      const view = await openWith("hottest", conflicting());
+      // Walk the highlight down to the last row, where the reorder is
+      // guaranteed to move it to a different index.
+      act(() => {
+        view.result.current.selectNext();
+        view.result.current.selectNext();
+      });
+      const selectedBefore = view.result.current.results[view.result.current.selectedIndex]?.id;
+      const indexBefore = view.result.current.selectedIndex;
+      expect(selectedBefore).toBe("mike");
+
+      act(() => {
+        setOtherSortMode("alphabetical");
+      });
+
+      await waitFor(() => {
+        expect(view.result.current.results.map((p) => p.id)).toEqual(["alpha", "mike", "zulu"]);
+      });
+      // The index moved but the selection is the project, not the slot — the
+      // highlight must not be left addressing whatever row inherited index 2.
+      expect(view.result.current.selectedIndex).not.toBe(indexBefore);
+      expect(view.result.current.results[view.result.current.selectedIndex]?.id).toBe(
+        selectedBefore
+      );
+    });
+  });
+
   describe("section classification", () => {
     const base = (id: string, extra: Record<string, unknown> = {}) => ({
       id,
