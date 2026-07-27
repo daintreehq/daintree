@@ -368,8 +368,8 @@ function TopProjects({
 }) {
   return (
     <div className="w-full">
-      {/* "Your projects", not "Recent projects": the list is ranked by decayed
-          use, and each row already shows its own true "opened X ago". */}
+      {/* "Your projects", not "Recent projects": the order follows the switcher's
+          Other-band sort mode, so no fixed order-word belongs in the heading. */}
       <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider mb-3">
         Your projects
       </h3>
