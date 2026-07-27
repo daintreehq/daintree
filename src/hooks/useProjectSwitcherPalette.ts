@@ -1182,7 +1182,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         void selectScratch(row);
         return;
       }
-      selectProject(row);
+      void selectProject(row);
     },
     [selectProject, selectScratch]
   );
