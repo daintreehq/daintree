@@ -132,6 +132,12 @@ export interface ProjectSwitcherPaletteProps {
   onConfirmFreeMemory?: () => void;
   isFreeingMemory?: boolean;
   /** Scratch (one-off agent workspace) results — rendered in their own collapsible section. */
+  /**
+   * True while `results` is the ranked list carrying the scratches, so the
+   * pinned section below can stand down. Trails the query by a commit; defaults
+   * to the live query for callers that don't track it.
+   */
+  rankedSearch?: boolean;
   scratchResults?: SearchableScratch[];
   /** Callback to create and switch to a new scratch. A blank name takes the default. */
   onCreateScratch?: (name?: string) => void;
@@ -734,7 +740,7 @@ function ProjectListContent({
 
   return (
     <>
-      <div ref={listRef} id="project-list" role="listbox" aria-label="Projects">
+      <div ref={listRef} id="project-list" role="listbox" aria-label="Workspaces">
         {results.length === 0 ? (
           <div className="p-2">
             <div
@@ -1186,9 +1192,9 @@ function ScratchSection({
 }
 
 /**
- * Both shortcuts here are project-only, so a highlighted scratch row drops them
- * rather than naming keys that do nothing on it: ⌘↵ falls back to a plain switch
- * and ⌘⌫ is inert.
+ * Every hint here is project-only, so a highlighted scratch row drops them
+ * rather than naming affordances it doesn't have: ⌘↵ falls back to a plain
+ * switch, ⌘⌫ is inert, and a search-mode scratch row carries no context menu.
  */
 function ProjectSwitcherFooter({
   mode,
@@ -1218,9 +1224,11 @@ function ProjectSwitcherFooter({
           </span>
         )}
       </div>
-      <span className="text-daintree-text/50">
-        <span>Right-click for more</span>
-      </span>
+      {!isScratchSelected && (
+        <span className="text-daintree-text/50">
+          <span>Right-click for more</span>
+        </span>
+      )}
     </div>
   );
 }
@@ -1254,6 +1262,12 @@ interface ProjectPaletteInnerProps {
   onCopyPath?: (path: string) => void;
   onHoverProject?: (projectId: string, pointerType: string) => void;
   onHoverProjectEnd?: (pointerType: string) => void;
+  /**
+   * True while `results` is the ranked list carrying the scratches, so the
+   * pinned section below can stand down. Trails the query by a commit; defaults
+   * to the live query for callers that don't track it.
+   */
+  rankedSearch?: boolean;
   scratchResults?: SearchableScratch[];
   onCreateScratch?: (name?: string) => void;
   onSelectScratch?: (scratch: SearchableScratch) => void;
@@ -1289,6 +1303,7 @@ function ProjectPaletteInner({
   onCopyPath,
   onHoverProject,
   onHoverProjectEnd,
+  rankedSearch,
   scratchResults,
   onCreateScratch,
   onSelectScratch,
@@ -1376,7 +1391,11 @@ function ProjectPaletteInner({
 
   const activeResult = results[selectedIndex];
   const activeDescendant = activeResult ? `project-option-${activeResult.id}` : undefined;
-  const isSearching = query.trim().length > 0;
+  // The RANKED list owns the scratches, and it trails the box by a commit.
+  // Hiding the pinned section on the live query instead would blank them for
+  // that frame — and for a user whose only workspaces are scratches, that frame
+  // reads as "no matches".
+  const isRankedSearch = rankedSearch ?? query.trim().length > 0;
 
   return (
     <>
@@ -1391,11 +1410,11 @@ function ProjectPaletteInner({
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Search projects…"
+          placeholder="Search workspaces…"
           role="combobox"
           aria-expanded={true}
           aria-haspopup="listbox"
-          aria-label="Search projects"
+          aria-label="Search workspaces"
           aria-controls="project-list"
           aria-activedescendant={activeDescendant}
         />
@@ -1404,7 +1423,7 @@ function ProjectPaletteInner({
       <AppPaletteDialog.Body
         maxHeight={PALETTE_MAX_HEIGHT}
         className="p-0"
-        ariaLabel="Projects"
+        ariaLabel="Workspaces"
         activeDescendant={activeDescendant}
         onNavigationKeyDown={handleKeyDown}
       >
@@ -1429,10 +1448,10 @@ function ProjectPaletteInner({
         />
         {(onCreateScratch || (scratchResults && scratchResults.length > 0)) && (
           <>
-            <div className="h-[3px] bg-tint/[0.08]" hidden={isSearching} />
+            <div className="h-[3px] bg-tint/[0.08]" hidden={isRankedSearch} />
             <ScratchSection
               scratches={scratchResults ?? []}
-              isSearching={isSearching}
+              isSearching={isRankedSearch}
               onCreate={onCreateScratch}
               onSelect={onSelectScratch}
               onRemove={onRemoveScratch}
@@ -1554,6 +1573,7 @@ function ModalContent({
         onSelectNewWindow={innerProps.onSelectNewWindow}
         onHoverProject={innerProps.onHoverProject}
         onHoverProjectEnd={innerProps.onHoverProjectEnd}
+        rankedSearch={innerProps.rankedSearch}
         scratchResults={innerProps.scratchResults}
         onCreateScratch={innerProps.onCreateScratch}
         onSelectScratch={innerProps.onSelectScratch}
@@ -1661,6 +1681,7 @@ function DropdownContent({
           onSelectNewWindow={innerProps.onSelectNewWindow}
           onHoverProject={innerProps.onHoverProject}
           onHoverProjectEnd={innerProps.onHoverProjectEnd}
+          rankedSearch={innerProps.rankedSearch}
           scratchResults={innerProps.scratchResults}
           onCreateScratch={innerProps.onCreateScratch}
           onSelectScratch={innerProps.onSelectScratch}
@@ -1710,6 +1731,7 @@ export function ProjectSwitcherPalette({
   onFreeMemoryConfirmClose,
   onConfirmFreeMemory,
   isFreeingMemory = false,
+  rankedSearch,
   scratchResults,
   onCreateScratch,
   onSelectScratch,
@@ -1761,6 +1783,7 @@ export function ProjectSwitcherPalette({
         onOpenProjectSettings={onOpenProjectSettings}
         onDropdownCloseAutoFocus={onDropdownCloseAutoFocus}
         dropdownAlign={dropdownAlign}
+        rankedSearch={rankedSearch}
         scratchResults={scratchResults}
         onCreateScratch={onCreateScratch}
         onSelectScratch={onSelectScratch}
@@ -1797,6 +1820,7 @@ export function ProjectSwitcherPalette({
         onHoverProject={onHoverProject}
         onHoverProjectEnd={onHoverProjectEnd}
         onOpenProjectSettings={onOpenProjectSettings}
+        rankedSearch={rankedSearch}
         scratchResults={scratchResults}
         onCreateScratch={onCreateScratch}
         onSelectScratch={onSelectScratch}

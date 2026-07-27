@@ -180,16 +180,21 @@ describe("rankSwitcherMatches", () => {
     expect(results).toHaveLength(20);
   });
 
-  it("leaves project ordering untouched when scratches are added to the pool", () => {
-    // Merging scratches must not reshuffle the projects around them, or search
-    // order would shift under a user who never asked for one.
-    const scratches = [
-      makeScratch({ id: "s1", name: "daintree-scratch" }),
-      makeScratch({ id: "s2", name: "unrelated" }),
-    ];
-    const projectOnly = rankSwitcherMatches("daintree", projects, []).map((r) => r.id);
-    const mixed = rankSwitcherMatches("daintree", projects, scratches);
-    expect(mixed.filter((r) => r.kind === "project").map((r) => r.id)).toEqual(projectOnly);
+  it("leaves project ordering untouched when a scratch ranks between two projects", () => {
+    // The scratch has to land BETWEEN the projects, or "append the scratches"
+    // would satisfy this too. Frecency also opposes input order, so a ranker
+    // that dropped the tiebreak while merging still fails.
+    const strong = makeProject({ id: "strong", name: "alpha", path: "/repos/alpha" });
+    const weak = makeProject({ id: "weak", name: "a-l-p-h-a", path: "/zzz", frecencyScore: 99 });
+    const scratch = makeScratch({ id: "mid", name: "alpha-spike" });
+
+    const mixed = rankSwitcherMatches("alpha", [weak, strong], [scratch]);
+
+    expect(mixed.map((r) => r.id)).toEqual(["strong", "mid", "weak"]);
+    // And the projects keep the order they had with no scratch in the pool.
+    expect(mixed.filter((r) => r.kind === "project").map((r) => r.id)).toEqual(
+      rankSwitcherMatches("alpha", [weak, strong], []).map((r) => r.id)
+    );
   });
 
   it("tags every row with its kind", () => {
@@ -211,12 +216,19 @@ describe("rankSwitcherMatches", () => {
   });
 
   it("puts the project first when a project and a scratch match a name equally", () => {
-    const results = rankSwitcherMatches(
-      "release",
-      [makeProject({ id: "p", name: "release", path: "/repos/release" })],
-      [makeScratch({ id: "s", name: "release" })]
+    // The path scores 0, so the two land on an EXACT numeric tie and only the
+    // kind tiebreak can order them. Give the project a matching path and it
+    // wins on score instead, leaving the tiebreak untested.
+    const project = makeProject({ id: "p", name: "release", path: "/zzz" });
+    const scratch = makeScratch({ id: "s", name: "release" });
+    expect(scoreProjectQuery("release", project.name, project.path)).toBe(
+      scoreScratchQuery("release", scratch.name)
     );
-    expect(results.map((r) => r.id)).toEqual(["p", "s"]);
+
+    expect(rankSwitcherMatches("release", [project], [scratch]).map((r) => r.id)).toEqual([
+      "p",
+      "s",
+    ]);
   });
 
   it("ranks a scratch whose name contains the query above a loosely matching project", () => {

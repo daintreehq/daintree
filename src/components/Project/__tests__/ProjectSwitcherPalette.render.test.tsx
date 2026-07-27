@@ -420,7 +420,7 @@ describe("ProjectSwitcherPalette modal mode", () => {
   // selection on a row that was never in the DOM (#11071).
   it("renders every supplied result as an option in modal mode", () => {
     render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
-    const list = screen.getByRole("listbox", { name: "Projects" });
+    const list = screen.getByRole("listbox", { name: "Workspaces" });
     const options = within(list).getAllByRole("option");
 
     expect(options).toHaveLength(multiProjects.length);
@@ -482,7 +482,7 @@ describe("ProjectSwitcherPalette modal mode", () => {
 
   it("prints each band header in the order the results arrive", () => {
     render(<ProjectSwitcherPalette {...dropdownProps} results={multiProjects} />);
-    const list = screen.getByRole("listbox", { name: "Projects" });
+    const list = screen.getByRole("listbox", { name: "Workspaces" });
     const headers = Array.from(list.querySelectorAll("div"))
       .map((el) => el.textContent?.trim())
       .filter(
@@ -596,17 +596,24 @@ describe("ProjectSwitcherPalette scratch search rows", () => {
     onSelectScratch: vi.fn(),
   };
 
-  it("gives a scratch row the option id the active descendant resolves against", () => {
+  it("puts a scratch row in the same listbox the input drives, addressed by the same id scheme", () => {
+    const project = makeProject({ id: "p1", name: "Spike Project" });
     const scratch = makeScratchRow({ id: "s1", name: "Spike notes" });
-    render(<ProjectSwitcherPalette {...searchProps} results={[scratch]} selectedIndex={0} />);
-
-    const row = screen.getByRole("option", { name: /Spike notes/ });
-    // The palette points aria-activedescendant at this exact id, so a row that
-    // named itself anything else would leave the highlight unresolvable.
-    expect(row.getAttribute("id")).toBe(`project-option-${scratch.id}`);
-    expect(screen.getByTestId("palette-input").getAttribute("aria-activedescendant")).toBe(
-      row.getAttribute("id")
+    render(
+      <ProjectSwitcherPalette {...searchProps} results={[project, scratch]} selectedIndex={1} />
     );
+
+    // The whole fix rests on one array in one listbox: the row the input's
+    // active descendant names must resolve INSIDE the listbox it controls, or
+    // the highlight is addressing something the arrow keys don't walk (#11071).
+    const input = screen.getByTestId("palette-input");
+    const listbox = document.getElementById(input.getAttribute("aria-controls")!)!;
+    const active = document.getElementById(input.getAttribute("aria-activedescendant")!);
+
+    expect(active).not.toBeNull();
+    expect(listbox.contains(active)).toBe(true);
+    expect(active!.textContent).toContain("Spike notes");
+    expect(within(listbox).getAllByRole("option")).toHaveLength(2);
   });
 
   it("marks the highlighted row selected rather than the active workspace", () => {
@@ -632,9 +639,9 @@ describe("ProjectSwitcherPalette scratch search rows", () => {
       />
     );
 
-    const row = screen.getByRole("option", { name: /Spike notes/ });
-    expect(row.tagName).not.toBe("BUTTON");
-    expect(row.hasAttribute("tabindex")).toBe(false);
+    // The behavioural contract, not the tag: a focusable row would take a Tab
+    // stop away from the pinned section and split the arrow-key domain.
+    expect(screen.getByRole("option", { name: /Spike notes/ }).tabIndex).toBe(-1);
   });
 
   it("names the row's origin without spending the accent on it", () => {
@@ -716,9 +723,11 @@ describe("ProjectSwitcherPalette scratch search rows", () => {
   it("names both kinds in the empty state now that both were searched", () => {
     render(<ProjectSwitcherPalette {...searchProps} results={[]} />);
 
-    const copy = screen.getByTestId("project-empty-state").textContent ?? "";
-    expect(copy).toContain("spike");
-    expect(copy).not.toContain("No projects match");
+    // Positively: the umbrella term, not merely the absence of the old copy —
+    // "No bananas match spike" would satisfy a negative-only assertion.
+    expect(screen.getByTestId("project-empty-state").textContent).toBe(
+      'No workspaces match "spike"'
+    );
   });
 
   it("drops the project-only shortcut hints while a scratch is highlighted", () => {
@@ -737,5 +746,80 @@ describe("ProjectSwitcherPalette scratch search rows", () => {
     // ⌘⌫ removes a project and does nothing to a scratch, so advertising it
     // here would name a key that has no effect on the highlighted row.
     expect(screen.getByTestId("palette-footer").textContent).not.toContain("Remove");
+  });
+});
+
+/**
+ * The pinned scratch section across a search round-trip (issue #11466).
+ *
+ * Hiding rather than unmounting keeps the section's own state alive, which is
+ * the point — and also the risk, since a hidden subtree's effects and escape
+ * claims keep running.
+ */
+describe("ProjectSwitcherPalette scratch section across search", () => {
+  const scratch = {
+    id: "s1",
+    name: "Spike notes",
+    path: "/userData/scratch/s1",
+    createdAt: 0,
+    lastOpened: 0,
+    isActive: false,
+  };
+
+  const browseProps = {
+    ...dropdownProps,
+    query: "",
+    results: [],
+    scratchResults: [scratch],
+    onCreateScratch: vi.fn(),
+    onRenameScratch: vi.fn(),
+  };
+
+  it("closes an open create editor when the ranked search takes over", () => {
+    const { rerender } = render(<ProjectSwitcherPalette {...browseProps} />);
+    fireEvent.click(screen.getByTestId("scratch-create-button"));
+    expect(screen.getByTestId("scratch-create-input")).toBeTruthy();
+
+    rerender(<ProjectSwitcherPalette {...browseProps} query="spike" rankedSearch />);
+
+    // Left mounted, the editor keeps its claim on the escape stack — Escape
+    // would cancel an edit nobody can see instead of closing the palette.
+    expect(screen.queryByTestId("scratch-create-input")).toBeNull();
+  });
+
+  it("does not resurrect the editor when the query is cleared again", () => {
+    const { rerender } = render(<ProjectSwitcherPalette {...browseProps} />);
+    fireEvent.click(screen.getByTestId("scratch-create-button"));
+
+    rerender(<ProjectSwitcherPalette {...browseProps} query="spike" rankedSearch />);
+    rerender(<ProjectSwitcherPalette {...browseProps} />);
+
+    expect(screen.queryByTestId("scratch-create-input")).toBeNull();
+    expect(screen.getByTestId("scratch-create-button")).toBeTruthy();
+  });
+
+  it("keeps a collapsed section collapsed across a search round-trip", () => {
+    const { rerender } = render(<ProjectSwitcherPalette {...browseProps} />);
+    const header = screen.getByRole("button", { name: /Scratch/ });
+    fireEvent.click(header);
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+
+    rerender(<ProjectSwitcherPalette {...browseProps} query="spike" rankedSearch />);
+    rerender(<ProjectSwitcherPalette {...browseProps} />);
+
+    // Unmounting instead would reseed `collapsed` from the scratch count and
+    // spring the section back open under a user who deliberately shut it.
+    expect(screen.getByRole("button", { name: /Scratch/ }).getAttribute("aria-expanded")).toBe(
+      "false"
+    );
+  });
+
+  it("keeps the section visible while the ranking is still catching up", () => {
+    // A non-empty box whose ranked results have not landed yet: the scratches
+    // are not in `results`, so hiding the section here would leave them in
+    // neither list and read as "no matches".
+    render(<ProjectSwitcherPalette {...browseProps} query="spike" rankedSearch={false} />);
+
+    expect(screen.queryByRole("listbox", { name: "Scratch workspaces" })).toBeTruthy();
   });
 });

@@ -89,8 +89,15 @@ export function scoreProjectQuery(query: string, name: string, path: string): nu
  *
  * The same {@link NAME_WEIGHT} a project's name carries, so the two scales are
  * directly comparable: an equal name match leaves the project ahead by exactly
- * its path term (which is never negative), and a scratch whose name contains the
- * query clears a project that only matched loosely.
+ * its path term, which is never negative.
+ *
+ * That a scratch containing the query outranks a loosely-matched project is a
+ * consequence of the scores, not a guarantee. Long queries let a project's
+ * per-character boundary bonuses plus a path hit overtake the substring bonus —
+ * but only where the project's own name matches nearly as exactly, which is a
+ * project that deserves the top slot anyway. Promoting substring quality into a
+ * ranking tier would have to apply to every pair, projects included, or the
+ * comparator stops being transitive.
  */
 export function scoreScratchQuery(query: string, name: string): number {
   if (!query) return 0;

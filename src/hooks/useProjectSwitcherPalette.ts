@@ -153,10 +153,6 @@ function toProjectRow(project: SearchableProject): ProjectSwitcherProjectRow {
   return { kind: "project", ...project };
 }
 
-function toScratchRow(scratch: SearchableScratch): ProjectSwitcherScratchRow {
-  return { kind: "scratch", ...scratch };
-}
-
 export interface UseProjectSwitcherPaletteReturn {
   isOpen: boolean;
   mode: ProjectSwitcherMode;
@@ -175,6 +171,14 @@ export interface UseProjectSwitcherPaletteReturn {
   results: ProjectSwitcherRow[];
   /** True while `deferredQuery` has not yet caught up to `query` — the results shown are from the previous query. */
   isFiltering: boolean;
+  /**
+   * True exactly while {@link results} is the ranked list, which is the only
+   * time it carries scratches. Trails `query` by a commit, because the ranking
+   * runs on the deferred query — so a surface that also renders scratches
+   * elsewhere must hide them on THIS, not on a non-empty query, or they would
+   * belong to neither list for a frame.
+   */
+  isRankedSearch: boolean;
   /**
    * The currently active project as a `SearchableProject`, with stats and
    * pin/missing flags enriched. Decoupled from `results` so callers (e.g. the
@@ -497,21 +501,25 @@ function compareWithinSection(
  *
  * Scratches join the ranking, and only the ranking (#11466). In browse they are
  * left to the pinned section at the bottom, where create and delete-all live and
- * spatial predictability is worth more than relevance. The one frame where the
- * live query has outrun the deferred one still carries them — unranked, after
- * the projects, exactly where browse already draws them — because dropping them
- * for that frame is what would flash the empty state at a user whose only
- * workspaces are scratches.
+ * spatial predictability is worth more than relevance.
+ *
+ * They join on `rankQuery`, not on the live one, so the frame where the live
+ * query has outrun the deferred one is still pure browse. The pinned section
+ * keys off the same signal ({@link UseProjectSwitcherPaletteReturn.isRankedSearch}),
+ * so for that frame the scratches are simply still down there — never listed
+ * twice, and never briefly absent from both places.
  */
 function buildResults(
+  browseRows: ProjectSwitcherRow[],
   browseOrdered: SearchableProject[],
   scratches: SearchableScratch[],
   rankQuery: string,
   isSearching: boolean
 ): ProjectSwitcherRow[] {
-  if (!isSearching) return browseOrdered.map(toProjectRow);
-  if (rankQuery.trim()) return rankSwitcherMatches(rankQuery, browseOrdered, scratches);
-  return [...browseOrdered.map(toProjectRow), ...scratches.map(toScratchRow)];
+  if (isSearching && rankQuery.trim()) {
+    return rankSwitcherMatches(rankQuery, browseOrdered, scratches);
+  }
+  return browseRows;
 }
 
 /**
@@ -957,9 +965,25 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // search ranking on the way back to an empty query.
   const resultsQuery = isSearching ? deferredQuery : "";
 
+  // Held apart from `results` so browse keeps a stable array identity across
+  // scratch-store traffic. Folded into the same memo, a rename in the pinned
+  // section below would hand the component a fresh array of identical project
+  // rows, and its scroll-into-view effect would yank the list back to the
+  // highlighted project while the user was reading the section.
+  const browseRows = useMemo<ProjectSwitcherRow[]>(
+    () => browseOrdered.map(toProjectRow),
+    [browseOrdered]
+  );
+
+  // True exactly when `results` is the ranked, scratch-carrying list — which is
+  // one commit behind `isSearching`, since the ranking runs on the deferred
+  // query. The pinned scratch section hides on THIS, never on the live query:
+  // hiding a commit early would leave the scratches nowhere for that frame.
+  const isRankedSearch = isSearching && resultsQuery.trim().length > 0;
+
   const results = useMemo<ProjectSwitcherRow[]>(
-    () => buildResults(browseOrdered, scratchResults, resultsQuery, isSearching),
-    [browseOrdered, scratchResults, resultsQuery, isSearching]
+    () => buildResults(browseRows, browseOrdered, scratchResults, resultsQuery, isSearching),
+    [browseRows, browseOrdered, scratchResults, resultsQuery, isSearching]
   );
 
   // The selected ROW is the state; its index is derived. Tracking an index
@@ -1764,6 +1788,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     query,
     results,
     isFiltering,
+    isRankedSearch,
     activeProject,
     selectedIndex,
     open,

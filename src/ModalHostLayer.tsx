@@ -469,6 +469,7 @@ export function ModalHostLayer({
                   { source: "user" }
                 );
               }}
+              rankedSearch={projectSwitcherPalette.isRankedSearch}
               scratchResults={projectSwitcherPalette.scratchResults}
               onCreateScratch={(name) => void projectSwitcherPalette.createScratch(name)}
               onSelectScratch={(scratch) => void projectSwitcherPalette.selectScratch(scratch)}

@@ -736,7 +736,12 @@ describe("scratches in search results", () => {
     const { result } = renderHook(() => useProjectSwitcherPalette());
 
     act(() => result.current.setQuery("Spike"));
-    await waitFor(() => expect(result.current.results).toHaveLength(2));
+    // Both scratches are present before AND after the deferred render settles,
+    // so a length check alone would not prove the ranking actually ran.
+    await waitFor(() => {
+      expect(result.current.isFiltering).toBe(false);
+      expect(result.current.results).toHaveLength(2);
+    });
 
     act(() => result.current.setQuery(""));
 
@@ -748,16 +753,54 @@ describe("scratches in search results", () => {
     const { result } = renderHook(() => useProjectSwitcherPalette());
 
     act(() => result.current.setQuery("Spike"));
-    await waitFor(() => expect(result.current.results).toHaveLength(2));
+    await waitFor(() => {
+      expect(result.current.isFiltering).toBe(false);
+      expect(result.current.results).toHaveLength(2);
+    });
 
     const first = result.current.results[result.current.selectedIndex]!.id;
     act(() => result.current.selectNext());
-    const second = result.current.results[result.current.selectedIndex]!.id;
 
-    expect(second).not.toBe(first);
-    // The index must stay a valid address into the rendered array, never run
-    // past it — that is what strands a highlight off-screen (#11071).
-    expect(result.current.selectedIndex).toBeLessThan(result.current.results.length);
+    expect(result.current.results[result.current.selectedIndex]!.id).not.toBe(first);
+  });
+
+  it("keeps ranked results in step with the scratch store under a settled query", async () => {
+    const seeded = seedScratches(2);
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.setQuery("Spike 2"));
+    await waitFor(() => expect(result.current.results.map((row) => row.id)).toEqual(["scratch-2"]));
+
+    // A `scratch:removed` push under an open, settled query. Without the store
+    // feeding the ranked list, the row would linger and Enter would commit a
+    // workspace that no longer exists.
+    scratchState.scratches = [seeded[0]!];
+    rerender();
+
+    await waitFor(() => expect(result.current.results).toEqual([]));
+  });
+
+  it("holds browse rows steady when only the scratches change", async () => {
+    seedScratches(2);
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+    const before = result.current.results;
+    scratchState.scratches = [
+      ...scratchState.scratches,
+      {
+        id: "scratch-3",
+        name: "Spike 3",
+        path: "/tmp/scratches/scratch-3",
+        createdAt: 3_000,
+        lastOpened: 3_000,
+      },
+    ];
+    rerender();
+
+    // Browse ignores scratches, so its array must keep its identity — a fresh
+    // one sends the palette's scroll-into-view effect chasing the highlight
+    // while the user is reading the pinned section.
+    expect(result.current.results).toBe(before);
   });
 
   it("switches to the highlighted scratch on confirm rather than a project", async () => {

@@ -1641,6 +1641,7 @@ export function Toolbar({
                     }
                     onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
                     isFreeingMemory={projectSwitcher.isFreeingMemory}
+                    rankedSearch={projectSwitcher.isRankedSearch}
                     scratchResults={projectSwitcher.scratchResults}
                     onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
                     onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
