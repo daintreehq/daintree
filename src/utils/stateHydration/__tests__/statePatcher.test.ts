@@ -706,6 +706,138 @@ describe("buildArgsForRespawn", () => {
       expect(result.sessionLostOnRestore).toBeUndefined();
     });
 
+    it("is set when resume-latest is suppressed for a sibling-owned slot (#11461)", () => {
+      buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+      const result = buildArgsForRespawn(
+        { id: "t1", kind: "terminal" as const, agentId: "claude", cwd: "/p", location: "grid" },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp",
+        undefined,
+        { allowResumeLatest: false }
+      );
+      expect(buildResumeLatestCommandMock).not.toHaveBeenCalled();
+      expect(result.command).toBe("claude --generated");
+      expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("does not inherit a persisted resume-latest command when suppressed (#11461)", () => {
+      // A prior restore persists its resume command, so `saved.command` can itself
+      // be `--continue`. With no settings and no flags to rebuild from, the
+      // suppressed pane must still not re-run it.
+      buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          command: "claude --continue",
+        },
+        "terminal",
+        "/p",
+        undefined,
+        false,
+        "/tmp",
+        undefined,
+        { allowResumeLatest: false }
+      );
+      expect(result.command).toBe("claude");
+      expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("still resumes an exact session id when resume-latest is suppressed (#11461)", () => {
+      // The gate must touch only the no-session-id branch.
+      buildResumeCommandMock.mockReturnValue("claude --resume sess-1");
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          agentSessionId: "sess-1",
+        },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp",
+        undefined,
+        { allowResumeLatest: false }
+      );
+      expect(result.command).toBe("claude --resume sess-1");
+      expect(result.sessionLostOnRestore).toBeUndefined();
+    });
+
+    it("prefers persisted flags over a bare rebuild when suppressed (#11461)", () => {
+      buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          agentLaunchFlags: ["--flagged"],
+        },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp",
+        undefined,
+        { allowResumeLatest: false }
+      );
+      expect(result.command).toBe("claude --flagged");
+      expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("leaves an agent with no resume-latest fallback untouched when suppressed (#11461)", () => {
+      // Suppression may only affect an agent that has a fallback to suppress, so
+      // the option can't quietly rewrite an unrelated agent's saved command.
+      buildResumeLatestCommandMock.mockReturnValue(undefined);
+      const saved = {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        command: "claude --custom-mode",
+      };
+      const allowed = buildArgsForRespawn(saved, "terminal", "/p", undefined, false, "/tmp");
+      const suppressed = buildArgsForRespawn(
+        saved,
+        "terminal",
+        "/p",
+        undefined,
+        false,
+        "/tmp",
+        undefined,
+        { allowResumeLatest: false }
+      );
+
+      expect(suppressed.command).toBe(allowed.command);
+      expect(suppressed.sessionLostOnRestore).toBe(allowed.sessionLostOnRestore);
+    });
+
+    it("uses resume-latest by default when no allowance is passed (#11461)", () => {
+      buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+      const result = buildArgsForRespawn(
+        { id: "t1", kind: "terminal" as const, agentId: "claude", cwd: "/p", location: "grid" },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp"
+      );
+      expect(result.command).toBe("claude --continue");
+      expect(result.sessionLostOnRestore).toBeUndefined();
+    });
+
     it("is not set for non-agent panels", () => {
       const result = buildArgsForRespawn(
         { id: "t1", kind: "terminal" as const, cwd: "/p", location: "grid" },
@@ -837,7 +969,7 @@ describe("buildArgsForRespawn", () => {
       false,
       "/tmp/clip",
       undefined,
-      "'/tmp/daintree-fake-bin/claude'"
+      { resolvedAgentBaseCommand: "'/tmp/daintree-fake-bin/claude'" }
     );
 
     expect(result.command).toBe("'/tmp/daintree-fake-bin/claude' --generated");
@@ -915,7 +1047,7 @@ describe("buildArgsForRespawn", () => {
       false,
       undefined,
       undefined,
-      "'/tmp/daintree-fake-bin/claude'"
+      { resolvedAgentBaseCommand: "'/tmp/daintree-fake-bin/claude'" }
     );
 
     expect(result.command).toBe("'/tmp/daintree-fake-bin/claude' --continue");

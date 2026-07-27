@@ -28,7 +28,10 @@ import {
   buildArgsForNonPtyRecreation,
   buildArgsForOrphanedTerminal,
   inferWorktreeIdFromCwd,
+  resolveRespawnAgentId,
 } from "./statePatcher";
+import { buildResumeLatestCommand } from "@shared/types/agentSettings";
+import { normalize as normalizePath } from "@shared/utils/path";
 import type { HydrationOptions } from "./";
 import { getAgentConfig } from "@/config/agents";
 import {
@@ -38,6 +41,101 @@ import {
 
 type AddPanelFn = HydrationOptions["addPanel"];
 type RestoreTerminalOrderFn = NonNullable<HydrationOptions["restoreTerminalOrder"]>;
+
+/**
+ * Scope key component for the resume-latest election: the directory a pane will
+ * launch in, normalized lexically so two spellings of one directory share a slot.
+ * Deliberately not realpath'd — the election must stay synchronous and the path
+ * may no longer exist, so symlink aliases remain separate scopes.
+ */
+function resumeLatestScopeCwd(cwd: string): string {
+  const normalized = normalizePath(cwd).normalize("NFC");
+  // Windows paths are case-insensitive; fold so `C:/Repo` and `c:/repo` collide.
+  return /^([A-Za-z]:\/|\/\/)/.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+/**
+ * Ids of panes that must NOT use their agent's resume-latest fallback because a
+ * sibling pane in the same (agent, cwd) scope already owns that scope's single
+ * slot (#11461). Highest valid `lastActiveAt` wins and ties keep the earlier
+ * saved entry, so the outcome is deterministic and independent of restore order.
+ *
+ * Only panes that could actually reach the fallback are candidates: an id-less
+ * agent pane, of an agent that declares resume-latest args, whose PTY did not
+ * survive. A pane with a live backend record — or a prefetched probe that already
+ * says its PTY exists — reconnects instead of respawning, so letting one win a
+ * slot would strand its genuinely-respawning siblings on fresh launches.
+ *
+ * Scopes with a single candidate are omitted entirely, so the common one-pane
+ * case keeps its existing behavior by construction.
+ *
+ * Liveness is only as good as what is known synchronously. When the bulk probe
+ * timed out there is no prefetched result, and a per-panel reconnect can still
+ * find a live PTY after the election has run — that pane then holds a slot it
+ * never uses and its cold sibling launches fresh. Deliberately accepted: the
+ * election has to complete before any task dispatches (a claim taken after an
+ * await races, the hazard #11052 fixed for restart), and the cost is one pane
+ * missing a resume rather than two panes sharing a conversation.
+ */
+function electSuppressedResumeLatestIds(
+  panels: readonly (TerminalState | undefined)[],
+  context: {
+    projectRoot: string;
+    backendTerminalMap: Map<string, BackendTerminalInfo>;
+    prefetchedReconnectResults?: Record<string, TerminalReconnectResult>;
+  }
+): Set<string> {
+  const winnerByScope = new Map<string, { id: string; lastActiveAt: number }>();
+  const candidateIdsByScope = new Map<string, string[]>();
+
+  for (const saved of panels) {
+    if (saved === undefined) continue;
+    if (isSmokeTestTerminalId(saved.id)) continue;
+    // An exact per-pane session id resumes precisely and never consumes a slot.
+    if (saved.agentSessionId) continue;
+    if (context.backendTerminalMap.has(saved.id)) continue;
+    // A prefetched probe reporting a live PTY takes the reconnect path in
+    // `reconnectWithTimeout`, so this pane never respawns either.
+    const prefetched = context.prefetchedReconnectResults?.[saved.id];
+    if (prefetched?.exists && prefetched.hasPty) continue;
+    const kind = inferKind(saved);
+    if (kind === "assistant" || !panelKindHasPty(kind)) continue;
+    const agentId = resolveRespawnAgentId(saved, kind);
+    if (agentId === undefined) continue;
+    // Probe capability through the very builder the respawn branch calls, so
+    // eligibility can't drift from behavior (covers custom/plugin agents too).
+    if (buildResumeLatestCommand(agentId) === undefined) continue;
+
+    // NUL-joined: neither an agent id nor a path can contain it, so the key can
+    // never be forged by an unusual path or a future custom agent id.
+    const scope = `${agentId}\u0000${resumeLatestScopeCwd(saved.cwd || context.projectRoot)}`;
+    const existingIds = candidateIdsByScope.get(scope);
+    if (existingIds === undefined) {
+      candidateIdsByScope.set(scope, [saved.id]);
+    } else {
+      existingIds.push(saved.id);
+    }
+
+    // A corrupt or missing stamp ranks lowest rather than winning the slot.
+    const savedLastActiveAt = saved.lastActiveAt ?? 0;
+    const lastActiveAt =
+      Number.isFinite(savedLastActiveAt) && savedLastActiveAt > 0 ? savedLastActiveAt : 0;
+    const currentWinner = winnerByScope.get(scope);
+    if (currentWinner === undefined || lastActiveAt > currentWinner.lastActiveAt) {
+      winnerByScope.set(scope, { id: saved.id, lastActiveAt });
+    }
+  }
+
+  const suppressed = new Set<string>();
+  for (const [scope, ids] of candidateIdsByScope) {
+    if (ids.length < 2) continue;
+    const winnerId = winnerByScope.get(scope)?.id;
+    for (const id of ids) {
+      if (id !== winnerId) suppressed.add(id);
+    }
+  }
+  return suppressed;
+}
 
 /**
  * Rebase a restore arg's `cwd` from a moved worktree's old root to its new one.
@@ -263,6 +361,21 @@ export async function restorePanelsPhase(
       }
     }
 
+    // Elect at most one pane per (agent, cwd) to use the agent's resume-latest
+    // fallback. That fallback resolves to the most recent session in scope
+    // (`codex resume --last`, `claude --continue`), so N id-less panes sharing a
+    // directory would every one of them reopen the SAME conversation (#11461).
+    // Computed synchronously over static saved fields before any task executes:
+    // same-tier tasks run concurrently via Promise.allSettled, so a check-and-claim
+    // inside the closures would race (the hazard already fixed once for restart,
+    // #11052). Only the losers are recorded, so a lone candidate — the common
+    // single-pane case — is never suppressed.
+    const resumeLatestSuppressedIds = electSuppressedResumeLatestIds(panels, {
+      projectRoot: projectRoot || "",
+      backendTerminalMap,
+      prefetchedReconnectResults,
+    });
+
     const panelTasks: PanelRestoreTaskEntry[] = [];
     const restoredIdsByIndex = new Map<number, string>();
 
@@ -462,7 +575,10 @@ export async function restorePanelsPhase(
                   reconnectTimedOut,
                   clipboardDirectory,
                   projectPresetsByAgent,
-                  resolvedAgentBaseCommand
+                  {
+                    resolvedAgentBaseCommand,
+                    allowResumeLatest: !resumeLatestSuppressedIds.has(saved.id),
+                  }
                 );
 
                 // Assign to the active worktree when the saved terminal has no

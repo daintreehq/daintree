@@ -144,8 +144,10 @@ export interface AddPanelOptionsBase {
   fallbackChainIndex?: number;
   /**
    * PTY-only, transient. True when session restore fell through to a fresh
-   * agent launch because no resume command (neither exact-session nor
-   * resume-latest) was available — the prior conversation is unreachable.
+   * agent launch because no resume command was usable — either none was
+   * available (neither exact-session nor resume-latest), or resume-latest was
+   * suppressed because a sibling pane owns this agent+cwd's single slot
+   * (#11461) — so the prior conversation is unreachable for this pane.
    * Drives the "Session no longer reachable" restart banner. Never persisted;
    * cleared on the next restart. See `serializePtyPanel` (intentionally omitted).
    */

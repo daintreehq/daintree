@@ -20,6 +20,8 @@ import {
   sanitizeTerminals,
   sanitizeTerminalSizes,
   sanitizeDraftInputs,
+  sanitizeFieldEdits,
+  TERMINAL_FIELD_LEVEL_MERGE,
 } from "../terminalLayout.js";
 import { sanitizeTabGroups } from "../../../schemas/index.js";
 import { mergeIdArray, mergeRecord } from "../../../../shared/utils/layoutMerge.js";
@@ -318,7 +320,14 @@ async function persistOutgoingProjectState(
               existing?.terminals ?? [],
               validTerminals,
               terminalDelta.changedIds,
-              terminalDelta.removedIds
+              terminalDelta.removedIds,
+              {
+                // Same out-of-band-field policy as the setTerminals handler: a
+                // stale outgoing snapshot must not erase a session id Main
+                // captured on shutdown (#11461).
+                fieldLevelMerge: TERMINAL_FIELD_LEVEL_MERGE,
+                fieldEdits: sanitizeFieldEdits(terminalDelta.fieldEdits),
+              }
             )
           : validTerminals;
     const mergedTabGroups =

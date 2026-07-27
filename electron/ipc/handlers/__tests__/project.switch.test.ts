@@ -885,6 +885,90 @@ describe("project:switch outgoing draftInputs merge (#11352)", () => {
   });
 });
 
+describe("project:switch outgoing agentSessionId field merge (#11461)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetProjectForWebContents.mockReturnValue("proj-old");
+  });
+
+  async function runSwitchWithTerminals(
+    existingTerminals: Record<string, unknown>[],
+    outgoingState: Record<string, unknown>
+  ): Promise<{ id: string; agentSessionId?: string }[]> {
+    const mockView = {
+      webContents: { id: 100, isDestroyed: () => false, send: vi.fn() },
+    };
+    const pvm = {
+      switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew: false }),
+      getProjectIdForWebContents: vi.fn(),
+    };
+    mockGetWindowForWebContents.mockReturnValue(null);
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New Project",
+      path: "/projects/new",
+    });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+    projectStoreMock.getProjectState.mockResolvedValue({
+      projectId: "proj-old",
+      sidebarWidth: 350,
+      terminals: existingTerminals,
+      tabGroups: [],
+    });
+    projectStoreMock.saveProjectState.mockResolvedValue(undefined);
+
+    const deps = {
+      mainWindow: { id: 1 } as unknown,
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+    registerProjectCrudHandlers(deps);
+
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+    const handler = handleMap.get(CHANNELS.PROJECT_SWITCH);
+    await handler!({ sender: { id: 99 } }, "proj-new", outgoingState);
+    const state = projectStoreMock.saveProjectState.mock.calls[0]?.[1] as {
+      terminals?: { id: string; agentSessionId?: string }[];
+    };
+    return state.terminals ?? [];
+  }
+
+  const pane = (extra: Record<string, unknown> = {}) => ({
+    id: "t1",
+    title: "Codex",
+    kind: "terminal",
+    cwd: "/proj",
+    location: "grid",
+    launchAgentId: "codex",
+    ...extra,
+  });
+
+  it("keeps a shutdown-captured session id the outgoing snapshot omits", async () => {
+    const terminals = await runSwitchWithTerminals([pane({ agentSessionId: "captured" })], {
+      terminals: [pane({ agentState: "exited" })],
+      terminalDelta: { changedIds: ["t1"], removedIds: [] },
+    });
+
+    expect(terminals.find((t) => t.id === "t1")?.agentSessionId).toBe("captured");
+  });
+
+  it("clears it when the outgoing delta claims the change", async () => {
+    const terminals = await runSwitchWithTerminals([pane({ agentSessionId: "consumed" })], {
+      terminals: [pane()],
+      terminalDelta: {
+        changedIds: ["t1"],
+        removedIds: [],
+        fieldEdits: [{ id: "t1", fields: ["agentSessionId"] }],
+      },
+    });
+
+    expect(terminals.find((t) => t.id === "t1")?.agentSessionId).toBeUndefined();
+  });
+});
+
 describe("project:switch worktree-load-status (#8400)", () => {
   beforeEach(() => {
     vi.clearAllMocks();

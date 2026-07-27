@@ -9,13 +9,14 @@ const projectStoreMock = vi.hoisted(() => ({
 
 vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 
-import { terminalLayoutNamespace } from "../terminalLayout.js";
+import { terminalLayoutNamespace, sanitizeFieldEdits } from "../terminalLayout.js";
 
 const setTerminals = terminalLayoutNamespace.ops.setTerminals.handler as (payload: {
   projectId: string;
   terminals: TerminalSnapshot[];
   changedIds?: string[];
   removedIds?: string[];
+  fieldEdits?: unknown;
 }) => Promise<void>;
 
 const setTabGroups = terminalLayoutNamespace.ops.setTabGroups.handler as (payload: {
@@ -125,6 +126,157 @@ describe("setTerminals merge (#11350)", () => {
     const saved = onDisk(baseState([term("1"), term("2"), term("3")]));
     await setTerminals({ projectId: "p1", terminals: [term("1")] });
     expect(ids(saved()?.terminals)).toEqual(["1"]);
+  });
+});
+
+describe("setTerminals session-id preservation (#11461)", () => {
+  const withSession = (
+    id: string,
+    agentSessionId?: string,
+    extra: Partial<TerminalSnapshot> = {}
+  ): TerminalSnapshot => ({
+    ...term(id),
+    launchAgentId: "codex",
+    ...(agentSessionId && { agentSessionId }),
+    ...extra,
+  });
+
+  const sessionIdOf = (state: ProjectState | null, id: string): string | undefined =>
+    state?.terminals?.find((t) => t.id === id)?.agentSessionId;
+
+  it("keeps a shutdown-captured session id when the writer omits it", async () => {
+    const saved = onDisk(baseState([withSession("1", "captured")]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [withSession("1")],
+      changedIds: ["1"],
+      removedIds: [],
+    });
+
+    expect(sessionIdOf(saved(), "1")).toBe("captured");
+  });
+
+  it("clears the stored session id when the writer claims the change", async () => {
+    const saved = onDisk(baseState([withSession("1", "stale")]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [withSession("1")],
+      changedIds: ["1"],
+      removedIds: [],
+      fieldEdits: [{ id: "1", fields: ["agentSessionId"] }],
+    });
+
+    expect(sessionIdOf(saved(), "1")).toBeUndefined();
+  });
+
+  it("does not let a stale sibling window resurrect a consumed session id", async () => {
+    // Window A already consumed and cleared the session, so disk has none.
+    // Window B is stale, still carries the old id, and saves for an unrelated
+    // reason without claiming the field.
+    const saved = onDisk(baseState([withSession("1", undefined, { agentState: "idle" })]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [withSession("1", "consumed", { agentState: "exited" })],
+      changedIds: ["1"],
+      removedIds: [],
+    });
+
+    expect(sessionIdOf(saved(), "1")).toBeUndefined();
+    expect(saved()?.terminals?.find((t) => t.id === "1")?.agentState).toBe("exited");
+  });
+
+  it("ignores field names outside the allowlist", async () => {
+    const saved = onDisk(baseState([withSession("1", "captured")]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [withSession("1", undefined, { title: "renamed" })],
+      changedIds: ["1"],
+      removedIds: [],
+      fieldEdits: [{ id: "1", fields: ["title", "cwd"] }],
+    });
+
+    const entry = saved()?.terminals?.find((t) => t.id === "1");
+    expect(entry?.agentSessionId).toBe("captured");
+    expect(entry?.title).toBe("renamed");
+    expect(entry?.cwd).toBe("/tmp");
+  });
+
+  it("survives malformed claim metadata without dropping the stored id", async () => {
+    const saved = onDisk(baseState([withSession("1", "captured")]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [withSession("1")],
+      changedIds: ["1"],
+      removedIds: [],
+      fieldEdits: [null, "nope", { id: 7, fields: ["agentSessionId"] }, { id: "1" }],
+    });
+
+    expect(sessionIdOf(saved(), "1")).toBe("captured");
+  });
+
+  it("does not let one entry's tombstone clear another's session id", async () => {
+    const saved = onDisk(baseState([withSession("1", "keep-a"), withSession("2", "keep-b")]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [withSession("1"), withSession("2")],
+      changedIds: ["1", "2"],
+      removedIds: [],
+      fieldEdits: [{ id: "1", fields: ["agentSessionId"] }],
+    });
+
+    expect(sessionIdOf(saved(), "1")).toBeUndefined();
+    expect(sessionIdOf(saved(), "2")).toBe("keep-b");
+  });
+
+  it("full-replace still drops an omitted session id (legacy contract unchanged)", async () => {
+    const saved = onDisk(baseState([withSession("1", "captured")]));
+
+    await setTerminals({ projectId: "p1", terminals: [withSession("1")] });
+
+    expect(sessionIdOf(saved(), "1")).toBeUndefined();
+  });
+});
+
+describe("sanitizeFieldEdits (#11461 trust boundary)", () => {
+  // Asserted directly: the merge independently ignores unknown fields, so a
+  // handler-level test alone would still pass with the sanitizer bypassed.
+  it("keeps only allowlisted field names", () => {
+    expect(sanitizeFieldEdits([{ id: "1", fields: ["agentSessionId", "title", "cwd"] }])).toEqual([
+      { id: "1", fields: ["agentSessionId"] },
+    ]);
+  });
+
+  it("returns undefined when nothing survives", () => {
+    expect(sanitizeFieldEdits([{ id: "1", fields: ["title"] }])).toBeUndefined();
+    expect(sanitizeFieldEdits([])).toBeUndefined();
+    expect(sanitizeFieldEdits("nope")).toBeUndefined();
+    expect(sanitizeFieldEdits(undefined)).toBeUndefined();
+  });
+
+  it("drops entries with an unusable id or fields list", () => {
+    expect(
+      sanitizeFieldEdits([
+        null,
+        "nope",
+        { id: 7, fields: ["agentSessionId"] },
+        { id: "", fields: ["agentSessionId"] },
+        { id: "ok", fields: "agentSessionId" },
+        { id: "ok", fields: ["agentSessionId"] },
+      ])
+    ).toEqual([{ id: "ok", fields: ["agentSessionId"] }]);
+  });
+
+  it("carries a prototype-chain id through as plain data", () => {
+    // Kept as an ordinary string id; the merge keys claims in a Map, so it can
+    // never reach Object.prototype downstream.
+    const sanitized = sanitizeFieldEdits([{ id: "__proto__", fields: ["agentSessionId"] }]) ?? [];
+    expect(sanitized.map((e) => e.id)).toEqual(["__proto__"]);
   });
 });
 

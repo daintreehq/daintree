@@ -212,6 +212,223 @@ describe("mergeIdArray", () => {
   });
 });
 
+describe("field-level merge for out-of-band fields (#11461)", () => {
+  interface Snap {
+    id: string;
+    agentSessionId?: string;
+    agentState?: string;
+    detectedProcessId?: string;
+  }
+
+  // Mirrors the real producer: undefined-valued keys are dropped, so an absent
+  // field and an explicitly-undefined one are the same wire shape.
+  const snapEq = (a: Snap, b: Snap) => deepEqualIgnoringUndefined(a, b);
+  const sessionMerge = { fieldLevelMerge: ["agentSessionId"] } as const;
+  const claim = (id: string) => [{ id, fields: ["agentSessionId"] }];
+
+  it("keeps a session id only Main knows when an ambient change flags the entry", () => {
+    // The #11461 scenario: shutdown captured the id straight to disk, the
+    // renderer never had it, and a PTY exit flips agentState on the next save.
+    const existing: Snap[] = [{ id: "1", agentSessionId: "captured", agentState: "idle" }];
+    const incoming: Snap[] = [{ id: "1", agentState: "exited" }];
+
+    const merged = mergeIdArray(existing, incoming, ["1"], [], sessionMerge);
+
+    expect(merged[0]!.agentSessionId).toBe("captured");
+    // The ambient field the writer *did* change still wins.
+    expect(merged[0]!.agentState).toBe("exited");
+  });
+
+  it("clears the field when the writer claims it and sends nothing", () => {
+    const existing: Snap[] = [{ id: "1", agentSessionId: "stale" }];
+    const incoming: Snap[] = [{ id: "1" }];
+
+    const merged = mergeIdArray(existing, incoming, ["1"], [], {
+      ...sessionMerge,
+      fieldEdits: claim("1"),
+    });
+
+    expect(merged[0]!.agentSessionId).toBeUndefined();
+  });
+
+  it("rejects an unclaimed value, so a stale writer cannot resurrect a consumed id", () => {
+    // Window A consumed the session and cleared it; disk has no id. Window B is
+    // stale, still carries the old id, and saves for an unrelated reason. Without
+    // per-field authority B's carried value would reinstate a dead session — and
+    // permanently, since neither window can then claim a change to clear it.
+    const existing: Snap[] = [{ id: "1", agentState: "idle" }];
+    const incoming: Snap[] = [{ id: "1", agentSessionId: "consumed", agentState: "exited" }];
+
+    const merged = mergeIdArray(existing, incoming, ["1"], [], sessionMerge);
+
+    expect(merged[0]!.agentSessionId).toBeUndefined();
+    expect(merged[0]!.agentState).toBe("exited");
+  });
+
+  it("applies a claimed value over a differing on-disk one", () => {
+    const existing: Snap[] = [{ id: "1", agentSessionId: "old" }];
+    const incoming: Snap[] = [{ id: "1", agentSessionId: "new" }];
+
+    const merged = mergeIdArray(existing, incoming, ["1"], [], {
+      ...sessionMerge,
+      fieldEdits: claim("1"),
+    });
+
+    expect(merged[0]!.agentSessionId).toBe("new");
+  });
+
+  it("leaves fields outside the allowlist on entry-level last-writer-wins", () => {
+    const existing: Snap[] = [{ id: "1", agentSessionId: "keep", agentState: "idle" }];
+    const incoming: Snap[] = [{ id: "1" }];
+
+    const merged = mergeIdArray(existing, incoming, ["1"], [], sessionMerge);
+
+    expect(merged[0]!.agentSessionId).toBe("keep");
+    expect(merged[0]!.agentState).toBeUndefined();
+  });
+
+  it("unions duplicate claim entries for the same id", () => {
+    const existing: Snap[] = [{ id: "1", agentSessionId: "a", detectedProcessId: "b" }];
+    const incoming: Snap[] = [{ id: "1" }];
+
+    const merged = mergeIdArray(existing, incoming, ["1"], [], {
+      fieldLevelMerge: ["agentSessionId", "detectedProcessId"],
+      fieldEdits: [
+        { id: "1", fields: ["agentSessionId"] },
+        { id: "1", fields: ["detectedProcessId"] },
+      ],
+    });
+
+    expect(merged[0]!.agentSessionId).toBeUndefined();
+    expect(merged[0]!.detectedProcessId).toBeUndefined();
+  });
+
+  it("ignores a claim for an entry the writer never changed", () => {
+    const existing: Snap[] = [{ id: "1", agentSessionId: "sibling" }];
+    const incoming: Snap[] = [{ id: "1" }];
+
+    const merged = mergeIdArray(existing, incoming, [], [], {
+      ...sessionMerge,
+      fieldEdits: claim("1"),
+    });
+
+    expect(merged[0]!.agentSessionId).toBe("sibling");
+  });
+
+  it("claims nothing when a tracked field matches the baseline on both sides", () => {
+    // Renderer baseline is primed from disk at hydration, so a value only Main
+    // ever wrote matches on both sides — which must read as "no opinion".
+    const base: Snap[] = [{ id: "1", agentState: "idle" }];
+    const current: Snap[] = [{ id: "1", agentState: "exited" }];
+
+    const delta = computeIdArrayDelta(base, current, snapEq, ["agentSessionId"]);
+
+    expect(delta.changedIds).toEqual(["1"]);
+    expect(delta.fieldEdits).toBeUndefined();
+  });
+
+  it("claims an unchanged-but-held value nowhere, even when the entry changed", () => {
+    // The producer half of the stale-writer guard: B still holds the id it was
+    // hydrated with, so it must not claim authority over it.
+    const base: Snap[] = [{ id: "1", agentSessionId: "held", agentState: "idle" }];
+    const current: Snap[] = [{ id: "1", agentSessionId: "held", agentState: "exited" }];
+
+    const delta = computeIdArrayDelta(base, current, snapEq, ["agentSessionId"]);
+
+    expect(delta.changedIds).toEqual(["1"]);
+    expect(delta.fieldEdits).toBeUndefined();
+  });
+
+  it("claims a tracked field going from a value to absent", () => {
+    const base: Snap[] = [{ id: "1", agentSessionId: "consumed" }];
+    const current: Snap[] = [{ id: "1" }];
+
+    const delta = computeIdArrayDelta(base, current, snapEq, ["agentSessionId"]);
+
+    expect(delta.fieldEdits).toEqual([{ id: "1", fields: ["agentSessionId"] }]);
+  });
+
+  it("claims a tracked field going from absent to a value", () => {
+    const base: Snap[] = [{ id: "1" }];
+    const current: Snap[] = [{ id: "1", agentSessionId: "resumed" }];
+
+    const delta = computeIdArrayDelta(base, current, snapEq, ["agentSessionId"]);
+
+    expect(delta.fieldEdits).toEqual([{ id: "1", fields: ["agentSessionId"] }]);
+  });
+
+  it("claims nothing for an entry with no baseline", () => {
+    // A missing baseline usually means the writer just created the panel, but it
+    // can also mean an earlier save failed or the view was cached across a switch
+    // — in which case disk may hold something newer. Silence, not authority.
+    const added: Snap[] = [{ id: "new", agentSessionId: "fresh" }];
+
+    const delta = computeIdArrayDelta([], added, snapEq, ["agentSessionId"]);
+
+    expect(delta.fieldEdits).toBeUndefined();
+  });
+
+  it("still persists a genuinely new entry's tracked value", () => {
+    // Nothing on disk to defer to, so the unclaimed value stands and creating a
+    // panel with a session id (the resume-a-session flow) still records it.
+    const added: Snap[] = [{ id: "new", agentSessionId: "fresh" }];
+
+    const merged = mergeIdArray([], added, ["new"], [], sessionMerge);
+
+    expect(merged[0]!.agentSessionId).toBe("fresh");
+  });
+
+  it("defers to disk for an unbaselined entry that already exists on disk", () => {
+    // A stale writer whose baseline lost the entry must not out-rank a value
+    // another window wrote in the meantime — here a deliberate clear.
+    const existing: Snap[] = [{ id: "1", agentState: "idle" }];
+    const current: Snap[] = [{ id: "1", agentSessionId: "stale", agentState: "exited" }];
+
+    const delta = computeIdArrayDelta([], current, snapEq, ["agentSessionId"]);
+    const merged = mergeIdArray(existing, current, delta.changedIds, delta.removedIds, {
+      ...sessionMerge,
+      fieldEdits: delta.fieldEdits,
+    });
+
+    expect(merged[0]!.agentSessionId).toBeUndefined();
+    expect(merged[0]!.agentState).toBe("exited");
+  });
+
+  it("flags a claimed id as changed even when equals ignores the field", () => {
+    // A claim is only honoured for an entry the writer is allowed to touch, so
+    // the two lists have to stay consistent under a partial equality fn.
+    const base: Snap[] = [{ id: "1", agentSessionId: "consumed", agentState: "idle" }];
+    const current: Snap[] = [{ id: "1", agentState: "idle" }];
+    const stateOnlyEq = (a: Snap, b: Snap) => a.agentState === b.agentState;
+
+    const delta = computeIdArrayDelta(base, current, stateOnlyEq, ["agentSessionId"]);
+
+    expect(delta.changedIds).toEqual(["1"]);
+    expect(delta.fieldEdits).toHaveLength(1);
+  });
+
+  it("round-trips: a deliberate clear applies, a value the writer never held does not", () => {
+    const disk: Snap[] = [
+      { id: "consumed", agentSessionId: "old-a" },
+      { id: "captured", agentSessionId: "from-shutdown" },
+    ];
+    // Baseline = what this renderer last acknowledged. It knew "consumed"'s id
+    // and then dropped it; it never knew "captured"'s.
+    const base: Snap[] = [{ id: "consumed", agentSessionId: "old-a" }, { id: "captured" }];
+    const current: Snap[] = [{ id: "consumed" }, { id: "captured", agentState: "exited" }];
+
+    const delta = computeIdArrayDelta(base, current, snapEq, ["agentSessionId"]);
+    const merged = mergeIdArray(disk, current, delta.changedIds, delta.removedIds, {
+      ...sessionMerge,
+      fieldEdits: delta.fieldEdits,
+    });
+
+    const byId = new Map(merged.map((entry) => [entry.id, entry]));
+    expect(byId.get("consumed")!.agentSessionId).toBeUndefined();
+    expect(byId.get("captured")!.agentSessionId).toBe("from-shutdown");
+  });
+});
+
 describe("computeRecordDelta (draft inputs, #11352)", () => {
   it("reports an added key as changed", () => {
     const delta = computeRecordDelta({ a: "x" }, { a: "x", b: "y" });
