@@ -91,6 +91,9 @@ function createWindowMock(isFocused = false, ownerIds: number[] = []) {
     id,
     ownerIds,
     listeners,
+    /** Undefined means the window has no ProjectViewManager at all. */
+    activeProjectId: undefined as string | null | undefined,
+    bridgedProjectId: null as string | null,
     isDestroyed: vi.fn(() => false),
     isFocused: vi.fn(() => isFocused),
     isMinimized: vi.fn(() => false),
@@ -112,6 +115,29 @@ function createWindowMock(isFocused = false, ownerIds: number[] = []) {
 
 type WindowMock = ReturnType<typeof createWindowMock>;
 
+/**
+ * Reads the ids off the window mock on every call rather than closing over
+ * them, so a test can move a window to another project mid-run the way a real
+ * switch does.
+ */
+function projectViewManagerOf(w: WindowMock) {
+  return {
+    getActiveProjectId: () => w.activeProjectId ?? null,
+    getOutgoingBridgeProjectId: () => w.bridgedProjectId,
+  };
+}
+
+/** Project rows keyed by id, standing in for the SQLite-backed store. */
+function lookupOf(rows: Record<string, { name: string; status?: string }>) {
+  return (projectId: string) => rows[projectId] ?? null;
+}
+
+/** The last title a window was given — titles are rewritten on every pass. */
+function lastTitle(w: WindowMock): string {
+  const calls = w.setTitle.mock.calls;
+  return calls[calls.length - 1]?.[0] as string;
+}
+
 function createRegistryMock(windows: WindowMock[]) {
   const contexts = windows.map((w) => ({
     windowId: w.id,
@@ -119,7 +145,8 @@ function createRegistryMock(windows: WindowMock[]) {
     browserWindow: w,
     projectPath: null,
     abortController: new AbortController(),
-    services: {},
+    services:
+      w.activeProjectId === undefined ? {} : { projectViewManager: projectViewManagerOf(w) },
     cleanup: [],
   }));
 
@@ -212,6 +239,194 @@ describe("NotificationService", () => {
     notificationService.dispose();
 
     expect(() => notificationService.updateNotifications(11, { waitingCount: 1 })).not.toThrow();
+  });
+
+  describe("project-aware titles", () => {
+    const rows = lookupOf({
+      alpha: { name: "alpha-app", status: "active" },
+      beta: { name: "beta-app", status: "background" },
+      gone: { name: "archived", status: "closed" },
+    });
+
+    it("titles each window from its own project, not a shared pointer", () => {
+      const winA = createWindowMock(false, [11]);
+      const winB = createWindowMock(false, [21]);
+      winA.activeProjectId = "alpha";
+      winB.activeProjectId = "beta";
+
+      notificationService.initialize(createRegistryMock([winA, winB]) as never, rows);
+      notificationService.refreshTitles();
+
+      expect(lastTitle(winA)).toBe("alpha-app");
+      expect(lastTitle(winB)).toBe("beta-app");
+    });
+
+    it("names the same project in both windows showing it", () => {
+      const winA = createWindowMock(false, [11]);
+      const winB = createWindowMock(false, [21]);
+      winA.activeProjectId = "alpha";
+      winB.activeProjectId = "alpha";
+
+      notificationService.initialize(createRegistryMock([winA, winB]) as never, rows);
+      notificationService.refreshTitles();
+
+      expect(lastTitle(winB)).toBe(lastTitle(winA));
+    });
+
+    it("scopes the waiting count to the window that owns it", () => {
+      const winA = createWindowMock(false, [11]);
+      const winB = createWindowMock(false, [21]);
+      winA.activeProjectId = "alpha";
+      winB.activeProjectId = "beta";
+
+      notificationService.initialize(createRegistryMock([winA, winB]) as never, rows);
+      notificationService.updateNotifications(11, { waitingCount: 4 });
+      vi.advanceTimersByTime(301);
+
+      expect(lastTitle(winA)).toBe("(4) alpha-app");
+      expect(lastTitle(winB)).toBe("beta-app");
+    });
+
+    it("sums a window's cached views into one count beside its project name", () => {
+      const win = createWindowMock(false, [11, 12]);
+      win.activeProjectId = "alpha";
+
+      notificationService.initialize(createRegistryMock([win]) as never, rows);
+      notificationService.updateNotifications(11, { waitingCount: 2 });
+      notificationService.updateNotifications(12, { waitingCount: 3 });
+      vi.advanceTimersByTime(301);
+
+      expect(lastTitle(win)).toBe("(5) alpha-app");
+    });
+
+    it("keeps the waiting count when only the project identity changed", () => {
+      const win = createWindowMock(false, [11]);
+      win.activeProjectId = "alpha";
+
+      notificationService.initialize(createRegistryMock([win]) as never, rows);
+      notificationService.updateNotifications(11, { waitingCount: 2 });
+      vi.advanceTimersByTime(301);
+
+      win.activeProjectId = "beta";
+      notificationService.refreshTitles();
+
+      expect(lastTitle(win)).toBe("(2) beta-app");
+    });
+
+    it("does not disturb the badge when refreshing titles alone", () => {
+      const win = createWindowMock(false, [11]);
+      win.activeProjectId = "alpha";
+
+      notificationService.initialize(createRegistryMock([win]) as never, rows);
+      notificationService.updateNotifications(11, { waitingCount: 2 });
+      vi.advanceTimersByTime(301);
+      electronMock.app.setBadgeCount.mockClear();
+
+      notificationService.refreshTitles();
+
+      expect(electronMock.app.setBadgeCount).not.toHaveBeenCalled();
+    });
+
+    it("falls back for a closed project whose window binding lingers", () => {
+      const open = createWindowMock(false, [11]);
+      const closed = createWindowMock(false, [21]);
+      open.activeProjectId = "alpha";
+      closed.activeProjectId = "gone";
+
+      notificationService.initialize(createRegistryMock([open, closed]) as never, rows);
+      notificationService.refreshTitles();
+
+      expect(lastTitle(open)).toBe("alpha-app");
+      expect(lastTitle(closed)).toBe("Daintree");
+    });
+
+    it("falls back for a scratch id that matches no project row", () => {
+      const win = createWindowMock(false, [11]);
+      win.activeProjectId = "scratch-uuid";
+
+      notificationService.initialize(createRegistryMock([win]) as never, rows);
+      notificationService.refreshTitles();
+
+      expect(lastTitle(win)).toBe("Daintree");
+    });
+
+    it("titles the project still painted behind a cold-switch bridge", () => {
+      const win = createWindowMock(false, [11]);
+      win.activeProjectId = "alpha";
+      win.bridgedProjectId = "beta";
+
+      notificationService.initialize(createRegistryMock([win]) as never, rows);
+      notificationService.refreshTitles();
+
+      expect(lastTitle(win)).toBe("beta-app");
+    });
+
+    it("converges on the renamed project when a debounced tick lands after a refresh", () => {
+      const win = createWindowMock(false, [11]);
+      win.activeProjectId = "alpha";
+      const renamable: Record<string, { name: string; status?: string }> = {
+        alpha: { name: "alpha-app", status: "active" },
+      };
+
+      notificationService.initialize(createRegistryMock([win]) as never, lookupOf(renamable));
+      notificationService.updateNotifications(11, { waitingCount: 1 });
+
+      renamable.alpha = { name: "renamed-app", status: "active" };
+      notificationService.refreshTitles();
+      expect(lastTitle(win)).toBe("(1) renamed-app");
+
+      vi.advanceTimersByTime(301);
+      expect(lastTitle(win)).toBe("(1) renamed-app");
+    });
+
+    it("skips a destroyed window without touching its title", () => {
+      const live = createWindowMock(false, [11]);
+      const dead = createWindowMock(false, [21]);
+      live.activeProjectId = "alpha";
+      dead.activeProjectId = "beta";
+      dead.isDestroyed.mockReturnValue(true);
+
+      notificationService.initialize(createRegistryMock([live, dead]) as never, rows);
+      dead.setTitle.mockClear();
+      notificationService.refreshTitles();
+
+      expect(dead.setTitle).not.toHaveBeenCalled();
+      expect(lastTitle(live)).toBe("alpha-app");
+    });
+
+    it("keeps titling the other windows when one view manager throws", () => {
+      const broken = createWindowMock(false, [11]);
+      const healthy = createWindowMock(false, [21]);
+      broken.activeProjectId = "alpha";
+      healthy.activeProjectId = "beta";
+
+      const registry = createRegistryMock([broken, healthy]);
+      registry.all()[0].services.projectViewManager = {
+        getActiveProjectId: () => {
+          throw new Error("disposing");
+        },
+        getOutgoingBridgeProjectId: () => null,
+      };
+
+      notificationService.initialize(registry as never, rows);
+      expect(() => notificationService.refreshTitles()).not.toThrow();
+      expect(lastTitle(healthy)).toBe("beta-app");
+    });
+
+    it("titles by app name alone once the project lookup is gone", () => {
+      const win = createWindowMock(false, [11]);
+      win.activeProjectId = "alpha";
+
+      notificationService.initialize(createRegistryMock([win]) as never, rows);
+      notificationService.dispose();
+
+      const revived = createWindowMock(false, [31]);
+      revived.activeProjectId = "alpha";
+      notificationService.initialize(createRegistryMock([revived]) as never);
+      notificationService.refreshTitles();
+
+      expect(lastTitle(revived)).toBe("Daintree");
+    });
   });
 
   it("dispose detaches listeners from all tracked windows", () => {
