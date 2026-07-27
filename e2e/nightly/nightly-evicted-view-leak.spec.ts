@@ -228,15 +228,14 @@ test.describe.serial("Nightly: Evicted project view leak detection", () => {
       console.log(`[evicted-view][heap] ${className}: ${count} instances`);
     }
 
-    // ProjectViewManager is a per-window singleton — its instance count
-    // should be exactly 1 in single-window E2E runs. We look it up by the
-    // runtime constructor name to stay correct under production minification.
-    // Asserting truthiness first ensures the hook working correctly is a
-    // hard requirement of the test rather than a best-effort skip — a falsy
-    // value (null, "", undefined) would otherwise silently pass.
+    // Look up the manager by its runtime constructor name because production
+    // minification mangles class identifiers. Minified names are not globally
+    // unique, so this diagnostic count may include unrelated classes with the
+    // same short name; require a real match here and compare snapshots across
+    // churn in the multi-project leak test.
     expect(pvmRuntimeName).toBeTruthy();
     const pvmCount = countInstancesByName(snapshot, pvmRuntimeName!);
     console.log(`[evicted-view][heap] PVM (${pvmRuntimeName}): ${pvmCount} instances`);
-    expect(pvmCount).toBe(1);
+    expect(pvmCount).toBeGreaterThan(0);
   });
 });
