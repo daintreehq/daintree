@@ -187,17 +187,17 @@ export function setupViewHandlers(
     // "oom" is Windows-specific (pagefile exhaustion). On macOS/Linux, V8
     // heap exhaustion surfaces as "crashed" and the OS OOM-killer surfaces
     // as "killed". We detect probable OOM by checking available memory
-    // against the profile threshold. exitCode is intentionally not used —
-    // sources disagree on its value for V8 heap OOM (5 vs 132).
-    // Performance profile sets the threshold to null to disable the
-    // heuristic for memory-unconstrained sessions.
+    // against the reclaim band's critical edge. exitCode is intentionally not
+    // used — sources disagree on its value for V8 heap OOM (5 vs 132). A null
+    // policy (E2E escape hatch) disables the heuristic.
     const availableMb = getAvailableMemoryMb();
+    const criticalMb = host.memoryPressurePolicy?.criticalMb ?? null;
     const isProbableOom =
       details.reason === "oom" ||
       ((details.reason === "crashed" || details.reason === "killed") &&
-        host.lowMemoryFreeThresholdMb !== null &&
+        criticalMb !== null &&
         availableMb !== null &&
-        availableMb < host.lowMemoryFreeThresholdMb);
+        availableMb < criticalMb);
 
     // OS-pressure memory eviction is distinct from a crash: the renderer is
     // reclaimed by the OS without a V8 abort. For the ACTIVE view the blank

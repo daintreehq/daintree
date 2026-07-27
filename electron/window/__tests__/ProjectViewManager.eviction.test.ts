@@ -2836,3 +2836,276 @@ describe("ProjectViewManager — low-memory eviction", () => {
     expect(wcA.close).not.toHaveBeenCalled();
   });
 });
+
+describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
+  let manager: ProjectViewManager;
+  let win: ReturnType<typeof createMockWindow>;
+
+  type MemInfo = { free: number; purgeable?: number; total: number };
+  const originalSystemMemoryInfo = (process as unknown as { getSystemMemoryInfo?: () => MemInfo })
+    .getSystemMemoryInfo;
+
+  /** `availableMb` is reported straight through as free memory (KB on the wire). */
+  function setAvailableMb(availableMb: number) {
+    Object.defineProperty(process, "getSystemMemoryInfo", {
+      configurable: true,
+      value: () => ({ free: availableMb * 1024, purgeable: 0, total: 8 * 1024 * 1024 }),
+    });
+  }
+
+  // 3 cached views over a 1000MB-wide band: one step per 500MB, so 1500MB
+  // targets 2 views and 1200MB targets 1 — reached one view per pass.
+  const BAND = { criticalMb: 1000, warningMb: 2000 };
+
+  const evictedProjectIds = () =>
+    vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.eviction")
+      .map(([, ctx]) => (ctx as { projectId: string }).projectId);
+
+  const tickPressureCheck = (mgr: ProjectViewManager) =>
+    (mgr as unknown as { maybeEvictUnderPressure(): void }).maybeEvictUnderPressure();
+
+  function makeManager(cachedProjectViews: number) {
+    return new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews,
+      assistantBackendForProject,
+      isTerminalLive,
+    });
+  }
+
+  /** Three views (proj-a, proj-b oldest-first; proj-c active). */
+  async function seedThreeViews(mgr: ProjectViewManager) {
+    const wcA = createMockWebContents();
+    mgr.registerInitialView({ webContents: wcA, setBounds: vi.fn() } as never, "proj-a", "/path/a");
+    await mgr.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+    await mgr.switchTo("proj-c", "/path/c");
+    await flushImmediates();
+  }
+
+  beforeEach(() => {
+    nextWebContentsId = 100;
+    nextOsProcessId = 1000;
+    vi.clearAllMocks();
+    mockGetAllTerminals.mockReset();
+    mockGetAllTerminals.mockResolvedValue([]);
+    mockGetAppMetrics.mockReset();
+    mockGetAppMetrics.mockReturnValue([]);
+    assistantBackends.clear();
+    liveTerminals.clear();
+    win = createMockWindow();
+    manager = makeManager(3);
+    manager.setMemoryPressurePolicy(BAND);
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "getSystemMemoryInfo", {
+      configurable: true,
+      value: originalSystemMemoryInfo,
+    });
+  });
+
+  it("sheds exactly one view per soft-band pass, converging over several ticks", async () => {
+    setAvailableMb(2500);
+    await seedThreeViews(manager);
+    expect(manager.getAllViews().length).toBe(3);
+
+    // Deep in the soft band the settled target is 1, but a single pass must
+    // still take only one view — this is the whole point of #11469.
+    setAvailableMb(1200);
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c"]);
+
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+
+    // Converged — further ticks have nothing left to take.
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+  });
+
+  it("stops stepping once available memory recovers into a higher band", async () => {
+    setAvailableMb(2500);
+    await seedThreeViews(manager);
+
+    setAvailableMb(1200);
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().length).toBe(2);
+
+    // The freed renderer returned its memory: the next tick sees a target of 2
+    // and takes nothing, instead of marching on to 1.
+    setAvailableMb(1600);
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().length).toBe(2);
+  });
+
+  it("still collapses to the active view in one pass below the critical edge", async () => {
+    setAvailableMb(2500);
+    await seedThreeViews(manager);
+
+    setAvailableMb(BAND.criticalMb - 1);
+    tickPressureCheck(manager);
+
+    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    expect(evictedProjectIds()).toEqual(["proj-a", "proj-b"]);
+  });
+
+  it("does not shed extra views on the switch path under soft pressure", async () => {
+    // Only the periodic sweep contracts the cache, so the 30s sampler cadence
+    // is the settling interval. A switch enforces the configured cap and no more.
+    setAvailableMb(1200);
+    await seedThreeViews(manager);
+
+    expect(manager.getAllViews().length).toBe(3);
+    expect(evictedProjectIds()).toEqual([]);
+  });
+
+  it("cascades a limit change straight to its new cap under soft pressure", async () => {
+    setAvailableMb(2500);
+    await seedThreeViews(manager);
+
+    setAvailableMb(1200);
+    manager.setCachedViewLimit(2);
+
+    // The requested cap is honored exactly — not contracted further by the
+    // soft-band target of 1, and not held back by the one-view budget.
+    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c"]);
+  });
+
+  it("takes only one view per pass even when the cache sits above its cap", async () => {
+    // A cache above its cap is reachable in production (assistant protection, or
+    // a paint-gate exclusion deferring an earlier pass). Deriving the per-pass
+    // budget from the cap rather than counting evictions would let a single soft
+    // tick destroy three renderers here instead of one.
+    const mgr = makeManager(4);
+    mgr.setMemoryPressurePolicy(BAND);
+    setAvailableMb(2500);
+
+    const wcA = createMockWebContents();
+    mgr.registerInitialView({ webContents: wcA, setBounds: vi.fn() } as never, "proj-a", "/path/a");
+    for (const id of ["proj-b", "proj-c", "proj-d"]) {
+      await mgr.switchTo(id, `/path/${id}`);
+      await flushImmediates();
+    }
+    expect(mgr.getAllViews().length).toBe(4);
+
+    // Drop the cap without going through setCachedViewLimit, whose own
+    // "limit-change" pass would trim to the new cap immediately.
+    (mgr as unknown as { maxCachedViews: number }).maxCachedViews = 2;
+
+    setAvailableMb(1200);
+    tickPressureCheck(mgr);
+
+    expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c", "proj-d"]);
+  });
+
+  it("never takes an assistant-backed view in a soft pass", async () => {
+    // Soft-band trimming must not cost a running assistant its PTY tree
+    // (#11157) — that yield is reserved for genuine OOM risk.
+    const mgr = makeManager(3);
+    mgr.setMemoryPressurePolicy(BAND);
+    setAvailableMb(2500);
+    await seedThreeViews(mgr);
+
+    for (const projectId of ["proj-a", "proj-b"]) {
+      const wc = mgr.getAllViews().find((v) => v.projectId === projectId)!.view.webContents;
+      assistantBackends.set(projectId, { terminalId: `t-help-${projectId}`, webContentsId: wc.id });
+      liveTerminals.add(`t-help-${projectId}`);
+    }
+
+    setAvailableMb(1200);
+    tickPressureCheck(mgr);
+
+    expect(mgr.getAllViews().length).toBe(3);
+    expect(evictedProjectIds()).toEqual([]);
+
+    // Critical pressure still yields the floor, ordinary renderers first.
+    setAvailableMb(BAND.criticalMb - 1);
+    tickPressureCheck(mgr);
+    expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+  });
+
+  it("arms the periodic sweep at the warning edge, not the critical one", async () => {
+    // Gating the sweep on criticalMb would leave the whole soft band unreachable.
+    setAvailableMb(2500);
+    await seedThreeViews(manager);
+
+    setAvailableMb(BAND.warningMb);
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().length).toBe(3);
+
+    setAvailableMb(BAND.warningMb - 1);
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().length).toBe(2);
+  });
+
+  it("reports the band, tier and budget on the pressure-override event", async () => {
+    setAvailableMb(2500);
+    await seedThreeViews(manager);
+
+    setAvailableMb(1200);
+    tickPressureCheck(manager);
+
+    expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
+      "projectview.pressure-override",
+      expect.objectContaining({
+        thresholdMb: BAND.criticalMb,
+        warningThresholdMb: BAND.warningMb,
+        pressureLevel: "soft",
+        evictionBudget: 1,
+      })
+    );
+  });
+
+  it("collapses the band to a cliff for the legacy single-floor setter", async () => {
+    // The E2E escape hatch and every pre-#11469 caller pass one number; that
+    // must keep meaning "clamp to 1 below this", with no soft band.
+    manager.setLowMemoryFreeThresholdMb(1500);
+    setAvailableMb(2500);
+    await seedThreeViews(manager);
+
+    setAvailableMb(1600);
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().length).toBe(3);
+
+    setAvailableMb(1499);
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+  });
+
+  it("disables reclaim entirely when the policy is cleared", async () => {
+    manager.setMemoryPressurePolicy(null);
+    setAvailableMb(50);
+    await seedThreeViews(manager);
+
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().length).toBe(3);
+    expect(manager.getLowMemoryFreeThresholdMb()).toBeNull();
+  });
+
+  it("rejects an inverted or non-finite band rather than half-arming it", () => {
+    manager.setMemoryPressurePolicy({ criticalMb: 2000, warningMb: 1000 });
+    expect(manager.getLowMemoryFreeThresholdMb()).toBeNull();
+
+    manager.setMemoryPressurePolicy({ criticalMb: Number.NaN, warningMb: 2000 });
+    expect(manager.getLowMemoryFreeThresholdMb()).toBeNull();
+
+    manager.setMemoryPressurePolicy({ criticalMb: 0, warningMb: 2000 });
+    expect(manager.getLowMemoryFreeThresholdMb()).toBeNull();
+  });
+
+  it("keeps the forced tier-2 reclaim aggressive regardless of band or memory", async () => {
+    manager.setMemoryPressurePolicy(null);
+    setAvailableMb(64 * 1024);
+    await seedThreeViews(manager);
+
+    expect(manager.reclaimCachedViewsUnderPressure()).toBe(2);
+    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+  });
+});

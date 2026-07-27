@@ -66,14 +66,6 @@ export interface ResourceProfileConfig {
   /** HibernationService memory-pressure inactivity threshold (ms) */
   memoryPressureInactiveMs: number;
   /**
-   * Available system memory (MB) below which ProjectViewManager clamps its
-   * effective cached-view limit to 1 for the current eviction pass. `null`
-   * disables the override (the user-configured cachedProjectViews limit stays
-   * authoritative). "Available" on macOS means free + purgeable; on other
-   * platforms it is free alone.
-   */
-  lowMemoryFreeThresholdMb: number | null;
-  /**
    * Cold-start paint-gate SOFT timeout (ms). Bounds the wait for the incoming
    * project view's renderer to emit `APP_VIEW_PAINTED`. Crossing this bound
    * does NOT detach the outgoing view — it only logs a warning so the gate
@@ -191,7 +183,6 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfi
     processTreePollInterval: 2000,
     projectStatsPollInterval: 5000,
     memoryPressureInactiveMs: 60 * 60 * 1000, // 60 min
-    lowMemoryFreeThresholdMb: null,
     agentScrollbackMaxLines: 10000,
     fetchIntervalActiveMs: 20_000,
     fetchIntervalBackgroundMs: 3 * 60_000,
@@ -210,7 +201,6 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfi
     processTreePollInterval: 2500,
     projectStatsPollInterval: 5000,
     memoryPressureInactiveMs: 30 * 60 * 1000, // 30 min
-    lowMemoryFreeThresholdMb: 768,
     agentScrollbackMaxLines: 10000,
     fetchIntervalActiveMs: 30_000,
     fetchIntervalBackgroundMs: 5 * 60_000,
@@ -235,7 +225,6 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfi
     processTreePollInterval: 5000,
     projectStatsPollInterval: 25000,
     memoryPressureInactiveMs: 15 * 60 * 1000, // 15 min
-    lowMemoryFreeThresholdMb: 1024,
     // Lower agent history ceiling on constrained hardware — ~7MB less buffer
     // headroom per filled agent terminal versus the 10k perf/balanced ceiling,
     // consistent with the efficiency profile's other fidelity trades. Still

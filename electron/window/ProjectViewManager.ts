@@ -27,6 +27,7 @@ import { cleanupEntry } from "./ProjectViewLifecycleController.js";
 import * as EvictionController from "./ProjectViewEvictionController.js";
 import { hasActiveAgent, initAgentStateCache } from "./ProjectViewAgentStateCache.js";
 import type { PaintGate, PaintGateOutcome, ViewEntry } from "./ProjectViewManagerTypes.js";
+import type { MemoryPressurePolicy } from "../utils/cachedProjectViews.js";
 
 // Trailing-edge debounce on freeze entry: the lag-pressure path can flip
 // efficiency on/off without going through the 30 s downgrade hysteresis, so
@@ -193,7 +194,7 @@ export class ProjectViewManager {
   webContentsToProject = new Map<number, string>();
   activeProjectId: string | null = null;
   maxCachedViews = 1;
-  lowMemoryFreeThresholdMb: number | null = null;
+  memoryPressurePolicy: MemoryPressurePolicy | null = null;
   win: BrowserWindow;
   dirname: string;
   onRecreateWindow?: () => Promise<void>;
@@ -691,20 +692,46 @@ export class ProjectViewManager {
   }
 
   /**
-   * Set the available-memory floor (MB) below which eviction clamps the
-   * effective cap to 1 view for the current pass without mutating
-   * `maxCachedViews`. `null` disables the override.
+   * Set the available-memory band governing cached-view reclaim, without
+   * mutating `maxCachedViews`. Pushed once at ResourceProfileService start (and
+   * per late-created window), never on a profile transition — the band is a
+   * property of the machine, not of the profile, so the interactive
+   * efficiency→balanced clamp cannot loosen it (#11469). `null` disables
+   * reclaim entirely.
+   *
+   * The pair is copied: the caller's object is a long-lived service field, and
+   * an inverted or non-finite edge disables rather than half-arms the policy.
+   */
+  setMemoryPressurePolicy(policy: MemoryPressurePolicy | null): void {
+    if (
+      policy == null ||
+      !Number.isFinite(policy.criticalMb) ||
+      !Number.isFinite(policy.warningMb) ||
+      policy.criticalMb <= 0 ||
+      policy.warningMb < policy.criticalMb
+    ) {
+      this.memoryPressurePolicy = null;
+      return;
+    }
+    this.memoryPressurePolicy = { criticalMb: policy.criticalMb, warningMb: policy.warningMb };
+  }
+
+  /**
+   * Legacy single-floor setter, retained as the E2E escape hatch (six specs
+   * push `null` to neutralize pressure eviction so host memory can't perturb
+   * their deterministic assertions). A positive value collapses the band to a
+   * cliff at `mb`, reproducing the pre-#11469 clamp-to-1 exactly.
    */
   setLowMemoryFreeThresholdMb(mb: number | null): void {
     if (mb == null || !Number.isFinite(mb) || mb <= 0) {
-      this.lowMemoryFreeThresholdMb = null;
+      this.memoryPressurePolicy = null;
     } else {
-      this.lowMemoryFreeThresholdMb = mb;
+      this.memoryPressurePolicy = { criticalMb: mb, warningMb: mb };
     }
   }
 
   getLowMemoryFreeThresholdMb(): number | null {
-    return this.lowMemoryFreeThresholdMb;
+    return this.memoryPressurePolicy?.criticalMb ?? null;
   }
 
   /**

@@ -27,6 +27,7 @@ import {
 import type { WhySlowResourceReason, WhySlowResourceSnapshot } from "../../shared/types/whySlow.js";
 import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
 import { getSystemMemoryThresholds, readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
+import type { MemoryPressurePolicy } from "../utils/cachedProjectViews.js";
 import { resolveResourceProfileConfig } from "../utils/resourceProfileConfig.js";
 
 /** Map an additive pressure score to a profile. Efficiency latches at ≥ 3; a
@@ -191,6 +192,14 @@ export class ResourceProfileService {
   private readonly memoryThresholdLowMb: number;
   private readonly sysMemThresholdHighMb: number;
   private readonly sysMemThresholdLowMb: number;
+  /**
+   * Cached-view reclaim band, pushed to every PVM. Deliberately NOT part of
+   * RESOURCE_PROFILE_CONFIGS: it is a property of the machine's RAM, not of the
+   * profile, so it stays armed at one value across every transition — including
+   * the interactive efficiency→balanced clamp, which used to loosen the floor
+   * 1024→768 exactly when memory was lowest (#11469).
+   */
+  private readonly memoryPressurePolicy: MemoryPressurePolicy;
   private readonly terminalWorkloadHighMb: number;
   private readonly terminalWorkloadLowMb: number;
   // Latest terminal-workload rollup sample; null until the first successful
@@ -230,6 +239,12 @@ export class ResourceProfileService {
     const systemMemoryThresholds = getSystemMemoryThresholds(totalRamMb);
     this.sysMemThresholdHighMb = systemMemoryThresholds.warningMb;
     this.sysMemThresholdLowMb = systemMemoryThresholds.criticalMb;
+    // Same thresholds that promote the profile on the memory signal, so a
+    // promotion and the reclaim it implies now arm at the same reading.
+    this.memoryPressurePolicy = {
+      criticalMb: systemMemoryThresholds.criticalMb,
+      warningMb: systemMemoryThresholds.warningMb,
+    };
     this.terminalWorkloadHighMb = totalRamMb * TERMINAL_WORKLOAD_HIGH_FRACTION;
     this.terminalWorkloadLowMb = totalRamMb * TERMINAL_WORKLOAD_LOW_FRACTION;
     const totalRamGb = totalRamMb / 1024;
@@ -449,7 +464,7 @@ export class ResourceProfileService {
       }
     }
     try {
-      pvm.setLowMemoryFreeThresholdMb(config.lowMemoryFreeThresholdMb);
+      pvm.setMemoryPressurePolicy(this.memoryPressurePolicy);
     } catch {
       // non-critical
     }
@@ -1183,16 +1198,11 @@ export class ResourceProfileService {
           // non-critical
         }
       }
-      // Push the profile's low-memory floor unconditionally on every transition
-      // so an upgrade out of efficiency doesn't leave the stricter threshold
-      // stuck in place. PVM checks this floor inside `evictStaleViews` and
-      // clamps `effectiveMax` to 1 for the pass when available RAM drops below
-      // it, without mutating the user-configured `maxCachedViews`.
-      try {
-        pvm.setLowMemoryFreeThresholdMb(config.lowMemoryFreeThresholdMb);
-      } catch {
-        // non-critical
-      }
+      // The cached-view reclaim band is deliberately NOT pushed here. It is
+      // set once per PVM (start / applyCurrentProfileTo) from the machine's
+      // system-memory thresholds, so no transition — least of all the
+      // interactive efficiency→balanced clamp above — can loosen or re-arm it
+      // (#11469).
 
       // Push per-profile paint-gate timeouts (cold and warm). Both cold
       // starts and warm wake fan-outs run measurably slower under efficiency

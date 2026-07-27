@@ -51,7 +51,7 @@ const EIGHT_GB = 8 * 1024 * 1024 * 1024;
 function makeMockPvm() {
   return {
     setCachedViewLimit: vi.fn(),
-    setLowMemoryFreeThresholdMb: vi.fn(),
+    setMemoryPressurePolicy: vi.fn(),
     setEfficiencyFreeze: vi.fn(),
     setPaintGateTimeoutMs: vi.fn(),
     setPaintGateHardTimeoutMs: vi.fn(),
@@ -127,9 +127,6 @@ describe("ResourceProfileService fan-out isolation", () => {
       broken.setEfficiencyFreeze.mockImplementation(() => {
         throw new Error("freeze exploded");
       });
-      broken.setLowMemoryFreeThresholdMb.mockImplementation(() => {
-        throw new Error("threshold exploded");
-      });
       const healthy = makeMockPvm();
       const { deps, pty } = createDeps({
         getAllProjectViewManagers: () => asPvms([broken, healthy]),
@@ -145,9 +142,10 @@ describe("ResourceProfileService fan-out isolation", () => {
       const balanced = RESOURCE_PROFILE_CONFIGS.balanced;
       expect(healthy.setCachedViewLimit).toHaveBeenCalledWith(2);
       expect(healthy.setEfficiencyFreeze).toHaveBeenLastCalledWith(false);
-      expect(healthy.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
-        balanced.lowMemoryFreeThresholdMb
-      );
+      // The reclaim band is not part of a transition's fan-out (#11469) — it is
+      // pushed once per PVM at start/late-create, so a transition must not
+      // touch it on either the broken or the healthy window.
+      expect(healthy.setMemoryPressurePolicy).not.toHaveBeenCalled();
       expect(healthy.setPaintGateTimeoutMs).toHaveBeenLastCalledWith(balanced.paintGateTimeoutMs);
       expect(healthy.setWarmPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
         balanced.warmPaintGateHardTimeoutMs
@@ -289,7 +287,7 @@ describe("ResourceProfileService fan-out isolation", () => {
   describe("late-created PVM under a throwing sibling setter", () => {
     it("applyCurrentProfileTo pushes the remaining settings when an early setter throws", () => {
       const pvm = makeMockPvm();
-      pvm.setLowMemoryFreeThresholdMb.mockImplementation(() => {
+      pvm.setMemoryPressurePolicy.mockImplementation(() => {
         throw new Error("threshold exploded");
       });
       const { deps } = createDeps();
