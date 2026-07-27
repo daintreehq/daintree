@@ -100,11 +100,11 @@ export function createView(host: ProjectViewManager, projectId: string): WebCont
 type LoadPhase = "navigation" | "bootstrap";
 
 /**
- * True when a `loadView` rejection is the view being torn down mid-load rather
- * than a genuine load failure. Teardown (window close, app quit, dispose) is a
- * normal event, so callers must skip rollback and user-facing error reporting
- * — mirroring the repo-wide convention that abort-shaped errors never reach
- * `notifyError` (see `handleRetry` in ipc/errorHandlers.ts).
+ * True when a `loadView` rejection was settled by the `destroyed` listener
+ * rather than by a load event. Purely diagnostic: it feeds the `cancelled`
+ * field of the `projectview.coldstart.abandoned` log. Rollback and user-facing
+ * error reporting are keyed on host liveness ALONE, never on this predicate
+ * (see ProjectViewSwitchController's catch).
  *
  * Keyed on the code alone: `loadView` is the only producer of `CANCELLED` here,
  * and every other rejection path — including anything thrown by the bootstrap

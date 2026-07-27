@@ -643,7 +643,7 @@ describe("ProjectViewManager — switch failure rollback", () => {
     // Timing out before did-finish-load is the navigation phase. The phase is
     // what makes a production timeout report actionable — it tells "the page
     // never navigated" apart from "the renderer loaded but never answered the
-    // bootstrap eval", which one shared 10s budget otherwise conflates (#11458).
+    // bootstrap eval", which one shared hard budget otherwise conflates (#11458).
     expect(errorCode(err)).toBe("INTERNAL");
     expect(errorContext(err)).toMatchObject({ phase: "navigation", projectId: "proj-b" });
     expect(manager.getActiveProjectId()).toBe("proj-a");

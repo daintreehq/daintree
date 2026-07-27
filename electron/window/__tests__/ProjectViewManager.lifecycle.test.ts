@@ -751,7 +751,7 @@ describe("ProjectViewManager — lifecycle invariants", () => {
 
       // autoFinishLoad: false — the load never completes on its own, so the
       // switch is still awaiting loadView when teardown lands. Before #11458
-      // nothing settled that promise: it sat for the full 10s timeout and then
+      // nothing settled that promise: it sat for the full hard timeout and then
       // reported a timeout that never happened.
       const bWc = createMockWebContents({ autoFinishLoad: false });
       wcQueue.push(bWc);
