@@ -29,9 +29,19 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ArrowDownAZ, Clock, Flame } from "@/components/icons";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { getProjectRowStatus, type ProjectRowTone } from "@/lib/projectRowStatus";
@@ -49,7 +59,12 @@ import type {
   SearchableProject,
   SearchableScratch,
 } from "@/hooks/useProjectSwitcherPalette";
-import { PROJECT_SECTION_LABELS } from "@/hooks/useProjectSwitcherPalette";
+import {
+  PROJECT_SECTION_LABELS,
+  OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS,
+} from "@/hooks/useProjectSwitcherPalette";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { isOtherProjectsSortMode, type OtherProjectsSortMode } from "@/lib/projectSort";
 import { useUIStore } from "@/store/uiStore";
 import {
   useProjectSettingsStore,
@@ -413,6 +428,110 @@ interface ProjectSection {
   items: SearchableProject[];
 }
 
+const OTHER_PROJECTS_SORT_OPTIONS: readonly {
+  value: OtherProjectsSortMode;
+  label: string;
+  Icon: typeof Flame;
+}[] = [
+  { value: "hottest", label: "Hottest", Icon: Flame },
+  { value: "recent", label: "Recent", Icon: Clock },
+  { value: "alphabetical", label: "A to Z", Icon: ArrowDownAZ },
+];
+
+/**
+ * The Other band's header, which doubles as its sort control (#11455). Every
+ * row in the band prints a timestamp, so an unlabelled frecency order reads as
+ * broken — the control's first job is naming the order, changing it second.
+ *
+ * Two structural constraints shape the markup:
+ *
+ * - The `id` stays on a leaf element holding ONLY the label text. It is the
+ *   `aria-labelledby` target for the surrounding `role="group"`, and that name
+ *   is computed from the element's whole subtree — nesting the mode inside it
+ *   would name the band "Other projects Hottest".
+ * - The trigger is `tabIndex={-1}`. Section headers live inside the
+ *   `role="listbox"`, where a focusable child is invalid and unreachable
+ *   anyway (arrow keys move `aria-activedescendant` across rows, never here).
+ *   Right-click reaches the same options, matching every other secondary
+ *   action in this palette.
+ */
+function OtherProjectsHeader({
+  headerId,
+  label,
+  itemCount,
+}: {
+  headerId: string;
+  label: string;
+  itemCount: number;
+}) {
+  const sortMode = usePreferencesStore((state) => state.projectSwitcherOtherSortMode);
+  const setSortMode = usePreferencesStore((state) => state.setProjectSwitcherOtherSortMode);
+
+  const active =
+    OTHER_PROJECTS_SORT_OPTIONS.find((option) => option.value === sortMode) ??
+    OTHER_PROJECTS_SORT_OPTIONS[0];
+  const ActiveIcon = active.Icon;
+
+  const handleValueChange = (value: string) => {
+    if (isOtherProjectsSortMode(value)) setSortMode(value);
+  };
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          role="presentation"
+          className="flex items-center justify-between px-3 py-1 text-[10px] font-medium text-daintree-text/40 select-none"
+        >
+          <div id={headerId} className="tracking-wider uppercase">
+            {label}
+          </div>
+          {itemCount >= OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  data-testid="other-projects-sort-trigger"
+                  aria-label={`Sort other projects, currently ${active.label}`}
+                  className="flex shrink-0 items-center gap-1 text-daintree-text/40 hover:text-daintree-text/60 transition-colors"
+                >
+                  <ActiveIcon className="w-3 h-3" aria-hidden="true" />
+                  {active.label}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuRadioGroup value={sortMode} onValueChange={handleValueChange}>
+                  {OTHER_PROJECTS_SORT_OPTIONS.map(({ value, label: optionLabel, Icon }) => (
+                    <DropdownMenuRadioItem key={value} value={value}>
+                      <Icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      {optionLabel}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+      </ContextMenuTrigger>
+      {/*
+       * Right-click keeps the options reachable below the row threshold, where
+       * the visible trigger hides itself — the preference still applies there.
+       */}
+      <ContextMenuContent>
+        <ContextMenuRadioGroup value={sortMode} onValueChange={handleValueChange}>
+          {OTHER_PROJECTS_SORT_OPTIONS.map(({ value, label: optionLabel, Icon }) => (
+            <ContextMenuRadioItem key={value} value={value}>
+              <Icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+              {optionLabel}
+            </ContextMenuRadioItem>
+          ))}
+        </ContextMenuRadioGroup>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
 interface ProjectListContentProps {
   results: SearchableProject[];
   selectedIndex: number;
@@ -554,14 +673,21 @@ function ProjectListContent({
                     isActiveSection && "bg-overlay-subtle"
                   )}
                 >
-                  {section.label && (
-                    <div
-                      id={headerId}
-                      className="px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none"
-                    >
-                      {section.label}
-                    </div>
-                  )}
+                  {section.label &&
+                    (section.key === "other" ? (
+                      <OtherProjectsHeader
+                        headerId={headerId}
+                        label={section.label}
+                        itemCount={section.items.length}
+                      />
+                    ) : (
+                      <div
+                        id={headerId}
+                        className="px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none"
+                      >
+                        {section.label}
+                      </div>
+                    ))}
                   {section.items.map(renderItem)}
                 </div>
               </div>

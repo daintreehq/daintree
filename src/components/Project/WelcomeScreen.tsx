@@ -18,6 +18,8 @@ import { BrandMark, DaintreeIcon } from "@/components/icons";
 import { useProjectStore } from "@/store/projectStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { compareProjectsByMode } from "@/lib/projectSort";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
@@ -56,18 +58,34 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   const projects = useProjectStore((state) => state.projects);
   const switchProject = useProjectStore((state) => state.switchProject);
 
+  const otherProjectsSortMode = usePreferencesStore((state) => state.projectSwitcherOtherSortMode);
+
   // Effective (read-time decayed) scores against one shared now — comparing
   // raw persisted scores compares snapshots frozen on different dates, which
-  // let months-dormant projects hold the top slots. Same transform as the
-  // project switcher, so the two surfaces can never disagree on order.
+  // let months-dormant projects hold the top slots. Same transform AND the same
+  // comparator as the project switcher's Other band, reading the same
+  // preference, so the two surfaces can never disagree on order (#11455).
+  //
+  // Sorted before the cap, never after: slicing first would rank five projects
+  // the frecency order happened to surface, not the five this mode ranks top.
   const topProjects = useMemo(() => {
     const now = Date.now();
-    const effective = (p: (typeof projects)[number]) =>
-      decayFrecencyScore(p.frecencyScore ?? FRECENCY_COLD_START, p.lastAccessedAt ?? 0, now);
     return [...projects]
-      .sort((a, b) => effective(b) - effective(a) || (b.lastOpened ?? 0) - (a.lastOpened ?? 0))
-      .slice(0, 5);
-  }, [projects]);
+      .map((project) => ({
+        project,
+        id: project.id,
+        name: project.name,
+        lastOpened: project.lastOpened ?? 0,
+        frecencyScore: decayFrecencyScore(
+          project.frecencyScore ?? FRECENCY_COLD_START,
+          project.lastAccessedAt ?? 0,
+          now
+        ),
+      }))
+      .sort((a, b) => compareProjectsByMode(a, b, otherProjectsSortMode))
+      .slice(0, 5)
+      .map((entry) => entry.project);
+  }, [projects, otherProjectsSortMode]);
 
   const hasProjects = topProjects.length > 0;
   const { checklist } = gettingStarted;

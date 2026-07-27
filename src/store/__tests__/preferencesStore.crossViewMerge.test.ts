@@ -9,7 +9,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
  */
 describe("preferencesStore cross-view write merge (#11351)", () => {
   const STORAGE_KEY = "daintree-preferences";
-  const VERSION = 13;
   const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
   type PersistedBlob = {
@@ -77,10 +76,13 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     const backing = installLocalStorage({});
     const { usePreferencesStore: store } = await import("../preferencesStore");
 
+    // Read from the store rather than pinning a literal: the merge SKIPS
+    // reconciliation when the on-disk version differs, so a stale fixture
+    // silently stops testing the merge instead of failing loudly.
     backing.set(
       STORAGE_KEY,
       JSON.stringify({
-        version: VERSION,
+        version: store.persist.getOptions().version,
         state: {
           lastSelectedWorktreeRecipeIdByProject: { "proj-b": "recipe-b" },
           showProjectPulse: false,

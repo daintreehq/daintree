@@ -137,6 +137,8 @@ vi.mock("@/components/ui/context-menu", () => ({
   ContextMenuContent: () => null,
   ContextMenuItem: () => null,
   ContextMenuSeparator: () => null,
+  ContextMenuRadioGroup: () => null,
+  ContextMenuRadioItem: () => null,
 }));
 
 const modifierKeysState = { meta: false, alt: false };

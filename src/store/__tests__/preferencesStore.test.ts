@@ -782,4 +782,57 @@ describe("preferencesStore migration", () => {
       expect(store.getState().fileBrowserAlwaysHiddenPatterns).toEqual(["ok"]);
     });
   });
+
+  describe("projectSwitcherOtherSortMode (v14 migration)", () => {
+    it("defaults to the band's existing frecency order on a fresh install", async () => {
+      // The default has to reproduce today's behavior exactly, or shipping the
+      // control silently reorders every user's Other band on upgrade.
+      const store = await loadStore();
+      expect(store.getState().projectSwitcherOtherSortMode).toBe("hottest");
+    });
+
+    it("round-trips a non-default choice through storage", async () => {
+      const store = await loadStore();
+      store.getState().setProjectSwitcherOtherSortMode("alphabetical");
+
+      const persisted = JSON.parse(storage[STORAGE_KEY]!) as {
+        state: Record<string, unknown>;
+      };
+      expect(persisted.state.projectSwitcherOtherSortMode).toBe("alphabetical");
+    });
+
+    it("survives a reload rather than resetting to the default", async () => {
+      const first = await loadStore();
+      first.getState().setProjectSwitcherOtherSortMode("recent");
+
+      vi.resetModules();
+      _resetPersistedStoreRegistryForTests();
+      const reloaded = await loadStore();
+      expect(reloaded.getState().projectSwitcherOtherSortMode).toBe("recent");
+    });
+
+    it("defaults a pre-v14 blob that predates the field", async () => {
+      setStoredState({ dockDensity: "compact" }, 13);
+      const store = await loadStore();
+
+      expect(store.getState().projectSwitcherOtherSortMode).toBe("hottest");
+      // The migration must not trample the state it is migrating past.
+      expect(store.getState().dockDensity).toBe("compact");
+    });
+
+    it("preserves an explicit choice across the v14 migration", async () => {
+      setStoredState({ projectSwitcherOtherSortMode: "recent" }, 13);
+      const store = await loadStore();
+      expect(store.getState().projectSwitcherOtherSortMode).toBe("recent");
+    });
+
+    it("normalises a value outside the closed set", async () => {
+      // Hand-edited or written by a newer build: an unknown mode would leave
+      // the radio group with no checked item and fall through every branch of
+      // the comparator.
+      setStoredState({ projectSwitcherOtherSortMode: "newest" }, 14);
+      const store = await loadStore();
+      expect(store.getState().projectSwitcherOtherSortMode).toBe("hottest");
+    });
+  });
 });

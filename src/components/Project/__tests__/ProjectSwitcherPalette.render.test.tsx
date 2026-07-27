@@ -111,6 +111,8 @@ vi.mock("@/components/ui/context-menu", () => ({
   ContextMenuContent: () => null,
   ContextMenuItem: () => null,
   ContextMenuSeparator: () => null,
+  ContextMenuRadioGroup: () => null,
+  ContextMenuRadioItem: () => null,
 }));
 
 vi.mock("@/hooks/useModifierKeys", () => ({
@@ -487,6 +489,54 @@ describe("ProjectSwitcherPalette modal mode", () => {
     expect(headers[0]).toBe("Pinned");
     expect(headers).toContain("Running");
     expect(headers).toContain("Other projects");
+  });
+
+  describe("Other band sort control — issue #11455", () => {
+    function withOtherRows(count: number) {
+      return [
+        ...multiProjects.filter((project) => project.section !== "other"),
+        ...Array.from({ length: count }, (_, i) =>
+          makeProject({
+            id: `other-${i}`,
+            name: `Other ${i}`,
+            section: "other",
+            lastOpened: now - (i + 1) * 3600000,
+          })
+        ),
+      ];
+    }
+
+    it("advertises the order once the band is long enough to need it", () => {
+      render(<ProjectSwitcherPalette {...dropdownProps} results={withOtherRows(4)} />);
+      expect(screen.getByTestId("other-projects-sort-trigger")).toBeTruthy();
+    });
+
+    it("stays quiet on a band short enough to read at a glance", () => {
+      render(<ProjectSwitcherPalette {...dropdownProps} results={withOtherRows(3)} />);
+      expect(screen.queryByTestId("other-projects-sort-trigger")).toBeNull();
+    });
+
+    it("puts the control only on the Other band", () => {
+      render(<ProjectSwitcherPalette {...dropdownProps} results={withOtherRows(4)} />);
+      // Pinned and Running are load-bearing orders this preference must not
+      // claim to govern, so neither header may grow a control.
+      expect(screen.getAllByTestId("other-projects-sort-trigger")).toHaveLength(1);
+    });
+
+    it("keeps the band's accessible name free of the mode it is showing", () => {
+      // The header id is the group's aria-labelledby target, and that name is
+      // computed from the element's whole subtree — nesting the mode inside it
+      // would name the band "Other projects Hottest" to a screen reader.
+      render(<ProjectSwitcherPalette {...dropdownProps} results={withOtherRows(4)} />);
+      expect(screen.getByRole("group", { name: "Other projects" })).toBeTruthy();
+    });
+
+    it("keeps the trigger out of the Tab order", () => {
+      // Section headers live inside the listbox, where a focusable child is
+      // invalid; arrow keys move aria-activedescendant across rows only.
+      render(<ProjectSwitcherPalette {...dropdownProps} results={withOtherRows(4)} />);
+      expect(screen.getByTestId("other-projects-sort-trigger").getAttribute("tabindex")).toBe("-1");
+    });
   });
 
   it("shows Remove hint in dropdown mode footer", () => {
