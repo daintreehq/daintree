@@ -146,7 +146,7 @@ class NotificationService {
   initialize(registry: WindowRegistry, projectLookup?: ProjectTitleLookup): void {
     this.detachAllWindowListeners();
     this.registry = registry;
-    if (projectLookup) this.projectLookup = projectLookup;
+    this.projectLookup = projectLookup ?? null;
 
     for (const ctx of registry.all()) {
       this.attachWindowListeners(ctx);
@@ -179,6 +179,7 @@ class NotificationService {
   private applyNotifications(): void {
     if (!this.registry) return;
 
+    this.pruneDeadOwners();
     const countsByWindow = this.countsByWindow();
 
     let totalWaiting = 0;
@@ -216,19 +217,32 @@ class NotificationService {
    * An owner that no longer resolves to a window is dead or dying: a view's
    * webContents id is indexed at creation, before its renderer can send any
    * IPC, and is unindexed only on eviction (which closes it) or window
-   * teardown. Pruning here keeps the badge honest even if a "destroyed" event
-   * is missed.
+   * teardown. Pruning keeps the badge honest even if a "destroyed" event is
+   * missed.
+   *
+   * Only `applyNotifications` prunes, because dropping an owner changes the
+   * total the badge is about to be set from. A title-only pass that pruned
+   * would leave the badge stale AND make the later `removeOwner` a no-op, since
+   * its `delete` would find nothing left to remove.
    */
+  private pruneDeadOwners(): void {
+    if (!this.registry) return;
+
+    for (const ownerId of [...this.statesByOwner.keys()]) {
+      const ctx = this.registry.getByWebContentsId(ownerId);
+      if (!ctx || ctx.browserWindow.isDestroyed()) {
+        this.statesByOwner.delete(ownerId);
+      }
+    }
+  }
+
   private countsByWindow(): Map<number, number> {
     const counts = new Map<number, number>();
     if (!this.registry) return counts;
 
-    for (const [ownerId, state] of [...this.statesByOwner]) {
+    for (const [ownerId, state] of this.statesByOwner) {
       const ctx = this.registry.getByWebContentsId(ownerId);
-      if (!ctx || ctx.browserWindow.isDestroyed()) {
-        this.statesByOwner.delete(ownerId);
-        continue;
-      }
+      if (!ctx || ctx.browserWindow.isDestroyed()) continue;
       counts.set(ctx.windowId, (counts.get(ctx.windowId) ?? 0) + state.waitingCount);
     }
     return counts;

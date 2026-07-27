@@ -1,6 +1,7 @@
 import { Menu, dialog, BrowserWindow, app, webContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { projectStore } from "./services/ProjectStore.js";
+import { notificationService } from "./services/NotificationService.js";
 import { openExternalUrl } from "./utils/openExternal.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { broadcastProjectSwitchUpdates } from "./ipc/projectSwitchBroadcast.js";
@@ -1013,5 +1014,12 @@ export async function handleDirectoryOpen(
     } catch (dialogError) {
       console.error("Failed to surface project open error:", dialogError);
     }
+  } finally {
+    // The third switch entry point, and the one that bypasses
+    // `activateProjectView` — nothing else on this path writes the title, and
+    // the next notification tick may be far off. In `finally` for the same
+    // reason the IPC switch handler converges there: a swap that committed
+    // visually before a later step threw still moved what this window shows.
+    notificationService.refreshTitles();
   }
 }

@@ -69,6 +69,7 @@ vi.mock("../../window/webContentsRegistry.js", () => registryMock);
 
 import { sendToRenderer } from "../../ipc/utils.js";
 import { notificationService } from "../NotificationService.js";
+import type { ProjectTitleLookup, ProjectTitleRow } from "../../window/windowTitle.js";
 
 const sendToRendererMock = vi.mocked(sendToRenderer);
 
@@ -128,14 +129,23 @@ function projectViewManagerOf(w: WindowMock) {
 }
 
 /** Project rows keyed by id, standing in for the SQLite-backed store. */
-function lookupOf(rows: Record<string, { name: string; status?: string }>) {
+function lookupOf(rows: Record<string, ProjectTitleRow>): ProjectTitleLookup {
   return (projectId: string) => rows[projectId] ?? null;
 }
 
-/** The last title a window was given — titles are rewritten on every pass. */
+/**
+ * The last title a window was given — titles are rewritten on every pass.
+ * Throws rather than returning undefined so a comparison between two windows
+ * can't pass because neither of them was titled at all.
+ */
 function lastTitle(w: WindowMock): string {
   const calls = w.setTitle.mock.calls;
-  return calls[calls.length - 1]?.[0] as string;
+  if (calls.length === 0) throw new Error(`window ${w.id} was never given a title`);
+  return calls[calls.length - 1][0] as string;
+}
+
+function titleCount(w: WindowMock): number {
+  return w.setTitle.mock.calls.length;
 }
 
 function createRegistryMock(windows: WindowMock[]) {
@@ -270,6 +280,7 @@ describe("NotificationService", () => {
       notificationService.initialize(createRegistryMock([winA, winB]) as never, rows);
       notificationService.refreshTitles();
 
+      expect(lastTitle(winA)).toBe("alpha-app");
       expect(lastTitle(winB)).toBe(lastTitle(winA));
     });
 
@@ -330,24 +341,29 @@ describe("NotificationService", () => {
     it("falls back for a closed project whose window binding lingers", () => {
       const open = createWindowMock(false, [11]);
       const closed = createWindowMock(false, [21]);
+      const unbound = createWindowMock(false, [31]);
       open.activeProjectId = "alpha";
       closed.activeProjectId = "gone";
+      unbound.activeProjectId = null;
 
-      notificationService.initialize(createRegistryMock([open, closed]) as never, rows);
+      notificationService.initialize(createRegistryMock([open, closed, unbound]) as never, rows);
       notificationService.refreshTitles();
 
       expect(lastTitle(open)).toBe("alpha-app");
-      expect(lastTitle(closed)).toBe("Daintree");
+      expect(lastTitle(closed)).not.toContain("archived");
+      expect(lastTitle(closed)).toBe(lastTitle(unbound));
     });
 
     it("falls back for a scratch id that matches no project row", () => {
-      const win = createWindowMock(false, [11]);
-      win.activeProjectId = "scratch-uuid";
+      const scratch = createWindowMock(false, [11]);
+      const unbound = createWindowMock(false, [21]);
+      scratch.activeProjectId = "scratch-uuid";
+      unbound.activeProjectId = null;
 
-      notificationService.initialize(createRegistryMock([win]) as never, rows);
+      notificationService.initialize(createRegistryMock([scratch, unbound]) as never, rows);
       notificationService.refreshTitles();
 
-      expect(lastTitle(win)).toBe("Daintree");
+      expect(lastTitle(scratch)).toBe(lastTitle(unbound));
     });
 
     it("titles the project still painted behind a cold-switch bridge", () => {
@@ -361,10 +377,10 @@ describe("NotificationService", () => {
       expect(lastTitle(win)).toBe("beta-app");
     });
 
-    it("converges on the renamed project when a debounced tick lands after a refresh", () => {
+    it("leaves the pending tick armed and converges it on the renamed project", () => {
       const win = createWindowMock(false, [11]);
       win.activeProjectId = "alpha";
-      const renamable: Record<string, { name: string; status?: string }> = {
+      const renamable: Record<string, ProjectTitleRow> = {
         alpha: { name: "alpha-app", status: "active" },
       };
 
@@ -375,8 +391,14 @@ describe("NotificationService", () => {
       notificationService.refreshTitles();
       expect(lastTitle(win)).toBe("(1) renamed-app");
 
+      // The refresh must not have swallowed the debounce: the tick still owes a
+      // write, and it recomputes rather than replaying the name it was queued with.
+      const beforeTick = titleCount(win);
+      renamable.alpha = { name: "renamed-again", status: "active" };
       vi.advanceTimersByTime(301);
-      expect(lastTitle(win)).toBe("(1) renamed-app");
+
+      expect(titleCount(win)).toBeGreaterThan(beforeTick);
+      expect(lastTitle(win)).toBe("(1) renamed-again");
     });
 
     it("skips a destroyed window without touching its title", () => {
@@ -413,19 +435,62 @@ describe("NotificationService", () => {
       expect(lastTitle(healthy)).toBe("beta-app");
     });
 
-    it("titles by app name alone once the project lookup is gone", () => {
+    it("drops the project lookup when reinitialized without one", () => {
+      const bound = createWindowMock(false, [11]);
+      bound.activeProjectId = "alpha";
+      notificationService.initialize(createRegistryMock([bound]) as never, rows);
+      notificationService.refreshTitles();
+      expect(lastTitle(bound)).toBe("alpha-app");
+
+      // No dispose in between: a re-init that supplies no lookup must not keep
+      // resolving names through the previous one.
+      const rebound = createWindowMock(false, [21]);
+      const unbound = createWindowMock(false, [31]);
+      rebound.activeProjectId = "alpha";
+      unbound.activeProjectId = null;
+      notificationService.initialize(createRegistryMock([rebound, unbound]) as never);
+      notificationService.refreshTitles();
+
+      expect(lastTitle(rebound)).not.toContain("alpha-app");
+      expect(lastTitle(rebound)).toBe(lastTitle(unbound));
+    });
+
+    it("names a project whose row went missing rather than blanking the window", () => {
+      const win = createWindowMock(false, [11]);
+      win.activeProjectId = "vanished";
+
+      const withMissing = lookupOf({ vanished: { name: "on-a-dead-mount", status: "missing" } });
+      notificationService.initialize(createRegistryMock([win]) as never, withMissing);
+      notificationService.refreshTitles();
+
+      expect(lastTitle(win)).toBe("on-a-dead-mount");
+    });
+
+    it("resolves a window whose view manager reports no active project", () => {
+      const win = createWindowMock(false, [11]);
+      win.activeProjectId = null;
+
+      notificationService.initialize(createRegistryMock([win]) as never, rows);
+      notificationService.updateNotifications(11, { waitingCount: 3 });
+      vi.advanceTimersByTime(301);
+
+      expect(lastTitle(win).startsWith("(3) ")).toBe(true);
+      expect(lastTitle(win)).not.toContain("alpha-app");
+    });
+
+    it("keeps the badge answerable after a title-only refresh prunes nothing", () => {
       const win = createWindowMock(false, [11]);
       win.activeProjectId = "alpha";
 
       notificationService.initialize(createRegistryMock([win]) as never, rows);
-      notificationService.dispose();
+      notificationService.updateNotifications(11, { waitingCount: 4 });
+      vi.advanceTimersByTime(301);
 
-      const revived = createWindowMock(false, [31]);
-      revived.activeProjectId = "alpha";
-      notificationService.initialize(createRegistryMock([revived]) as never);
       notificationService.refreshTitles();
+      electronMock.app.setBadgeCount.mockClear();
+      notificationService.removeOwner(11);
 
-      expect(lastTitle(revived)).toBe("Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(0);
     });
   });
 
