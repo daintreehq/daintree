@@ -454,6 +454,11 @@ if (!gotTheLock) {
           .catch((err) => {
             console.warn(`[main] run-history pushSnapshotTo failed for wc ${wcId}:`, err);
           });
+        // Replay the project status map for the same reason (#11452). The stats
+        // service suppresses unchanged broadcasts, so a view that loads while
+        // the fleet is static would otherwise show every project unbanded until
+        // agent state next moved. Statically imported, so no dynamic import.
+        getProjectStatsService()?.pushSnapshotTo(wc);
 
         // #10815: cold switch-back auto-resume is driven entirely by the
         // renderer's pull-on-mount `help.peekPendingHibernation` peek (which

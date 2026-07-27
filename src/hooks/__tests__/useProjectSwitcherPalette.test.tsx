@@ -1735,29 +1735,81 @@ describe("useProjectSwitcherPalette", () => {
       bulk.second!.latestWorkingSince = 9_000;
       getBulkStatsMock.mockResolvedValue(bulk);
 
-      const { result } = renderHook(() => useProjectSwitcherPalette());
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
       act(() => {
         result.current.open("modal");
       });
       await waitFor(() => {
-        expect(
-          result.current.results.every((project) => project.latestWorkingSince !== undefined)
-        ).toBe(true);
+        expect(setStatsMock).toHaveBeenCalled();
+      });
+      act(() => {
+        rerender();
       });
 
-      // The first open froze its layout before the seed landed; the seed's
-      // ordering takes effect on the next capture.
-      act(() => {
-        result.current.close();
+      // The open froze a guess before the seed landed; the seed resolves it in
+      // place. Without latestWorkingSince riding the bulk contract this would
+      // fall back to lastOpened and invert — and without the regroup it would
+      // stay inverted for the whole session, since unchanged pushes are
+      // suppressed and the freeze would hold the placeholder ordering.
+      await waitFor(() => {
+        expect(result.current.results.map((p) => p.id)).toEqual(["second", "first"]);
       });
+      expect(result.current.results.every((p) => p.section === "running")).toBe(true);
+    });
+
+    it("regroups a cold session in place when stats arrive, then holds", async () => {
+      const projects = [base("quiet"), base("busy"), base("stuck")];
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      // No push has reached this view, so every row reads as zero agents.
+      projectStatsState.stats = {};
+      const bulk = emptyBulkStats(projects.map((p) => p.id));
+      bulk.busy!.activeAgentCount = 2;
+      bulk.stuck!.waitingAgentCount = 1;
+      getBulkStatsMock.mockResolvedValue(bulk);
+
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
       act(() => {
         result.current.open("modal");
       });
 
-      // Without latestWorkingSince riding the bulk contract, this would fall
-      // back to lastOpened and invert — potentially for the whole session,
-      // since unchanged pushes are suppressed.
-      expect(result.current.results.map((p) => p.id)).toEqual(["second", "first"]);
+      // The freeze taken at open put everything in one band.
+      expect(result.current.results.every((p) => p.section === "other")).toBe(true);
+
+      await waitFor(() => {
+        expect(setStatsMock).toHaveBeenCalled();
+      });
+      act(() => {
+        rerender();
+      });
+
+      // Bands and within-band order both come from the real data, without the
+      // user closing and reopening the palette.
+      await waitFor(() => {
+        expect(result.current.results.map((p) => [p.id, p.section])).toEqual([
+          ["stuck", "attention"],
+          ["busy", "running"],
+          ["quiet", "other"],
+        ]);
+      });
+
+      // The regroup is spent: the session is now a decision, so a later change
+      // is held exactly as it would have been on a warm open.
+      act(() => {
+        projectStatsState.stats = {
+          quiet: { activeAgentCount: 4, waitingAgentCount: 0, processCount: 4 },
+          busy: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+          stuck: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+        };
+        rerender();
+      });
+
+      expect(result.current.results.map((p) => [p.id, p.section])).toEqual([
+        ["stuck", "attention"],
+        ["busy", "running"],
+        ["quiet", "other"],
+      ]);
+      expect(result.current.results[2]!.activeAgentCount).toBe(4);
     });
 
     it("never preselects an unavailable row while an available one exists", async () => {
@@ -1868,10 +1920,13 @@ describe("useProjectSwitcherPalette", () => {
       });
       expect(result.current.results[0]!.section).toBe("attention");
 
-      // The agent finishes while the user is reading the list.
+      // The agent finishes while the user is reading the list, and the push
+      // that carries it also fills in the row that had no entry at open. A
+      // partial map is not a cold session, so this must not unlock the freeze.
       act(() => {
         projectStatsState.stats = {
           waiting: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+          idle: { activeAgentCount: 3, waitingAgentCount: 0, processCount: 3 },
         };
         rerender();
       });
@@ -1881,12 +1936,124 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.results[0]!.section).toBe("attention");
       // Content underneath is live, though.
       expect(result.current.results[0]!.waitingAgentCount).toBe(0);
+      expect(result.current.results[1]!.section).toBe("other");
+      expect(result.current.results[1]!.activeAgentCount).toBe(3);
+    });
+
+    it("regroups a project that registers while the session is still a guess", async () => {
+      const first = base("first");
+      const late = base("late");
+      projectState.projects = [first];
+      projectState.currentProject = null;
+      projectStatsState.stats = {};
+      getBulkStatsMock.mockResolvedValue({});
+
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+
+      // Registered before anything hydrated, so it joins the pending regroup
+      // rather than being locked at the band its missing stats implied.
+      act(() => {
+        projectState.projects = [first, late];
+        rerender();
+      });
+      act(() => {
+        projectStatsState.stats = {
+          first: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+        };
+        rerender();
+      });
+      expect(result.current.results.find((p) => p.id === "late")!.section).toBe("other");
+
+      act(() => {
+        projectStatsState.stats = {
+          first: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+          late: { activeAgentCount: 2, waitingAgentCount: 0, processCount: 2 },
+        };
+        rerender();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results.find((p) => p.id === "late")!.section).toBe("running");
+      });
+    });
+
+    it("waits for every guessed row, and a removed one stops holding it up", async () => {
+      const first = base("first");
+      const removed = base("removed");
+      projectState.projects = [first, removed];
+      projectState.currentProject = null;
+      projectStatsState.stats = {};
+      getBulkStatsMock.mockResolvedValue({});
+
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+
+      // One row resolves, the other has not: a partial answer must not move
+      // rows, or the list would regroup in installments under the pointer.
+      act(() => {
+        projectStatsState.stats = {
+          first: { activeAgentCount: 2, waitingAgentCount: 0, processCount: 2 },
+        };
+        rerender();
+      });
+      expect(result.current.results.find((p) => p.id === "first")!.section).toBe("other");
+      expect(result.current.results.find((p) => p.id === "first")!.activeAgentCount).toBe(2);
+
+      // The unresolved row goes away, so nothing is a guess any more.
+      act(() => {
+        projectState.projects = [first];
+        rerender();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results[0]!.section).toBe("running");
+      });
+    });
+
+    it("treats an active-only stats map as a guess for the rows that can switch", async () => {
+      const projects = [base("active", { status: "active" }), base("busy")];
+      projectState.projects = projects;
+      projectState.currentProject = { id: "active" };
+      // The active row is keyed, but nothing is known about the switch target,
+      // so this session is still a guess despite a non-empty map.
+      projectStatsState.stats = {
+        active: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+      };
+      const bulk = emptyBulkStats(projects.map((p) => p.id));
+      bulk.busy!.activeAgentCount = 2;
+      getBulkStatsMock.mockResolvedValue(bulk);
+
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      expect(result.current.results.find((p) => p.id === "busy")!.section).toBe("other");
+
+      await waitFor(() => {
+        expect(setStatsMock).toHaveBeenCalled();
+      });
+      act(() => {
+        rerender();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results.find((p) => p.id === "busy")!.section).toBe("running");
+      });
     });
 
     it("holds a project that arrives after the freeze just as still", async () => {
       projectState.projects = [base("first")];
       projectState.currentProject = null;
-      projectStatsState.stats = {};
+      // Keyed and idle, not absent: this session opens on real data, so the
+      // freeze is a decision from the start and no regroup is pending.
+      projectStatsState.stats = {
+        first: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+      };
       getBulkStatsMock.mockResolvedValue(emptyBulkStats(["first"]));
 
       const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
