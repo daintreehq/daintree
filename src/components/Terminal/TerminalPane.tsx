@@ -85,6 +85,7 @@ import {
   getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
   resolvePaneFocusAction,
+  shouldRecordXtermFocusPreference,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
 } from "./terminalFocus";
@@ -867,20 +868,21 @@ function TerminalPaneComponent({
       e.timeStamp
     );
 
-    // A physical click on xterm is an explicit "I want the terminal" gesture —
-    // record it so subsequent Cmd-Opt-Arrow navigation stays on xterm across
-    // panes. Skip for AT routing so a screen reader reaching terminal output
-    // doesn't silently clobber the user's hybrid-input focus preference.
-    if (!isAtSynthesized) {
-      setPreferredTerminalFocusTarget("xterm");
-    }
-
     const shouldSuppress = shouldSuppressUnfocusedClick({
       location,
       isFocused,
       isCursorPointer: xtermElement.classList.contains("xterm-cursor-pointer"),
       isShiftKey: e.shiftKey,
     });
+
+    // A physical click that reaches xterm is an explicit "I want the terminal"
+    // gesture — record it so subsequent Cmd-Opt-Arrow navigation stays on
+    // xterm across panes. Classify the click first: a suppressed activation
+    // click never reaches xterm, and overwriting the preference there is what
+    // used to destroy the pane's remembered hybrid-input target (#11465).
+    if (shouldRecordXtermFocusPreference({ isAtSynthesized, shouldSuppress })) {
+      setPreferredTerminalFocusTarget("xterm");
+    }
 
     if (!shouldSuppress) {
       // Already-focused panes: let the click through so xterm selection,
@@ -910,8 +912,12 @@ function TerminalPaneComponent({
       // Element was detached (e.g. LRU view eviction). Safe to ignore.
     }
 
+    // Activate the pane only. The `isFocused` effect below owns the resolved
+    // handoff via getTerminalFocusTarget / resolvePaneFocusAction, so forcing
+    // xterm focus here would both duplicate that resolver and defeat it —
+    // landing DOM focus on xterm fires `focusin`, which unconditionally
+    // records "xterm" and overwrites the target we just preserved.
     setFocused(id);
-    requestAnimationFrame(() => terminalInstanceService.focus(id));
   };
 
   const handleXtermPointerNoop = () => {};
