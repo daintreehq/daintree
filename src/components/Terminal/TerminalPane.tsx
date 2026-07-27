@@ -878,16 +878,17 @@ function TerminalPaneComponent({
     // A physical click that reaches xterm is an explicit "I want the terminal"
     // gesture — record it so subsequent Cmd-Opt-Arrow navigation stays on
     // xterm across panes. Classify the click first: a suppressed activation
-    // click never reaches xterm, and overwriting the preference there is what
-    // used to destroy the pane's remembered hybrid-input target (#11465).
+    // click is swallowed before xterm sees it, and recording there is what
+    // used to destroy the remembered hybrid-input target (#11465).
     if (shouldRecordXtermFocusPreference({ isAtSynthesized, shouldSuppress })) {
       setPreferredTerminalFocusTarget("xterm");
     }
 
     if (!shouldSuppress) {
-      // Already-focused panes: let the click through so xterm selection,
-      // cursor positioning, and mouse reporting work natively. The xterm
-      // focus listener (TerminalInstanceService) records the focus event.
+      // Pass-through cases — already-focused panes, dock panes, link cells,
+      // shift+click. Let the click reach xterm so selection, cursor
+      // positioning, and mouse reporting work natively. The xterm focus
+      // listener (TerminalInstanceService) records the focus event.
       return;
     }
 
