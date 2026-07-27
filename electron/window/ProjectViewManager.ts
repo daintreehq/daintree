@@ -214,6 +214,24 @@ export class ProjectViewManager {
   private efficiencyFreezeTimer: NodeJS.Timeout | null = null;
   private backgroundResizeTimer: NodeJS.Timeout | null = null;
   pendingPaintGate: PaintGate | null = null;
+  /**
+   * The cold switch currently between `loadView` starting and the outgoing
+   * view being detached (or the switch rolling back).
+   *
+   * `pendingPaintGate` cannot answer "is the outgoing view still on screen?":
+   * the gate resolves on the incoming view's skeleton signal — or its own 4s
+   * hard timeout — and nulls itself, while the outgoing view stays attached
+   * and visible until `loadView` resolves. With the load ceiling raised to
+   * 30s (#11459) that divergence is wide enough to matter, so the two
+   * consumers that need the real answer read this instead:
+   *   - eviction, so a pressure pass can't destroy the visible outgoing view
+   *     and leave a blank window behind (the guard in
+   *     ProjectViewEvictionController exists for exactly this case but was
+   *     keyed off the gate);
+   *   - the persistent crash handler, so a renderer that dies mid-load takes
+   *     only `loadView`'s rollback and not crash recovery as well.
+   */
+  pendingColdSwitch: { projectId: string; outgoingProjectId: string | null } | null = null;
   paintGateTimeoutMs = DEFAULT_PAINT_GATE_TIMEOUT_MS;
   paintGateHardTimeoutMs = DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS;
   warmPaintGateTimeoutMs = DEFAULT_WARM_PAINT_GATE_TIMEOUT_MS;

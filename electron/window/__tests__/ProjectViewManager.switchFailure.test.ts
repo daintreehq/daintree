@@ -20,7 +20,10 @@ interface MockWc {
   setWindowOpenHandler: ReturnType<typeof vi.fn>;
   setIgnoreMenuShortcuts: ReturnType<typeof vi.fn>;
   _handlers: Map<string, Handler[]>;
+  _persistentHandlers: Map<string, Handler[]>;
   _fireOnce: (event: string, ...args: unknown[]) => void;
+  /** Fire the persistent (`.on`) handlers setupViewHandlers registered. */
+  _fireOn: (event: string, ...args: unknown[]) => void;
 }
 
 function createMockWebContents(opts?: {
@@ -29,6 +32,7 @@ function createMockWebContents(opts?: {
 }): MockWc {
   const id = nextWebContentsId++;
   const handlers = new Map<string, Handler[]>();
+  const persistentHandlers = new Map<string, Handler[]>();
   const autoFinish = opts?.autoFinishLoad ?? true;
   const bootstrapProjectId = opts?.bootstrapProjectId ?? null;
 
@@ -46,7 +50,10 @@ function createMockWebContents(opts?: {
     close: vi.fn(),
     reload: vi.fn(),
     send: vi.fn(),
-    on: vi.fn((_event: string, _handler: Handler) => {}),
+    on: vi.fn((event: string, handler: Handler) => {
+      if (!persistentHandlers.has(event)) persistentHandlers.set(event, []);
+      persistentHandlers.get(event)!.push(handler);
+    }),
     once: vi.fn((event: string, handler: Handler) => {
       if (!handlers.has(event)) handlers.set(event, []);
       handlers.get(event)!.push(handler);
@@ -64,12 +71,16 @@ function createMockWebContents(opts?: {
     setWindowOpenHandler: vi.fn(),
     setIgnoreMenuShortcuts: vi.fn(),
     _handlers: handlers,
+    _persistentHandlers: persistentHandlers,
     _fireOnce(event: string, ...args: unknown[]) {
       const list = handlers.get(event);
       if (list && list.length > 0) {
         const h = list.shift()!;
         h(...args);
       }
+    },
+    _fireOn(event: string, ...args: unknown[]) {
+      for (const h of [...(persistentHandlers.get(event) ?? [])]) h(...args);
     },
   };
   return wc;
@@ -184,6 +195,7 @@ vi.mock("../../utils/logger.js", () => ({
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
 import { logInfo, logWarn } from "../../utils/logger.js";
+import { RESOURCE_PROFILE_CONFIGS } from "../../../shared/types/resourceProfile.js";
 
 /**
  * Short stand-ins for the real 10s/30s view-load bounds so the two-phase
@@ -254,6 +266,183 @@ describe("ProjectViewManager — switch failure rollback", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("defaults to the balanced profile's view-load bounds", () => {
+    // The manager constants are the fallback until the first resource-profile
+    // push lands, so a drift between them and the balanced profile would
+    // silently change cold-switch behaviour for the window's first switch.
+    const defaultManager = new ProjectViewManager(win as never, { dirname: "/test" });
+    expect(defaultManager.viewLoadTimeoutMs).toBe(
+      RESOURCE_PROFILE_CONFIGS.balanced.viewLoadTimeoutMs
+    );
+    expect(defaultManager.viewLoadHardTimeoutMs).toBe(
+      RESOURCE_PROFILE_CONFIGS.balanced.viewLoadHardTimeoutMs
+    );
+  });
+
+  it("leaves no load timer armed once the load settles", async () => {
+    // Both timers must be cleared on settle. Without an explicit inventory
+    // check a leaked hard timer is invisible: its callback just hits the
+    // `settled` guard, so nothing observable changes while the closure and
+    // the view it captures stay alive for the rest of the ceiling.
+    const wc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(wc);
+
+    const baseline = vi.getTimerCount();
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+    await vi.advanceTimersByTimeAsync(0);
+    // Soft + hard are both armed while the load is in flight. (The paint-gate
+    // timers are configured to 0ms and have already fired by now.)
+    expect(vi.getTimerCount()).toBe(baseline + 2);
+
+    // Settle well before either bound. The rollback path is used deliberately:
+    // a successful switch caches the outgoing view, which starts the periodic
+    // cached-view memory sampler and would confound the count.
+    wc._fireOnce("preload-error", {}, "/test/preload.cjs", new Error("Cannot find module"));
+    await errPromise;
+
+    expect(vi.getTimerCount()).toBe(baseline);
+  });
+
+  it("records a non-negative timer lateness on the soft warning", async () => {
+    const wc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(wc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(LOAD_SOFT_MS + 1);
+
+    const [, payload] = softTimeoutWarnings()[0] as [string, Record<string, unknown>];
+    expect(payload.waitedMs).toBe(LOAD_SOFT_MS);
+    expect(payload.hardMs).toBe(LOAD_HARD_MS);
+    // The stall-vs-slow-renderer diagnostic must always be a usable number —
+    // a NaN or negative here would silently poison the telemetry it exists for.
+    expect(Number.isFinite(payload.timerLateByMs)).toBe(true);
+    expect(payload.timerLateByMs as number).toBeGreaterThanOrEqual(0);
+
+    await vi.advanceTimersByTimeAsync(LOAD_HARD_MS);
+    await errPromise;
+  });
+
+  it("applies bounds pushed through the runtime setters to the next load", async () => {
+    // The resource-profile push goes through these setters, so a no-op setter
+    // would silently strand every window on the default bounds.
+    const setterManager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+    });
+    setterManager.setViewLoadTimeoutMs(LOAD_SOFT_MS);
+    setterManager.setViewLoadHardTimeoutMs(LOAD_HARD_MS);
+
+    const failWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(failWc);
+
+    const p = setterManager.switchTo("proj-z", "/path/z");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(LOAD_SOFT_MS + 1);
+    expect(softTimeoutWarnings()).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(LOAD_HARD_MS);
+    const err = await errPromise;
+    expect(err.message).toBe("View load timed out");
+  });
+
+  it("ignores non-finite and negative bounds from the setters", async () => {
+    const setterManager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      viewLoadTimeoutMs: LOAD_SOFT_MS,
+      viewLoadHardTimeoutMs: LOAD_HARD_MS,
+    });
+
+    setterManager.setViewLoadTimeoutMs(Number.NaN);
+    setterManager.setViewLoadHardTimeoutMs(-1);
+    expect(setterManager.viewLoadTimeoutMs).toBe(LOAD_SOFT_MS);
+    expect(setterManager.viewLoadHardTimeoutMs).toBe(LOAD_HARD_MS);
+
+    setterManager.setViewLoadHardTimeoutMs(Number.POSITIVE_INFINITY);
+    expect(setterManager.viewLoadHardTimeoutMs).toBe(LOAD_HARD_MS);
+  });
+
+  it("keeps the in-flight load on its captured bounds when the setters move", async () => {
+    const failWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(failWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // A resource-profile transition landing mid-load must not retime it.
+    manager.setViewLoadTimeoutMs(5_000);
+    manager.setViewLoadHardTimeoutMs(9_000);
+
+    await vi.advanceTimersByTimeAsync(LOAD_HARD_MS + 1);
+    const err = await errPromise;
+    expect(err.message).toBe("View load timed out");
+  });
+
+  it("does not run crash recovery for a renderer that dies mid-load", async () => {
+    // The persistent crash handler and loadView's one-shot handler both see
+    // render-process-gone. Only the latter should act: the former would tear
+    // down ports and reload a view the rollback is about to destroy.
+    const onViewCrashed = vi.fn();
+    const crashManager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      viewLoadTimeoutMs: LOAD_SOFT_MS,
+      viewLoadHardTimeoutMs: LOAD_HARD_MS,
+      onViewCrashed,
+    });
+
+    const crashWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(crashWc);
+
+    const p = crashManager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Persistent handler first (registered before loadView's one-shot), then
+    // the one-shot that actually owns the failure.
+    crashWc._fireOn("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+    crashWc._fireOnce("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+
+    const err = await errPromise;
+    expect(err.message).toBe("Renderer process gone during load: crashed");
+    expect(onViewCrashed).not.toHaveBeenCalled();
+    expect(crashWc.reload).not.toHaveBeenCalled();
+  });
+
+  it("shields the still-visible outgoing view from eviction while the load runs", async () => {
+    // The paint gate resolves on the incoming skeleton signal, but the
+    // outgoing view stays on screen until the load finishes. A pressure pass
+    // in that gap must not destroy it — doing so leaves a blank window if the
+    // load then fails, since rollback has no live view to restore.
+    const bWc = createMockWebContents({ autoFinishLoad: true, bootstrapProjectId: "proj-b" });
+    wcQueue.push(bWc);
+    const firstSwitch = manager.switchTo("proj-b", "/path/b");
+    await vi.advanceTimersByTimeAsync(1);
+    await firstSwitch;
+
+    const slowWc = createMockWebContents({ autoFinishLoad: false, bootstrapProjectId: "proj-c" });
+    wcQueue.push(slowWc);
+    const p = manager.switchTo("proj-c", "/path/c");
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Mid-load pressure reclaim: proj-a is a genuine cached view and may go;
+    // proj-b is the visible bridge and must not.
+    manager.reclaimCachedViewsUnderPressure();
+    expect(bWc.close).not.toHaveBeenCalled();
+
+    slowWc._fireOnce("did-finish-load");
+    await vi.advanceTimersByTimeAsync(1);
+    await p;
+    expect(manager.getActiveProjectId()).toBe("proj-c");
   });
 
   it("rolls back to previous view when preload-error fires", async () => {

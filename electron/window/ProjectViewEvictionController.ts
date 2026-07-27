@@ -167,9 +167,20 @@ export function evictStaleViews(
   // start) would evict the outgoing view and expose the unpainted
   // incoming frame, re-creating the exact flash this gate prevents.
   const gateOutgoingProjectId = host.pendingPaintGate?.outgoingProjectId ?? null;
+  // The gate resolves on the incoming skeleton signal (or its own hard
+  // timeout) while the outgoing view stays attached until the load finishes,
+  // so the gate alone under-covers the very case the guard above describes —
+  // by up to the full load ceiling (#11459). `pendingColdSwitch` spans the
+  // real on-screen window.
+  const switchOutgoingProjectId = host.pendingColdSwitch?.outgoingProjectId ?? null;
 
   const evictable = Array.from(host.views.entries())
-    .filter(([id]) => id !== host.activeProjectId && id !== gateOutgoingProjectId)
+    .filter(
+      ([id]) =>
+        id !== host.activeProjectId &&
+        id !== gateOutgoingProjectId &&
+        id !== switchOutgoingProjectId
+    )
     // Oldest lastUsed first — pure LRU. Sequential switchTo calls stamp
     // distinct millisecond timestamps so equal-lastUsed ties don't arise
     // in practice; Array.sort stability handles them deterministically.

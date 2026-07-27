@@ -312,5 +312,26 @@ describe("ResourceProfileService fan-out isolation", () => {
       expect(pvm.setViewLoadTimeoutMs).toHaveBeenCalledWith(efficiency.viewLoadTimeoutMs);
       expect(pvm.setViewLoadHardTimeoutMs).toHaveBeenCalledWith(efficiency.viewLoadHardTimeoutMs);
     });
+
+    it("a throwing soft view-load setter still lets the hard bound land", () => {
+      // The two bounds must not share a try block: a soft-setter throw that
+      // skipped the hard setter would leave the ceiling on the previous
+      // profile's value while the soft bound moved.
+      const pvm = makeMockPvm();
+      pvm.setViewLoadTimeoutMs.mockImplementation(() => {
+        throw new Error("soft bound exploded");
+      });
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service._forceProfileForTesting("efficiency");
+
+      expect(() =>
+        service.applyCurrentProfileTo(pvm as unknown as ProjectViewManager)
+      ).not.toThrow();
+
+      expect(pvm.setViewLoadHardTimeoutMs).toHaveBeenCalledWith(
+        RESOURCE_PROFILE_CONFIGS.efficiency.viewLoadHardTimeoutMs
+      );
+    });
   });
 });
