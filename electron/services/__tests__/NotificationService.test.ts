@@ -478,16 +478,23 @@ describe("NotificationService", () => {
       expect(lastTitle(win)).not.toContain("alpha-app");
     });
 
-    it("keeps the badge answerable after a title-only refresh prunes nothing", () => {
+    it("leaves a dead owner for removeOwner to clear, so the badge still settles", () => {
       const win = createWindowMock(false, [11]);
       win.activeProjectId = "alpha";
 
       notificationService.initialize(createRegistryMock([win]) as never, rows);
       notificationService.updateNotifications(11, { waitingCount: 4 });
       vi.advanceTimersByTime(301);
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(4);
 
+      // The owner's window dies without its destroyed event being processed, so
+      // the count is now unbacked. A title-only refresh must not consume it: if
+      // it did, removeOwner's delete would find nothing and return before ever
+      // recomputing the badge, stranding it at 4.
+      win.isDestroyed.mockReturnValue(true);
       notificationService.refreshTitles();
       electronMock.app.setBadgeCount.mockClear();
+
       notificationService.removeOwner(11);
 
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(0);
