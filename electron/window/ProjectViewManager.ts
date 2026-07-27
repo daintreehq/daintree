@@ -511,14 +511,24 @@ export class ProjectViewManager {
   }
 
   /**
-   * Project whose view is the still-visible anti-flash bridge of an open paint
-   * gate. During a cold switch `activeProjectId` is already the incoming
-   * project, but the outgoing project's view stays on-screen until the gate
-   * settles — so it is non-evictable for the same reason as the active view.
-   * Eviction paths must skip both (mirrors the LRU guard in `evictStaleViews`).
+   * Project whose view is the still-visible anti-flash bridge of a cold switch.
+   * During a cold switch `activeProjectId` is already the incoming project, but
+   * the outgoing project's view stays on-screen until the load settles — so it
+   * is non-evictable for the same reason as the active view. Eviction paths
+   * must skip both (mirrors the LRU guard in `evictStaleViews`).
+   *
+   * Spans the whole load, not just the paint gate: the gate resolves on the
+   * incoming skeleton signal (or its own hard timeout) and nulls itself, while
+   * the outgoing view stays attached until `loadView` settles — up to the load
+   * ceiling (#11459). Falling back to `pendingColdSwitch` closes that window
+   * for every consumer (hibernation, idle auto-close, relocation, menu state),
+   * any of which would otherwise destroy the visible outgoing view and leave
+   * rollback with nothing to restore.
    */
   getOutgoingBridgeProjectId(): string | null {
-    return this.pendingPaintGate?.outgoingProjectId ?? null;
+    return (
+      this.pendingPaintGate?.outgoingProjectId ?? this.pendingColdSwitch?.outgoingProjectId ?? null
+    );
   }
 
   getActiveView(): WebContentsView | null {
@@ -839,6 +849,7 @@ export class ProjectViewManager {
     }
 
     PaintGateController.clearPaintGate(this);
+    this.pendingColdSwitch = null;
     for (const projectId of Array.from(this.views.keys())) {
       cleanupEntry(this, projectId);
     }

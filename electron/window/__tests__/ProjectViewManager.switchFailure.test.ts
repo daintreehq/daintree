@@ -445,6 +445,88 @@ describe("ProjectViewManager — switch failure rollback", () => {
     expect(manager.getActiveProjectId()).toBe("proj-c");
   });
 
+  /**
+   * A manager whose paint gate expires strictly inside the load window, so the
+   * gap between "gate gone" and "load settled" can be observed on both sides.
+   */
+  const GATE_HARD_MS = 50;
+  function startBridgedSwitch() {
+    const bridgeManager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: GATE_HARD_MS,
+      viewLoadTimeoutMs: LOAD_SOFT_MS,
+      viewLoadHardTimeoutMs: LOAD_HARD_MS,
+    });
+    bridgeManager.registerInitialView(
+      { webContents: createMockWebContents(), setBounds: vi.fn() } as never,
+      "bridge-a",
+      "/path/bridge-a"
+    );
+
+    const slowWc = createMockWebContents({
+      autoFinishLoad: false,
+      bootstrapProjectId: "bridge-b",
+    });
+    wcQueue.push(slowWc);
+    return {
+      bridgeManager,
+      slowWc,
+      switchPromise: bridgeManager.switchTo("bridge-b", "/path/bridge-b"),
+    };
+  }
+
+  it("keeps reporting the outgoing bridge after the paint gate clears mid-load", async () => {
+    // The gate resolves on the incoming skeleton signal — or its own hard
+    // timeout — and nulls itself, while the outgoing view stays attached and
+    // visible until the load settles. Answering from the gate alone left every
+    // consumer (hibernation, idle auto-close, relocation, menu state) blind for
+    // that whole gap, free to destroy the view rollback needs and strand the
+    // window on a project with no live entry (#11459).
+    const { bridgeManager, slowWc, switchPromise } = startBridgedSwitch();
+
+    // Gate still open: this is the case that passed before the fix too.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(bridgeManager.pendingPaintGate).not.toBeNull();
+    const whileGateOpen = bridgeManager.getOutgoingBridgeProjectId();
+    expect(whileGateOpen).toBe("bridge-a");
+
+    // Gate hard-times-out and drops itself; the load is still in flight.
+    await vi.advanceTimersByTimeAsync(GATE_HARD_MS);
+    expect(bridgeManager.pendingPaintGate).toBeNull();
+    expect(bridgeManager.pendingColdSwitch?.projectId).toBe("bridge-b");
+
+    // The answer must not change across that boundary — the outgoing view is
+    // still the painted frame.
+    expect(bridgeManager.getOutgoingBridgeProjectId()).toBe(whileGateOpen);
+
+    // Only once the load settles is the bridge genuinely gone.
+    slowWc._fireOnce("did-finish-load");
+    await vi.advanceTimersByTimeAsync(1);
+    await switchPromise;
+    expect(bridgeManager.getOutgoingBridgeProjectId()).toBeNull();
+  });
+
+  it("stops reporting an outgoing bridge once the manager is disposed", async () => {
+    // dispose() clears the paint gate, so the cold switch has to go with it:
+    // otherwise a manager torn down mid-load keeps naming a project as on
+    // screen for the rest of the load ceiling, pinning it against hibernation
+    // and idle auto-close long after its window is gone.
+    const { bridgeManager, switchPromise } = startBridgedSwitch();
+    const errPromise = expectRejection(switchPromise);
+
+    await vi.advanceTimersByTimeAsync(GATE_HARD_MS + 1);
+    expect(bridgeManager.pendingPaintGate).toBeNull();
+    expect(bridgeManager.getOutgoingBridgeProjectId()).toBe("bridge-a");
+
+    bridgeManager.dispose();
+    expect(bridgeManager.getOutgoingBridgeProjectId()).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(LOAD_HARD_MS);
+    await errPromise;
+  });
+
   it("rolls back to previous view when preload-error fires", async () => {
     const failWc = createMockWebContents({ autoFinishLoad: false });
     wcQueue.push(failWc);
