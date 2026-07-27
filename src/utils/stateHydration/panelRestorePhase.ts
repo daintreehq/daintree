@@ -74,6 +74,14 @@ function resumeLatestScopeCwd(cwd: string): string {
  *
  * Scopes with a single candidate are omitted entirely, so the common one-pane
  * case keeps its existing behavior by construction.
+ *
+ * Liveness is only as good as what is known synchronously. When the bulk probe
+ * timed out there is no prefetched result, and a per-panel reconnect can still
+ * find a live PTY after the election has run — that pane then holds a slot it
+ * never uses and its cold sibling launches fresh. Deliberately accepted: the
+ * election has to complete before any task dispatches (a claim taken after an
+ * await races, the hazard #11052 fixed for restart), and the cost is one pane
+ * missing a resume rather than two panes sharing a conversation.
  */
 function electSuppressedResumeLatestIds(
   panels: readonly (TerminalState | undefined)[],

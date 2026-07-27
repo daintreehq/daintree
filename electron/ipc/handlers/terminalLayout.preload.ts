@@ -30,7 +30,8 @@ export interface TerminalLayoutPreloadBindings {
   // `changedIds`/`removedIds` describe what this renderer changed relative to
   // its last-persisted baseline so Main can merge concurrent writes from
   // sibling windows of the same project (#11350). Omit both for a full replace.
-  // `fieldEdits` tombstones fields Main may author out-of-band (#11461).
+  // `fieldEdits` names which Main-authorable fields this renderer changed; the
+  // rest keep their on-disk value (#11461).
   setTerminals(
     projectId: string,
     terminals: TerminalSnapshot[],

@@ -357,9 +357,10 @@ describe("field-level merge for out-of-band fields (#11461)", () => {
     expect(delta.fieldEdits).toEqual([{ id: "1", fields: ["agentSessionId"] }]);
   });
 
-  it("claims every tracked field on an entry it just added", () => {
-    // No baseline entry means the writer created this panel, so it owns its
-    // fields outright — nothing on disk could be newer.
+  it("claims nothing for an entry with no baseline", () => {
+    // A missing baseline usually means the writer just created the panel, but it
+    // can also mean an earlier save failed or the view was cached across a switch
+    // — in which case disk may hold something newer. Silence, not authority.
     const delta = computeIdArrayDelta(
       [],
       [{ id: "new", agentSessionId: "fresh" }] as Snap[],
@@ -367,7 +368,37 @@ describe("field-level merge for out-of-band fields (#11461)", () => {
       ["agentSessionId"]
     );
 
-    expect(delta.fieldEdits).toEqual([{ id: "new", fields: ["agentSessionId"] }]);
+    expect(delta.fieldEdits).toBeUndefined();
+  });
+
+  it("still persists a genuinely new entry's tracked value", () => {
+    // Nothing on disk to defer to, so the unclaimed value stands and creating a
+    // panel with a session id (the resume-a-session flow) still records it.
+    const merged = mergeIdArray(
+      [],
+      [{ id: "new", agentSessionId: "fresh" }] as Snap[],
+      ["new"],
+      [],
+      sessionMerge
+    );
+
+    expect(merged[0]!.agentSessionId).toBe("fresh");
+  });
+
+  it("defers to disk for an unbaselined entry that already exists on disk", () => {
+    // A stale writer whose baseline lost the entry must not out-rank a value
+    // another window wrote in the meantime — here a deliberate clear.
+    const existing: Snap[] = [{ id: "1", agentState: "idle" }];
+    const current: Snap[] = [{ id: "1", agentSessionId: "stale", agentState: "exited" }];
+
+    const delta = computeIdArrayDelta([], current, snapEq, ["agentSessionId"]);
+    const merged = mergeIdArray(existing, current, delta.changedIds, delta.removedIds, {
+      ...sessionMerge,
+      fieldEdits: delta.fieldEdits,
+    });
+
+    expect(merged[0]!.agentSessionId).toBeUndefined();
+    expect(merged[0]!.agentState).toBe("exited");
   });
 
   it("flags a claimed id as changed even when equals ignores the field", () => {

@@ -137,8 +137,13 @@ export function deepEqualIgnoringUndefined(left: unknown, right: unknown): boole
  * Main then leaves the on-disk value alone (#11461). Deriving authority from the
  * baseline rather than tracking intent in the store works because the baseline is
  * primed from the on-disk snapshot at hydration: a value only Main ever knew
- * matches on both sides and is never claimed. An entry with no baseline at all is
- * this writer's own addition, so it speaks for every tracked field on it.
+ * matches on both sides and is never claimed.
+ *
+ * An entry with no baseline entry at all claims nothing. Usually that means the
+ * writer just created the panel, and its values still apply because there is no
+ * on-disk row to defer to. But a baseline can also be missing because an earlier
+ * save failed or the view was cached across a project switch, and then the
+ * on-disk row may hold something newer — so silence, not authority, is correct.
  */
 export function computeIdArrayDelta<T extends { id: string }>(
   base: readonly T[],
@@ -163,11 +168,8 @@ export function computeIdArrayDelta<T extends { id: string }>(
       changedSeen.add(entry.id);
       changedIds.push(entry.id);
     }
-    if (trackedFields === undefined) continue;
-    const edited =
-      prev === undefined
-        ? trackedFields.filter((field) => entry[field] !== undefined)
-        : trackedFields.filter((field) => prev[field] !== entry[field]);
+    if (trackedFields === undefined || prev === undefined) continue;
+    const edited = trackedFields.filter((field) => prev[field] !== entry[field]);
     if (edited.length === 0) continue;
     fieldEdits.push({ id: entry.id, fields: [...edited] });
     // A claim is only honoured for an entry the writer is allowed to touch, so
@@ -225,6 +227,11 @@ function buildFieldEditIndex(
  * held) and a stale carried-over value (which would resurrect one another writer
  * deliberately cleared). Returns `incoming` untouched when the two already agree,
  * so the common path allocates nothing.
+ *
+ * With no on-disk entry there is nothing to defer to, so the incoming values
+ * stand. A writer whose entry was deleted on disk therefore still recreates it
+ * with its own tracked values — the entry-level last-writer-wins rule #11350
+ * already applies to a changed entry, and this does not narrow it.
  */
 function applyFieldAuthority<T extends { id: string }>(
   incoming: T,
