@@ -183,7 +183,21 @@ vi.mock("../../utils/logger.js", () => ({
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
-import { logInfo } from "../../utils/logger.js";
+import { logInfo, logWarn } from "../../utils/logger.js";
+
+/**
+ * Short stand-ins for the real 10s/30s view-load bounds so the two-phase
+ * behaviour can be driven without advancing 30s of fake time. The assertions
+ * below key off these, never off the production constants.
+ */
+const LOAD_SOFT_MS = 100;
+const LOAD_HARD_MS = 300;
+
+function softTimeoutWarnings() {
+  return vi
+    .mocked(logWarn)
+    .mock.calls.filter(([event]) => event === "projectview.load.softtimeout");
+}
 
 function createMockWindow() {
   return {
@@ -221,6 +235,7 @@ describe("ProjectViewManager — switch failure rollback", () => {
     wcQueue = [];
     vi.mocked(notifyError).mockClear();
     vi.mocked(logInfo).mockClear();
+    vi.mocked(logWarn).mockClear();
 
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, {
@@ -228,6 +243,8 @@ describe("ProjectViewManager — switch failure rollback", () => {
       cachedProjectViews: 3,
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      viewLoadTimeoutMs: LOAD_SOFT_MS,
+      viewLoadHardTimeoutMs: LOAD_HARD_MS,
     });
 
     initialWc = createMockWebContents();
@@ -305,21 +322,110 @@ describe("ProjectViewManager — switch failure rollback", () => {
     ).toHaveLength(0);
   });
 
-  it("rolls back when load times out (10s)", async () => {
+  it("keeps the load alive past the soft timeout and only rolls back at the hard timeout", async () => {
+    const failWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(failWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    let rejected = false;
+    const errPromise = expectRejection(p).then((err) => {
+      rejected = true;
+      return err;
+    });
+
+    // Past the soft bound: the slow load is reported, but nothing is torn
+    // down — this is the window in which #11459 used to lose the switch.
+    await vi.advanceTimersByTimeAsync(LOAD_SOFT_MS + 1);
+    expect(rejected).toBe(false);
+    expect(softTimeoutWarnings()).toHaveLength(1);
+    expect(failWc.close).not.toHaveBeenCalled();
+    expect(notifyError).not.toHaveBeenCalled();
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+
+    // Past the hard bound: now the load is presumed wedged and rolled back.
+    await vi.advanceTimersByTimeAsync(LOAD_HARD_MS - LOAD_SOFT_MS);
+
+    const err = await errPromise;
+    expect(err.message).toBe("View load timed out");
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(failWc.close).toHaveBeenCalled();
+    expect(notifyError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ source: "project-switch" })
+    );
+    expect(
+      vi.mocked(logInfo).mock.calls.filter(([e]) => e === "projectview.coldstart")
+    ).toHaveLength(0);
+    // The soft bound warns once, not once per elapsed interval.
+    expect(softTimeoutWarnings()).toHaveLength(1);
+  });
+
+  it("completes the switch when the load finishes between the soft and hard timeouts", async () => {
+    const slowWc = createMockWebContents({
+      autoFinishLoad: false,
+      bootstrapProjectId: "proj-b",
+    });
+    wcQueue.push(slowWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+
+    // Cross the soft bound without finishing — previously fatal at 10s.
+    await vi.advanceTimersByTimeAsync(LOAD_SOFT_MS + 1);
+    expect(softTimeoutWarnings()).toHaveLength(1);
+
+    // The renderer catches up before the hard ceiling.
+    slowWc._fireOnce("did-finish-load");
+    await vi.advanceTimersByTimeAsync(1);
+
+    const result = await p;
+    expect(result.isNew).toBe(true);
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    expect(slowWc.close).not.toHaveBeenCalled();
+    expect(notifyError).not.toHaveBeenCalled();
+
+    // The hard timer was cleared on settle: advancing well past it must not
+    // retroactively roll back a switch that already succeeded.
+    await vi.advanceTimersByTimeAsync(LOAD_HARD_MS * 2);
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+
+  it("clears both load timers when an event-driven failure settles first", async () => {
     const failWc = createMockWebContents({ autoFinishLoad: false });
     wcQueue.push(failWc);
 
     const p = manager.switchTo("proj-b", "/path/b");
     const errPromise = expectRejection(p);
 
-    await vi.advanceTimersByTimeAsync(10_001);
+    await vi.advanceTimersByTimeAsync(0);
+    failWc._fireOnce("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+    await errPromise;
 
-    const err = await errPromise;
-    expect(err.message).toBe("View load timed out");
-    expect(manager.getActiveProjectId()).toBe("proj-a");
-    expect(
-      vi.mocked(logInfo).mock.calls.filter(([e]) => e === "projectview.coldstart")
-    ).toHaveLength(0);
+    vi.mocked(notifyError).mockClear();
+
+    // Deterministic failures must not inherit the hard delay, and neither
+    // timer may fire after the promise already settled.
+    await vi.advanceTimersByTimeAsync(LOAD_HARD_MS * 2);
+    expect(softTimeoutWarnings()).toHaveLength(0);
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+
+  it("detaches the dom-ready listener when the load fails before dom-ready", async () => {
+    const failWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(failWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(failWc._handlers.get("dom-ready") ?? []).toHaveLength(1);
+
+    failWc._fireOnce("preload-error", {}, "/test/preload.cjs", new Error("Cannot find module"));
+    await errPromise;
+
+    // `webContents.close()` does not remove JS listeners, so settle() has to
+    // detach this one itself or it stays bound to a torn-down view.
+    expect(failWc._handlers.get("dom-ready") ?? []).toHaveLength(0);
   });
 
   it("sets activeProjectId to null when no previous view exists", async () => {
@@ -327,6 +433,8 @@ describe("ProjectViewManager — switch failure rollback", () => {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
+      viewLoadTimeoutMs: LOAD_SOFT_MS,
+      viewLoadHardTimeoutMs: LOAD_HARD_MS,
     });
 
     const failWc = createMockWebContents({ autoFinishLoad: false });
@@ -335,12 +443,36 @@ describe("ProjectViewManager — switch failure rollback", () => {
     const p = freshManager.switchTo("proj-x", "/path/x");
     const errPromise = expectRejection(p);
 
-    await vi.advanceTimersByTimeAsync(10_001);
+    await vi.advanceTimersByTimeAsync(LOAD_HARD_MS + 1);
 
     const err = await errPromise;
     expect(err.message).toBe("View load timed out");
     expect(freshManager.getActiveProjectId()).toBeNull();
     expect(notifyError).toHaveBeenCalled();
+  });
+
+  it("normalizes a hard bound below the soft bound so soft never outlives hard", async () => {
+    const invertedManager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      viewLoadTimeoutMs: LOAD_HARD_MS,
+      viewLoadHardTimeoutMs: LOAD_SOFT_MS,
+    });
+
+    const failWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(failWc);
+
+    const p = invertedManager.switchTo("proj-y", "/path/y");
+    const errPromise = expectRejection(p);
+
+    // hard is clamped up to soft, so nothing rejects at the smaller value.
+    await vi.advanceTimersByTimeAsync(LOAD_SOFT_MS + 1);
+    expect(notifyError).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(LOAD_HARD_MS);
+    const err = await errPromise;
+    expect(err.message).toBe("View load timed out");
   });
 
   it("switchChain continues after rollback — second switch succeeds", async () => {
@@ -354,7 +486,7 @@ describe("ProjectViewManager — switch failure rollback", () => {
     const first = manager.switchTo("proj-b", "/path/b");
     const firstErr = expectRejection(first);
 
-    await vi.advanceTimersByTimeAsync(10_001);
+    await vi.advanceTimersByTimeAsync(LOAD_HARD_MS + 1);
     await firstErr;
 
     const second = manager.switchTo("proj-c", "/path/c");

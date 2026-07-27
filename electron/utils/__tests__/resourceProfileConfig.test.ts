@@ -39,6 +39,23 @@ describe("resolveResourceProfileConfig", () => {
     }
   });
 
+  it("keeps every hard timeout at or above its soft counterpart", () => {
+    // The soft bound only warns; the hard bound is what abandons the work. If
+    // a profile ever inverts them the soft phase is unreachable and the
+    // two-phase design silently collapses back to a single fatal deadline.
+    for (const profile of PROFILES) {
+      const config = RESOURCE_PROFILE_CONFIGS[profile];
+      expect(config.paintGateHardTimeoutMs).toBeGreaterThanOrEqual(config.paintGateTimeoutMs);
+      expect(config.warmPaintGateHardTimeoutMs).toBeGreaterThanOrEqual(
+        config.warmPaintGateTimeoutMs
+      );
+      expect(config.viewLoadHardTimeoutMs).toBeGreaterThanOrEqual(config.viewLoadTimeoutMs);
+      // A view-load ceiling below the paint-gate ceiling would abandon loads
+      // the gate downstream is still willing to wait for.
+      expect(config.viewLoadHardTimeoutMs).toBeGreaterThan(config.paintGateHardTimeoutMs);
+    }
+  });
+
   it("does not mutate the shared RESOURCE_PROFILE_CONFIGS table", () => {
     const balancedBefore = { ...RESOURCE_PROFILE_CONFIGS.balanced };
     resolveResourceProfileConfig("balanced", 32);

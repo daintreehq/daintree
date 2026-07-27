@@ -66,6 +66,22 @@ const DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS = 4_000;
 const DEFAULT_WARM_PAINT_GATE_TIMEOUT_MS = 500;
 const DEFAULT_WARM_PAINT_GATE_HARD_TIMEOUT_MS = 1_500;
 /**
+ * Soft view-load timeout (ms). At this point the cold-start load is taking far
+ * longer than the measured distribution (p90 ~177ms) and that fact is logged,
+ * but the load keeps running — crossing this bound is observable, never fatal.
+ */
+const DEFAULT_VIEW_LOAD_TIMEOUT_MS = 10_000;
+/**
+ * Hard view-load timeout (ms). Absolute ceiling at which the load is abandoned
+ * and the switch rolls back. Previously the soft bound doubled as this ceiling,
+ * so a load that was merely slow — a main process saturated by concurrent agent
+ * CLIs and git enumeration also stalls the `app://` chunks the renderer is
+ * waiting on — lost the switch outright (#11459). Progress signals deliberately
+ * do NOT extend it: the same stall that delays the load delays any event that
+ * would reset it, so only a wall-clock backstop can bound the wait.
+ */
+const DEFAULT_VIEW_LOAD_HARD_TIMEOUT_MS = 30_000;
+/**
  * Period between renderer-memory samples for cached (non-active) views. 30 s
  * matches `ProcessMemoryMonitor` and keeps the synchronous `app.getAppMetrics()`
  * call (5–50 ms per invocation) out of the budget that would risk main-thread
@@ -135,6 +151,18 @@ export interface ProjectViewManagerOptions {
    */
   warmPaintGateHardTimeoutMs?: number;
   /**
+   * Override the soft view-load timeout (default 10000 ms). Crossing this bound
+   * only logs `projectview.load.softtimeout` — the load stays alive. Lower
+   * values let tests exercise the slow-load warning path without a real stall.
+   */
+  viewLoadTimeoutMs?: number;
+  /**
+   * Override the hard view-load timeout (default 30000 ms). At this bound the
+   * load is abandoned and the switch rolls back. Lower values let tests drive
+   * the rejection deterministically without advancing 30s of fake time.
+   */
+  viewLoadHardTimeoutMs?: number;
+  /**
    * Resolve the Daintree Assistant backend bound to a project — its PTY and the
    * WebContents its help session pinned — or null when it has no session.
    * Injected from the composition root so the eviction policy can consult
@@ -190,6 +218,8 @@ export class ProjectViewManager {
   paintGateHardTimeoutMs = DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS;
   warmPaintGateTimeoutMs = DEFAULT_WARM_PAINT_GATE_TIMEOUT_MS;
   warmPaintGateHardTimeoutMs = DEFAULT_WARM_PAINT_GATE_HARD_TIMEOUT_MS;
+  viewLoadTimeoutMs = DEFAULT_VIEW_LOAD_TIMEOUT_MS;
+  viewLoadHardTimeoutMs = DEFAULT_VIEW_LOAD_HARD_TIMEOUT_MS;
   // One-shot focus intent consumed by the next switchTo for this projectId.
   // Lives on the instance (not module) so multi-window does not cross-leak.
   // Cleared after delivery or discard so a later unrelated switch can't
@@ -236,6 +266,12 @@ export class ProjectViewManager {
     }
     if (opts.warmPaintGateHardTimeoutMs != null) {
       this.warmPaintGateHardTimeoutMs = Math.max(0, opts.warmPaintGateHardTimeoutMs);
+    }
+    if (opts.viewLoadTimeoutMs != null) {
+      this.viewLoadTimeoutMs = Math.max(0, opts.viewLoadTimeoutMs);
+    }
+    if (opts.viewLoadHardTimeoutMs != null) {
+      this.viewLoadHardTimeoutMs = Math.max(0, opts.viewLoadHardTimeoutMs);
     }
 
     // Single resize handler that always updates the active view's bounds.
@@ -604,6 +640,26 @@ export class ProjectViewManager {
   setWarmPaintGateHardTimeoutMs(ms: number): void {
     if (!Number.isFinite(ms) || ms < 0) return;
     this.warmPaintGateHardTimeoutMs = ms;
+  }
+
+  /**
+   * Set the soft view-load timeout (ms). Does NOT retime an in-flight load —
+   * the value is captured when `loadView` is called. Called by
+   * `ResourceProfileService` to push per-profile timing.
+   */
+  setViewLoadTimeoutMs(ms: number): void {
+    if (!Number.isFinite(ms) || ms < 0) return;
+    this.viewLoadTimeoutMs = ms;
+  }
+
+  /**
+   * Set the hard view-load timeout (ms). Does NOT retime an in-flight load —
+   * the value is captured when `loadView` is called. Called by
+   * `ResourceProfileService` to push per-profile timing.
+   */
+  setViewLoadHardTimeoutMs(ms: number): void {
+    if (!Number.isFinite(ms) || ms < 0) return;
+    this.viewLoadHardTimeoutMs = ms;
   }
 
   /**

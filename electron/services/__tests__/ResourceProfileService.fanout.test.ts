@@ -57,6 +57,8 @@ function makeMockPvm() {
     setPaintGateHardTimeoutMs: vi.fn(),
     setWarmPaintGateTimeoutMs: vi.fn(),
     setWarmPaintGateHardTimeoutMs: vi.fn(),
+    setViewLoadTimeoutMs: vi.fn(),
+    setViewLoadHardTimeoutMs: vi.fn(),
   };
 }
 
@@ -149,6 +151,10 @@ describe("ResourceProfileService fan-out isolation", () => {
       expect(healthy.setPaintGateTimeoutMs).toHaveBeenLastCalledWith(balanced.paintGateTimeoutMs);
       expect(healthy.setWarmPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
         balanced.warmPaintGateHardTimeoutMs
+      );
+      expect(healthy.setViewLoadTimeoutMs).toHaveBeenLastCalledWith(balanced.viewLoadTimeoutMs);
+      expect(healthy.setViewLoadHardTimeoutMs).toHaveBeenLastCalledWith(
+        balanced.viewLoadHardTimeoutMs
       );
       // Downstream consumers after the PVM loop still ran.
       expect(pty.setResourceProfile).toHaveBeenLastCalledWith("balanced");
@@ -303,6 +309,8 @@ describe("ResourceProfileService fan-out isolation", () => {
       expect(pvm.setWarmPaintGateHardTimeoutMs).toHaveBeenCalledWith(
         efficiency.warmPaintGateHardTimeoutMs
       );
+      expect(pvm.setViewLoadTimeoutMs).toHaveBeenCalledWith(efficiency.viewLoadTimeoutMs);
+      expect(pvm.setViewLoadHardTimeoutMs).toHaveBeenCalledWith(efficiency.viewLoadHardTimeoutMs);
     });
   });
 });

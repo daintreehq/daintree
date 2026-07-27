@@ -324,8 +324,13 @@ export async function performSwitch(
   let visibleAt: number;
   let loadFinishedAt: number;
   try {
-    // Load the renderer with projectId context
-    await loadView(view, projectId);
+    // Load the renderer with projectId context. Timing is captured here as
+    // primitives so a resource-profile transition mid-load can't retime an
+    // in-flight load, matching the paint gate's capture-at-creation contract.
+    await loadView(view, projectId, {
+      softMs: host.viewLoadTimeoutMs,
+      hardMs: host.viewLoadHardTimeoutMs,
+    });
     loadFinishedAt = performance.now();
 
     // The incoming view is stacked behind the still-visible outgoing view,

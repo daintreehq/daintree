@@ -473,6 +473,16 @@ export class ResourceProfileService {
     } catch {
       // non-critical
     }
+    try {
+      pvm.setViewLoadTimeoutMs(config.viewLoadTimeoutMs);
+    } catch {
+      // non-critical
+    }
+    try {
+      pvm.setViewLoadHardTimeoutMs(config.viewLoadHardTimeoutMs);
+    } catch {
+      // non-critical
+    }
   }
 
   private startLagMonitor(): void {
@@ -1206,6 +1216,19 @@ export class ResourceProfileService {
       }
       try {
         pvm.setWarmPaintGateHardTimeoutMs(config.warmPaintGateHardTimeoutMs);
+      } catch {
+        // non-critical
+      }
+      // Same rationale for the cold view-load bounds: the main-process
+      // contention that selects efficiency also slows the `app://` chunks the
+      // incoming renderer is waiting on (#11459).
+      try {
+        pvm.setViewLoadTimeoutMs(config.viewLoadTimeoutMs);
+      } catch {
+        // non-critical
+      }
+      try {
+        pvm.setViewLoadHardTimeoutMs(config.viewLoadHardTimeoutMs);
       } catch {
         // non-critical
       }
