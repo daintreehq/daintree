@@ -1,5 +1,127 @@
 # Changelog
 
+## [0.29.0] - 2026-07-28
+
+Daintree stops requiring a git repository — any folder opens as a lightweight workspace, with git init as an explicit upgrade — and a project's folder can now be moved or renamed without losing panels, terminals, or agent conversations. Alongside those: a new file browser panel, a file viewer that plays video and audio and previews PDFs, and a large durability wave protecting agent sessions, drafts, recipes, and uncommitted work.
+
+### Features
+
+**Projects & folders**
+
+- Open any folder as a lightweight workspace — no git repository required, and Daintree never modifies it (#11417)
+- Move or rename a project's folder from inside Daintree; panels, terminals, and agent conversations follow it (#11285, #11324, #11355, #11381, #11394)
+- "Open in Daintree" in Finder, Explorer, and Linux file managers (#11412)
+- Set a project's name and emoji when you create it (#11414)
+- Dropping a non-repo folder on the Dock opens a guided git init, defaulting to a Minimal gitignore from an expanded template set (#11284, #11411)
+- Folder-open failures report what went wrong instead of leaking git internals (#11418)
+
+**Files**
+
+- New read-only file browser panel, with a collapsible and resizable tree sidebar, live filesystem updates, a rethought hidden-file model, and Source/Rendered markdown previews (#11287, #11322, #11336, #11338, #11370)
+- The file viewer plays video and audio inline, previews PDFs through Chromium's viewer, and recognises AVIF and APNG as images (#11385, #11429, #11430, #11428)
+- Open a diff for any file with local changes straight from the file viewer, and reveal it in the system file manager (#11276, #11392)
+- Click a re-rooted tree's root path to copy it (#11413)
+
+**Diff & review**
+
+- The diff panel can show the full file instead of only the changed hunks (#11268)
+- Reveal and open-in-editor from the Diff Viewer toolbar (#11272)
+- One step from a worktree to the diff of its changed files (#11422)
+
+**Project switcher & windows**
+
+- The switcher ranks by scores that decay with time and attention, labels agent state truthfully, and never dead-ends (#11449, #11450)
+- Scratch workspaces are searchable, and the Other projects band gets a sort control (#11468, #11457)
+- Each window title names its active project (#11460)
+
+**Plugins**
+
+- Plugin toolbar buttons collect into a single plugin tray (#11310)
+- Plugin actions declare per-action capability intent, so a shell-capable plugin no longer forces a destructive confirm on every command (#11311)
+- Plugin views distinguish a temporary unmount from a permanent teardown, so maximizing a neighbouring pane no longer kills a plugin's running process (#11312)
+- Managed plugin processes support interactive stdio and PTY, with worker env scrubbing (#11314)
+- Plugin detail tabs are earned by content, and installs report progress (#11313)
+
+**Terminal & panels**
+
+- Every panel kind is dockable by default, with explicit opt-out (#11374)
+- file:// URLs in terminal output are clickable (#11421)
+- One shared keybinding table drives both the renderer and the native menus, so menus can't drift from the real shortcuts; focused terminals own the readline and clipboard keys on Windows and Linux (#11337)
+- Deleting several worktrees at once collapses into a single summary row and a single inbox entry (#11266)
+- The Update ready toast links to the release notes (#11264)
+
+**Context**
+
+- CopyTree 0.16: the Max file size, total size, file count and character budgets actually apply now, and the context listing comes from CopyTree itself (#11440, #11446)
+
+### Bug Fixes
+
+**Durability**
+
+- A pty-host crash replays the launch command so agents resume instead of dying (#11362)
+- Agent sessions are journalled on project close, project remove, and scratch remove (#11360)
+- A failed journal read no longer truncates session history (#11358)
+- Typed but unsent terminal drafts survive a window close (#11376)
+- Abandoning a worktree delete restores its terminals (#11377)
+- Worktree delete confirms against fresh git status, and stale-scratch auto-cleanup no longer touches uncommitted work (#11361, #11378)
+- Recipe writes are serialized, and local recipe env values survive a missing .daintree/recipes (#11372, #11357)
+- An unreadable project state no longer deletes that project's terminal restore files (#11356)
+- Concurrent layout writes from multiple project windows merge instead of clobbering, and project-scoped stores share the same write-merge (#11363, #11379, #11402)
+- Spawning onto a terminal id that already has a live owner is rejected (#11373)
+- Worktree "end all" and "clear history" confirm from every dispatch source (#11369)
+- Restored panes no longer resume one another's agent conversation (#11464, #11471)
+
+**MCP**
+
+- Destructive MCP tool calls require host confirmation and never trust client elicitation (#11359)
+- External arm and inject can no longer target the wrong terminal (#11368)
+
+**Worktrees & sidebar**
+
+- Panels are preserved when a worktree moves (#11395)
+- Restore no longer collapses agent terminals onto a partial worktree list (#11393)
+- Dock membership is hardened against stranding (#11396)
+- Worktrees living outside the project directory are identified and sorted apart (#11436)
+- develop worktrees stop being pinned out of the list and counts (#11435)
+- Deleted-worktree ghosts anchor to a neighbour, the auto-close countdown times correctly, and a rescued terminal follows its drag (#11401, #11267, #11275)
+- Dock chip reorder works for worktree-less panels, which adopt the active worktree when promoted to the grid (#11293, #11294)
+
+**Terminal**
+
+- Docked terminals pin to the bottom of the viewport on reveal (#11317)
+- ArrowUp in an agent terminal goes to the terminal, not the command history (#11391)
+- Terminal geometry is tracked for backgrounded project views (#11447)
+- The worktree card stops flashing on every keystroke (#11448)
+- Clicking an unfocused pane keeps the remembered focus target (#11467)
+- Grok forces full-screen in alt-screen mode (#11424)
+
+**Project views & memory**
+
+- A slow cold project switch lands instead of being lost, and a pending view load cancels on teardown instead of reporting a phantom timeout (#11462, #11463)
+- Cached-view memory reclaim is graduated and decoupled from the resource profile (#11470)
+
+**Plugins**
+
+- Plugin icons resolve identically across every surface, and real project and worktree context is threaded into invocations (#11307, #11308)
+- The plugin SDK no longer bundles React 19 (#11309)
+- Double-clicking a .dntr archive confirms before installing (#11283)
+- The worktree colour stripe is gone from panel frames — its orange and amber entries read as warnings (#11306)
+
+**Elsewhere**
+
+- A wedged drag no longer disables all drag-and-drop until reload (#11305)
+- --cli-path is hardened against Chromium argv displacement (#11415)
+- The forgeRemote setting is honoured in toolbar issue and PR resolution (#11416)
+- Arrow and Enter navigation stay alive in the palette after Tab (#11432)
+- Open and reveal work for files in tracked worktrees (#11278)
+- Folder context honours root ignore rules (#11442)
+- Rename fields no longer start drags, and refresh buttons finish their spin (#11279, #11335)
+
+### Other Changes
+
+- Voice dictation moves to GPT-5.6 Luna ahead of the gpt-5-nano and gpt-5-mini shutdown; the correction-model dropdown is gone now that both tiers collapse to one model (#11380)
+- better-sqlite3 13 brings in-package N-API prebuilds, removing the Electron rebuild step, alongside a batch of in-range dependency updates (#11315)
+
 ## [0.28.1] - 2026-07-20
 
 A fast follow-up to 0.28.0 fixing two file viewer dialog regressions from the new panel-as-dialog model — long files now scroll, and markdown no longer collapses on the switch to rendered.
