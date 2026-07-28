@@ -90,8 +90,26 @@ vi.mock("../../services/McpServerService.js", () => ({
   mcpServerService: mcpServerMock,
 }));
 
-vi.mock("../../ipc/utils.js", () => ({
+// The shutdown chain reaches this module through a dynamic import, so the export
+// is exposed behind a getter that can be armed to throw. Arming it makes the
+// chain's `const { drainRateLimitQueues } = await import(...)` statement itself
+// fail, which a plain throwing mock function cannot — that would only prove the
+// CALL is guarded. It is a stand-in, not a true module-resolution failure: the
+// throw happens when the binding is read rather than when the loader rejects, so
+// a refactor that split the import and the destructure across the `try` boundary
+// could still pass. Armed after `setup()` so only the chain's import sees it.
+const ipcUtilsMock = vi.hoisted(() => ({
+  failLoad: false,
   drainRateLimitQueues: vi.fn(),
+}));
+
+vi.mock("../../ipc/utils.js", () => ({
+  get drainRateLimitQueues() {
+    if (ipcUtilsMock.failLoad) {
+      throw new Error("app.asar replaced under the running process");
+    }
+    return ipcUtilsMock.drainRateLimitQueues;
+  },
 }));
 
 const signalShutdownMock = vi.hoisted(() => ({
@@ -1118,6 +1136,70 @@ describe("registerShutdownHandler", () => {
       expect(record.branch).toBe("feature/x");
     });
 
+    it("still captures and journals when the rate-limit drain import fails", async () => {
+      // The motivating failure: an installer replaced app.asar under the running
+      // process, so the chain's `await import(...)` no longer yields the module. It
+      // sits ahead of the graceful kill, and unguarded its rejection took every
+      // session capture and journal record with it.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [agentTerminal]),
+        gracefulKillByProject: vi.fn(async () => [{ id: "t1", agentSessionId: "sess-1" }]),
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      try {
+        ipcUtilsMock.failLoad = true;
+        await beforeQuitCb(makeEvent());
+        await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+        expect(ipcUtilsMock.drainRateLimitQueues).not.toHaveBeenCalled();
+        expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalled();
+        expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
+        expect(
+          (persistAgentSessionMock.mock.calls[0][0] as Record<string, unknown>).sessionId
+        ).toBe("sess-1");
+        // A best-effort drain must not downgrade the exit to dirty either.
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      } finally {
+        ipcUtilsMock.failLoad = false;
+      }
+    });
+
+    it("still captures and journals when the rate-limit drain itself throws", async () => {
+      // The other half of the guard: the module loads, the drain blows up.
+      const { drainRateLimitQueues } = await import("../../ipc/utils.js");
+      vi.mocked(drainRateLimitQueues).mockImplementationOnce(() => {
+        throw new Error("rate-limit queue wedged");
+      });
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const gracefulKillByProject = vi.fn(async () => [{ id: "t1", agentSessionId: "sess-1" }]);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [agentTerminal]),
+        gracefulKillByProject,
+      });
+      const workspaceClient = {
+        dispose: vi.fn(),
+        getMonitorAsync: vi.fn(async () => ({ branch: "feature/x" })),
+      };
+      const { beforeQuitCb } = await setup({
+        getPtyClient: () => ptyClient,
+        getWorkspaceClient: () => workspaceClient as never,
+      });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(gracefulKillByProject).toHaveBeenCalledWith("proj-1");
+      expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalled();
+      expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
+      expect((persistAgentSessionMock.mock.calls[0][0] as Record<string, unknown>).sessionId).toBe(
+        "sess-1"
+      );
+      // A best-effort drain must not downgrade the exit to dirty either.
+      expect(appMock.exit).toHaveBeenCalledWith(0);
+    });
+
     it("does not journal non-agent terminals or null-session captures", async () => {
       projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
       const ptyClient = makePtyClient({
@@ -1172,6 +1254,57 @@ describe("registerShutdownHandler", () => {
       );
       expect(persistedIds).toContain("sess-1");
       expect(persistedIds).toContain("sess-2");
+    });
+
+    it("keeps one project's captures when another project's kill rejects", async () => {
+      // The per-project timeout already isolates a slow project; a rejected IPC
+      // has to be isolated for the same reason. Unhandled, it escapes to the
+      // outer catch and takes the state write and the journal with it — for every
+      // project, including the ones that captured fine.
+      projectStoreMock.getAllProjects.mockReturnValue([
+        { id: "proj-1" },
+        { id: "proj-2" },
+      ] as never);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [{ ...agentTerminal, id: "t2" }]),
+        gracefulKillByProject: vi.fn(async (pid: string) => {
+          if (pid === "proj-1") throw new Error("pty-host gone");
+          return [{ id: "t2", agentSessionId: "sess-2" }];
+        }),
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalledWith(
+        "proj-2",
+        expect.any(Function)
+      );
+      expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
+      expect((persistAgentSessionMock.mock.calls[0][0] as Record<string, unknown>).sessionId).toBe(
+        "sess-2"
+      );
+    });
+
+    it("still journals when persisting a project's captures rejects", async () => {
+      // The journal is the other half of the resume story and recoverable on its
+      // own (session history reads it), so a failed state write must not skip it.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      projectStoreMock.enqueueProjectStateUpdate.mockRejectedValueOnce(new Error("disk full"));
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [agentTerminal]),
+        gracefulKillByProject: vi.fn(async () => [{ id: "t1", agentSessionId: "sess-1" }]),
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
+      expect((persistAgentSessionMock.mock.calls[0][0] as Record<string, unknown>).sessionId).toBe(
+        "sess-1"
+      );
     });
 
     it("still journals (branch undefined) when the branch lookup rejects", async () => {
