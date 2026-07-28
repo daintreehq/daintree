@@ -19,7 +19,10 @@ const coreTimeout = isWindowsCI
     : isNonWindowsCI
       ? 180_000
       : 120_000;
-const onlineTimeout = isWindowsCI ? 480_000 : 300_000;
+// launchOpenCodeReady can run its ready-wait twice (the CLI self-updates and
+// asks for a restart), so the per-test budget has to clear two cold starts at
+// the platform's ready-state deadline — see waitForOpenCodeReady.
+const onlineTimeout = isWindowsCI ? 480_000 : isCI ? 420_000 : 300_000;
 
 // Blob reporter is opted into by the cross-platform stabilize sweep and the
 // release E2E matrix, so per-leg outputs can be merged into a single unified

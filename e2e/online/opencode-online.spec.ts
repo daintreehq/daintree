@@ -64,7 +64,12 @@ async function waitForOpenCodeReady(agentPanel: Locator): Promise<"ready" | "nee
   // Windows GitHub runners take significantly longer to bring up the
   // OpenCode CLI (Node spawn + provider probe + render) — extend the
   // ready-state polling budget so we don't trip the deadline on cold-start.
-  const deadline = Date.now() + (process.platform === "win32" ? 360_000 : 120_000);
+  // macOS/Linux release runners need more than the local budget too: they run
+  // every E2E bucket at once, and a flat 120s expired mid-cold-start on the
+  // v0.29.0 macOS release run. The online gate runs with FAIL_ON_FLAKY_TESTS,
+  // so a retry-recovered timeout still fails the release.
+  const deadline =
+    Date.now() + (process.platform === "win32" ? 360_000 : process.env.CI ? 180_000 : 120_000);
 
   while (Date.now() < deadline) {
     await dismissTelemetryConsent(window);
