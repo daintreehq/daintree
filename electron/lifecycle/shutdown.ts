@@ -194,8 +194,20 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
   }
 
   console.log("[MAIN] Starting graceful shutdown...");
-  const { drainRateLimitQueues } = await import("../ipc/utils.js");
-  drainRateLimitQueues();
+  // Guarded like every other dynamic import in this chain, and for a sharper
+  // reason: this one runs BEFORE the graceful kill, so a rejection here rejects
+  // runShutdownChain outright and costs every agent's session capture and journal
+  // record — for the sake of a best-effort queue drain. A dynamic import can fail
+  // even for a module that resolved at boot: an installer replacing app.asar under
+  // a running process leaves anything not already in the module cache unreadable.
+  // The coordinator maps the rejection to a dirty exit, so the process still ends;
+  // what it cannot recover is the capture that never ran.
+  try {
+    const { drainRateLimitQueues } = await import("../ipc/utils.js");
+    drainRateLimitQueues();
+  } catch (err) {
+    console.warn("[MAIN] Rate-limit queue drain at quit failed:", err);
+  }
 
   const ptyClient = deps.getPtyClient();
   const workspaceClient = deps.getWorkspaceClient();
@@ -230,6 +242,10 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
       // project must not discard the captured sessions of projects that did
       // finish in time — both the projectStore write and the resume journal
       // below depend on those partial results. Wall-clock stays ~4s (parallel).
+      // A rejected kill is isolated the same way and for the same reason: one
+      // project's IPC failing must cost only that project's captures, not every
+      // project's (an unhandled rejection here would escape to the outer catch
+      // and skip the state write and the journal wholesale).
       const allResults = await Promise.all(
         projectIds.map((pid) => {
           let timer: ReturnType<typeof setTimeout> | undefined;
@@ -238,9 +254,14 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
             new Promise<Array<{ id: string; agentSessionId: string | null }>>((resolve) => {
               timer = setTimeout(() => resolve([]), 4000);
             }),
-          ]).finally(() => {
-            if (timer) clearTimeout(timer);
-          });
+          ])
+            .catch((error) => {
+              console.warn(`[MAIN] Graceful kill failed for project ${pid}:`, error);
+              return [] as Array<{ id: string; agentSessionId: string | null }>;
+            })
+            .finally(() => {
+              if (timer) clearTimeout(timer);
+            });
         })
       );
 
@@ -249,16 +270,26 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         const captured = results.filter((r) => r.agentSessionId);
         if (captured.length === 0) continue;
 
-        await projectStore.enqueueProjectStateUpdate(projectIds[i], (state) => {
-          if (!state?.terminals) return null;
-          for (const result of captured) {
-            const snapshot = state.terminals.find((t: { id: string }) => t.id === result.id);
-            if (snapshot) {
-              snapshot.agentSessionId = result.agentSessionId ?? undefined;
+        try {
+          await projectStore.enqueueProjectStateUpdate(projectIds[i], (state) => {
+            if (!state?.terminals) return null;
+            for (const result of captured) {
+              const snapshot = state.terminals.find((t: { id: string }) => t.id === result.id);
+              if (snapshot) {
+                snapshot.agentSessionId = result.agentSessionId ?? undefined;
+              }
             }
-          }
-          return state;
-        });
+            return state;
+          });
+        } catch (error) {
+          // Per-project so one failed write can't skip the remaining projects —
+          // or the journal below, which is the other half of the resume story and
+          // is recoverable on its own (session history reads it).
+          console.warn(
+            `[MAIN] Persisting captured sessions failed for project ${projectIds[i]}:`,
+            error
+          );
+        }
       }
 
       // Journal a resume record per captured agent session, matching the

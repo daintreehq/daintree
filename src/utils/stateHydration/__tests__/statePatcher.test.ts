@@ -824,6 +824,110 @@ describe("buildArgsForRespawn", () => {
       expect(suppressed.sessionLostOnRestore).toBe(allowed.sessionLostOnRestore);
     });
 
+    it("withholds an exact session id a sibling owns (#11461)", () => {
+      // Two panes can persist ONE session id — that is what the collision this
+      // guards against leaves behind — so the loser must not replay it.
+      buildResumeCommandMock.mockReturnValue("claude --resume dupe");
+      buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          agentSessionId: "dupe",
+        },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp",
+        undefined,
+        { allowSessionIdResume: false, allowResumeLatest: false }
+      );
+      expect(result.command).toBe("claude --generated");
+      expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("does not inherit a persisted --resume command when the id is withheld (#11461)", () => {
+      // With nothing to rebuild from, `saved.command` still holds the resume
+      // command an earlier restore built. Re-running it would put this pane back
+      // in the owner's conversation, which is the collision being prevented.
+      buildResumeCommandMock.mockReturnValue("claude --resume dupe");
+      // No resume-latest fallback for this agent: the withheld id alone has to
+      // drive the clean rebuild.
+      buildResumeLatestCommandMock.mockReturnValue(undefined);
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          agentSessionId: "dupe",
+          command: "claude --resume dupe",
+        },
+        "terminal",
+        "/p",
+        undefined,
+        false,
+        "/tmp",
+        undefined,
+        { allowSessionIdResume: false, allowResumeLatest: false }
+      );
+      expect(result.command).toBe("claude");
+      expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("does not fall back to resume-latest when the session id is withheld (#11461)", () => {
+      // The two allowances always travel together from the election, but the gate
+      // holds on its own: reaching the fallback here would land in the very
+      // conversation the owner is replaying.
+      buildResumeCommandMock.mockReturnValue("claude --resume dupe");
+      buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          agentSessionId: "dupe",
+        },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp",
+        undefined,
+        { allowSessionIdResume: false }
+      );
+      expect(result.command).toBe("claude --generated");
+      expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("resumes its own session id by default when no allowance is passed (#11461)", () => {
+      buildResumeCommandMock.mockReturnValue("claude --resume sess-1");
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          agentSessionId: "sess-1",
+        },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp"
+      );
+      expect(result.command).toBe("claude --resume sess-1");
+      expect(result.sessionLostOnRestore).toBeUndefined();
+    });
+
     it("uses resume-latest by default when no allowance is passed (#11461)", () => {
       buildResumeLatestCommandMock.mockReturnValue("claude --continue");
       const result = buildArgsForRespawn(

@@ -483,10 +483,17 @@ export interface BuildArgsForRespawnOptions {
   resolvedAgentBaseCommand?: string;
   /**
    * False when a sibling pane already owns this agent+cwd's single resume-latest
-   * slot (#11461). Only suppresses the resume-latest fallback — an exact
-   * per-pane session id still resumes normally.
+   * slot, or when something else in that directory already holds a session the
+   * fallback would resolve to (#11461).
    */
   allowResumeLatest?: boolean;
+  /**
+   * False when a sibling pane owns the exact `agentSessionId` this snapshot
+   * carries (#11461). Two panes can persist one session id — that is what the
+   * collision this guards against leaves behind — and replaying both would put
+   * two writers on one transcript, so the loser resumes nothing.
+   */
+  allowSessionIdResume?: boolean;
 }
 
 export function buildArgsForRespawn(
@@ -501,6 +508,13 @@ export function buildArgsForRespawn(
 ): AddTerminalArgs {
   const resolvedAgentBaseCommand = options?.resolvedAgentBaseCommand;
   const allowResumeLatest = options?.allowResumeLatest ?? true;
+  const allowSessionIdResume = options?.allowSessionIdResume ?? true;
+  // True once a resume this snapshot could have replayed was withheld on purpose.
+  // `command` still holds `saved.command`, which is itself a resume command
+  // whenever an earlier restore built one, so the suppressed paths below have to
+  // rebuild it rather than inherit it — that would reinstate the very collision
+  // the suppression exists to prevent.
+  const resumeWithheld = Boolean(saved.agentSessionId) && !allowSessionIdResume;
   const effectiveAgentId = resolveRespawnAgentId(saved, kind);
 
   const isAgentPanel = Boolean(effectiveAgentId);
@@ -580,7 +594,7 @@ export function buildArgsForRespawn(
         shareClipboardDirectory,
       });
 
-    if (saved.agentSessionId) {
+    if (saved.agentSessionId && allowSessionIdResume) {
       const resumeCmd = resolvedAgentBaseCommand
         ? buildResumeCommand(agentId, saved.agentSessionId, resumeFlags, baseCommand)
         : buildResumeCommand(agentId, saved.agentSessionId, resumeFlags);
@@ -600,14 +614,19 @@ export function buildArgsForRespawn(
         sessionLostOnRestore = true;
       }
     } else {
-      // No session ID was captured (graceful-shutdown pattern match missed or
-      // timed out). Try the agent's resume-latest fallback before falling
-      // through to a fresh launch so the user keeps their prior conversation.
-      // Suppressed when a sibling pane owns this agent+cwd's single slot:
+      // Either no session id was captured (graceful-shutdown pattern match missed
+      // or timed out) or a sibling owns the one this snapshot carries. Try the
+      // agent's resume-latest fallback before falling through to a fresh launch so
+      // the user keeps their prior conversation. Suppressed when a sibling pane
+      // owns this agent+cwd's single slot, or holds a session in that directory:
       // resume-latest resolves to the most recent session in scope, so several
       // panes running it would all land in the SAME conversation (#11461).
+      // `resumeWithheld` gates it too, so the two allowances can't be set
+      // inconsistently by a caller: a pane denied the session id it carries must
+      // not reach that same conversation through the back door, since the owner
+      // replaying it is exactly what resume-latest would resolve to.
       let resumeLatestCmd: string | undefined;
-      if (allowResumeLatest) {
+      if (allowResumeLatest && !resumeWithheld) {
         resumeLatestCmd = resolvedAgentBaseCommand
           ? buildResumeLatestCommand(agentId, resumeFlags, baseCommand)
           : buildResumeLatestCommand(agentId, resumeFlags);
@@ -626,14 +645,18 @@ export function buildArgsForRespawn(
           globalUseAltScreen,
         });
         sessionLostOnRestore = true;
-      } else if (!allowResumeLatest && buildResumeLatestCommand(agentId) !== undefined) {
+      } else if (
+        resumeWithheld ||
+        (!allowResumeLatest && buildResumeLatestCommand(agentId) !== undefined)
+      ) {
         // Nothing above rebuilt the command, so `command` still holds
-        // `saved.command` — which is itself a persisted resume-latest command
-        // whenever an earlier restore used one. Inheriting it would reinstate the
-        // very collision this suppression exists to prevent, so launch clean.
-        // The bare capability probe (config-only, so flag-independent and in
-        // agreement with the restore election's) keeps suppression from touching
-        // an agent that has no resume-latest fallback to suppress.
+        // `saved.command` — which is itself a persisted resume command whenever an
+        // earlier restore built one. Inheriting it would reinstate the very
+        // collision this suppression exists to prevent, so launch clean. The bare
+        // capability probe (config-only, so flag-independent and in agreement with
+        // the restore election's) keeps resume-latest suppression from touching an
+        // agent that has no such fallback; a withheld session id needs no probe,
+        // since the id in hand is proof the snapshot can carry a resume command.
         command = buildLaunchCommandFromFlags(baseCommand, agentId, injectedFromEmpty, {
           clipboardDirectory,
           shareClipboardDirectory,
