@@ -108,8 +108,14 @@ test.describe.serial("Core: List Mount Perf Budget", () => {
       });
       const unstageAllButton = hub.locator(SEL.reviewHub.unstageAllButton);
       await expect(unstageAllButton).toBeVisible({ timeout: T_LIST_MOUNT });
-      await unstageAllButton.click();
-      await expect(hub.locator(SEL.reviewHub.noStagedFiles)).toBeVisible({ timeout: T_LONG });
+      // Same reason the toggles go through clickReviewHubSetupButton: the list
+      // is expanded to 1000 non-virtualized rows here, so a real Playwright
+      // click spends its whole budget in scrollIntoViewIfNeeded waiting for a
+      // still-painting list to hold still, and never lands.
+      await clickReviewHubSetupButton(unstageAllButton);
+      await expect(hub.locator(SEL.reviewHub.noStagedFiles)).toBeVisible({
+        timeout: T_LIST_MOUNT,
+      });
 
       await clickReviewHubSetupButton(fileListToggle);
       await expect(fileListToggle).toHaveAttribute("aria-expanded", "false", {

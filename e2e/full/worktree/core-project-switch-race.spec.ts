@@ -141,6 +141,18 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     // Trigger a second terminal spawn (this one will be delayed)
     await openTerminal(ctx.window);
 
+    // openTerminal returns once the click is delivered, not once React has
+    // dispatched terminal:spawn. addPanel commits the pane to the store before
+    // any async work (#5789 commit-then-spawn), so a second grid pane is proof
+    // the spawn is genuinely in-flight — and it lands in milliseconds, well
+    // inside the 3s delay. Without this gate a loaded runner can switch away
+    // before the spawn is ever sent, and addPanel's async tail then drops the
+    // pane on the project switch (see panelStore.addPanel), leaving one
+    // terminal instead of two.
+    await expect(ctx.window.locator(SEL.panel.gridPanel)).toHaveCount(2, {
+      timeout: T_LONG,
+    });
+
     // Immediately switch to Project B — the spawn is still in-flight
     await switchToProject(ctx.window, PROJECT_B_NAME);
 

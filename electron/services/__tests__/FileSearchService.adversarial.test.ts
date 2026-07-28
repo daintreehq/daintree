@@ -172,13 +172,17 @@ describe("FileSearchService adversarial", () => {
 
   it(
     "enforces the fallback file cap before overflowing traversal results",
-    { timeout: 60_000 },
+    // Populating the cap takes 20k file creations. Windows runners are an order
+    // of magnitude slower at that than macOS/Linux and overran a flat 60s.
+    { timeout: process.platform === "win32" ? 180_000 : 60_000 },
     async () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
       tempDirs.push(dir);
       createHardenedGitMock.mockReturnValue(createGitClient());
+      // Deliberately not writeFile() here: its per-call recursive mkdirSync is
+      // 19,999 redundant syscalls against a directory that already exists.
       for (let index = 0; index < 19_999; index++) {
-        writeFile(path.join(dir, `file-${index}.txt`));
+        fs.writeFileSync(path.join(dir, `file-${index}.txt`), "x", "utf8");
       }
       writeFile(path.join(dir, "overflow", "sentinel.txt"));
 
