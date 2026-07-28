@@ -187,6 +187,11 @@ export function PanelPalette({
     return elements;
   };
 
+  const activeDescendant =
+    results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length
+      ? `panel-option-${results[selectedIndex]!.id}`
+      : undefined;
+
   return (
     <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Panel palette">
       <AppPaletteDialog.Header
@@ -204,15 +209,15 @@ export function PanelPalette({
           aria-haspopup="listbox"
           aria-label="Select panel type"
           aria-controls="panel-list"
-          aria-activedescendant={
-            results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length
-              ? `panel-option-${results[selectedIndex]!.id}`
-              : undefined
-          }
+          aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>
 
-      <AppPaletteDialog.Body>
+      <AppPaletteDialog.Body
+        ariaLabel="Panel types"
+        activeDescendant={activeDescendant}
+        onNavigationKeyDown={handleKeyDown}
+      >
         {results.length === 0 ? (
           <AppPaletteDialog.Empty
             query={query}

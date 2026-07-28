@@ -16,7 +16,12 @@ import { notifyError } from "../ipc/errorHandlers.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { unfreezeWebContents } from "../utils/webContentsLifecycle.js";
-import { createView, loadView, updateViewBounds } from "./ProjectViewFactory.js";
+import {
+  createView,
+  isViewLoadCancelled,
+  loadView,
+  updateViewBounds,
+} from "./ProjectViewFactory.js";
 import {
   activateView,
   deactivateEntry,
@@ -323,9 +328,21 @@ export async function performSwitch(
 
   let visibleAt: number;
   let loadFinishedAt: number;
+  // Mark the window in which the outgoing view is still attached and visible
+  // while the incoming one loads. Cleared in the `finally` below, on both the
+  // success and rollback paths.
+  host.pendingColdSwitch = {
+    projectId,
+    outgoingProjectId: previousEntry?.projectId ?? null,
+  };
   try {
-    // Load the renderer with projectId context
-    await loadView(view, projectId);
+    // Load the renderer with projectId context. Timing is captured here as
+    // primitives so a resource-profile transition mid-load can't retime an
+    // in-flight load, matching the paint gate's capture-at-creation contract.
+    await loadView(view, projectId, {
+      softMs: host.viewLoadTimeoutMs,
+      hardMs: host.viewLoadHardTimeoutMs,
+    });
     loadFinishedAt = performance.now();
 
     // The incoming view is stacked behind the still-visible outgoing view,
@@ -414,6 +431,36 @@ export async function performSwitch(
     consumePendingFocusIntent(host, projectId);
     cleanupEntry(host, projectId);
 
+    // The manager/window is going away — window close, app quit, dispose()
+    // landing on a queued switch (#11458). Everything above is local cleanup
+    // that runs either way; everything below restores the previous view as the
+    // visible active one, which teardown has already destroyed: `dispose()`
+    // nulled `activeProjectId`, so rolling it back resurrects what teardown
+    // just cleared. Reporting is wrong too — this spurious error toast
+    // arriving after an ordinary window close is the bug.
+    //
+    // Keyed on host liveness ALONE, deliberately not on the rejection being a
+    // cancellation. `wc.close()` aborts the in-flight navigation, so a
+    // teardown often surfaces as did-fail-load/ERR_ABORTED settling the load
+    // first (the "dominant normal case" loadView's own comment describes) —
+    // which removes the destroyed listener and rejects as INTERNAL. Gating on
+    // the error class would let that far-from-rare ordering fall through to a
+    // full rollback against dead state. Why the load failed and whether the
+    // host survives are independent questions; only the latter belongs here.
+    //
+    // A view dying under a still-live manager is the opposite case: the
+    // outgoing view remains attached and visible, so `activeProjectId` must
+    // follow it back or pointer and view disagree. That keeps the rollback
+    // below, and still gains the prompt settle. Rethrown either way — a
+    // half-loaded view is never a successful switch result.
+    if (host.disposed || host.win.isDestroyed()) {
+      logInfo("projectview.coldstart.abandoned", {
+        projectId,
+        cancelled: isViewLoadCancelled(loadError),
+      });
+      throw loadError;
+    }
+
     host.activeProjectId = previousProjectId;
     if (previousEntry && !previousEntry.view.webContents.isDestroyed()) {
       // Restore app-view registration so getAppWebContents() resolves back
@@ -466,6 +513,11 @@ export async function performSwitch(
     notifyError(loadError, { source: "project-switch" });
 
     throw loadError;
+  } finally {
+    // By this point the outgoing view has either been detached (success) or
+    // restored as the active view (rollback), so it no longer needs the
+    // bridge protections.
+    host.pendingColdSwitch = null;
   }
 
   // Explicit focus after swap

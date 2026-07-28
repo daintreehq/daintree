@@ -4,6 +4,8 @@ import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import { Bell, BellOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
+import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
@@ -232,6 +234,9 @@ export function NotificationCenterToolbarButton({
     setDndAnnouncement(next ? "OS Do Not Disturb active" : "OS Do Not Disturb off");
   }, [osDndActive, isDndActive, notificationsEnabled]);
 
+  const shortcut = useKeybindingDisplay("notifications.toggle");
+  const ariaShortcut = useAriaKeyshortcuts("notifications.toggle");
+
   if (!notificationsEnabled) return null;
 
   const label = (() => {
@@ -265,6 +270,7 @@ export function NotificationCenterToolbarButton({
                 }
                 className={toolbarIconButtonClass}
                 aria-label={label}
+                aria-keyshortcuts={ariaShortcut}
                 aria-expanded={notificationCenterOpen}
                 aria-haspopup="dialog"
               >
@@ -283,7 +289,7 @@ export function NotificationCenterToolbarButton({
                 />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">{label}</TooltipContent>
+            <TooltipContent side="bottom">{createTooltipContent(label, shortcut)}</TooltipContent>
           </Tooltip>
         </ContextMenuTrigger>
         <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">

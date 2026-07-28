@@ -56,7 +56,7 @@ type ManagedStub = {
 };
 
 function setupActions(): {
-  run: (id: string, args?: unknown) => Promise<unknown>;
+  run: (id: string, args?: unknown, ctx?: unknown) => Promise<unknown>;
   callbacks: ActionCallbacks;
 } {
   const actions: ActionRegistry = new Map();
@@ -66,11 +66,11 @@ function setupActions(): {
   } as unknown as ActionCallbacks;
   registerTerminalInputActions(actions, callbacks);
   return {
-    run: async (id: string, args?: unknown) => {
+    run: async (id: string, args?: unknown, ctx?: unknown) => {
       const factory = actions.get(id);
       if (!factory) throw new Error(`missing ${id}`);
       const def = factory() as AnyActionDefinition;
-      return def.run(args, {});
+      return def.run(args, (ctx ?? {}) as never);
     },
     callbacks,
   };
@@ -362,7 +362,7 @@ describe("terminalInputActions adversarial", () => {
       expect(result).toEqual({ armed: [] });
     });
 
-    it("keeps every arm/disarm primitive safe — they only edit the broadcast set", () => {
+    it("gates arm behind confirm but keeps disarm/disarmAll safe (#11346)", () => {
       const actions: ActionRegistry = new Map();
       registerTerminalInputActions(actions, {
         getActiveWorktreeId: vi.fn(),
@@ -372,11 +372,46 @@ describe("terminalInputActions adversarial", () => {
       const disarm = actions.get("terminal.disarm")!() as AnyActionDefinition;
       const disarmAll = actions.get("terminal.disarmAll")!() as AnyActionDefinition;
 
-      // Arming/disarming routes the *next* input and mutates nothing on its own;
-      // it's fully reversible via disarm, so none of it carries a confirm gate.
-      expect(arm.danger).toBe("safe");
+      // Arming reroutes the user's next keystrokes to every armed terminal, so
+      // an agent/MCP caller must clear the host confirm gate before it can
+      // silently repoint the broadcast set; disarming only shrinks the set (the
+      // recovery path) and stays confirm-free.
+      expect(arm.danger).toBe("confirm");
+      expect(arm.dangerRationale?.trim()).toBeTruthy();
       expect(disarm.danger).toBe("safe");
       expect(disarmAll.danger).toBe("safe");
+    });
+  });
+
+  describe("terminal.inject target binding (#11346)", () => {
+    it("agent dispatch without terminalId fails closed and never injects", async () => {
+      const { run, callbacks } = setupActions();
+      (callbacks.getActiveWorktreeId as ReturnType<typeof vi.fn>).mockReturnValue("wt-1");
+
+      await expect(run("terminal.inject", undefined, { dispatchSource: "agent" })).rejects.toThrow(
+        /terminalId/
+      );
+      expect(callbacks.onInject).not.toHaveBeenCalled();
+    });
+
+    it("agent dispatch with an explicit terminalId forwards it to the injection callback", async () => {
+      const { run, callbacks } = setupActions();
+      (callbacks.getActiveWorktreeId as ReturnType<typeof vi.fn>).mockReturnValue("wt-1");
+
+      await run("terminal.inject", { terminalId: "term-9" }, { dispatchSource: "agent" });
+
+      expect(callbacks.onInject).toHaveBeenCalledWith("wt-1", "term-9");
+    });
+
+    it("interactive (keybinding) dispatch may omit terminalId and preserves the focus fallback", async () => {
+      const { run, callbacks } = setupActions();
+      (callbacks.getActiveWorktreeId as ReturnType<typeof vi.fn>).mockReturnValue("wt-1");
+
+      // No dispatchSource / a non-agent source: the action forwards an undefined
+      // target so the hook falls back to the focused terminal.
+      await run("terminal.inject", undefined, { dispatchSource: "keybinding" });
+
+      expect(callbacks.onInject).toHaveBeenCalledWith("wt-1", undefined);
     });
   });
 });

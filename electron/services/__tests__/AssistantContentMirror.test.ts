@@ -74,7 +74,13 @@ describe("syncAssistantContent", () => {
 
     const result = await sync("claude");
 
-    expect(result).toEqual({ copied: 2, removed: 0 });
+    expect(result).toMatchObject({
+      copied: 2,
+      removed: 0,
+      omittedSkills: [],
+      failedCopies: [],
+      staleFailures: [],
+    });
     expect(await readSession(".claude/commands/review.md")).toBe("do a review");
     expect(await readSession(".claude/skills/deploy/SKILL.md")).toBe("deploy skill");
   });
@@ -94,7 +100,7 @@ describe("syncAssistantContent", () => {
 
     const result = await sync("codex");
 
-    expect(result).toEqual({ copied: 1, removed: 0 });
+    expect(result).toMatchObject({ copied: 1, removed: 0, staleFailures: [] });
     expect(await readSession(".agents/skills/shared-thing/SKILL.md")).toBe("shared");
     expect(await readSession(".claude/commands/review.md")).toBeNull();
   });
@@ -106,7 +112,7 @@ describe("syncAssistantContent", () => {
 
     const result = await sync("copilot");
 
-    expect(result).toEqual({ copied: 2, removed: 0 });
+    expect(result).toMatchObject({ copied: 2, removed: 0, staleFailures: [] });
     expect(await readSession(".agents/skills/a/SKILL.md")).toBe("a");
     expect(await readSession(".claude/skills/b/SKILL.md")).toBe("b");
     expect(await readSession(".claude/commands/c.md")).toBeNull();
@@ -161,7 +167,7 @@ describe("syncAssistantContent", () => {
     await fs.rm(path.join(globalDir, ".claude", "commands", "old.md"));
     const result = await sync("claude");
 
-    expect(result).toEqual({ copied: 0, removed: 1 });
+    expect(result).toMatchObject({ copied: 0, removed: 1, staleFailures: [] });
     expect(await readSession(".claude/commands/old.md")).toBeNull();
   });
 
@@ -213,11 +219,13 @@ describe("syncAssistantContent", () => {
 
     const failed = await sync("claude");
     expect(failed?.removed).toBe(0);
+    expect(failed?.staleFailures).toEqual([".claude/commands/flaky.md"]);
     expect(await readSession(".claude/commands/flaky.md")).toBe("x");
 
     rmSpy.mockRestore();
     const retried = await sync("claude");
     expect(retried?.removed).toBe(1);
+    expect(retried?.staleFailures).toEqual([]);
     expect(await readSession(".claude/commands/flaky.md")).toBeNull();
   });
 
@@ -256,6 +264,11 @@ describe("syncAssistantContent", () => {
 
     expect(result?.removed).toBe(0);
     expect(result?.copied).toBe(0);
+    // Fail-closed: the manifest-owned path resolves through the planted
+    // symlink to a still-present file, so it must be reported stale, and the
+    // skipped copy must be reported (its slot is empty behind the symlink).
+    expect(result?.staleFailures).toContain(".claude/skills/SKILL.md");
+    expect(result?.failedCopies).toContain(".claude/skills/mine/SKILL.md");
     expect(await fs.readFile(path.join(outside, "SKILL.md"), "utf-8")).toBe("precious");
     await expect(fs.stat(path.join(outside, "mine"))).rejects.toThrow();
   });
@@ -316,13 +329,19 @@ describe("syncAssistantContent", () => {
 
     const result = await sync("claude");
 
-    expect(result).toEqual({ copied: 1, removed: 0 });
+    expect(result).toMatchObject({ copied: 1, removed: 0 });
     expect(await readSession(".claude/commands/.hidden.md")).toBeNull();
   });
 
   it("syncs cleanly when no source folders exist", async () => {
     const result = await sync("claude");
-    expect(result).toEqual({ copied: 0, removed: 0 });
+    expect(result).toMatchObject({
+      copied: 0,
+      removed: 0,
+      omittedSkills: [],
+      failedCopies: [],
+      staleFailures: [],
+    });
   });
 
   it("refreshes changed file content on every sync", async () => {
@@ -333,6 +352,262 @@ describe("syncAssistantContent", () => {
     await sync("claude");
 
     expect(await readSession(".claude/commands/review.md")).toBe("v2");
+  });
+
+  it("translates .codex/skills into the session's .agents/skills for codex", async () => {
+    await writeSource(globalDir, ".codex/skills/example/SKILL.md", "codex only");
+
+    const result = await sync("codex");
+
+    expect(result).toMatchObject({ copied: 1, removed: 0, staleFailures: [] });
+    expect(await readSession(".agents/skills/example/SKILL.md")).toBe("codex only");
+    expect(await readSession(".codex/skills/example/SKILL.md")).toBeNull();
+  });
+
+  it("does not deliver .codex/skills to claude sessions", async () => {
+    await writeSource(globalDir, ".codex/skills/example/SKILL.md", "codex only");
+
+    const result = await sync("claude");
+
+    expect(result).toMatchObject({ copied: 0 });
+    expect(await readSession(".claude/skills/example/SKILL.md")).toBeNull();
+    expect(await readSession(".agents/skills/example/SKILL.md")).toBeNull();
+  });
+
+  it("lets an explicit .codex skill override the shared skill wholesale", async () => {
+    await writeSource(globalDir, ".agents/skills/dupe/SKILL.md", "shared version");
+    await writeSource(globalDir, ".agents/skills/dupe/scripts/helper.py", "shared helper");
+    await writeSource(globalDir, ".codex/skills/dupe/SKILL.md", "codex version");
+
+    await sync("codex");
+
+    expect(await readSession(".agents/skills/dupe/SKILL.md")).toBe("codex version");
+    expect(await readSession(".agents/skills/dupe/scripts/helper.py")).toBeNull();
+  });
+
+  it("lets a project codex skill override the global codex skill", async () => {
+    await writeSource(globalDir, ".codex/skills/dupe/SKILL.md", "global");
+    const projectContent = getProjectAssistantContentDir(projectPath);
+    await writeSource(projectContent, ".codex/skills/dupe/SKILL.md", "project");
+
+    await sync("codex");
+
+    expect(await readSession(".agents/skills/dupe/SKILL.md")).toBe("project");
+  });
+
+  it("removes a deleted codex skill on the next sync", async () => {
+    await writeSource(globalDir, ".codex/skills/gone/SKILL.md", "x");
+    await sync("codex");
+    expect(await readSession(".agents/skills/gone/SKILL.md")).toBe("x");
+
+    await fs.rm(path.join(globalDir, ".codex", "skills", "gone"), { recursive: true });
+    const result = await sync("codex");
+
+    expect(result).toMatchObject({ removed: 1, staleFailures: [] });
+    expect(await readSession(".agents/skills/gone/SKILL.md")).toBeNull();
+  });
+
+  it("reveals the shared skill when the explicit codex override is deleted", async () => {
+    await writeSource(globalDir, ".agents/skills/dupe/SKILL.md", "shared version");
+    await writeSource(globalDir, ".codex/skills/dupe/SKILL.md", "codex version");
+    await sync("codex");
+    expect(await readSession(".agents/skills/dupe/SKILL.md")).toBe("codex version");
+
+    await fs.rm(path.join(globalDir, ".codex", "skills", "dupe"), { recursive: true });
+    await sync("codex");
+
+    expect(await readSession(".agents/skills/dupe/SKILL.md")).toBe("shared version");
+  });
+
+  it("removes codex-mirrored .agents/skills files when switching to claude", async () => {
+    await writeSource(globalDir, ".codex/skills/example/SKILL.md", "codex only");
+    await sync("codex");
+    expect(await readSession(".agents/skills/example/SKILL.md")).toBe("codex only");
+
+    const result = await sync("claude");
+
+    expect(result).toMatchObject({ removed: 1, staleFailures: [] });
+    expect(await readSession(".agents/skills/example/SKILL.md")).toBeNull();
+  });
+
+  it("omits a skill directory without SKILL.md and reports it", async () => {
+    await writeSource(globalDir, ".codex/skills/broken/notes.md", "no skill manifest");
+
+    const result = await sync("codex");
+
+    expect(result).toMatchObject({ copied: 0, omittedSkills: ["global:.codex/skills/broken"] });
+    expect(await readSession(".agents/skills/broken/notes.md")).toBeNull();
+  });
+
+  it("does not let an invalid explicit skill shadow a valid shared skill", async () => {
+    await writeSource(globalDir, ".agents/skills/dupe/SKILL.md", "shared version");
+    await writeSource(globalDir, ".codex/skills/dupe/README.md", "no SKILL.md here");
+
+    const result = await sync("codex");
+
+    expect(result?.omittedSkills).toEqual(["global:.codex/skills/dupe"]);
+    expect(await readSession(".agents/skills/dupe/SKILL.md")).toBe("shared version");
+  });
+
+  it("retires the mirrored copy of a skill whose SKILL.md was deleted", async () => {
+    await writeSource(globalDir, ".codex/skills/tool/SKILL.md", "manifest");
+    await writeSource(globalDir, ".codex/skills/tool/scripts/run.sh", "script");
+    await sync("codex");
+    expect(await readSession(".agents/skills/tool/scripts/run.sh")).toBe("script");
+
+    await fs.rm(path.join(globalDir, ".codex", "skills", "tool", "SKILL.md"));
+    const result = await sync("codex");
+
+    expect(result?.omittedSkills).toEqual(["global:.codex/skills/tool"]);
+    expect(result).toMatchObject({ removed: 2, staleFailures: [] });
+    expect(await readSession(".agents/skills/tool/SKILL.md")).toBeNull();
+    expect(await readSession(".agents/skills/tool/scripts/run.sh")).toBeNull();
+  });
+
+  it("refreshes changed skill resource files on every sync", async () => {
+    await writeSource(globalDir, ".codex/skills/tool/SKILL.md", "manifest");
+    await writeSource(globalDir, ".codex/skills/tool/scripts/run.sh", "v1");
+    await sync("codex");
+    await writeSource(globalDir, ".codex/skills/tool/scripts/run.sh", "v2");
+
+    await sync("codex");
+
+    expect(await readSession(".agents/skills/tool/scripts/run.sh")).toBe("v2");
+  });
+
+  it("throws when a source directory exists but is unreadable", async () => {
+    await writeSource(globalDir, ".claude/commands/ok.md", "fine");
+    const lockedDir = path.join(globalDir, ".claude", "skills", "locked");
+    await fs.mkdir(lockedDir, { recursive: true });
+    const realReaddir = fs.readdir.bind(fs);
+    // The overloaded readdir signature defeats mockImplementation's inference.
+    vi.spyOn(fs, "readdir").mockImplementation((async (target: unknown, opts: unknown) => {
+      if (target === lockedDir) {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }
+      return realReaddir(target as string, opts as never);
+    }) as never);
+
+    await expect(sync("claude")).rejects.toThrow(/Unreadable assistant content directory/);
+  });
+
+  it("reports a failed copy without failing closed when nothing stale remains", async () => {
+    await writeSource(globalDir, ".claude/commands/new.md", "fresh");
+    const destAbs = path.join(sessionPath, ".claude", "commands", "new.md");
+    const realCopyFile = fs.copyFile.bind(fs);
+    vi.spyOn(fs, "copyFile").mockImplementation(async (src, dest) => {
+      if (dest === destAbs) throw Object.assign(new Error("EIO: simulated"), { code: "EIO" });
+      return realCopyFile(src as string, dest as string);
+    });
+
+    const result = await sync("claude");
+
+    expect(result?.failedCopies).toEqual([".claude/commands/new.md"]);
+    expect(result?.staleFailures).toEqual([]);
+  });
+
+  it("fails closed when a stale copy survives a failed refresh copy", async () => {
+    await writeSource(globalDir, ".claude/commands/review.md", "v1");
+    await sync("claude");
+    await writeSource(globalDir, ".claude/commands/review.md", "v2");
+
+    const destAbs = path.join(sessionPath, ".claude", "commands", "review.md");
+    const realCopyFile = fs.copyFile.bind(fs);
+    vi.spyOn(fs, "copyFile").mockImplementation(async (src, dest) => {
+      if (dest === destAbs) throw Object.assign(new Error("EIO: simulated"), { code: "EIO" });
+      return realCopyFile(src as string, dest as string);
+    });
+
+    const result = await sync("claude");
+
+    expect(result?.staleFailures).toEqual([".claude/commands/review.md"]);
+    expect(result?.failedCopies).toEqual([]);
+    expect(await readSession(".claude/commands/review.md")).toBe("v1");
+  });
+
+  it("fails the sync when the manifest is corrupt instead of orphaning managed files", async () => {
+    await fs.writeFile(path.join(sessionPath, ".daintree-user-content.json"), "{not json", "utf-8");
+
+    await expect(sync("claude")).rejects.toThrow(/manifest/);
+  });
+
+  it("fails the sync on an unsupported manifest version", async () => {
+    await fs.writeFile(
+      path.join(sessionPath, ".daintree-user-content.json"),
+      JSON.stringify({ version: 2, files: [] }),
+      "utf-8"
+    );
+
+    await expect(sync("claude")).rejects.toThrow(/manifest/);
+  });
+
+  it("retires successfully removed paths from the manifest", async () => {
+    await writeSource(globalDir, ".claude/commands/old.md", "old");
+    await sync("claude");
+    await fs.rm(path.join(globalDir, ".claude", "commands", "old.md"));
+    await sync("claude");
+
+    // A hand-placed file at the historical path must now be unmanaged.
+    const handRolled = path.join(sessionPath, ".claude", "commands", "old.md");
+    await fs.mkdir(path.dirname(handRolled), { recursive: true });
+    await fs.writeFile(handRolled, "mine", "utf-8");
+    const result = await sync("claude");
+
+    expect(result?.removed).toBe(0);
+    expect(await readSession(".claude/commands/old.md")).toBe("mine");
+  });
+
+  it("does not let an oversized SKILL.md shadow a valid shared skill", async () => {
+    await writeSource(globalDir, ".agents/skills/dupe/SKILL.md", "shared version");
+    const big = path.join(globalDir, ".codex", "skills", "dupe", "SKILL.md");
+    await fs.mkdir(path.dirname(big), { recursive: true });
+    await fs.writeFile(big, Buffer.alloc(5 * 1024 * 1024 + 1, 0x61));
+
+    const result = await sync("codex");
+
+    expect(result?.omittedSkills).toEqual(["global:.codex/skills/dupe"]);
+    expect(await readSession(".agents/skills/dupe/SKILL.md")).toBe("shared version");
+  });
+
+  it("never mirrors filenames its cleanup validator cannot own", async () => {
+    await writeSource(globalDir, ".claude/commands/evil:colon.md", "x");
+
+    const result = await sync("claude");
+
+    expect(result).toMatchObject({ copied: 0, staleFailures: [] });
+    expect(await readSession(".claude/commands/evil:colon.md")).toBeNull();
+  });
+
+  it("ignores non-markdown files in command source directories", async () => {
+    await writeSource(globalDir, ".claude/commands/notes.txt", "x");
+
+    const result = await sync("claude");
+
+    expect(result).toMatchObject({ copied: 0, staleFailures: [] });
+    expect(await readSession(".claude/commands/notes.txt")).toBeNull();
+  });
+
+  it("collapses case-colliding skill names to the highest-precedence spelling", async () => {
+    await writeSource(globalDir, ".agents/skills/Dupe/SKILL.md", "global spelling");
+    const projectContent = getProjectAssistantContentDir(projectPath);
+    await writeSource(projectContent, ".agents/skills/dupe/SKILL.md", "project spelling");
+
+    const result = await sync("codex");
+
+    expect(result?.copied).toBe(1);
+    expect(result?.omittedSkills).toEqual(["case-collision:.agents/skills/Dupe"]);
+    expect(await readSession(".agents/skills/dupe/SKILL.md")).toBe("project spelling");
+  });
+
+  it("ignores loose files at a skills source root", async () => {
+    await writeSource(globalDir, ".codex/skills/loose-note.md", "not a skill");
+    await writeSource(globalDir, ".codex/skills/real/SKILL.md", "real");
+
+    const result = await sync("codex");
+
+    expect(result).toMatchObject({ copied: 1, omittedSkills: [] });
+    expect(await readSession(".agents/skills/loose-note.md")).toBeNull();
+    expect(await readSession(".agents/skills/real/SKILL.md")).toBe("real");
   });
 });
 
@@ -363,12 +638,13 @@ describe("ensureAssistantContentDir", () => {
     const created = await ensureAssistantContentDir(target);
 
     expect(created).toBe(target);
-    for (const dir of [".claude/commands", ".claude/skills", ".agents/skills"]) {
+    for (const dir of [".claude/commands", ".claude/skills", ".codex/skills", ".agents/skills"]) {
       const stat = await fs.stat(path.join(target, ...dir.split("/")));
       expect(stat.isDirectory()).toBe(true);
     }
     const readme = await fs.readFile(path.join(target, "README.md"), "utf-8");
     expect(readme).toContain(".agents/skills/");
+    expect(readme).toContain(".codex/skills/");
 
     await fs.writeFile(path.join(target, "README.md"), "customized", "utf-8");
     await ensureAssistantContentDir(target);

@@ -18,6 +18,8 @@ import { BrandMark, DaintreeIcon } from "@/components/icons";
 import { useProjectStore } from "@/store/projectStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { compareProjectsByMode } from "@/lib/projectSort";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
@@ -29,6 +31,7 @@ import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboar
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getAgentConfig } from "@/config/agents";
 import { LAUNCHABLE_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
+import { decayFrecencyScore, FRECENCY_COLD_START } from "@shared/utils/frecency";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import type { AgentAvailabilityState } from "../../../shared/types/ipc/system";
@@ -55,12 +58,36 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   const projects = useProjectStore((state) => state.projects);
   const switchProject = useProjectStore((state) => state.switchProject);
 
-  const recentProjects = useMemo(
-    () => [...projects].sort((a, b) => (b.frecencyScore ?? 0) - (a.frecencyScore ?? 0)).slice(0, 5),
-    [projects]
-  );
+  const otherProjectsSortMode = usePreferencesStore((state) => state.projectSwitcherOtherSortMode);
 
-  const hasProjects = recentProjects.length > 0;
+  // Effective (read-time decayed) scores against one shared now — comparing
+  // raw persisted scores compares snapshots frozen on different dates, which
+  // let months-dormant projects hold the top slots. Same transform AND the same
+  // comparator as the project switcher's Other band, reading the same
+  // preference, so the two surfaces can never disagree on order (#11455).
+  //
+  // Sorted before the cap, never after: slicing first would rank five projects
+  // the frecency order happened to surface, not the five this mode ranks top.
+  const topProjects = useMemo(() => {
+    const now = Date.now();
+    return [...projects]
+      .map((project) => ({
+        project,
+        id: project.id,
+        name: project.name,
+        lastOpened: project.lastOpened ?? 0,
+        frecencyScore: decayFrecencyScore(
+          project.frecencyScore ?? FRECENCY_COLD_START,
+          project.lastAccessedAt ?? 0,
+          now
+        ),
+      }))
+      .sort((a, b) => compareProjectsByMode(a, b, otherProjectsSortMode))
+      .slice(0, 5)
+      .map((entry) => entry.project);
+  }, [projects, otherProjectsSortMode]);
+
+  const hasProjects = topProjects.length > 0;
   const { checklist } = gettingStarted;
 
   const visibleShortcutTips = useMemo(
@@ -139,7 +166,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
           </div>
         )}
 
-        {hasProjects && <RecentProjects projects={recentProjects} onSelect={switchProject} />}
+        {hasProjects && <TopProjects projects={topProjects} onSelect={switchProject} />}
 
         <NudgeSequencer
           showChecklist={!!showChecklist}
@@ -332,7 +359,7 @@ function NudgeSequencer({
   return null;
 }
 
-function RecentProjects({
+function TopProjects({
   projects,
   onSelect,
 }: {
@@ -341,8 +368,10 @@ function RecentProjects({
 }) {
   return (
     <div className="w-full">
+      {/* "Your projects", not "Recent projects": the order follows the switcher's
+          Other-band sort mode, so no fixed order-word belongs in the heading. */}
       <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider mb-3">
-        Recent projects
+        Your projects
       </h3>
       <div className="space-y-1">
         {projects.map((project) => (

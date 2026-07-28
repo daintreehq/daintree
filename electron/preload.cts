@@ -59,6 +59,7 @@ import { buildPrivacyPreloadBindings } from "./ipc/handlers/privacy.preload.js";
 import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
 import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
+import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
 import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
@@ -73,6 +74,8 @@ import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
+import { buildProjectHistoryPreloadBindings } from "./ipc/handlers/projectHistory.preload.js";
+import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRelocation.preload.js";
 import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabricSurface.preload.js";
 import { buildWebviewNavigationPreloadBindings } from "./ipc/handlers/webviewNavigation.preload.js";
 import { buildWebviewCapturePreloadBindings } from "./ipc/handlers/webviewCapture.preload.js";
@@ -82,6 +85,7 @@ import { buildTerminalConfigPreloadBindings } from "./ipc/handlers/terminalConfi
 
 import type {
   Project,
+  ProjectAddOptions,
   ProjectSettings,
   TerminalSpawnOptions,
   CopyTreeOptions,
@@ -151,6 +155,7 @@ import type {
   PluginActionDescriptor,
   PluginKeybindingDescriptor,
   ContextMenuContribution,
+  PluginArchiveInstallIntent,
   PluginDeepLinkIntent,
   PluginPanelBadge,
 } from "../shared/types/plugin.js";
@@ -741,6 +746,29 @@ function _reconstructGitError(serialized: {
   return error;
 }
 
+/**
+ * Reconstruct `HelpSessionError` thrown by help-session provisioning. Same
+ * realm-boundary stripping as `_reconstructAppError`: contextBridge discards
+ * the custom `code`, so it rides an encoded message prefix that the renderer
+ * decodes via `extractHelpSessionErrorCode` (`src/utils/clientHelpSessionError.ts`).
+ *
+ * Format: `[HelpSessionError|<code>] <original message>`
+ */
+function _reconstructHelpSessionError(serialized: {
+  name: string;
+  message: string;
+  code?: string;
+}): Error {
+  const code = serialized.code ?? "UNKNOWN";
+  const error = new Error(`[HelpSessionError|${code}] ${serialized.message}`);
+  // Standard properties — set for callers in the same realm. They don't
+  // survive the contextBridge crossing; the message prefix is the source
+  // of truth on the renderer side.
+  error.name = "HelpSessionError";
+  (error as Error & { code: string }).code = code;
+  return error;
+}
+
 // Typed overload: when `channel` is a key of `IpcInvokeMap` and the args match,
 // the result is statically enforced against the central IPC contract. Calls
 // that don't match the typed overload — including the function-value
@@ -763,6 +791,9 @@ async function _unwrappingInvoke(channel: string, ...args: unknown[]): Promise<a
       }
       if (serialized.name === "GitOperationError" && typeof serialized.gitReason === "string") {
         throw _reconstructGitError(serialized);
+      }
+      if (serialized.name === "HelpSessionError" && typeof serialized.code === "string") {
+        throw _reconstructHelpSessionError(serialized);
       }
       throw deserializeError(serialized);
     }
@@ -832,8 +863,17 @@ let _eventBusWired = false;
 const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:deep-link",
   "window:disk-space-status",
+  "plugin:archive-install-intent",
 ]);
-const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown>();
+// Replayable events that accumulate instead of superseding. A double-clicked
+// `.dntr` archive (#11280) is one decision per file, so collapsing two
+// pre-subscriber intents to the latest would silently drop an archive the user
+// asked to install — unlike the latest-wins signals above, where only the
+// current value matters. Buffered payloads replay in arrival order.
+const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
+  "plugin:archive-install-intent",
+]);
+const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown[]>();
 
 function _ensureEventBusWired(): void {
   if (_eventBusWired) return;
@@ -846,7 +886,11 @@ function _ensureEventBusWired(): void {
       // No subscriber yet: buffer replayable events so a late-mounting
       // subscriber (e.g. one behind a Suspense boundary) still receives them.
       if (_eventBusReplayable.has(envelope.name)) {
-        _eventBusBuffered.set(envelope.name, envelope.payload);
+        const prior = _eventBusFifoReplay.has(envelope.name)
+          ? (_eventBusBuffered.get(envelope.name) ?? [])
+          : [];
+        prior.push(envelope.payload);
+        _eventBusBuffered.set(envelope.name, prior);
       }
       return;
     }
@@ -863,6 +907,13 @@ function _ensureEventBusWired(): void {
   });
 }
 
+// Wired eagerly, not lazily on first subscribe: the replay buffer above only
+// catches a pre-subscriber event if the underlying `EVENTS_PUSH` listener is
+// already attached. Deferring it to the first `_eventBusOn` call made the
+// buffer depend on some unrelated hook having subscribed first — exactly the
+// slow-cold-launch case it exists to cover (#11280).
+_ensureEventBusWired();
+
 function _eventBusOn<K extends keyof IpcEventBusMap>(
   name: K,
   callback: (payload: IpcEventBusMap[K]) => void
@@ -878,12 +929,14 @@ function _eventBusOn<K extends keyof IpcEventBusMap>(
   // Replay a buffered event to the first subscriber (see _eventBusReplayable) so
   // a signal delivered before this subscriber mounted isn't lost.
   if (_eventBusBuffered.has(name)) {
-    const buffered = _eventBusBuffered.get(name);
+    const buffered = _eventBusBuffered.get(name) ?? [];
     _eventBusBuffered.delete(name);
-    try {
-      wrapped(buffered);
-    } catch (err) {
-      console.error("[Preload] events:push replay threw for", name, err);
+    for (const payload of buffered) {
+      try {
+        wrapped(payload);
+      } catch (err) {
+        console.error("[Preload] events:push replay threw for", name, err);
+      }
     }
   }
   return () => {
@@ -1308,6 +1361,9 @@ function buildElectronApi(): ElectronAPI {
     // Diff media API — HEAD vs working-tree image versions for image compare
     diffMedia: buildDiffMediaPreloadBindings(_unwrappingInvoke),
 
+    // File browser API — lazy directory listings for the read-only browser panel
+    fileBrowser: buildFileBrowserPreloadBindings(_unwrappingInvoke),
+
     // Watchdog API — surfaces the main-process deadlock detector's disabled
     // state to the renderer and exposes a manual restart path.
     watchdog: {
@@ -1366,8 +1422,12 @@ function buildElectronApi(): ElectronAPI {
       cancel: (injectionId?: string) =>
         _unwrappingInvoke(CHANNELS.COPYTREE_CANCEL, { injectionId }),
 
-      getFileTree: (worktreeId: string, dirPath?: string) =>
-        _unwrappingInvoke(CHANNELS.COPYTREE_GET_FILE_TREE, { worktreeId, dirPath }),
+      getFileTree: (worktreeId: string, dirPath?: string, includeExcluded?: boolean) =>
+        _unwrappingInvoke(CHANNELS.COPYTREE_GET_FILE_TREE, {
+          worktreeId,
+          dirPath,
+          includeExcluded,
+        }),
 
       testConfig: (worktreeId: string, options?: CopyTreeTestConfigOptions) =>
         _unwrappingInvoke(CHANNELS.COPYTREE_TEST_CONFIG, { worktreeId, options }),
@@ -1378,6 +1438,12 @@ function buildElectronApi(): ElectronAPI {
 
     // Editor API
     editor: buildEditorConfigPreloadBindings(_unwrappingInvoke),
+
+    // Per-window back/forward over visited projects
+    projectHistory: buildProjectHistoryPreloadBindings(_unwrappingInvoke),
+
+    // Move or rename project — preview + apply (#11282, phase 4)
+    projectRelocation: buildProjectRelocationPreloadBindings(_unwrappingInvoke),
 
     // Paint-fabric surface views (Phase 1V substrate)
     paintSurface: {
@@ -1651,7 +1717,12 @@ function buildElectronApi(): ElectronAPI {
 
       getCurrent: () => _unwrappingInvoke(CHANNELS.PROJECT_GET_CURRENT),
 
-      add: (path: string) => _unwrappingInvoke(CHANNELS.PROJECT_ADD, path),
+      // Forward the optional options bag only when present — an open-existing-repo
+      // add stays a one-argument invoke, byte-identical to before.
+      add: (path: string, options?: ProjectAddOptions) =>
+        options
+          ? _unwrappingInvoke(CHANNELS.PROJECT_ADD, path, options)
+          : _unwrappingInvoke(CHANNELS.PROJECT_ADD, path),
 
       remove: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_REMOVE, projectId),
 
@@ -1681,6 +1752,9 @@ function buildElectronApi(): ElectronAPI {
       onWorktreeLoadStatus: (
         callback: (payload: { projectId: string; worktreeLoadError: string | null }) => void
       ) => _typedOn(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, callback),
+
+      onOpenGitInitDialog: (callback: (payload: { directoryPath: string }) => void) =>
+        _typedOn(CHANNELS.PROJECT_OPEN_GIT_INIT_DIALOG, callback),
 
       onFocusOnActivate: (callback: (payload: { intent: "focus-next-waiting" }) => void) =>
         _typedOn(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, callback),
@@ -2459,6 +2533,17 @@ function buildElectronApi(): ElectronAPI {
       getRetentionDays: () => _unwrappingInvoke(CHANNELS.AGENT_SESSION_GET_RETENTION),
       setRetentionDays: (days: number) =>
         _unwrappingInvoke(CHANNELS.AGENT_SESSION_SET_RETENTION, days),
+      // Session bookmarks (#11288)
+      prepareBookmark: (input: unknown) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SESSION_PREPARE_BOOKMARK, input),
+      promoteBookmark: (input: unknown) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SESSION_PROMOTE_BOOKMARK, input),
+      renameBookmark: (input: unknown) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SESSION_RENAME_BOOKMARK, input),
+      deleteBookmark: (input: unknown) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SESSION_DELETE_BOOKMARK, input),
+      listBookmarks: (input?: unknown) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SESSION_LIST_BOOKMARKS, input),
     },
 
     // Clipboard API — bindings built from the preload-safe channel map in
@@ -2745,7 +2830,7 @@ function buildElectronApi(): ElectronAPI {
           transcriptionProvider: "openai" | "deepgram";
           transcriptionModel: "gpt-realtime-whisper";
           correctionEnabled: boolean;
-          correctionModel: "gpt-5-nano" | "gpt-5-mini";
+          correctionModel: "gpt-5.6-luna";
           correctionCustomInstructions: string;
           paragraphingStrategy: "spoken-command" | "manual";
           resolveFileLinks: boolean;
@@ -2937,6 +3022,11 @@ function buildElectronApi(): ElectronAPI {
         _eventBusOn("plugin:actions-changed", callback),
       onProvenanceChanged: (callback: (payload: Record<string, never>) => void) =>
         _eventBusOn("plugin:provenance-changed", callback),
+      // Direct channel, not the event bus: install progress is targeted at the
+      // window that started the install, never broadcast to every view (#11302).
+      onInstallProgress: (
+        callback: (event: import("../shared/types/plugin.js").PluginInstallProgressEvent) => void
+      ) => _typedOn(CHANNELS.PLUGIN_INSTALL_PROGRESS, callback),
       onBackgroundUpdateAvailable: (
         callback: (
           payload: import("../shared/types/plugin.js").PluginBackgroundUpdateCheckResult
@@ -2974,6 +3064,8 @@ function buildElectronApi(): ElectronAPI {
         _eventBusOn("plugin:panel-badges-cleared", callback),
       onDeepLink: (callback: (intent: PluginDeepLinkIntent) => void) =>
         _eventBusOn("plugin:deep-link", callback),
+      onArchiveInstallIntent: (callback: (intent: PluginArchiveInstallIntent) => void) =>
+        _eventBusOn("plugin:archive-install-intent", callback),
     },
 
     pluginMcp: buildPluginMcpPreloadBindings(_unwrappingInvoke),

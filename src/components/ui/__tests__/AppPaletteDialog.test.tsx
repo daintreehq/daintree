@@ -302,3 +302,89 @@ describe("AppPaletteDialog reduced-motion policy", () => {
     expect(getScrim().style.transitionTimingFunction).not.toBe("");
   });
 });
+
+describe("AppPaletteDialog.Body results region (#11431)", () => {
+  function renderBody(onNavigationKeyDown: (e: React.KeyboardEvent) => void) {
+    render(
+      <>
+        <Dispatcher />
+        <AppPaletteDialog isOpen onClose={() => {}} ariaLabel="Body palette">
+          <AppPaletteDialog.Body
+            ariaLabel="Results"
+            activeDescendant="option-b"
+            onNavigationKeyDown={onNavigationKeyDown}
+          >
+            <div role="listbox" aria-label="Results list">
+              <div id="option-a" role="option" aria-selected={false}>
+                A
+              </div>
+              <div id="option-b" role="option" aria-selected>
+                B
+              </div>
+            </div>
+            <button type="button">Nested control</button>
+          </AppPaletteDialog.Body>
+        </AppPaletteDialog>
+      </>
+    );
+    return screen.getByRole("group", { name: "Results" });
+  }
+
+  it("stays a tab stop so the scrollable region keeps keyboard access", () => {
+    // Load-bearing for axe's scrollable-region-focusable (WCAG 2.1.1).
+    expect(renderBody(vi.fn()).getAttribute("tabindex")).toBe("0");
+  });
+
+  it("mirrors the active descendant and resolves it to a real option", () => {
+    const region = renderBody(vi.fn());
+    const activeDescendant = region.getAttribute("aria-activedescendant");
+
+    expect(activeDescendant).toBe("option-b");
+    expect(document.getElementById(activeDescendant!)).not.toBeNull();
+  });
+
+  it.each(["ArrowUp", "ArrowDown", "Home", "End", "Enter"])(
+    "forwards %s to the palette's navigation handler",
+    (key) => {
+      const onNavigationKeyDown = vi.fn();
+      fireEvent.keyDown(renderBody(onNavigationKeyDown), { key });
+
+      expect(onNavigationKeyDown).toHaveBeenCalledTimes(1);
+      expect(onNavigationKeyDown.mock.calls[0]![0].key).toBe(key);
+    }
+  );
+
+  it.each([
+    ["Tab", false],
+    ["Tab", true],
+    ["PageDown", false],
+    ["PageUp", false],
+    [" ", false],
+    ["Escape", false],
+  ])("leaves %s (shift: %s) to its native behaviour", (key, shiftKey) => {
+    const onNavigationKeyDown = vi.fn();
+    const notCancelled = fireEvent.keyDown(renderBody(onNavigationKeyDown), { key, shiftKey });
+
+    expect(onNavigationKeyDown).not.toHaveBeenCalled();
+    // Not merely unhandled — uncancelled, so Tab still traverses and
+    // Page/Space still scroll the region.
+    expect(notCancelled).toBe(true);
+  });
+
+  it("forwards modified Backspace so row shortcuts survive the focus move", () => {
+    const onNavigationKeyDown = vi.fn();
+    fireEvent.keyDown(renderBody(onNavigationKeyDown), { key: "Backspace", metaKey: true });
+
+    expect(onNavigationKeyDown).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores navigation keys raised by controls nested inside the region", () => {
+    // Enter on the scratch-section style buttons must activate the button, not
+    // confirm the palette's active result.
+    const onNavigationKeyDown = vi.fn();
+    renderBody(onNavigationKeyDown);
+    fireEvent.keyDown(screen.getByRole("button", { name: "Nested control" }), { key: "Enter" });
+
+    expect(onNavigationKeyDown).not.toHaveBeenCalled();
+  });
+});

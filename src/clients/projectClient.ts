@@ -1,5 +1,6 @@
 import type {
   Project,
+  ProjectAddOptions,
   ProjectSettings,
   RunCommand,
   ProjectCloseResult,
@@ -12,8 +13,10 @@ import type {
   TabGroup,
 } from "@shared/types";
 import type { NotificationSettings } from "@shared/types/ipc/api";
+import type { RelocationPreview, RelocationRequest } from "@shared/types/projectRelocation";
 import type { AgentPreset } from "@shared/config/agentRegistry";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
+import type { IdArrayFieldEdit } from "@shared/utils/layoutMerge";
 import type {
   GitInitOptions,
   GitInitResult,
@@ -110,8 +113,8 @@ export const projectClient = {
     return inflight;
   },
 
-  add: (path: string): Promise<Project> => {
-    return window.electron.project.add(path);
+  add: (path: string, options?: ProjectAddOptions): Promise<Project> => {
+    return window.electron.project.add(path, options);
   },
 
   remove: (projectId: string): Promise<void> => {
@@ -144,6 +147,23 @@ export const projectClient = {
 
   openDialog: (): Promise<string | null> => {
     return window.electron.project.openDialog();
+  },
+
+  /**
+   * Read-only preview of what a move/reattach would affect (#11282, phase 4).
+   * Never mutates — the dialog gates its confirm on the returned blockers.
+   */
+  previewRelocation: (request: RelocationRequest): Promise<RelocationPreview> => {
+    return window.electron.projectRelocation.preview(request);
+  },
+
+  /**
+   * Commit a managed move (`fs.rename`) or reattach of an already-moved folder.
+   * Broadcasts `PROJECT_UPDATED` on success, so the local cache is invalidated.
+   */
+  applyRelocation: (request: RelocationRequest): Promise<Project> => {
+    invalidateCurrentCache();
+    return window.electron.projectRelocation.apply(request);
   },
 
   onSwitch: (
@@ -328,8 +348,20 @@ export const projectClient = {
     return window.electron.project.getTerminals(projectId);
   },
 
-  setTerminals: (projectId: string, terminals: TerminalSnapshot[]): Promise<void> => {
-    return window.electron.project.setTerminals(projectId, terminals);
+  setTerminals: (
+    projectId: string,
+    terminals: TerminalSnapshot[],
+    changedIds?: string[],
+    removedIds?: string[],
+    fieldEdits?: IdArrayFieldEdit[]
+  ): Promise<void> => {
+    return window.electron.project.setTerminals(
+      projectId,
+      terminals,
+      changedIds,
+      removedIds,
+      fieldEdits
+    );
   },
 
   getTerminalSizes: (
@@ -349,16 +381,26 @@ export const projectClient = {
     return window.electron.project.getDraftInputs(projectId);
   },
 
-  setDraftInputs: (projectId: string, draftInputs: Record<string, string>): Promise<void> => {
-    return window.electron.project.setDraftInputs(projectId, draftInputs);
+  setDraftInputs: (
+    projectId: string,
+    draftInputs: Record<string, string>,
+    changedIds?: string[],
+    removedIds?: string[]
+  ): Promise<void> => {
+    return window.electron.project.setDraftInputs(projectId, draftInputs, changedIds, removedIds);
   },
 
   getTabGroups: (projectId: string): Promise<TabGroup[]> => {
     return window.electron.project.getTabGroups(projectId);
   },
 
-  setTabGroups: (projectId: string, tabGroups: TabGroup[]): Promise<void> => {
-    return window.electron.project.setTabGroups(projectId, tabGroups);
+  setTabGroups: (
+    projectId: string,
+    tabGroups: TabGroup[],
+    changedIds?: string[],
+    removedIds?: string[]
+  ): Promise<void> => {
+    return window.electron.project.setTabGroups(projectId, tabGroups, changedIds, removedIds);
   },
 
   readClaudeMd: (projectId: string): Promise<string | null> => {

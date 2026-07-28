@@ -9,6 +9,7 @@ const SETTINGS_BUTTON_PATH = path.resolve(__dirname, "../ToolbarSettingsButton.t
 const LAUNCHER_BUTTON_PATH = path.resolve(__dirname, "../ToolbarLauncherButton.tsx");
 const AGENT_BUTTON_PATH = path.resolve(__dirname, "../AgentButton.tsx");
 const VOICE_RECORDING_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarButton.tsx");
+const PLUGIN_TRAY_PATH = path.resolve(__dirname, "../PluginTrayButton.tsx");
 const TOOLBAR_CSS_PATH = path.resolve(__dirname, "../../../styles/components/toolbar.css");
 
 describe("Toolbar shortcut tooltips — issue #3443", () => {
@@ -19,6 +20,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
   let launcherSource: string;
   let agentSource: string;
   let voiceSource: string;
+  let pluginTraySource: string;
 
   beforeEach(async () => {
     [
@@ -29,6 +31,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       launcherSource,
       agentSource,
       voiceSource,
+      pluginTraySource,
     ] = await Promise.all([
       fs.readFile(TOOLBAR_PATH, "utf-8"),
       fs.readFile(PROBLEMS_BUTTON_PATH, "utf-8"),
@@ -37,6 +40,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       fs.readFile(LAUNCHER_BUTTON_PATH, "utf-8"),
       fs.readFile(AGENT_BUTTON_PATH, "utf-8"),
       fs.readFile(VOICE_RECORDING_PATH, "utf-8"),
+      fs.readFile(PLUGIN_TRAY_PATH, "utf-8"),
     ]);
   });
 
@@ -224,16 +228,28 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(sidebarBlock![0]).toContain("aria-pressed={!isFocusMode}");
     });
 
-    it("carves the sidebar toggle out of the armed aria-pressed rule in toolbar.css", async () => {
+    it("carves both sidebar toggles out of the armed rules in toolbar.css (#8357, #11328)", async () => {
       const css = await fs.readFile(TOOLBAR_CSS_PATH, "utf-8");
-      expect(css).toContain(
-        '.toolbar-icon-button[aria-pressed="true"]:where(:not([data-sidebar-toggle]))'
+      // The app sidebar toggle uses aria-pressed; the file-browser tree toggle
+      // uses aria-expanded (a disclosure). Both carry data-sidebar-toggle and
+      // must be excluded so neither shows a persistent armed chip.
+      const pressedOptOut = css.match(
+        /\.toolbar-icon-button\[aria-pressed="true"\]:where\(:not\(\[data-sidebar-toggle\]\)\)/g
       );
-      // The carve-out must not regress to an un-excluded standalone selector.
+      const expandedOptOut = css.match(
+        /\.toolbar-icon-button\[aria-expanded="true"\]:where\(:not\(\[data-sidebar-toggle\]\)\)/g
+      );
+      // Relational invariant: wherever the pressed rule is carved out (base,
+      // light, forced-colors), the expanded rule is too — so reverting one
+      // block's aria-expanded selector to the un-excluded form fails here.
+      expect(expandedOptOut?.length ?? 0).toBeGreaterThan(0);
+      expect(expandedOptOut?.length).toBe(pressedOptOut?.length);
+      // Neither icon-button carve-out may regress to an un-excluded standalone selector.
       expect(css).not.toMatch(/\.toolbar-icon-button\[aria-pressed="true"\],/);
-      // Other armed selectors stay intact so dropdowns/agent buttons keep the highlight.
-      expect(css).toContain('.toolbar-icon-button[aria-expanded="true"]');
+      expect(css).not.toMatch(/\.toolbar-icon-button\[aria-expanded="true"\],/);
+      // Agent-button armed selectors stay intact so dropdowns keep the highlight.
       expect(css).toContain('.toolbar-agent-button[aria-pressed="true"]');
+      expect(css).toContain('.toolbar-agent-button[aria-expanded="true"]');
     });
   });
 
@@ -272,21 +288,19 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
   });
 
+  // PluginToolbarButton moved to PluginTrayButton.tsx in #11304, alongside the
+  // tray that now owns un-promoted contributions.
   describe("PluginToolbarButton aria-keyshortcuts — issue #8938", () => {
     it("calls useAriaKeyshortcuts with the plugin actionId", () => {
-      expect(source).toContain("useAriaKeyshortcuts(config.actionId)");
+      expect(pluginTraySource).toContain("useAriaKeyshortcuts(config.actionId)");
     });
 
     it("renders aria-keyshortcuts on the plugin Button", () => {
-      // Other aria-keyshortcuts spreads in Toolbar.tsx use named locals
-      // (sidebarAriaShortcut, copyTreeAriaShortcut). Only PluginToolbarButton
-      // uses the plain `ariaShortcut` identifier, so this assertion is
-      // unambiguous without a function-block carve-out.
-      expect(source).toContain("aria-keyshortcuts={ariaShortcut}");
+      expect(pluginTraySource).toContain("aria-keyshortcuts={ariaShortcut}");
     });
 
     it("drops the redundant `as string` cast on the hover hook", () => {
-      expect(source).not.toContain("useShortcutHintHover(config.actionId as string)");
+      expect(pluginTraySource).not.toContain("useShortcutHintHover(config.actionId as string)");
     });
   });
 

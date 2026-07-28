@@ -67,6 +67,8 @@ interface ForgeMockOptions {
   providers?: ForgeProviderEntry[];
   remotes?: RemoteInfo[] | Error;
   resolveByRemote?: Record<string, ResolvedForgeProvider>;
+  /** The project's stored forge remote name; undefined means auto-detect. */
+  forgeRemote?: string;
 }
 
 function installForgeMocks(opts: ForgeMockOptions = {}) {
@@ -87,6 +89,8 @@ function installForgeMocks(opts: ForgeMockOptions = {}) {
         if (opts.remotes instanceof Error) throw opts.remotes;
         return opts.remotes ?? [];
       }),
+      // Drives which remote the panel labels "Active" (#11408).
+      getSettings: vi.fn(async () => ({ forgeRemote: opts.forgeRemote })),
     },
   } as unknown as typeof window.electron;
   return { setDefault };
@@ -108,6 +112,60 @@ describe("ForgeIntegrationsTab", () => {
     });
     expect(screen.getByText(/Open a project to view its forge routing/i)).toBeTruthy();
     expect(window.electron.project.listRemotes).not.toHaveBeenCalled();
+  });
+
+  describe("active remote marker (#11408)", () => {
+    const github = makeProvider("builtin", "github", "GitHub", ["github.com"]);
+    const ORIGIN_URL = "git@github.com:me/fork.git";
+    const UPSTREAM_URL = "git@github.com:acme/canonical.git";
+
+    function renderWithBothRemotes(forgeRemote?: string) {
+      installForgeMocks({
+        providers: [github],
+        remotes: [makeRemote("origin", ORIGIN_URL), makeRemote("upstream", UPSTREAM_URL)],
+        resolveByRemote: {
+          [ORIGIN_URL]: { entry: github, resolvedVia: "hostname" },
+          [UPSTREAM_URL]: { entry: github, resolvedVia: "hostname" },
+        },
+        forgeRemote,
+      });
+      setProject({ id: "proj-1", path: "/repo", name: "Repo" } as Project);
+      render(<ForgeIntegrationsTab />);
+    }
+
+    /** The row `<li>` whose remote name cell matches. */
+    function rowFor(name: string): HTMLElement {
+      const cell = screen.getByText(name);
+      const row = cell.closest("li");
+      if (!row) throw new Error(`No routing row found for remote "${name}"`);
+      return row;
+    }
+
+    it("marks the remote named by the project setting", async () => {
+      renderWithBothRemotes("upstream");
+
+      await waitFor(() => expect(screen.getByText("Active")).toBeTruthy());
+      expect(rowFor("upstream").textContent).toContain("Active");
+      expect(rowFor("origin").textContent).not.toContain("Active");
+    });
+
+    it("marks the auto-detected remote when no setting is stored", async () => {
+      // Both match a provider, so origin-first name preference wins — the
+      // same answer PullRequestService reaches.
+      renderWithBothRemotes(undefined);
+
+      await waitFor(() => expect(screen.getByText("Active")).toBeTruthy());
+      expect(rowFor("origin").textContent).toContain("Active");
+      expect(rowFor("upstream").textContent).not.toContain("Active");
+    });
+
+    it("marks exactly one remote", async () => {
+      renderWithBothRemotes("origin");
+
+      await waitFor(() => expect(screen.getByText("Active")).toBeTruthy());
+      expect(screen.getAllByText("Active")).toHaveLength(1);
+      expect(rowFor("origin").textContent).toContain("Active");
+    });
   });
 
   it("renders a routing row per remote with the resolved provider badge", async () => {

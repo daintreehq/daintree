@@ -46,6 +46,10 @@ const MIME_TYPES: Record<string, string> = {
   ".css": "text/css",
   ".json": "application/json",
   ".png": "image/png",
+  // Distinct from image/png so nosniff doesn't block the load: an unmapped
+  // extension falls through to application/octet-stream below, which Chromium
+  // refuses to decode as an image once nosniff is set.
+  ".apng": "image/apng",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".gif": "image/gif",
@@ -59,9 +63,23 @@ const MIME_TYPES: Record<string, string> = {
   ".ttf": "font/ttf",
   ".eot": "application/vnd.ms-fontobject",
   ".wasm": "application/wasm",
+  // Spellings Chromium actually accepts: canPlayType("audio/flac") is
+  // "probably" while "audio/x-flac" is "" — and daintree-file:// serves
+  // nosniff, so a legacy alias here would leave the file unplayable. `.m4a`
+  // and `.opus` stay bare (no codecs= parameter): the extension names the
+  // container, not what's inside it, so promising a codec could be a lie.
   ".wav": "audio/wav",
   ".mp3": "audio/mpeg",
   ".ogg": "audio/ogg",
+  ".oga": "audio/ogg",
+  ".opus": "audio/ogg",
+  ".flac": "audio/flac",
+  ".m4a": "audio/mp4",
+  ".aac": "audio/aac",
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".webm": "video/webm",
+  ".ogv": "video/ogg",
 };
 
 export function getMimeType(filePath: string): string {

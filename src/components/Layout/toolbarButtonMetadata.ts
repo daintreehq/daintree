@@ -11,7 +11,7 @@ import {
   SquareMenu,
   SquareTerminal,
 } from "lucide-react";
-import { Folders, History } from "@/components/icons";
+import { Folders, History, Package } from "@/components/icons";
 import {
   BUILT_IN_AGENT_IDS,
   isBuiltInAgentId,
@@ -57,6 +57,11 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
     label: "Agent tray",
     icon: Plug,
     description: "Dropdown for launching any agent and jumping into setup",
+  },
+  "plugin-tray": {
+    label: "Plugin tray",
+    icon: Package,
+    description: "Dropdown collecting every plugin's toolbar buttons",
   },
   ...AGENT_METADATA,
   terminal: {
@@ -117,20 +122,29 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
 };
 
 /**
- * Canonical visibility resolver for toolbar buttons. Both `Toolbar.tsx` and
- * `ToolbarSettingsTab.tsx` consume this so they can never disagree about
- * whether a button should appear (#7666).
+ * Canonical resolver for whether a button gets its own top-level toolbar slot.
+ * Both `Toolbar.tsx` and `ToolbarSettingsTab.tsx` consume this so they can
+ * never disagree (#7666).
  *
  * Agent IDs (entries in `BUILT_IN_AGENT_IDS`) route to `isAgentToolbarVisible`
- * — their pin lives in `agentSettingsStore`. Every other ID, including
- * `agent-tray` and plugin buttons, reads from the toolbar store's
+ * — their pin lives in `agentSettingsStore`. Built-in IDs, including
+ * `agent-tray` and `plugin-tray`, read from the toolbar store's
  * `pinnedButtons` map: an explicit `false` hides; missing or `true` shows.
+ *
+ * Registered plugin contributions invert that default (#11304): they reach the
+ * user through the plugin tray, so a top-level slot is opt-in and requires an
+ * explicit `true`. `isPluginContribution` is passed by callers that hold the
+ * live broadcast config map — registry membership is the discriminator, never
+ * string-parsing the dotted id, so a built-in that ever gains a dot can't be
+ * mistaken for a plugin. It defaults to `false` so callers without that map
+ * (e.g. `LauncherQuickActions`) keep their existing behavior.
  */
 export function isToolbarButtonVisible(
   buttonId: AnyToolbarButtonId,
   pinnedButtons: ToolbarPinnedState,
   agentSettings: AgentSettings | null | undefined,
-  agentAvailability: CliAvailability | null | undefined
+  agentAvailability: CliAvailability | null | undefined,
+  isPluginContribution = false
 ): boolean {
   if (isBuiltInAgentId(buttonId)) {
     // Assistant-only agents are never offered as launchable toolbar buttons,
@@ -139,5 +153,6 @@ export function isToolbarButtonVisible(
     if (isAssistantOnlyAgentId(buttonId)) return false;
     return isAgentToolbarVisible(agentSettings?.agents?.[buttonId], agentAvailability?.[buttonId]);
   }
+  if (isPluginContribution) return pinnedButtons[buttonId] === true;
   return pinnedButtons[buttonId] !== false;
 }

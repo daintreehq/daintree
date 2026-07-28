@@ -308,10 +308,7 @@ export interface ForgeAuditRecord {
 export type ForgeAnomalySeverity = "danger";
 
 export type ForgeAnomalyKind =
-  | "latency-drift"
-  | "first-seen-method"
-  | "failure-cluster"
-  | "p95-z-score";
+  "latency-drift" | "first-seen-method" | "failure-cluster" | "p95-z-score";
 
 /**
  * Anomaly signal computed across the forge audit ring buffer. Mirrors

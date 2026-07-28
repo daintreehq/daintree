@@ -8,10 +8,11 @@ import {
   resolveGridInsertionIndexFromRects,
   findGroupIndex,
   isNonDockableDockDrop,
+  dragCarriesNonDockableIntoDock,
   filterOutDockDroppables,
   type ClientRectLike,
 } from "../dropResolution";
-import type { PanelInstance } from "@shared/types/panel";
+import type { PanelInstance, PanelKind } from "@shared/types/panel";
 import type { TabGroup } from "@shared/types";
 
 function makeRect(left: number, top: number, width: number, height: number): ClientRectLike {
@@ -82,6 +83,62 @@ describe("isNonDockableDockDrop", () => {
   it("never rejects when the target is not the dock", () => {
     expect(isNonDockableDockDrop("grid", "dev-preview")).toBe(false);
     expect(isNonDockableDockDrop(null, "dev-preview")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dragCarriesNonDockableIntoDock (#11375) — group-aware dock rejection
+// ---------------------------------------------------------------------------
+describe("dragCarriesNonDockableIntoDock", () => {
+  const panel = (id: string, kind: PanelKind): PanelInstance =>
+    ({ ...makeTerminal(id, "grid"), kind }) as PanelInstance;
+  const panelsById: Record<string, PanelInstance | undefined> = {
+    t1: panel("t1", "terminal"),
+    b1: panel("b1", "browser"),
+    r1: panel("r1", "review"), // non-dockable
+    d1: panel("d1", "diff"), // non-dockable
+  };
+
+  it("falls back to the representative kind for a single-panel drag", () => {
+    expect(dragCarriesNonDockableIntoDock("dock", "review", undefined, panelsById)).toBe(true);
+    expect(dragCarriesNonDockableIntoDock("dock", "terminal", undefined, panelsById)).toBe(false);
+    // A single-item array is not a group drag — still uses the representative.
+    expect(dragCarriesNonDockableIntoDock("dock", "review", ["r1"], panelsById)).toBe(true);
+  });
+
+  it("rejects a group drag when ANY member is non-dockable", () => {
+    expect(dragCarriesNonDockableIntoDock("dock", "terminal", ["t1", "r1"], panelsById)).toBe(true);
+    expect(dragCarriesNonDockableIntoDock("dock", "browser", ["b1", "d1"], panelsById)).toBe(true);
+  });
+
+  it("allows a group drag when every member is dockable", () => {
+    expect(dragCarriesNonDockableIntoDock("dock", "terminal", ["t1", "b1"], panelsById)).toBe(
+      false
+    );
+  });
+
+  it("fails closed on a group member that resolves to no live panel", () => {
+    expect(dragCarriesNonDockableIntoDock("dock", "terminal", ["t1", "gone"], panelsById)).toBe(
+      true
+    );
+  });
+
+  it("fails closed on a non-string group member id", () => {
+    expect(
+      dragCarriesNonDockableIntoDock(
+        "dock",
+        "terminal",
+        ["t1", 42 as unknown as string],
+        panelsById
+      )
+    ).toBe(true);
+  });
+
+  it("never rejects when the target is not the dock, even for a mixed group", () => {
+    expect(dragCarriesNonDockableIntoDock("grid", "terminal", ["t1", "r1"], panelsById)).toBe(
+      false
+    );
+    expect(dragCarriesNonDockableIntoDock(null, "review", undefined, panelsById)).toBe(false);
   });
 });
 
@@ -166,6 +223,36 @@ describe("filterTerminalsByContainer", () => {
     const byId = { null: tNull };
     const result = filterTerminalsByContainer(byId, ["null"], "grid", null);
     expect(result.map((t) => t.id)).toEqual(["null"]);
+  });
+
+  // #11289 — the dock renders global (worktree-less) panels in every
+  // worktree-scoped dock, so the drop-commit list must include them too.
+  it("includes global dock panels when a worktree is active (#11289)", () => {
+    const tG = makeTerminal("g", "dock", undefined);
+    const byId = { ...terminalsById, g: tG };
+    const result = filterTerminalsByContainer(byId, ["a", "b", "g", "c", "d"], "dock", "wt1");
+    expect(result.map((t) => t.id)).toEqual(["b", "g"]);
+  });
+
+  it("still excludes other worktrees' dock panels alongside global ones", () => {
+    const tG = makeTerminal("g", "dock", undefined);
+    const byId = { ...terminalsById, g: tG };
+    const result = filterTerminalsByContainer(byId, ["d", "g", "b"], "dock", "wt1");
+    expect(result.map((t) => t.id)).toEqual(["g", "b"]);
+  });
+
+  it("keeps the grid worktree-exact — global grid panels stay excluded", () => {
+    const tGG = makeTerminal("gg", "grid", undefined);
+    const byId = { ...terminalsById, gg: tGG };
+    const result = filterTerminalsByContainer(byId, [...panelIds, "gg"], "grid", "wt1");
+    expect(result.map((t) => t.id)).toEqual(["a", "c"]);
+  });
+
+  it("returns only global dock panels when no worktree is active", () => {
+    const tG = makeTerminal("g", "dock", undefined);
+    const byId = { ...terminalsById, g: tG };
+    const result = filterTerminalsByContainer(byId, ["b", "g", "d"], "dock", null);
+    expect(result.map((t) => t.id)).toEqual(["g"]);
   });
 });
 
@@ -295,6 +382,15 @@ describe("resolveTargetIndex", () => {
     const ids = [...panelIds, "d"];
     // "d" is wt2 and won't appear when filtering for wt1
     expect(resolveTargetIndex(byId, ids, "wt1", "grid", "d", undefined, false)).toBe(3);
+  });
+
+  it("resolves dock indices over the rendered order including global chips (#11289)", () => {
+    const tG = makeTerminal("g", "dock", undefined);
+    const tH = makeTerminal("h", "dock", "wt1");
+    const byId = { g: tG, h: tH };
+    // Rendered dock for wt1 is [g, h]; dropping on "h" must yield index 1,
+    // not 0 over a globals-stripped list.
+    expect(resolveTargetIndex(byId, ["g", "h"], "wt1", "dock", "h", undefined, false)).toBe(1);
   });
 
   // Geometry-aware branch (dock→grid single-terminal drops). Over rect spans

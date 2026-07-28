@@ -457,9 +457,13 @@ describe("PluginManifestSchema capabilities field", () => {
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("shell:exec");
   });
 
-  it("BUILT_IN_PLUGIN_CAPABILITIES has exactly 14 unique entries", () => {
-    expect(BUILT_IN_PLUGIN_CAPABILITIES).toHaveLength(14);
-    expect(new Set(BUILT_IN_PLUGIN_CAPABILITIES).size).toBe(14);
+  it("BUILT_IN_PLUGIN_CAPABILITIES has no duplicate entries", () => {
+    // A duplicate is the failure that actually matters: the list is a public
+    // contract rendered as a permissions checklist, so a repeated token shows
+    // the user the same grant twice. The previous form of this test asserted a
+    // hardcoded length, which only ever forced a mechanical edit when the list
+    // grew — it could not fail for any reason a reader would care about.
+    expect(new Set(BUILT_IN_PLUGIN_CAPABILITIES).size).toBe(BUILT_IN_PLUGIN_CAPABILITIES.length);
   });
 
   it("rejects null capabilities value", () => {
@@ -583,6 +587,72 @@ describe("PluginManifestSchema scopes field", () => {
           deniedUrls: ["https://evil.com"],
         },
       },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.code === "unrecognized_keys")).toBe(true);
+    }
+  });
+
+  it.each([
+    ["/var/run/docker.sock"],
+    ["/tmp/app.sock"],
+    ["\\\\.\\pipe\\docker_engine"],
+    ["\\\\?\\pipe\\docker_engine"],
+  ])("accepts socket.allowedPaths entry %j on every platform", (socketPath) => {
+    // A manifest must parse identically wherever it's read — a Windows-authored
+    // plugin has to validate on a Linux CI box and vice versa — so both endpoint
+    // forms are accepted regardless of the host running the check.
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      capabilities: ["socket:connect"],
+      scopes: { socket: { allowedPaths: [socketPath] } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.scopes?.socket?.allowedPaths).toEqual([socketPath]);
+    }
+  });
+
+  it.each([
+    ["relative/docker.sock"],
+    ["/var/run/*.sock"],
+    ["/var/run/../../etc/passwd"],
+    ["\\\\.\\pipe\\"],
+    [" /var/run/docker.sock"],
+    [""],
+  ])("rejects socket.allowedPaths entry %j", (socketPath) => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      capabilities: ["socket:connect"],
+      scopes: { socket: { allowedPaths: [socketPath] } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts socket:connect with no socket scope (scope is optional intent)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      capabilities: ["socket:connect"],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an empty socket.allowedPaths array", () => {
+    // Declaring the bucket and leaving it empty says nothing; omit it instead.
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      capabilities: ["socket:connect"],
+      scopes: { socket: { allowedPaths: [] } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an unknown key inside scopes.socket (strict)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      capabilities: ["socket:connect"],
+      scopes: { socket: { allowedPaths: ["/var/run/docker.sock"], deniedPaths: ["/x"] } },
     });
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -872,6 +942,47 @@ describe("PluginManifestSchema contributes strict validation", () => {
     }
   });
 
+  it("accepts an explicit dockable:false on a panel contribution (#11332)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        panels: [{ id: "p", name: "P", iconId: "eye", color: "#abc", dockable: false }],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.panels[0]?.dockable).toBe(false);
+    }
+  });
+
+  it("leaves dockable undefined when a panel omits it — the dockable-by-default path (#11332)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        panels: [{ id: "p", name: "P", iconId: "eye", color: "#abc" }],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Assert the panel exists before checking key absence, so an empty
+      // panels array can't make `?.dockable` pass vacuously.
+      expect(result.data.contributes.panels).toHaveLength(1);
+      expect(
+        Object.prototype.hasOwnProperty.call(result.data.contributes.panels[0], "dockable")
+      ).toBe(false);
+    }
+  });
+
+  it("rejects a non-boolean dockable on a panel contribution (#11332)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        panels: [{ id: "p", name: "P", iconId: "eye", color: "#abc", dockable: "yes" }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("accepts the stable mcpServers key inside contributes (#10466)", () => {
     const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
@@ -978,6 +1089,57 @@ describe("PluginManifestSchema contributes strict validation", () => {
         panels: [],
         toolbarButtons: [],
       },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("panel contribution PTY / dockable cross-field rule (#11375)", () => {
+  const validBase = { name: "acme.panels", version: "1.0.0" };
+  const basePanel = {
+    id: "my-panel",
+    name: "My Panel",
+    iconId: "puzzle",
+    color: "#123456",
+  };
+
+  it("rejects hasPty:true combined with an explicit dockable:false", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: { panels: [{ ...basePanel, hasPty: true, dockable: false }] },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find(
+        (i) => i.path.includes("dockable") && i.path.includes("panels")
+      );
+      expect(issue, "expected an issue on the panel's dockable field").toBeDefined();
+      expect(issue?.message).toContain("dockable");
+    }
+  });
+
+  it("accepts hasPty:true with dockable:true", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: { panels: [{ ...basePanel, hasPty: true, dockable: true }] },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts hasPty:true with dockable omitted (defaults to dockable)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: { panels: [{ ...basePanel, hasPty: true }] },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a non-PTY panel that opts out of the dock (dockable:false)", () => {
+    // `hasPty` defaults to false, so the explicit opt-out is the whole point of
+    // the flag for a non-PTY view — it must stay valid.
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: { panels: [{ ...basePanel, dockable: false }] },
     });
     expect(result.success).toBe(true);
   });

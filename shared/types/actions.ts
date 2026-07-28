@@ -9,10 +9,7 @@ export type ActionKind = "command" | "query";
 export type ActionDanger = "safe" | "confirm" | "restricted";
 
 export type RiskBand =
-  | "reversible"
-  | "external-effect"
-  | "destructive-local"
-  | "destructive-network";
+  "reversible" | "external-effect" | "destructive-local" | "destructive-network";
 
 export type McpVisibility = "core" | "discoverable" | "hidden";
 
@@ -132,8 +129,8 @@ export interface ActionDefinition<
    * text-injection effect belongs behind the `agent:input` capability and the
    * first-class `host.sendToActiveAgent(...)` API rather than the ungated `safe`
    * built-in side door (#10558). `danger`-based gating is the wrong tool here:
-   * `confirm` would force an elicitation prompt on every agent/MCP call, and
-   * `restricted` would block agents too.
+   * `confirm` would force a host confirmation prompt on every agent/MCP call,
+   * and `restricted` would block agents too.
    */
   denyPluginDispatch?: boolean;
   argsSchema?: S;
@@ -204,8 +201,8 @@ export interface ActionDefinition<
   examples?: readonly ActionExample[];
   /**
    * Human-readable rationale for why this action carries its `danger` rating.
-   * Surfaces in the MCP elicitation confirmation message so the user sees the
-   * same reasoning the model would. Required when `danger !== "safe"`.
+   * Surfaces in the MCP host confirmation dialog so the user sees the same
+   * reasoning the model would. Required when `danger !== "safe"`.
    */
   dangerRationale?: string;
   /**
@@ -282,8 +279,7 @@ export interface ActionDispatchError {
 }
 
 export type ActionDispatchResult<Result = unknown> =
-  | ActionDispatchSuccess<Result>
-  | ActionDispatchError;
+  ActionDispatchSuccess<Result> | ActionDispatchError;
 
 export type ActionErrorCode =
   | "NOT_FOUND"
@@ -294,6 +290,9 @@ export type ActionErrorCode =
   | "EXECUTION_ERROR"
   | "USER_REJECTED"
   | "CONFIRMATION_TIMEOUT"
+  // Legacy: no longer produced since the elicitation-confirm path was removed
+  // (#11342). Retained for compatibility so old persisted audit records still
+  // type-check and render; do not reuse for new outcomes.
   | "ELICITATION_FAILED"
   | "BINDING_STALE"
   | "PLUGIN_UNLOADED"
@@ -309,8 +308,15 @@ export interface ActionError {
 export interface ActionDispatchOptions {
   source?: ActionSource;
   /**
-   * For actions with danger: "confirm", this must be true to execute.
-   * Agent sources MUST explicitly set this flag to confirm destructive actions.
+   * Trusted host attestation that a `danger: "confirm"` action was approved —
+   * NOT a client/agent-supplied value. For MCP dispatch it is set true only by
+   * the renderer AFTER the user approves the native ConfirmDialog, or by a
+   * host-issued native automation grant. An external client's request always
+   * arrives unconfirmed; never forward a client field into this flag — doing so
+   * was the #11342 self-approval vulnerability. Absent/false ⇒ ActionService
+   * refuses a `danger:"confirm"` dispatch with `CONFIRMATION_REQUIRED`; the MCP
+   * renderer bridge is what surfaces the native ConfirmDialog and re-dispatches
+   * (with this flag set) only after the user approves.
    */
   confirmed?: boolean;
   /**
@@ -326,7 +332,7 @@ export interface ActionDispatchPayload {
   context: ActionContext;
   source: ActionSource;
   timestamp: number;
-  /** True when an agent explicitly confirmed a danger:"confirm" action. Absent for user-source and safe actions. */
+  /** Host attestation that a danger:"confirm" action was approved (native ConfirmDialog or host grant) — never set from client input. Absent for user-source and safe actions. */
   confirmed?: boolean;
 }
 

@@ -10,7 +10,7 @@ import fs from "fs/promises";
 import { createHash } from "crypto";
 import { z } from "zod";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
-import { UTF8_BOM } from "./projectStorePaths.js";
+import { UTF8_BOM, isValidProjectId } from "./projectStorePaths.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
 import { TerminalRecipeSchema } from "../schemas/ipc.js";
 import {
@@ -27,9 +27,16 @@ import {
  * actually persists. Hashing the raw in-memory recipe would produce
  * spurious conflicts on every write because `projectId`/`worktreeId`/env
  * values would never match the redacted on-disk bytes.
+ *
+ * `lastUsedAt`/`usageHistory` are machine-local frecency data that must never
+ * enter the git-tracked canonical file (#11354): now that in-repo usage
+ * metadata is persisted to the ProjectFileStore mirror, a later substantive
+ * edit carries those fields on the in-memory recipe, so they are stripped here
+ * at the serialization boundary rather than relying on every caller to omit
+ * them. They live only in the mirror; reconcile re-merges them on load.
  */
 export function buildInRepoRecipePayloadString(recipe: TerminalRecipe): string {
-  const { projectId: _p, worktreeId: _w, ...shareable } = recipe;
+  const { projectId: _p, worktreeId: _w, lastUsedAt: _l, usageHistory: _u, ...shareable } = recipe;
   const sanitizedTerminals = shareable.terminals.map((t) => {
     if (!t.env || Object.keys(t.env).length === 0) return t;
     const redactedEnv: Record<string, string> = {};
@@ -97,7 +104,7 @@ function buildShareableTerminalSettings(
 export class ProjectIdentityFiles {
   async readInRepoProjectIdentity(
     projectPath: string
-  ): Promise<{ name?: string; emoji?: string; color?: string; found: boolean }> {
+  ): Promise<{ id?: string; name?: string; emoji?: string; color?: string; found: boolean }> {
     const filePath = path.join(projectPath, DAINTREE_PROJECT_JSON);
     try {
       let content = await fs.readFile(filePath, "utf-8");
@@ -114,9 +121,17 @@ export class ProjectIdentityFiles {
         return { found: false };
       }
 
-      const result: { name?: string; emoji?: string; color?: string; found: boolean } = {
-        found: true,
-      };
+      const result: { id?: string; name?: string; emoji?: string; color?: string; found: boolean } =
+        {
+          found: true,
+        };
+
+      // The move anchor (#11282). A malformed id is dropped without discarding
+      // the rest of the identity — a hand-edited or truncated value must not
+      // cost the user their project name/emoji/color.
+      if (typeof parsed.id === "string" && isValidProjectId(parsed.id)) {
+        result.id = parsed.id;
+      }
 
       if (typeof parsed.name === "string" && parsed.name.trim().length > 0) {
         result.name = parsed.name.trim().slice(0, MAX_PROJECT_NAME_LENGTH);
@@ -153,13 +168,26 @@ export class ProjectIdentityFiles {
 
   async writeInRepoProjectIdentity(
     projectPath: string,
-    data: { name?: string; emoji?: string; color?: string }
+    data: { id?: string; name?: string; emoji?: string; color?: string }
   ): Promise<void> {
     await this.assertDaintreeDirNotSymlink(projectPath);
     const daintreeDir = path.join(projectPath, DAINTREE_DIR);
     const filePath = path.join(projectPath, DAINTREE_PROJECT_JSON);
 
-    const payload: { version: 1; name?: string; emoji?: string; color?: string } = { version: 1 };
+    // This function rebuilds the envelope from scratch, so an `id` the caller
+    // does not supply would be *erased* by any ordinary name/emoji/color edit —
+    // silently disarming move detection (#11282). Carry the on-disk value
+    // forward whenever the caller doesn't name one.
+    let id = data.id !== undefined && isValidProjectId(data.id) ? data.id : undefined;
+    if (id === undefined) {
+      const existing = await this.readInRepoProjectIdentity(projectPath);
+      id = existing.id;
+    }
+
+    const payload: { version: 1; id?: string; name?: string; emoji?: string; color?: string } = {
+      version: 1,
+    };
+    if (id !== undefined) payload.id = id;
     if (data.name !== undefined) payload.name = data.name;
     if (data.emoji !== undefined) payload.emoji = data.emoji;
     if (data.color !== undefined) payload.color = data.color;
@@ -317,23 +345,43 @@ export class ProjectIdentityFiles {
    * exact bytes (`fs.readFile` UTF-8 result), so it matches what
    * {@link writeInRepoRecipe} and {@link getInRepoRecipeFileHash} produce when
    * the file is untouched.
+   *
+   * `dirExists` reports whether the `.daintree/recipes/` directory was present.
+   * An absent directory (e.g. a checked-out branch/commit that predates recipes)
+   * yields the same empty `recipes`/`hashes` as an authoritatively empty one, so
+   * callers that make destructive decisions must consult `dirExists` to avoid
+   * treating "not on this checkout" as "deleted" (#11347). `scanComplete` is
+   * `false` when the directory existed but at least one entry could not be read
+   * (a partial, non-authoritative snapshot) — destructive callers must treat
+   * that the same as an absent directory.
    */
-  async readInRepoRecipesWithHashes(
-    projectPath: string
-  ): Promise<{ recipes: TerminalRecipe[]; hashes: Map<string, string> }> {
+  async readInRepoRecipesWithHashes(projectPath: string): Promise<{
+    recipes: TerminalRecipe[];
+    hashes: Map<string, string>;
+    dirExists: boolean;
+    scanComplete: boolean;
+  }> {
     const recipesDir = path.join(projectPath, DAINTREE_RECIPES_DIR);
     let entries;
     try {
       entries = await fs.readdir(recipesDir, { withFileTypes: true });
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT")
-        return { recipes: [], hashes: new Map() };
+        return { recipes: [], hashes: new Map(), dirExists: false, scanComplete: true };
       throw error;
     }
 
     const recipes: TerminalRecipe[] = [];
     const hashes = new Map<string, string>();
     const seenIds = new Set<string>();
+    // Whether every listed entry was actually read. A per-file *read* failure
+    // (e.g. a concurrent branch checkout unlinking a recipe after `readdir` but
+    // before we open it) means this snapshot is not an authoritative view of the
+    // directory, so destructive reconciliation must not prune from it (#11347).
+    // A readable-but-malformed file (JSON/schema failure below) is different: it
+    // is genuinely skipped and does NOT taint the scan, otherwise one committed
+    // bad file would wedge pruning forever.
+    let scanComplete = true;
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       try {
@@ -416,10 +464,22 @@ export class ProjectIdentityFiles {
         recipes.push(recipe);
         hashes.set(recipe.id, hashRecipePayload(content));
       } catch (error) {
-        console.warn(`[ProjectIdentityFiles] Skipping malformed recipe file: ${entry.name}`, error);
+        // A filesystem error (has a `code`) means the entry could not be read —
+        // an incomplete, non-authoritative scan. A SyntaxError from JSON.parse
+        // (no `code`) is a genuinely malformed file: skip it, but leave the scan
+        // authoritative so a permanently-bad file never blocks pruning.
+        if (error instanceof Error && "code" in error) {
+          scanComplete = false;
+          console.warn(`[ProjectIdentityFiles] Could not read recipe file: ${entry.name}`, error);
+        } else {
+          console.warn(
+            `[ProjectIdentityFiles] Skipping malformed recipe file: ${entry.name}`,
+            error
+          );
+        }
       }
     }
-    return { recipes, hashes };
+    return { recipes, hashes, dirExists: true, scanComplete };
   }
 
   /**

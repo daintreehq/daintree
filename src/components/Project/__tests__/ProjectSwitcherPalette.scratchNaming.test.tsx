@@ -139,6 +139,11 @@ vi.mock("@/components/ui/context-menu", () => ({
     </button>
   ),
   ContextMenuSeparator: () => null,
+  // Null rather than the button seam above: the Other band's sort options are
+  // not this suite's subject, and rendering them would add buttons to a DOM
+  // these specs query by role.
+  ContextMenuRadioGroup: () => null,
+  ContextMenuRadioItem: () => null,
 }));
 
 vi.mock("@/hooks/useModifierKeys", () => ({

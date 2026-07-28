@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import path from "path";
+import { Readable } from "node:stream";
 
 type WebContentsCreatedListener = (event: unknown, contents: MockWebContents) => void;
 
@@ -85,7 +86,7 @@ const fsPromisesMocks = vi.hoisted(() => ({
   realpath: vi.fn(),
   stat: vi.fn(),
   open: vi.fn(),
-  constants: { O_RDONLY: 0, O_NOFOLLOW: 0x100 },
+  constants: { O_RDONLY: 0, O_NOFOLLOW: 0x100, O_NONBLOCK: 0x4 },
 }));
 
 vi.mock("fs/promises", () => ({
@@ -135,9 +136,11 @@ vi.mock("../../ipc/channels.js", () => ({
 }));
 
 import {
+  applyDaintreeAppCspToSession,
   createPluginProtocolHandler,
   registerAppProtocol,
   registerDaintreeFileProtocol,
+  registerDaintreePdfProtocol,
   registerPluginProtocol,
   registerProtocolsForSession,
   setPluginDirResolver,
@@ -1197,6 +1200,49 @@ describe("setupWebviewCSP — partition CSP wiring", () => {
     expect(vi.mocked(mergeCspHeaders)).toHaveBeenCalledTimes(1);
   });
 
+  it("passes daintree-pdf:// responses through without stamping a CSP on them (#11427)", async () => {
+    const { session } = await import("electron");
+    const { mergeCspHeaders } = await import("../../utils/webviewCsp.js");
+    const fromPartition = vi.mocked(session.fromPartition);
+    vi.mocked(mergeCspHeaders).mockClear();
+
+    let captured:
+      | ((details: unknown, callback: (r: { responseHeaders?: unknown }) => void) => void)
+      | undefined;
+    fromPartition.mockImplementation((partition: string) => {
+      const onHeadersReceived = vi.fn(
+        (
+          _filter: unknown,
+          listener: (details: unknown, callback: (r: { responseHeaders?: unknown }) => void) => void
+        ) => {
+          if (partition === "persist:daintree") captured = listener;
+        }
+      );
+      return { webRequest: { onHeadersReceived } } as unknown as Electron.Session;
+    });
+
+    setupWebviewCSP();
+    expect(captured).toBeDefined();
+
+    // A PDF document must reach PDFium carrying NO CSP: the app policy's
+    // frame-src omits chrome-extension:, so overlaying it would block the
+    // viewer frame PDFium installs inside the document.
+    const pdfHeaders = { "Content-Type": ["application/pdf"] };
+    let pdfResult: { responseHeaders?: unknown } | undefined;
+    captured!(
+      { url: "daintree-pdf://load?path=%2Frepo%2Fa.pdf", responseHeaders: pdfHeaders },
+      (r) => {
+        pdfResult = r;
+      }
+    );
+    expect(pdfResult?.responseHeaders).toBe(pdfHeaders);
+    expect(vi.mocked(mergeCspHeaders)).not.toHaveBeenCalled();
+
+    // A normal app response still gets the overlay, so the bypass is scoped.
+    captured!({ url: "app://daintree/index.html", responseHeaders: {} }, () => {});
+    expect(vi.mocked(mergeCspHeaders)).toHaveBeenCalledTimes(1);
+  });
+
   it("attaches an onHeadersReceived listener for persist:daintree only (browser is excluded)", async () => {
     const { session } = await import("electron");
     const fromPartition = vi.mocked(session.fromPartition);
@@ -1419,10 +1465,16 @@ describe("protocol registration", () => {
     // plugin:// is skipped here — registerPluginProtocol hasn't been called yet
     // in this test. Production order is the opposite: registerPluginProtocol runs
     // in app.whenReady() before any per-project session is created.
-    expect(handle).toHaveBeenCalledTimes(3);
-    expect(handle).toHaveBeenCalledWith("app", expect.any(Function));
-    expect(handle).toHaveBeenCalledWith("daintree-file", expect.any(Function));
-    expect(handle).toHaveBeenCalledWith("daintree-html", expect.any(Function));
+    const schemes = handle.mock.calls.map((c) => c[0] as string);
+    expect(new Set(schemes)).toEqual(
+      new Set(["app", "daintree-file", "daintree-html", "daintree-pdf"])
+    );
+    // Each exactly once: a duplicate handle() for one scheme throws in Electron.
+    expect(schemes).toHaveLength(new Set(schemes).size);
+    expect(schemes).not.toContain("plugin");
+    for (const scheme of schemes) {
+      expect(handle).toHaveBeenCalledWith(scheme, expect.any(Function));
+    }
   });
 
   it("also registers plugin:// on per-project sessions after the resolver is cached", async () => {
@@ -1442,6 +1494,14 @@ describe("protocol registration", () => {
     registerDaintreeFileProtocol();
 
     expect(protocol.handle).toHaveBeenCalledWith("daintree-file", expect.any(Function));
+  });
+
+  it("registers the default-session daintree-pdf protocol", async () => {
+    const { protocol } = await import("electron");
+
+    registerDaintreePdfProtocol();
+
+    expect(protocol.handle).toHaveBeenCalledWith("daintree-pdf", expect.any(Function));
   });
 
   it("registers the default-session plugin protocol", async () => {
@@ -1672,6 +1732,27 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
 
     // 5 MB would 413 under the text cap; an image is decoded as pixels, not a
     // giant string, so it clears the larger image ceiling and gets read.
+    expect(response.status).toBe(200);
+    expect(fs.open).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["image/avif", "/project/big.avif"],
+    ["image/apng", "/project/big.apng"],
+  ])("extends the raster ceiling to %s", async (mimeType, filePath) => {
+    // Both decode to pixels like every other raster format, so they belong on
+    // the image ceiling — an animated APNG in particular passes 512 KB quickly.
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({ size: 5 * 1024 * 1024 } as Awaited<
+      ReturnType<typeof fs.stat>
+    >);
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue(mimeType);
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest(filePath, "/project"));
+
     expect(response.status).toBe(200);
     expect(fs.open).toHaveBeenCalledTimes(1);
   });
@@ -1988,6 +2069,539 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
   });
 });
 
+describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () => {
+  type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
+
+  async function captureHandler(): Promise<ProtocolHandler> {
+    const handle = vi.fn();
+    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
+    registerProtocolsForSession(mockSession, "/tmp/dist");
+    const call = handle.mock.calls.find((c) => c[0] === "daintree-file");
+    if (!call) throw new Error("handler for daintree-file not registered");
+    return call[1] as ProtocolHandler;
+  }
+
+  function makeVideoRequest(
+    filePath: string,
+    rootPath: string,
+    init?: { method?: string; range?: string; origin?: string }
+  ): GlobalRequest {
+    const url = new URL("daintree-file://serve");
+    url.searchParams.set("path", filePath);
+    url.searchParams.set("root", rootPath);
+    return new Request(url.toString(), {
+      method: init?.method ?? "GET",
+      headers: {
+        ...(init?.range && { Range: init.range }),
+        ...(init?.origin && { Origin: init.origin }),
+      },
+    }) as GlobalRequest;
+  }
+
+  const VIDEO_BYTES = Buffer.from("0123456789abcdef");
+
+  function makeVideoHandle(
+    content: Buffer = VIDEO_BYTES,
+    { size = content.length, isFile = true } = {}
+  ) {
+    return {
+      stat: vi.fn().mockResolvedValue({ size, isFile: () => isFile }),
+      createReadStream: vi.fn(({ start, end }: { start: number; end: number }) =>
+        Readable.from([content.subarray(start, Math.min(end + 1, content.length))])
+      ),
+      close: vi.fn().mockResolvedValue(undefined),
+      // The buffered core's entry point — a video must never reach it.
+      readFile: vi.fn(),
+    };
+  }
+
+  function installHandle(handle: ReturnType<typeof makeVideoHandle>) {
+    return import("fs/promises").then((fs) =>
+      vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>)
+    );
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.open).mockResolvedValue(
+      makeVideoHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+    // Pinned here rather than inherited: clearAllMocks keeps implementations,
+    // so a stat left over from an earlier describe would silently decide the
+    // buffered-fallback cases below.
+    vi.mocked(fs.stat).mockResolvedValue({
+      size: VIDEO_BYTES.length,
+    } as Awaited<ReturnType<typeof fs.stat>>);
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("video/mp4");
+  });
+
+  it("streams a 200 with Accept-Ranges and no whole-file cap, bypassing the buffered core", async () => {
+    // Far beyond both the 512 KB text cap and the 25 MB image ceiling — video
+    // responses are backpressured streams, so no whole-file cap applies.
+    const size = 600 * 1024 * 1024;
+    const handle = makeVideoHandle(VIDEO_BYTES, { size });
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(makeVideoRequest("/project/clip.mp4", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Length")).toBe(String(size));
+    expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(response.headers.get("Content-Type")).toBe("video/mp4");
+    expect(handle.readFile).not.toHaveBeenCalled();
+    expect(handle.createReadStream).toHaveBeenCalledWith({
+      start: 0,
+      end: size - 1,
+      autoClose: true,
+    });
+  });
+
+  describe("audio streaming (#11425)", () => {
+    // Audio joined the streaming route because the buffered core caps normal
+    // files at 512 KB — every real track would have 413'd before reaching the
+    // renderer.
+    it("streams an audio file far past the buffered cap instead of 413ing", async () => {
+      const size = 8 * 1024 * 1024;
+      const handle = makeVideoHandle(VIDEO_BYTES, { size });
+      await installHandle(handle);
+      const appProtocol = await import("../../utils/appProtocol.js");
+      vi.mocked(appProtocol.getMimeType).mockReturnValue("audio/mpeg");
+
+      const handler = await captureHandler();
+      const response = await handler(makeVideoRequest("/project/track.mp3", "/project"));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Length")).toBe(String(size));
+      expect(response.headers.get("Content-Type")).toBe("audio/mpeg");
+      expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+      expect(handle.readFile).not.toHaveBeenCalled();
+    });
+
+    it("serves a ranged audio request from the same stream path", async () => {
+      const appProtocol = await import("../../utils/appProtocol.js");
+      vi.mocked(appProtocol.getMimeType).mockReturnValue("audio/flac");
+
+      const handler = await captureHandler();
+      const response = await handler(
+        makeVideoRequest("/project/track.flac", "/project", { range: "bytes=4-9" })
+      );
+
+      expect(response.status).toBe(206);
+      expect(response.headers.get("Content-Range")).toBe(`bytes 4-9/${String(VIDEO_BYTES.length)}`);
+      expect(await response.text()).toBe("456789");
+    });
+
+    it("routes an audio-suffixed alias of a non-media file through the buffered path", async () => {
+      // On Windows O_NOFOLLOW is a no-op, so an in-root `track.mp3 → notes.txt`
+      // symlink opens fine — classification must follow the canonical target so
+      // the read stays capped instead of streaming uncapped under an audio MIME.
+      const fs = await import("fs/promises");
+      const appProtocol = await import("../../utils/appProtocol.js");
+      const alias = path.normalize("/project/track.mp3");
+      const target = path.normalize("/project/notes.txt");
+      vi.mocked(fs.realpath).mockImplementation((p) =>
+        Promise.resolve(p === alias ? target : (p as string))
+      );
+      vi.mocked(appProtocol.getMimeType).mockImplementation((p: string) =>
+        p.endsWith(".mp3") ? "audio/mpeg" : "text/plain"
+      );
+      vi.mocked(fs.stat).mockResolvedValue({ size: 4 } as Awaited<ReturnType<typeof fs.stat>>);
+      const bufferedHandle = {
+        readFile: vi.fn().mockResolvedValue(Buffer.from("data")),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(fs.open).mockResolvedValue(
+        bufferedHandle as unknown as Awaited<ReturnType<typeof fs.open>>
+      );
+
+      const handler = await captureHandler();
+      const response = await handler(makeVideoRequest("/project/track.mp3", "/project"));
+
+      // A 200 with the canonical text MIME — not a 500 from an unconfigured
+      // buffered handle, which would let this pass without proving anything.
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toBe("text/plain");
+      expect(response.headers.get("Accept-Ranges")).toBeNull();
+      expect(bufferedHandle.readFile).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects an oversize audio alias of a text file with 413 before opening it", async () => {
+      // The cap is the whole point of routing the alias back to the buffered
+      // core; a size past it must be refused rather than read.
+      const fs = await import("fs/promises");
+      const appProtocol = await import("../../utils/appProtocol.js");
+      const alias = path.normalize("/project/track.mp3");
+      const target = path.normalize("/project/notes.txt");
+      vi.mocked(fs.realpath).mockImplementation((p) =>
+        Promise.resolve(p === alias ? target : (p as string))
+      );
+      vi.mocked(appProtocol.getMimeType).mockImplementation((p: string) =>
+        p.endsWith(".mp3") ? "audio/mpeg" : "text/plain"
+      );
+      vi.mocked(fs.stat).mockResolvedValue({
+        size: 5 * 1024 * 1024,
+      } as Awaited<ReturnType<typeof fs.stat>>);
+      const bufferedHandle = {
+        readFile: vi.fn(),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(fs.open).mockResolvedValue(
+        bufferedHandle as unknown as Awaited<ReturnType<typeof fs.open>>
+      );
+
+      const handler = await captureHandler();
+      const response = await handler(makeVideoRequest("/project/track.mp3", "/project"));
+
+      expect(response.status).toBe(413);
+      expect(bufferedHandle.readFile).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("CORS gate (blob-URL playback fetch)", () => {
+    // corsEnabled on the scheme only makes cross-origin fetch possible;
+    // these pin the actual grant: ACAO echoed solely for the trusted app
+    // origin, never for arbitrary web content in a browser panel.
+    it("echoes Access-Control-Allow-Origin for the trusted app origin", async () => {
+      const handler = await captureHandler();
+      const response = await handler(
+        makeVideoRequest("/project/clip.mp4", "/project", { origin: "app://daintree" })
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
+    });
+
+    it("omits the grant for a foreign origin", async () => {
+      const handler = await captureHandler();
+      const response = await handler(
+        makeVideoRequest("/project/clip.mp4", "/project", { origin: "https://evil.example" })
+      );
+
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    });
+
+    it("omits the grant when no Origin header is present", async () => {
+      const handler = await captureHandler();
+      const response = await handler(makeVideoRequest("/project/clip.mp4", "/project"));
+
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    });
+
+    it("carries the grant on error responses so fetch() can read the status", async () => {
+      const handler = await captureHandler();
+      const response = await handler(
+        makeVideoRequest("/project/clip.mp4", "/project", {
+          origin: "app://daintree",
+          range: "bytes=99-",
+        })
+      );
+
+      expect(response.status).toBe(416);
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
+    });
+  });
+
+  it("opens with O_RDONLY | O_NOFOLLOW | O_NONBLOCK (FIFO-swap TOCTOU hardening)", async () => {
+    const fs = await import("fs/promises");
+    const handler = await captureHandler();
+    await handler(makeVideoRequest("/project/clip.mp4", "/project"));
+
+    expect(fs.open).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fs.open).mock.calls[0][1]).toBe(
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
+    );
+  });
+
+  it("rejects a non-regular file after the fd-level stat and closes the handle", async () => {
+    // O_NOFOLLOW only blocks symlink swaps; a FIFO swapped in after the realpath
+    // check passes the open, so the post-open fstat is the guard that catches it.
+    const handle = makeVideoHandle(VIDEO_BYTES, { isFile: false });
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(makeVideoRequest("/project/clip.mp4", "/project"));
+
+    expect(response.status).toBe(404);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+    expect(handle.createReadStream).not.toHaveBeenCalled();
+  });
+
+  it("serves an exact 206 for an explicit byte range", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=2-5" })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe("bytes 2-5/16");
+    expect(response.headers.get("Content-Length")).toBe("4");
+    expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(Buffer.from(await response.arrayBuffer()).toString()).toBe("2345");
+  });
+
+  it("clamps an open-ended range to EOF", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=4-" })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe("bytes 4-15/16");
+    expect(Buffer.from(await response.arrayBuffer()).toString()).toBe("456789abcdef");
+  });
+
+  it("serves a suffix range (last N bytes)", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=-4" })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe("bytes 12-15/16");
+    expect(Buffer.from(await response.arrayBuffer()).toString()).toBe("cdef");
+  });
+
+  it("clamps a past-EOF explicit end to EOF", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=10-9999" })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe("bytes 10-15/16");
+  });
+
+  it("serves an open-ended range on a huge file to EOF, never a shorter chunk", async () => {
+    // Chromium's custom-scheme media loader is single-shot: a 206 that ends
+    // before the requested range is treated as the whole resource and never
+    // re-requested, so serving `bytes=N-` in bounded chunks truncates playback
+    // at the first chunk. The full remainder must stream in one response.
+    const size = 100 * 1024 * 1024;
+    const handle = makeVideoHandle(VIDEO_BYTES, { size });
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=4-" })
+    );
+
+    expect(response.status).toBe(206);
+    expect(handle.createReadStream).toHaveBeenCalledWith({
+      start: 4,
+      end: size - 1,
+      autoClose: true,
+    });
+    expect(response.headers.get("Content-Length")).toBe(String(size - 4));
+    expect(response.headers.get("Content-Range")).toBe(`bytes 4-${size - 1}/${size}`);
+  });
+
+  it("serves an over-cap suffix range exactly (the tail carries mp4 moov metadata)", async () => {
+    // Clamping a suffix from its start would drop EOF — the very bytes a
+    // suffix request exists to fetch. Client-bounded forms are served whole.
+    const size = 100 * 1024 * 1024;
+    const suffix = 16 * 1024 * 1024;
+    const handle = makeVideoHandle(VIDEO_BYTES, { size });
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: `bytes=-${suffix}` })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe(
+      `bytes ${size - suffix}-${size - 1}/${size}`
+    );
+    expect(response.headers.get("Content-Length")).toBe(String(suffix));
+  });
+
+  it("serves a large explicit range exactly (client-bounded, no clamp)", async () => {
+    const size = 100 * 1024 * 1024;
+    const end = 20 * 1024 * 1024 - 1;
+    const handle = makeVideoHandle(VIDEO_BYTES, { size });
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: `bytes=0-${end}` })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe(`bytes 0-${end}/${size}`);
+    expect(response.headers.get("Content-Length")).toBe(String(end + 1));
+  });
+
+  it("returns 416 for a start past the safe-integer range (necessarily past EOF)", async () => {
+    // Ignoring it would serve the whole file for a range that names no real byte.
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=9007199254740992-" })
+    );
+
+    expect(response.status).toBe(416);
+  });
+
+  it("returns 416 for a zero-length suffix (bytes=-0 names no byte)", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=-0" })
+    );
+
+    expect(response.status).toBe(416);
+    expect(response.headers.get("Content-Range")).toBe("bytes */16");
+  });
+
+  it("returns 416 with Content-Range */size for an unsatisfiable range", async () => {
+    const handle = makeVideoHandle();
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=99-" })
+    );
+
+    expect(response.status).toBe(416);
+    expect(response.headers.get("Content-Range")).toBe("bytes */16");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(handle.close).toHaveBeenCalledTimes(1);
+    expect(handle.createReadStream).not.toHaveBeenCalled();
+  });
+
+  it.each(["bytes=abc", "bytes=0-1,4-5", "items=0-4", "bytes=5-2"])(
+    "ignores unsupported Range header %s and serves a full 200 (RFC 9110)",
+    async (range) => {
+      const handler = await captureHandler();
+      const response = await handler(makeVideoRequest("/project/clip.mp4", "/project", { range }));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Length")).toBe("16");
+    }
+  );
+
+  it("answers HEAD with metadata and Accept-Ranges without opening a stream", async () => {
+    // Chromium probes with HEAD before issuing ranged GETs.
+    const handle = makeVideoHandle();
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { method: "HEAD" })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Length")).toBe("16");
+    expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(response.headers.get("Content-Type")).toBe("video/mp4");
+    expect(handle.createReadStream).not.toHaveBeenCalled();
+    expect(handle.readFile).not.toHaveBeenCalled();
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("HEAD ignores Range entirely (RFC 9110 defines range handling for GET only)", async () => {
+    // Even an unsatisfiable Range must not turn HEAD into a 416.
+    const handle = makeVideoHandle();
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { method: "HEAD", range: "bytes=99-" })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Length")).toBe("16");
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves an empty video as an empty 200 without a stream", async () => {
+    const handle = makeVideoHandle(Buffer.alloc(0));
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(makeVideoRequest("/project/clip.mp4", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Length")).toBe("0");
+    expect(handle.createReadStream).not.toHaveBeenCalled();
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits the hardened response header set on streamed responses", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=0-3" })
+    );
+
+    expect(response.headers.get("Content-Security-Policy")).toBe("sandbox; default-src 'none'");
+    expect(response.headers.get("Cross-Origin-Resource-Policy")).toBe("cross-origin");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("applies realpath containment to video paths (out-of-root symlink → 404)", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    const projectRoot = path.normalize("/project");
+    const escapeIn = path.normalize("/project/escape.mp4");
+    realpath.mockImplementation((p) => {
+      if (p === projectRoot) return Promise.resolve(projectRoot);
+      if (p === escapeIn) return Promise.resolve(path.normalize("/etc/evil.mp4"));
+      return Promise.resolve(p as string);
+    });
+
+    const handler = await captureHandler();
+    const response = await handler(makeVideoRequest("/project/escape.mp4", "/project"));
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the video open is rejected with ELOOP (symlink swap)", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.open).mockRejectedValue(Object.assign(new Error("ELOOP"), { code: "ELOOP" }));
+
+    const handler = await captureHandler();
+    const response = await handler(makeVideoRequest("/project/clip.mp4", "/project"));
+
+    expect(response.status).toBe(404);
+  });
+
+  it("routes a video-suffixed alias of a non-video through the buffered path", async () => {
+    // On Windows O_NOFOLLOW is a no-op, so an in-root `clip.mp4 → notes.txt`
+    // symlink opens fine — classification must follow the canonical target,
+    // which lands this request on the capped buffered path with a text MIME.
+    const fs = await import("fs/promises");
+    const appProtocol = await import("../../utils/appProtocol.js");
+    const alias = path.normalize("/project/clip.mp4");
+    const target = path.normalize("/project/notes.txt");
+    vi.mocked(fs.realpath).mockImplementation((p) =>
+      Promise.resolve(p === alias ? target : (p as string))
+    );
+    vi.mocked(appProtocol.getMimeType).mockImplementation((p: string) =>
+      p.endsWith(".mp4") ? "video/mp4" : "text/plain"
+    );
+    vi.mocked(fs.stat).mockResolvedValue({ size: 4 } as Awaited<ReturnType<typeof fs.stat>>);
+    const bufferedHandle = {
+      readFile: vi.fn().mockResolvedValue(Buffer.from("data")),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(fs.open).mockResolvedValue(
+      bufferedHandle as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+
+    const handler = await captureHandler();
+    const response = await handler(makeVideoRequest("/project/clip.mp4", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("text/plain");
+    // Buffered semantics: the whole (capped) read, not a stream.
+    expect(bufferedHandle.readFile).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("createPluginProtocolHandler", () => {
   type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
 
@@ -2039,6 +2653,59 @@ describe("createPluginProtocolHandler", () => {
     const openArgs = vi.mocked(fs.open).mock.calls[0];
     expect(openArgs[0]).toBe(path.join(PLUGIN_ROOT, "dist", "index.js"));
     expect(openArgs[1]).toBe(fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  });
+
+  it("resolves a view-generation namespace to the same file on disk (#11301)", async () => {
+    const fs = await import("fs/promises");
+    const handler = buildHandler();
+
+    const first = await handler(makeRequest("plugin://my-plugin/__dtv-1/dist/index.js"));
+    const second = await handler(makeRequest("plugin://my-plugin/__dtv-42/dist/index.js"));
+
+    // Two specifiers V8 has never seen before, backed by identical bytes — that
+    // is the entire mechanism by which an upgraded plugin's view actually loads.
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const opened = vi.mocked(fs.open).mock.calls.map((c) => c[0]);
+    expect(opened).toEqual([
+      path.join(PLUGIN_ROOT, "dist", "index.js"),
+      path.join(PLUGIN_ROOT, "dist", "index.js"),
+    ]);
+  });
+
+  it("keeps a relative chunk inside its entry's generation namespace", async () => {
+    const fs = await import("fs/promises");
+    const handler = buildHandler();
+
+    // `./chunk.js` resolved against `.../__dtv-3/dist/index.js` produces this.
+    const response = await handler(makeRequest("plugin://my-plugin/__dtv-3/dist/chunk.js"));
+
+    expect(response.status).toBe(200);
+    expect(vi.mocked(fs.open).mock.calls[0]?.[0]).toBe(path.join(PLUGIN_ROOT, "dist", "chunk.js"));
+  });
+
+  it.each([
+    "plugin://my-plugin/__dtv-/dist/index.js",
+    "plugin://my-plugin/__dtv-abc/dist/index.js",
+    "plugin://my-plugin/__dtv-7",
+  ])("404s a malformed generation namespace (%s) instead of hitting disk", async (url) => {
+    const fs = await import("fs/promises");
+    const handler = buildHandler();
+
+    const response = await handler(makeRequest(url));
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("still contains encoded traversal that follows a generation namespace", async () => {
+    const fs = await import("fs/promises");
+    const handler = buildHandler();
+    // Stripping the namespace must not hand an un-normalized remainder to the
+    // resolver — `..` after the prefix stays subject to the same containment.
+    await handler(makeRequest("plugin://my-plugin/__dtv-2/%2e%2e/%2e%2e/secret"));
+
+    expect(vi.mocked(fs.open).mock.calls[0]?.[0]).toBe(path.join(PLUGIN_ROOT, "secret"));
   });
 
   it("emits the hardened response header set with cross-origin CORP", async () => {
@@ -2765,5 +3432,338 @@ describe("createDaintreeHtmlProtocolHandler — sandboxed HTML preview (#11191)"
     const handler = await captureHandler();
     const response = await handler(makeRequest(token, "chart.png"));
     expect(response.status).toBe(413);
+  });
+});
+
+describe("createDaintreePdfProtocolHandler — inline PDF preview (#11427)", () => {
+  type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
+
+  async function captureHandler(): Promise<ProtocolHandler> {
+    const handle = vi.fn();
+    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
+    registerProtocolsForSession(mockSession, "/tmp/dist");
+    const call = handle.mock.calls.find((c) => c[0] === "daintree-pdf");
+    if (!call) throw new Error("handler for daintree-pdf not registered");
+    return call[1] as ProtocolHandler;
+  }
+
+  function makeRequest(filePath: string, rootPath: string, init?: RequestInit): GlobalRequest {
+    const url = new URL("daintree-pdf://load");
+    url.searchParams.set("path", filePath);
+    url.searchParams.set("root", rootPath);
+    return new Request(url.toString(), init) as GlobalRequest;
+  }
+
+  function makeFileHandle(content: string | Buffer = "%PDF-1.4 body") {
+    const buffer = typeof content === "string" ? Buffer.from(content) : content;
+    return {
+      readFile: vi.fn().mockResolvedValue(buffer),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({ size: 13 } as Awaited<ReturnType<typeof fs.stat>>);
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("application/pdf");
+  });
+
+  it("serves a PDF with no CSP and no COEP so PDFium can install its viewer frame", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/project/spec.pdf", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("application/pdf");
+    // Both headers are load-bearing by their ABSENCE: a `sandbox` CSP blocks
+    // PDFium outright, and a COEP makes the PDF an embedder whose own viewer
+    // frame is then blocked. The iframe carries `credentialless` instead.
+    expect(response.headers.get("Content-Security-Policy")).toBeNull();
+    expect(response.headers.get("Cross-Origin-Embedder-Policy")).toBeNull();
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("reports the byte length actually returned", async () => {
+    const fs = await import("fs/promises");
+    const bytes = Buffer.from("%PDF-1.7 a longer body than the stat claimed");
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle(bytes) as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/project/spec.pdf", "/project"));
+
+    expect(response.headers.get("Content-Length")).toBe(String(bytes.length));
+  });
+
+  it("names the download after the file, not the URL's `load` segment", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/project/data sheet.pdf", "/project"));
+
+    const disposition = response.headers.get("Content-Disposition") ?? "";
+    expect(disposition.startsWith("inline")).toBe(true);
+    expect(disposition).toContain('filename="data sheet.pdf"');
+    expect(disposition).not.toContain("load");
+  });
+
+  it("opens the user-supplied path with O_NOFOLLOW", async () => {
+    const fs = await import("fs/promises");
+    const handler = await captureHandler();
+    await handler(makeRequest("/project/spec.pdf", "/project"));
+
+    expect(fs.open).toHaveBeenCalledWith(
+      path.normalize("/project/spec.pdf"),
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
+    );
+  });
+
+  it.each(["/project/spec.PDF", "/project/a.b.Pdf"])(
+    "accepts the case-insensitive extension %s",
+    async (filePath) => {
+      const handler = await captureHandler();
+      const response = await handler(makeRequest(filePath, "/project"));
+      expect(response.status).toBe(200);
+    }
+  );
+
+  it("rejects a non-PDF before reading any bytes", async () => {
+    const fs = await import("fs/promises");
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/project/notes.txt", "/project"));
+
+    expect(response.status).toBe(415);
+    // The gate must run before the read, or an arbitrary in-root file would be
+    // buffered under the PDF ceiling rather than the much tighter text cap.
+    expect(fs.open).not.toHaveBeenCalled();
+    expect(fs.stat).not.toHaveBeenCalled();
+  });
+
+  it("rejects a .pdf name whose canonical path is not a PDF", async () => {
+    // On Windows O_NOFOLLOW is a no-op, so a final-component symlink
+    // (`spec.pdf` -> `huge.bin`) would otherwise be served under the PDF cap.
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) =>
+      Promise.resolve(
+        (p as string).endsWith("spec.pdf") ? path.normalize("/project/huge.bin") : (p as string)
+      )
+    );
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/project/spec.pdf", "/project"));
+
+    expect(response.status).toBe(415);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("types a .pdf holding active HTML as a PDF rather than a document", async () => {
+    // This is what makes the `frame-src daintree-pdf:` allowance safe: the
+    // bytes reach PDFium and fail as a malformed PDF instead of executing.
+    const fs = await import("fs/promises");
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle("<script>parent.pwned = true</script>") as unknown as Awaited<
+        ReturnType<typeof fs.open>
+      >
+    );
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/project/evil.pdf", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("application/pdf");
+  });
+
+  it("ignores a Range header and answers with the whole document", async () => {
+    // PDFium renders from a single buffered 200, so the video path's ranged
+    // streaming is deliberately not wired here.
+    const fs = await import("fs/promises");
+    const bytes = Buffer.from("%PDF-1.4 the entire document body");
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle(bytes) as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeRequest("/project/spec.pdf", "/project", { headers: { Range: "bytes=0-4" } })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Range")).toBeNull();
+    // Assert the bytes, not just the status: a truncated or empty 200 would
+    // otherwise satisfy this test while breaking the viewer.
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("answers HEAD with the metadata and no body", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeRequest("/project/spec.pdf", "/project", { method: "HEAD" })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("application/pdf");
+    expect((await response.arrayBuffer()).byteLength).toBe(0);
+  });
+
+  it("allows a PDF larger than the raster-image ceiling but rejects one past its own", async () => {
+    const fs = await import("fs/promises");
+    const handler = await captureHandler();
+
+    // 30 MB clears the 25 MB image cap — proving PDFs get their own, larger
+    // ceiling rather than inheriting one of the existing limits.
+    vi.mocked(fs.stat).mockResolvedValue({ size: 30 * 1024 * 1024 } as Awaited<
+      ReturnType<typeof fs.stat>
+    >);
+    expect((await handler(makeRequest("/project/big.pdf", "/project"))).status).toBe(200);
+
+    // 60 MB must fail. Bracketing the ceiling between 30 and 60 pins it without
+    // restating the constant, so a tenfold relaxation can't slip through.
+    vi.mocked(fs.stat).mockResolvedValue({ size: 60 * 1024 * 1024 } as Awaited<
+      ReturnType<typeof fs.stat>
+    >);
+    expect((await handler(makeRequest("/project/huge.pdf", "/project"))).status).toBe(413);
+  });
+
+  it("rejects bytes that grew past the ceiling between stat and read", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.stat).mockResolvedValue({ size: 100 } as Awaited<ReturnType<typeof fs.stat>>);
+    // The pre-read stat is advisory — a writer can swap the file underneath it,
+    // so the bytes actually read are re-checked before they reach the renderer.
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle(Buffer.alloc(60 * 1024 * 1024)) as unknown as Awaited<
+        ReturnType<typeof fs.open>
+      >
+    );
+
+    const handler = await captureHandler();
+    expect((await handler(makeRequest("/project/spec.pdf", "/project"))).status).toBe(413);
+  });
+
+  it("percent-encodes an extended filename so a conforming parser accepts it", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/project/O'Brien (1)*.pdf", "/project"));
+
+    const disposition = response.headers.get("Content-Disposition") ?? "";
+    const extended = disposition.match(/filename\*=UTF-8''(.*)$/)?.[1] ?? "";
+    // RFC 8187 attr-char excludes ' ( ) * — none may survive unescaped, or the
+    // recipient discards the extended value and falls back to the lossy one.
+    expect(extended).not.toMatch(/['()*]/);
+    expect(decodeURIComponent(extended)).toBe("O'Brien (1)*.pdf");
+  });
+
+  it("strips control characters from the ASCII filename fallback", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest('/project/a\r\nb"c.pdf', "/project"));
+
+    const disposition = response.headers.get("Content-Disposition") ?? "";
+    // A raw CR/LF or quote here would break out of the header value.
+    expect(disposition).not.toMatch(/[\r\n]/);
+    expect(disposition.match(/filename="([^"]*)"/)?.[1]).toBe("a__b_c.pdf");
+  });
+
+  it("rejects a file outside the root", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/elsewhere/secret.pdf", "/project"));
+    expect(response.status).toBe(404);
+  });
+
+  it.each([
+    ["relative paths", "project/spec.pdf", "/project"],
+    ["a NUL byte", "/project/spec\0.pdf", "/project"],
+  ])("rejects %s with 400", async (_label, filePath, rootPath) => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest(filePath, rootPath));
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a request missing the path parameter", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      new Request("daintree-pdf://load?root=%2Fproject") as GlobalRequest
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a non-GET method", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeRequest("/project/spec.pdf", "/project", { method: "POST" })
+    );
+    expect(response.status).toBe(405);
+  });
+
+  it("keeps error responses inert rather than serving them as PDFs", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/project/notes.txt", "/project"));
+
+    expect(response.headers.get("Content-Type")).toBe("text/plain");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Content-Security-Policy")).toContain("sandbox");
+  });
+});
+
+describe("applyDaintreeAppCspToSession — preview response pass-through", () => {
+  // The second CSP overlay call site. It and setupWebviewCSP must agree about
+  // which preview responses keep their own headers; a bypass added to only one
+  // leaves paint-surface views silently broken (#11198).
+  async function captureListener() {
+    const { mergeCspHeaders } = await import("../../utils/webviewCsp.js");
+    vi.mocked(mergeCspHeaders).mockClear();
+
+    let captured:
+      | ((details: unknown, callback: (r: { responseHeaders?: unknown }) => void) => void)
+      | undefined;
+    const ses = {
+      webRequest: {
+        onHeadersReceived: vi.fn(
+          (
+            _filter: unknown,
+            listener: (
+              details: unknown,
+              callback: (r: { responseHeaders?: unknown }) => void
+            ) => void
+          ) => {
+            captured = listener;
+          }
+        ),
+      },
+    } as unknown as Electron.Session;
+
+    applyDaintreeAppCspToSession(ses);
+    if (!captured) throw new Error("no onHeadersReceived listener registered");
+    return { listener: captured, mergeCspHeaders: vi.mocked(mergeCspHeaders) };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([["daintree-pdf://load?path=%2Frepo%2Fa.pdf"], ["daintree-html://tok/index.html"]])(
+    "passes %s through untouched",
+    async (url) => {
+      const { listener, mergeCspHeaders } = await captureListener();
+      const headers = { "Content-Type": ["application/pdf"] };
+
+      let result: { responseHeaders?: unknown } | undefined;
+      listener({ url, responseHeaders: headers }, (r) => {
+        result = r;
+      });
+
+      expect(result?.responseHeaders).toBe(headers);
+      expect(mergeCspHeaders).not.toHaveBeenCalled();
+    }
+  );
+
+  it("still overlays the app CSP on ordinary responses", async () => {
+    const { listener, mergeCspHeaders } = await captureListener();
+
+    listener({ url: "app://daintree/index.html", responseHeaders: {} }, () => {});
+
+    expect(mergeCspHeaders).toHaveBeenCalledTimes(1);
   });
 });

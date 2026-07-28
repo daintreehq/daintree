@@ -3,7 +3,12 @@ import { defineAction } from "../defineAction";
 import { z } from "zod";
 import { worktreeClient } from "@/clients";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { closeTerminalsForWorktree } from "@/components/Worktree/worktreeDeleteHelper";
+import {
+  captureWorktreeTerminalSnapshot,
+  closeTerminalsForWorktree,
+  restoreClosedTerminals,
+  type WorktreeTerminalRestoreSnapshot,
+} from "@/components/Worktree/worktreeDeleteHelper";
 
 export function registerWorktreeCreateActions(
   actions: ActionRegistry,
@@ -98,17 +103,36 @@ export function registerWorktreeCreateActions(
         closeTerminals: z.boolean().optional(),
       }),
       run: async ({ worktreeId, force, deleteBranch, closeTerminals }) => {
-        if (closeTerminals) {
-          await closeTerminalsForWorktree(worktreeId);
+        // Capture BEFORE closing so a close-wait timeout (or a stop-dev-preview
+        // failure) still leaves a snapshot to restore from (#11344).
+        const restoreSnapshot: WorktreeTerminalRestoreSnapshot[] = closeTerminals
+          ? captureWorktreeTerminalSnapshot(worktreeId)
+          : [];
+        try {
+          if (closeTerminals) {
+            await closeTerminalsForWorktree(worktreeId);
+          }
+          // Stop any running dev preview BEFORE `git worktree remove` (#9084).
+          // Windows holds a directory lock while the dev server runs; removal
+          // fails outright if the server is still alive. `stopByWorktree` is
+          // a safe no-op when no session matches, so it's called
+          // unconditionally rather than gated on `getByWorktree` — that gate
+          // would miss multi-panel sessions sharing the same worktreeId.
+          await window.electron.devPreview.stopByWorktree({ worktreeId });
+          await worktreeClient.delete(worktreeId, force, deleteBranch);
+        } catch (error) {
+          // This action path has no outbox retry, so a throw here ends the
+          // delete. Bring the closed terminals back rather than losing them to a
+          // delete that didn't happen — but only if the worktree still exists: a
+          // branch-delete failure lands after `git worktree remove` succeeded, so
+          // relaunching then would strand terminals on a deleted worktree.
+          const stillExists = await worktreeClient
+            .getAll()
+            .then((worktrees) => worktrees.some((worktree) => worktree.id === worktreeId))
+            .catch(() => true);
+          if (stillExists) void restoreClosedTerminals(restoreSnapshot);
+          throw error;
         }
-        // Stop any running dev preview BEFORE `git worktree remove` (#9084).
-        // Windows holds a directory lock while the dev server runs; removal
-        // fails outright if the server is still alive. `stopByWorktree` is
-        // a safe no-op when no session matches, so it's called
-        // unconditionally rather than gated on `getByWorktree` — that gate
-        // would miss multi-panel sessions sharing the same worktreeId.
-        await window.electron.devPreview.stopByWorktree({ worktreeId });
-        await worktreeClient.delete(worktreeId, force, deleteBranch);
       },
     })
   );

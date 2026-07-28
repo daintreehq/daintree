@@ -25,6 +25,7 @@ import {
   registerAppProtocol,
   registerDaintreeFileProtocol,
   registerDaintreeHtmlProtocol,
+  registerDaintreePdfProtocol,
   registerDeepLinkProtocolClient,
   registerPluginProtocol,
   setupWebviewCSP,
@@ -124,10 +125,18 @@ protocol.registerSchemesAsPrivileged([
     },
   },
   {
+    // corsEnabled lets the trusted renderer fetch() video bytes for blob-URL
+    // playback (Chromium's custom-scheme media loader can't consume follow-up
+    // range requests — electron#51442). It only makes the scheme *eligible*
+    // for cross-origin fetch: reads still require the handler to echo
+    // Access-Control-Allow-Origin, which it does solely for trusted app
+    // origins (see daintreeFileCorsOrigin in setup/protocols.ts), so browser
+    // panels hosting remote sites gain no access.
     scheme: "daintree-file",
     privileges: {
       secure: true,
       supportFetchAPI: true,
+      corsEnabled: true,
     },
   },
   {
@@ -141,6 +150,23 @@ protocol.registerSchemesAsPrivileged([
     scheme: "daintree-html",
     privileges: {
       standard: true,
+      secure: true,
+    },
+  },
+  {
+    // Inline PDF preview (#11427). Chromium's built-in PDFium viewer engages for
+    // any custom-scheme response typed `application/pdf` — verified against
+    // Electron 42 / Chromium 148 — so this scheme exists purely to give the
+    // viewer a `frame-src` allowance that can never resolve to anything but a
+    // PDF. Kept off daintree-file:// on purpose: that scheme serves arbitrary
+    // repo files under extension-derived MIME types and a `sandbox` response
+    // CSP, and a sandboxed document blocks PDFium (ERR_BLOCKED_BY_CLIENT).
+    // Deliberately minimal privileges: no `standard` (an opaque origin is more
+    // isolated, and the query-string URL shape needs no hierarchical parsing),
+    // and no supportFetchAPI/corsEnabled — the iframe navigates here, it never
+    // fetch()es.
+    scheme: "daintree-pdf",
+    privileges: {
       secure: true,
     },
   },
@@ -428,6 +454,11 @@ if (!gotTheLock) {
           .catch((err) => {
             console.warn(`[main] run-history pushSnapshotTo failed for wc ${wcId}:`, err);
           });
+        // Replay the project status map for the same reason (#11452). The stats
+        // service suppresses unchanged broadcasts, so a view that loads while
+        // the fleet is static would otherwise show every project unbanded until
+        // agent state next moved. Statically imported, so no dynamic import.
+        getProjectStatsService()?.pushSnapshotTo(wc);
 
         // #10815: cold switch-back auto-resume is driven entirely by the
         // renderer's pull-on-mount `help.peekPendingHibernation` peek (which
@@ -584,6 +615,7 @@ if (!gotTheLock) {
       registerAppProtocol(distPath, { allowDisplayCapture: isDemoMode });
       registerDaintreeFileProtocol();
       registerDaintreeHtmlProtocol();
+      registerDaintreePdfProtocol();
       // Register `plugin://` with a placeholder resolver that 404s every
       // request, keeping the heavy ~2900-line PluginService module off the
       // first-paint critical path (#10322). The handler must exist before

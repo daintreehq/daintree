@@ -1,5 +1,5 @@
 import { forwardRef, lazy, Suspense, useImperativeHandle, useRef } from "react";
-import type { FileViewMode } from "@shared/types/panel";
+import type { FileRenderMode } from "@shared/types/panel";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
@@ -21,7 +21,7 @@ export interface MarkdownViewerProps {
   filePath: string;
   /** Containment root for image loads and relative links */
   rootPath: string;
-  viewMode: FileViewMode;
+  viewMode: FileRenderMode;
   /** Source-mode only: line to scroll to and highlight */
   initialLine?: number;
   /** Source-mode only: soft-wrap long lines */

@@ -29,12 +29,7 @@ import {
  */
 
 export type FleetRunStatus =
-  | "submitting"
-  | "watching"
-  | "completed"
-  | "cancelled"
-  | "failed"
-  | "superseded";
+  "submitting" | "watching" | "completed" | "cancelled" | "failed" | "superseded";
 
 export type FleetRunSubmissionStatus = "pending" | "sent" | "failed" | "skipped";
 

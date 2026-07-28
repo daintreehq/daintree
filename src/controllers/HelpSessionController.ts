@@ -33,12 +33,7 @@ import { McpActivityTracker } from "./McpActivityTracker";
 import { HibernationManager } from "./HibernationManager";
 
 export type HelpSessionPhase =
-  | "idle"
-  | "version-checking"
-  | "provisioning"
-  | "launching"
-  | "live"
-  | "hibernating";
+  "idle" | "version-checking" | "provisioning" | "launching" | "live" | "hibernating";
 
 export interface VersionTooOld {
   agentId: string;
@@ -86,6 +81,7 @@ export interface TierMismatchState {
 export type LaunchErrorKind =
   | "mcp-server-not-started"
   | "mcp-probe-failed"
+  | "skills-sync-failed"
   | "spawn-failed"
   | "folder-unavailable";
 

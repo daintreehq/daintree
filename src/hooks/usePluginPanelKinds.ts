@@ -9,6 +9,7 @@ import {
 import { registerPanelKindDefinition, unregisterPanelKindDefinition } from "@/registry";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
 import { makePluginViewHost } from "@/components/Plugin/PluginViewHost";
+import { reconcileDockMembership } from "@/store/reconcileDockMembership";
 import { logWarn } from "@/utils/logger";
 
 /**
@@ -51,6 +52,7 @@ const PANEL_KIND_META_KEYS = [
   "firstRenderRestore",
   "lazyImportPath",
   "showInPalette",
+  "dockable",
   "extensionId",
   "componentPath",
   "shortcut",
@@ -181,6 +183,13 @@ export function usePluginPanelKinds(): void {
 
         registeredByPlugin.set(pluginId, incomingIds);
       }
+
+      // A `dockable:true→false` flip or a plugin unregister above can strand
+      // panels currently living in the dock (the dock now filters them out while
+      // their stored location stays "dock"). Relocate them to the grid so they
+      // stay reachable (#11375). Cheap — it scans dock membership, which is
+      // small, and no-ops when nothing is stranded.
+      reconcileDockMembership();
     };
 
     const electron = typeof window !== "undefined" ? window.electron : undefined;

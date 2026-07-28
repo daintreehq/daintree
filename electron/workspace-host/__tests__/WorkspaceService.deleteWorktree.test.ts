@@ -913,4 +913,41 @@ describe("WorkspaceService.deleteWorktree", () => {
       expect(service.getAcknowledgedMutationIds()).toEqual([]);
     });
   });
+
+  describe("getFreshWorktreeChanges (#11343)", () => {
+    it("returns a guaranteed-fresh status read (bypassing the single-flight pass)", async () => {
+      const monitor = createAndRegisterMonitor();
+      const fresh = {
+        worktreeId: "/test/worktree",
+        rootPath: "/test/worktree",
+        changedFileCount: 2,
+        changes: [
+          { path: "a.ts", status: "modified" as const, insertions: null, deletions: null },
+          { path: "n.txt", status: "untracked" as const, insertions: null, deletions: null },
+        ],
+      };
+      // The service must read through getFreshChanges (forced git status), NOT
+      // refresh()/getWorktreeChanges() which can no-op to a stale snapshot when
+      // a poll is mid-pass.
+      const freshSpy = vi.spyOn(monitor, "getFreshChanges").mockResolvedValue(fresh);
+
+      const result = await service.getFreshWorktreeChanges("/test/worktree");
+
+      expect(freshSpy).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(fresh);
+    });
+
+    it("propagates a fresh-read failure so callers fail closed", async () => {
+      const monitor = createAndRegisterMonitor();
+      vi.spyOn(monitor, "getFreshChanges").mockRejectedValue(new Error("git status failed"));
+
+      await expect(service.getFreshWorktreeChanges("/test/worktree")).rejects.toThrow(
+        "git status failed"
+      );
+    });
+
+    it("returns null when no monitor exists for the id", async () => {
+      await expect(service.getFreshWorktreeChanges("/nonexistent")).resolves.toBeNull();
+    });
+  });
 });

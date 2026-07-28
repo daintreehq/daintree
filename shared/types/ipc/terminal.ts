@@ -86,6 +86,13 @@ export interface TerminalState {
   cwd?: string;
   /** Associated worktree ID */
   worktreeId?: string;
+  /**
+   * The worktree's stable `.git/worktrees/<name>` admin-dir handle persisted at
+   * save time (#11388). Used at restore to remap a `worktreeId` whose path
+   * changed via `git worktree move` back to the worktree's new id. Absent on
+   * legacy snapshots.
+   */
+  worktreeGitDir?: string;
   /** Location in the UI - grid or dock */
   location?: PanelLocation;
   /** Command to execute after shell starts (e.g., 'claude' for AI agents) */

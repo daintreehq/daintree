@@ -87,6 +87,7 @@ const mockPullRequestService = {
   reset: vi.fn(),
   cleanup: vi.fn(),
   refresh: vi.fn().mockResolvedValue(undefined),
+  setForgeSettings: vi.fn(),
   getStatus: vi.fn().mockReturnValue({
     state: "idle",
     isPolling: false,
@@ -262,6 +263,119 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
   }
 
   const ORIGIN_GITHUB = remote("origin", "https://github.com/acme/app.git");
+
+  describe("remote selection honours the project setting (#11408)", () => {
+    const ORIGIN_INTERNAL = remote("origin", "https://git.internal.example/acme/app.git");
+    const UPSTREAM_GITHUB = remote("upstream", "https://github.com/upstream/app.git");
+
+    it("probes the remote named by forgeRemote rather than origin", async () => {
+      service["forgeRemoteName"] = "upstream";
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      await runStartProbe(main, [ORIGIN_GITHUB, UPSTREAM_GITHUB]);
+
+      expect(main.remoteFetchUrl).toBe("https://github.com/upstream/app.git");
+    });
+
+    it("auto-detects a provider-matching remote when origin matches nothing", async () => {
+      service["forgeRemoteName"] = null;
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      await runStartProbe(main, [ORIGIN_INTERNAL, UPSTREAM_GITHUB]);
+
+      expect(main.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
+      expect(main.remoteFetchUrl).toBe("https://github.com/upstream/app.git");
+    });
+
+    it("keeps auto-detect on origin when origin itself matches a provider", async () => {
+      // Origin-first parity with PullRequestService — the toolbar and the
+      // worktree PR badges must not read different repositories.
+      service["forgeRemoteName"] = null;
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      await runStartProbe(main, [ORIGIN_GITHUB, UPSTREAM_GITHUB]);
+
+      expect(main.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+    });
+
+    it("coalesces a burst of matcher pushes into one git read", async () => {
+      // The relay fires on every registry change, so plugin init arrives as a
+      // burst — one `git remote -v` each would be pure waste.
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+
+      for (let i = 0; i < 4; i++) {
+        service.setForgeProviderMatchers([
+          { providerId: GITHUB_PROVIDER_ID, hostnames: ["github.com"] },
+        ]);
+      }
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-selects when the matcher table arrives after a cold start", async () => {
+      // Cold start: no matchers yet, so name preference alone picks origin
+      // even though no provider can read it. Once the GitHub matcher lands,
+      // re-matching that remembered URL is not enough — selection must re-run
+      // or the affordance stays hidden while upstream was usable all along.
+      service["forgeProviderMatchers"] = [];
+      service["forgeRemoteName"] = null;
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      await runStartProbe(main, [ORIGIN_INTERNAL, UPSTREAM_GITHUB]);
+      expect(main.remoteFetchUrl).toBe("https://git.internal.example/acme/app.git");
+      expect(main.getSnapshot().matchedForgeProviderId).toBeFalsy();
+
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_INTERNAL, UPSTREAM_GITHUB]);
+      service.setForgeProviderMatchers([
+        { providerId: GITHUB_PROVIDER_ID, hostnames: ["github.com"] },
+      ]);
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(main.remoteFetchUrl).toBe("https://github.com/upstream/app.git");
+      expect(main.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
+    });
+
+    it("keeps the signature across ALL remotes, not just the selected one", async () => {
+      // The signature answers "did the remote table change" — adding an
+      // unselected remote must still be detected as a change.
+      service["forgeRemoteName"] = "upstream";
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([UPSTREAM_GITHUB]);
+
+      mockSimpleGit.getRemotes.mockResolvedValue([UPSTREAM_GITHUB, ORIGIN_INTERNAL]);
+      await fireConfigChange();
+
+      expect(sysRemoteChanged).toHaveBeenCalledTimes(1);
+      expect(mockSendEvent).toHaveBeenCalledWith({ type: "forge-remote-changed" });
+    });
+
+    it("re-selects and fans out when updateForgeSettings changes the remote", async () => {
+      // `.git/config` is untouched, so the signature-gated reprobe never fires
+      // — the selection change itself has to drive the update.
+      // `mirror` is not a preferred name, so auto-detect starts on origin.
+      const MIRROR_GITHUB = remote("mirror", "https://github.com/mirror/app.git");
+      service["forgeRemoteName"] = null;
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      await runStartProbe(main, [ORIGIN_GITHUB, MIRROR_GITHUB]);
+      expect(main.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB, MIRROR_GITHUB]);
+      service.updateForgeSettings({
+        forgeProviderOverride: null,
+        forgeDefaultProviderId: null,
+        forgeRemote: "mirror",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(main.remoteFetchUrl).toBe("https://github.com/mirror/app.git");
+    });
+  });
 
   it("resolves the provider after an origin is added to a repo that had none", async () => {
     const main = registerMonitor("/test/main", { isMainWorktree: true });

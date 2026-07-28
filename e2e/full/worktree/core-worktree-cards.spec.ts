@@ -160,6 +160,76 @@ test.describe.serial("Core: Worktree Cards", () => {
       });
     });
 
+    // The card's two menu surfaces are one item list rendered through two sets
+    // of primitives, so they must present the same top-level menu. They drifted
+    // once (Browse Files was wired into the dropdown only), which no test caught
+    // because both specs assert item labels one surface at a time. This compares
+    // the surfaces to each other instead of to hardcoded expectations.
+    test("right-click menu and actions dropdown present the same items", async () => {
+      const { window } = ctx;
+      const featureCard = window.locator(SEL.worktree.card(FEATURE));
+
+      const readOpenMenuSignature = async () => {
+        const menu = window.locator('[role="menu"]');
+        await expect(menu).toHaveCount(1, { timeout: T_SHORT });
+        await expect(menu).toBeVisible({ timeout: T_SHORT });
+        return menu.evaluate((root) =>
+          Array.from(root.children)
+            // Menu content also holds conditional scroll-shadow overlays whose
+            // presence depends on overflow geometry, and the two surfaces anchor
+            // differently — keep only the semantic children.
+            .filter((el) => {
+              const role = el.getAttribute("role");
+              return role === "separator" || (role?.startsWith("menuitem") ?? false);
+            })
+            .map((el) => {
+              const role = el.getAttribute("role")!;
+              if (role === "separator") return "separator";
+              const label = (el.textContent ?? "").trim().replace(/\s+/g, " ");
+              const state = el.getAttribute("aria-disabled") === "true" ? " [disabled]" : "";
+              const submenu = el.getAttribute("aria-haspopup") ? " [submenu]" : "";
+              return `${role}|${label}${submenu}${state}`;
+            })
+        );
+      };
+
+      const closeMenu = async () => {
+        await window.keyboard.press("Escape");
+        await expect(window.locator('[role="menu"]')).toHaveCount(0, { timeout: T_SHORT });
+      };
+
+      let dropdownSignature: string[] = [];
+      await test.step("Capture the ⋯ dropdown signature", async () => {
+        await featureCard.locator(SEL.worktree.actionsMenu).click();
+        dropdownSignature = await readOpenMenuSignature();
+        await closeMenu();
+      });
+
+      let contextSignature: string[] = [];
+      await test.step("Capture the right-click menu signature", async () => {
+        await featureCard.click({ button: "right", position: { x: 40, y: 12 } });
+        contextSignature = await readOpenMenuSignature();
+        await closeMenu();
+      });
+
+      // Guards a vacuous pass: two empty or near-empty reads would compare equal.
+      expect(dropdownSignature.length).toBeGreaterThan(8);
+      expect(
+        dropdownSignature.filter((entry) => entry.includes("[submenu]")).length
+      ).toBeGreaterThan(0);
+      expect(contextSignature).toEqual(dropdownSignature);
+
+      // Every separator must divide two groups — no leading, trailing, or
+      // stacked rules, which is what the conditional group separators buy.
+      expect(dropdownSignature[0]).not.toBe("separator");
+      expect(dropdownSignature[dropdownSignature.length - 1]).not.toBe("separator");
+      expect(
+        dropdownSignature.filter(
+          (entry, i) => entry === "separator" && dropdownSignature[i + 1] === "separator"
+        )
+      ).toEqual([]);
+    });
+
     test("Launch submenu opens on hover and Open Terminal creates a panel", async () => {
       const { window } = ctx;
       let panelsBefore = 0;

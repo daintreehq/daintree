@@ -44,10 +44,21 @@ export function readSystemMemorySnapshot(): SystemMemorySnapshot | null {
     ).getSystemMemoryInfo;
     if (typeof getInfo !== "function") return null;
     const info = getInfo.call(process);
-    const freeMb = typeof info.free === "number" ? info.free / 1024 : 0;
-    const purgeableMb = typeof info.purgeable === "number" ? info.purgeable / 1024 : 0;
+    // Reject a missing or malformed `free` outright rather than coercing it to
+    // 0: a negative reading paired with a plausible `purgeable` would otherwise
+    // sum back into a healthy-looking figure.
+    if (typeof info.free !== "number" || !Number.isFinite(info.free) || info.free < 0) return null;
+    const freeMb = info.free / 1024;
+    const purgeableMb =
+      typeof info.purgeable === "number" && Number.isFinite(info.purgeable) && info.purgeable > 0
+        ? info.purgeable / 1024
+        : 0;
     const availableMb = freeMb + purgeableMb;
-    if (!Number.isFinite(availableMb) || availableMb <= 0) return null;
+    // A zero total is treated as an API artifact, not a maximally-critical
+    // reading: a transiently zeroed struct must not collapse every cached view
+    // and downgrade the profile. Genuine exhaustion is caught by
+    // ProcessMemoryMonitor's own-process RSS tiers.
+    if (availableMb <= 0) return null;
     return { totalMb, freeMb, purgeableMb, availableMb };
   } catch {
     return null;

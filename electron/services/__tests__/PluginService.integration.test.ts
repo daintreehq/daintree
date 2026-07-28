@@ -1372,15 +1372,13 @@ describe("PluginService integration — activate() lifecycle", () => {
     await initializeAndActivate(service);
 
     const marker = readMarker(markerKey) as
-      | { pluginId: string; called: boolean; cleaned?: boolean }
-      | undefined;
+      { pluginId: string; called: boolean; cleaned?: boolean } | undefined;
     expect(marker?.cleaned).toBeUndefined();
 
     service.unloadPlugin("acme.cleanup-plugin");
 
     const afterMarker = readMarker(markerKey) as
-      | { pluginId: string; called: boolean; cleaned?: boolean }
-      | undefined;
+      { pluginId: string; called: boolean; cleaned?: boolean } | undefined;
     expect(afterMarker?.cleaned).toBe(true);
     expect(service.hasPlugin("acme.cleanup-plugin")).toBe(false);
   });

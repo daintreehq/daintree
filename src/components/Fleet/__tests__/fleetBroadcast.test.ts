@@ -82,6 +82,7 @@ function installViewStore(worktrees: Map<string, WorktreeSnapshot>) {
   const store = createStore<WorktreeViewState & WorktreeViewActions>(() => ({
     worktrees,
     statusCheckedAt: new Map(),
+    workingTreeChangedAtById: new Map(),
     manualAssociations: new Map(),
     version: { epoch: "", seq: 0 },
     tombstones: new Map(),

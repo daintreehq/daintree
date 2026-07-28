@@ -1,23 +1,11 @@
-import type { BuiltInActionId, ActionId } from "@shared/types/actions";
+import type { ActionId } from "@shared/types/actions";
+import type { KeybindingConfig, KeyScope } from "@shared/types/keybinding";
 import { isMac } from "@/lib/platform";
 
-export type KeyScope =
-  | "global"
-  | "terminal"
-  | "modal"
-  | "worktreeList"
-  | "portal"
-  | "worktreeGrid"
-  | "dev-preview";
-
-export interface KeybindingConfig {
-  actionId: BuiltInActionId;
-  combo: string; // e.g., "Cmd+T", "Ctrl+Shift+P", "Escape", "Cmd+K Cmd+S" (chords)
-  scope: KeyScope;
-  priority: number; // Higher priority wins in conflicts (default 0)
-  description?: string;
-  category?: string; // Category for organization in UI (e.g., "Terminal", "Panels")
-}
+// KeyScope and KeybindingConfig live in shared/types/keybinding.ts (the
+// defaults table is cross-process); re-exported here so renderer imports
+// keep their historical home.
+export type { KeybindingConfig, KeyScope };
 
 // Wide variant for internal storage, registerBinding, and return types — actionId
 // accepts plugin-defined IDs via the ActionId open union.
@@ -110,14 +98,20 @@ export function normalizeKeyForBinding(event: KeyboardEvent): string {
     return event.code.charAt(3).toUpperCase();
   }
 
-  // Handle digit keys when Alt is pressed on macOS (Alt+1 produces ¡ instead of 1)
-  // event.code for digits is like "Digit0", "Digit1", ..., "Digit9"
+  // Physical number-row matching for command shortcuts: layouts that shift
+  // their digit row (French AZERTY: Digit1 produces "&") would otherwise never
+  // match Cmd+1..9 / Cmd+Alt+1..9. Gated on a primary modifier so bare digits
+  // stay character-based (terminal/text input untouched), and AltGr is
+  // excluded on non-mac — it synthesizes ctrl+alt and must keep producing
+  // international characters (#7941). Numpad codes are deliberately not
+  // mapped: with NumLock off, Numpad1 means End. Also covers macOS Alt+digit
+  // (Alt+1 produces ¡) when combined with Cmd.
   if (
-    mac &&
-    event.altKey &&
     event.code &&
     event.code.startsWith("Digit") &&
-    event.code.length === 6
+    event.code.length === 6 &&
+    (event.metaKey || event.ctrlKey || (mac && event.altKey)) &&
+    (mac || !event.getModifierState?.("AltGraph"))
   ) {
     return event.code.charAt(5);
   }

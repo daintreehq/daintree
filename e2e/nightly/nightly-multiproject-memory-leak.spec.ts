@@ -158,9 +158,7 @@ test.describe.serial("Nightly: Multi-project switching memory leak", () => {
       const gcAvailable =
         typeof g.__daintree_gc === "function" || typeof (g as { gc?: unknown }).gc === "function";
       const pvm = (g.__daintreeGetPvm as (() => unknown) | undefined)?.() as
-        | { getCacheConfig?: () => { maxCachedViews: number } }
-        | null
-        | undefined;
+        { getCacheConfig?: () => { maxCachedViews: number } } | null | undefined;
       return {
         gcAvailable,
         snapshotAvailable: typeof g.__daintreeWriteHeapSnapshot === "function",
@@ -269,9 +267,10 @@ test.describe.serial("Nightly: Multi-project switching memory leak", () => {
     //    measured switches; a flat post-GC heap means churn is reclaimed.
     expect(heapGrowthMB).toBeLessThan(MAIN_HEAP_GROWTH_THRESHOLD_MB);
 
-    // 4. The view manager itself is a per-window singleton — switching must not
-    //    duplicate it. Counted by runtime constructor name so it holds under
-    //    production minification (esbuild mangles class names).
+    // 4. Switching must not increase the number of objects sharing the view
+    //    manager's runtime constructor name. Production minification mangles
+    //    class names and can assign the same short name to unrelated classes,
+    //    so the stable baseline-to-final count is the reliable leak invariant.
     expect(runtimeName).toBeTruthy();
     expect(existsSync(snapshotBaselinePath)).toBe(true);
     expect(existsSync(snapshotFinalPath)).toBe(true);
@@ -282,7 +281,7 @@ test.describe.serial("Nightly: Multi-project switching memory leak", () => {
     console.log(
       `[mp-leak] PVM (${runtimeName}) instances baseline=${basePvmCount} final=${finalPvmCount}`
     );
-    expect(finalPvmCount).toBe(1);
+    expect(basePvmCount).toBeGreaterThan(0);
     expect(finalPvmCount).toBe(basePvmCount);
   });
 });

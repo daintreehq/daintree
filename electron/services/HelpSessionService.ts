@@ -239,8 +239,15 @@ async function readTemplateHashStamp(sessionPath: string): Promise<string | null
  * but the readiness probe didn't respond in time. `MCP_NOT_READY` is retained
  * as a legacy alias the renderer still classifies (falling back to the
  * probe-failed shape) so older serialized errors keep displaying.
+ *
+ * `USER_CONTENT_SYNC_FAILED` means the user commands/skills mirror could not
+ * reconcile the session dir — either a source folder was unreadable (desired
+ * state unprovable) or a stale managed skill could not be removed. Launching
+ * anyway would run the session with outdated or unowned skill instructions,
+ * so provisioning fails closed and the renderer shows a retryable error.
  */
-export type HelpSessionErrorCode = "MCP_NOT_READY" | "MCP_SERVER_NOT_STARTED" | "MCP_PROBE_FAILED";
+export type HelpSessionErrorCode =
+  "MCP_NOT_READY" | "MCP_SERVER_NOT_STARTED" | "MCP_PROBE_FAILED" | "USER_CONTENT_SYNC_FAILED";
 
 export class HelpSessionError extends Error {
   readonly code: HelpSessionErrorCode;
@@ -660,18 +667,51 @@ export class HelpSessionService {
     // discovers them through its native cwd-scoped mechanisms. Runs after the
     // template copy and unconditionally — the template hash gate doesn't
     // cover user content, which changes independently of app version.
-    // Non-fatal: a broken user file must never block the assistant launch.
+    //
+    // Failure policy: invalid or unwritable NEW content is safely omitted (the
+    // assistant just launches without it), but content that would run STALE —
+    // an unreadable source (desired state unprovable) or a managed skill that
+    // should be gone yet is still on disk — fails the provision closed. A
+    // session quietly running deleted or superseded skill instructions is
+    // worse than a retryable launch error.
+    let syncResult;
     try {
-      await syncAssistantContent({
+      syncResult = await syncAssistantContent({
         sessionPath,
         projectPath: input.projectPath,
         agentId: input.agentId,
       });
     } catch (err) {
-      console.warn(
-        "[HelpSessionService] User content sync failed; launching without custom commands:",
-        err
+      const reason = formatErrorMessage(err, "couldn't read the assistant content folders");
+      throw new HelpSessionError(
+        "USER_CONTENT_SYNC_FAILED",
+        `Couldn't refresh the project's assistant commands and skills: ${reason}`
       );
+    }
+    if (syncResult) {
+      if (syncResult.omittedSkills.length > 0 || syncResult.failedCopies.length > 0) {
+        console.warn(
+          "[HelpSessionService] Assistant content partially mirrored; launching without:",
+          {
+            sessionPath,
+            omittedSkills: syncResult.omittedSkills,
+            failedCopies: syncResult.failedCopies,
+          }
+        );
+      }
+      if (syncResult.staleFailures.length > 0) {
+        // Name the session dir: a stale file that survives removal (symlinked
+        // chain, or a directory where a managed file belongs) fails every
+        // retry identically, so clearing that path by hand is the only fix.
+        console.warn(
+          "[HelpSessionService] Assistant content sync left stale managed files; clear this session directory to recover:",
+          { sessionPath, staleFailures: syncResult.staleFailures }
+        );
+        throw new HelpSessionError(
+          "USER_CONTENT_SYNC_FAILED",
+          `Couldn't refresh the project's assistant commands and skills — outdated copies still present in the session directory ${sessionPath}: ${syncResult.staleFailures.join(", ")}`
+        );
+      }
     }
 
     // Per-session scratch dir under `userData/assistant-scratch/<instanceId>/`.

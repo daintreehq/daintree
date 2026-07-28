@@ -1,13 +1,38 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { ChevronLeft, ChevronRight, Check, PanelLeft, RefreshCw, WrapText } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Check,
+  ExternalLink,
+  PanelLeft,
+  RefreshCw,
+  WrapText,
+  XCircle,
+} from "lucide-react";
 import { FileDiff as FileDiffIcon } from "lucide-react";
 import type { GitStatus } from "@shared/types/git";
 import type { DiffPanelData } from "@shared/types/panel";
+import { isAbsolute, join } from "@shared/utils/path";
+import { FolderOpen } from "@/components/icons";
+import { actionService } from "@/services/ActionService";
+import { logError } from "@/utils/logger";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
+import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { DiffFileSidebar } from "@/components/FileViewer/DiffFileSidebar";
+import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
+import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
+import { FilePdfPreview } from "@/components/FileViewer/FilePdfPreview";
+import type { MediaPreviewError } from "@/components/FileViewer/useMediaBlobUrl";
+import {
+  isAudioFilePath,
+  isPdfFilePath,
+  isVideoFilePath,
+} from "@/components/FileViewer/filePreviewKinds";
 import { ImageDiffViewer, isImageDiffCandidate } from "@/components/FileViewer/ImageDiffViewer";
-import { DiffViewer } from "@/components/Worktree/DiffViewer";
+import { DiffViewer, FULL_FILE_MAX_LINES } from "@/components/Worktree/DiffViewer";
+import type { FullFileUnavailableReason } from "@/components/Worktree/DiffViewer";
+import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { IconToggle } from "@/components/FileViewer/IconToggle";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
@@ -17,13 +42,44 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore, type DiffFontSize } from "@/store/preferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { useDiffContent } from "./useDiffContent";
+import { useDiffFileSource } from "./useDiffFileSource";
+import { getFullFileAvailability } from "./fullFileAvailability";
 import type { DiffSubject } from "./diffContentCache";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 
 type DiffViewType = "split" | "unified";
+
+/**
+ * How much of the file the diff renders. Kept separate from `DiffViewType`:
+ * layout and content scope are independent, and full file stays meaningful in
+ * both unified and split.
+ */
+type DiffContentScope = "changes" | "full-file";
+
+/** Which external surface a toolbar action aims the current file at. */
+type ExternalTarget = "reveal" | "editor";
+
+const FULL_FILE_FALLBACK_MESSAGES: Record<FullFileUnavailableReason, string> = {
+  "source-mismatch": "The file changed after this diff loaded, so only changed lines are shown",
+  "too-large": `Files over ${FULL_FILE_MAX_LINES.toLocaleString()} lines stay on changed lines to keep the diff responsive`,
+  unsupported: "The whole file can't be shown for this diff",
+};
+
+// Used when the preview reports a failure it can't name — a decode error gives
+// the media element no detail beyond "this didn't play".
+const GENERIC_VIDEO_ERROR: MediaPreviewError = {
+  title: "This video couldn't be played",
+  description: "The container is supported but the codec may not be — Refresh to try again.",
+};
+
+const GENERIC_AUDIO_ERROR: MediaPreviewError = {
+  title: "This audio file couldn't be played",
+  description: "The format is supported but the codec may not be — Refresh to try again.",
+};
 
 // Mirrors the ladder the modal used, so the preference keeps meaning the same
 // sizes it always did.
@@ -117,6 +173,8 @@ export function DiffPane({
   const setDiffViewType = usePreferencesStore((s) => s.setDiffViewType);
   const diffWrapLines = usePreferencesStore((s) => s.diffWrapLines);
   const setDiffWrapLines = usePreferencesStore((s) => s.setDiffWrapLines);
+  const diffFullFile = usePreferencesStore((s) => s.diffFullFile);
+  const setDiffFullFile = usePreferencesStore((s) => s.setDiffFullFile);
   const diffShowFileList = usePreferencesStore((s) => s.diffShowFileList);
   const diffFontSize = usePreferencesStore((s) => s.diffFontSize);
   const diffFontStyle: CSSProperties & Record<"--diff-font-size", string> = {
@@ -125,6 +183,17 @@ export function DiffPane({
   const setDiffShowFileList = usePreferencesStore((s) => s.setDiffShowFileList);
 
   const filePath = panel?.filePath;
+  // `filePath` is worktree-relative (unlike FilePanelData's), but both file
+  // actions want an absolute path. Null means there is nothing to aim them at:
+  // a relative path with no resolved worktree can't be made absolute, and
+  // dispatching the relative one would just fail inside the action.
+  const absolutePath = !filePath
+    ? null
+    : isAbsolute(filePath)
+      ? filePath
+      : worktreePath
+        ? join(worktreePath, filePath)
+        : null;
   const fileStatus = panel?.fileStatus;
   const changeSet = panel?.changeSet;
   const diffSource = panel?.diffSource;
@@ -211,6 +280,20 @@ export function DiffPane({
   const currentEntry = currentIndex === -1 ? undefined : changeSet?.[currentIndex];
   const isViewed = currentEntry ? viewedSet.has(currentEntry.viewedKey) : false;
 
+  // Forces a fresh request in video, audio and PDF mode — the diff content hooks
+  // don't carry those bytes, so Refresh has to re-request the protocol URL itself.
+  const [previewReloadNonce, setPreviewReloadNonce] = useState(0);
+  // An allowlisted container can still hold a codec Chromium lacks, or the
+  // file may be unreadable — surface that instead of a dead native control.
+  // Holds the preview's specific reason (e.g. too large) when it gives one.
+  const [mediaPlaybackError, setMediaPlaybackError] = useState<MediaPreviewError | null>(null);
+  useEffect(() => {
+    // Any change to the playback attempt's identity — file, resolved root, or
+    // an explicit refresh — gets a fresh attempt. absolutePath covers a
+    // worktree move that filePath (relative) alone would miss.
+    setMediaPlaybackError(null);
+  }, [filePath, absolutePath, worktreePath, previewReloadNonce]);
+
   const [pathCopied, setPathCopied] = useState(false);
   const handleCopyPath = useCallback(() => {
     if (!filePath) return;
@@ -219,6 +302,78 @@ export function DiffPane({
       window.setTimeout(() => setPathCopied(false), 1500);
     });
   }, [filePath]);
+
+  // dispatch() resolves an ActionDispatchResult and never rejects, so a failed
+  // open would otherwise vanish entirely (the #11114 bug FilePane already hit).
+  // Surface it on the pane that owns the button rather than through a toast.
+  // `target` rides along so Retry re-aims at what actually failed.
+  const [externalError, setExternalError] = useState<{
+    message: string;
+    target: ExternalTarget;
+  } | null>(null);
+  // Tracked per target, not as one flag: revealing successfully says nothing
+  // about a missing editor, so the two must not clear or spin for each other.
+  const [pendingTargets, setPendingTargets] = useState<readonly ExternalTarget[]>([]);
+  // Bumped only by the reset below, so a still-running action is invalidated by
+  // the file moving out from under it — never by the sibling button starting.
+  const externalGenerationRef = useRef(0);
+  // Synchronous re-entry guard: state can't stop a double-click in one tick.
+  const externalInFlightRef = useRef<Set<ExternalTarget>>(new Set());
+
+  // Keyed on the resolved absolute path, not the relative one — a worktree move
+  // re-aims these buttons without changing `filePath`, and a result landing
+  // after that belongs to the old location.
+  useEffect(() => {
+    externalGenerationRef.current += 1;
+    externalInFlightRef.current.clear();
+    setExternalError(null);
+    setPendingTargets([]);
+  }, [id, absolutePath]);
+
+  const handleExternalAction = useCallback(
+    async (target: ExternalTarget) => {
+      if (!absolutePath) return;
+      if (externalInFlightRef.current.has(target)) return;
+      externalInFlightRef.current.add(target);
+      const generation = externalGenerationRef.current;
+      setPendingTargets((current) => (current.includes(target) ? current : [...current, target]));
+      try {
+        const result = await actionService.dispatch(
+          target === "reveal" ? "file.showItemInFolder" : "file.openInEditor",
+          { path: absolutePath },
+          { source: "user" }
+        );
+        // The file (or its worktree) moved while this was in flight: the result
+        // describes a location the pane no longer shows.
+        if (externalGenerationRef.current !== generation) return;
+        if (result.ok) {
+          // Clears only its own failure — the other button's banner stands
+          // until that button's own retry succeeds.
+          setExternalError((current) => (current?.target === target ? null : current));
+          return;
+        }
+        logError(
+          `[DiffPane] ${target === "reveal" ? "showItemInFolder" : "openInEditor"} failed`,
+          result.error
+        );
+        setExternalError({ message: result.error.message, target });
+      } finally {
+        // Releasing in `finally` keeps a rejection from wedging the button for
+        // good; the generation check leaves a reset's clean slate alone.
+        if (externalGenerationRef.current === generation) {
+          externalInFlightRef.current.delete(target);
+          setPendingTargets((current) => current.filter((t) => t !== target));
+        }
+      }
+    },
+    [absolutePath]
+  );
+
+  const isErrorTargetPending =
+    externalError !== null && pendingTargets.includes(externalError.target);
+  // Below the Doherty threshold a spinner is just a flash; `disabled` still
+  // blocks a double submit from the first millisecond.
+  const showRetrySpinner = useDohertyGate(isErrorTargetPending);
 
   const hasPrevFile = isWorkspace && currentIndex > 0;
   const hasNextFile =
@@ -257,47 +412,266 @@ export function DiffPane({
   const isImageMode = Boolean(
     filePath && fileStatus && isImageDiffCandidate(filePath) && panel?.diffSource !== "base-branch"
   );
-  const hasDiff = Boolean(
-    content && content.trim() && content !== "NO_CHANGES" && content !== "ERROR"
+  // Media shows only the current working-tree version (no side-by-side diff —
+  // the media pipeline has no cheap "old vs new" comparison), so unlike
+  // isImageMode this applies to every diff source, base-branch included.
+  const isVideoMode = Boolean(filePath && isVideoFilePath(filePath));
+  const isAudioMode = Boolean(filePath && isAudioFilePath(filePath));
+  const isMediaMode = isVideoMode || isAudioMode;
+  // PDFs likewise show only the current working-tree version: the built-in
+  // viewer renders a whole document, not a comparison, so like media this
+  // applies to every diff source.
+  const isPdfMode = Boolean(filePath && isPdfFilePath(filePath));
+  // Sentinels the viewer turns into empty states rather than a rendered diff.
+  // `NO_CHANGES`/`ERROR` gate the pane's own branches below; the binary and
+  // oversized ones matter to the full-file scope, which has nothing to expand
+  // when no hunks were rendered in the first place.
+  const isDiffSentinel =
+    content === "NO_CHANGES" ||
+    content === "ERROR" ||
+    content === "BINARY_FILE" ||
+    content === "FILE_TOO_LARGE";
+  const hasDiff = Boolean(content && content.trim() && !isDiffSentinel);
+
+  // Whether this file *can* show its whole contents, independent of whether the
+  // user currently wants to — the toggle stays visible either way so the option
+  // is discoverable, and explains itself when it can't be used.
+  const sourceAvailability = useMemo(
+    () => getFullFileAvailability(diffSource, fileStatus),
+    [diffSource, fileStatus]
+  );
+  // An image diff already shows the whole asset, and a diff that hasn't loaded
+  // has nothing to expand — folding both into the availability verdict keeps
+  // the control from looking live while being inert.
+  const fullFileAvailability: typeof sourceAvailability = !sourceAvailability.available
+    ? sourceAvailability
+    : isImageMode
+      ? { available: false, reason: "This view already shows the whole image" }
+      : isVideoMode
+        ? { available: false, reason: "This view already shows the whole video" }
+        : isAudioMode
+          ? { available: false, reason: "This view already shows the whole audio file" }
+          : isPdfMode
+            ? { available: false, reason: "This view already shows the whole PDF" }
+            : !hasDiff
+              ? { available: false, reason: "There's no diff to expand yet" }
+              : { available: true };
+
+  // The hunks and the file on disk must describe the same revision. Once the
+  // store reports the file changed, they demonstrably don't: the check inside
+  // the viewer only covers lines the hunks name, so a change in a hidden gap
+  // would otherwise be rendered as unchanged context.
+  const wantsFullFile = diffFullFile && fullFileAvailability.available && !stale;
+
+  const sourceSubject = useMemo(
+    () => (worktreePath && filePath ? { worktreePath, filePath } : null),
+    [worktreePath, filePath]
+  );
+  const { source, errorCode: sourceErrorCode } = useDiffFileSource(sourceSubject, wantsFullFile);
+
+  // Reported by the viewer once it has the parsed diff and the source side by
+  // side — the mismatch and size checks can only be made there.
+  //
+  // Stamped with the source it describes rather than cleared by an effect:
+  // child effects run before parent ones, so a reset keyed on `source` would
+  // fire in the same commit that the viewer reported its reason and swallow it.
+  const [viewerVerdict, setViewerVerdict] = useState<{
+    source: string | null | undefined;
+    reason: FullFileUnavailableReason | null;
+  } | null>(null);
+  const handleFullFileVerdict = useCallback(
+    (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => {
+      setViewerVerdict({ source: forSource, reason });
+    },
+    []
+  );
+  const activeViewerFallback =
+    viewerVerdict && viewerVerdict.source === source ? viewerVerdict.reason : null;
+
+  // Only the diff is retried: clearing it drops `hasDiff`, which disables the
+  // source hook and invalidates its read, and the source is fetched again when
+  // the new diff lands. Retrying both here would issue that read twice. The
+  // preview nonce bump is a no-op outside media/PDF mode (nothing renders it).
+  const refreshAll = useCallback(() => {
+    retry();
+    setPreviewReloadNonce((nonce) => nonce + 1);
+  }, [retry]);
+
+  // One line explaining why a requested whole-file view isn't on screen. The
+  // read failure wins over the viewer's verdict: without content the viewer
+  // never got far enough to have one. `recoverable` marks the notices a refresh
+  // can actually clear — a hunkless rename never grows hunks and an over-size
+  // file never shrinks, so those get no action rather than one that can't work.
+  const fullFileNotice: { message: string; recoverable: boolean } | null = wantsFullFile
+    ? sourceErrorCode
+      ? { message: FILE_READ_ERROR_MESSAGES[sourceErrorCode], recoverable: true }
+      : activeViewerFallback
+        ? {
+            message: FULL_FILE_FALLBACK_MESSAGES[activeViewerFallback],
+            recoverable: activeViewerFallback === "source-mismatch",
+          }
+        : null
+    : null;
+
+  // The reason rides an aria-describedby rather than the tooltip alone: a
+  // disabled segment takes no focus, so a keyboard or screen-reader user would
+  // never reach a hover-only explanation.
+  const scopeReasonId = `${id}-full-file-reason`;
+  const scopeToggle = (
+    <div
+      role="group"
+      aria-label="Diff content"
+      aria-describedby={fullFileAvailability.available ? undefined : scopeReasonId}
+    >
+      <SegmentedToggle<DiffContentScope>
+        options={[
+          { value: "changes", label: "Changes" },
+          {
+            value: "full-file",
+            label: "Full file",
+            disabled: !fullFileAvailability.available,
+          },
+        ]}
+        value={wantsFullFile && !fullFileNotice ? "full-file" : "changes"}
+        onChange={(next) => setDiffFullFile(next === "full-file")}
+      />
+      {!fullFileAvailability.available && (
+        <span id={scopeReasonId} className="sr-only">
+          {fullFileAvailability.reason}
+        </span>
+      )}
+    </div>
   );
 
   const fileName = filePath?.split(/[/\\]/).filter(Boolean).pop();
   const displayTitle = panel?.titleMode === "user" ? title : (fileName ?? title);
 
+  const reveal = revealCopy();
   const toolbar = filePath ? (
     <>
       <FileViewerToolbar.Root>
-        <SegmentedToggle<DiffViewType>
-          options={[
-            { value: "unified", label: "Unified" },
-            { value: "split", label: "Split" },
-          ]}
-          value={diffViewType}
-          onChange={setDiffViewType}
-        />
+        {!isImageMode && !isMediaMode && !isPdfMode && (
+          <div role="group" aria-label="Diff layout">
+            <SegmentedToggle<DiffViewType>
+              options={[
+                { value: "unified", label: "Unified" },
+                { value: "split", label: "Split" },
+              ]}
+              value={diffViewType}
+              onChange={setDiffViewType}
+            />
+          </div>
+        )}
+        {fullFileAvailability.available ? (
+          scopeToggle
+        ) : (
+          // A disabled segment can't host a tooltip trigger of its own
+          // (pointer-events are off), so the explanation hangs off the wrapper.
+          <Tooltip>
+            <TooltipTrigger asChild>{scopeToggle}</TooltipTrigger>
+            <TooltipContent side="bottom">{fullFileAvailability.reason}</TooltipContent>
+          </Tooltip>
+        )}
         <FileViewerToolbar.Path path={filePath} copied={pathCopied} onCopy={handleCopyPath} />
         <FileViewerToolbar.Actions>
-          <FileViewerToolbar.IconButton
-            label="Wrap long lines"
-            pressed={diffWrapLines}
-            onClick={() => setDiffWrapLines(!diffWrapLines)}
-          >
-            <WrapText className="w-4 h-4" />
-          </FileViewerToolbar.IconButton>
-          <FileViewerToolbar.IconButton label="Refresh" onClick={retry}>
+          {!isImageMode && !isMediaMode && !isPdfMode && (
+            <FileViewerToolbar.IconButton
+              label="Wrap long lines"
+              pressed={diffWrapLines}
+              onClick={() => setDiffWrapLines(!diffWrapLines)}
+            >
+              <WrapText className="w-4 h-4" />
+            </FileViewerToolbar.IconButton>
+          )}
+          <FileViewerToolbar.IconButton label="Refresh" onClick={refreshAll}>
             <RefreshCw className="w-4 h-4" />
           </FileViewerToolbar.IconButton>
+          {absolutePath && (
+            <>
+              <FileViewerToolbar.IconButton
+                label={reveal.label}
+                onClick={() => void handleExternalAction("reveal")}
+              >
+                <FolderOpen className="w-4 h-4" />
+              </FileViewerToolbar.IconButton>
+              <FileViewerToolbar.IconButton
+                label="Open in editor"
+                onClick={() => void handleExternalAction("editor")}
+              >
+                <ExternalLink className="w-4 h-4" />
+              </FileViewerToolbar.IconButton>
+            </>
+          )}
         </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>
-      {stale && hasDiff && (
+      {/* A failed action carries a recovery the user just asked for, so it
+          outranks both ambient notices; they return once it is dismissed or a
+          retry succeeds. Below it, the existing stale-over-full-file order
+          stands. */}
+      {externalError ? (
         <InlineStatusBanner
-          severity="info"
-          icon={FileDiffIcon}
-          title="File changed since this diff loaded"
-          role="status"
-          ariaLive="polite"
-          action={{ id: "refresh-diff", label: "Refresh", icon: RefreshCw, onClick: retry }}
+          icon={XCircle}
+          severity="error"
+          title={externalError.target === "reveal" ? reveal.errorTitle : "Couldn't open in editor"}
+          description={externalError.message}
+          action={{
+            id: "retry-external-action",
+            label: "Retry",
+            icon: RefreshCw,
+            variant: "dangerFilled",
+            loading: showRetrySpinner,
+            disabled: isErrorTargetPending,
+            onClick: () => void handleExternalAction(externalError.target),
+            ariaLabel:
+              externalError.target === "reveal" ? reveal.retryAriaLabel : "Retry opening in editor",
+          }}
+          onClose={() => setExternalError(null)}
+          closeAriaLabel={
+            externalError.target === "reveal"
+              ? "Dismiss file manager error"
+              : "Dismiss editor error"
+          }
         />
+      ) : (
+        <>
+          {stale && hasDiff && (
+            <InlineStatusBanner
+              severity="info"
+              icon={FileDiffIcon}
+              title="File changed since this diff loaded"
+              role="status"
+              ariaLive="polite"
+              action={{
+                id: "refresh-diff",
+                label: "Refresh",
+                icon: RefreshCw,
+                onClick: refreshAll,
+              }}
+            />
+          )}
+          {/* Suppressed while the staleness banner is up: both would be pointing
+              at the same underlying change and offering the same refresh. */}
+          {fullFileNotice && !stale && (
+            <InlineStatusBanner
+              severity="warning"
+              icon={FileDiffIcon}
+              title="Showing changed lines only"
+              description={fullFileNotice.message}
+              role="status"
+              ariaLive="polite"
+              action={
+                fullFileNotice.recoverable
+                  ? {
+                      id: "refresh-full-file",
+                      label: "Retry",
+                      icon: RefreshCw,
+                      onClick: refreshAll,
+                    }
+                  : undefined
+              }
+            />
+          )}
+        </>
       )}
     </>
   ) : undefined;
@@ -387,17 +761,85 @@ export function DiffPane({
               </div>
             )}
 
-            {filePath && subject && !isImageMode && content && (
+            {filePath &&
+              subject &&
+              isMediaMode &&
+              (fileStatus === "deleted" || !absolutePath ? (
+                <div className="flex h-full w-full items-center justify-center p-6">
+                  <EmptyState
+                    variant="zero-data"
+                    scale="canvas"
+                    title="No working-tree version to play"
+                    description={
+                      isAudioMode
+                        ? "This audio file was deleted, and the diff view can only play the current file."
+                        : "This video was deleted, and the diff view can only play the current file."
+                    }
+                  />
+                </div>
+              ) : mediaPlaybackError !== null ? (
+                <div className="flex h-full w-full items-center justify-center p-6">
+                  <EmptyState
+                    variant="zero-data"
+                    scale="canvas"
+                    title={mediaPlaybackError.title}
+                    description={mediaPlaybackError.description}
+                  />
+                </div>
+              ) : isAudioMode ? (
+                <FileAudioPreview
+                  filePath={absolutePath}
+                  rootPath={worktreePath}
+                  label={fileName ?? filePath}
+                  reloadKey={previewReloadNonce}
+                  onError={(error) => setMediaPlaybackError(error ?? GENERIC_AUDIO_ERROR)}
+                />
+              ) : (
+                <FileVideoPreview
+                  filePath={absolutePath}
+                  rootPath={worktreePath}
+                  label={fileName ?? filePath}
+                  reloadKey={previewReloadNonce}
+                  onError={(error) => setMediaPlaybackError(error ?? GENERIC_VIDEO_ERROR)}
+                  maxHeightClassName="max-h-full"
+                />
+              ))}
+
+            {filePath &&
+              subject &&
+              isPdfMode &&
+              (fileStatus === "deleted" || !absolutePath ? (
+                <div className="flex h-full w-full items-center justify-center p-6">
+                  <EmptyState
+                    variant="zero-data"
+                    scale="canvas"
+                    title="No working-tree version to preview"
+                    description="This PDF was deleted, and the diff view can only show the current file."
+                  />
+                </div>
+              ) : (
+                <FilePdfPreview
+                  filePath={absolutePath}
+                  rootPath={worktreePath}
+                  label={fileName ?? filePath}
+                  reloadKey={previewReloadNonce}
+                />
+              ))}
+
+            {filePath && subject && !isImageMode && !isMediaMode && !isPdfMode && content && (
               <DiffViewer
                 diff={content}
                 viewType={diffViewType}
                 rootPath={worktreePath}
+                source={wantsFullFile ? source : undefined}
+                fullFile={wantsFullFile}
+                onFullFileVerdict={handleFullFileVerdict}
                 wrapLines={diffWrapLines}
                 onRetry={retry}
               />
             )}
 
-            {filePath && subject && !isImageMode && !content && (
+            {filePath && subject && !isImageMode && !isMediaMode && !isPdfMode && !content && (
               <div className="p-4 space-y-3">
                 <Skeleton label="Loading diff">
                   <SkeletonBone className="h-7 w-3/4" />

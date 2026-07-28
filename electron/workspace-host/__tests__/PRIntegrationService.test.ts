@@ -32,7 +32,7 @@ describe("PRIntegrationService", () => {
   let eventBus: TypedEventBus;
   let callbacks: PRIntegrationCallbacks;
   interface PullRequestServiceLike {
-    initialize(rootPath: string): void;
+    initialize(rootPath: string, projectId: string): void;
     start(startupDelayMs?: number): Promise<void>;
     stop(): void;
     reset(): void;
@@ -73,7 +73,7 @@ describe("PRIntegrationService", () => {
     const emitSpy = vi.spyOn(eventBus, "emit");
     const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
 
-    await service.initialize("/repo", () => [
+    await service.initialize("/repo", "test-project-id", () => [
       { worktreeId: "wt-linked", branch: "feature/foo", issueNumber: 42, isMainWorktree: false },
     ]);
 
@@ -91,7 +91,7 @@ describe("PRIntegrationService", () => {
     const emitSpy = vi.spyOn(eventBus, "emit");
     const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
 
-    await service.initialize("/repo", () => [
+    await service.initialize("/repo", "test-project-id", () => [
       { worktreeId: "wt-root", branch: "develop", issueNumber: undefined, isMainWorktree: true },
       { worktreeId: "wt-linked", branch: "feature/bar", issueNumber: 10, isMainWorktree: false },
     ]);
@@ -108,7 +108,7 @@ describe("PRIntegrationService", () => {
   describe("forwards canonical owner/repo (#8452)", () => {
     it("threads owner/repo from a non-GitHub sys:pr:detected event to onPRDetected", async () => {
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
-      await service.initialize("/repo", () => []);
+      await service.initialize("/repo", "test-project-id", () => []);
 
       eventBus.emit("sys:pr:detected", {
         worktreeId: "wt-1",
@@ -136,7 +136,7 @@ describe("PRIntegrationService", () => {
 
     it("forwards isCiStatusLoading from a phase-1 sys:pr:detected event to onPRDetected (#9551)", async () => {
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
-      await service.initialize("/repo", () => []);
+      await service.initialize("/repo", "test-project-id", () => []);
 
       eventBus.emit("sys:pr:detected", {
         worktreeId: "wt-1",
@@ -159,7 +159,7 @@ describe("PRIntegrationService", () => {
 
     it("threads owner/repo from a non-GitHub sys:issue:detected event to onIssueDetected", async () => {
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
-      await service.initialize("/repo", () => []);
+      await service.initialize("/repo", "test-project-id", () => []);
 
       eventBus.emit("sys:issue:detected", {
         worktreeId: "wt-2",
@@ -248,7 +248,7 @@ describe("PRIntegrationService", () => {
         onDetectionStateChanged,
       });
 
-      await service.initialize("/repo", () => []);
+      await service.initialize("/repo", "test-project-id", () => []);
 
       eventBus.emit("sys:pr:detection-state", { tripped: true, timestamp: Date.now() });
       expect(onDetectionStateChanged).toHaveBeenCalledWith(true);
@@ -260,7 +260,7 @@ describe("PRIntegrationService", () => {
 
     it("does not throw when the optional callback is omitted", async () => {
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
-      await service.initialize("/repo", () => []);
+      await service.initialize("/repo", "test-project-id", () => []);
 
       expect(() =>
         eventBus.emit("sys:pr:detection-state", { tripped: true, timestamp: Date.now() })
@@ -278,17 +278,17 @@ describe("PRIntegrationService", () => {
       });
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
 
-      service.resetPRState("/repo");
+      service.resetPRState("/repo", "test-project-id");
 
       expect(callOrder.slice(0, 2)).toEqual(["reset", "initialize"]);
-      expect(prServiceMock.initialize).toHaveBeenCalledWith("/repo");
+      expect(prServiceMock.initialize).toHaveBeenCalledWith("/repo", "test-project-id");
       expect(prServiceMock.start).toHaveBeenCalled();
     });
 
     it("only calls reset when projectRootPath is null", () => {
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
 
-      service.resetPRState(null);
+      service.resetPRState(null, null);
 
       expect(prServiceMock.reset).toHaveBeenCalled();
       expect(prServiceMock.initialize).not.toHaveBeenCalled();
@@ -319,7 +319,8 @@ describe("PRIntegrationService", () => {
       service.updateForgeCredentials(
         "builtin.github",
         { kind: "bearer", value: "ghp_abc123" },
-        "/repo"
+        "/repo",
+        "test-project-id"
       );
 
       expect(prServiceMock.refresh).toHaveBeenCalledTimes(1);
@@ -335,17 +336,17 @@ describe("PRIntegrationService", () => {
       });
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
 
-      service.updateForgeCredentials("builtin.github", null, "/repo");
+      service.updateForgeCredentials("builtin.github", null, "/repo", "test-project-id");
 
       expect(prServiceMock.refresh).not.toHaveBeenCalled();
       expect(callOrder.slice(0, 2)).toEqual(["reset", "initialize"]);
-      expect(prServiceMock.initialize).toHaveBeenCalledWith("/repo");
+      expect(prServiceMock.initialize).toHaveBeenCalledWith("/repo", "test-project-id");
     });
 
     it("only resets when credentials and path are null", () => {
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
 
-      service.updateForgeCredentials("builtin.github", null, null);
+      service.updateForgeCredentials("builtin.github", null, null, null);
 
       expect(prServiceMock.reset).toHaveBeenCalledTimes(1);
       expect(prServiceMock.initialize).not.toHaveBeenCalled();
@@ -355,7 +356,12 @@ describe("PRIntegrationService", () => {
     it("refreshes for any providerId since the relay only signals presence", () => {
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
 
-      service.updateForgeCredentials("builtin.unknown", { kind: "bearer", value: "abc" }, "/repo");
+      service.updateForgeCredentials(
+        "builtin.unknown",
+        { kind: "bearer", value: "abc" },
+        "/repo",
+        "test-project-id"
+      );
 
       expect(prServiceMock.refresh).toHaveBeenCalledTimes(1);
     });
@@ -370,12 +376,12 @@ describe("PRIntegrationService", () => {
       const emitSpy = vi.spyOn(eventBus, "emit");
       const service = makeWorkerService();
 
-      await service.initialize("/repo", () => [
+      await service.initialize("/repo", "test-project-id", () => [
         { worktreeId: "wt-1", branch: "feature/foo", issueNumber: 7, isMainWorktree: false },
       ]);
 
       // Detection wiring is intact: candidates are still seeded…
-      expect(prServiceMock.initialize).toHaveBeenCalledWith("/repo");
+      expect(prServiceMock.initialize).toHaveBeenCalledWith("/repo", "test-project-id");
       const updateCalls = emitSpy.mock.calls.filter(([ev]) => ev === "sys:worktree:update");
       expect(updateCalls).toHaveLength(1);
       // …but the automatic polling loop never starts.
@@ -390,28 +396,33 @@ describe("PRIntegrationService", () => {
 
     it("resetPRState() reinitializes without restarting polling", () => {
       const service = makeWorkerService();
-      service.resetPRState("/repo");
+      service.resetPRState("/repo", "test-project-id");
       expect(prServiceMock.reset).toHaveBeenCalled();
-      expect(prServiceMock.initialize).toHaveBeenCalledWith("/repo");
+      expect(prServiceMock.initialize).toHaveBeenCalledWith("/repo", "test-project-id");
       expect(prServiceMock.start).not.toHaveBeenCalled();
     });
 
     it("updateForgeCredentials(null) reinitializes without restarting polling", () => {
       const service = makeWorkerService();
-      service.updateForgeCredentials("builtin.github", null, "/repo");
-      expect(prServiceMock.initialize).toHaveBeenCalledWith("/repo");
+      service.updateForgeCredentials("builtin.github", null, "/repo", "test-project-id");
+      expect(prServiceMock.initialize).toHaveBeenCalledWith("/repo", "test-project-id");
       expect(prServiceMock.start).not.toHaveBeenCalled();
     });
 
     it("keeps the on-demand refresh path functional", () => {
       const service = makeWorkerService();
-      service.updateForgeCredentials("builtin.github", { kind: "bearer", value: "ghp_x" }, "/repo");
+      service.updateForgeCredentials(
+        "builtin.github",
+        { kind: "bearer", value: "ghp_x" },
+        "/repo",
+        "test-project-id"
+      );
       expect(prServiceMock.refresh).toHaveBeenCalledTimes(1);
     });
 
     it("attended remains the default when options are omitted", async () => {
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
-      await service.initialize("/repo", () => []);
+      await service.initialize("/repo", "test-project-id", () => []);
       expect(prServiceMock.start).toHaveBeenCalledTimes(1);
     });
   });

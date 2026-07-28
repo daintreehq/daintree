@@ -314,6 +314,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartAll",
+  "terminal.arm",
   "worktree.delete",
   "worktree.sessions.endAll",
   "worktree.sessions.trashAll",
@@ -344,6 +345,8 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "forge.editPR",
   "forge.closeIssue",
   "forge.editIssue",
+  "session.bookmarkAndClose",
+  "session.bookmark.delete",
 ];
 
 /**
@@ -397,6 +400,12 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // Confirm in ProjectSwitcherPalette.tsx via removeConfirmProject state;
   // action ID not co-located with the ConfirmDialog in that file.
   "project.remove",
+  // Agent/MCP-only confirm gate (#11346): arming reroutes the user's next
+  // keystrokes to every armed terminal, so an external caller must pass the
+  // host confirm dialog. Palette-hidden, and user-side arming goes through the
+  // fleet ribbon (which calls the store directly, not ActionService), so there
+  // is no user-facing dispatch path to co-locate a ConfirmDialog with.
+  "terminal.arm",
   // Agent-dispatch only — no user-side ConfirmDialog. danger:"confirm" gates MCP/agent
   // dispatch only; user dispatch of recipe.run is intentionally ungated.
   "recipe.run",
@@ -426,6 +435,8 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // dispatch happens through the forge UI, not these actions.
   "forge.closeIssue",
   "forge.editIssue",
+  "session.bookmarkAndClose",
+  "session.bookmark.delete",
 ];
 
 describe("destructive-action confirm wiring", () => {
@@ -506,6 +517,10 @@ describe("destructive-action danger metadata", () => {
       issueNumber: 1,
       // terminal.kill/restart require a terminalId before their confirm gate runs.
       terminalId: "term-placeholder",
+      // session.bookmarkAndClose/delete need label + sessionId to clear arg
+      // validation and reach the confirm gate.
+      label: "placeholder",
+      sessionId: "session-placeholder",
     };
 
     // Some listed actions (e.g. worktree.resource.teardown) gate availability
@@ -518,6 +533,7 @@ describe("destructive-action danger metadata", () => {
         ["wt-placeholder", { id: "wt-placeholder", hasTeardownCommand: true } as WorktreeSnapshot],
       ]),
       statusCheckedAt: new Map(),
+      workingTreeChangedAtById: new Map(),
       manualAssociations: new Map(),
       version: { epoch: "test", seq: 1 },
       tombstones: new Map(),

@@ -31,7 +31,7 @@ vi.mock("@/hooks/useKeybinding", () => ({
 }));
 
 const paletteState = vi.hoisted(() => ({
-  nonActiveAgentCounts: { activeAgentCount: 0, waitingAgentCount: 0 },
+  nonActiveAgentCounts: { activeAgentCount: 0, waitingAgentCount: 0, waitingProjectCount: 0 },
 }));
 
 vi.mock("@/hooks", async () => {
@@ -362,29 +362,49 @@ describe("ProjectSwitcher background-agent badge", () => {
       currentProject: makeProject(),
       isLoading: false,
     });
-    paletteState.nonActiveAgentCounts = { activeAgentCount: 0, waitingAgentCount: 0 };
+    paletteState.nonActiveAgentCounts = {
+      activeAgentCount: 0,
+      waitingAgentCount: 0,
+      waitingProjectCount: 0,
+    };
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("counts agents on projects that are absent from results", () => {
-    paletteState.nonActiveAgentCounts = { activeAgentCount: 0, waitingAgentCount: 2 };
-    const { getByRole } = render(<ProjectSwitcher />);
-    expect(getByRole("status").getAttribute("aria-label")).toContain("2 background agents waiting");
-  });
-
-  it("prefers waiting agents over working ones", () => {
-    paletteState.nonActiveAgentCounts = { activeAgentCount: 5, waitingAgentCount: 1 };
+  it("counts waiting PROJECTS, not the agents inside them", () => {
+    // Eight agents queued in one repo is one place to go, not eight obligations.
+    paletteState.nonActiveAgentCounts = {
+      activeAgentCount: 0,
+      waitingAgentCount: 8,
+      waitingProjectCount: 1,
+    };
     const { getByRole } = render(<ProjectSwitcher />);
     const label = getByRole("status").getAttribute("aria-label");
-    expect(label).toContain("1 background agent waiting");
+    expect(label).toContain("1 project waiting for input");
+    expect(label).not.toContain("8");
+  });
+
+  it("prefers waiting projects over working agents", () => {
+    paletteState.nonActiveAgentCounts = {
+      activeAgentCount: 5,
+      waitingAgentCount: 1,
+      waitingProjectCount: 1,
+    };
+    const { getByRole } = render(<ProjectSwitcher />);
+    const label = getByRole("status").getAttribute("aria-label");
+    expect(label).toContain("1 project waiting for input");
     expect(label).not.toContain("working");
   });
 
   it("falls back to working agents when none are waiting", () => {
-    paletteState.nonActiveAgentCounts = { activeAgentCount: 3, waitingAgentCount: 0 };
+    // Work in progress is not an obligation, so it stays an agent tally.
+    paletteState.nonActiveAgentCounts = {
+      activeAgentCount: 3,
+      waitingAgentCount: 0,
+      waitingProjectCount: 0,
+    };
     const { getByRole } = render(<ProjectSwitcher />);
     expect(getByRole("status").getAttribute("aria-label")).toContain("3 background agents working");
   });

@@ -10,6 +10,7 @@ interface LatestRefShape {
   projectId?: string;
   disabled: boolean;
   isInitializing: boolean;
+  isAgentTerminal: boolean;
   isInHistoryMode: boolean;
   isAutocompleteOpen: boolean;
   autocompleteItems: AutocompleteItem[];
@@ -177,6 +178,21 @@ export function useEditorKeymap({
 
       const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
       const isEmpty = text.trim().length === 0;
+
+      // Agent terminals: an empty-input ArrowUp at rest belongs to the agent's
+      // own TUI (e.g. Codex's `/model` picker), not host prompt-history recall.
+      // Forward it to the terminal and never fall back to history — this keeps
+      // ArrowUp symmetric with ArrowDown (which already reaches the terminal at
+      // rest) and leaves host history reachable via Mod-r. Mid-recall
+      // (isInHistoryMode) still navigates host history in the block below.
+      if (latest.isAgentTerminal && isEmpty && !latest.isInHistoryMode) {
+        if (latest.onSendKey) {
+          latest.onSendKey("up");
+          return true;
+        }
+        return false;
+      }
+
       const canNavigateHistory = isEmpty || latest.isInHistoryMode;
 
       if (canNavigateHistory) {

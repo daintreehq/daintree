@@ -9,8 +9,10 @@ import type {
   ViewportPresetId,
   FileViewMode,
   DiffSource,
+  FileBrowserTreeSnapshot,
 } from "./panel.js";
 import type { CommandOverride } from "./commands.js";
+import type { GitignoreTemplateId } from "../config/gitignoreTemplates.js";
 import type { GitStatus } from "./git.js";
 import type { EditorConfig } from "./editor.js";
 import type { NotificationSettings } from "./ipc/api.js";
@@ -54,11 +56,11 @@ export interface ProjectRepoStats {
   lastUpdated: number | null;
 }
 
-/** Project (Git repository) managed by Daintree */
+/** Workspace managed by Daintree — a git repository, or a plain folder. */
 export interface Project {
   /** Unique identifier (UUID or path hash) */
   id: string;
-  /** Git repository root path */
+  /** Git repository root, or the adopted folder itself when {@link Project.gitBacked} is false */
   path: string;
   /** User-editable display name */
   name: string;
@@ -81,6 +83,13 @@ export interface Project {
   /** Timestamp (ms) of last frecency update */
   lastAccessedAt?: number;
   /**
+   * Epoch ms up to which the user has seen this project's completed agents
+   * (stamped after a 2s focused dwell on the project). Completions newer than
+   * this hold the project in the switcher's "Needs attention" band, with no
+   * time-based expiry. Absent = nothing acknowledged yet.
+   */
+  lastCompletionSeenAt?: number;
+  /**
    * Timestamp (ms) the background-idle auto-close reclaimed this project's
    * memory and marked it `closed`. Absent for projects closed manually or still
    * open; the project switcher surfaces it as a distinct "Suspended to free
@@ -93,6 +102,52 @@ export interface Project {
    * the write; absent until the project's first clean stats poll.
    */
   lastKnownStats?: ProjectRepoStats;
+  /**
+   * `false` for a folder opened without git (issue #11405) — worktrees, review,
+   * and diffs don't apply to it. Absent on every repository-backed project and
+   * every row predating the field, so absence means git-backed. Read it through
+   * {@link isGitBackedProject} rather than testing the field directly.
+   */
+  gitBacked?: boolean;
+}
+
+/** Options for registering a folder as a workspace. */
+export interface ProjectAddOptions {
+  /**
+   * `false` adopts a folder that isn't a git repository. Omitted keeps the
+   * strict git-root requirement, so an unknown non-repo still fails with
+   * `NOT_A_GIT_REPO` and drives the choice dialog.
+   */
+  gitBacked?: boolean;
+  /**
+   * Name/emoji chosen in a creation dialog, applied only where a brand-new row
+   * is minted. Kept as its own key rather than flattened alongside
+   * {@link ProjectAddOptions.gitBacked}: the main-process validator drops a
+   * creation identity whole unless both halves are present, so a flattened
+   * payload carrying only `gitBacked` would be discarded silently.
+   */
+  identity?: ProjectCreationIdentity;
+}
+
+/**
+ * Whether git-backed surfaces (worktrees, review, diffs, branch labels) apply.
+ * Absence means git-backed — legacy rows carry no discriminator.
+ */
+export function isGitBackedProject(
+  project: Pick<Project, "gitBacked"> | null | undefined
+): boolean {
+  return project?.gitBacked !== false;
+}
+
+/**
+ * Identity chosen in a creation dialog and applied when the project row is
+ * first minted. Only consulted on that branch — an already-registered path, an
+ * adopted move, or an in-repo `.daintree/project.json` all keep their own
+ * identity, so this can never be used to rename by re-adding a folder.
+ */
+export interface ProjectCreationIdentity {
+  name: string;
+  emoji: string;
 }
 
 /** Panel snapshot for state preservation. */
@@ -115,6 +170,14 @@ export interface PanelSnapshot {
   cwd?: string;
   /** Associated worktree ID */
   worktreeId?: string;
+  /**
+   * The worktree's stable `.git/worktrees/<name>` admin-dir handle, captured at
+   * save time (#11388). A worktree id is its normalized path, which changes on
+   * `git worktree move`; this handle survives the move, so restore can match a
+   * stale `worktreeId` to the worktree's new path instead of orphaning the panel
+   * and re-homing it to the active worktree. Absent on legacy snapshots.
+   */
+  worktreeGitDir?: string;
   /** Location in the UI - grid or dock */
   location: PanelLocation;
   /** Command to execute after shell starts (e.g., 'claude --model sonnet-4' for AI agents) */
@@ -159,6 +222,20 @@ export interface PanelSnapshot {
   diffSource?: DiffSource;
   /** Base ref for a diff panel with `diffSource: "base-branch"` */
   baseBranch?: string;
+  /** Worktree-relative path selected in a file browser panel */
+  browserSelectedPath?: string;
+  /** Worktree-relative directories expanded in a file browser panel */
+  browserExpandedPaths?: string[];
+  /** Whether a file browser panel hides dot-prefixed entries */
+  browserHideDotfiles?: boolean;
+  /** Worktree-relative directory a file browser panel is rooted at */
+  browserRootPath?: string;
+  /** Whether a file browser panel's tree sidebar is collapsed (only `true` persisted) */
+  browserSidebarCollapsed?: boolean;
+  /** Last-known tree structure of a file browser panel (#11367) */
+  browserTreeSnapshot?: FileBrowserTreeSnapshot;
+  /** File browser tree column width in px (only a non-default, in-range value persisted) */
+  browserSidebarWidth?: number;
   /** Legacy pre-file-panel field: absolute path shown in a markdown panel */
   markdownFilePath?: string;
   /** Legacy pre-file-panel field: markdown panel view mode */
@@ -372,15 +449,15 @@ export interface RunCommand {
 
 /** CopyTree context generation settings */
 export interface CopyTreeSettings {
-  /** Maximum total context size in bytes (e.g., 1MB, 5MB, 10MB). Undefined = unlimited */
+  /** Maximum total context size in bytes. Undefined falls back to CopyTree's 100MB ceiling */
   maxContextSize?: number;
-  /** Maximum individual file size in bytes. Files larger are skipped */
+  /** Per-file size gate in bytes. CopyTree's unliftable 10MB ceiling applies regardless */
   maxFileSize?: number;
-  /** Character limit per file for truncation. Files exceeding this will be truncated */
+  /** Character budget across all file content, not per file */
   charLimit?: number;
-  /** Truncation strategy: "all" (no truncation) or "modified" (newest first when limits hit) */
+  /** Retention order when a budget drops files: "all" (path order) or "modified" (newest first) */
   strategy?: "all" | "modified";
-  /** Glob patterns to always include, even if old */
+  /** Glob patterns to always include, overriding excludes and the per-file size limit */
   alwaysInclude?: string[];
   /** Glob patterns to always exclude from context */
   alwaysExclude?: string[];
@@ -515,8 +592,8 @@ export interface ProjectSettings {
     initialCommitMessage?: string;
     /** Create a .gitignore file (default: true) */
     createGitignore?: boolean;
-    /** Gitignore template to use (default: "node") */
-    gitignoreTemplate?: "node" | "python" | "minimal" | "none";
+    /** Gitignore template to use (default: "minimal") */
+    gitignoreTemplate?: GitignoreTemplateId;
   };
   /** Preferred external editor for this project */
   preferredEditor?: EditorConfig;

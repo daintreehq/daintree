@@ -14,6 +14,12 @@ import type { ResourceProfile } from "@shared/types/resourceProfile";
 import { type TerminalRestoreTask, getRestoreBatchParams, delay } from "./batchScheduler";
 import { reconnectWithTimeout } from "./reconnectManager";
 import {
+  buildWorktreeMoveContext,
+  resolveWorktreeMovePatch,
+  type WorktreeMoveContext,
+} from "./worktreeMoveRemap";
+import { rebaseAbsolutePath } from "@shared/utils/projectPathRelocation";
+import {
   inferKind,
   resolveAgentId,
   buildArgsForBackendTerminal,
@@ -22,7 +28,10 @@ import {
   buildArgsForNonPtyRecreation,
   buildArgsForOrphanedTerminal,
   inferWorktreeIdFromCwd,
+  resolveRespawnAgentId,
 } from "./statePatcher";
+import { buildResumeLatestCommand } from "@shared/types/agentSettings";
+import { normalize as normalizePath } from "@shared/utils/path";
 import type { HydrationOptions } from "./";
 import { getAgentConfig } from "@/config/agents";
 import {
@@ -32,6 +41,243 @@ import {
 
 type AddPanelFn = HydrationOptions["addPanel"];
 type RestoreTerminalOrderFn = NonNullable<HydrationOptions["restoreTerminalOrder"]>;
+
+/**
+ * Scope key component for the resume-latest election: the directory a pane will
+ * launch in, normalized lexically so two spellings of one directory share a slot.
+ * Deliberately not realpath'd — the election must stay synchronous and the path
+ * may no longer exist, so symlink aliases remain separate scopes.
+ */
+function resumeLatestScopeCwd(cwd: string): string {
+  const normalized = normalizePath(cwd).normalize("NFC");
+  // Windows paths are case-insensitive; fold so `C:/Repo` and `c:/repo` collide.
+  return /^([A-Za-z]:\/|\/\/)/.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+/**
+ * Compound key for the resume election. NUL-joined: neither an agent id, a path
+ * nor a session id can contain it, so a key can never be forged by an unusual
+ * path or a future custom agent id.
+ */
+function resumeKey(agentId: string, part: string): string {
+  return `${agentId}\u0000${part}`;
+}
+
+/** Key for one (agent, directory) resume-latest scope. */
+function resumeScopeKey(agentId: string, cwd: string): string {
+  return resumeKey(agentId, resumeLatestScopeCwd(cwd));
+}
+
+/**
+ * Which panes must be denied which resume on restore, so no two restored panes
+ * end up writing into one agent conversation (#11461).
+ */
+interface ResumeSuppression {
+  /** Panes denied their agent's resume-latest fallback. */
+  resumeLatest: Set<string>;
+  /** Panes denied the exact `agentSessionId` they carry, because a sibling owns it. */
+  sessionId: Set<string>;
+}
+
+/**
+ * Decide, before any restore task dispatches, which panes may resume what.
+ *
+ * Two collisions are possible and they need different answers.
+ *
+ * **The fallback resolves by recency, not identity.** `claude --continue` and
+ * `codex resume --last` reopen whichever session in the directory was touched
+ * last, and nothing about the command says which one that is. So a pane may use
+ * it only when nothing else in its (agent, cwd) scope is already attached to a
+ * session there. Two kinds of pane claim a scope: one carrying its own
+ * `agentSessionId`, which replays into that exact transcript, and one whose PTY
+ * survived, which reconnects to a conversation running right now. `lastActiveAt`
+ * cannot rank around a claim — whether the fallback reaches the directory before
+ * or after the claimant depends on launch order, not on which pane the user last
+ * focused — so every candidate in a claimed scope is suppressed. Among candidates
+ * in an UNCLAIMED scope the highest valid `lastActiveAt` takes the scope's single
+ * slot, ties keeping the earlier saved entry, so the outcome is deterministic and
+ * independent of restore order. A lone candidate in an unclaimed scope is never
+ * recorded, so the common single-pane case keeps its behavior by construction.
+ *
+ * **Two panes can carry the SAME `agentSessionId`.** That is exactly what the bug
+ * this guards against produces: two panes reopen one conversation, and the next
+ * quit captures that one session id into both snapshots. Replaying both would put
+ * two writers on one transcript, so one owner is elected per (agent, session id)
+ * by the same ranking, and the losers resume nothing at all. A live PTY attached
+ * to that session owns it outright rather than by ranking — it is writing now —
+ * so every cold holder of its id loses, alone or not.
+ *
+ * A suppressed pane launches fresh with `sessionLostOnRestore`, which raises the
+ * existing banner and leaves the conversation reachable from session history.
+ * That is the trade throughout: one pane missing a resume beats two panes writing
+ * into one conversation.
+ *
+ * Liveness is only as good as what is known synchronously. When the bulk probe
+ * timed out there is no prefetched result, and a per-panel reconnect can still
+ * find a live PTY after the election has run — that scope is then judged unclaimed
+ * and its winner resumes latest into the live session. Deliberately accepted: the
+ * election has to complete before any task dispatches (a claim taken after an
+ * await races, the hazard #11052 fixed for restart), and treating unknown liveness
+ * as a claim would cost every multi-pane scope its resume on a transient probe
+ * failure. A failed prefetch degrades to the behavior that shipped with the
+ * election rather than to something worse.
+ */
+function electResumeSuppression(
+  panels: readonly (TerminalState | undefined)[],
+  context: {
+    projectRoot: string;
+    backendTerminalMap: Map<string, BackendTerminalInfo>;
+    prefetchedReconnectResults?: Record<string, TerminalReconnectResult>;
+  }
+): ResumeSuppression {
+  const winnerByScope = new Map<string, { id: string; lastActiveAt: number }>();
+  const candidateIdsByScope = new Map<string, string[]>();
+  const claimedScopes = new Set<string>();
+  const ownerBySession = new Map<string, { id: string; lastActiveAt: number }>();
+  const holderIdsBySession = new Map<string, string[]>();
+  const liveOwnedSessions = new Set<string>();
+
+  // A corrupt or missing stamp ranks lowest rather than winning anything, and a
+  // tie keeps the entry seen first — the saved array's order, not restore order.
+  const recordBest = (
+    best: Map<string, { id: string; lastActiveAt: number }>,
+    key: string,
+    saved: TerminalState
+  ): void => {
+    const stamp = saved.lastActiveAt ?? 0;
+    const lastActiveAt = Number.isFinite(stamp) && stamp > 0 ? stamp : 0;
+    const current = best.get(key);
+    if (current === undefined || lastActiveAt > current.lastActiveAt) {
+      best.set(key, { id: saved.id, lastActiveAt });
+    }
+  };
+  const pushId = (into: Map<string, string[]>, key: string, id: string): void => {
+    const existing = into.get(key);
+    if (existing === undefined) {
+      into.set(key, [id]);
+    } else {
+      existing.push(id);
+    }
+  };
+
+  for (const saved of panels) {
+    if (saved === undefined) continue;
+    if (isSmokeTestTerminalId(saved.id)) continue;
+
+    // A pane with a backend record reconnects rather than respawns; the prefetched
+    // probe stands in for the same thing when it reports a live PTY. Either way
+    // the live record — not the snapshot — describes what is actually running, and
+    // can supply an identity a legacy snapshot lacks.
+    const backendTerminal = context.backendTerminalMap.get(saved.id);
+    const prefetched = context.prefetchedReconnectResults?.[saved.id];
+    const livePrefetch =
+      backendTerminal === undefined && prefetched?.exists === true && prefetched.hasPty === true
+        ? prefetched
+        : undefined;
+    const record = backendTerminal ?? livePrefetch;
+    const reconnects = record !== undefined;
+    // Holds an open conversation only with a live PTY. A `hasPty === false`
+    // backend record is either dropped outright by the restore branch below (a
+    // dead agent would be a phantom idle panel) or recreated with no session —
+    // neither is something the fallback can collide with.
+    const holdsLiveSession = reconnects && record.hasPty !== false;
+
+    const kind = record?.kind ?? inferKind(saved);
+    if (kind === "assistant" || !panelKindHasPty(kind)) continue;
+    const savedAgentId = resolveRespawnAgentId(saved, inferKind(saved));
+
+    if (reconnects) {
+      if (!holdsLiveSession) continue;
+      // Identity live-first, mirroring `buildArgsForBackendTerminal` — a stale
+      // snapshot agent id would otherwise claim a scope this pane is not in, and
+      // leave the one it IS in open to a colliding fallback. `saved.cwd` still
+      // leads for the directory, because it is already rebased across a worktree
+      // move (#11388) while the live record reports the pre-move path, and it is
+      // the key every candidate uses; the live cwd fills in for a snapshot that
+      // never recorded one.
+      const liveAgentId = resolveAgentId(record.launchAgentId, savedAgentId);
+      if (liveAgentId === undefined) continue;
+      claimedScopes.add(
+        resumeScopeKey(liveAgentId, saved.cwd || record.cwd || context.projectRoot)
+      );
+      // A live PTY owns its session outright: it is attached NOW, so a cold pane
+      // holding the same id has nothing to rank against and must not replay it.
+      const liveSessionId = record.agentSessionId ?? saved.agentSessionId;
+      if (liveSessionId) {
+        liveOwnedSessions.add(resumeKey(liveAgentId, liveSessionId));
+      }
+      continue;
+    }
+
+    // Respawning: identity is whatever the respawn itself will resolve.
+    const agentId = savedAgentId;
+    if (agentId === undefined) continue;
+    const scope = resumeScopeKey(agentId, saved.cwd || context.projectRoot);
+
+    if (saved.agentSessionId) {
+      // Respawning with an exact id: claims the scope, and contends for sole
+      // ownership of the session id itself.
+      claimedScopes.add(scope);
+      const sessionKey = resumeKey(agentId, saved.agentSessionId);
+      pushId(holderIdsBySession, sessionKey, saved.id);
+      recordBest(ownerBySession, sessionKey, saved);
+      continue;
+    }
+
+    // Probe capability through the very builder the respawn branch calls, so
+    // eligibility can't drift from behavior (covers custom/plugin agents too).
+    if (buildResumeLatestCommand(agentId) === undefined) continue;
+
+    pushId(candidateIdsByScope, scope, saved.id);
+    recordBest(winnerByScope, scope, saved);
+  }
+
+  const resumeLatest = new Set<string>();
+  const sessionId = new Set<string>();
+  for (const [scope, ids] of candidateIdsByScope) {
+    if (claimedScopes.has(scope)) {
+      for (const id of ids) {
+        resumeLatest.add(id);
+      }
+      continue;
+    }
+    if (ids.length < 2) continue;
+    const winnerId = winnerByScope.get(scope)?.id;
+    for (const id of ids) {
+      if (id !== winnerId) resumeLatest.add(id);
+    }
+  }
+  for (const [sessionKey, ids] of holderIdsBySession) {
+    // A live PTY already owns the session, so every cold holder loses — including
+    // a lone one, which has no rival among the snapshots but a very real one on
+    // the other end of that transcript.
+    const liveOwned = liveOwnedSessions.has(sessionKey);
+    if (!liveOwned && ids.length < 2) continue;
+    const ownerId = liveOwned ? undefined : ownerBySession.get(sessionKey)?.id;
+    for (const id of ids) {
+      if (id === ownerId) continue;
+      // Denied the id it carries — and the fallback with it, since resume-latest
+      // in that directory resolves to the very session the owner is replaying.
+      sessionId.add(id);
+      resumeLatest.add(id);
+    }
+  }
+  return { resumeLatest, sessionId };
+}
+
+/**
+ * Rebase a restore arg's `cwd` from a moved worktree's old root to its new one.
+ * No-op when the panel's worktree didn't move or the arg carries no cwd. Used on
+ * the surviving-PTY paths, whose cwd comes from the live backend record (the old
+ * path) rather than the already-rebased `saved.cwd` (#11388).
+ */
+function rebaseMovedArgsCwd(
+  args: { cwd?: string },
+  move: { oldRoot: string; newRoot: string } | undefined
+): void {
+  if (move === undefined || typeof args.cwd !== "string") return;
+  args.cwd = rebaseAbsolutePath(args.cwd, move.oldRoot, move.newRoot);
+}
 
 export interface PanelRestoreContext {
   addPanel: AddPanelFn;
@@ -150,25 +396,78 @@ export async function restorePanelsPhase(
   // worktree — so [] only ever means "not ready", never a real count. Treating
   // it as authoritative re-homed every panel to the active worktree, and the
   // save loop then persisted that, compounding across restarts.
-  let knownWorktreeIdsPromise: Promise<Set<string> | null> | null = null;
-  const getKnownWorktreeIds = (): Promise<Set<string> | null> => {
-    knownWorktreeIdsPromise ??= worktreesPromise.then((list) =>
-      list && list.length > 0 ? new Set(list.map((w) => w.id)) : null
-    );
-    return knownWorktreeIdsPromise;
+  // A single memoized correlation context off the in-flight worktree list,
+  // shared by the known-id guard and the worktree-move remap below (#11388).
+  let worktreeMoveContextPromise: Promise<WorktreeMoveContext | null> | null = null;
+  const getWorktreeMoveContext = (): Promise<WorktreeMoveContext | null> => {
+    worktreeMoveContextPromise ??= worktreesPromise.then((list) => buildWorktreeMoveContext(list));
+    return worktreeMoveContextPromise;
+  };
+  const getKnownWorktreeIds = async (): Promise<Set<string> | null> => {
+    const ctx = await getWorktreeMoveContext();
+    return ctx?.knownIds ?? null;
   };
   const resolveRestoredWorktreeId = async (
     worktreeId: string | undefined
   ): Promise<string | undefined> => {
-    if (!worktreeId) return activeWorktreeId ?? worktreeId;
     const known = await getKnownWorktreeIds();
+    // Only re-home onto the active worktree when it is itself live. With a
+    // complete, authoritative list (#11387) an activeWorktreeId absent from
+    // `known` is a deleted/stale selection, so re-homing onto it would strand
+    // the panel on a dead worktree — worse than keeping the saved id, which the
+    // boot's own active-selection fallback (index.ts) repairs on this and the
+    // next boot. When the list is unknown (null) there is nothing to validate
+    // against, so preserve the prior behavior of trusting activeWorktreeId
+    // (#11234). This closes PR #11235's own unaddressed follow-up.
+    const rehomeTarget =
+      activeWorktreeId !== null && (known === null || known.has(activeWorktreeId))
+        ? activeWorktreeId
+        : undefined;
+    // No saved worktree (undefined, or a corrupt empty string): fall to the
+    // validated active worktree, or leave it unset rather than guess onto a
+    // dead id — never echo back the falsy saved value.
+    if (!worktreeId) return rehomeTarget;
     // With no worktree list there is nothing to check the id against, so
     // re-homing would be a guess — keep what was saved.
-    if (!known || known.has(worktreeId)) return worktreeId;
-    return activeWorktreeId ?? worktreeId;
+    if (known === null || known.has(worktreeId)) return worktreeId;
+    return rehomeTarget ?? worktreeId;
   };
 
   if (savedPanels && savedPanels.length > 0) {
+    // #11388: a worktree move (`git worktree move` or an external relocation)
+    // changes its path-derived id while its stable `.git/worktrees/<name>`
+    // handle is preserved. Remap panels whose worktree moved — matched via the
+    // gitDir persisted with each panel — to the worktree's new id (rebasing
+    // cwd/filePath) BEFORE anything keys off saved.worktreeId, so a moved
+    // worktree's panels stay put instead of being treated as deleted. Legacy
+    // snapshots without a stored gitDir, and genuinely-deleted worktrees, are
+    // left untouched here and handled by resolveRestoredWorktreeId's re-home
+    // below. The context is null when the list isn't ready (#11234), so this is
+    // a no-op in that race — identical to the pre-#11388 behavior.
+    // Skip the correlation — and its worktree-list await — entirely when no
+    // saved panel even carries a gitDir handle. Legacy snapshots and
+    // browser-only sessions then restore without waiting on worktree
+    // enumeration, preserving the pre-#11388 time-to-first-panel.
+    const anyMoveCandidate = savedPanels.some(
+      (saved) =>
+        saved !== undefined && saved.worktreeId !== undefined && saved.worktreeGitDir !== undefined
+    );
+    const moveContext = anyMoveCandidate ? await getWorktreeMoveContext() : null;
+    // old→new root per remapped panel, so the surviving-PTY paths below (which
+    // take cwd from the live backend record, not saved.cwd) can rebase it too.
+    const movedRootsById = new Map<string, { oldRoot: string; newRoot: string }>();
+    const panels = moveContext
+      ? savedPanels.map((saved) => {
+          if (saved === undefined) return saved;
+          const patch = resolveWorktreeMovePatch(saved, moveContext);
+          if (!patch) return saved;
+          if (saved.worktreeId !== undefined) {
+            movedRootsById.set(saved.id, { oldRoot: saved.worktreeId, newRoot: patch.worktreeId });
+          }
+          return { ...saved, ...patch };
+        })
+      : savedPanels;
+
     // Build a single-pass map of worktreeId → highest lastActiveAt across saved
     // panels. The restore predicate uses this to promote each non-active
     // worktree's most-recently-focused panel to the priority sequential tier,
@@ -179,7 +478,7 @@ export async function restorePanelsPhase(
     // `Number.isFinite` rejects NaN and ±Infinity so corrupted persisted
     // values never seed the map with values that would silently mis-promote.
     const maxLastActiveAtByWorktree = new Map<string, number>();
-    for (const saved of savedPanels) {
+    for (const saved of panels) {
       if (saved === undefined) continue;
       if (saved.worktreeId === undefined) continue;
       if (!Number.isFinite(saved.lastActiveAt) || (saved.lastActiveAt ?? 0) <= 0) continue;
@@ -190,11 +489,28 @@ export async function restorePanelsPhase(
       }
     }
 
+    // Decide which panes may resume what, before any restore task runs. At most
+    // one pane per (agent, cwd) may use the agent's resume-latest fallback, none
+    // may where a sibling already holds a session in that directory, and only one
+    // pane may replay a given session id. That fallback resolves to the most
+    // recent session in scope (`codex resume --last`, `claude --continue`), so
+    // panes sharing a directory would otherwise all reopen the SAME conversation
+    // (#11461). Computed synchronously over static saved fields: same-tier tasks
+    // run concurrently via Promise.allSettled, so a check-and-claim inside the
+    // closures would race (the hazard already fixed once for restart, #11052).
+    // Only suppressions are recorded, so a lone candidate in an unclaimed scope —
+    // the common single-pane case — is never touched.
+    const resumeSuppression = electResumeSuppression(panels, {
+      projectRoot: projectRoot || "",
+      backendTerminalMap,
+      prefetchedReconnectResults,
+    });
+
     const panelTasks: PanelRestoreTaskEntry[] = [];
     const restoredIdsByIndex = new Map<number, string>();
 
-    for (let savedIndex = 0; savedIndex < savedPanels.length; savedIndex++) {
-      const saved = savedPanels[savedIndex];
+    for (let savedIndex = 0; savedIndex < panels.length; savedIndex++) {
+      const saved = panels[savedIndex];
       if (saved === undefined) continue;
       if (isSmokeTestTerminalId(saved.id)) {
         logHydrationInfo(`Skipping smoke test terminal snapshot: ${saved.id}`);
@@ -253,6 +569,10 @@ export async function restorePanelsPhase(
             // Assign to the active worktree when the terminal has no worktree,
             // or names one that no longer exists.
             args.worktreeId = await resolveRestoredWorktreeId(args.worktreeId);
+            // A surviving backend PTY reports its live (old-path) cwd; rebase it
+            // onto the moved worktree's new root so persisted state and a later
+            // respawn don't reference the vanished path (#11388).
+            rebaseMovedArgsCwd(args, movedRootsById.get(saved.id));
             const location = args.location as "grid" | "dock";
 
             logHydrationInfo(`[HYDRATION] Adding terminal from backend:`, {
@@ -331,6 +651,9 @@ export async function restorePanelsPhase(
                 reconnectArgs.worktreeId = await resolveRestoredWorktreeId(
                   reconnectArgs.worktreeId
                 );
+                // Rebase the reconnected PTY's live (old-path) cwd onto the
+                // moved worktree's new root, like the matched-backend path.
+                rebaseMovedArgsCwd(reconnectArgs, movedRootsById.get(saved.id));
                 const restoredTerminalId = await addPanel(reconnectArgs);
                 restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
@@ -382,7 +705,11 @@ export async function restorePanelsPhase(
                   reconnectTimedOut,
                   clipboardDirectory,
                   projectPresetsByAgent,
-                  resolvedAgentBaseCommand
+                  {
+                    resolvedAgentBaseCommand,
+                    allowResumeLatest: !resumeSuppression.resumeLatest.has(saved.id),
+                    allowSessionIdResume: !resumeSuppression.sessionId.has(saved.id),
+                  }
                 );
 
                 // Assign to the active worktree when the saved terminal has no
@@ -442,7 +769,7 @@ export async function restorePanelsPhase(
               }
               logHydrationInfo(`Recreating ${kind} panel: ${saved.id}`);
               const nonPtyId = await addPanel(
-                buildArgsForNonPtyRecreation(saved, kind, projectRoot || "")
+                buildArgsForNonPtyRecreation(saved, kind, projectRoot || "", activeWorktreeId)
               );
               restoredIdsByIndex.set(capturedIndex, nonPtyId);
             }

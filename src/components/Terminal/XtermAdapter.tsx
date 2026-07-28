@@ -16,6 +16,11 @@ import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { useTerminalFileTransfer } from "./useTerminalFileTransfer";
 import { getOptionWordJumpSequence } from "./terminalWordNavigation";
+import {
+  isTerminalClipboardCopyKey,
+  isTerminalClipboardPasteKey,
+  isTuiReservedKey,
+} from "@/services/terminalReservedKeys";
 
 export interface XtermAdapterProps {
   terminalId: string;
@@ -27,6 +32,12 @@ export interface XtermAdapterProps {
   onReady?: () => void;
   onExit?: (exitCode: number) => void;
   onInput?: (data: string) => void;
+  /**
+   * Fired once per live `attach()`, after the service has been told the
+   * terminal is visible. Lets the owning pane re-arm anything that captured an
+   * attach generation before this async setup landed (#11445).
+   */
+  onAttached?: () => void;
   className?: string;
   getRefreshTier?: () => TerminalRefreshTier;
   cwd?: string;
@@ -38,9 +49,6 @@ const MIN_CONTAINER_SIZE = 50;
 
 const MODIFIER_KEYS = new Set(["Meta", "Control", "Alt", "Shift"]);
 
-// TUI reliability: keep common readline-style Ctrl+key bindings in the terminal
-const TUI_KEYBINDS = new Set(["p", "n", "r", "f", "b", "a", "e", "k", "u", "w", "h", "d"]);
-
 export function XtermAdapter({
   terminalId,
   launchAgentId,
@@ -49,6 +57,7 @@ export function XtermAdapter({
   onReady,
   onExit,
   onInput,
+  onAttached,
   className,
   getRefreshTier,
   cwd,
@@ -74,6 +83,7 @@ export function XtermAdapter({
   const onReadyRef = useRef(onReady);
   const onExitRef = useRef(onExit);
   const onInputRef = useRef(onInput);
+  const onAttachedRef = useRef(onAttached);
   const cwdRef = useRef(cwd);
 
   useLayoutEffect(() => {
@@ -82,8 +92,9 @@ export function XtermAdapter({
     onReadyRef.current = onReady;
     onExitRef.current = onExit;
     onInputRef.current = onInput;
+    onAttachedRef.current = onAttached;
     cwdRef.current = cwd;
-  }, [launchAgentId, detectedAgentId, onReady, onExit, onInput, cwd]);
+  }, [launchAgentId, detectedAgentId, onReady, onExit, onInput, onAttached, cwd]);
 
   const stableOnInput = useCallback((data: string) => {
     onInputRef.current?.(data);
@@ -284,6 +295,11 @@ export function XtermAdapter({
       // Force visibility immediately on mount - don't wait for IntersectionObserver.
       // This prevents data from being dropped during the brief window before the observer fires.
       terminalInstanceService.setVisible(terminalId, true);
+      // Announce the generation this attach produced. The pane's visibility
+      // observer captured one before this async setup resumed, and only the
+      // service flag was forced above — the store field it owns would otherwise
+      // stay frozen behind the stale capture (#11445).
+      onAttachedRef.current?.();
 
       if (!managed.keyHandlerInstalled) {
         const writeWordJump = (event: KeyboardEvent, sequence: string): boolean => {
@@ -391,8 +407,43 @@ export function XtermAdapter({
           }
 
           // Allow critical Ctrl+<key> bindings to reach the TUI before checking global shortcuts
-          if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.has(event.key)) {
+          if (isTuiReservedKey(event)) {
             return true;
+          }
+
+          // Windows/Linux terminal clipboard conventions (Ctrl+Shift+C/V,
+          // Shift+Insert). Handled before global resolution — Ctrl+Shift+C/V
+          // would otherwise resolve to unrelated app bindings on non-mac. The
+          // window capture handler reserves the same keys via
+          // isTerminalReservedKey so they reach this handler at all.
+          if (isTerminalClipboardCopyKey(event)) {
+            event.preventDefault();
+            event.stopPropagation();
+            // Consume even with no selection: falling through would fire an
+            // app shortcut the user didn't intend from inside a terminal.
+            if (managed.terminal.hasSelection()) {
+              navigator.clipboard.writeText(managed.terminal.getSelection()).catch((error) => {
+                logError("[XtermClipboard] Copy failed", error);
+              });
+            }
+            return false;
+          }
+          if (isTerminalClipboardPasteKey(event)) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!managed.isInputLocked) {
+              // terminal.paste() follows the normal typed-input path (onData →
+              // PTY + input accounting) and applies bracketed-paste wrapping.
+              navigator.clipboard
+                .readText()
+                .then((text) => {
+                  if (text && !managed.isInputLocked) managed.terminal.paste(text);
+                })
+                .catch((error) => {
+                  logError("[XtermClipboard] Paste failed", error);
+                });
+            }
+            return false;
           }
 
           // Intercept global keybindings before terminal processing
@@ -443,7 +494,7 @@ export function XtermAdapter({
           }
 
           // Allow critical Ctrl+<key> bindings to reach the TUI
-          if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.has(event.key)) {
+          if (isTuiReservedKey(event)) {
             return true;
           }
 

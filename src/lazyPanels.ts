@@ -104,10 +104,10 @@ export const LazyProjectSwitcherPalette = lazy(() =>
 );
 
 export function preloadGitInitDialog() {
-  return import("./components/Project/GitInitDialog");
+  return import("./components/Project/NonGitFolderDialog");
 }
 export const LazyGitInitDialog = lazy(() =>
-  preloadGitInitDialog().then((m) => ({ default: m.GitInitDialog }))
+  preloadGitInitDialog().then((m) => ({ default: m.NonGitFolderDialog }))
 );
 
 export function preloadCloneRepoDialog() {
@@ -197,6 +197,12 @@ export function preloadPluginConfirmDialog() {
 }
 export const LazyPluginConfirmDialog = lazy(() =>
   preloadPluginConfirmDialog().then((m) => ({ default: m.PluginConfirmDialog }))
+);
+
+export const LazyPluginArchiveInstallConfirmDialog = lazy(() =>
+  import("./components/Plugin/PluginArchiveInstallConfirmDialog").then((m) => ({
+    default: m.PluginArchiveInstallConfirmDialog,
+  }))
 );
 
 export function preloadPluginMcpConfirmDialog() {

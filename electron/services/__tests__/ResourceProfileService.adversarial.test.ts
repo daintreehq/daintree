@@ -219,8 +219,7 @@ describe("ResourceProfileService adversarial", () => {
   describe("getSnapshot (#10500)", () => {
     function findPowerHandler(event: string): ((details?: unknown) => void) | undefined {
       return mockPowerMonitorOn.mock.calls.find((call: unknown[]) => call[0] === event)?.[1] as
-        | ((details?: unknown) => void)
-        | undefined;
+        ((details?: unknown) => void) | undefined;
     }
 
     it("reflects battery, thermal, and speed-limit transitions via power events", () => {
@@ -446,7 +445,7 @@ describe("ResourceProfileService adversarial", () => {
       // the renderers suppresses the CPU wake-ups that lag pressure is about).
       const pvm = {
         setCachedViewLimit: vi.fn(),
-        setLowMemoryFreeThresholdMb: vi.fn(),
+        setMemoryPressurePolicy: vi.fn(),
         setEfficiencyFreeze: vi.fn(),
       };
       const { deps } = createDeps({
@@ -477,7 +476,7 @@ describe("ResourceProfileService adversarial", () => {
       // avoids cold-start storms on rapid project switching (#10742).
       const pvm = {
         setCachedViewLimit: vi.fn(),
-        setLowMemoryFreeThresholdMb: vi.fn(),
+        setMemoryPressurePolicy: vi.fn(),
         setEfficiencyFreeze: vi.fn(),
       };
       const { deps } = createDeps({
@@ -1011,7 +1010,7 @@ describe("ResourceProfileService adversarial", () => {
       // have clamped during the efficiency window).
       const pvm = {
         setCachedViewLimit: vi.fn(),
-        setLowMemoryFreeThresholdMb: vi.fn(),
+        setMemoryPressurePolicy: vi.fn(),
         setEfficiencyFreeze: vi.fn(),
       };
       const { deps } = createDeps({

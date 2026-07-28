@@ -54,7 +54,14 @@ const BUILT_IN_ACTION_ID_SET: ReadonlySet<string> = new Set([
 // contribution wired to one is a dead button — reject it at parse time (#10580).
 const DENY_PLUGIN_DISPATCH_SET: ReadonlySet<string> = new Set(DENY_PLUGIN_DISPATCH_ACTION_IDS);
 
-export const PanelContributionSchema = z
+/**
+ * The unrefined object base — exported so the field-consumer contract test
+ * (`manifestContributionConsumers.test.ts`) can enumerate `.shape` without
+ * reaching through the `.superRefine` wrapper, mirroring
+ * {@link SettingDefinitionObjectSchema}. Runtime validation goes through
+ * {@link PanelContributionSchema} below.
+ */
+export const PanelContributionObjectSchema = z
   .object({
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
     name: z.string().min(1),
@@ -64,8 +71,34 @@ export const PanelContributionSchema = z
     canRestart: z.boolean().default(false),
     canConvert: z.boolean().default(false),
     showInPalette: z.boolean().default(true),
+    // Dockable by default (undefined). Declare `false` to opt a panel kind out
+    // of the dock — no default so absence flows through as `undefined` and
+    // `panelKindIsDockable` treats it as dockable.
+    dockable: z.boolean().optional(),
   })
   .strict();
+
+/**
+ * The validated `contributes.panels` entry: the object base plus a cross-field
+ * rule. `hasPty: true` with an explicit `dockable: false` is rejected — a
+ * PTY-backed plugin kind renders through `TerminalPane` and its kind collapses
+ * to the built-in dockable `terminal` at creation (`addPanel.ts`), so the
+ * opt-out could never be honored and would silently vanish. Plugin PTY kinds
+ * are unsupported in v1 anyway; surface the conflict to the author at
+ * manifest-write time instead of swallowing it at runtime (#11375). `hasPty`
+ * has already defaulted to `false` here, so an omitted `hasPty` never trips it.
+ */
+export const PanelContributionSchema = PanelContributionObjectSchema.superRefine((panel, ctx) => {
+  if (panel.hasPty === true && panel.dockable === false) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["dockable"],
+      message:
+        "A PTY-backed panel (hasPty: true) cannot opt out of the dock with dockable: false — plugin PTY panels render as terminals, which are always dockable. Remove the dockable flag.",
+      params: { errorCode: "pty_panel_dock_opt_out_unsupported" },
+    });
+  }
+});
 
 export const ToolbarButtonContributionSchema = z
   .object({
@@ -96,17 +129,24 @@ export const KeybindingContributionSchema = z
     // Closed to the renderer's KeyScope union (src/services/keybindingUtils.ts).
     // An unknown scope would never match the active scope and silently produce an
     // inert binding, so reject it at the manifest gate instead. Defaults to
-    // "global" in the renderer hook when omitted.
+    // "global" in the renderer hook when omitted. The former "terminal",
+    // "modal", and "worktreeList" scopes were removed — they were never
+    // activated, so bindings declared under them could not fire.
     scope: z
-      .enum([
-        "global",
-        "terminal",
-        "modal",
-        "worktreeList",
-        "portal",
-        "worktreeGrid",
-        "dev-preview",
-      ])
+      .enum(["global", "portal", "worktreeGrid", "dev-preview"], {
+        error: (issue) => {
+          switch (issue.input) {
+            case "terminal":
+              return 'keybinding scope "terminal" was removed — use scope "global" with when: "terminalFocused"';
+            case "modal":
+              return 'keybinding scope "modal" was removed — use scope "global" with when: "modalOpen"';
+            case "worktreeList":
+              return 'keybinding scope "worktreeList" was removed — worktree-list navigation keys are fixed and not bindable';
+            default:
+              return undefined;
+          }
+        },
+      })
       .optional(),
     description: z.string().min(1).optional(),
     when: z.string().min(1).optional(),
@@ -124,6 +164,13 @@ export const ContextMenuContributionSchema = z
     when: z.string().min(1).optional(),
   })
   .strict();
+
+/**
+ * Declared here rather than beside the other manifest-level schemas because
+ * {@link CommandContributionSchema} below references it for `requires`, and a
+ * `const` referenced above its declaration is a TDZ error at module init.
+ */
+export const PluginCapabilitySchema = z.enum(BUILT_IN_PLUGIN_CAPABILITIES);
 
 /**
  * `contributes.commands` manifest entry. The bare command `id` is namespaced
@@ -144,6 +191,12 @@ export const CommandContributionSchema = z
     danger: z.enum(["safe", "confirm"]),
     keywords: z.array(z.string().min(1)).optional(),
     inputSchema: z.record(z.string(), z.unknown()).optional(),
+    // Per-action capability intent (#11299). Deliberately NOT `.min(1)`: an
+    // empty array is the meaningful "this command exercises no capability"
+    // declaration that keeps it one-click in an otherwise high-authority
+    // plugin. Omitting the field keeps whole-manifest danger derivation.
+    // PluginService re-checks the subset against manifest.capabilities.
+    requires: z.array(PluginCapabilitySchema).optional(),
   })
   .strict();
 
@@ -470,8 +523,6 @@ export const AgentContributionSchema = z
   })
   .strict();
 
-export const PluginCapabilitySchema = z.enum(BUILT_IN_PLUGIN_CAPABILITIES);
-
 /**
  * Shared per-entry validator body for manifest URL fields. Each entry must:
  *
@@ -638,6 +689,77 @@ export const PluginFsScopeSchema = z
   .strict();
 
 /**
+ * A declared local socket endpoint: a Unix-domain socket path or a Windows
+ * named pipe (`\\.\pipe\name`).
+ *
+ * Deliberately does NOT reuse {@link PluginAllowedPathSchema}: that validator
+ * leans on `path.isAbsolute`, which is platform-dependent, so a manifest
+ * declaring `\\.\pipe\docker_engine` would fail to parse on macOS and a
+ * manifest declaring `/var/run/docker.sock` would fail on Windows. A manifest
+ * must validate identically everywhere it's read — including when a Linux CI
+ * box parses a plugin authored for Windows — so both forms are accepted on
+ * every platform and the shape is checked explicitly.
+ *
+ * This is disclosure metadata, not an enforcement boundary (nothing intercepts
+ * `node:net`), so the checks target author mistakes and misleading UI rather
+ * than containment: no globs (a wildcard would render as a specific endpoint
+ * while meaning any), no traversal segments, no NUL, no relative paths.
+ */
+const LOCAL_SOCKET_PATH_MAX = 512;
+export const PluginAllowedSocketPathSchema = z
+  .string()
+  .min(1)
+  .max(LOCAL_SOCKET_PATH_MAX)
+  .superRefine((value, ctx) => {
+    const addIssue = (message: string): void => {
+      ctx.addIssue({ code: "custom", message });
+    };
+    if (value.trim() !== value) {
+      addIssue("Socket path must not have leading or trailing whitespace");
+      return;
+    }
+    if (value.includes("\0")) {
+      addIssue("Socket path must not contain a NUL character");
+      return;
+    }
+    if (value.includes("*")) {
+      addIssue("Socket path must not contain a wildcard — declare each endpoint literally");
+      return;
+    }
+    const isWindowsPipe = /^\\\\[.?]\\pipe\\/i.test(value);
+    if (isWindowsPipe) {
+      if (value.length <= "\\\\.\\pipe\\".length) {
+        addIssue("Windows named pipe must include a pipe name");
+        return;
+      }
+    } else if (!value.startsWith("/")) {
+      addIssue(
+        "Socket path must be an absolute Unix-domain path (/var/run/docker.sock) or a Windows named pipe (\\\\.\\pipe\\name)"
+      );
+      return;
+    }
+    // Traversal is rejected for both forms. Splitting on either separator
+    // matters because the check has to hold for a Windows pipe name parsed on
+    // a POSIX host, where `path` would never treat `\` as a separator.
+    if (value.split(/[/\\]/).includes("..")) {
+      addIssue("Socket path must not contain a '..' segment");
+    }
+  });
+
+/**
+ * `scopes.socket.allowedPaths` — optional path intent for `socket:connect`
+ * (#11299). Unlike `scopes.fs`, nothing enforces this: a plugin's `main` calls
+ * `node:net` directly with no host interception point. It exists so the
+ * Permissions tab can render "connects to /var/run/docker.sock" instead of the
+ * bare capability, which is the whole value of the disclosure.
+ */
+export const PluginLocalSocketScopeSchema = z
+  .object({
+    allowedPaths: z.array(PluginAllowedSocketPathSchema).min(1),
+  })
+  .strict();
+
+/**
  * Top-level `scopes` field on `PluginManifest`. Strict so a misspelled scope
  * bucket (e.g. `networking` instead of `network`) surfaces as a manifest error
  * rather than silently failing to attenuate the compound-capability lattice.
@@ -646,6 +768,7 @@ export const PluginManifestScopesSchema = z
   .object({
     network: PluginNetworkScopeSchema.optional(),
     fs: PluginFsScopeSchema.optional(),
+    socket: PluginLocalSocketScopeSchema.optional(),
   })
   .strict();
 

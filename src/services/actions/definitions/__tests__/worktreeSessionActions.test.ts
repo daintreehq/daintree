@@ -38,7 +38,7 @@ import { registerWorktreeSessionActions } from "../worktreeSessionActions";
 
 type Panel = {
   id: string;
-  location: "grid" | "dock" | "trash";
+  location: "grid" | "dock" | "trash" | "overlay" | "background" | "dialog";
   worktreeId?: string;
   detectedAgentId?: string;
   agentState?: string;
@@ -49,19 +49,29 @@ function setPanelState(panels: Panel[]) {
   for (const p of panels) panelsById[p.id] = p;
   const bulkTrashByWorktree = vi.fn();
   const bulkRestartByWorktree = vi.fn().mockResolvedValue(undefined);
+  const bulkCloseByWorktree = vi.fn();
   panelStoreMock.getState.mockImplementation(() => ({
     panelIds: panels.map((p) => p.id),
     panelsById,
     bulkTrashByWorktree,
     bulkRestartByWorktree,
+    bulkCloseByWorktree,
   }));
-  return { bulkTrashByWorktree, bulkRestartByWorktree };
+  return { bulkTrashByWorktree, bulkRestartByWorktree, bulkCloseByWorktree };
+}
+
+// The registration callbacks are unused by these action factories; one shared
+// escape hatch keeps the no-unsafe-type-assertion count flat across helpers.
+const registrationCallbacks = {} as unknown as ActionCallbacks;
+
+function buildRegistry(): ActionRegistry {
+  const actions: ActionRegistry = new Map();
+  registerWorktreeSessionActions(actions, registrationCallbacks);
+  return actions;
 }
 
 function setupActions() {
-  const actions: ActionRegistry = new Map();
-  const callbacks = {} as unknown as ActionCallbacks;
-  registerWorktreeSessionActions(actions, callbacks);
+  const actions = buildRegistry();
   return (id: string, args?: unknown, ctx?: Partial<ActionContext>) => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
@@ -114,6 +124,152 @@ describe("worktree.sessions.trashAll confirm gate", () => {
     await run("worktree.sessions.trashAll", { worktreeId: "wt-1", confirmed: true });
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
+  });
+});
+
+describe("worktree.sessions.endAll confirm gate", () => {
+  it("does not end sessions without confirmed:true — the palette/keybinding bypass guard", async () => {
+    const { bulkCloseByWorktree } = setPanelState([
+      { id: "p1", location: "grid", worktreeId: "wt-1" },
+      { id: "p2", location: "dock", worktreeId: "wt-1" },
+    ]);
+    const run = setupActions();
+
+    await run("worktree.sessions.endAll", { worktreeId: "wt-1" });
+
+    expect(bulkCloseByWorktree).not.toHaveBeenCalled();
+    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
+      kind: "worktreeEndAll",
+      targetCount: 2,
+      runningAgentCount: 0,
+      worktreeId: "wt-1",
+    });
+  });
+
+  it("counts trash, overlay, and background panels (matching bulkCloseByWorktree) but excludes dialog panels and other worktrees", async () => {
+    const { bulkCloseByWorktree } = setPanelState([
+      { id: "p1", location: "grid", worktreeId: "wt-1" },
+      { id: "p2", location: "dock", worktreeId: "wt-1" },
+      { id: "p3", location: "trash", worktreeId: "wt-1" },
+      { id: "p4", location: "overlay", worktreeId: "wt-1" },
+      { id: "p5", location: "background", worktreeId: "wt-1" },
+      { id: "p6", location: "dialog", worktreeId: "wt-1" },
+      { id: "p7", location: "grid", worktreeId: "wt-2" },
+    ]);
+    const run = setupActions();
+
+    await run("worktree.sessions.endAll", { worktreeId: "wt-1" });
+
+    expect(bulkCloseByWorktree).not.toHaveBeenCalled();
+    // grid + dock + trash + overlay + background = 5; dialog and wt-2 are excluded.
+    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
+      kind: "worktreeEndAll",
+      targetCount: 5,
+      runningAgentCount: 0,
+      worktreeId: "wt-1",
+    });
+  });
+
+  it("counts only running agents inside the target set — not other worktrees or dialog panels", async () => {
+    setPanelState([
+      { id: "p1", location: "grid", worktreeId: "wt-1" },
+      {
+        id: "p2",
+        location: "grid",
+        worktreeId: "wt-1",
+        detectedAgentId: "claude",
+        agentState: "working",
+      },
+      // Working agent in a DIFFERENT worktree — excluded from targets and count.
+      {
+        id: "p3",
+        location: "grid",
+        worktreeId: "wt-2",
+        detectedAgentId: "claude",
+        agentState: "working",
+      },
+      // Working agent in a dialog panel — excluded (bulkCloseByWorktree skips dialogs).
+      {
+        id: "p4",
+        location: "dialog",
+        worktreeId: "wt-1",
+        detectedAgentId: "claude",
+        agentState: "working",
+      },
+    ]);
+    const run = setupActions();
+
+    await run("worktree.sessions.endAll", { worktreeId: "wt-1" });
+
+    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
+      kind: "worktreeEndAll",
+      targetCount: 2,
+      runningAgentCount: 1,
+      worktreeId: "wt-1",
+    });
+  });
+
+  it("does not clear another worktree's pending confirmation when ending this worktree", async () => {
+    const { bulkCloseByWorktree } = setPanelState([
+      { id: "p1", location: "grid", worktreeId: "wt-1" },
+    ]);
+    // A confirmation is already pending for a DIFFERENT worktree.
+    pendingDestructiveStoreMock.state.request({
+      kind: "worktreeEndAll",
+      targetCount: 3,
+      runningAgentCount: 0,
+      worktreeId: "wt-OTHER",
+    });
+    const run = setupActions();
+
+    await run("worktree.sessions.endAll", { worktreeId: "wt-1", confirmed: true });
+
+    expect(bulkCloseByWorktree).toHaveBeenCalledWith("wt-1");
+    expect(pendingDestructiveStoreMock.state.clear).not.toHaveBeenCalled();
+    expect(pendingDestructiveStoreMock.state.pending).toMatchObject({ worktreeId: "wt-OTHER" });
+  });
+
+  it("ends sessions when confirmed:true is passed and clears a stale same-kind pending entry", async () => {
+    const { bulkCloseByWorktree } = setPanelState([
+      { id: "p1", location: "grid", worktreeId: "wt-1" },
+    ]);
+    pendingDestructiveStoreMock.state.request({
+      kind: "worktreeEndAll",
+      targetCount: 1,
+      runningAgentCount: 0,
+      worktreeId: "wt-1",
+    });
+    const run = setupActions();
+
+    await run("worktree.sessions.endAll", { worktreeId: "wt-1", confirmed: true });
+
+    expect(bulkCloseByWorktree).toHaveBeenCalledWith("wt-1");
+    expect(pendingDestructiveStoreMock.state.clear).toHaveBeenCalled();
+  });
+
+  it("ends sessions for an agent-sourced dispatch without a second prompt (MCP already confirmed)", async () => {
+    const { bulkCloseByWorktree } = setPanelState([
+      { id: "p1", location: "grid", worktreeId: "wt-1" },
+    ]);
+    const run = setupActions();
+
+    await run("worktree.sessions.endAll", { worktreeId: "wt-1" }, { dispatchSource: "agent" });
+
+    expect(bulkCloseByWorktree).toHaveBeenCalledWith("wt-1");
+    expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op (no empty confirmation) when the target worktree has no non-dialog sessions", async () => {
+    const { bulkCloseByWorktree } = setPanelState([
+      { id: "p1", location: "dialog", worktreeId: "wt-1" },
+    ]);
+    const run = setupActions();
+
+    // Unconfirmed: proves an empty target set never opens a "End 0 sessions" dialog.
+    await run("worktree.sessions.endAll", { worktreeId: "wt-1" });
+
+    expect(bulkCloseByWorktree).not.toHaveBeenCalled();
     expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
   });
 });
@@ -200,7 +356,7 @@ describe("worktree.sessions.restartAll confirm gate", () => {
   });
 });
 
-describe("worktree.sessions.clearHistory run()", () => {
+describe("worktree.sessions.clearHistory confirm gate", () => {
   const clearMock = vi.fn().mockResolvedValue(undefined);
 
   beforeEach(() => {
@@ -208,21 +364,107 @@ describe("worktree.sessions.clearHistory run()", () => {
     vi.stubGlobal("window", { electron: { agentSessionHistory: { clear: clearMock } } });
   });
 
-  it("clears the explicit worktreeId when provided", async () => {
+  it("does not clear without confirmed:true — requests confirmation with a zero count (no live panels)", async () => {
     const run = setupActions();
+
     await run("worktree.sessions.clearHistory", { worktreeId: "wt-explicit" });
-    expect(clearMock).toHaveBeenCalledWith("wt-explicit");
-  });
 
-  it("falls back to the active worktree from context", async () => {
-    const run = setupActions();
-    await run("worktree.sessions.clearHistory", {}, { activeWorktreeId: "wt-active" });
-    expect(clearMock).toHaveBeenCalledWith("wt-active");
-  });
-
-  it("is a no-op when no worktree can be resolved", async () => {
-    const run = setupActions();
-    await run("worktree.sessions.clearHistory", {});
     expect(clearMock).not.toHaveBeenCalled();
+    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
+      kind: "worktreeClearHistory",
+      targetCount: 0,
+      runningAgentCount: 0,
+      worktreeId: "wt-explicit",
+    });
   });
+
+  it("requests against the active worktree from context when no id is passed", async () => {
+    const run = setupActions();
+
+    await run("worktree.sessions.clearHistory", {}, { activeWorktreeId: "wt-active" });
+
+    expect(clearMock).not.toHaveBeenCalled();
+    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
+      kind: "worktreeClearHistory",
+      targetCount: 0,
+      runningAgentCount: 0,
+      worktreeId: "wt-active",
+    });
+  });
+
+  it("clears the explicit worktreeId when confirmed:true and clears a stale same-kind pending entry", async () => {
+    pendingDestructiveStoreMock.state.request({
+      kind: "worktreeClearHistory",
+      targetCount: 0,
+      runningAgentCount: 0,
+      worktreeId: "wt-explicit",
+    });
+    const run = setupActions();
+
+    await run("worktree.sessions.clearHistory", { worktreeId: "wt-explicit", confirmed: true });
+
+    expect(clearMock).toHaveBeenCalledWith("wt-explicit");
+    expect(pendingDestructiveStoreMock.state.clear).toHaveBeenCalled();
+  });
+
+  it("clears for an agent-sourced dispatch without a second prompt (MCP already confirmed)", async () => {
+    const run = setupActions();
+
+    await run(
+      "worktree.sessions.clearHistory",
+      { worktreeId: "wt-active" },
+      { dispatchSource: "agent" }
+    );
+
+    expect(clearMock).toHaveBeenCalledWith("wt-active");
+    expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
+  });
+
+  it("does not clear another worktree's pending confirmation when clearing this worktree", async () => {
+    pendingDestructiveStoreMock.state.request({
+      kind: "worktreeClearHistory",
+      targetCount: 0,
+      runningAgentCount: 0,
+      worktreeId: "wt-OTHER",
+    });
+    const run = setupActions();
+
+    await run("worktree.sessions.clearHistory", { worktreeId: "wt-explicit", confirmed: true });
+
+    expect(clearMock).toHaveBeenCalledWith("wt-explicit");
+    expect(pendingDestructiveStoreMock.state.clear).not.toHaveBeenCalled();
+    expect(pendingDestructiveStoreMock.state.pending).toMatchObject({ worktreeId: "wt-OTHER" });
+  });
+
+  it("is a no-op (no confirmation request) when no worktree can be resolved", async () => {
+    const run = setupActions();
+
+    // Unconfirmed and unresolved: must not open a confirmation for a null worktree.
+    await run("worktree.sessions.clearHistory", {});
+
+    expect(clearMock).not.toHaveBeenCalled();
+    expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
+  });
+});
+
+describe("worktree.sessions confirmed flag survives arg validation (schema regression guard)", () => {
+  // The gate tests call run() directly, bypassing Zod. If `confirmed` were dropped
+  // from a schema, Zod would strip it and every confirmed dispatch would re-request
+  // forever — so assert the schemas actually preserve the flag through a parse.
+  function schemaFor(id: string) {
+    const factory = buildRegistry().get(id);
+    if (!factory) throw new Error(`missing ${id}`);
+    return (factory() as AnyActionDefinition).argsSchema;
+  }
+
+  it.each(["worktree.sessions.endAll", "worktree.sessions.clearHistory"])(
+    "%s preserves confirmed:true through argsSchema",
+    (id) => {
+      const schema = schemaFor(id);
+      expect(schema).toBeDefined();
+      const parsed = schema?.safeParse({ worktreeId: "wt-1", confirmed: true });
+      expect(parsed?.success).toBe(true);
+      expect(parsed?.success ? parsed.data : undefined).toMatchObject({ confirmed: true });
+    }
+  );
 });

@@ -10,10 +10,31 @@
  * — touching an unrelated worktree's bucket would re-fire every per-row
  * selector on every per-terminal tick.
  */
+import type { TabGroupLocation } from "@shared/types/panel";
+
 export type PanelIdsByWorktreeId = Record<string, string[]>;
 
 /** Bucket key for panels with `worktreeId === undefined`. */
 export const NO_WORKTREE = "__none__";
+
+/**
+ * Single source of truth for whether a panel belongs to a worktree scope at a
+ * location. Docked global (worktree-less) panels are intentionally visible in
+ * every worktree-scoped dock; grid panels remain worktree-exact so globals
+ * never leak into a worktree's grid. Every dock render AND reorder-commit path
+ * must share this predicate — a stricter commit-side filter is how dock chip
+ * reorders silently no-op (#11289).
+ */
+export function panelMatchesWorktreeScope(
+  panelWorktreeId: string | null | undefined,
+  worktreeId: string | null | undefined,
+  location: TabGroupLocation
+): boolean {
+  const panelWt = panelWorktreeId ?? undefined;
+  const scopeWt = worktreeId ?? undefined;
+  if (panelWt === scopeWt) return true;
+  return location === "dock" && panelWt === undefined && scopeWt !== undefined;
+}
 
 function bucketKey(worktreeId: string | undefined | null): string {
   return worktreeId ?? NO_WORKTREE;

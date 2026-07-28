@@ -12,6 +12,20 @@ const mod = process.platform === "darwin" ? "Meta" : "Control";
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
 
+async function openQuickSwitcher(window: Page): Promise<void> {
+  if (process.platform === "darwin") {
+    await window.keyboard.press(`${mod}+P`);
+    return;
+  }
+  await window.evaluate(() =>
+    (
+      window as unknown as {
+        __daintreeDispatchAction: (actionId: string) => Promise<unknown>;
+      }
+    ).__daintreeDispatchAction("nav.quickSwitcher")
+  );
+}
+
 /**
  * Open the new-terminal palette. It has no production keyboard/toolbar trigger,
  * so it is opened via its dedicated event (see useAppEventListeners) — the same
@@ -370,7 +384,7 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
     await expectTerminalFocused(lastPanel);
 
     await test.step("Quick switcher shows the recent panels", async () => {
-      await window.keyboard.press(`${mod}+P`);
+      await openQuickSwitcher(window);
       await expect(window.locator(SEL.quickSwitcher.dialog)).toBeVisible({ timeout: T_MEDIUM });
       const options = window.locator(SEL.quickSwitcher.options);
       await expect(options.first()).toBeVisible({ timeout: T_MEDIUM });

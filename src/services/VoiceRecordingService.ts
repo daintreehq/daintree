@@ -1029,7 +1029,7 @@ class VoiceRecordingService {
   /**
    * Whole-passage AI cleanup pass. Runs once after a graceful stop: marks the
    * dictated range with the `cm-voice-pending-ai` decoration, sends the full
-   * dictated text to gpt-5-mini, and swaps in the cleaned result if the region
+   * dictated text to gpt-5.6-luna, and swaps in the cleaned result if the region
    * is still where we left it. Best-effort — any failure leaves the raw text.
    */
   private async runCorrection(target: VoiceRecordingTarget, stopGeneration: number): Promise<void> {

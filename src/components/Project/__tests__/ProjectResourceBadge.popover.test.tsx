@@ -118,6 +118,9 @@ function makeBulkStatsEntry(overrides: Partial<BulkProjectStatsEntry> = {}): Bul
     processIds: [],
     activeAgentCount: 0,
     waitingAgentCount: 0,
+    blockedAgentCount: 0,
+    completedAgentCount: 0,
+    unacknowledgedCompletedAgentCount: 0,
     ...overrides,
   };
 }

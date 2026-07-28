@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Check, AlertCircle } from "lucide-react";
@@ -7,28 +7,50 @@ import { FolderGit2 } from "@/components/icons";
 import { projectClient } from "@/clients";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { GitInitOptions, GitInitProgressEvent } from "@shared/types/ipc/gitInit";
+import { basename } from "@shared/utils/path";
+import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
+import { ProjectEmojiButton } from "./ProjectEmojiButton";
+import {
+  FIELD_LABEL_CLASS,
+  FIELD_INPUT_CLASS,
+  FIELD_CHECKBOX_CLASS,
+  FIELD_EMOJI_ROW_INDENT,
+  PathCaption,
+} from "./projectDialogFields";
+import {
+  GITIGNORE_TEMPLATE_OPTIONS,
+  DEFAULT_GITIGNORE_TEMPLATE_ID,
+  isGitignoreTemplateId,
+} from "@shared/config/gitignoreTemplates";
+import type { GitInitProgressEvent } from "@shared/types/ipc/gitInit";
+import type { ProjectCreationIdentity } from "@shared/types";
 
 interface GitInitDialogProps {
   isOpen: boolean;
   directoryPath: string;
-  onSuccess: () => void;
+  /**
+   * Identity chosen one dialog earlier in the create-project flow. Present
+   * means "don't ask again, just show what they picked"; absent means this
+   * dialog was reached directly by opening a non-repo folder, so it derives a
+   * fresh suggestion from the folder name.
+   */
+  initialIdentity?: ProjectCreationIdentity | null;
+  onSuccess: (identity: ProjectCreationIdentity) => void;
   onCancel: () => void;
 }
 
 const AUTO_CLOSE_DELAY_MS = 2000;
 
-type GitignoreTemplate = NonNullable<GitInitOptions["gitignoreTemplate"]>;
-
-const TEMPLATE_OPTIONS: Array<{ value: GitignoreTemplate; label: string; description: string }> = [
-  { value: "node", label: "Node", description: "node_modules, build outputs, .env" },
-  { value: "python", label: "Python", description: "__pycache__, venv, .env" },
-  { value: "minimal", label: "Minimal", description: "OS files, IDE files, .env" },
-  { value: "none", label: "None", description: "Don't create a .gitignore" },
-];
-
-export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: GitInitDialogProps) {
-  const [gitignoreTemplate, setGitignoreTemplate] = useState<GitignoreTemplate>("node");
+export function GitInitDialog({
+  isOpen,
+  directoryPath,
+  initialIdentity,
+  onSuccess,
+  onCancel,
+}: GitInitDialogProps) {
+  const [projectName, setProjectName] = useState("");
+  const [emoji, setEmoji] = useState(DEFAULT_PROJECT_EMOJI);
+  const [gitignoreTemplate, setGitignoreTemplate] = useState(DEFAULT_GITIGNORE_TEMPLATE_ID);
   const [createInitialCommit, setCreateInitialCommit] = useState(true);
   const [initialCommitMessage, setInitialCommitMessage] = useState("Initial commit");
   const [progressEvents, setProgressEvents] = useState<GitInitProgressEvent[]>([]);
@@ -40,18 +62,41 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
   const inFlightRef = useRef(false);
   const sawTerminalEventRef = useRef(false);
   const sawErrorEventRef = useRef(false);
+  const nameErrorId = useId();
+
+  const trimmedProjectName = projectName.trim();
+  // The name is seeded from the folder, so this only ever fires after the user
+  // clears the field — the one state where the start button silently disables.
+  const isNameMissing = trimmedProjectName === "";
 
   const finalizeSuccess = useCallback(() => {
     if (hasFinalizedSuccessRef.current) {
       return;
     }
     hasFinalizedSuccessRef.current = true;
-    onSuccess();
-  }, [onSuccess]);
+    onSuccess({ name: trimmedProjectName, emoji });
+  }, [onSuccess, trimmedProjectName, emoji]);
+
+  // Seed the identity row on open: the create-project flow already asked, so
+  // reuse what it carried; reaching this dialog directly (opening a non-repo
+  // folder) derives a fresh suggestion from the folder name instead.
+  const seededName = initialIdentity?.name ?? basename(directoryPath);
+  const seededEmoji = initialIdentity?.emoji ?? suggestProjectEmoji(basename(directoryPath));
+  // Keyed on the folder as well as the open transition: a second git-init
+  // request arriving while this one is open swaps `directoryPath` under us, and
+  // leaving the identity behind would save folder B under folder A's name. The
+  // seeds are plain strings, so they only differ when their inputs actually
+  // change — depending on them costs no spurious re-seeds and keeps the
+  // component eligible for the React Compiler.
+  useEffect(() => {
+    if (!isOpen) return;
+    setProjectName(seededName);
+    setEmoji(seededEmoji);
+  }, [isOpen, directoryPath, seededName, seededEmoji]);
 
   useEffect(() => {
     if (!isOpen) {
-      setGitignoreTemplate("node");
+      setGitignoreTemplate(DEFAULT_GITIGNORE_TEMPLATE_ID);
       setCreateInitialCommit(true);
       setInitialCommitMessage("Initial commit");
       setProgressEvents([]);
@@ -168,34 +213,68 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
   const showConnecting = useDohertyGate(isInitializing && progressEvents.length === 0);
   const showProgress = showConnecting || progressEvents.length > 0;
   const configDisabled = isInitializing || isComplete;
-  const canStart = !createInitialCommit || initialCommitMessage.trim() !== "";
+  const canStart =
+    trimmedProjectName !== "" && (!createInitialCommit || initialCommitMessage.trim() !== "");
 
   return (
     <AppDialog isOpen={isOpen} onClose={handleClose} size="md" dismissible={!isInitializing}>
       <AppDialog.Header>
         <AppDialog.Title icon={<FolderGit2 className="h-5 w-5 text-daintree-accent" />}>
-          Initialize Git Repository
+          Set up project
         </AppDialog.Title>
         {!isInitializing && <AppDialog.CloseButton />}
       </AppDialog.Header>
 
-      <AppDialog.Body className="space-y-4">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span className="truncate">{directoryPath}</span>
+      <AppDialog.Body className="space-y-5">
+        <div className="space-y-1.5">
+          <label htmlFor="git-init-project-name" className={FIELD_LABEL_CLASS}>
+            Project name
+          </label>
+          <div className="flex items-center gap-2">
+            <ProjectEmojiButton
+              emoji={emoji}
+              onEmojiChange={setEmoji}
+              disabled={configDisabled}
+              ariaLabel="Choose project emoji"
+            />
+            <input
+              id="git-init-project-name"
+              type="text"
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              disabled={configDisabled}
+              aria-invalid={isNameMissing}
+              aria-describedby={isNameMissing ? nameErrorId : undefined}
+              className={FIELD_INPUT_CLASS}
+              placeholder="My project"
+            />
+          </div>
+          {isNameMissing && (
+            <p
+              id={nameErrorId}
+              role="alert"
+              className={`${FIELD_EMOJI_ROW_INDENT} text-xs text-status-error`}
+            >
+              Enter a project name
+            </p>
+          )}
+          <PathCaption path={directoryPath} className={FIELD_EMOJI_ROW_INDENT} />
         </div>
 
         <div className="space-y-1.5">
-          <label htmlFor="git-init-template" className="text-sm font-medium text-daintree-text/70">
+          <label htmlFor="git-init-template" className={FIELD_LABEL_CLASS}>
             Gitignore template
           </label>
           <select
             id="git-init-template"
             value={gitignoreTemplate}
-            onChange={(e) => setGitignoreTemplate(e.target.value as GitignoreTemplate)}
+            onChange={(e) => {
+              if (isGitignoreTemplateId(e.target.value)) setGitignoreTemplate(e.target.value);
+            }}
             disabled={configDisabled}
-            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
+            className={FIELD_INPUT_CLASS}
           >
-            {TEMPLATE_OPTIONS.map((opt) => (
+            {GITIGNORE_TEMPLATE_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label} — {opt.description}
               </option>
@@ -203,38 +282,35 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
           </select>
         </div>
 
-        <div className="space-y-1">
+        <div className="space-y-3">
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
               checked={createInitialCommit}
               onChange={(e) => setCreateInitialCommit(e.target.checked)}
               disabled={configDisabled}
-              className="rounded border-daintree-border accent-daintree-accent"
+              className={FIELD_CHECKBOX_CLASS}
             />
-            <span className="text-sm text-daintree-text/70">Create initial commit</span>
+            <span className="text-sm text-daintree-text/80">Create initial commit</span>
           </label>
-        </div>
 
-        {createInitialCommit && (
-          <div className="space-y-1.5">
-            <label
-              htmlFor="git-init-commit-message"
-              className="text-sm font-medium text-daintree-text/70"
-            >
-              Initial commit message
-            </label>
-            <input
-              id="git-init-commit-message"
-              type="text"
-              value={initialCommitMessage}
-              onChange={(e) => setInitialCommitMessage(e.target.value)}
-              disabled={configDisabled}
-              placeholder="Initial commit"
-              className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
-            />
-          </div>
-        )}
+          {createInitialCommit && (
+            <div className="space-y-1.5">
+              <label htmlFor="git-init-commit-message" className={FIELD_LABEL_CLASS}>
+                Initial commit message
+              </label>
+              <input
+                id="git-init-commit-message"
+                type="text"
+                value={initialCommitMessage}
+                onChange={(e) => setInitialCommitMessage(e.target.value)}
+                disabled={configDisabled}
+                placeholder="Initial commit"
+                className={FIELD_INPUT_CLASS}
+              />
+            </div>
+          )}
+        </div>
 
         {showProgress && (
           <div className="rounded-lg bg-muted/50 p-4 min-h-[120px] max-h-[300px] overflow-y-auto font-mono text-sm">

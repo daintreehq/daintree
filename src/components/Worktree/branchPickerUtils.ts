@@ -27,8 +27,7 @@ export interface BranchSearchResult extends BranchOption {
 }
 
 export type BranchPickerRow =
-  | { kind: "section"; label: string }
-  | ({ kind: "option" } & BranchSearchResult);
+  { kind: "section"; label: string } | ({ kind: "option" } & BranchSearchResult);
 
 export interface FilterBranchesOptions {
   query: string;

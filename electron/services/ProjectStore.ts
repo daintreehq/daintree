@@ -1,6 +1,7 @@
 // eager-import-allow: reads/writes the project list via sync fs during startup
 import type {
   Project,
+  ProjectAddOptions,
   ProjectRepoStats,
   ProjectState,
   ProjectSettings,
@@ -16,6 +17,7 @@ import { existsSync } from "fs";
 import { app } from "electron";
 import { GitService } from "./GitService.js";
 import { AppError, isDaintreeError } from "../utils/errorTypes.js";
+import { assertProjectDirectory, isMissingExecutableError } from "./projectOpenPreflight.js";
 import { logError } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { store } from "../store.js";
@@ -26,7 +28,12 @@ import {
   type ProjectRow,
 } from "./persistence/schema.js";
 import { eq, desc } from "drizzle-orm";
-import { generateProjectId, getProjectStateDir } from "./projectStorePaths.js";
+import {
+  generateProjectId,
+  mintProjectId,
+  isValidProjectId,
+  getProjectStateDir,
+} from "./projectStorePaths.js";
 import { ProjectSettingsManager } from "./ProjectSettingsManager.js";
 import { ProjectStateManager, type ProjectStateReadResult } from "./ProjectStateManager.js";
 import { invalidatePrefetchCache } from "./prefetchHydrateCache.js";
@@ -41,10 +48,49 @@ import {
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
 import { isInRepoRecipeId } from "../../shared/utils/recipeFilename.js";
 
-import { computeFrecencyScore, FRECENCY_COLD_START } from "./frecency.js";
+import { bumpFrecencyScore, decayFrecencyScore, FRECENCY_COLD_START } from "./frecency.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
+import { rewriteProjectStatePaths } from "./projectPathStateRewrite.js";
+import { rewriteAgentSessionPathsForProject } from "./pty/agentSessionHistory.js";
+import { getPendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
+import { repairMovedSubmodulePaths } from "./git/submodulePathRepair.js";
 
-export const DEFAULT_PROJECT_EMOJI = "🌲";
+export { DEFAULT_PROJECT_EMOJI } from "../../shared/utils/projectEmoji.js";
+import { DEFAULT_PROJECT_EMOJI } from "../../shared/utils/projectEmoji.js";
+
+/**
+ * The single spelling of a project path used for identity comparisons. Separator
+ * normalization and Unicode normalization are independent problems: a
+ * Finder-dragged NFD path and a typed NFC path denote the same folder on macOS
+ * but are different strings, so both operands of any path comparison have to go
+ * through here.
+ */
+export function normalizeProjectPath(projectPath: string): string {
+  return path.normalize(projectPath).normalize("NFC");
+}
+
+function isEnoent(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && (error as { code?: string }).code === "ENOENT"
+  );
+}
+
+/**
+ * Best-effort re-link of a moved project's linked worktrees. Deliberately never
+ * throws: a project whose folder moved is still perfectly usable on its own, so
+ * a repair failure must not fail the relocation and strand the user with an
+ * unregistered project.
+ */
+async function repairLinkedWorktrees(oldPath: string, newPath: string): Promise<void> {
+  try {
+    await new GitService(newPath).repairWorktrees();
+  } catch (error) {
+    logError(`Failed to repair linked worktrees for ${newPath}`, error);
+  }
+  // `git worktree repair` ignores submodules; rebase any absolute submodule
+  // pointers the move left stale ourselves (#11282). Never throws.
+  await repairMovedSubmodulePaths(oldPath, newPath);
+}
 
 /**
  * Read a persisted count back, rejecting anything a corrupt row could hold.
@@ -73,27 +119,6 @@ function rowToRepoStats(row: ProjectRow): ProjectRepoStats | null {
   };
 }
 
-/**
- * Inverse of {@link rowToRepoStats}, for the insert paths that rebuild a row
- * from a `Project` (relocation). Without this the last-known counts would be
- * dropped on the floor and the toolbar would shift once after every relocate.
- */
-function repoStatsToColumns(stats: ProjectRepoStats | undefined): {
-  statsCommitCount: number | null;
-  statsIssueCount: number | null;
-  statsPrCount: number | null;
-  statsProviderId: string | null;
-  statsLastUpdated: number | null;
-} {
-  return {
-    statsCommitCount: stats ? readPersistedCount(stats.commitCount) : null,
-    statsIssueCount: stats ? readPersistedCount(stats.issueCount) : null,
-    statsPrCount: stats ? readPersistedCount(stats.prCount) : null,
-    statsProviderId: stats?.providerId ?? null,
-    statsLastUpdated: stats ? readPersistedCount(stats.lastUpdated) : null,
-  };
-}
-
 function rowToProject(row: ProjectRow): Project {
   const project: Project = {
     id: row.id,
@@ -112,7 +137,11 @@ function rowToProject(row: ProjectRow): Project {
   project.frecencyScore =
     typeof row.frecencyScore === "number" ? row.frecencyScore : FRECENCY_COLD_START;
   project.lastAccessedAt = typeof row.lastAccessedAt === "number" ? row.lastAccessedAt : 0;
+  if (typeof row.lastCompletionSeenAt === "number")
+    project.lastCompletionSeenAt = row.lastCompletionSeenAt;
   if (typeof row.autoParkedAt === "number") project.autoParkedAt = row.autoParkedAt;
+  // Only `false` is carried: null means git-backed, and so does absence.
+  if (row.gitBacked === false) project.gitBacked = false;
   const lastKnownStats = rowToRepoStats(row);
   if (lastKnownStats) project.lastKnownStats = lastKnownStats;
   return project;
@@ -142,6 +171,15 @@ export class ProjectStore {
   // the file since the renderer loaded it. Keyed by `${projectPath}|${recipeId}`
   // so the same recipe id in two different project clones stays separate.
   private inRepoRecipeHashes = new Map<string, string>();
+
+  // Operation-scoped path rewrites for projects being relocated by the phase-3
+  // coordinator (#11282). While a project id is present here, EVERY persisted
+  // state write for it is rebased old→new before hitting disk — so a debounced
+  // renderer layout write still in flight with the OLD root (the live-repoint
+  // keeps the view alive, so it keeps writing) can't clobber the migrated state
+  // after the folder move. Bounded to the coordinator's operation via
+  // begin/endRelocationRewrite.
+  private relocationRewrites = new Map<string, { oldPath: string; newPath: string }>();
 
   constructor() {
     this.userDataDir = app.getPath("userData");
@@ -173,13 +211,13 @@ export class ProjectStore {
 
   async readInRepoProjectIdentity(
     projectPath: string
-  ): Promise<{ name?: string; emoji?: string; color?: string; found: boolean }> {
+  ): Promise<{ id?: string; name?: string; emoji?: string; color?: string; found: boolean }> {
     return this.identityFiles.readInRepoProjectIdentity(projectPath);
   }
 
   async writeInRepoProjectIdentity(
     projectPath: string,
-    data: { name?: string; emoji?: string; color?: string }
+    data: { id?: string; name?: string; emoji?: string; color?: string }
   ): Promise<void> {
     return this.identityFiles.writeInRepoProjectIdentity(projectPath, data);
   }
@@ -277,7 +315,24 @@ export class ProjectStore {
   }
 
   async readInRepoRecipes(projectPath: string): Promise<TerminalRecipe[]> {
-    const { recipes, hashes } = await this.identityFiles.readInRepoRecipesWithHashes(projectPath);
+    const { recipes } = await this.readInRepoRecipesWithMeta(projectPath);
+    return recipes;
+  }
+
+  /**
+   * Cache-populating read shared by {@link readInRepoRecipes} and
+   * {@link reconcileProjectRecipes}. In addition to the recipes, it surfaces
+   * `dirExists` so reconciliation can tell an absent `.daintree/recipes/`
+   * directory (a checked-out branch/commit that predates recipes) apart from an
+   * authoritatively empty one — the former must never authorize pruning
+   * project-local mirrors (#11347). The public array-returning
+   * {@link readInRepoRecipes} keeps its signature for its unrelated callers.
+   */
+  private async readInRepoRecipesWithMeta(
+    projectPath: string
+  ): Promise<{ recipes: TerminalRecipe[]; dirExists: boolean; scanComplete: boolean }> {
+    const { recipes, hashes, dirExists, scanComplete } =
+      await this.identityFiles.readInRepoRecipesWithHashes(projectPath);
     // Replace this project's cached hashes with the freshly observed set so an
     // externally deleted recipe doesn't leave a stale entry pointing at a hash
     // for a file that no longer exists.
@@ -288,7 +343,7 @@ export class ProjectStore {
     for (const [recipeId, hash] of hashes) {
       this.inRepoRecipeHashes.set(this.hashKey(projectPath, recipeId), hash);
     }
-    return recipes;
+    return { recipes, dirExists, scanComplete };
   }
 
   async deleteInRepoRecipe(projectPath: string, recipeName: string): Promise<void> {
@@ -305,6 +360,20 @@ export class ProjectStore {
 
   // --- DB CRUD ---
 
+  /**
+   * Canonical spelling of a path for comparison against a resolved git root:
+   * realpath (resolving symlinks and case) then the same separator + NFC
+   * normalization the root gets. Returns null if the path can't be resolved,
+   * which compares unequal to every root — the safe direction.
+   */
+  private async canonicalizeForCompare(input: string): Promise<string | null> {
+    try {
+      return normalizeProjectPath(await fs.realpath(input));
+    } catch {
+      return null;
+    }
+  }
+
   private async getGitRoot(projectPath: string): Promise<string> {
     const gitService = new GitService(projectPath);
     const root = await gitService.getRepositoryRoot(projectPath);
@@ -312,7 +381,25 @@ export class ProjectStore {
     return canonical;
   }
 
-  async addProject(projectPath: string): Promise<Project> {
+  /**
+   * `options.identity` is the name/emoji chosen in a creation dialog. It is
+   * consulted only where a brand-new row is minted below — every earlier return
+   * (already-registered path, adopted move, lost insert race) keeps the
+   * identity it already has, so re-adding a folder can never rename it.
+   * In-repo `.daintree/project.json` still wins field-wise.
+   *
+   * `options.gitBacked === false` adopts a folder that has no repository at
+   * all; anything else keeps the strict git-root requirement. The two options
+   * are read independently — a lightweight open carries no identity, and an
+   * identity never implies a mode.
+   */
+  async addProject(projectPath: string, options?: ProjectAddOptions): Promise<Project> {
+    // Classify the path before git ever sees it. simple-git's own synchronous
+    // baseDir check throws first otherwise, and its error can't distinguish a
+    // missing folder from a file — the root cause of #11409.
+    await assertProjectDirectory(projectPath);
+
+    const creationIdentity = options?.identity;
     let gitRoot: string;
     try {
       gitRoot = await this.getGitRoot(projectPath);
@@ -324,26 +411,82 @@ export class ProjectStore {
       const combined = [message, causeMessage].filter(Boolean).join("\n");
       const lower = combined.toLowerCase();
 
-      if (lower.includes("spawn git enoent") || lower.includes("git: not found")) {
-        throw new Error(
-          "Git executable not found. Install Git and ensure it is available on your PATH."
-        );
+      // Classified before the directory re-check below because it's a property
+      // of the machine, not the path: a transient stat failure must not mask
+      // "git isn't installed", and a missing binary must not be reported as a
+      // problem with the folder.
+      if (isMissingExecutableError(error)) {
+        throw new AppError({
+          code: "GIT_NOT_INSTALLED",
+          message: "Git executable not found",
+          context: { projectPath },
+          cause: error instanceof Error ? error : undefined,
+        });
       }
 
       if (lower.includes("dubious ownership") || lower.includes("safe.directory")) {
-        throw new Error(
-          "Git refused to open this repository due to 'dubious ownership'. Mark it as safe.directory and try again."
-        );
+        // The substring match is against git's own stderr, which git genuinely
+        // emits. What the renderer keys on is the code, so this message is
+        // diagnostic copy and free to be reworded.
+        throw new AppError({
+          code: "DUBIOUS_OWNERSHIP",
+          message:
+            "Git refused to open this repository due to 'dubious ownership'. Mark it as safe.directory and try again.",
+          context: { projectPath },
+        });
       }
 
+      // Re-check the directory before the guided-init branch: several awaits
+      // have passed since the pre-flight, and a folder deleted or swapped for a
+      // file in that window reports as "not a git repository" too. Offering to
+      // run `git init` in a folder that no longer exists would be worse than
+      // useless, so a path that stopped validating is reclassified here.
+      await assertProjectDirectory(projectPath);
+
       if (lower.includes("not a git repository")) {
+        // The folder has no repository. Adopt it as a lightweight workspace when
+        // the caller asked for that explicitly, or when it is already registered
+        // as one — the latter is what lets Recents, Dock drops, Open With and the
+        // CLI reopen it without re-prompting (#11405). Anything else keeps
+        // today's behavior and drives the choice dialog.
+        //
+        // A registered *git-backed* row is deliberately not demoted on its own:
+        // git failing to see a repository at a path we recorded as one is an
+        // anomaly (an unmounted volume, a permissions blip, a `.git` deleted out
+        // from under us), and silently rewriting the row would lose that project's
+        // git identity for good. It falls through to the choice dialog, where
+        // demotion becomes the user's explicit decision.
+        const lightweight = await this.resolveLightweightPath(projectPath);
+        if (lightweight) {
+          const existing = await this.getProjectByPath(lightweight);
+          if (existing) {
+            if (existing.gitBacked === false || options?.gitBacked === false) {
+              return this.touchExistingProject(existing, { gitBacked: false });
+            }
+          } else if (options?.gitBacked === false) {
+            return this.insertLightweightProject(lightweight);
+          }
+        }
+
         throw new AppError({
           code: "NOT_A_GIT_REPO",
           message: `Not a git repository: ${projectPath}`,
         });
       }
 
-      throw new Error(combined || "Failed to open project");
+      // Everything unrecognized becomes one opaque code, and the raw text is
+      // demoted to diagnostics. The old fallback rethrew `combined` as the
+      // message, which is how "Git operation failed: getRepositoryRoot" and
+      // simple-git's own wording reached the user (#11409) — keeping it out of
+      // `message` means even a surface that naively renders `error.message`
+      // can't leak it.
+      logError("Failed to open project", error, { projectPath });
+      throw new AppError({
+        code: "PROJECT_OPEN_FAILED",
+        message: `Failed to open project: ${projectPath}`,
+        context: { projectPath, detail: combined },
+        cause: error instanceof Error ? error : undefined,
+      });
     }
 
     // NFC-normalize for dedup so a Finder-dragged NFD path and a typed NFC
@@ -352,35 +495,52 @@ export class ProjectStore {
     // independent.
     const normalizedPath = path.normalize(gitRoot).normalize("NFC");
 
+    // The registered project is the git ROOT, which is not always the path the
+    // caller handed us: creating `/repo/child` inside an existing repository
+    // resolves back to `/repo`. Identity chosen for the child must not be
+    // stamped onto the ancestor, so it only survives when the two agree.
+    //
+    // Both sides are canonicalized the same way (`normalizedPath` already comes
+    // from a realpath'd git root). A lexical-only comparison here would treat a
+    // symlinked path, a trailing separator, or different casing on a
+    // case-insensitive volume as a mismatch and silently discard an identity
+    // the user actually chose.
+    const mintIdentity =
+      (await this.canonicalizeForCompare(projectPath)) === normalizedPath
+        ? creationIdentity
+        : undefined;
+
     const existing = await this.getProjectByPath(normalizedPath);
     if (existing) {
-      const now = Date.now();
-      // Skip frecency churn under disk pressure — these are non-critical
-      // ranking-signal writes. `lastOpened` is also non-critical here (the
-      // existing project row is unchanged for the user's purposes).
-      if (getWritesSuppressed()) {
-        return existing;
-      }
-      const newScore = computeFrecencyScore(
-        existing.frecencyScore ?? FRECENCY_COLD_START,
-        existing.lastAccessedAt ?? 0,
-        now
-      );
-      return this.updateProject(existing.id, {
-        lastOpened: now,
-        frecencyScore: newScore,
-        lastAccessedAt: now,
-      });
+      // A git root resolved, so promote a row that was adopted without one —
+      // this is what `git init` on a lightweight workspace lands on (#11405).
+      return this.touchExistingProject(existing, { gitBacked: true });
     }
 
     const inRepo = await this.readInRepoProjectIdentity(normalizedPath);
 
+    // The folder may be a project we already know that simply moved. `inRepo.id`
+    // is the anchor written into `.daintree/project.json`; if it names a row
+    // whose registered path is gone, this is that project at its new home and
+    // its identity — and therefore every id-keyed piece of state — is preserved
+    // in place (#11282).
+    const relocated = await this.tryAdoptMovedProject(inRepo.id, normalizedPath);
+    if (relocated) return relocated;
+
+    // Re-check under the same tick as the insert. Several awaits have happened
+    // since the lookup above, and a concurrent `addProject` for this same folder
+    // would otherwise get past that stale check, find the path-derived id taken,
+    // mint a *random* one and insert a second row for one directory — the path
+    // column has no unique index to catch it.
+    const raced = await this.getProjectByPath(normalizedPath);
+    if (raced) return raced;
+
     const now = Date.now();
     const project: Project = {
-      id: generateProjectId(normalizedPath),
+      id: mintProjectId(normalizedPath, (candidate) => this.isProjectIdTaken(candidate)),
       path: normalizedPath,
-      name: inRepo.name ?? path.basename(normalizedPath),
-      emoji: inRepo.emoji ?? DEFAULT_PROJECT_EMOJI,
+      name: inRepo.name ?? mintIdentity?.name ?? path.basename(normalizedPath),
+      emoji: inRepo.emoji ?? mintIdentity?.emoji ?? DEFAULT_PROJECT_EMOJI,
       lastOpened: now,
       status: "closed",
       frecencyScore: FRECENCY_COLD_START,
@@ -407,6 +567,175 @@ export class ProjectStore {
       .run();
 
     return project;
+  }
+
+  /**
+   * Reopen an already-registered project: bump its ranking signals and reconcile
+   * its git-backed mode.
+   *
+   * The mode flip is written even while disk-pressure suppression is on. Frecency
+   * and `lastOpened` are non-critical ranking churn and are rightly dropped under
+   * pressure, but the mode decides whether the workspace host enumerates
+   * worktrees at all — losing it would leave the row describing the wrong kind of
+   * workspace until the next uncontended open.
+   */
+  private touchExistingProject(existing: Project, mode: { gitBacked: boolean }): Project {
+    // Stored as null rather than 1 for a repository, so a git-backed row is
+    // indistinguishable from every row predating the column.
+    const nextGitBacked = mode.gitBacked ? undefined : false;
+    const modeChanged = existing.gitBacked !== nextGitBacked;
+
+    const now = Date.now();
+    if (getWritesSuppressed()) {
+      return modeChanged ? this.updateProject(existing.id, { gitBacked: nextGitBacked }) : existing;
+    }
+
+    // The pre-update lastOpened is the debounce clock: re-adding a project you
+    // left moments ago must not count as fresh engagement.
+    const newScore = bumpFrecencyScore(
+      existing.frecencyScore ?? FRECENCY_COLD_START,
+      existing.lastAccessedAt ?? 0,
+      existing.lastOpened ?? 0,
+      now
+    );
+    return this.updateProject(existing.id, {
+      lastOpened: now,
+      frecencyScore: newScore,
+      lastAccessedAt: now,
+      ...(modeChanged ? { gitBacked: nextGitBacked } : {}),
+    });
+  }
+
+  /**
+   * Canonical registry path for a folder with no repository, or `null` when it
+   * isn't a usable directory.
+   *
+   * Git-backed projects register their repository root; a lightweight workspace
+   * has none, so the adopted folder itself is the identity. Symlinks are resolved
+   * and the result NFC-normalized to match {@link addProject}'s dedup rules.
+   */
+  private async resolveLightweightPath(projectPath: string): Promise<string | null> {
+    try {
+      const canonical = await fs.realpath(projectPath);
+      const stats = await fs.stat(canonical);
+      if (!stats.isDirectory()) return null;
+      return path.normalize(canonical).normalize("NFC");
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Register a folder that has no repository.
+   *
+   * Deliberately skips `.daintree/project.json`: reading identity from an
+   * arbitrary folder would let a downloaded archive carrying a stray anchor
+   * either rename itself after an unrelated project or, through
+   * {@link tryAdoptMovedProject}, take over that project's id and inherit its
+   * panels, settings and Assistant history.
+   */
+  private insertLightweightProject(normalizedPath: string): Project {
+    const now = Date.now();
+    const project: Project = {
+      id: mintProjectId(normalizedPath, (candidate) => this.isProjectIdTaken(candidate)),
+      path: normalizedPath,
+      name: path.basename(normalizedPath),
+      emoji: DEFAULT_PROJECT_EMOJI,
+      lastOpened: now,
+      status: "closed",
+      frecencyScore: FRECENCY_COLD_START,
+      lastAccessedAt: now,
+      gitBacked: false,
+    };
+
+    getSharedDb()
+      .insert(projectsTable)
+      .values({
+        id: project.id,
+        path: project.path,
+        name: project.name,
+        emoji: project.emoji,
+        lastOpened: project.lastOpened,
+        status: project.status ?? null,
+        frecencyScore: FRECENCY_COLD_START,
+        lastAccessedAt: now,
+        gitBacked: false,
+      })
+      .run();
+
+    return project;
+  }
+
+  /**
+   * True if `candidate` may not be handed to a new project.
+   *
+   * A registered row is the obvious case, but a leftover *state directory* is
+   * just as disqualifying: cleanup after a removed project is best-effort, so an
+   * orphaned directory can outlive its row. Reusing its id would silently serve
+   * a dead project's panels, settings and secure-env keys to an unrelated
+   * repository.
+   */
+  private isProjectIdTaken(candidate: string): boolean {
+    if (this.getProjectById(candidate) !== null) return true;
+    const stateDir = getProjectStateDir(this.projectsConfigDir, candidate);
+    return stateDir !== null && existsSync(stateDir);
+  }
+
+  /**
+   * Decides whether the folder now at `normalizedPath` is an already-registered
+   * project that moved, and if so repoints it in place.
+   *
+   * `.daintree/project.json` is git-tracked, so a clone or fork inherits the
+   * anchor of the repository it was copied from. The discriminator is whether
+   * the anchored project's registered path is *still there*: if it is, this
+   * folder is a copy living alongside the original and must get its own
+   * identity; only a vanished original means "the same project moved here".
+   *
+   * Every uncertain case returns `null`, which falls through to registering a
+   * brand-new project — today's behavior. Failing that direction costs the user
+   * a re-link; the opposite failure would silently hand one project's panels,
+   * settings and Assistant history to a different repository.
+   */
+  private async tryAdoptMovedProject(
+    anchorId: string | undefined,
+    normalizedPath: string
+  ): Promise<Project | null> {
+    if (!anchorId || !isValidProjectId(anchorId)) return null;
+
+    const anchored = this.getProjectById(anchorId);
+    if (!anchored) return null;
+
+    // Already registered here; the caller's path lookup should have caught it.
+    if (normalizeProjectPath(anchored.path) === normalizedPath) return null;
+
+    // Repointing the project a window is currently displaying would strand that
+    // view, its workspace host and its PTYs on the old path — the same reason
+    // `relocateProject` refuses it. Rebinding a live project needs the
+    // quiesce/rebind sequence that doesn't exist yet, so decline the adoption
+    // and let this register as an ordinary new project.
+    if (anchorId === this.getCurrentProjectId()) return null;
+
+    let originalIsGone: boolean;
+    try {
+      await fs.access(anchored.path);
+      originalIsGone = false;
+    } catch (error) {
+      // Only a genuinely absent original proves a move. A permissions or I/O
+      // failure tells us nothing, so it must not be read as "gone".
+      originalIsGone = isEnoent(error);
+    }
+    if (!originalIsGone) return null;
+
+    const adopted = this.updateProject(anchorId, {
+      path: normalizedPath,
+      status: "closed",
+    });
+
+    this.pruneInRepoRecipeHashes(anchored.path);
+    await this.migratePathBearingStateAfterMove(anchorId, anchored.path, normalizedPath);
+    await repairLinkedWorktrees(anchored.path, normalizedPath);
+
+    return adopted;
   }
 
   async removeProject(projectId: string): Promise<void> {
@@ -469,7 +798,9 @@ export class ProjectStore {
       pinned: number;
       frecencyScore: number;
       lastAccessedAt: number;
+      lastCompletionSeenAt: number;
       autoParkedAt: number | null;
+      gitBacked: boolean | null;
     }> = {};
     if (updates.name !== undefined) set.name = updates.name;
     if (updates.path !== undefined) set.path = updates.path;
@@ -483,7 +814,13 @@ export class ProjectStore {
     if (updates.pinned !== undefined) set.pinned = updates.pinned ? 1 : 0;
     if (updates.frecencyScore !== undefined) set.frecencyScore = updates.frecencyScore;
     if (updates.lastAccessedAt !== undefined) set.lastAccessedAt = updates.lastAccessedAt;
+    if (updates.lastCompletionSeenAt !== undefined)
+      set.lastCompletionSeenAt = updates.lastCompletionSeenAt;
     if ("autoParkedAt" in updates) set.autoParkedAt = updates.autoParkedAt ?? null;
+    // Keyed on presence, not on `!== undefined`: promoting a lightweight
+    // workspace clears the flag by passing `undefined`, which an existence-blind
+    // check would silently drop and leave the row lightweight forever.
+    if ("gitBacked" in updates) set.gitBacked = updates.gitBacked ?? null;
 
     if (Object.keys(set).length > 0) {
       db.update(projectsTable).set(set).where(eq(projectsTable.id, projectId)).run();
@@ -671,7 +1008,19 @@ export class ProjectStore {
       );
     }
 
-    return rows.map(rowToProject);
+    // The SQL orderBy pre-sorts on the raw persisted score, but raw scores are
+    // snapshots frozen at different lastAccessedAt dates and must never be
+    // compared directly — decay both to one shared `now` first. One `now` for
+    // the whole list keeps the comparison internally consistent.
+    const projects = rows.map(rowToProject);
+    const now = Date.now();
+    projects.sort((a, b) => {
+      const scoreA = decayFrecencyScore(a.frecencyScore ?? 0, a.lastAccessedAt ?? 0, now);
+      const scoreB = decayFrecencyScore(b.frecencyScore ?? 0, b.lastAccessedAt ?? 0, now);
+      if (scoreA !== scoreB) return scoreB - scoreA;
+      return (b.lastOpened ?? 0) - (a.lastOpened ?? 0);
+    });
+    return projects;
   }
 
   async getProjectByPath(projectPath: string): Promise<Project | null> {
@@ -681,10 +1030,51 @@ export class ProjectStore {
     return row ? rowToProject(row) : null;
   }
 
+  /**
+   * Resolves the id of the project registered at `projectPath`.
+   *
+   * Prefer this over `generateProjectId(path)` anywhere the answer is used to
+   * look something up: ids survive a folder move, so a relocated project's id
+   * no longer equals the hash of its current path and hashing would silently
+   * resolve to a project that does not exist (#11282). Falls back to the hash
+   * for paths that were never registered, preserving the previous behavior for
+   * callers that run before/without a project row.
+   */
+  resolveProjectIdForPath(projectPath: string): string {
+    const normalizedPath = normalizeProjectPath(projectPath);
+    const db = getSharedDb();
+    const row = db.select().from(projectsTable).where(eq(projectsTable.path, normalizedPath)).get();
+    return row?.id ?? generateProjectId(normalizedPath);
+  }
+
   getProjectById(projectId: string): Project | null {
     const db = getSharedDb();
     const row = db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).get();
     return row ? rowToProject(row) : null;
+  }
+
+  /**
+   * Acknowledgement watermarks for the completed-agent tallies: project id →
+   * epoch ms up to which the user has seen that project's completions. Only
+   * projects with a stamp appear. Read on every stats compute, so it selects
+   * the two columns it needs rather than hydrating full rows.
+   */
+  getLastCompletionSeenMap(): Map<string, number> {
+    const db = getSharedDb();
+    const rows = db
+      .select({
+        id: projectsTable.id,
+        lastCompletionSeenAt: projectsTable.lastCompletionSeenAt,
+      })
+      .from(projectsTable)
+      .all();
+    const map = new Map<string, number>();
+    for (const row of rows) {
+      if (typeof row.lastCompletionSeenAt === "number" && row.lastCompletionSeenAt > 0) {
+        map.set(row.id, row.lastCompletionSeenAt);
+      }
+    }
+    return map;
   }
 
   async checkMissingProjects(): Promise<string[]> {
@@ -719,107 +1109,154 @@ export class ProjectStore {
     return missingIds;
   }
 
+  /**
+   * Rebase the path-bearing Daintree state this phase covers after a moved or
+   * renamed project folder leaves it stale (#11282, phase 2). The project id is
+   * immutable (phase 1), so id-keyed files — the state dir, settings, secure
+   * env, hibernation token — stay reachable; the absolute paths INSIDE them
+   * (panel cwds, worktree ids, file-panel paths, MRU entries, captured session
+   * dirs, Assistant hibernation cwd) and the path-KEYED window-state store are
+   * rewritten here.
+   *
+   * Deliberately NOT covered yet (tracked as follow-ups under #11282): recipe
+   * `worktreeId` bindings, `terminalSettings.defaultWorkingDirectory`, and the
+   * worktree-keyed `worktreeIssueMap` / `wslGitByWorktree` / preset maps — each
+   * needs its own serialized/global-map rewrite contract, kept out to keep this
+   * phase reviewable.
+   *
+   * Best-effort by design: the DB row has already moved and is authoritative, so
+   * a failure in any ancillary surface is logged rather than surfaced as a
+   * relocation error (reporting failure after the row moved would misrepresent
+   * the real state). Each surface is an independently-settled thunk, so neither a
+   * rejection nor a SYNCHRONOUS throw in one can skip the others. Reached for a
+   * genuine folder move via any path: closed-project reattach/adoption, or the
+   * phase-3 coordinator relocating an OPEN project (which has already quiesced
+   * that project's live runtimes before the rewrite runs).
+   */
+  private async migratePathBearingStateAfterMove(
+    projectId: string,
+    oldPath: string,
+    newPath: string
+  ): Promise<void> {
+    // Thunks (not eager promises): running each through Promise.resolve().then
+    // converts a synchronous throw while BUILDING the promise — e.g. the first
+    // `getPendingHelpHibernationStore()` touches `app.getPath` — into a rejected
+    // result instead of letting it escape allSettled and reject the relocation.
+    const surfaces: Array<() => Promise<unknown>> = [
+      () =>
+        this.enqueueProjectStateUpdate(projectId, (existing) => {
+          if (!existing) return null;
+          const rewritten = rewriteProjectStatePaths(existing, oldPath, newPath);
+          // Same object reference back ⇒ nothing rebased ⇒ skip the disk write.
+          return rewritten === existing ? null : rewritten;
+        }),
+      async () => {
+        // Dynamic import breaks the ProjectStore ⇄ windowState cycle at module
+        // eval (windowState imports the projectStore singleton).
+        const { rekeyWindowStateForPath } = await import("../windowState.js");
+        rekeyWindowStateForPath(oldPath, newPath);
+      },
+      () => rewriteAgentSessionPathsForProject(projectId, oldPath, newPath),
+      () => getPendingHelpHibernationStore().rewriteProjectPath(projectId, oldPath, newPath),
+    ];
+
+    const results = await Promise.allSettled(surfaces.map((task) => Promise.resolve().then(task)));
+    for (const result of results) {
+      if (result.status === "rejected") {
+        logError(`Failed to migrate path-bearing state for ${projectId}`, result.reason);
+      }
+    }
+  }
+
   async relocateProject(projectId: string, newPath: string): Promise<Project> {
     const project = this.getProjectById(projectId);
     if (!project) {
       throw new Error(`Project not found: ${projectId}`);
     }
 
+    // Defense-in-depth: an OPEN project must go through the phase-3
+    // quiesce/rebind coordinator (which calls `finalizeRelocatedPath` directly
+    // after tearing down its runtimes), never this closed-project reattach path
+    // — repointing a live view/host/PTY from here would strand them on the old
+    // path (#11282). This single-window pointer only catches the last-focused
+    // window; the authoritative open-anywhere fork lives at the IPC boundary
+    // (`collectActiveProjectIds`), which routes open projects to the coordinator.
     if (projectId === this.getCurrentProjectId()) {
       throw new Error("Cannot relocate the currently active project");
     }
 
-    const canonicalNewPath = await this.getGitRoot(newPath);
-    const newProjectId = generateProjectId(canonicalNewPath);
+    // A plain reattach always parks the project as `closed`; the coordinator is
+    // the only caller that preserves an open project's live status.
+    return this.finalizeRelocatedPath({
+      projectId,
+      expectedOldPath: project.path,
+      newPath,
+      status: "closed",
+    });
+  }
 
-    if (newProjectId === projectId) {
-      return this.updateProject(projectId, { path: canonicalNewPath, status: "closed" });
+  /**
+   * Commit a project's move to a folder that ALREADY exists at `newPath`:
+   * canonicalize the new Git root, update the immutable-id row, and rebase every
+   * path-bearing surface. The caller owns the filesystem move — a plain reattach
+   * via {@link relocateProject} (folder moved externally), or the phase-3
+   * relocation coordinator after its own same-volume `fs.rename`.
+   *
+   * Split out from `relocateProject` so the coordinator can relocate an OPEN
+   * project while PRESERVING its `status` (forcing `"closed"` would make the
+   * visible project and the DB row disagree); `relocateProject` always closes.
+   *
+   * `expectedOldPath` guards a concurrent move: if the row no longer points where
+   * the caller captured it, the state rebase would run against a stale old root,
+   * so bail rather than corrupt state.
+   */
+  async finalizeRelocatedPath(opts: {
+    projectId: string;
+    expectedOldPath: string;
+    newPath: string;
+    status: Project["status"];
+  }): Promise<Project> {
+    const { projectId, expectedOldPath, newPath, status } = opts;
+    const project = this.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+    if (normalizeProjectPath(project.path) !== normalizeProjectPath(expectedOldPath)) {
+      throw new Error(
+        `Project ${projectId} moved concurrently (expected ${expectedOldPath}, found ${project.path})`
+      );
     }
 
-    const existingAtNewPath = this.getProjectById(newProjectId);
-    if (existingAtNewPath) {
+    // Normalize to the same NFC spelling `addProject`/`getProjectByPath` use, so
+    // a decomposed-Unicode destination on macOS is stored in the form later
+    // lookups query by — otherwise `resolveProjectIdForPath` misses it and falls
+    // back to the path hash, defeating the immutable id (#11282).
+    const canonicalNewPath = normalizeProjectPath(await this.getGitRoot(newPath));
+
+    // A project id is immutable once registered, so reattaching a folder is a
+    // path update on the existing row — not a new identity (#11282). Everything
+    // keyed by the id (state dir, settings, secure env, panel/terminal ids,
+    // Assistant hibernation, session journal) stays reachable with no copying or
+    // re-keying of the containers. The absolute paths stored INSIDE that state,
+    // plus the path-keyed window-state store, are rebased separately by
+    // `migratePathBearingStateAfterMove` below (phase 2).
+    const existingAtNewPath = await this.getProjectByPath(canonicalNewPath);
+    if (existingAtNewPath && existingAtNewPath.id !== projectId) {
       throw new Error(`A project already exists at that location: ${existingAtNewPath.name}`);
     }
 
-    const oldStateDir = getProjectStateDir(this.projectsConfigDir, projectId);
-    const newStateDir = getProjectStateDir(this.projectsConfigDir, newProjectId);
-
-    if (oldStateDir && newStateDir && existsSync(oldStateDir)) {
-      await fs.cp(oldStateDir, newStateDir, { recursive: true });
-    }
-
-    const projects = this.getAllProjects();
-    const index = projects.findIndex((p) => p.id === projectId);
-    if (index === -1) {
-      if (newStateDir && existsSync(newStateDir)) {
-        await fs.rm(newStateDir, { recursive: true, force: true }).catch(() => {});
-      }
-      throw new Error(`Project not found: ${projectId}`);
-    }
-
-    const oldProject = projects[index];
-    const updatedProject: Project = {
-      ...oldProject,
-      id: newProjectId,
+    const oldPath = project.path;
+    const updatedProject = this.updateProject(projectId, {
       path: canonicalNewPath,
-      status: "closed",
-    };
+      status,
+    });
 
-    const db = getSharedDb();
-    try {
-      db.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
-      db.insert(projectsTable)
-        .values({
-          id: updatedProject.id,
-          path: updatedProject.path,
-          name: updatedProject.name,
-          emoji: updatedProject.emoji,
-          lastOpened: updatedProject.lastOpened,
-          color: updatedProject.color ?? null,
-          status: updatedProject.status ?? null,
-          daintreeConfigPresent: updatedProject.daintreeConfigPresent ?? null,
-          inRepoSettings: updatedProject.inRepoSettings ?? null,
-          pinned: updatedProject.pinned ? 1 : 0,
-          frecencyScore: updatedProject.frecencyScore ?? FRECENCY_COLD_START,
-          lastAccessedAt: updatedProject.lastAccessedAt ?? 0,
-          ...repoStatsToColumns(updatedProject.lastKnownStats),
-        })
-        .run();
-      this.settingsManager.migrateEnvForProject(projectId, newProjectId);
-      this.stateManager.invalidateProjectStateCache(projectId);
-      this.stateManager.invalidateProjectStateCache(newProjectId);
-    } catch (error) {
-      db.delete(projectsTable).where(eq(projectsTable.id, newProjectId)).run();
-      db.insert(projectsTable)
-        .values({
-          id: oldProject.id,
-          path: oldProject.path,
-          name: oldProject.name,
-          emoji: oldProject.emoji,
-          lastOpened: oldProject.lastOpened,
-          color: oldProject.color ?? null,
-          status: oldProject.status ?? null,
-          daintreeConfigPresent: oldProject.daintreeConfigPresent ?? null,
-          inRepoSettings: oldProject.inRepoSettings ?? null,
-          pinned: oldProject.pinned ? 1 : 0,
-          frecencyScore: oldProject.frecencyScore ?? FRECENCY_COLD_START,
-          lastAccessedAt: oldProject.lastAccessedAt ?? 0,
-          ...repoStatsToColumns(oldProject.lastKnownStats),
-        })
-        .run();
-      if (newStateDir && existsSync(newStateDir)) {
-        await fs.rm(newStateDir, { recursive: true, force: true }).catch(() => {});
-      }
-      throw error;
-    }
-
-    // The old path is gone — drop its cached recipe hashes so they don't linger.
-    this.pruneInRepoRecipeHashes(oldProject.path);
-
-    if (oldStateDir && existsSync(oldStateDir)) {
-      await fs.rm(oldStateDir, { recursive: true, force: true }).catch((err) => {
-        logError(`Failed to clean up old state dir for project ${projectId}`, err);
-      });
+    if (normalizeProjectPath(oldPath) !== normalizeProjectPath(canonicalNewPath)) {
+      // The old path no longer backs this project — drop its cached recipe
+      // hashes so they don't linger.
+      this.pruneInRepoRecipeHashes(oldPath);
+      await this.migratePathBearingStateAfterMove(projectId, oldPath, canonicalNewPath);
+      await repairLinkedWorktrees(oldPath, canonicalNewPath);
     }
 
     return updatedProject;
@@ -878,11 +1315,15 @@ export class ProjectStore {
     // critical state updates (currentProjectId pointer + active/background
     // status) unconditional — those are session state the user depends on.
     const writesSuppressed = getWritesSuppressed();
+    // Debounced on the incoming project's pre-switch lastOpened: bouncing
+    // between two projects inside the window keeps re-basing the score to now
+    // but adds no increment, so toggling can't out-rank real engagement.
     const newScore = writesSuppressed
       ? null
-      : computeFrecencyScore(
+      : bumpFrecencyScore(
           project.frecencyScore ?? FRECENCY_COLD_START,
           project.lastAccessedAt ?? 0,
+          project.lastOpened ?? 0,
           now
         );
 
@@ -945,12 +1386,35 @@ export class ProjectStore {
 
   // --- State ---
 
+  /**
+   * Arm the operation-scoped state-write rewrite for a relocating project
+   * (#11282, phase 3). Until {@link endRelocationRewrite}, any persisted state
+   * write for `projectId` is rebased old→new, so a late renderer write with the
+   * old root can't undo the folder-move migration. Idempotent per id.
+   */
+  beginRelocationRewrite(projectId: string, oldPath: string, newPath: string): void {
+    this.relocationRewrites.set(projectId, { oldPath, newPath });
+  }
+
+  endRelocationRewrite(projectId: string): void {
+    this.relocationRewrites.delete(projectId);
+  }
+
+  private applyRelocationRewrite(projectId: string, state: ProjectState): ProjectState {
+    const rewrite = this.relocationRewrites.get(projectId);
+    if (!rewrite) return state;
+    return rewriteProjectStatePaths(state, rewrite.oldPath, rewrite.newPath);
+  }
+
   async saveProjectState(projectId: string, state: ProjectState): Promise<void> {
     // Invalidate before the write so any in-flight prefetch sees a version bump
     // and discards its result — otherwise a prefetch resolving after the write
     // could clobber the cache with pre-mutation state.
     invalidatePrefetchCache(projectId);
-    return this.stateManager.saveProjectState(projectId, state);
+    return this.stateManager.saveProjectState(
+      projectId,
+      this.applyRelocationRewrite(projectId, state)
+    );
   }
 
   async enqueueProjectStateUpdate(
@@ -963,6 +1427,7 @@ export class ProjectStore {
         // Same contract as saveProjectState: invalidate before the write so an
         // in-flight prefetch can't clobber the cache with pre-mutation state.
         invalidatePrefetchCache(projectId);
+        return this.applyRelocationRewrite(projectId, updated);
       }
       return updated;
     });
@@ -972,8 +1437,35 @@ export class ProjectStore {
     return this.stateManager.getProjectState(projectId);
   }
 
+  /**
+   * Count the persisted panels whose stored absolute paths a move from
+   * `oldPath` to `newPath` would rewrite (#11282, phase 4). Read-only: reuses
+   * the exact production rebase ({@link rewriteProjectStatePaths}) over the
+   * loaded state so the "panels with rewritten paths" preview can't drift from
+   * what an actual relocation rewrites. Returns 0 when nothing changes.
+   */
+  async countRebasedPanels(projectId: string, oldPath: string, newPath: string): Promise<number> {
+    if (normalizeProjectPath(oldPath) === normalizeProjectPath(newPath)) return 0;
+    const state = await this.getProjectState(projectId);
+    if (!state) return 0;
+    const rewritten = rewriteProjectStatePaths(state, oldPath, newPath);
+    // Same reference back ⇒ nothing rebased.
+    if (rewritten === state) return 0;
+    const before = Array.isArray(state.terminals) ? state.terminals : [];
+    const after = Array.isArray(rewritten.terminals) ? rewritten.terminals : [];
+    let count = 0;
+    for (let i = 0; i < before.length; i++) {
+      if (after[i] !== before[i]) count++;
+    }
+    return count;
+  }
+
   async getProjectStateWithRecovery(projectId: string): Promise<ProjectStateReadResult> {
     return this.stateManager.getProjectStateWithRecovery(projectId);
+  }
+
+  wasStateUnreadableThisSession(projectId: string): boolean {
+    return this.stateManager.wasStateUnreadableThisSession(projectId);
   }
 
   async clearProjectState(projectId: string): Promise<void> {
@@ -1034,116 +1526,148 @@ export class ProjectStore {
     projectPath: string,
     projectId: string
   ): Promise<RecipeNameCollision[]> {
-    // Go through the cache-aware wrapper so the hash map is populated as a
-    // side effect — otherwise the first renderer-driven edit after a project
-    // load races the unrelated `getInRepoRecipes` call to populate the cache
-    // and may see a phantom RECIPE_STALE_CONFLICT.
-    const inRepoRecipes = await this.readInRepoRecipes(projectPath);
-    const fileStoreRecipes = await this.fileStore.getRecipes(projectId);
-
-    const inRepoById = new Map(inRepoRecipes.map((r) => [r.id, r]));
-    const fileStoreById = new Map(fileStoreRecipes.map((r) => [r.id, r]));
-
-    let promoted = false;
+    // Fold the whole read-compute-write into one queued turn so it can't
+    // interleave with concurrent add/update/delete on the same project — the
+    // reconcile-vs-CRUD TOCTOU a per-method queue would otherwise leave open.
+    // The collision list is captured via this closure and returned after the
+    // queued promise resolves. The updater calls only unqueued fileStore reads
+    // (getRecipes) and in-repo writes (writeInRepoRecipe), never a queued
+    // fileStore mutator, so it cannot self-deadlock behind its own turn.
     const collisions: RecipeNameCollision[] = [];
-    // Project-local recipes that couldn't be promoted (filename collision) but
-    // must survive in ProjectFileStore rather than being dropped.
-    const keptLocal: TerminalRecipe[] = [];
-    const seenFilenames = new Map<string, string>();
-    for (const recipe of inRepoById.values()) {
-      seenFilenames.set(safeRecipeFilename(recipe.name), recipe.id);
-    }
+    await this.fileStore.enqueueRecipesUpdate(projectId, async () => {
+      // Go through the cache-aware wrapper so the hash map is populated as a
+      // side effect — otherwise the first renderer-driven edit after a project
+      // load races the unrelated `getInRepoRecipes` call to populate the cache
+      // and may see a phantom RECIPE_STALE_CONFLICT. `dirExists` distinguishes
+      // an absent `.daintree/recipes/` directory from an authoritatively empty
+      // one; `scanComplete` is false when the directory existed but a recipe
+      // file couldn't be read (a partial snapshot, e.g. mid-checkout).
+      const {
+        recipes: inRepoRecipes,
+        dirExists,
+        scanComplete,
+      } = await this.readInRepoRecipesWithMeta(projectPath);
+      const fileStoreRecipes = await this.fileStore.getRecipes(projectId);
 
-    for (const recipe of fileStoreRecipes) {
-      if (inRepoById.has(recipe.id)) continue;
-      if (isInRepoRecipeId(recipe)) continue; // stale, removed below
-
-      const filename = safeRecipeFilename(recipe.name);
-      const ownerId = seenFilenames.get(filename);
-      if (ownerId !== undefined && ownerId !== recipe.id) {
-        // Can't promote: a different recipe already owns this filename. Keep
-        // it as a project-local recipe and report the collision upward.
-        collisions.push({
-          filename,
-          keptId: ownerId,
-          droppedId: recipe.id,
-          droppedName: recipe.name,
-        });
-        keptLocal.push(recipe);
-        continue;
+      // #11347: When the in-repo recipe directory is absent (e.g. the user checked
+      // out a branch or commit that predates `.daintree/recipes/`), or the scan of
+      // it was incomplete (a file vanished/locked mid-read), we cannot tell a
+      // recipe that was deleted from one that merely lives on another checkout.
+      // If any project-local recipe is in-repo-scoped, pruning it would destroy
+      // local-only env values / usage metadata, and promoting a *sibling*
+      // local-only recipe would recreate the directory — making the very next
+      // reconcile observe `dirExists: true` and prune the recipe we just
+      // protected. So when the view isn't authoritative and there is anything to
+      // protect, make no filesystem changes at all and defer reconciliation until
+      // the directory is observable again. Projects with only promotable
+      // (non-in-repo) recipes still migrate/collision-check as before.
+      if ((!dirExists || !scanComplete) && fileStoreRecipes.some((r) => isInRepoRecipeId(r))) {
+        return null;
       }
 
-      await this.writeInRepoRecipe(projectPath, recipe);
-      inRepoById.set(recipe.id, recipe);
-      seenFilenames.set(filename, recipe.id);
-      promoted = true;
-    }
+      const inRepoById = new Map(inRepoRecipes.map((r) => [r.id, r]));
+      const fileStoreById = new Map(fileStoreRecipes.map((r) => [r.id, r]));
 
-    const hasStale = fileStoreRecipes.some((r) => isInRepoRecipeId(r) && !inRepoById.has(r.id));
+      let promoted = false;
+      // Project-local recipes that couldn't be promoted (filename collision) but
+      // must survive in ProjectFileStore rather than being dropped.
+      const keptLocal: TerminalRecipe[] = [];
+      const seenFilenames = new Map<string, string>();
+      for (const recipe of inRepoById.values()) {
+        seenFilenames.set(safeRecipeFilename(recipe.name), recipe.id);
+      }
 
-    const reconciledIds = new Set(inRepoById.keys());
-    const sizeChanged = reconciledIds.size !== fileStoreById.size;
-    const idsChanged = ![...reconciledIds].every((id) => fileStoreById.has(id));
+      for (const recipe of fileStoreRecipes) {
+        if (inRepoById.has(recipe.id)) continue;
+        if (isInRepoRecipeId(recipe)) continue; // stale, removed below
 
-    if (!promoted && !hasStale && !sizeChanged && !idsChanged && collisions.length === 0) {
-      // IDs match perfectly — check content before skipping
-      let contentDiffers = false;
+        const filename = safeRecipeFilename(recipe.name);
+        const ownerId = seenFilenames.get(filename);
+        if (ownerId !== undefined && ownerId !== recipe.id) {
+          // Can't promote: a different recipe already owns this filename. Keep
+          // it as a project-local recipe and report the collision upward.
+          collisions.push({
+            filename,
+            keptId: ownerId,
+            droppedId: recipe.id,
+            droppedName: recipe.name,
+          });
+          keptLocal.push(recipe);
+          continue;
+        }
+
+        await this.writeInRepoRecipe(projectPath, recipe);
+        inRepoById.set(recipe.id, recipe);
+        seenFilenames.set(filename, recipe.id);
+        promoted = true;
+      }
+
+      const hasStale = fileStoreRecipes.some((r) => isInRepoRecipeId(r) && !inRepoById.has(r.id));
+
+      const reconciledIds = new Set(inRepoById.keys());
+      const sizeChanged = reconciledIds.size !== fileStoreById.size;
+      const idsChanged = ![...reconciledIds].every((id) => fileStoreById.has(id));
+
+      if (!promoted && !hasStale && !sizeChanged && !idsChanged && collisions.length === 0) {
+        // IDs match perfectly — check content before skipping
+        let contentDiffers = false;
+        for (const recipe of inRepoById.values()) {
+          const existing = fileStoreById.get(recipe.id);
+          if (!existing) continue;
+          const {
+            projectId: _p1,
+            worktreeId: _w1,
+            ...inRepoNorm
+          } = recipe as unknown as Record<string, unknown>;
+          const {
+            projectId: _p2,
+            worktreeId: _w2,
+            ...fsNorm
+          } = existing as unknown as Record<string, unknown>;
+          if (JSON.stringify(inRepoNorm) !== JSON.stringify(fsNorm)) {
+            contentDiffers = true;
+            break;
+          }
+        }
+        if (!contentDiffers) return null;
+      }
+
+      // Build reconciled list: start from in-repo canonical, merge fileStore-only
+      // fields (env values, metadata) so they survive the write-back.
+      const reconciled: TerminalRecipe[] = [];
       for (const recipe of inRepoById.values()) {
         const existing = fileStoreById.get(recipe.id);
-        if (!existing) continue;
-        const {
-          projectId: _p1,
-          worktreeId: _w1,
-          ...inRepoNorm
-        } = recipe as unknown as Record<string, unknown>;
-        const {
-          projectId: _p2,
-          worktreeId: _w2,
-          ...fsNorm
-        } = existing as unknown as Record<string, unknown>;
-        if (JSON.stringify(inRepoNorm) !== JSON.stringify(fsNorm)) {
-          contentDiffers = true;
-          break;
+        if (!existing) {
+          reconciled.push(recipe);
+          continue;
         }
-      }
-      if (!contentDiffers) return collisions;
-    }
 
-    // Build reconciled list: start from in-repo canonical, merge fileStore-only
-    // fields (env values, metadata) so they survive the write-back.
-    const reconciled: TerminalRecipe[] = [];
-    for (const recipe of inRepoById.values()) {
-      const existing = fileStoreById.get(recipe.id);
-      if (!existing) {
-        reconciled.push(recipe);
-        continue;
+        const mergedTerminals = recipe.terminals.map((inRepoT, i) => {
+          const existingT = existing.terminals[i];
+          if (!existingT?.env || Object.keys(existingT.env).length === 0) return inRepoT;
+          const env: Record<string, string> = {};
+          for (const key of Object.keys(inRepoT.env ?? {})) {
+            env[key] = existingT.env[key] ?? "";
+          }
+          return { ...inRepoT, env };
+        });
+
+        reconciled.push({
+          ...recipe,
+          terminals: mergedTerminals,
+          projectId: existing.projectId,
+          worktreeId: existing.worktreeId,
+          lastUsedAt: existing.lastUsedAt,
+          usageHistory: existing.usageHistory,
+        });
       }
 
-      const mergedTerminals = recipe.terminals.map((inRepoT, i) => {
-        const existingT = existing.terminals[i];
-        if (!existingT?.env || Object.keys(existingT.env).length === 0) return inRepoT;
-        const env: Record<string, string> = {};
-        for (const key of Object.keys(inRepoT.env ?? {})) {
-          env[key] = existingT.env[key] ?? "";
-        }
-        return { ...inRepoT, env };
-      });
+      // Keep project-local recipes that couldn't be promoted (filename collision)
+      // so they survive the write-back rather than being silently dropped.
+      reconciled.push(...keptLocal);
 
-      reconciled.push({
-        ...recipe,
-        terminals: mergedTerminals,
-        projectId: existing.projectId,
-        worktreeId: existing.worktreeId,
-        lastUsedAt: existing.lastUsedAt,
-        usageHistory: existing.usageHistory,
-      });
-    }
-
-    // Keep project-local recipes that couldn't be promoted (filename collision)
-    // so they survive the write-back rather than being silently dropped.
-    reconciled.push(...keptLocal);
-
-    await this.fileStore.saveRecipes(projectId, reconciled);
+      return reconciled;
+    });
     return collisions;
   }
 

@@ -14,6 +14,7 @@ import {
   isDeletedWorktreeCleanupSeconds,
   DELETED_WORKTREE_CLEANUP_DEFAULT,
 } from "@/store/preferencesStore";
+import { FileBrowserVisibilitySettings } from "./FileBrowserVisibilitySettings";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
@@ -340,7 +341,7 @@ export function WorktreeSettingsTab() {
       >
         <SettingsSelect
           label="Close leftover terminals"
-          description="Leftover terminals move to trash when the timer ends. The timer pauses while a drag is in progress and while an agent is still working."
+          description="Leftover terminals move to trash when the timer ends. The timer only counts down while the project is open, and pauses for a while during a drag, an open close confirmation, or an agent that's still working."
           scope="global"
           value={String(cleanupSeconds)}
           onValueChange={handleCleanupChange}
@@ -349,6 +350,8 @@ export function WorktreeSettingsTab() {
           onReset={() => setCleanupSeconds(DELETED_WORKTREE_CLEANUP_DEFAULT)}
         />
       </SettingsSection>
+
+      <FileBrowserVisibilitySettings />
     </div>
   );
 }

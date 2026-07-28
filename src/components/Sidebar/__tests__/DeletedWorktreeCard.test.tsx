@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 vi.mock("react-dom", async () => {
@@ -34,7 +34,7 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
 }));
 
 import { usePanelStore } from "@/store/panelStore";
-import { usePreferencesStore } from "@/store/preferencesStore";
+import { usePreferencesStore, type DeletedWorktreeCleanupSeconds } from "@/store/preferencesStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
 import { useWorktreeSelectionStore, type DeletedWorktree } from "@/store/worktreeStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -65,6 +65,24 @@ function setPanels(
   });
 }
 
+// Classifies Tailwind bottom-border *width* utilities (`border-b`, `border-b-2`,
+// and variant-prefixed forms like `hover:border-b`) rather than matching the
+// class string, so the check keeps working as unrelated classes come and go.
+// `border-b-0` is excluded because it removes the border rather than painting
+// one, as are colour-only utilities like `border-b-border-default`.
+function hasBottomBorderUtility(element: Element): boolean {
+  return [...element.classList].some((className) => {
+    const utility = className.split(":").at(-1);
+    if (utility === "border-b") return true;
+    if (utility?.startsWith("border-b-") !== true) return false;
+    const value = utility.slice("border-b-".length);
+    // Arbitrary widths (`border-b-[1px]`) paint a rule of their own; arbitrary
+    // colours (`border-b-[#fff]`) only tint one some width utility declared.
+    if (value.startsWith("[")) return !value.startsWith("[#");
+    return /^\d+$/.test(value) && value !== "0";
+  });
+}
+
 function renderCard(wt: DeletedWorktree = worktree) {
   return render(
     <TooltipProvider>
@@ -79,7 +97,8 @@ const worktree: DeletedWorktree = {
   path: "/repo/feature-login",
   deletedAt: 1000,
   expiresAt: null,
-  pinnedIndex: 2,
+  holdReason: null,
+  pinnedBeforeWorktreeId: null,
 };
 
 const originalSelectWorktree = useWorktreeSelectionStore.getState().selectWorktree;
@@ -142,12 +161,8 @@ describe("DeletedWorktreeCard", () => {
     expect(selectWorktree).toHaveBeenCalledWith("wt-1", { source: "focus" });
   });
 
-  it("shows the auto-cleanup countdown bar when a deadline is armed", () => {
-    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
-    const { container } = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
-
-    expect(container.querySelector("[data-testid='deleted-worktree-countdown']")).toBeTruthy();
-  });
+  // Armed presence is owned by the bottom-edge-ownership block below, which
+  // asserts the same thing plus where the fill sits in the tree.
 
   it("shows the seconds readout next to the close button while armed", () => {
     setPanels([{ id: "t1", worktreeId: "wt-1" }]);
@@ -155,6 +170,202 @@ describe("DeletedWorktreeCard", () => {
 
     const readout = container.querySelector("[data-testid='deleted-worktree-countdown-seconds']");
     expect(readout?.textContent).toMatch(/^\d+s$/);
+  });
+
+  it("names the condition holding the countdown", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    const { container } = renderCard({
+      ...worktree,
+      expiresAt: Date.now() + 40_000,
+      holdReason: "agent",
+    });
+
+    const badge = container.querySelector("[data-testid='deleted-worktree-countdown-hold']");
+    // A row that simply stops counting down reads as broken — it has to say
+    // which condition is holding it.
+    expect(badge?.textContent).toBeTruthy();
+    expect(badge?.getAttribute("data-hold-reason")).toBe("agent");
+    // The remaining stays visible alongside it, so the row still shows what it
+    // is holding *at*.
+    const readout = container.querySelector("[data-testid='deleted-worktree-countdown-seconds']");
+    expect(readout?.textContent).toMatch(/^\d+s$/);
+  });
+
+  it("holds the readout on one value while the countdown is held", () => {
+    vi.useFakeTimers();
+    try {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      const base = 1_700_000_000_000;
+      vi.setSystemTime(base);
+
+      // A held row is pinned at whatever remained when the hold began, so every
+      // sweep re-pins the deadline to `now + remaining`. `now` has advanced, so
+      // that write is never a no-op and re-renders the card at the *sweep's*
+      // phase, while the card's own 1Hz tick renders at its own. Deriving the
+      // readout from the deadline therefore alternates between N and N+1
+      // forever, which reads as broken in exactly the way this PR set out to
+      // fix. Neither the TTL clamp nor the full-width snap absorbs it: a hold
+      // pins mid-countdown, not at full.
+      const pinnedRemainingMs = 38_000;
+      const sweptAt = (at: number): DeletedWorktree => ({
+        ...worktree,
+        expiresAt: at + pinnedRemainingMs,
+        holdReason: "agent",
+      });
+
+      const { container, rerender } = render(
+        <TooltipProvider>
+          <DeletedWorktreeCard worktree={sweptAt(base)} />
+        </TooltipProvider>
+      );
+      const seconds = () =>
+        container.querySelector("[data-testid='deleted-worktree-countdown-seconds']")?.textContent;
+      const width = () =>
+        container
+          .querySelector("[data-testid='deleted-worktree-countdown']")
+          ?.getAttribute("style");
+
+      const steadySeconds = seconds();
+      const steadyWidth = width();
+      expect(steadySeconds).toMatch(/^\d+s$/);
+
+      // Sweep phase 600ms, card-tick phase 0ms — advancing through both is what
+      // makes the alternation observable.
+      for (let cycle = 1; cycle <= 4; cycle += 1) {
+        act(() => {
+          vi.advanceTimersByTime(600);
+        });
+        rerender(
+          <TooltipProvider>
+            <DeletedWorktreeCard worktree={sweptAt(base + (cycle - 1) * 1000 + 600)} />
+          </TooltipProvider>
+        );
+        expect(seconds()).toBe(steadySeconds);
+        expect(width()).toBe(steadyWidth);
+
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        expect(seconds()).toBe(steadySeconds);
+        expect(width()).toBe(steadyWidth);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The freeze is captured during render, so releasing a hold is where the
+  // capture can linger — the steady-state test above never releases, and a
+  // snapshot that outlived its hold would pin the row forever.
+  it("resumes counting down from the live deadline once the hold is released", () => {
+    vi.useFakeTimers();
+    try {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      const base = 1_700_000_000_000;
+      vi.setSystemTime(base);
+      const held: DeletedWorktree = {
+        ...worktree,
+        expiresAt: base + 38_000,
+        holdReason: "agent",
+      };
+
+      const { container, rerender } = renderCard(held);
+      const secondsValue = () =>
+        Number.parseInt(
+          container
+            .querySelector("[data-testid='deleted-worktree-countdown-seconds']")
+            ?.textContent?.replace("s", "") ?? "NaN",
+          10
+        );
+
+      const frozen = secondsValue();
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+      expect(secondsValue()).toBe(frozen);
+
+      // Release: the captured snapshot must be dropped, not linger and keep the
+      // row pinned at a value the deadline has long since moved past.
+      rerender(
+        <TooltipProvider>
+          <DeletedWorktreeCard worktree={{ ...held, holdReason: null }} />
+        </TooltipProvider>
+      );
+      expect(secondsValue()).toBeLessThan(frozen);
+
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(secondsValue()).toBeLessThan(frozen - 5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("names each hold condition in terms the user can act on", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    const copyFor = (holdReason: DeletedWorktree["holdReason"]) => {
+      const { container } = renderCard({
+        ...worktree,
+        expiresAt: Date.now() + 40_000,
+        holdReason,
+      });
+      const label =
+        container.querySelector("[data-testid='deleted-worktree-countdown-hold']")?.textContent ??
+        "";
+      const explanation =
+        container
+          .querySelector("[data-testid='deleted-worktree-countdown-seconds']")
+          ?.getAttribute("title") ?? "";
+      cleanup();
+      return { label, explanation };
+    };
+
+    // The visible label is what carries the reason, so it has to actually name
+    // the condition — swapped or generic copy would leave the row as opaque as
+    // the bug being fixed.
+    const agent = copyFor("agent");
+    expect(agent.label.toLowerCase()).toContain("agent");
+    expect(agent.explanation.toLowerCase()).toContain("agent");
+
+    const drag = copyFor("drag");
+    expect(drag.label.toLowerCase()).toContain("drag");
+    expect(drag.explanation.toLowerCase()).toContain("drag");
+
+    const confirm = copyFor("confirm");
+    expect(confirm.label.toLowerCase()).toContain("confirm");
+    expect(confirm.explanation.toLowerCase()).toContain("confirm");
+
+    // Sentence case, no trailing period (CLAUDE.md microcopy).
+    for (const { label } of [agent, drag, confirm]) {
+      expect(label.endsWith(".")).toBe(false);
+      expect(label.slice(1)).toBe(label.slice(1).toLowerCase());
+    }
+  });
+
+  it("shows no hold badge while the countdown is running", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    const { container } = renderCard({ ...worktree, expiresAt: Date.now() + 40_000 });
+
+    expect(container.querySelector("[data-testid='deleted-worktree-countdown-hold']")).toBeNull();
+    expect(
+      container
+        .querySelector("[data-testid='deleted-worktree-countdown']")
+        ?.getAttribute("data-held")
+    ).toBeNull();
+  });
+
+  it("hides the hold badge along with the countdown when auto-cleanup is off", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 0 });
+    const { container } = renderCard({
+      ...worktree,
+      expiresAt: Date.now() + 40_000,
+      holdReason: "drag",
+    });
+
+    expect(container.querySelector("[data-testid='deleted-worktree-countdown-hold']")).toBeNull();
+    expect(container.querySelector("[data-testid='deleted-worktree-countdown']")).toBeNull();
   });
 
   it("hides the countdown bar while auto-cleanup is off or the row is unarmed", () => {
@@ -168,6 +379,145 @@ describe("DeletedWorktreeCard", () => {
     usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 0 });
     const off = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
     expect(off.container.querySelector("[data-testid='deleted-worktree-countdown']")).toBeNull();
+  });
+
+  // #11262: the card used to carry a `border-b` *and* an absolutely positioned
+  // countdown bar. `bottom-0` resolves against the padding edge, so the bar
+  // landed one border-width above the border and the two painted as a doubled
+  // rule. The invariant these lock is structural, not cosmetic: exactly one
+  // element owns the bottom edge in every state, and the countdown lives inside
+  // it rather than beside it. jsdom can't measure the overlap that caused the
+  // bug, so we assert the arrangement that makes it unrepresentable.
+  describe("bottom-edge ownership (#11262)", () => {
+    const bottomEdgeStates: Array<{
+      name: string;
+      wt: DeletedWorktree;
+      cleanupSeconds: DeletedWorktreeCleanupSeconds;
+      armed: boolean;
+    }> = [
+      { name: "unarmed", wt: worktree, cleanupSeconds: 60, armed: false },
+      {
+        name: "armed",
+        wt: { ...worktree, expiresAt: Date.now() + 60_000 },
+        cleanupSeconds: 60,
+        armed: true,
+      },
+      {
+        name: "deadline set but auto-cleanup disabled",
+        wt: { ...worktree, expiresAt: Date.now() + 60_000 },
+        cleanupSeconds: 0,
+        armed: false,
+      },
+    ];
+
+    for (const { name, wt, cleanupSeconds, armed } of bottomEdgeStates) {
+      it(`keeps a single bottom rule while ${name}`, () => {
+        setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+        usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: cleanupSeconds });
+        const { container } = renderCard(wt);
+
+        const card = container.querySelector("[data-deleted-worktree-id='wt-1']");
+        if (!card) throw new Error("card did not render");
+
+        // The card must not paint a border of its own — that border plus the
+        // positioned track is precisely the doubling this fixes.
+        expect(hasBottomBorderUtility(card)).toBe(false);
+
+        const separators = card.querySelectorAll(
+          ":scope > [data-testid='deleted-worktree-separator']"
+        );
+        expect(separators).toHaveLength(1);
+
+        // The countdown must be nested in the separator. A regression that
+        // reintroduces it as a sibling would still satisfy a naive
+        // presence check, so assert the containment and the absence of a
+        // second top-level bar separately.
+        const separator = separators[0];
+        if (!separator) throw new Error("separator did not render");
+        expect(
+          separator.querySelectorAll(":scope > [data-testid='deleted-worktree-countdown']")
+        ).toHaveLength(armed ? 1 : 0);
+        expect(
+          card.querySelectorAll(":scope > [data-testid='deleted-worktree-countdown']")
+        ).toHaveLength(0);
+      });
+    }
+
+    it("keeps the track decorative rather than a second tooltip target", () => {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      const { container } = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
+
+      const separator = container.querySelector("[data-testid='deleted-worktree-separator']");
+      // A 1px strip is an unhittable hover target, and the seconds readout in
+      // the header already carries the tooltip — a title here would be dead
+      // weight that screen readers skip anyway.
+      expect(separator?.getAttribute("aria-hidden")).toBe("true");
+      expect(separator?.hasAttribute("title")).toBe(false);
+      expect(
+        container.querySelector("[data-testid='deleted-worktree-countdown']")?.hasAttribute("title")
+      ).toBe(false);
+      // The readout keeps its own tooltip, so the information is not lost.
+      expect(
+        container
+          .querySelector("[data-testid='deleted-worktree-countdown-seconds']")
+          ?.getAttribute("title")
+      ).toContain("Closes automatically");
+    });
+  });
+
+  // The fill's width is the only thing that makes the separator read as a
+  // countdown, and `remainingFraction` is not a straight ratio: it clamps to
+  // the configured TTL (the sweep re-extends the deadline out of phase with
+  // this component's tick) and snaps the top ~1.5s to exactly full so a
+  // deferred countdown holds steady instead of sawtoothing. Assert the
+  // computed width, since every structural test above passes even if the fill
+  // is permanently stuck at 0% or 100%.
+  describe("countdown fill width", () => {
+    function renderArmed(expiresAt: number, cleanupSeconds: DeletedWorktreeCleanupSeconds = 60) {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: cleanupSeconds });
+      const { container } = renderCard({ ...worktree, expiresAt });
+      return {
+        width: container.querySelector<HTMLElement>("[data-testid='deleted-worktree-countdown']")
+          ?.style.width,
+        readout: container.querySelector("[data-testid='deleted-worktree-countdown-seconds']")
+          ?.textContent,
+      };
+    }
+
+    function fillWidth(
+      expiresAt: number,
+      cleanupSeconds: DeletedWorktreeCleanupSeconds = 60
+    ): string | undefined {
+      return renderArmed(expiresAt, cleanupSeconds).width;
+    }
+
+    it("holds at full while the sweep defers the deadline past the TTL", () => {
+      // The sweep re-extends the deadline out of phase with this component's
+      // tick, so a deadline beyond the TTL is normal and must read as full.
+      // Assert the readout too: the width alone can't distinguish the clamp
+      // from the snap-to-full branch, which would also yield 100% here.
+      const { width, readout } = renderArmed(Date.now() + 90_000);
+      expect(width).toBe("100%");
+      expect(readout).toBe("60s");
+    });
+
+    it("snaps the opening moments to exactly full so a paused bar holds steady", () => {
+      // Inside the ~1.5s snap window — a raw ratio would render just under 100%.
+      expect(fillWidth(Date.now() + 59_200)).toBe("100%");
+    });
+
+    it("tracks the remaining fraction once the countdown is clear of the snap", () => {
+      const width = fillWidth(Date.now() + 30_000);
+      const percent = Number.parseFloat(width ?? "");
+      // Tolerance absorbs the ms that elapse between arming and asserting.
+      expect(percent).toBeGreaterThan(48);
+      expect(percent).toBeLessThan(52);
+    });
+
+    it("drains to empty once the deadline has passed", () => {
+      expect(fillWidth(Date.now() - 5_000)).toBe("0%");
+    });
   });
 
   it("marks the card active when it is the active worktree", () => {
@@ -249,5 +599,30 @@ describe("DeletedWorktreeCard", () => {
     // worktree drop payload DndProvider gates on.
     expect(container.querySelector("[data-deleted-worktree-id='wt-1']")).toBeTruthy();
     expect(container.querySelector("[data-worktree-drop-target]")).toBeNull();
+  });
+});
+
+describe("DeletedWorktreeCard — grouped (#11260)", () => {
+  it("hides its own dismiss button so the group's bulk clear is the only one", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "t2", worktreeId: "wt-1" },
+    ]);
+    render(
+      <TooltipProvider>
+        <DeletedWorktreeCard worktree={worktree} showDismissAction={false} />
+      </TooltipProvider>
+    );
+
+    expect(screen.queryByRole("button", { name: "Close 2 terminals" })).toBeNull();
+    // The rest of the card is unchanged — it still identifies its worktree.
+    expect(screen.getByText("feature/login")).toBeTruthy();
+  });
+
+  it("keeps the dismiss button by default", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    renderCard();
+
+    expect(screen.getByRole("button", { name: "Close 1 terminal" })).toBeTruthy();
   });
 });

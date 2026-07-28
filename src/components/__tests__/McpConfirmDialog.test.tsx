@@ -41,6 +41,7 @@ function enqueue(
     actionTitle?: string;
     danger?: ActionDanger;
     callerInfo?: McpBearerIdentity;
+    dangerRationale?: string;
   } = {}
 ) {
   return requestMcpConfirmation({
@@ -51,6 +52,7 @@ function enqueue(
     argsSummary: '{"worktreeId":"wt-1"}',
     danger: overrides.danger ?? "confirm",
     callerInfo: overrides.callerInfo,
+    ...(overrides.dangerRationale ? { dangerRationale: overrides.dangerRationale } : {}),
   });
 }
 
@@ -108,6 +110,26 @@ describe("McpConfirmDialog", () => {
     render(<McpConfirmDialog />);
 
     expect(screen.queryByText("Requested by")).toBeNull();
+  });
+
+  it("surfaces the action's dangerRationale so the human sees why it's gated (#11342)", () => {
+    void enqueue({
+      actionTitle: "Delete worktree",
+      dangerRationale: "Permanently removes the worktree directory and any uncommitted changes.",
+    });
+    render(<McpConfirmDialog />);
+
+    expect(screen.getByText("Why this is gated")).toBeTruthy();
+    expect(
+      screen.getByText(/Permanently removes the worktree directory and any uncommitted changes\./)
+    ).toBeTruthy();
+  });
+
+  it("omits the rationale row when the action carries no dangerRationale", () => {
+    void enqueue({ actionTitle: "Delete worktree" });
+    render(<McpConfirmDialog />);
+
+    expect(screen.queryByText("Why this is gated")).toBeNull();
   });
 
   it("renders destructive styling only for danger:confirm dispatches", () => {

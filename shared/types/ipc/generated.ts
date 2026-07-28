@@ -36,6 +36,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { worktreeId?: string | undefined }];
     result: void;
   };
+  "agent-session:delete-bookmark": {
+    args: [payload: { sessionId: string }];
+    result: void;
+  };
   "agent-session:get-retention": {
     args: [];
     result: import("./agentSessionHistory.js").AgentSessionRetentionDays;
@@ -43,6 +47,40 @@ export interface GeneratedIpcInvokeMap {
   "agent-session:list": {
     args: [payload: { worktreeId?: string | undefined }];
     result: import("./agentSessionHistory.js").AgentSessionRecord[];
+  };
+  "agent-session:list-bookmarks": {
+    args: [payload: { projectId?: string | undefined } | undefined];
+    result: import("./agentSessionHistory.js").AgentSessionRecord[];
+  };
+  "agent-session:prepare-bookmark": {
+    args: [
+      payload: {
+        terminalId: string;
+        label: string;
+        metadata?:
+          | {
+              sourcePanelId?: string | undefined;
+              sourceLocation?: "grid" | "dock" | undefined;
+              titleMode?: "default" | "custom" | "user" | undefined;
+              agentPresetId?: string | undefined;
+              agentPresetColor?: string | undefined;
+              originalPresetId?: string | undefined;
+              isUsingFallback?: boolean | undefined;
+              fallbackChainIndex?: number | undefined;
+              isInputLocked?: boolean | undefined;
+            }
+          | undefined;
+      },
+    ];
+    result: { record: import("./agentSessionHistory.js").AgentSessionRecord };
+  };
+  "agent-session:promote-bookmark": {
+    args: [payload: { sessionId: string; label: string }];
+    result: import("./agentSessionHistory.js").AgentSessionRecord;
+  };
+  "agent-session:rename-bookmark": {
+    args: [payload: { sessionId: string; label: string }];
+    result: import("./agentSessionHistory.js").AgentSessionRecord;
   };
   "agent-session:set-retention": {
     args: [days: import("./agentSessionHistory.js").AgentSessionRetentionDays];
@@ -314,6 +352,14 @@ export interface GeneratedIpcInvokeMap {
   "event-inspector:get-filtered": {
     args: [filters: import("./events.js").EventFilterOptions];
     result: import("./events.js").EventRecord[];
+  };
+  "file-browser:list-directory": {
+    args: [payload: import("./fileBrowser.js").FileBrowserListDirectoryPayload];
+    result: import("./fileBrowser.js").FileBrowserListDirectoryResult;
+  };
+  "file-browser:stat-paths": {
+    args: [payload: import("./fileBrowser.js").FileBrowserStatPathsPayload];
+    result: import("./fileBrowser.js").FileBrowserStatPathsResult;
   };
   "forge-audit:clear-log": {
     args: [];
@@ -948,6 +994,10 @@ export interface GeneratedIpcInvokeMap {
     args: [enabled: boolean];
     result: import("../plugin.js").PluginBackgroundUpdateCheckSettings;
   };
+  "plugin:cancel-install": {
+    args: [jobId: string];
+    result: boolean;
+  };
   "plugin:check-for-update": {
     args: [pluginId: string];
     result: import("../plugin.js").PluginCheckUpdateResult;
@@ -989,15 +1039,15 @@ export interface GeneratedIpcInvokeMap {
     result: import("../plugin.js").PluginInstallResult;
   };
   "plugin:install-from-file": {
-    args: [];
+    args: [jobId?: string | undefined];
     result: import("../plugin.js").PluginInstallResult;
   };
   "plugin:install-from-path": {
-    args: [path: string];
+    args: [path: string, jobId?: string | undefined];
     result: import("../plugin.js").PluginInstallResult;
   };
   "plugin:install-from-url": {
-    args: [url: string];
+    args: [url: string, jobId?: string | undefined];
     result: import("../plugin.js").PluginInstallResult;
   };
   "plugin:keybindings": {
@@ -1019,6 +1069,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin:pick-path": {
     args: [pluginId: string, request: import("../plugin.js").PluginPickPathRequest];
     result: string | null;
+  };
+  "plugin:report-panel-lifecycle": {
+    args: [events: import("../plugin.js").PluginPanelLifecycleEvent[]];
+    result: void;
   };
   "plugin:set-audit-enabled": {
     args: [enabled: boolean];
@@ -1156,6 +1210,18 @@ export interface GeneratedIpcInvokeMap {
     args: [level: "off" | "errors" | "full"];
     result: void;
   };
+  "project-history:peek": {
+    args: [];
+    result: import("./project.js").ProjectHistoryTarget | null;
+  };
+  "project-relocation:apply": {
+    args: [request: import("../projectRelocation.js").RelocationRequest];
+    result: import("../project.js").Project;
+  };
+  "project-relocation:preview": {
+    args: [request: import("../projectRelocation.js").RelocationRequest];
+    result: import("../projectRelocation.js").RelocationPreview;
+  };
   "project:clone-cancel": {
     args: [];
     result: void;
@@ -1192,7 +1258,14 @@ export interface GeneratedIpcInvokeMap {
     result: import("../project.js").PanelSnapshot[];
   };
   "project:set-draft-inputs": {
-    args: [payload: { projectId: string; draftInputs: Record<string, string> }];
+    args: [
+      payload: {
+        projectId: string;
+        draftInputs: Record<string, string>;
+        changedIds?: string[] | undefined;
+        removedIds?: string[] | undefined;
+      },
+    ];
     result: void;
   };
   "project:set-focus-mode": {
@@ -1206,7 +1279,14 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "project:set-tab-groups": {
-    args: [payload: { projectId: string; tabGroups: import("../panel.js").TabGroup[] }];
+    args: [
+      payload: {
+        projectId: string;
+        tabGroups: import("../panel.js").TabGroup[];
+        changedIds?: string[] | undefined;
+        removedIds?: string[] | undefined;
+      },
+    ];
     result: void;
   };
   "project:set-terminal-sizes": {
@@ -1216,7 +1296,15 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "project:set-terminals": {
-    args: [payload: { projectId: string; terminals: import("../project.js").PanelSnapshot[] }];
+    args: [
+      payload: {
+        projectId: string;
+        terminals: import("../project.js").PanelSnapshot[];
+        changedIds?: string[] | undefined;
+        removedIds?: string[] | undefined;
+        fieldEdits?: import("../../utils/layoutMerge.js").IdArrayFieldEdit[] | undefined;
+      },
+    ];
     result: void;
   };
   "run-history:append": {
@@ -1543,13 +1631,7 @@ export interface GeneratedIpcInvokeMap {
               focusedTerminalTitle?: string | undefined;
               isSettingsOpen?: boolean | undefined;
               dispatchSource?:
-                | "user"
-                | "menu"
-                | "keybinding"
-                | "agent"
-                | "context-menu"
-                | "plugin"
-                | undefined;
+                "user" | "menu" | "keybinding" | "agent" | "context-menu" | "plugin" | undefined;
             }
           | undefined;
       },

@@ -18,10 +18,16 @@ import { registerPanelCoreActions } from "../panelCoreActions";
 const addPanel = vi.fn();
 const activateTerminal = vi.fn();
 
+/** Worktrees the current project owns, as `callbacks.getWorktrees()` sees them. */
+let worktrees: Array<{ id: string }> = [];
+
 function setup(args?: unknown) {
   const actions: ActionRegistry = new Map();
   const callbacks = {
     getActiveWorktreeId: () => "wt-active",
+    // A supplied worktreeId is checked for membership in the current project
+    // (#11297), so the mock has to carry the ids these cases pass in.
+    getWorktrees: () => worktrees,
   } as unknown as ActionCallbacks;
   registerPanelCoreActions(actions, callbacks);
   const factory = actions.get("panel.openPluginPanel");
@@ -32,6 +38,7 @@ function setup(args?: unknown) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  worktrees = [{ id: "wt-active" }, { id: "wt-1" }];
   addPanel.mockResolvedValue("panel-new");
   panelStoreMock.getState.mockReturnValue({
     panelIds: [],
@@ -120,5 +127,56 @@ describe("panel.openPluginPanel", () => {
     await setup({ kind: "acme.dash", worktreeId: "wt-1", reuseExisting: false });
     expect(activateTerminal).not.toHaveBeenCalled();
     expect(addPanel).toHaveBeenCalledTimes(1);
+  });
+
+  // ── #11297: a foreign worktreeId must not be persisted onto the panel ──
+
+  it("rejects a worktreeId that belongs to another project", async () => {
+    await expect(setup({ kind: "acme.dash", worktreeId: "wt-other" })).rejects.toThrow(
+      /does not belong to the current project/
+    );
+    // The whole point: nothing is persisted. Silently spawning under another
+    // project is what made the command look like a no-op.
+    expect(addPanel).not.toHaveBeenCalled();
+    expect(activateTerminal).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes an unloaded worktree list from a foreign id", async () => {
+    // Membership can't be established, so it can't be granted — bypassing the
+    // check on an empty list would re-admit arbitrary ids. But this failure is
+    // transient and worth retrying, so it must not read as "wrong project".
+    worktrees = [];
+    await expect(setup({ kind: "acme.dash", worktreeId: "wt-1" })).rejects.toThrow(
+      /haven't loaded yet/
+    );
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("still spawns with the active worktree when none is supplied and none have loaded", async () => {
+    // The default path must keep working while a project is still loading —
+    // the check applies only to a caller-named target.
+    worktrees = [];
+    await setup({ kind: "acme.dash" });
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    expect(addPanel.mock.calls[0]![0].worktreeId).toBe("wt-active");
+  });
+
+  it("does not reuse an existing panel that sits in a foreign worktree", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["p-foreign"],
+      panelsById: {
+        "p-foreign": {
+          id: "p-foreign",
+          kind: "acme.dash",
+          worktreeId: "wt-other",
+          location: "grid",
+        },
+      },
+      addPanel,
+      activateTerminal,
+    });
+
+    await expect(setup({ kind: "acme.dash", worktreeId: "wt-other" })).rejects.toThrow();
+    expect(activateTerminal).not.toHaveBeenCalled();
   });
 });

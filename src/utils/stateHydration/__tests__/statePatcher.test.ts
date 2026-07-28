@@ -8,7 +8,7 @@ const getMergedPresetMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/config/agents", () => ({
   isRegisteredAgent: (type: string) =>
-    ["claude", "gemini", "antigravity", "codex", "opencode"].includes(type),
+    ["claude", "gemini", "antigravity", "codex", "opencode", "grok"].includes(type),
   getAgentConfig: (id: string) => ({
     command: id,
     name: id.charAt(0).toUpperCase() + id.slice(1),
@@ -706,6 +706,242 @@ describe("buildArgsForRespawn", () => {
       expect(result.sessionLostOnRestore).toBeUndefined();
     });
 
+    it("is set when resume-latest is suppressed for a sibling-owned slot (#11461)", () => {
+      buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+      const result = buildArgsForRespawn(
+        { id: "t1", kind: "terminal" as const, agentId: "claude", cwd: "/p", location: "grid" },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp",
+        undefined,
+        { allowResumeLatest: false }
+      );
+      expect(buildResumeLatestCommandMock).not.toHaveBeenCalled();
+      expect(result.command).toBe("claude --generated");
+      expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("does not inherit a persisted resume-latest command when suppressed (#11461)", () => {
+      // A prior restore persists its resume command, so `saved.command` can itself
+      // be `--continue`. With no settings and no flags to rebuild from, the
+      // suppressed pane must still not re-run it.
+      buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          command: "claude --continue",
+        },
+        "terminal",
+        "/p",
+        undefined,
+        false,
+        "/tmp",
+        undefined,
+        { allowResumeLatest: false }
+      );
+      expect(result.command).toBe("claude");
+      expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("still resumes an exact session id when resume-latest is suppressed (#11461)", () => {
+      // The gate must touch only the no-session-id branch.
+      buildResumeCommandMock.mockReturnValue("claude --resume sess-1");
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          agentSessionId: "sess-1",
+        },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp",
+        undefined,
+        { allowResumeLatest: false }
+      );
+      expect(result.command).toBe("claude --resume sess-1");
+      expect(result.sessionLostOnRestore).toBeUndefined();
+    });
+
+    it("prefers persisted flags over a bare rebuild when suppressed (#11461)", () => {
+      buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          agentLaunchFlags: ["--flagged"],
+        },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp",
+        undefined,
+        { allowResumeLatest: false }
+      );
+      expect(result.command).toBe("claude --flagged");
+      expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("leaves an agent with no resume-latest fallback untouched when suppressed (#11461)", () => {
+      // Suppression may only affect an agent that has a fallback to suppress, so
+      // the option can't quietly rewrite an unrelated agent's saved command.
+      buildResumeLatestCommandMock.mockReturnValue(undefined);
+      const saved = {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        command: "claude --custom-mode",
+      };
+      const allowed = buildArgsForRespawn(saved, "terminal", "/p", undefined, false, "/tmp");
+      const suppressed = buildArgsForRespawn(
+        saved,
+        "terminal",
+        "/p",
+        undefined,
+        false,
+        "/tmp",
+        undefined,
+        { allowResumeLatest: false }
+      );
+
+      expect(suppressed.command).toBe(allowed.command);
+      expect(suppressed.sessionLostOnRestore).toBe(allowed.sessionLostOnRestore);
+    });
+
+    it("withholds an exact session id a sibling owns (#11461)", () => {
+      // Two panes can persist ONE session id — that is what the collision this
+      // guards against leaves behind — so the loser must not replay it.
+      buildResumeCommandMock.mockReturnValue("claude --resume dupe");
+      buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          agentSessionId: "dupe",
+        },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp",
+        undefined,
+        { allowSessionIdResume: false, allowResumeLatest: false }
+      );
+      expect(result.command).toBe("claude --generated");
+      expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("does not inherit a persisted --resume command when the id is withheld (#11461)", () => {
+      // With nothing to rebuild from, `saved.command` still holds the resume
+      // command an earlier restore built. Re-running it would put this pane back
+      // in the owner's conversation, which is the collision being prevented.
+      buildResumeCommandMock.mockReturnValue("claude --resume dupe");
+      // No resume-latest fallback for this agent: the withheld id alone has to
+      // drive the clean rebuild.
+      buildResumeLatestCommandMock.mockReturnValue(undefined);
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          agentSessionId: "dupe",
+          command: "claude --resume dupe",
+        },
+        "terminal",
+        "/p",
+        undefined,
+        false,
+        "/tmp",
+        undefined,
+        { allowSessionIdResume: false, allowResumeLatest: false }
+      );
+      expect(result.command).toBe("claude");
+      expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("does not fall back to resume-latest when the session id is withheld (#11461)", () => {
+      // The two allowances always travel together from the election, but the gate
+      // holds on its own: reaching the fallback here would land in the very
+      // conversation the owner is replaying.
+      buildResumeCommandMock.mockReturnValue("claude --resume dupe");
+      buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          agentSessionId: "dupe",
+        },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp",
+        undefined,
+        { allowSessionIdResume: false }
+      );
+      expect(result.command).toBe("claude --generated");
+      expect(result.sessionLostOnRestore).toBe(true);
+    });
+
+    it("resumes its own session id by default when no allowance is passed (#11461)", () => {
+      buildResumeCommandMock.mockReturnValue("claude --resume sess-1");
+      const result = buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "claude",
+          cwd: "/p",
+          location: "grid",
+          agentSessionId: "sess-1",
+        },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp"
+      );
+      expect(result.command).toBe("claude --resume sess-1");
+      expect(result.sessionLostOnRestore).toBeUndefined();
+    });
+
+    it("uses resume-latest by default when no allowance is passed (#11461)", () => {
+      buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+      const result = buildArgsForRespawn(
+        { id: "t1", kind: "terminal" as const, agentId: "claude", cwd: "/p", location: "grid" },
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp"
+      );
+      expect(result.command).toBe("claude --continue");
+      expect(result.sessionLostOnRestore).toBeUndefined();
+    });
+
     it("is not set for non-agent panels", () => {
       const result = buildArgsForRespawn(
         { id: "t1", kind: "terminal" as const, cwd: "/p", location: "grid" },
@@ -837,7 +1073,7 @@ describe("buildArgsForRespawn", () => {
       false,
       "/tmp/clip",
       undefined,
-      "'/tmp/daintree-fake-bin/claude'"
+      { resolvedAgentBaseCommand: "'/tmp/daintree-fake-bin/claude'" }
     );
 
     expect(result.command).toBe("'/tmp/daintree-fake-bin/claude' --generated");
@@ -915,7 +1151,7 @@ describe("buildArgsForRespawn", () => {
       false,
       undefined,
       undefined,
-      "'/tmp/daintree-fake-bin/claude'"
+      { resolvedAgentBaseCommand: "'/tmp/daintree-fake-bin/claude'" }
     );
 
     expect(result.command).toBe("'/tmp/daintree-fake-bin/claude' --continue");
@@ -1067,6 +1303,59 @@ describe("buildArgsForRespawn", () => {
     ]);
     // ...but the stored snapshot is not synthesized from nothing.
     expect(result.agentLaunchFlags).toEqual([]);
+  });
+
+  it("injects the force-alt-screen flag into an empty snapshot at resume (#11423)", () => {
+    // The live crash-recovery boundary: this file runs the REAL reconciler, so
+    // it proves the chokepoint actually threads the resolved decision through
+    // rather than merely that the reconciler works in isolation. A session
+    // captured before #11423 has no screen-mode token at all, and alt-screen
+    // used to mean "inject nothing" — which left grok on its own inline default.
+    buildResumeCommandMock.mockClear();
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "grok",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: [],
+      },
+      "agent",
+      "/p",
+      { agents: { grok: {} }, globalUseAltScreen: true },
+      false,
+      undefined
+    );
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("grok", "sess-1", ["--fullscreen"]);
+    expect(result.agentLaunchFlags).toEqual([]);
+  });
+
+  it("flips a stale inline token to force-alt-screen on resume (#11423)", () => {
+    buildResumeCommandMock.mockClear();
+    buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "grok",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        // Captured while the global switch said inline.
+        agentLaunchFlags: ["--no-alt-screen", "--model", "grok-build"],
+      },
+      "agent",
+      "/p",
+      { agents: { grok: {} }, globalUseAltScreen: true },
+      false,
+      undefined
+    );
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("grok", "sess-1", [
+      "--fullscreen",
+      "--model",
+      "grok-build",
+    ]);
   });
 
   it("prefers primary buildResumeCommand over resume-latest when session ID is present", () => {
@@ -1505,6 +1794,71 @@ describe("buildArgsForNonPtyRecreation", () => {
       "/project"
     );
     expect(result.extensionState).toBeUndefined();
+  });
+
+  describe("dock→grid rescue on hydration (#11375 point 3)", () => {
+    it("keeps a dockable dock panel in the dock and stays global", () => {
+      // `browser` is dockable — a persisted global dock browser stays in the
+      // dock (visible in every worktree's dock); no worktree is stamped.
+      const result = buildArgsForNonPtyRecreation(
+        { id: "b1", kind: "browser", title: "Browser", location: "dock" },
+        "browser",
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("dock");
+      expect(result.worktreeId).toBeUndefined();
+    });
+
+    it("rescues a non-dockable dock panel to the grid and adopts the active worktree", () => {
+      // `dev-preview` is a non-dockable built-in. A persisted global dock
+      // dev-preview must land visibly in the active worktree's grid, not
+      // worktree-less in the global-only bucket.
+      const result = buildArgsForNonPtyRecreation(
+        { id: "d1", kind: "dev-preview", title: "Dev", location: "dock" },
+        "dev-preview",
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("grid");
+      expect(result.worktreeId).toBe("wt-active");
+    });
+
+    it("rescues an unregistered (not-yet-loaded plugin) dock kind to the grid and adopts", () => {
+      // At hydration a plugin kind may not be registered yet — treated as
+      // non-dockable — so a global dock panel of that kind is rescued to the
+      // grid with the active worktree, returning visibly rather than stranding.
+      const result = buildArgsForNonPtyRecreation(
+        { id: "p1", kind: "acme.viewer", title: "Plugin", location: "dock" },
+        "acme.viewer",
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("grid");
+      expect(result.worktreeId).toBe("wt-active");
+    });
+
+    it("does not override an explicit saved worktree when rescuing", () => {
+      const result = buildArgsForNonPtyRecreation(
+        { id: "d1", kind: "dev-preview", title: "Dev", location: "dock", worktreeId: "wt-saved" },
+        "dev-preview",
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("grid");
+      expect(result.worktreeId).toBe("wt-saved");
+    });
+
+    it("rescues to the grid worktree-less when no active worktree is known", () => {
+      const result = buildArgsForNonPtyRecreation(
+        { id: "d1", kind: "dev-preview", title: "Dev", location: "dock" },
+        "dev-preview",
+        "/project",
+        null
+      );
+      expect(result.location).toBe("grid");
+      expect(result.worktreeId).toBeUndefined();
+    });
   });
 });
 

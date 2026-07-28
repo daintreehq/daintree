@@ -1,5 +1,6 @@
 import type { Project, TerminalSnapshot } from "../project.js";
 import type { TabGroup } from "../panel.js";
+import type { IdArrayDelta } from "../../utils/layoutMerge.js";
 import type { HydrateResult } from "./app.js";
 
 /**
@@ -14,6 +15,23 @@ export interface ProjectSwitchOutgoingState {
   draftInputs?: Record<string, string>;
   tabGroups?: TabGroup[];
   activeWorktreeId?: string;
+  /**
+   * What this window changed in `terminals`/`tabGroups` relative to its
+   * last-persisted baseline. When present, Main merges the arrays by id instead
+   * of full-replacing, so switching away from a project open in another window
+   * doesn't clobber that window's concurrent layout changes (#11350). Absent =
+   * legacy full replace.
+   */
+  terminalDelta?: IdArrayDelta;
+  tabGroupDelta?: IdArrayDelta;
+  /**
+   * What this window changed in `draftInputs` relative to its last-persisted
+   * baseline (`changedIds`/`removedIds` are terminal ids). When present, Main
+   * merges the draft record by key instead of full-replacing, so switching away
+   * doesn't clobber a sibling window's drafts (#11352). Absent = legacy full
+   * replace.
+   */
+  draftDelta?: IdArrayDelta;
 }
 
 /** Payload for project:on-switch event with cancellation token */
@@ -84,6 +102,31 @@ export interface BulkProjectStatsEntry extends ProjectStats {
   activeAgentCount: number;
   waitingAgentCount: number;
   /**
+   * Waiting agents blocked on an error — a subset of
+   * {@link BulkProjectStatsEntry.waitingAgentCount}. Carried so a renderer that
+   * has never received a pushed status update seeds from the same reading the
+   * push would have given it.
+   */
+  blockedAgentCount: number;
+  /** Earliest transition into `waiting`, absent when nothing is waiting. */
+  oldestWaitingSince?: number;
+  /** Agents settled in `completed` — finished work awaiting review. */
+  completedAgentCount: number;
+  /**
+   * Completed agents the user hasn't seen yet — their completion postdates the
+   * project's acknowledgement watermark. Subset of
+   * {@link BulkProjectStatsEntry.completedAgentCount}.
+   */
+  unacknowledgedCompletedAgentCount: number;
+  /** Earliest unacknowledged completion, absent when everything was seen. */
+  oldestUnacknowledgedCompletionAt?: number;
+  /** Latest unacknowledged completion, absent when everything was seen. */
+  latestUnacknowledgedCompletionAt?: number;
+  /** Latest completion regardless of acknowledgement, absent when none. */
+  latestCompletionAt?: number;
+  /** Latest transition into `working`, absent when nothing is working. */
+  latestWorkingSince?: number;
+  /**
    * Measured resident memory (MB) of this project's terminal process trees —
    * each shell plus every descendant (dev servers, agents, language servers),
    * deduplicated by PID. Undefined when the OS process table couldn't be read;
@@ -103,6 +146,59 @@ export interface ProjectStatusEntry {
   activeAgentCount: number;
   waitingAgentCount: number;
   processCount: number;
+  /**
+   * Waiting agents whose `waitingReason` is `"error"` — settled after a blocking
+   * failure, where input may not unblock them. A subset of
+   * {@link ProjectStatusEntry.waitingAgentCount}, never additional to it: the
+   * switcher reports "needs input" for the remainder and "blocked" for these,
+   * so double-counting would overstate both.
+   */
+  blockedAgentCount: number;
+  /**
+   * Epoch ms of the earliest state change among this project's waiting agents,
+   * so the switcher can age a wait ("oldest 42m") instead of only asserting one
+   * exists. Absent when nothing is waiting, or when no waiting terminal carried
+   * a `lastStateChange` (a pre-detection boot window).
+   */
+  oldestWaitingSince?: number;
+  /** Agents settled in `completed` — finished work awaiting review. */
+  completedAgentCount: number;
+  /**
+   * Completed agents the user hasn't seen yet: their transition into
+   * `completed` postdates the project's acknowledgement watermark
+   * (`Project.lastCompletionSeenAt`). Holds the project in the switcher's
+   * "Needs attention" band with no time-based expiry — work finished while the
+   * user was away stays surfaced until actually seen. A subset of
+   * {@link ProjectStatusEntry.completedAgentCount}.
+   */
+  unacknowledgedCompletedAgentCount: number;
+  /**
+   * Earliest unacknowledged completion (epoch ms). Oldest-first ordering in
+   * the attention band's review tier — prevents review starvation under a
+   * stream of newer completions. Absent when everything was seen.
+   */
+  oldestUnacknowledgedCompletionAt?: number;
+  /** Latest unacknowledged completion (epoch ms), for "just finished" copy. */
+  latestUnacknowledgedCompletionAt?: number;
+  /**
+   * Latest completion regardless of acknowledgement (epoch ms) — drives the
+   * muted "Agent finished · 2h ago" line after the work has been seen.
+   */
+  latestCompletionAt?: number;
+  /**
+   * Latest transition into `working` (epoch ms). Secondary ordering key for
+   * the Running band. Absent when nothing is working or no working terminal
+   * carried a `lastStateChange`.
+   */
+  latestWorkingSince?: number;
+}
+
+/**
+ * The project this window was in before the current one. Main resolves it; the
+ * renderer performs the switch through its ordinary path.
+ */
+export interface ProjectHistoryTarget {
+  projectId: string;
 }
 
 /** Project status map pushed from main process, keyed by project ID */

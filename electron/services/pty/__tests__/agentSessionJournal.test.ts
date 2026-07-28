@@ -22,7 +22,7 @@ vi.mock("../../../utils/logger.js", () => ({
   }),
 }));
 
-import { journalAgentSession } from "../agentSessionJournal.js";
+import { journalAgentSession, journalAgentSessionRecord } from "../agentSessionJournal.js";
 import { readSessionHistory } from "../agentSessionHistory.js";
 import { getLifecycleLedger, disposeLifecycleLedger } from "../lifecycleLedger.js";
 import { events } from "../../events.js";
@@ -145,18 +145,50 @@ describe("journalAgentSession", () => {
     expect(await readSessionHistory(userDataDir)).toHaveLength(1);
   });
 
-  it("releases the journal reservation when the write fails, so a retry still lands", async () => {
+  it("null generation journals fail-open and never reserves a respawned slot (#11340)", async () => {
+    const ledger = getLifecycleLedger();
+    // The same terminal id has respawned; the current generation belongs to the
+    // successor incarnation. (Simulates an evicted predecessor whose captured
+    // generation was frozen as null by a project-teardown journal.)
+    const successorGen = ledger.recordLaunch("term-1", { launchAgentId: "claude" });
+
+    // Journaling the predecessor's session with an explicit null must NOT gate
+    // on the successor's current generation...
+    expect(
+      await journalAgentSession(makeRecord("sess-old"), { terminalId: "term-1", generation: null })
+    ).toBe(true);
+
+    // ...so the successor's own record at its real generation still lands. With
+    // the old `?? currentGeneration` fallback the predecessor would have
+    // consumed this slot and this write would be dropped.
+    expect(
+      await journalAgentSession(makeRecord("sess-new"), {
+        terminalId: "term-1",
+        generation: successorGen,
+      })
+    ).toBe(true);
+    expect(await readSessionHistory(userDataDir)).toHaveLength(2);
+  });
+
+  it("releases the journal reservation when persistence fails, so a retry still lands", async () => {
     const ledger = getLifecycleLedger();
     const generation = ledger.recordLaunch("term-1", { launchAgentId: "claude" });
 
-    // Force the first write to fail: point the journal at a path where the
-    // history file location is a directory, so the atomic write rejects.
+    // Force the first persist to fail: point the journal at a directory. The
+    // read-modify-write now rejects while reading (EISDIR ⇒ unreadable), before
+    // it would ever overwrite — proving the abort path propagates the failure.
     const filePath = path.join(userDataDir, "agent-session-history.json");
     await fsp.mkdir(filePath, { recursive: true });
 
     await expect(
       journalAgentSession(makeRecord("sess-1"), { terminalId: "term-1", generation })
-    ).rejects.toThrow();
+      // Assert the specific unreadable-read abort (not just any throw): with the
+      // fix reverted, the failure would come from the atomic write, not the read.
+    ).rejects.toThrow(/could not be read/);
+
+    // A failed persist must NOT emit the "recorded" signal — the reservation is
+    // rescinded, not consumed, so the retry below is not gated out as a duplicate.
+    expect(recordedEvents).toEqual([]);
 
     await fsp.rm(filePath, { recursive: true, force: true });
 
@@ -167,6 +199,8 @@ describe("journalAgentSession", () => {
     });
     expect(retried).toBe(true);
     expect(await readSessionHistory(userDataDir)).toHaveLength(1);
+    // Exactly one "recorded" event overall — only the successful retry emitted.
+    expect(recordedEvents).toEqual([{ sessionId: "sess-1" }]);
   });
 
   it("applies retention on the main-side write", async () => {
@@ -189,5 +223,36 @@ describe("journalAgentSession", () => {
 
     const records = await readSessionHistory(userDataDir);
     expect(records.map((r) => r.sessionId)).toEqual(["sess-fresh"]);
+  });
+
+  it("journalAgentSessionRecord persists bookmark intent and returns the durable record", async () => {
+    const ledger = getLifecycleLedger();
+    const generation = ledger.recordLaunch("term-1", { launchAgentId: "claude" });
+
+    const record = await journalAgentSessionRecord(
+      makeRecord("sess-1", { bookmark: { bookmarkedAt: 5, label: "Pin" } }),
+      { terminalId: "term-1", generation }
+    );
+
+    expect(record?.sessionId).toBe("sess-1");
+    expect(record?.bookmark).toEqual({ bookmarkedAt: 5, label: "Pin" });
+    const onDisk = await readSessionHistory(userDataDir);
+    expect(onDisk[0].bookmark).toEqual({ bookmarkedAt: 5, label: "Pin" });
+    expect(recordedEvents).toEqual([{ sessionId: "sess-1" }]);
+  });
+
+  it("journalAgentSessionRecord returns null and emits nothing on a duplicate generation", async () => {
+    const ledger = getLifecycleLedger();
+    const generation = ledger.recordLaunch("term-1", { launchAgentId: "claude" });
+    await journalAgentSessionRecord(makeRecord("sess-1"), { terminalId: "term-1", generation });
+    recordedEvents.length = 0;
+
+    const dup = await journalAgentSessionRecord(
+      makeRecord("sess-1", { bookmark: { bookmarkedAt: 1, label: "x" } }),
+      { terminalId: "term-1", generation }
+    );
+
+    expect(dup).toBeNull();
+    expect(recordedEvents).toEqual([]);
   });
 });

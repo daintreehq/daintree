@@ -1,4 +1,4 @@
-import { useMemo, useRef, useCallback, useLayoutEffect } from "react";
+import { useMemo, useRef, useCallback, useLayoutEffect, useSyncExternalStore } from "react";
 
 import { useShallow } from "zustand/react/shallow";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
@@ -10,6 +10,7 @@ import { usePanelStore, useProjectStore, useWorktreeSelectionStore } from "@/sto
 import { useScratchStore } from "@/store/scratchStore";
 import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
 import {
+  isBrowserPanel,
   isDockPanel,
   isFilePanel,
   isPtyPanel,
@@ -19,7 +20,8 @@ import {
   type PanelInstance,
 } from "@shared/types/panel";
 import { extractHostPort } from "@/components/Browser/browserUtils";
-import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { getRenderablePanel } from "@/store/slices/panelRegistry/selectors";
+import { panelMatchesWorktreeScope } from "@/store/slices/panelRegistry/worktreeIndex";
 import type { TrashedTerminal } from "@/store/slices";
 import { DockedTerminalItem } from "./DockedTerminalItem";
 import { DockedNonPtyPanelItem } from "./DockedNonPtyPanelItem";
@@ -41,7 +43,10 @@ import {
   useIsWorktreeSortDragging,
   useDndPlaceholder,
 } from "@/components/DragDrop";
-import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
+import {
+  subscribeToPanelKindRegistry,
+  getPanelKindRegistrySnapshot,
+} from "@shared/config/panelKindRegistry";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useHorizontalScrollControls } from "@/hooks";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
@@ -115,7 +120,29 @@ function browserChipTitle(panel: BrowserPanelData): string {
   return host || panel.title || "Browser";
 }
 
+// Chip label for a non-PTY dock panel. File and browser get their kind-specific
+// derivations; every other dockable kind (dev-preview if opted in, plugin view
+// panels — #11332) falls back to the panel title so the chip is never blank.
+function dockChipTitle(panel: PanelInstance): string {
+  if (isFilePanel(panel)) return fileChipTitle(panel);
+  if (isBrowserPanel(panel)) return browserChipTitle(panel);
+  return panel.title;
+}
+
 export function ContentDock({ density = "normal" }: ContentDockProps) {
+  // Subscribe to panel-kind metadata changes (#11375). The dock-membership
+  // selectors below call `isDockPanel` (→ `panelKindIsDockable`), which reads
+  // the registry, not the panel store — so a `dockable`-only flip or a plugin
+  // unregister wouldn't re-run them on its own. This subscription forces a
+  // re-render on any registry change, and the re-render re-evaluates the Zustand
+  // selectors against the fresh registry. Return value intentionally unused —
+  // mirrors `GridPanel`/`DockedPanel`'s definition-registry subscription.
+  useSyncExternalStore(
+    subscribeToPanelKindRegistry,
+    getPanelKindRegistrySnapshot,
+    getPanelKindRegistrySnapshot
+  );
+
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
   const trashedTerminals = usePanelStore((state) => state.trashedTerminals);
@@ -135,8 +162,11 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   // Narrow dock subscriptions (#10908). Subscribing to the whole `panelsById`
   // re-rendered the dock on every panel's rAF status-buffer flush — including
   // grid agents that never appear here. Both selectors below react only to dock
-  // panels. Membership is `isDockPanel` (PTY panels plus the dockable file
-  // kind — #10985); each member kind has its own chip below. This is NOT the
+  // panels. Membership is `isDockPanel` — every registered kind that hasn't
+  // opted out with `dockable: false`, PTY and non-PTY alike, including plugin
+  // kinds (#11332). Panels are read through `getRenderablePanel` (not
+  // `getNarrowPanel`, which drops plugin kinds); the PTY chip and the generic
+  // `DockedNonPtyPanelItem` chip cover every member below. This is NOT the
   // #10512 grid render-eligibility predicate, which deliberately does not
   // apply to the dock.
   //
@@ -151,7 +181,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     useShallow((state) => {
       const result: string[] = [];
       for (const id of Object.keys(state.panelsById)) {
-        const terminal = getNarrowPanel(state.panelsById, id);
+        const terminal = getRenderablePanel(state.panelsById, id);
         if (
           terminal &&
           isDockPanel(terminal) &&
@@ -172,7 +202,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     useShallow((state) => {
       const result: DockPanelData[] = [];
       for (const id of state.panelIds) {
-        const terminal = getNarrowPanel(state.panelsById, id);
+        const terminal = getRenderablePanel(state.panelsById, id);
         if (
           terminal &&
           isDockPanel(terminal) &&
@@ -211,7 +241,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     for (const terminal of dockTerminalsRaw) {
       if (
         terminal.id !== helpTerminalId &&
-        (terminal.worktreeId == null || terminal.worktreeId === activeWorktreeId)
+        panelMatchesWorktreeScope(terminal.worktreeId, activeWorktreeId, "dock")
       ) {
         result.push(terminal);
       }
@@ -407,13 +437,11 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const isWorktreeSortDragging = useIsWorktreeSortDragging();
 
   // A panel whose kind the dock can't render can't drop here either (#11054).
-  // Read the active drag from the placeholder context and gate on the same
-  // dockability predicate the store guards use, so the reject cue matches what
-  // `cancelDrop`/`collisionDetection` actually enforce.
-  const { activeTerminal } = useDndPlaceholder();
-  const isDraggingNonDockable =
-    activeTerminal !== null && !panelKindIsDockable(activeTerminal.kind ?? "terminal");
-  const isDockDropRejected = isWorktreeSortDragging || isDraggingNonDockable;
+  // `activeDragRejectsDock` is group-aware — for a group drag it reflects ANY
+  // non-dockable member, not just the dragged representative (#11375) — so the
+  // reject cue matches exactly what `cancelDrop`/`collisionDetection` enforce.
+  const { activeDragRejectsDock } = useDndPlaceholder();
+  const isDockDropRejected = isWorktreeSortDragging || activeDragRejectsDock;
 
   // Sync droppable ref with scroll container ref using stable callback
   // This prevents ResizeObserver thrashing that causes infinite update loops
@@ -563,15 +591,10 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                           <SortableDockItem key={group.id} terminal={terminal} sourceIndex={index}>
                             {isPtyPanel(terminal) ? (
                               <DockedTerminalItem terminal={terminal} />
-                            ) : isFilePanel(terminal) ? (
-                              <DockedNonPtyPanelItem
-                                panel={terminal}
-                                displayTitle={fileChipTitle(terminal)}
-                              />
                             ) : (
                               <DockedNonPtyPanelItem
                                 panel={terminal}
-                                displayTitle={browserChipTitle(terminal)}
+                                displayTitle={dockChipTitle(terminal)}
                               />
                             )}
                           </SortableDockItem>

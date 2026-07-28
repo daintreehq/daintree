@@ -276,6 +276,9 @@ describe("PtyManager adversarial", () => {
     const manager = new PtyManager();
 
     manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
+    // Mark the first terminal killed-but-not-yet-reaped so the same-id respawn
+    // is allowed (a LIVE owner is now rejected — see DUPLICATE_LIVE_SPAWN_*).
+    shared.created[0]!.info.wasKilled = true;
     manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
 
     const exits: Array<{ id: string; code: number }> = [];
@@ -315,16 +318,49 @@ describe("PtyManager adversarial", () => {
     expect(received).toEqual([{ id: "t1", data: "hello-a" }]);
   });
 
-  it("DUPLICATE_SPAWN_KILLS_PREVIOUS", () => {
+  it("DUPLICATE_LIVE_SPAWN_REJECTS_AND_PRESERVES_OWNER", () => {
     const manager = new PtyManager();
 
     manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
     const original = shared.created[0]!;
 
-    manager.spawn("t1", spawnOptions({ projectId: "project-b" }));
+    let thrown: NodeJS.ErrnoException | undefined;
+    try {
+      manager.spawn("t1", spawnOptions({ projectId: "project-b" }));
+    } catch (error) {
+      thrown = error as NodeJS.ErrnoException;
+    }
 
-    expect(original.kill).toHaveBeenCalledTimes(1);
+    // A spawn against a LIVE id is rejected — the running terminal is untouched,
+    // not silently killed and replaced (#11341).
+    expect(thrown?.code).toBe("TERMINAL_ALREADY_LIVE");
+    expect(original.kill).not.toHaveBeenCalled();
+    expect(shared.created).toHaveLength(1); // no replacement TerminalProcess built
     expect(manager.getActiveTerminalIds()).toEqual(["t1"]);
+    expect(manager.getTerminal("t1")?.projectId).toBe("project-a");
+  });
+
+  it("SPAWN_REPLACES_EXITED_PRESERVED_OWNER", () => {
+    const manager = new PtyManager();
+
+    manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
+    const original = shared.created[0]!;
+    // Terminal exited but is retained for its scrollback snapshot — a same-id
+    // spawn is allowed and replaces it, keeping restart/resume working.
+    original.info.isExited = true;
+
+    let thrown: unknown;
+    try {
+      manager.spawn("t1", spawnOptions({ projectId: "project-b" }));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeUndefined();
+    // The preserved entry is torn down (kill-and-respawn), not silently
+    // overwritten — the old terminal's kill runs and a new process is built.
+    expect(original.kill).toHaveBeenCalledTimes(1);
+    expect(shared.created).toHaveLength(2);
     expect(manager.getTerminal("t1")?.projectId).toBe("project-b");
   });
 

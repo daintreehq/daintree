@@ -16,9 +16,11 @@ import {
   useErrors,
   useReEntrySummary,
 } from "./hooks";
+import type { ProjectCreationIdentity } from "@shared/types";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { usePluginActions } from "./hooks/usePluginActions";
 import { usePluginPanelKinds } from "./hooks/usePluginPanelKinds";
+import { usePluginPanelLifecycle } from "./hooks/usePluginPanelLifecycle";
 import { usePluginAgents } from "./hooks/usePluginAgents";
 import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
 import { usePluginMcpConsentBridge } from "./hooks/usePluginMcpConsentBridge";
@@ -176,8 +178,11 @@ function AppInner() {
   const currentProject = useProjectStore((state) => state.currentProject);
   const gitInitDialogOpen = useProjectStore((state) => state.gitInitDialogOpen);
   const gitInitDirectoryPath = useProjectStore((state) => state.gitInitDirectoryPath);
+  const gitInitIdentity = useProjectStore((state) => state.gitInitIdentity);
   const closeGitInitDialog = useProjectStore((state) => state.closeGitInitDialog);
   const handleGitInitSuccess = useProjectStore((state) => state.handleGitInitSuccess);
+  const gitInitDialogStep = useProjectStore((state) => state.gitInitDialogStep);
+  const openWithoutGit = useProjectStore((state) => state.openWithoutGit);
   const createFolderDialogOpen = useProjectStore((state) => state.createFolderDialogOpen);
   const closeCreateFolderDialog = useProjectStore((state) => state.closeCreateFolderDialog);
 
@@ -188,16 +193,26 @@ function AppInner() {
   const shouldMountCreateFolderDialog = useKeepMounted(createFolderDialogOpen);
   const shouldMountCloneRepoDialog = useKeepMounted(cloneRepoDialogOpen);
   // GitInitDialog mounts on the directory path (its `directoryPath` prop is
-  // non-nullable), but closeGitInitDialog() clears both `gitInitDialogOpen` and
-  // `gitInitDirectoryPath` in one set(). Latch the last non-null path so the
-  // dialog keeps a valid prop through its exit animation window (#9917). On the
-  // next open the store sets the path before isOpen, so a fresh path wins.
+  // non-nullable), but closeGitInitDialog() clears `gitInitDialogOpen`,
+  // `gitInitDirectoryPath` and `gitInitIdentity` in one set(). Latch path and
+  // identity as ONE object so the dialog keeps valid props through its exit
+  // animation window (#9917) and the two can never be latched out of step. On
+  // the next open the store sets both before isOpen, so a fresh context wins.
   const shouldMountGitInitDialog = useKeepMounted(gitInitDialogOpen);
-  const [latchedGitInitPath, setLatchedGitInitPath] = useState<string | null>(null);
+  const [latchedGitInit, setLatchedGitInit] = useState<{
+    path: string;
+    identity: ProjectCreationIdentity | null;
+  } | null>(null);
   useEffect(() => {
-    if (gitInitDirectoryPath) setLatchedGitInitPath(gitInitDirectoryPath);
-  }, [gitInitDirectoryPath]);
-  const effectiveGitInitPath = gitInitDirectoryPath ?? latchedGitInitPath;
+    if (gitInitDirectoryPath) {
+      setLatchedGitInit({ path: gitInitDirectoryPath, identity: gitInitIdentity });
+    }
+  }, [gitInitDirectoryPath, gitInitIdentity]);
+  const effectiveGitInit = gitInitDirectoryPath
+    ? { path: gitInitDirectoryPath, identity: gitInitIdentity }
+    : latchedGitInit;
+  const effectiveGitInitPath = effectiveGitInit?.path ?? null;
+  const effectiveGitInitIdentity = effectiveGitInit?.identity ?? null;
   const { selectWorktree, activeWorktreeId, focusedWorktreeId } = useWorktreeSelectionStore(
     useShallow((state) => ({
       selectWorktree: state.selectWorktree,
@@ -277,6 +292,7 @@ function AppInner() {
     pluginConfirmResetKey,
     pluginMcpConfirmResetKey,
     pluginCapabilityConfirmResetKey,
+    pluginArchiveInstallResetKey,
     diagnosticsReviewResetKey,
     terminalInfoResetKey,
   } = useModalResetKeys();
@@ -369,6 +385,7 @@ function AppInner() {
 
   usePluginActions();
   usePluginPanelKinds();
+  usePluginPanelLifecycle();
   usePluginAgents();
   usePluginKeybindings();
   usePluginMcpConsentBridge();
@@ -575,6 +592,7 @@ function AppInner() {
                 pluginConfirmResetKey={pluginConfirmResetKey}
                 pluginMcpConfirmResetKey={pluginMcpConfirmResetKey}
                 pluginCapabilityConfirmResetKey={pluginCapabilityConfirmResetKey}
+                pluginArchiveInstallResetKey={pluginArchiveInstallResetKey}
                 panelLimitResetKey={panelLimitResetKey}
                 diagnosticsReviewResetKey={diagnosticsReviewResetKey}
                 gitPushResetKey={gitPushResetKey}
@@ -583,7 +601,10 @@ function AppInner() {
                 gitInitDialogOpen={gitInitDialogOpen}
                 shouldMountGitInitDialog={shouldMountGitInitDialog}
                 effectiveGitInitPath={effectiveGitInitPath}
+                effectiveGitInitIdentity={effectiveGitInitIdentity}
+                gitInitDialogStep={gitInitDialogStep}
                 handleGitInitSuccess={handleGitInitSuccess}
+                openWithoutGit={openWithoutGit}
                 closeGitInitDialog={closeGitInitDialog}
                 createFolderDialogOpen={createFolderDialogOpen}
                 shouldMountCreateFolderDialog={shouldMountCreateFolderDialog}

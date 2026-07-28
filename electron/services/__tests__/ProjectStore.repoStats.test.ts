@@ -23,12 +23,14 @@ const CREATE_TABLES_SQL = `
     pinned INTEGER NOT NULL DEFAULT 0,
     frecency_score REAL NOT NULL DEFAULT 3.0,
     last_accessed_at INTEGER NOT NULL DEFAULT 0,
+    last_completion_seen_at INTEGER,
     auto_parked_at INTEGER,
     stats_commit_count INTEGER,
     stats_issue_count INTEGER,
     stats_pr_count INTEGER,
     stats_provider_id TEXT,
-    stats_last_updated INTEGER
+    stats_last_updated INTEGER,
+    git_backed INTEGER
   );
   CREATE TABLE IF NOT EXISTS app_state (
     key TEXT PRIMARY KEY,

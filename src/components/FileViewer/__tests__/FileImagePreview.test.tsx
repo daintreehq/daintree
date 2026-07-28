@@ -11,6 +11,7 @@ import { describe, it, expect } from "vitest";
 import { render, cleanup } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { FileImagePreview } from "../FileImagePreview";
+import { buildDaintreeFileUrl } from "../filePreviewKinds";
 
 afterEach(cleanup);
 
@@ -73,5 +74,99 @@ describe("FileImagePreview SVG inlining", () => {
     expect(img).not.toBeNull();
     expect(img?.getAttribute("alt")).toBe("logo.png");
     expect(img?.getAttribute("src")).toContain("daintree-file://");
+  });
+});
+
+/**
+ * The protocol URL is a pure function of path and root, so a rewritten image is
+ * never refetched without a changing token (#11451). `Cache-Control: no-store`
+ * on the response only governs a request that actually happens.
+ */
+describe("FileImagePreview cache busting", () => {
+  function renderRaster(cacheBust?: string) {
+    return render(
+      <FileImagePreview
+        filePath="/repo/assets/logo.png"
+        rootPath="/repo"
+        alt="logo.png"
+        sanitizedSvg={null}
+        cacheBust={cacheBust}
+      />
+    );
+  }
+
+  function rawSrc(container: HTMLElement): string {
+    const src = container.querySelector("img")?.getAttribute("src");
+    if (!src) throw new Error("img not rendered");
+    return src;
+  }
+
+  function parseSrc(container: HTMLElement): URL {
+    return new URL(rawSrc(container));
+  }
+
+  /** The value of the one parameter the token adds, whatever it is named. */
+  function addedParamValue(busted: URL, canonical: URL): string | undefined {
+    const extra = [...busted.searchParams].filter(([key]) => !canonical.searchParams.has(key));
+    expect(extra).toHaveLength(1);
+    return extra[0]?.[1];
+  }
+
+  it("leaves the URL untouched when no token is supplied", () => {
+    // Whole-URL equality, so a phantom `&…=undefined` fails no matter its name.
+    const { container } = renderRaster();
+
+    expect(rawSrc(container)).toBe(buildDaintreeFileUrl("/repo/assets/logo.png", "/repo"));
+  });
+
+  it("carries an opaque token through without disturbing path or root", () => {
+    // Reserved characters throughout: unencoded, this would inject extra
+    // parameters and corrupt the path/root the protocol resolves against.
+    const token = "7 &root=/etc/?#";
+    const canonical = parseSrc(renderRaster().container);
+    cleanup();
+
+    const busted = parseSrc(renderRaster(token).container);
+
+    expect(addedParamValue(busted, canonical)).toBe(token);
+    expect(busted.searchParams.get("path")).toBe(canonical.searchParams.get("path"));
+    expect(busted.searchParams.get("root")).toBe(canonical.searchParams.get("root"));
+  });
+
+  it("swaps the src in place when the token changes, without remounting", () => {
+    // Remounting would drop the painted frame and flash empty mid-refresh; the
+    // point is to change the URL while the element survives.
+    const { container, rerender } = renderRaster("1");
+    const img = container.querySelector("img");
+    const before = rawSrc(container);
+
+    rerender(
+      <FileImagePreview
+        filePath="/repo/assets/logo.png"
+        rootPath="/repo"
+        alt="logo.png"
+        sanitizedSvg={null}
+        cacheBust="2"
+      />
+    );
+
+    expect(rawSrc(container)).not.toBe(before);
+    expect(container.querySelector("img")).toBe(img);
+  });
+
+  it("ignores the token when SVG markup is inlined", () => {
+    // Inlined SVG has no URL to bust — it is re-read and re-sanitized upstream.
+    const { container } = render(
+      <FileImagePreview
+        filePath="/repo/assets/icon.svg"
+        rootPath="/repo"
+        alt="icon.svg"
+        sanitizedSvg={`<svg xmlns="${SVG_NS}"><rect /></svg>`}
+        cacheBust="9"
+      />
+    );
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("svg rect")).not.toBeNull();
   });
 });

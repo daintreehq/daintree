@@ -7,6 +7,7 @@ import {
   Clipboard,
   Download,
   FileText,
+  FolderInput,
   FolderOpen,
   FolderPlus,
   FolderUp,
@@ -28,11 +29,22 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ArrowDownAZ, ChartNoAxesColumn, Clock } from "@/components/icons";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { formatTimeAgo } from "@/utils/timeAgo";
+import { getProjectRowStatus, type ProjectRowTone } from "@/lib/projectRowStatus";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
 import { useOverlayClaim } from "@/hooks";
@@ -42,10 +54,24 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { defaultScratchName } from "@shared/utils/scratchName";
 import type {
   DeleteAllScratchesSnapshot,
+  ProjectSectionKey,
   ProjectSwitcherMode,
+  ProjectSwitcherProjectRow,
+  ProjectSwitcherRow,
+  ProjectSwitcherScratchRow,
   SearchableProject,
   SearchableScratch,
 } from "@/hooks/useProjectSwitcherPalette";
+import {
+  PROJECT_SECTION_LABELS,
+  OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS,
+} from "@/hooks/useProjectSwitcherPalette";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import {
+  isOtherProjectsSortMode,
+  OTHER_PROJECTS_SORT_MODES,
+  type OtherProjectsSortMode,
+} from "@/lib/projectSort";
 import { useUIStore } from "@/store/uiStore";
 import {
   useProjectSettingsStore,
@@ -59,12 +85,17 @@ import {
 export interface ProjectSwitcherPaletteProps {
   isOpen: boolean;
   query: string;
-  results: SearchableProject[];
+  /**
+   * Mixed once a query is active — narrow on `kind` before reading anything a
+   * scratch row doesn't carry.
+   */
+  results: ProjectSwitcherRow[];
   selectedIndex: number;
   onQueryChange: (query: string) => void;
   onSelectPrevious: () => void;
   onSelectNext: () => void;
-  onSelect: (project: SearchableProject) => void;
+  /** Commits any row. Project-only callbacks below stay typed to projects. */
+  onSelect: (row: ProjectSwitcherRow) => void;
   onClose: () => void;
   mode?: ProjectSwitcherMode;
   onAddProject?: () => void;
@@ -74,6 +105,7 @@ export interface ProjectSwitcherPaletteProps {
   onCloseProject?: (projectId: string) => void;
   onFreeMemoryProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
   onSelectNewWindow?: (project: SearchableProject) => void;
@@ -100,6 +132,12 @@ export interface ProjectSwitcherPaletteProps {
   onConfirmFreeMemory?: () => void;
   isFreeingMemory?: boolean;
   /** Scratch (one-off agent workspace) results — rendered in their own collapsible section. */
+  /**
+   * True while `results` is the ranked list carrying the scratches, so the
+   * pinned section below can stand down. Trails the query by a commit; defaults
+   * to the live query for callers that don't track it.
+   */
+  rankedSearch?: boolean;
   scratchResults?: SearchableScratch[];
   /** Callback to create and switch to a new scratch. A blank name takes the default. */
   onCreateScratch?: (name?: string) => void;
@@ -135,13 +173,14 @@ export interface ProjectSwitcherPaletteProps {
 }
 
 interface ProjectListItemProps {
-  project: SearchableProject;
+  project: ProjectSwitcherProjectRow;
   isSelected: boolean;
-  onSelect: (project: SearchableProject) => void;
+  onSelect: (row: ProjectSwitcherProjectRow) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onFreeMemoryProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
   onSelectNewWindow?: (project: SearchableProject) => void;
@@ -149,41 +188,54 @@ interface ProjectListItemProps {
   onHoverProjectEnd?: (pointerType: string) => void;
 }
 
-function StatusDot({ project }: { project: SearchableProject }) {
-  const hasActive = project.activeAgentCount > 0;
-  const hasWaiting = project.waitingAgentCount > 0;
-  const hasProcesses = project.processCount > 0;
+const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
+  blocked: "text-status-danger/80",
+  waiting: "text-activity-waiting",
+  // Finished-awaiting-review: the completed-state hue, distinct from both the
+  // warning of a wait and the success-green of a healthy process. Never danger
+  // — completion is the desired outcome, not a fault.
+  review: "text-activity-completed",
+  working: "text-activity-working",
+  running: "text-daintree-text/50",
+  muted: "text-daintree-text/50",
+};
 
-  if (hasActive) {
-    return (
-      <div
-        className="w-1.5 h-1.5 rounded-full bg-activity-active animate-activity-pulse shrink-0"
-        aria-label="Agents working"
-      />
-    );
-  }
-  if (hasWaiting) {
-    return (
-      <div
-        className="w-1.5 h-1.5 rounded-full bg-status-warning shrink-0"
-        aria-label="Agents waiting"
-      />
-    );
-  }
-  if (hasProcesses || project.isBackground) {
-    return (
-      <div
-        className="w-1.5 h-1.5 rounded-full bg-status-success shrink-0"
-        aria-label="Running in background"
-      />
-    );
-  }
-  return (
-    <div
-      className="w-1.5 h-1.5 rounded-full border border-daintree-text/20 shrink-0"
-      aria-label="Idle"
-    />
-  );
+const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
+  blocked: "bg-status-danger",
+  waiting: "bg-status-warning",
+  review: "bg-activity-completed",
+  working: "bg-activity-active animate-activity-pulse",
+  running: "bg-status-success",
+  muted: "border border-daintree-text/20",
+};
+
+/**
+ * The dot repeats the status line's tone rather than encoding anything on its
+ * own — status must never be colour-only, and the sentence beside it already
+ * carries the meaning for anyone who can't separate these hues.
+ */
+function StatusDot({ tone }: { tone: ProjectRowTone }) {
+  return <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", ROW_DOT_CLASS[tone])} />;
+}
+
+/** Matches the resolution of the wait ages on screen — they change by the minute. */
+const WAIT_AGE_TICK_MS = 60_000;
+
+/**
+ * Re-renders once a minute so wait ages advance while the palette sits open.
+ *
+ * Ages are derived from a timestamp at render time, and the stats service
+ * suppresses broadcasts whose payload hasn't changed — so without a tick, an
+ * agent that has been waiting eleven minutes keeps reading "just now" for as
+ * long as nothing else happens.
+ */
+function useWaitAgeTick(active: boolean): void {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => setTick((value) => value + 1), WAIT_AGE_TICK_MS);
+    return () => clearInterval(id);
+  }, [active]);
 }
 
 function ProjectListItem({
@@ -194,6 +246,7 @@ function ProjectListItem({
   onCloseProject,
   onFreeMemoryProject,
   onLocateProject,
+  onMoveOrRenameProject,
   onTogglePinProject,
   onCopyPath,
   onSelectNewWindow,
@@ -212,54 +265,45 @@ function ProjectListItem({
   );
   const isProjectNotificationsMuted = areProjectNotificationsMuted(notificationOverrides);
 
-  const { secondaryText, secondaryClass } = (() => {
-    if (project.isMissing)
-      return { secondaryText: "Directory not found", secondaryClass: "text-status-warning/70" };
-    if (project.activeAgentCount > 0)
-      return { secondaryText: "Agent working\u2026", secondaryClass: "text-activity-working" };
-    if (project.waitingAgentCount > 0)
-      return { secondaryText: "Agent waiting…", secondaryClass: "text-activity-waiting" };
-    // Auto-closed by the background-idle sweep (#10830) — surface the distinct
-    // "parked" label instead of a plain time-ago so the user understands why the
-    // project left active state and that reopening restores it.
-    if (project.status === "closed" && project.autoParkedAt)
-      return {
-        secondaryText: "Suspended to free memory",
-        secondaryClass: "text-daintree-text/50",
-      };
-    if (project.lastOpened > 0)
-      return {
-        secondaryText: formatTimeAgo(project.lastOpened),
-        secondaryClass: "text-daintree-text/50",
-      };
-    return { secondaryText: project.displayPath, secondaryClass: "text-daintree-text/50" };
-  })();
+  const status = getProjectRowStatus(project);
 
   const row = (
     <div
       id={`project-option-${project.id}`}
       role="option"
       aria-selected={isSelected}
-      aria-disabled={project.isMissing || undefined}
       className={cn(
         "group relative w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent",
-        "aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2 aria-selected:before:w-[2px] aria-selected:before:rounded-r aria-selected:before:bg-daintree-accent aria-selected:before:content-['']",
+        // The accent bar is always laid out and only its opacity changes, so it
+        // rides the same transition as the row background. Toggling `content`
+        // instead meant the pseudo-element popped into existence with nothing to
+        // transition, and the bar arrived at the new row while the highlight was
+        // still fading in behind it. Duration and easing are deliberately left
+        // to match `transition-colors` above — a tier of its own would only move
+        // the desync rather than remove it.
+        "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-[''] before:opacity-0 before:transition-opacity aria-selected:before:opacity-100",
         project.isActive
-          ? cn("text-daintree-text", isSelected && "bg-overlay-raised border-overlay")
+          ? cn(
+              "text-daintree-text cursor-pointer",
+              isSelected && "bg-overlay-raised border-overlay"
+            )
           : project.isMissing
             ? cn(
-                "text-daintree-text/50",
+                "text-daintree-text/50 cursor-pointer",
                 isSelected ? "bg-overlay-raised border-overlay" : "hover:bg-overlay-subtle"
               )
             : isSelected
               ? "bg-overlay-raised border-overlay text-daintree-text cursor-pointer"
               : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text cursor-pointer"
       )}
-      onClick={() => !project.isActive && !project.isMissing && onSelect(project)}
+      // The current project is selectable too: picking where you already are is
+      // a "never mind", and the handler closes the palette rather than sitting
+      // there doing nothing.
+      onClick={() => onSelect(project)}
       onPointerEnter={onHoverProject ? (e) => onHoverProject(project.id, e.pointerType) : undefined}
       onPointerLeave={onHoverProjectEnd ? (e) => onHoverProjectEnd(e.pointerType) : undefined}
     >
-      <StatusDot project={project} />
+      <StatusDot tone={status.tone} />
 
       <div
         className={cn(
@@ -294,10 +338,15 @@ function ProjectListItem({
           )}
         </div>
 
-        <div className="flex items-center min-w-0 mt-0.5">
-          <span className={cn("truncate text-[11px] leading-none", secondaryClass)}>
-            {secondaryText}
+        <div className="flex items-center gap-1 min-w-0 mt-0.5">
+          <span className={cn("truncate text-[11px] leading-none", ROW_TONE_CLASS[status.tone])}>
+            {status.text}
           </span>
+          {status.pathHint && (
+            <span className="truncate text-[11px] leading-none text-daintree-text/50 shrink">
+              {`· ${status.pathHint}`}
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -309,7 +358,9 @@ function ProjectListItem({
     onCloseProject ||
     onFreeMemoryProject ||
     onCopyPath ||
-    onSelectNewWindow;
+    onSelectNewWindow ||
+    onMoveOrRenameProject ||
+    onLocateProject;
   if (!hasContextActions) return row;
 
   return (
@@ -343,6 +394,12 @@ function ProjectListItem({
             Copy path
           </ContextMenuItem>
         )}
+        {onMoveOrRenameProject && !project.isMissing && (
+          <ContextMenuItem onSelect={() => onMoveOrRenameProject(project.id)}>
+            <FolderInput className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Move or rename project…
+          </ContextMenuItem>
+        )}
         {(onTogglePinProject || onCopyPath) &&
           (onStopProject || onFreeMemoryProject || onCloseProject) && <ContextMenuSeparator />}
         {showStop && onStopProject && (
@@ -374,7 +431,7 @@ function ProjectListItem({
             <ContextMenuSeparator />
             <ContextMenuItem onSelect={() => onLocateProject(project.id)}>
               <FolderOpen className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-              Locate folder
+              Locate moved project
             </ContextMenuItem>
           </>
         )}
@@ -383,34 +440,213 @@ function ProjectListItem({
   );
 }
 
-interface TemporalSection {
-  key: string;
-  label: string | null;
-  items: SearchableProject[];
+/**
+ * A scratch as a row of the ranked search list (#11466).
+ *
+ * Deliberately NOT the button `ScratchSection` draws. That one is its own
+ * focusable stop in a nested listbox; this one belongs to the palette's roving
+ * selection, so it carries the shared `project-option-` id the scroll query and
+ * `aria-activedescendant` resolve against, and stays out of the tab order.
+ *
+ * "Scratch" rides the secondary line rather than a chip: origin has to be
+ * unambiguous, but it is not the row's headline, and a pill here would be a
+ * second emphasis signal competing with the selection stripe.
+ *
+ * Action-free on purpose. Rename, save-as-project and delete are browse-mode
+ * management — an inline rename editor would have to live inside the array the
+ * arrow keys walk, and scratch delete has no confirm, which is the last thing
+ * that should sit one keystroke away from a highlighted row.
+ */
+function ScratchListItem({
+  scratch,
+  isSelected,
+  onSelect,
+}: {
+  scratch: ProjectSwitcherScratchRow;
+  isSelected: boolean;
+  onSelect: (row: ProjectSwitcherScratchRow) => void;
+}) {
+  return (
+    <div
+      id={`project-option-${scratch.id}`}
+      role="option"
+      aria-selected={isSelected}
+      className={cn(
+        "group relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent cursor-pointer",
+        "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-[''] before:opacity-0 before:transition-opacity aria-selected:before:opacity-100",
+        isSelected
+          ? "bg-overlay-raised border-overlay text-daintree-text"
+          : scratch.isActive
+            ? "text-daintree-text hover:bg-overlay-subtle"
+            : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
+      )}
+      onClick={() => onSelect(scratch)}
+    >
+      <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">
+        <FileText className="h-4 w-4" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="truncate text-sm font-semibold leading-tight">{scratch.name}</div>
+        <div className="truncate text-[11px] leading-none text-daintree-text/50 mt-0.5">
+          {`Scratch · ${formatTimeAgo(scratch.lastOpened)}`}
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function getTemporalBucket(timestamp: number, todayStart: number, weekStart: number): string {
-  if (timestamp >= todayStart) return "today";
-  if (timestamp >= weekStart) return "this-week";
-  return "older";
+interface ProjectSection {
+  key: ProjectSectionKey;
+  label: string | null;
+  items: ProjectSwitcherProjectRow[];
+}
+
+// Keyed by mode rather than a list, so the lookup below is total: a new mode in
+// the union is a compile error here until it gets a label and an icon. The menu
+// takes its order from `OTHER_PROJECTS_SORT_MODES`.
+const OTHER_PROJECTS_SORT_OPTIONS: Record<
+  OtherProjectsSortMode,
+  { label: string; Icon: typeof Clock }
+> = {
+  mostUsed: { label: "Most used", Icon: ChartNoAxesColumn },
+  recent: { label: "Recent", Icon: Clock },
+  alphabetical: { label: "A to Z", Icon: ArrowDownAZ },
+};
+
+/**
+ * The Other band's header, which doubles as its sort control (#11455). Every
+ * row in the band prints a timestamp, so an unlabelled frecency order reads as
+ * broken — the control's first job is naming the order, changing it second.
+ *
+ * Two structural constraints shape the markup:
+ *
+ * - The `id` stays on a leaf element holding ONLY the label text. It is the
+ *   `aria-labelledby` target for the surrounding `role="group"`, and that name
+ *   is computed from the element's whole subtree — nesting the mode inside it
+ *   would name the band "Other projects Most used".
+ * - The trigger is `tabIndex={-1}`. Section headers live inside the
+ *   `role="listbox"`, where a focusable child is invalid and unreachable
+ *   anyway (arrow keys move `aria-activedescendant` across rows, never here).
+ *   Right-click reaches the same options, matching every other secondary
+ *   action in this palette.
+ */
+function OtherProjectsHeader({
+  headerId,
+  label,
+  itemCount,
+  onReturnFocus,
+}: {
+  headerId: string;
+  label: string;
+  itemCount: number;
+  onReturnFocus?: () => void;
+}) {
+  const sortMode = usePreferencesStore((state) => state.projectSwitcherOtherSortMode);
+  const setSortMode = usePreferencesStore((state) => state.setProjectSwitcherOtherSortMode);
+
+  const active = OTHER_PROJECTS_SORT_OPTIONS[sortMode];
+  const ActiveIcon = active.Icon;
+
+  const handleValueChange = (value: string) => {
+    if (isOtherProjectsSortMode(value)) setSortMode(value);
+  };
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          role="presentation"
+          className="flex items-center justify-between px-3 py-1 text-[10px] font-medium text-daintree-text/40 select-none"
+        >
+          <div id={headerId} className="tracking-wider uppercase">
+            {label}
+          </div>
+          {itemCount >= OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  data-testid="other-projects-sort-trigger"
+                  aria-label={`Sort other projects, currently ${active.label}`}
+                  className="flex shrink-0 items-center gap-1 text-daintree-text/40 hover:text-daintree-text/60 transition-colors"
+                >
+                  <ActiveIcon className="w-3 h-3" aria-hidden="true" />
+                  {active.label}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                onCloseAutoFocus={(event) => {
+                  // Radix would restore focus to the trigger, which then eats
+                  // ArrowDown and Enter to reopen itself — leaving the palette
+                  // unable to walk or commit a row until focus moved by hand.
+                  // The search box owns those keys, so send focus back there.
+                  //
+                  // Deferred a frame: focusing inside Radix's own focus-restore
+                  // window loses the race with its teardown (same reason
+                  // `ContentPanel`'s rename input defers).
+                  event.preventDefault();
+                  requestAnimationFrame(() => onReturnFocus?.());
+                }}
+              >
+                <DropdownMenuRadioGroup value={sortMode} onValueChange={handleValueChange}>
+                  {OTHER_PROJECTS_SORT_MODES.map((value) => {
+                    const { label: optionLabel, Icon } = OTHER_PROJECTS_SORT_OPTIONS[value];
+                    return (
+                      <DropdownMenuRadioItem key={value} value={value}>
+                        <Icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                        {optionLabel}
+                      </DropdownMenuRadioItem>
+                    );
+                  })}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+      </ContextMenuTrigger>
+      {/*
+       * Right-click keeps the options reachable below the row threshold, where
+       * the visible trigger hides itself — the preference still applies there.
+       */}
+      <ContextMenuContent>
+        <ContextMenuRadioGroup value={sortMode} onValueChange={handleValueChange}>
+          {OTHER_PROJECTS_SORT_MODES.map((value) => {
+            const { label: optionLabel, Icon } = OTHER_PROJECTS_SORT_OPTIONS[value];
+            return (
+              <ContextMenuRadioItem key={value} value={value}>
+                <Icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                {optionLabel}
+              </ContextMenuRadioItem>
+            );
+          })}
+        </ContextMenuRadioGroup>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
 }
 
 interface ProjectListContentProps {
-  results: SearchableProject[];
+  results: ProjectSwitcherRow[];
   selectedIndex: number;
   query: string;
-  onSelect: (project: SearchableProject) => void;
+  onSelect: (row: ProjectSwitcherRow) => void;
   listRef: React.RefObject<HTMLDivElement | null>;
-  mode?: ProjectSwitcherMode;
+  /** Whether this surface offers "Add Project…" — decides what the empty state can name. */
+  canAddProject: boolean;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onFreeMemoryProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
   onSelectNewWindow?: (project: SearchableProject) => void;
   onHoverProject?: (projectId: string, pointerType: string) => void;
   onHoverProjectEnd?: (pointerType: string) => void;
+  /** Hands focus back to the search box after the sort menu closes. */
+  onReturnFocus?: () => void;
 }
 
 function ProjectListContent({
@@ -419,107 +655,129 @@ function ProjectListContent({
   query,
   onSelect,
   listRef,
-  mode,
+  canAddProject,
   onStopProject,
   onCloseProject,
   onFreeMemoryProject,
   onLocateProject,
+  onMoveOrRenameProject,
   onTogglePinProject,
   onCopyPath,
   onSelectNewWindow,
   onHoverProject,
   onHoverProjectEnd,
+  onReturnFocus,
 }: ProjectListContentProps) {
   const isSearching = query.trim().length > 0;
 
-  const sections = useMemo<TemporalSection[] | null>(() => {
-    if (isSearching || results.length === 0 || mode === "modal") return null;
+  // Mounted here, once for the whole list, rather than per row: sixty timers in
+  // a hundred-project list would all fire for the same reason.
+  useWaitAgeTick(results.length > 0);
 
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const dayOfWeek = now.getDay();
-    const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-    const weekStart = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate() - mondayOffset
-    ).getTime();
+  // Bands are contiguous runs of `results`, never a re-filter of it. The hook
+  // has already sorted by section, so walking the array once and cutting where
+  // `section` changes reproduces the grouping without building a second,
+  // narrower list — the thing that stranded the highlight and let Enter commit
+  // an off-screen project (#11071). Every row in every band is still a row of
+  // `results`, at the same index the arrow keys use.
+  const sections = useMemo<ProjectSection[] | null>(() => {
+    if (isSearching || results.length === 0) return null;
 
-    const current = results.filter((p) => p.isActive);
-    const pinned = results.filter((p) => p.isPinned && !p.isActive);
-    const remaining = results.filter((p) => !p.isActive && !p.isPinned);
-
-    const buckets: Record<string, SearchableProject[]> = {
-      today: [],
-      "this-week": [],
-      older: [],
-    };
-    for (const p of remaining) {
-      buckets[getTemporalBucket(p.lastOpened, todayStart, weekStart)]!.push(p);
+    const bands: ProjectSection[] = [];
+    for (const row of results) {
+      // Browse is projects only — scratches ride the pinned section below. A
+      // non-project row here would mean that changed, so drop the whole band
+      // layout rather than skipping the row: the flat branch still renders
+      // everything, where dropping one would strand the highlight on a row that
+      // isn't on screen (#11071).
+      if (row.kind !== "project") return null;
+      const last = bands.at(-1);
+      if (last && last.key === row.section) {
+        last.items.push(row);
+      } else {
+        bands.push({
+          key: row.section,
+          label: PROJECT_SECTION_LABELS[row.section],
+          items: [row],
+        });
+      }
     }
-
-    return [
-      current.length > 0 ? { key: "current", label: null, items: current } : null,
-      pinned.length > 0 ? { key: "pinned", label: "Pinned", items: pinned } : null,
-      buckets.today!.length > 0 ? { key: "today", label: "Today", items: buckets.today! } : null,
-      buckets["this-week"]!.length > 0
-        ? { key: "this-week", label: "This Week", items: buckets["this-week"]! }
-        : null,
-      buckets.older!.length > 0 ? { key: "older", label: "Older", items: buckets.older! } : null,
-    ].filter((s): s is TemporalSection => s !== null);
-  }, [results, isSearching, mode]);
+    return bands;
+  }, [results, isSearching]);
 
   // `results` is already scoped by the hook to exactly the rows this mode
   // renders, so it doubles as the arrow-key domain. Never re-filter it here:
   // a second, narrower array is what stranded the highlight and let Enter
   // commit an off-screen project (#11071).
-  const selectedProjectId = results[selectedIndex]?.id;
+  const selectedRowId = results[selectedIndex]?.id;
 
-  const renderItem = (project: SearchableProject) => {
+  const renderItem = (row: ProjectSwitcherRow) => {
+    const isSelected = row.id === selectedRowId;
     return (
-      <div key={project.id} role="presentation">
-        <ProjectListItem
-          project={project}
-          isSelected={project.id === selectedProjectId}
-          onSelect={onSelect}
-          onStopProject={onStopProject}
-          onCloseProject={onCloseProject}
-          onFreeMemoryProject={onFreeMemoryProject}
-          onLocateProject={onLocateProject}
-          onTogglePinProject={onTogglePinProject}
-          onCopyPath={onCopyPath}
-          onSelectNewWindow={onSelectNewWindow}
-          onHoverProject={onHoverProject}
-          onHoverProjectEnd={onHoverProjectEnd}
-        />
+      <div key={`${row.kind}-${row.id}`} role="presentation">
+        {row.kind === "scratch" ? (
+          <ScratchListItem scratch={row} isSelected={isSelected} onSelect={onSelect} />
+        ) : (
+          <ProjectListItem
+            project={row}
+            isSelected={isSelected}
+            onSelect={onSelect}
+            onStopProject={onStopProject}
+            onCloseProject={onCloseProject}
+            onFreeMemoryProject={onFreeMemoryProject}
+            onLocateProject={onLocateProject}
+            onMoveOrRenameProject={onMoveOrRenameProject}
+            onTogglePinProject={onTogglePinProject}
+            onCopyPath={onCopyPath}
+            onSelectNewWindow={onSelectNewWindow}
+            onHoverProject={onHoverProject}
+            onHoverProjectEnd={onHoverProjectEnd}
+          />
+        )}
       </div>
     );
   };
 
   return (
     <>
-      <div ref={listRef} id="project-list" role="listbox" aria-label="Projects">
+      <div ref={listRef} id="project-list" role="listbox" aria-label="Workspaces">
         {results.length === 0 ? (
           <div className="p-2">
-            <div className="px-3 py-8 text-center text-daintree-text/50 text-sm">
+            <div
+              className="px-3 py-8 text-center text-daintree-text/50 text-sm"
+              data-testid="project-empty-state"
+            >
               {query.trim() ? (
-                <div>{`No projects match "${query}"`}</div>
-              ) : mode === "modal" ? (
-                "No active projects"
+                // "Workspaces", not "projects": scratches are ranked into this
+                // same list now, so naming only half of what was searched would
+                // read as a scratch still being findable somewhere else.
+                <div>{`No workspaces match "${query}"`}</div>
+              ) : canAddProject ? (
+                // Names the button sitting directly below this list.
+                "Add a project to get started"
               ) : (
-                "No projects available — add one below"
+                // The modal mounts without the add/clone callbacks, so naming
+                // them here would point at an action this surface can't run.
+                "Open a project from the File menu to get started"
               )}
             </div>
           </div>
         ) : sections ? (
           sections.map((section, sectionIdx) => {
-            const isActiveSection = section.items[0]?.isActive;
+            const isActiveSection = section.key === "current";
             const isLast = sectionIdx === sections.length - 1;
+            const headerId = `project-section-${section.key}`;
 
+            // Bands wrap options, so they can't be bare `div`s inside the
+            // listbox: a labelled band is a `group` named by its own visible
+            // header, and an unlabelled one flattens away so its rows stay
+            // owned by the listbox (an unnamed `group` is an ARIA violation).
             return (
-              <div key={section.key}>
+              <div key={section.key} role="presentation">
                 {sectionIdx > 0 && <div className="h-[3px] bg-tint/[0.08]" />}
                 <div
+                  role={section.label ? "group" : "presentation"}
+                  aria-labelledby={section.label ? headerId : undefined}
                   className={cn(
                     "px-2 py-1.5",
                     sectionIdx === 0 && "pt-2",
@@ -527,18 +785,31 @@ function ProjectListContent({
                     isActiveSection && "bg-overlay-subtle"
                   )}
                 >
-                  {section.label && (
-                    <div className="px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none">
-                      {section.label}
-                    </div>
-                  )}
+                  {section.label &&
+                    (section.key === "other" ? (
+                      <OtherProjectsHeader
+                        headerId={headerId}
+                        label={section.label}
+                        itemCount={section.items.length}
+                        onReturnFocus={onReturnFocus}
+                      />
+                    ) : (
+                      <div
+                        id={headerId}
+                        className="px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none"
+                      >
+                        {section.label}
+                      </div>
+                    ))}
                   {section.items.map(renderItem)}
                 </div>
               </div>
             );
           })
         ) : (
-          <div className="p-2">{results.map((project) => renderItem(project))}</div>
+          <div className="p-2" role="presentation">
+            {results.map((project) => renderItem(project))}
+          </div>
         )}
       </div>
     </>
@@ -647,12 +918,17 @@ function ScratchNameEditor({
 }
 
 type ScratchEditorState =
-  | { kind: "create" }
-  | { kind: "rename"; scratchId: string; name: string }
-  | null;
+  { kind: "create" } | { kind: "rename"; scratchId: string; name: string } | null;
 
 interface ScratchSectionProps {
   scratches: SearchableScratch[];
+  /**
+   * True once a query is active, where the ranked list owns the scratches. The
+   * section hides rather than unmounting: remounting would reset `collapsed`,
+   * so a section the user deliberately collapsed would spring back open the
+   * moment they cleared the box.
+   */
+  isSearching: boolean;
   onCreate?: (name?: string) => void;
   onSelect?: (scratch: SearchableScratch) => void;
   onRemove?: (scratchId: string) => void;
@@ -662,15 +938,17 @@ interface ScratchSectionProps {
 }
 
 /**
- * Collapsible "Scratch" section. Defaults to collapsed when there are no
- * scratches yet — discoverable but quiet. Once the user has scratches,
- * defaults to expanded.
+ * Collapsible "Scratch" section, rendered in browse only — searching ranks
+ * scratches into the main list instead (#11466). Defaults to collapsed when
+ * there are no scratches yet — discoverable but quiet. Once the user has
+ * scratches, defaults to expanded.
  *
  * Sort order is purely by `lastOpened` desc (the hook already does this).
  * Scratches deliberately do NOT participate in the project frecency ranking.
  */
 function ScratchSection({
   scratches,
+  isSearching,
   onCreate,
   onSelect,
   onRemove,
@@ -710,6 +988,13 @@ function ScratchSection({
     }
   }, [editor, scratches]);
 
+  // Searching hides this section, and a hidden editor is worse than a closed
+  // one: it still holds its claim on the escape stack, so Escape would cancel
+  // an edit nobody can see instead of closing the palette.
+  useEffect(() => {
+    if (isSearching) setEditor(null);
+  }, [isSearching]);
+
   const closeEditor = useCallback(() => setEditor(null), []);
 
   const handleCreateCommit = useCallback(
@@ -733,7 +1018,7 @@ function ScratchSection({
   const isCreating = editor?.kind === "create";
 
   return (
-    <div className="px-2 py-1.5">
+    <div className="px-2 py-1.5" hidden={isSearching}>
       {/*
        * The trigger stays mounted at zero scratches — only the menu content is
        * conditional. Swapping the button in and out of a ContextMenu as the last
@@ -906,12 +1191,24 @@ function ScratchSection({
   );
 }
 
-function ProjectSwitcherFooter({ mode }: { mode?: ProjectSwitcherMode }) {
+/**
+ * Every hint here is project-only, so a highlighted scratch row drops them
+ * rather than naming affordances it doesn't have: ⌘↵ falls back to a plain
+ * switch, ⌘⌫ is inert, and a search-mode scratch row carries no context menu.
+ */
+function ProjectSwitcherFooter({
+  mode,
+  isScratchSelected,
+}: {
+  mode?: ProjectSwitcherMode;
+  isScratchSelected: boolean;
+}) {
   const modifiers = useModifierKeys();
 
-  const hint = modifiers.meta
-    ? { keys: "⌘↵", label: "New window" }
-    : { keys: "↵", label: "Switch" };
+  const hint =
+    modifiers.meta && !isScratchSelected
+      ? { keys: "⌘↵", label: "New window" }
+      : { keys: "↵", label: "Switch" };
 
   return (
     <div className="w-full flex items-center justify-between">
@@ -920,16 +1217,18 @@ function ProjectSwitcherFooter({ mode }: { mode?: ProjectSwitcherMode }) {
           <kbd className={KBD_CLASS}>{hint.keys}</kbd>
           <span className="ml-1.5">{hint.label}</span>
         </span>
-        {mode !== "modal" && (
+        {mode !== "modal" && !isScratchSelected && (
           <span className="text-daintree-text/50">
             <kbd className={KBD_CLASS}>⌘⌫</kbd>
             <span className="ml-1.5">Remove</span>
           </span>
         )}
       </div>
-      <span className="text-daintree-text/50">
-        <span>Right-click for more</span>
-      </span>
+      {!isScratchSelected && (
+        <span className="text-daintree-text/50">
+          <span>Right-click for more</span>
+        </span>
+      )}
     </div>
   );
 }
@@ -941,11 +1240,11 @@ interface ProjectPaletteInnerProps {
   inputRef: React.RefObject<HTMLInputElement | null>;
   listRef: React.RefObject<HTMLDivElement | null>;
   query: string;
-  results: SearchableProject[];
+  results: ProjectSwitcherRow[];
   selectedIndex: number;
   mode?: ProjectSwitcherMode;
   onQueryChange: (query: string) => void;
-  onSelect: (project: SearchableProject) => void;
+  onSelect: (row: ProjectSwitcherRow) => void;
   onSelectNewWindow?: (project: SearchableProject) => void;
   onClose: () => void;
   onSelectPrevious: () => void;
@@ -958,10 +1257,17 @@ interface ProjectPaletteInnerProps {
   onCloseProject?: (projectId: string) => void;
   onFreeMemoryProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
   onHoverProject?: (projectId: string, pointerType: string) => void;
   onHoverProjectEnd?: (pointerType: string) => void;
+  /**
+   * True while `results` is the ranked list carrying the scratches, so the
+   * pinned section below can stand down. Trails the query by a commit; defaults
+   * to the live query for callers that don't track it.
+   */
+  rankedSearch?: boolean;
   scratchResults?: SearchableScratch[];
   onCreateScratch?: (name?: string) => void;
   onSelectScratch?: (scratch: SearchableScratch) => void;
@@ -992,10 +1298,12 @@ function ProjectPaletteInner({
   onCloseProject,
   onFreeMemoryProject,
   onLocateProject,
+  onMoveOrRenameProject,
   onTogglePinProject,
   onCopyPath,
   onHoverProject,
   onHoverProjectEnd,
+  rankedSearch,
   scratchResults,
   onCreateScratch,
   onSelectScratch,
@@ -1035,9 +1343,12 @@ function ProjectPaletteInner({
           e.stopPropagation();
           if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
             const selected = results[selectedIndex]!;
+            // A scratch has no second window to open, so ⌘↵ falls through to
+            // the plain switch rather than swallowing the keypress.
             if (
               (e.metaKey || e.ctrlKey) &&
               onSelectNewWindow &&
+              selected.kind === "project" &&
               !selected.isActive &&
               !selected.isMissing
             ) {
@@ -1052,19 +1363,18 @@ function ProjectPaletteInner({
           e.stopPropagation();
           onClose();
           break;
-        case "Backspace":
-          if (
-            (e.metaKey || e.ctrlKey) &&
-            onCloseProject &&
-            results.length > 0 &&
-            selectedIndex >= 0 &&
-            selectedIndex < results.length
-          ) {
+        case "Backspace": {
+          // Projects only. Removing a project opens a confirm; deleting a
+          // scratch does not, so wiring this to a highlighted scratch row would
+          // put an unconfirmed destructive action one chord away.
+          const target = results[selectedIndex];
+          if ((e.metaKey || e.ctrlKey) && onCloseProject && target?.kind === "project") {
             e.preventDefault();
             e.stopPropagation();
-            onCloseProject(results[selectedIndex]!.id);
+            onCloseProject(target.id);
           }
           break;
+        }
       }
     },
     [
@@ -1080,6 +1390,12 @@ function ProjectPaletteInner({
   );
 
   const activeResult = results[selectedIndex];
+  const activeDescendant = activeResult ? `project-option-${activeResult.id}` : undefined;
+  // The RANKED list owns the scratches, and it trails the box by a commit.
+  // Hiding the pinned section on the live query instead would blank them for
+  // that frame — and for a user whose only workspaces are scratches, that frame
+  // reads as "no matches".
+  const isRankedSearch = rankedSearch ?? query.trim().length > 0;
 
   return (
     <>
@@ -1094,39 +1410,48 @@ function ProjectPaletteInner({
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Search projects…"
+          placeholder="Search workspaces…"
           role="combobox"
           aria-expanded={true}
           aria-haspopup="listbox"
-          aria-label="Search projects"
+          aria-label="Search workspaces"
           aria-controls="project-list"
-          aria-activedescendant={activeResult ? `project-option-${activeResult.id}` : undefined}
+          aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>
 
-      <AppPaletteDialog.Body maxHeight={PALETTE_MAX_HEIGHT} className="p-0">
+      <AppPaletteDialog.Body
+        maxHeight={PALETTE_MAX_HEIGHT}
+        className="p-0"
+        ariaLabel="Workspaces"
+        activeDescendant={activeDescendant}
+        onNavigationKeyDown={handleKeyDown}
+      >
         <ProjectListContent
           results={results}
           selectedIndex={selectedIndex}
           query={query}
           onSelect={onSelect}
           listRef={listRef}
-          mode={mode}
+          canAddProject={Boolean(onAddProject)}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
           onFreeMemoryProject={onFreeMemoryProject}
           onLocateProject={onLocateProject}
+          onMoveOrRenameProject={onMoveOrRenameProject}
           onTogglePinProject={onTogglePinProject}
           onCopyPath={onCopyPath}
           onSelectNewWindow={onSelectNewWindow}
           onHoverProject={onHoverProject}
           onHoverProjectEnd={onHoverProjectEnd}
+          onReturnFocus={() => inputRef.current?.focus()}
         />
         {(onCreateScratch || (scratchResults && scratchResults.length > 0)) && (
           <>
-            <div className="h-[3px] bg-tint/[0.08]" />
+            <div className="h-[3px] bg-tint/[0.08]" hidden={isRankedSearch} />
             <ScratchSection
               scratches={scratchResults ?? []}
+              isSearching={isRankedSearch}
               onCreate={onCreateScratch}
               onSelect={onSelectScratch}
               onRemove={onRemoveScratch}
@@ -1199,7 +1524,7 @@ function ProjectPaletteInner({
       )}
 
       <AppPaletteDialog.Footer>
-        <ProjectSwitcherFooter mode={mode} />
+        <ProjectSwitcherFooter mode={mode} isScratchSelected={activeResult?.kind === "scratch"} />
       </AppPaletteDialog.Footer>
     </>
   );
@@ -1242,11 +1567,13 @@ function ModalContent({
         onCloseProject={innerProps.onCloseProject}
         onFreeMemoryProject={innerProps.onFreeMemoryProject}
         onLocateProject={innerProps.onLocateProject}
+        onMoveOrRenameProject={innerProps.onMoveOrRenameProject}
         onTogglePinProject={innerProps.onTogglePinProject}
         onCopyPath={innerProps.onCopyPath}
         onSelectNewWindow={innerProps.onSelectNewWindow}
         onHoverProject={innerProps.onHoverProject}
         onHoverProjectEnd={innerProps.onHoverProjectEnd}
+        rankedSearch={innerProps.rankedSearch}
         scratchResults={innerProps.scratchResults}
         onCreateScratch={innerProps.onCreateScratch}
         onSelectScratch={innerProps.onSelectScratch}
@@ -1348,11 +1675,13 @@ function DropdownContent({
           onCloseProject={innerProps.onCloseProject}
           onFreeMemoryProject={innerProps.onFreeMemoryProject}
           onLocateProject={innerProps.onLocateProject}
+          onMoveOrRenameProject={innerProps.onMoveOrRenameProject}
           onTogglePinProject={innerProps.onTogglePinProject}
           onCopyPath={innerProps.onCopyPath}
           onSelectNewWindow={innerProps.onSelectNewWindow}
           onHoverProject={innerProps.onHoverProject}
           onHoverProjectEnd={innerProps.onHoverProjectEnd}
+          rankedSearch={innerProps.rankedSearch}
           scratchResults={innerProps.scratchResults}
           onCreateScratch={innerProps.onCreateScratch}
           onSelectScratch={innerProps.onSelectScratch}
@@ -1384,6 +1713,7 @@ export function ProjectSwitcherPalette({
   onCloseProject,
   onFreeMemoryProject,
   onLocateProject,
+  onMoveOrRenameProject,
   onTogglePinProject,
   onCopyPath,
   onSelectNewWindow,
@@ -1401,6 +1731,7 @@ export function ProjectSwitcherPalette({
   onFreeMemoryConfirmClose,
   onConfirmFreeMemory,
   isFreeingMemory = false,
+  rankedSearch,
   scratchResults,
   onCreateScratch,
   onSelectScratch,
@@ -1443,6 +1774,7 @@ export function ProjectSwitcherPalette({
         onCloseProject={onCloseProject}
         onFreeMemoryProject={onFreeMemoryProject}
         onLocateProject={onLocateProject}
+        onMoveOrRenameProject={onMoveOrRenameProject}
         onTogglePinProject={onTogglePinProject}
         onCopyPath={onCopyPath}
         onSelectNewWindow={onSelectNewWindow}
@@ -1451,6 +1783,7 @@ export function ProjectSwitcherPalette({
         onOpenProjectSettings={onOpenProjectSettings}
         onDropdownCloseAutoFocus={onDropdownCloseAutoFocus}
         dropdownAlign={dropdownAlign}
+        rankedSearch={rankedSearch}
         scratchResults={scratchResults}
         onCreateScratch={onCreateScratch}
         onSelectScratch={onSelectScratch}
@@ -1480,12 +1813,14 @@ export function ProjectSwitcherPalette({
         onCloseProject={onCloseProject}
         onFreeMemoryProject={onFreeMemoryProject}
         onLocateProject={onLocateProject}
+        onMoveOrRenameProject={onMoveOrRenameProject}
         onTogglePinProject={onTogglePinProject}
         onCopyPath={onCopyPath}
         onSelectNewWindow={onSelectNewWindow}
         onHoverProject={onHoverProject}
         onHoverProjectEnd={onHoverProjectEnd}
         onOpenProjectSettings={onOpenProjectSettings}
+        rankedSearch={rankedSearch}
         scratchResults={scratchResults}
         onCreateScratch={onCreateScratch}
         onSelectScratch={onSelectScratch}

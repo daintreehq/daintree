@@ -2,6 +2,8 @@
  * Git initialization workflow types
  */
 
+import type { GitignoreTemplateId } from "../../config/gitignoreTemplates.js";
+
 export interface GitInitOptions {
   /** Directory path to initialize */
   directoryPath: string;
@@ -11,8 +13,8 @@ export interface GitInitOptions {
   initialCommitMessage?: string;
   /** Create a .gitignore file (default: true) */
   createGitignore?: boolean;
-  /** Gitignore template to use (default: "node") */
-  gitignoreTemplate?: "node" | "python" | "minimal" | "none";
+  /** Gitignore template to use (default: "minimal") */
+  gitignoreTemplate?: GitignoreTemplateId;
 }
 
 export type GitInitStepType = "init" | "gitignore" | "add" | "commit" | "complete" | "error";

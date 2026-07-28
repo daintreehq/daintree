@@ -886,4 +886,105 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
   });
+
+  describe("working-tree-changed signal (#11330)", () => {
+    const WATCH_CONFIG: WorktreeMonitorConfig = {
+      ...TEST_CONFIG,
+      gitWatchEnabled: true,
+    };
+    // Active worktree → recursive watcher, and start() resolves the initial
+    // git status synchronously so _hasInitialStatus is already true on return.
+    const ACTIVE_WORKTREE: Worktree = { ...TEST_WORKTREE, isCurrent: true };
+
+    beforeEach(() => {
+      mockWatcherStartResult = true;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+    });
+
+    it("a recursive-watcher flush emits a stamped snapshot without a git-status change", async () => {
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      expect(monitor.hasInitialStatus).toBe(true);
+      // No raw-fs write yet, so the initial snapshot carries no stamp.
+      expect(
+        vi.mocked(callbacks.onUpdate).mock.calls.at(-1)?.[0]?.workingTreeChangedAt
+      ).toBeUndefined();
+
+      const statusCallsBefore = mockGetWorktreeChangesWithStats.mock.calls.length;
+      const emitsBefore = vi.mocked(callbacks.onUpdate).mock.calls.length;
+
+      const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as
+        (() => void) | undefined;
+      expect(fireWorktreeFilesChanged).toBeDefined();
+      fireWorktreeFilesChanged?.();
+
+      // Emitted off the write alone — a fresh snapshot, no extra git status run.
+      expect(vi.mocked(callbacks.onUpdate).mock.calls.length).toBe(emitsBefore + 1);
+      expect(mockGetWorktreeChangesWithStats.mock.calls.length).toBe(statusCallsBefore);
+      expect(
+        vi.mocked(callbacks.onUpdate).mock.calls.at(-1)?.[0]?.workingTreeChangedAt
+      ).toBeGreaterThan(0);
+
+      monitor.stop();
+    });
+
+    it("stamps a strictly increasing workingTreeChangedAt across successive flushes", async () => {
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as () => void;
+
+      // Two flushes with no timer advance between them: the monotonic guard
+      // (Math.max(now, prev + 1)) must still move the stamp forward even when
+      // Date.now() is unchanged.
+      fireWorktreeFilesChanged();
+      const first = vi.mocked(callbacks.onUpdate).mock.calls.at(-1)?.[0]?.workingTreeChangedAt;
+      fireWorktreeFilesChanged();
+      const second = vi.mocked(callbacks.onUpdate).mock.calls.at(-1)?.[0]?.workingTreeChangedAt;
+
+      expect(first).toBeGreaterThan(0);
+      expect(second).toBeGreaterThan(first ?? 0);
+
+      monitor.stop();
+    });
+
+    it("a flush before initial status stamps but does not emit; the first snapshot carries it", async () => {
+      // Background worktree defers its initial git status behind the 2-5s
+      // jitter, so _hasInitialStatus is still false right after start() — the
+      // only clean way to exercise the pre-initial-status branch. Driving the
+      // captured callback directly stands in for the recursive flush.
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      expect(monitor.hasInitialStatus).toBe(false);
+      expect(callbacks.onUpdate).not.toHaveBeenCalled();
+
+      const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as () => void;
+      fireWorktreeFilesChanged();
+
+      // Stamped internally, but no incomplete snapshot emitted for it.
+      expect(callbacks.onUpdate).not.toHaveBeenCalled();
+
+      // Once the deferred initial status lands, its first snapshot carries the
+      // retained stamp.
+      await flushInitialStatus();
+      expect(monitor.hasInitialStatus).toBe(true);
+      expect(callbacks.onUpdate).toHaveBeenCalled();
+      expect(
+        vi.mocked(callbacks.onUpdate).mock.calls[0]?.[0]?.workingTreeChangedAt
+      ).toBeGreaterThan(0);
+
+      monitor.stop();
+    });
+  });
 });

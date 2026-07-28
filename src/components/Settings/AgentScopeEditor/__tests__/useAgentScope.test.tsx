@@ -123,3 +123,41 @@ describe("useAgentScope — inline-mode inherit origin label (#10894)", () => {
     expect(result.current.inlineInheritOriginLabel).toBe("agent default");
   });
 });
+
+describe("useAgentScope — screen-mode control gating (#11423)", () => {
+  const withCapabilities = (
+    id: string,
+    capabilities: AgentConfig["capabilities"]
+  ): AgentConfig => ({
+    id,
+    name: id,
+    command: id,
+    color: "#ffffff",
+    iconId: "custom",
+    supportsContextInjection: false,
+    capabilities,
+  });
+
+  beforeEach(() => {
+    useAgentSettingsStore.setState({ settings: DEFAULT_AGENT_SETTINGS });
+    setUserRegistry({
+      "inline-only": withCapabilities("inline-only", { inlineModeFlag: "--sentinel-inline" }),
+      "alt-only": withCapabilities("alt-only", { altScreenFlag: "--sentinel-alt" }),
+      "neither-mode": withCapabilities("neither-mode", { scrollback: 1000 }),
+    });
+  });
+  afterEach(() => {
+    setUserRegistry({});
+  });
+
+  it("shows the control for either polarity and hides it only when neither is declared", () => {
+    // An agent declaring only `altScreenFlag` can still force full-screen, so
+    // gating on `inlineModeFlag` alone would hide a control that works.
+    const supports = (agentId: string) =>
+      renderHook(() => useAgentScope(makeProps(agentId))).result.current.supportsInlineMode;
+
+    expect(supports("inline-only")).toBe(true);
+    expect(supports("alt-only")).toBe(true);
+    expect(supports("neither-mode")).toBe(false);
+  });
+});

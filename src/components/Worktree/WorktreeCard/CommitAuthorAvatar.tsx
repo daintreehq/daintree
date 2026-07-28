@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { CAT_COLOR_CLASSES } from "@/config/categoryColors";
 import { AGENT_REGISTRY, type AgentIconProps } from "@/config/agents";
 import { getGravatarUrl, isBotAuthor } from "@/utils/gravatar";
+import { djb2 } from "@shared/utils/hash";
 
 export interface CommitAuthor {
   name: string;
@@ -47,14 +48,6 @@ export function resolveCommitAgentIcon(author: CommitAuthor): ComponentType<Agen
 /** Square for AI agents and bots, circle for humans. */
 export function commitAvatarIsSquare(author: CommitAuthor): boolean {
   return resolveCommitAgentIcon(author) != null || isBotAuthor(author.name);
-}
-
-function djb2(input: string): number {
-  let hash = 5381;
-  for (let i = 0; i < input.length; i++) {
-    hash = ((hash << 5) + hash + input.charCodeAt(i)) | 0;
-  }
-  return hash;
 }
 
 function initialsOf(name: string): string {

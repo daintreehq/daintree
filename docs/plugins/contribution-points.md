@@ -43,6 +43,29 @@ Commands are callable actions that appear in the command palette and can be boun
 | `danger` | yes | `"safe"` or `"confirm"`. `"restricted"` is rejected — plugins cannot self-register restricted actions. The host raises `"safe"` to `"confirm"` automatically when the plugin holds a high-risk capability. |
 | `keywords` | no | Extra search terms for the palette. |
 | `inputSchema` | no | JSON schema validated against the dispatched `args` payload. |
+| `requires` | no | The capabilities _this command_ actually uses — see below. |
+
+**`requires` — per-action capability intent:**
+
+By default the host derives a command's `effectiveDanger` from your plugin's _entire_ `capabilities` list, so declaring `shell:exec` for one command puts a destructive confirmation on all of them — including a no-argument "open the panel" command. Dropping the capability isn't an honest fix; `requires` is:
+
+```json
+{
+  "id": "open-panel",
+  "title": "Open Panel",
+  "description": "Opens the tools panel.",
+  "category": "Flutter Tools",
+  "kind": "command",
+  "danger": "safe",
+  "requires": []
+}
+```
+
+- **Omit `requires`** and nothing changes — the whole manifest is consulted, as before. Existing plugins need no migration.
+- **`"requires": []`** declares the command exercises no capability, so it stays one click even in a plugin holding `shell:exec`.
+- **`"requires": ["git:read"]`** consults only those capabilities, for both the high-risk set and the compound-capability lattice.
+
+Three things it does _not_ do. It grants no access: host APIs still gate on `manifest.capabilities` at call time, so listing a capability here neither adds nor removes runtime authority. It cannot lower a self-declared `"danger": "confirm"`. And every entry must appear in your `capabilities` — naming one you didn't declare fails the command's registration outright rather than falling back, so an author's typo surfaces at load instead of quietly reverting to the old behaviour.
 
 **Handler binding — two ways:**
 
@@ -117,12 +140,18 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 | --- | --- | --- |
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. |
 | `name` | yes | Display label in the panel header and palette. |
-| `iconId` | yes | Must match a registered icon ID — see the icon registry in `src/components/icons/`. |
+| `iconId` | yes | One of the shared plugin icon IDs listed in `shared/config/pluginIconIds.ts`. An unrecognized ID falls back to the generic terminal glyph on panel surfaces; `daintree-plugin validate` warns about it. |
 | `color` | yes | HSL string used for the panel tab accent. |
 | `hasPty` | no | `false` (default) for UI-only panels. `true` is reserved for PTY-backed panels, not available to plugins in v1. |
 | `canRestart` | no | Show a "restart" control in the panel header. |
 | `canConvert` | no | Allow conversion between compatible panel kinds. Rarely useful for plugins. |
 | `showInPalette` | no | Include in the "New Panel…" palette. Default `true`. |
+
+**Icon IDs** — one shared set backs every surface that renders a plugin icon (the panel palette, panel headers, tabs, the dock, toolbar buttons, and the toolbar overflow menu), so an ID looks the same everywhere it appears:
+
+`terminal`, `package`, `puzzle`, `globe`, `monitor`, `monitor-play`, `file-text`, `file-diff`, `folder-tree`, `git-branch`, `git-pull-request`, `sticky-note`, `gauge`, `list`, `sparkles`, `layout-panel-top`, `daintree`
+
+`shared/config/pluginIconIds.ts` is authoritative — run `daintree-plugin validate` to check a manifest against the set your installed host actually ships. Panel `iconId` also accepts a built-in agent ID (e.g. `claude`) to render that agent's brand mark.
 
 **Component registration** is covered by the **views** contribution point below — panels declare the slot, views provide the component.
 
@@ -139,10 +168,8 @@ Views are the React components that render inside a panel. A view binds to a pan
     "views": [
       {
         "id": "dashboard",
-        "name": "Cost Dashboard",
         "componentPath": "./dist/dashboard.js",
-        "location": "panel",
-        "iconId": "gauge"
+        "location": "panel"
       }
     ]
   }
@@ -156,11 +183,11 @@ Views are the React components that render inside a panel. A view binds to a pan
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Matches the panel `id` it provides a component for. Namespaced at runtime as `{pluginId}.{id}`. |
-| `name` | yes | Display label, also used in the loading skeleton's accessible label. |
 | `componentPath` | yes | POSIX-relative path to an ESM module inside the plugin. The module's default export is a React component. Absolute paths, URL schemes, and `..` segments are rejected at manifest validation. |
 | `location` | yes | `"panel"` (docked in the grid). `"sidebar"` is rejected at manifest validation — the sidebar host does not exist yet. |
-| `iconId` | no | Override the panel's icon for this view. |
-| `description` | no | Surface text for palette/preferences. |
+| `iconId` | no | Accepted for compatibility but **ignored at runtime** — the matching `contributes.panels` entry owns the rendered icon. Set it there instead. |
+
+The view schema is strict and carries no `name` or `description`: the matching panel is the single source of truth for a view's display metadata, so those fields were removed (#10888) rather than validate values the runtime ignores.
 
 **Bundling** — plugin views ship as **pre-built ESM modules**. You don't compile TypeScript or JSX at plugin-load time. `@daintreehq/plugin-vite` produces the bundle with the correct externals for React 19 sharing. See [Architecture → Renderer host](./architecture.md#renderer-host) for the internals.
 
@@ -223,14 +250,40 @@ export default function Dashboard(props) {
 | --- | --- | --- |
 | `panelId` | `string` | Runtime id of this panel instance. Useful as a key for plugin-local panel-scoped state, and the routing key for per-instance pushes: the plugin's main side targets one instance with `host.postToPanel(channel, payload, panelId)` (omit or pass `null` to broadcast to every instance of the kind). To receive only the targeted pushes, subscribe with `usePluginPanelEvent(pluginId, channel, panelId, cb)` (or raw `plugin.onPanel(pluginId, channel, panelId, cb)`) and pass this prop. `usePluginEvent` / `plugin.on` receive broadcast pushes, not per-instance ones. |
 | `pluginId` | `string` | The plugin's manifest `name`. Stable for the lifetime of the host — useful for namespacing storage keys and log lines. |
-| `disposeSignal` | `AbortSignal` | Aborts on unmount and when the host receives a `plugin:panel-kinds-changed` push that omits this kind. The broadcast fires before main tears down plugin IPC handlers, so signal-driven cleanup runs while host APIs are still live. |
+| `disposeSignal` | `AbortSignal` | Lifetime of **this mounted view attempt**. Aborts on unmount, on "Try again", and when the host receives a `plugin:panel-kinds-changed` push that omits this kind. The broadcast fires before main tears down plugin IPC handlers, so signal-driven cleanup runs while host APIs are still live. A **temporary** unmount aborts it too — maximizing a sibling pane, leaving a dock tab, or caching a background project view. Tie only view-scoped work to it. |
+| `panelRemovedSignal` | `AbortSignal` | Lifetime of **the panel record**. The same object is handed to every mount of a given `panelId`, so it survives remounts, retries, trash-then-restore, and plugin upgrades. Aborts exactly once, when the panel is permanently removed. |
 | `initialArgs` | `Record<string, unknown>` \| `undefined` | The argument bag the panel was spawned with — set when the panel is opened via the `panel.openPluginPanel` action's `initialArgs` (e.g. dispatched from a context menu with a file path). It rides the panel's save/restore-surviving extension state, so a restored panel sees the same args it was spawned with. `undefined` when the panel was opened without args. |
 
-The view is wrapped in an error boundary by the host. An unhandled render error shows an inline "Try again" affordance; clicking it produces a fresh `lazy()` reference so the dynamic import is re-evaluated rather than returning the cached failed promise.
+The view is wrapped in an error boundary by the host. An unhandled render error shows a diagnostics pane with "Try again" — which produces a fresh `lazy()` reference so the dynamic import is re-evaluated rather than returning the cached failed promise — alongside "Close panel", "Copy diagnostics", and "View logs".
+
+### Which signal to use
+
+A panel outlives its views. Maximizing a different pane unmounts every other grid panel, so `disposeSignal` fires for a teardown the user experiences as "I'll be right back", identically to one they experience as "I'm done with this". Deciding deletion from `disposeSignal` alone is how a plugin ends up killing a running dev-server session because the user maximized a neighbouring pane.
+
+- **View-scoped work** — in-flight `fetch`es, DOM observers, `postToPanel` subscriptions, timers driving the UI → `disposeSignal`.
+- **Panel-scoped work** — anything that should survive being backgrounded but not survive the panel itself → `panelRemovedSignal`.
+- **Durable resources** — spawned processes, long-lived sessions, anything expensive to restart → keep them in the **worker** and release them from `host.onDidChangePanelLifecycle` on the `"removed"` phase. The worker observes the panel across every remount; the view cannot, because it is gone during exactly the teardown that matters. See [Host API → `onDidChangePanelLifecycle`](./host-api.md#ondidchangepanellifecycle).
+
+### Worker reload vs. view-module replacement
+
+These are two different reloads, and a plugin author debugging "my change didn't show up" is usually confusing them:
+
+- **Worker reload** replaces the plugin's _backend_ Realm. `activate()` runs again against a fresh module graph, so edits to your main entry take effect on the next reload.
+- **View-module replacement** is the _renderer_ half. Chromium caches ESM module records by URL with no eviction API, so re-importing the same `plugin://` specifier returns the module already in memory no matter how thoroughly the panel remounts.
+
+Daintree bridges the gap by stamping a per-load generation into the view URL — `plugin://<id>/__dtv-<n>/dist/view.js`. Every time the plugin is **loaded** — an install, a replacement install, an enable, or an app start — it mints a new `<n>`, which is a specifier the renderer has never imported, so the new bundle is genuinely fetched and evaluated. Open panels remount onto it automatically; no Force Reload, and no need to hand-version your bundle filename each release.
+
+The `daintree-plugin dev` hot-reload path is the exception: it respawns the plugin's **worker** without re-registering contributions, so your backend changes take effect but the generation does not advance and open views keep the module already in memory. Reopen the plugin (disable/enable, or reinstall) — or Force Reload the window — to pick up view changes during a dev session.
+
+Two consequences worth knowing. Relative imports inside your entry module inherit the generation namespace (they resolve against the entry's URL), so multi-chunk bundles refresh as a unit — but an **absolute** `plugin://` import you write by hand does not, and will keep resolving to the first version imported in that session. And because each generation is a distinct module record, a long dev session with many reloads accumulates them in the renderer's memory; that is bounded by how many times you reloaded, and a window reload clears it.
+
+The `__dtv-<n>` segment is virtual — it never exists on disk, and the protocol handler strips it before resolving your file. Treat `__dtv-` as a reserved top-level directory name.
 
 ## Toolbar buttons — _Shipped_
 
 Toolbar buttons dispatch an existing action from the main toolbar.
+
+Every contributed button is collected into the **plugin tray** — a single toolbar button, grouped by plugin — rather than claiming its own top-level slot. A user can promote any individual button to its own toolbar slot from the tray (hover the row and click the pin, or press <kbd>P</kbd>) or from Settings → Toolbar; a promoted button keeps its tray row as well. Placement is the user's call, not the manifest's: there is no field that requests a top-level slot.
 
 ```json
 {
@@ -254,9 +307,9 @@ Toolbar buttons dispatch an existing action from the main toolbar.
 | --- | --- | --- |
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}` — matches the convention used by every other contribution surface. |
 | `label` | yes | Hover tooltip. |
-| `iconId` | yes | Registered icon ID. |
+| `iconId` | yes | One of the shared plugin icon IDs listed in `shared/config/pluginIconIds.ts` — the same set panels use. An unrecognized ID falls back to a generic package glyph; `daintree-plugin validate` warns about it. Agent brand IDs (e.g. `claude`) don't resolve here. |
 | `actionId` | yes | Fully-qualified action ID, including plugin namespace. Built-in actions (e.g. `terminal.new`) also work. |
-| `priority` | no | `1`–`5`, lower = earlier in sort order. Default `3`. |
+| `priority` | no | `1`–`5`, lower = earlier. Orders your buttons within your plugin's tray group. Default `3`. |
 
 ## Menu items — _Shipped_
 
@@ -285,6 +338,7 @@ Menu items add entries to Daintree's application menus.
 | `actionId` | yes | Fully-qualified action ID to dispatch. |
 | `location` | yes | One of `"terminal"`, `"file"`, `"view"`, `"help"`. Determines which top-level menu the item appears in. |
 | `accelerator` | no | Platform-neutral shortcut, e.g. `"Cmd+Shift+L"` (becomes `Ctrl+Shift+L` on Windows/Linux). |
+| `when` | no | Context expression gating whether the item appears. Evaluated once at menu build time against an empty context, so only constant expressions (literals and negations of unknown identifiers) are useful — for live conditions use a keybinding `when` clause instead. |
 
 ## Keybindings — _Shipped_
 
@@ -298,7 +352,7 @@ Keybindings map a key combination to an action.
         "actionId": "acme.linear-planner.plan-from-issue",
         "combo": "Cmd+Shift+P",
         "scope": "global",
-        "when": "panel.focused"
+        "when": "!terminalFocused && !modalOpen"
       }
     ]
   }
@@ -311,9 +365,23 @@ Keybindings map a key combination to an action.
 | --- | --- | --- |
 | `actionId` | yes | Fully-qualified action ID, usually one your plugin declared. |
 | `combo` | yes | Normalized key combo string, same format as Daintree's default keybindings. Chords (`"Cmd+K Cmd+S"`) supported. |
-| `scope` | no | One of `"global"`, `"terminal"`, `"modal"`, `"worktreeList"`, `"portal"`, `"worktreeGrid"`, `"dev-preview"`. Defaults to `"global"`. An unknown scope is rejected at the manifest gate. |
+| `scope` | no | One of `"global"`, `"portal"`, `"worktreeGrid"`, `"dev-preview"`. Defaults to `"global"`. An unknown scope is rejected at the manifest gate. The former `"terminal"`, `"modal"`, and `"worktreeList"` scopes were removed — use `when` conditions instead (`"terminalFocused"`, `"modalOpen"`); worktree-list navigation keys are fixed and not bindable. |
 | `description` | no | Human-readable description of what the binding does. |
-| `when` | no | Context expression gating when the binding is active. |
+| `when` | no | Context expression gating when the binding is active. Evaluated live at each keydown against the context keys below; unknown identifiers evaluate falsy — which makes negated expressions permissive (a misspelled `!modalOpne` is always true), so double-check identifier spelling. Supports `&&`, `\|\|`, `!`, `==`, `!=`, and single-quoted string literals. |
+
+**`when` context keys:**
+
+| Key               | Type    | Meaning                                                        |
+| ----------------- | ------- | -------------------------------------------------------------- |
+| `terminalFocused` | boolean | Keyboard focus is inside an xterm terminal.                    |
+| `modalOpen`       | boolean | A modal dialog (`aria-modal`) is open.                         |
+| `paletteOpen`     | boolean | Any palette (command palette, quick switcher, …) is open.      |
+| `paletteId`       | string  | Identifier of the open palette, or `""` when none.             |
+| `fleetArmed`      | boolean | At least one terminal is armed for fleet broadcast.            |
+| `fleetWaiting`    | boolean | At least one armed terminal's agent is in the `waiting` state. |
+| `sidebarVisible`  | boolean | The worktree sidebar is currently visible.                     |
+
+Note: this context applies to keybinding `when` clauses, which resolve in the renderer. Native menu-item `when` clauses (the `menuItems` contribution) are evaluated once at menu build time against an empty context — only literal/negation expressions are useful there.
 
 Bindings register when the plugin loads and unregister on unload. Conflicts with user overrides or other plugins' bindings are resolved by Daintree's existing keybinding service — plugin bindings are low-priority and yield to user overrides. See `registerBinding` in `src/services/KeybindingService.ts` for the registration API.
 
@@ -572,7 +640,7 @@ Teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CL
         "command": "acme",
         "args": ["--interactive"],
         "color": "#3366ff",
-        "iconId": "terminal",
+        "iconId": "claude",
         "supportsContextInjection": true
       }
     ]
@@ -589,7 +657,7 @@ Teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CL
 | `command` | yes | CLI binary to launch. Same safe-id pattern as `id` (no shell metacharacters). Supports `${settings:settingId}` — see below. |
 | `args` | no | Default launch arguments (≤20 entries; no control characters). Supports `${settings:settingId}` — see below. |
 | `color` | yes | Brand color as a 6-digit hex (`#rrggbb`). |
-| `iconId` | yes | Icon id used for the agent. |
+| `iconId` | yes | **A different namespace from panel/toolbar icon IDs** — agents render bundled brand marks, so this must name one of Daintree's built-in agent IDs (`claude`, `codex`, `gemini`, …). A panel icon ID like `terminal` doesn't resolve here; unrecognized values silently fall back to the Claude mark. Shipping a custom icon asset isn't supported yet. |
 | `supportsContextInjection` | no | Whether copy-tree context injection targets this agent. Defaults to `false`. |
 
 A plugin agent is launchable and selectable as a named entry in the effective registry. It launches as a named terminal. Without a `detection` block it runs as a plain named terminal whose working/waiting state Daintree doesn't track; declare `detection` (below) to wire it into the agent-state UI like a built-in agent.

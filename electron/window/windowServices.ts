@@ -9,6 +9,7 @@ import { getWorkspaceClient } from "../services/WorkspaceClient.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { createApplicationMenu, handleDirectoryOpen } from "../menu.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
+import { notificationService } from "../services/NotificationService.js";
 import { getMainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { scratchStore } from "../services/ScratchStore.js";
@@ -27,17 +28,19 @@ import {
   smokeTestStart,
   getEarlyPathRefreshPromise,
   kickOffEarlyPathRefresh,
+  getPendingOpenDirPaths,
+  queuePendingOpenDirPath,
 } from "../setup/environment.js";
 import { shouldDeferRendererLoadForE2E } from "./earlyRenderer.js";
 import { isE2EFaultMode } from "../setup/runtimeFlags.js";
 import {
   extractCliPath,
+  hasCliPathFlag,
   getPendingCliPath,
   setPendingCliPath,
   extractDntrPaths,
-  getPendingDntrPaths,
-  drainPendingDntrPaths,
-  installDntrPath,
+  extractDirectoryPaths,
+  queueDntrPaths,
 } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { getWindowRegistry } from "./windowRef.js";
@@ -60,6 +63,8 @@ import {
   getProcessArgvCliHandled,
   setProcessArgvCliHandled,
   getProcessArgvDntrHandled,
+  getProcessArgvDirectoryHandled,
+  setProcessArgvDirectoryHandled,
   setProcessArgvDntrHandled,
   getIpcHandlersRegistered,
   setIpcHandlersRegistered,
@@ -530,6 +535,24 @@ export async function setupWindowServices(
     ? projectStore.getProjectById(opts.initialProjectId)
     : undefined;
 
+  // A Linux file manager launching a cold Daintree via "Open With" on a folder
+  // puts a `file://` directory URI in argv. Classified here — outside the PTY
+  // gate below — so a degraded-mode launch still honours the request, and
+  // queued into the same pre-window store the macOS `open-file` drops use so
+  // `drainPendingOpenDirs` opens it. An explicit `--cli-path` suppresses the
+  // scan, mirroring `second-instance`, so one launch is never routed twice —
+  // gated on the flag rather than a resolved path, both so an unresolvable
+  // `--cli-path` isn't quietly replaced by a positional URI and so this doesn't
+  // become a second `extractCliPath` call that re-reports the same failure.
+  let coldDirectoryPaths: string[] = [];
+  if (!getProcessArgvDirectoryHandled()) {
+    setProcessArgvDirectoryHandled(true);
+    coldDirectoryPaths = hasCliPathFlag(process.argv) ? [] : extractDirectoryPaths(process.argv);
+    for (const dirPath of coldDirectoryPaths) {
+      queuePendingOpenDirPath(dirPath);
+    }
+  }
+
   // PTY-related features
   if (ptyReady) {
     const pty = getPtyClient()!;
@@ -555,9 +578,15 @@ export async function setupWindowServices(
     initializePowerSaveBlockerService();
     console.log("[MAIN] AgentAvailabilityStore and PowerSaveBlocker initialized");
 
-    const processArgvCli = !getProcessArgvCliHandled() ? extractCliPath(process.argv) : null;
+    const processArgvCli = !getProcessArgvCliHandled()
+      ? extractCliPath(process.argv, process.cwd())
+      : null;
     const skipDefaultSpawn =
-      opts.initialProjectPath || processArgvCli || getPendingCliPath() || restoreProject;
+      opts.initialProjectPath ||
+      processArgvCli ||
+      getPendingCliPath() ||
+      restoreProject ||
+      getPendingOpenDirPaths().length > 0;
     if (skipDefaultSpawn) {
       console.log(
         "[MAIN] CLI path, initial project path, or existing project set, skipping default terminal spawn"
@@ -602,6 +631,7 @@ export async function setupWindowServices(
     // The menu was built before this binding existed, so its project gates
     // resolved against a PVM with no active project. Converge them now (#11136).
     refreshProjectMenuState();
+    notificationService.refreshTitles();
   }
 
   // Load worktrees — prefer initialProjectPath, else restoreProject for
@@ -711,8 +741,13 @@ export async function setupWindowServices(
 
   // CLI path handling — skip if this window was opened with an explicit initialProjectPath
   if (!opts.initialProjectPath) {
-    const firstLaunchCliPath = !getProcessArgvCliHandled() ? extractCliPath(process.argv) : null;
-    if (firstLaunchCliPath) setProcessArgvCliHandled(true);
+    const firstLaunchCliPath = !getProcessArgvCliHandled()
+      ? extractCliPath(process.argv, process.cwd())
+      : null;
+    // Retire the one-shot read whenever argv asked for a path at all, not only
+    // when it resolved: an unresolvable `--cli-path` is still consumed, so it
+    // isn't re-parsed (and re-reported) by every window created afterwards.
+    if (firstLaunchCliPath || hasCliPathFlag(process.argv)) setProcessArgvCliHandled(true);
     const cliPath = firstLaunchCliPath ?? getPendingCliPath();
     if (cliPath) {
       setPendingCliPath(null);
@@ -738,21 +773,23 @@ export async function setupWindowServices(
   drainPendingOpenDirs(win, openDirDeps);
 
   // `.dntr` plugin-archive handling — independent of project/CLI-path routing.
-  // First-launch (cold double-click) archives arrive in process.argv; second
-  // instances queue into pendingDntrPaths. Both are sideloaded once the first
-  // window is ready so install toasts have a live renderer target. Fire-and-
-  // forget: installs run sequentially through the installer's lock.
+  // First-launch (cold double-click) archives arrive in process.argv. Each is
+  // queued for the install-confirmation prompt (#11280), never installed
+  // outright; the intent queue holds previews until this window paints, so
+  // there is no separate windowless drain. Fire-and-forget: previews are read
+  // sequentially so the prompts keep argv order.
+  // A folder named `foo.dntr` opened from the OS is a project, not an archive —
+  // the stat-backed directory scan above wins, mirroring `second-instance`.
   const firstLaunchDntrPaths = !getProcessArgvDntrHandled()
-    ? extractDntrPaths(process.argv, process.cwd())
+    ? extractDntrPaths(process.argv, process.cwd()).filter(
+        (dntrPath) => !coldDirectoryPaths.includes(dntrPath)
+      )
     : [];
-  if (firstLaunchDntrPaths.length > 0) setProcessArgvDntrHandled(true);
-  if (firstLaunchDntrPaths.length > 0 || getPendingDntrPaths().length > 0) {
-    void (async () => {
-      for (const archivePath of firstLaunchDntrPaths) {
-        await installDntrPath(archivePath);
-      }
-      await drainPendingDntrPaths();
-    })().catch((err) => console.error("[MAIN] Failed to install .dntr plugin(s):", err));
+  if (firstLaunchDntrPaths.length > 0) {
+    setProcessArgvDntrHandled(true);
+    void queueDntrPaths(firstLaunchDntrPaths).catch((err) =>
+      console.error("[MAIN] Failed to queue .dntr plugin(s):", err)
+    );
   }
 
   // ── Last-window-close: reset per-window deferred queue ──

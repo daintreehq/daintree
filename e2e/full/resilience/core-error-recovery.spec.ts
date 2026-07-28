@@ -172,10 +172,10 @@ test.describe.serial("Core: Error Recovery — Missing Project", () => {
     // The missing project shows "Directory not found" text
     await expect(palette.getByText("Directory not found")).toBeVisible({ timeout: T_LONG });
 
-    // The missing project row has aria-disabled
-    await expect(palette.locator('[role="option"][aria-disabled="true"]')).toBeVisible({
-      timeout: T_MEDIUM,
-    });
+    const missingProjectRow = palette
+      .getByRole("option")
+      .filter({ hasText: "Directory not found" });
+    await expect(missingProjectRow).not.toHaveAttribute("aria-disabled", "true");
 
     // Close palette
     await window.keyboard.press("Escape");

@@ -25,8 +25,7 @@ export interface DiffTokenizeResult {
 export type DiffTokenizeWorkerRequest = DiffTokenizeRequest & { id: number };
 
 export type DiffTokenizeWorkerResponse =
-  | ({ id: number; ok: true } & DiffTokenizeResult)
-  | { id: number; ok: false; error: string };
+  ({ id: number; ok: true } & DiffTokenizeResult) | { id: number; ok: false; error: string };
 
 /** Changed-line budget above which word-level edit marking is skipped. */
 export const MAX_INTRALINE_CHANGES = 3000;
@@ -70,7 +69,7 @@ function intralineEditEnhancers(hunks: HunkData[]): TokenizeEnhancer[] {
     const lineAlignedChanges: ChangeData[] = [];
     const blockChanges: ChangeData[] = [];
     const changes = hunk.changes;
-    for (let start = 0; start < changes.length; ) {
+    for (let start = 0; start < changes.length;) {
       if (changes[start]!.type === "normal") {
         lineAlignedChanges.push(changes[start]!);
         blockChanges.push(changes[start]!);

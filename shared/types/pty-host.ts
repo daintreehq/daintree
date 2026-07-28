@@ -30,10 +30,7 @@ export type { TerminalFlowStatus };
  * does NOT carry this discriminator; it only carries `success: boolean`.
  */
 export type AgentStateTransitionDropReason =
-  | "no-op"
-  | "hysteresis"
-  | "stale-session"
-  | "schema-invalid";
+  "no-op" | "hysteresis" | "stale-session" | "schema-invalid";
 
 /** Options for spawning a new PTY process (matches PtyManager interface) */
 export interface PtyHostSpawnOptions {
@@ -85,6 +82,22 @@ export interface PtyHostSpawnOptions {
    * session journaling exactly-once per terminal incarnation.
    */
   launchGeneration?: number;
+  /**
+   * Command to type into the PTY immediately after spawn, for command launches
+   * on shells that can't host a startup wrapper (`buildCommandLaunchShell`
+   * returned null — fish, nushell, an unrecognized Windows shell). The wrapper
+   * shells (zsh/bash/sh/pwsh/cmd) embed the launch command in `args`, but these
+   * shells launch bare and the command is written in afterwards.
+   *
+   * Cached here so it rides `pendingSpawns` and is re-injected on every replay —
+   * a pty-host crash respawn, a crash-budget migration, and the pre-ready
+   * initial replay — so a resumed (or any) launch survives a crash on these
+   * shells instead of coming back as an empty prompt (#11339). The pty-host
+   * spawn handler injects it, and only after a successful spawn, so a rejected
+   * spawn (e.g. TERMINAL_ALREADY_LIVE) can't type it into a pre-existing live
+   * PTY (#11341).
+   */
+  postSpawnInput?: string;
 }
 
 /** Per-project terminal-workload memory, deduplicated by PID. */
@@ -116,10 +129,74 @@ export interface MemoryRollup {
 }
 
 /**
+ * Spawn config for a raw plugin PTY (#11300). Deliberately NOT
+ * {@link PtyHostSpawnOptions}: a plugin's interactive process is not a terminal
+ * panel, so it carries no agent hint, project id, title, session restore, or
+ * launch generation, and the host must never route it through `PtyManager` /
+ * `TerminalProcess` (no pooling, agent detection, resource governance, or
+ * session persistence). `env` arrives already reduced to the shared safe-key
+ * allowlist by Main; the host applies it verbatim.
+ */
+export interface PluginPtyHostSpawnOptions {
+  command: string;
+  args: string[];
+  cwd?: string;
+  env: Record<string, string>;
+  cols: number;
+  rows: number;
+}
+
+/**
+ * Main → Host messages for the raw plugin-PTY lane (#11300). `generation`
+ * distinguishes incarnations of the same handle id across `restart()`, so a
+ * late message from (or about) a replaced PTY is dropped instead of hitting its
+ * successor. The host is a dumb executor here: every capability check, consent
+ * prompt, plugin-liveness gate, and env reduction has already run in Main.
+ */
+export type PluginPtyHostRequest =
+  | {
+      type: "plugin-pty-spawn";
+      id: string;
+      generation: number;
+      options: PluginPtyHostSpawnOptions;
+    }
+  | { type: "plugin-pty-write"; id: string; generation: number; data: string }
+  | { type: "plugin-pty-resize"; id: string; generation: number; cols: number; rows: number }
+  | {
+      type: "plugin-pty-kill";
+      id: string;
+      generation: number;
+      signal: "SIGTERM" | "SIGKILL";
+    };
+
+/** Outcome of a `plugin-pty-spawn`. */
+export type PluginPtySpawnResult =
+  { success: true; pid: number | null } | { success: false; error: string };
+
+/** Host → Main events for the raw plugin-PTY lane (#11300). */
+export type PluginPtyHostEvent =
+  | {
+      type: "plugin-pty-spawn-result";
+      id: string;
+      generation: number;
+      result: PluginPtySpawnResult;
+    }
+  | { type: "plugin-pty-data"; id: string; generation: number; data: string }
+  | {
+      type: "plugin-pty-exit";
+      id: string;
+      generation: number;
+      exitCode: number | null;
+      /** Raw OS signal number from node-pty, or `null` when it exited normally. */
+      signal: number | null;
+    };
+
+/**
  * Requests sent from Main → Host.
  * Each request is a discriminated union type for compile-time safety.
  */
 export type PtyHostRequest =
+  | PluginPtyHostRequest
   | { type: "spawn"; id: string; options: PtyHostSpawnOptions }
   | { type: "resize"; id: string; cols: number; rows: number }
   | { type: "write"; id: string; data: string; traceId?: string }
@@ -401,6 +478,7 @@ export interface PtyHostTerminalSnapshot {
  * Forward processed events back to Main process.
  */
 export type PtyHostEvent =
+  | PluginPtyHostEvent
   | { type: "data"; id: string; data: string }
   // Main-process-only copy of a chunk the renderer already received on its
   // visual path (MessagePort) or that the background gate suppressed. Consumed
@@ -757,6 +835,7 @@ export type SpawnErrorCode =
   | "EBUSY" // Terminal device busy
   | "DISCONNECTED" // Terminal process no longer exists in backend (e.g., after project switch)
   | "PENDING_SPAWNS_CAPPED" // PtyClient.pendingSpawns admission cap hit (restart-storm guard)
+  | "TERMINAL_ALREADY_LIVE" // Spawn rejected: the id already has a live owner (#11341)
   | "UNKNOWN"; // Unknown error
 
 /** Result of a spawn operation */
@@ -783,11 +862,7 @@ export interface SpawnError {
 
 /** Crash type classification based on exit codes */
 export type CrashType =
-  | "OUT_OF_MEMORY"
-  | "ASSERTION_FAILURE"
-  | "SIGNAL_TERMINATED"
-  | "UNKNOWN_CRASH"
-  | "CLEAN_EXIT";
+  "OUT_OF_MEMORY" | "ASSERTION_FAILURE" | "SIGNAL_TERMINATED" | "UNKNOWN_CRASH" | "CLEAN_EXIT";
 
 /** Payload for terminal status events (flow control) */
 export interface TerminalStatusPayload {

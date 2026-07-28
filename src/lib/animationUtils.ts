@@ -90,6 +90,17 @@ export const UI_PALETTE_STALE_DELAY = DURATION_200;
  *  Not an animation token — a perceptual floor, same family as Doherty. */
 export const UI_SKELETON_GATE_MS = 200;
 
+/** UX anti-flicker gate for a granular, per-item *inline* loading indicator —
+ *  e.g. the file-tree folder-expansion spinner (`FileTreeRow`). A folder whose
+ *  listing resolves in under this window shows nothing, killing the flash on a
+ *  warm-cache expand. Intentionally shorter than `UI_DOHERTY_THRESHOLD`, which
+ *  governs page/panel-level spinners: 400ms is too sluggish for feedback this
+ *  granular, and issue #11318 asks for ~200ms here specifically. Shares the
+ *  200ms value with the skeleton gate by coincidence, not by coupling — the two
+ *  can diverge freely. Not an animation token — a perceptual floor, same family
+ *  as the Doherty/skeleton gates. */
+export const UI_INLINE_LOADING_GATE_MS = 200;
+
 /** Minimum on-screen dwell once a skeleton has crossed its onset gate. The
  *  onset gates (`useSkeletonGate`, `useDohertyGate`) only suppress *early*
  *  display; nothing stops a skeleton that just appeared from tearing down in
@@ -100,6 +111,17 @@ export const UI_SKELETON_GATE_MS = 200;
  *  enough to never feel sluggish in an IDE where data usually resolves fast.
  *  Not an animation token — a perceptual floor, same family as the gates. */
 export const UI_SKELETON_FLOOR_MS = DURATION_250;
+
+/** One full rotation of Tailwind's built-in `.animate-spin` utility, which runs
+ *  `spin 1s linear infinite` (`--animate-spin` in tailwindcss/theme.css, not
+ *  overridden in this repo). `SpinningIcon` uses this as the backstop timer that
+ *  clears a spinning refresh icon when the CSS animation is suppressed
+ *  (reduced-motion / performance mode) and therefore never fires an
+ *  `animationiteration` event to stop it at a rotation boundary. Pinned to
+ *  Tailwind's duration; the drift-contract test in animationUtils.test.ts parses
+ *  theme.css and fails if the two diverge. Not a design-motion token — a
+ *  mechanism constant coupled to a third-party default. */
+export const UI_SPIN_CYCLE_MS = 1_000;
 
 /** Feedback-hint window for direct user actions (e.g. `Button`'s `loading`
  *  state). Distinct in role from the skeleton/Doherty gates: those *delay*

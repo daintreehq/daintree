@@ -419,7 +419,8 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
         path: "/repo-worktrees/gone",
         deletedAt: 1000,
         expiresAt: null,
-        pinnedIndex: -1,
+        holdReason: null,
+        pinnedBeforeWorktreeId: null,
       });
       useWorktreeSelectionStore.setState({ activeWorktreeId: "ghost-1" });
     });

@@ -9,6 +9,7 @@ const projectClientMock = {
   update: vi.fn().mockResolvedValue(undefined),
   switch: vi.fn().mockResolvedValue(null),
   openDialog: vi.fn(),
+  createFolder: vi.fn(),
   onSwitch: vi.fn(() => () => {}),
   onWorktreeLoadStatus: vi.fn(() => () => {}),
   getSettings: vi.fn(),
@@ -30,6 +31,10 @@ const terminalClientMock = {
   getSharedBuffers: vi.fn().mockResolvedValue({ visualBuffers: [], signalBuffer: null }),
 };
 
+const worktreeClientMock = {
+  retryProjectLoad: vi.fn().mockResolvedValue(undefined),
+};
+
 const notifyMock = vi.fn().mockReturnValue("");
 
 const actionServiceDispatchMock = vi.fn().mockResolvedValue({ ok: true });
@@ -42,6 +47,7 @@ vi.mock("@/clients", () => ({
   projectClient: projectClientMock,
   appClient: appClientMock,
   terminalClient: terminalClientMock,
+  worktreeClient: worktreeClientMock,
 }));
 
 vi.mock("@/lib/notify", () => ({
@@ -72,6 +78,10 @@ vi.mock("../slices", () => ({
 
 const { useProjectStore } = await import("../projectStore");
 
+// Exact store signature, so the mock needs no cast (which would trip the
+// no-unsafe-type-assertion ratchet).
+type AddProjectByPath = ReturnType<typeof useProjectStore.getState>["addProjectByPath"];
+
 // Capture original action references once — earlier tests replace them via
 // setState() which is a merge, so functions leak across tests without this.
 const originalAddProjectByPath = useProjectStore.getState().addProjectByPath;
@@ -87,9 +97,44 @@ describe("projectStore addProject", () => {
       error: null,
       gitInitDialogOpen: false,
       gitInitDirectoryPath: null,
+      gitInitIdentity: null,
       addProjectByPath: originalAddProjectByPath,
       addProject: originalAddProject,
     });
+  });
+
+  it("carries the create-flow identity into the git-init dialog it always chains through", async () => {
+    projectClientMock.createFolder.mockResolvedValueOnce("/tmp/new-folder");
+    projectClientMock.add.mockRejectedValueOnce(new Error("Not a git repository: /tmp/new-folder"));
+
+    await useProjectStore.getState().createProjectFolder("/tmp", "new-folder", "🚀");
+
+    expect(useProjectStore.getState().gitInitDialogOpen).toBe(true);
+    expect(useProjectStore.getState().gitInitIdentity).toEqual({
+      name: "new-folder",
+      emoji: "🚀",
+    });
+  });
+
+  it("forwards the clone dialog's identity to the add call", async () => {
+    projectClientMock.add.mockResolvedValueOnce({ id: "p1", path: "/tmp/cloned" });
+
+    await useProjectStore
+      .getState()
+      .handleCloneSuccess("/tmp/cloned", { name: "cloned", emoji: "📦" });
+
+    expect(projectClientMock.add).toHaveBeenCalledWith("/tmp/cloned", {
+      identity: { name: "cloned", emoji: "📦" },
+    });
+  });
+
+  it("adds an existing repo with no identity argument", async () => {
+    projectClientMock.openDialog.mockResolvedValueOnce("/tmp/existing-repo");
+    projectClientMock.add.mockResolvedValueOnce({ id: "p2", path: "/tmp/existing-repo" });
+
+    await useProjectStore.getState().addProject();
+
+    expect(projectClientMock.add).toHaveBeenCalledWith("/tmp/existing-repo", undefined);
   });
 
   it("opens the guided git init dialog when add fails for non-git directories", async () => {
@@ -142,18 +187,67 @@ describe("projectStore addProject", () => {
   });
 
   it("retries adding the project after successful initialization", async () => {
-    const addProjectByPathMock = vi.fn().mockResolvedValue(undefined);
+    const addProjectByPathMock = vi.fn<AddProjectByPath>().mockResolvedValue(undefined);
     useProjectStore.setState({
       gitInitDialogOpen: true,
       gitInitDirectoryPath: "/tmp/repo",
-      addProjectByPath: addProjectByPathMock as (path: string) => Promise<void>,
+      addProjectByPath: addProjectByPathMock,
     });
 
     await useProjectStore.getState().handleGitInitSuccess();
 
-    expect(addProjectByPathMock).toHaveBeenCalledWith("/tmp/repo");
+    expect(addProjectByPathMock).toHaveBeenCalledWith("/tmp/repo", { identity: undefined });
     expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
     expect(useProjectStore.getState().gitInitDirectoryPath).toBeNull();
+  });
+
+  it("passes the identity supplied at git-init completion through to the add", async () => {
+    const addProjectByPathMock = vi.fn<AddProjectByPath>().mockResolvedValue(undefined);
+    useProjectStore.setState({
+      gitInitDialogOpen: true,
+      gitInitDirectoryPath: "/tmp/repo",
+      addProjectByPath: addProjectByPathMock,
+    });
+
+    await useProjectStore.getState().handleGitInitSuccess({ name: "Edited", emoji: "🚀" });
+
+    expect(addProjectByPathMock).toHaveBeenCalledWith("/tmp/repo", {
+      identity: { name: "Edited", emoji: "🚀" },
+    });
+  });
+
+  it("falls back to the identity carried in from the create-project dialog", async () => {
+    const addProjectByPathMock = vi.fn<AddProjectByPath>().mockResolvedValue(undefined);
+    useProjectStore.setState({
+      gitInitDialogOpen: true,
+      gitInitDirectoryPath: "/tmp/repo",
+      gitInitIdentity: { name: "Carried", emoji: "📦" },
+      addProjectByPath: addProjectByPathMock,
+    });
+
+    await useProjectStore.getState().handleGitInitSuccess();
+
+    expect(addProjectByPathMock).toHaveBeenCalledWith("/tmp/repo", {
+      identity: { name: "Carried", emoji: "📦" },
+    });
+  });
+
+  it("clears the carried identity together with the path on close", () => {
+    useProjectStore
+      .getState()
+      .openGitInitDialog("/tmp/repo", { identity: { name: "N", emoji: "🚀" } });
+    expect(useProjectStore.getState().gitInitIdentity).toEqual({ name: "N", emoji: "🚀" });
+
+    useProjectStore.getState().closeGitInitDialog();
+
+    expect(useProjectStore.getState().gitInitDirectoryPath).toBeNull();
+    expect(useProjectStore.getState().gitInitIdentity).toBeNull();
+  });
+
+  it("opens git-init with no identity when the folder was merely opened", () => {
+    useProjectStore.getState().openGitInitDialog("/tmp/plain-folder");
+
+    expect(useProjectStore.getState().gitInitIdentity).toBeNull();
   });
 
   describe("dubious ownership handling", () => {
@@ -219,7 +313,7 @@ describe("projectStore addProject", () => {
 
       expect(markSafeDirectoryMock).toHaveBeenCalledWith("/tmp/dubious-repo");
       expect(projectClientMock.add).toHaveBeenCalledTimes(2);
-      expect(projectClientMock.add).toHaveBeenLastCalledWith("/tmp/dubious-repo");
+      expect(projectClientMock.add).toHaveBeenLastCalledWith("/tmp/dubious-repo", undefined);
     });
 
     it("secondary action dispatches the errors.openLogs action", async () => {
@@ -304,6 +398,236 @@ describe("projectStore addProject", () => {
         (call) => (call[0] as { title?: string }).title === "Couldn't add project"
       );
       expect(genericToasts.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("opening a folder without git (#11405)", () => {
+    const LIGHTWEIGHT = { id: "p-light", path: "/tmp/downloads", name: "downloads" };
+
+    beforeEach(() => {
+      useProjectStore.setState({ gitInitDirectoryPath: "/tmp/downloads" });
+      projectClientMock.add.mockResolvedValue(LIGHTWEIGHT);
+      projectClientMock.getAll.mockResolvedValue([LIGHTWEIGHT]);
+    });
+
+    it("opens the choice screen first when a folder has no repository", async () => {
+      projectClientMock.openDialog.mockResolvedValueOnce("/tmp/not-a-repo");
+      projectClientMock.add.mockRejectedValueOnce(
+        new Error("Not a git repository: /tmp/not-a-repo")
+      );
+
+      await useProjectStore.getState().addProject();
+
+      expect(useProjectStore.getState().gitInitDialogStep).toBe("choice");
+    });
+
+    it("asks main to drop the git requirement when the user opens without git", async () => {
+      await useProjectStore.getState().openWithoutGit();
+
+      expect(projectClientMock.add).toHaveBeenCalledWith("/tmp/downloads", { gitBacked: false });
+      expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
+    });
+
+    it("keeps the git requirement on an ordinary add", async () => {
+      await useProjectStore.getState().addProjectByPath("/tmp/some-repo");
+
+      expect(projectClientMock.add).toHaveBeenCalledWith("/tmp/some-repo", undefined);
+    });
+
+    it("reloads the workspace after initializing git in the open workspace", async () => {
+      useProjectStore.setState({
+        currentProject: { ...LIGHTWEIGHT, emoji: "🌳", lastOpened: 0, gitBacked: false },
+      });
+
+      await useProjectStore.getState().handleGitInitSuccess();
+
+      // The host loaded this folder with no repository and enumerated nothing;
+      // without a reload the sidebar would stay empty until the next switch.
+      expect(worktreeClientMock.retryProjectLoad).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not reload when git was initialized in some other folder", async () => {
+      useProjectStore.setState({ currentProject: null });
+
+      await useProjectStore.getState().handleGitInitSuccess();
+
+      expect(worktreeClientMock.retryProjectLoad).not.toHaveBeenCalled();
+    });
+  });
+
+  // #11409: classified open failures arrive as AppError codes and must render
+  // the shared plain-language copy — not the raw internal text that used to
+  // fall through the message matchers.
+  describe("classified open failures", () => {
+    const FOLDER = "/Volumes/Archive/repos/alpha";
+
+    /**
+     * Errors reach the renderer through the preload, which strips custom
+     * properties at the contextBridge boundary and re-encodes the code into the
+     * message. Rejecting with that exact shape is the only way this asserts the
+     * production path rather than a same-realm convenience object.
+     */
+    function preloadError(code: string, message: string): Error {
+      return new Error(`[AppError|${code}] ${message}`);
+    }
+
+    function toastPayload(): {
+      title: string;
+      message: string;
+      actions?: Array<{ label: string; onClick: () => Promise<void> }>;
+    } {
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const payload: unknown = notifyMock.mock.calls[0]?.[0];
+      if (typeof payload !== "object" || payload === null) {
+        throw new Error("expected notify to receive a toast payload");
+      }
+      const actions: unknown = Reflect.get(payload, "actions");
+      return {
+        title: String(Reflect.get(payload, "title")),
+        message: String(Reflect.get(payload, "message")),
+        actions: Array.isArray(actions)
+          ? actions.map((action: object) => {
+              const handler: unknown = Reflect.get(action, "onClick");
+              return {
+                label: String(Reflect.get(action, "label")),
+                onClick: async (): Promise<void> => {
+                  if (typeof handler !== "function") throw new Error("action has no onClick");
+                  // The store's handlers kick off work fire-and-forget, so let
+                  // the queued microtasks drain before asserting on it.
+                  Reflect.apply(handler, undefined, []);
+                  await new Promise((resolve) => setTimeout(resolve, 0));
+                },
+              };
+            })
+          : undefined,
+      };
+    }
+
+    it.each([
+      ["NOT_FOUND"],
+      ["NOT_A_DIRECTORY"],
+      ["PERMISSION"],
+      ["GIT_NOT_INSTALLED"],
+      ["PROJECT_OPEN_FAILED"],
+      ["INVALID_PATH"],
+    ])("renders plain language instead of internals for %s", async (code) => {
+      projectClientMock.add.mockRejectedValueOnce(
+        preloadError(code, "Git operation failed: getRepositoryRoot")
+      );
+
+      await useProjectStore.getState().addProjectByPath(FOLDER);
+
+      const { message } = toastPayload();
+      for (const banned of [
+        "simple-git",
+        "getRepositoryRoot",
+        "AppError",
+        "[",
+        "Git operation failed",
+      ]) {
+        expect(message).not.toContain(banned);
+      }
+    });
+
+    it("names the folder the user tried to open", async () => {
+      // IPC sanitization scrubs absolute paths out of error messages, so the
+      // path has to come from the renderer's own state.
+      projectClientMock.add.mockRejectedValueOnce(preloadError("NOT_FOUND", "not found"));
+
+      await useProjectStore.getState().addProjectByPath(FOLDER);
+
+      expect(toastPayload().message).toContain(FOLDER);
+    });
+
+    it("distinguishes a missing folder from one that is a file", async () => {
+      projectClientMock.add.mockRejectedValueOnce(preloadError("NOT_FOUND", "x"));
+      await useProjectStore.getState().addProjectByPath(FOLDER);
+      const missing = toastPayload().message;
+
+      notifyMock.mockClear();
+      projectClientMock.add.mockRejectedValueOnce(preloadError("NOT_A_DIRECTORY", "x"));
+      await useProjectStore.getState().addProjectByPath(FOLDER);
+      const notADirectory = toastPayload().message;
+
+      // simple-git reports these two identically; the whole fix is that we no
+      // longer do.
+      expect(missing).not.toBe(notADirectory);
+    });
+
+    it("retries the same folder for a failure that could clear on its own", async () => {
+      projectClientMock.add.mockRejectedValueOnce(preloadError("PERMISSION", "denied"));
+
+      await useProjectStore.getState().addProjectByPath(FOLDER);
+
+      const { actions } = toastPayload();
+      expect(actions).toHaveLength(1);
+      expect(actions?.[0]?.label).toBe("Try again");
+
+      projectClientMock.add.mockResolvedValueOnce({ id: "p1", path: FOLDER });
+      await actions?.[0]?.onClick();
+
+      expect(projectClientMock.add.mock.lastCall?.[0]).toBe(FOLDER);
+      expect(projectClientMock.openDialog).not.toHaveBeenCalled();
+    });
+
+    it("sends the user to the picker when retrying the same folder can't help", async () => {
+      // A folder that's gone stays gone — retrying the identical path would
+      // just reproduce the same error.
+      projectClientMock.add.mockRejectedValueOnce(preloadError("NOT_FOUND", "gone"));
+
+      await useProjectStore.getState().addProjectByPath(FOLDER);
+
+      const { actions } = toastPayload();
+      expect(actions?.[0]?.label).toBe("Choose another folder");
+
+      projectClientMock.openDialog.mockResolvedValueOnce("/repos/elsewhere");
+      projectClientMock.add.mockResolvedValueOnce({ id: "p1", path: "/repos/elsewhere" });
+      await actions?.[0]?.onClick();
+
+      expect(projectClientMock.openDialog).toHaveBeenCalledTimes(1);
+    });
+
+    it("routes the dubious-ownership flow on the code, not the message text", async () => {
+      // The message is deliberately reworded past every substring the old
+      // matcher keyed on ("dubious ownership" / "safe.directory"), so this only
+      // passes if the code alone drives the dedicated ownership toast. A future
+      // microcopy edit in main must not be able to kill the retry.
+      projectClientMock.openDialog.mockResolvedValueOnce("/tmp/dubious-repo");
+      projectClientMock.add.mockRejectedValueOnce(
+        preloadError("DUBIOUS_OWNERSHIP", "reworded in main, nothing to match on")
+      );
+
+      await useProjectStore.getState().addProject();
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const { title, actions } = toastPayload();
+      expect(title).toBe("Repository ownership issue");
+      expect(actions?.[0]?.label).toBe("Mark as safe");
+    });
+
+    it("still recognizes raw git stderr from the unclassified switch/reopen callers", async () => {
+      // Those failures never pass through `addProject`'s classification, so they
+      // arrive as plain errors carrying git's own wording — the substring
+      // fallback is what keeps them on the ownership flow.
+      projectClientMock.openDialog.mockResolvedValueOnce("/tmp/dubious-repo");
+      projectClientMock.add.mockRejectedValueOnce(
+        new Error("fatal: detected dubious ownership in repository at '/tmp/dubious-repo'")
+      );
+
+      await useProjectStore.getState().addProject();
+
+      expect(toastPayload().title).toBe("Repository ownership issue");
+    });
+
+    it("leaves the guided git-init path alone", async () => {
+      projectClientMock.add.mockRejectedValueOnce(
+        preloadError("NOT_A_GIT_REPO", "Not a git repository")
+      );
+
+      await useProjectStore.getState().addProjectByPath(FOLDER);
+
+      expect(notifyMock).not.toHaveBeenCalled();
+      expect(useProjectStore.getState().gitInitDialogOpen).toBe(true);
     });
   });
 });

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Check, AlertCircle, FolderOpen, LogIn, X } from "lucide-react";
@@ -10,9 +10,20 @@ import { actionService } from "@/services/ActionService";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { validateFolderName } from "@shared/utils/folderName";
+import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
+import { ProjectEmojiButton } from "./ProjectEmojiButton";
+import {
+  FIELD_LABEL_CLASS,
+  FIELD_INPUT_CLASS,
+  FIELD_READONLY_INPUT_CLASS,
+  FIELD_CHECKBOX_CLASS,
+  FIELD_BROWSE_BUTTON_CLASS,
+  FIELD_EMOJI_ROW_INDENT,
+} from "./projectDialogFields";
 import { matchProviderForRemoteUrl } from "@shared/utils/forgeHostnames";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import type { CloneRepoProgressEvent } from "@shared/types/ipc/gitClone";
+import type { ProjectCreationIdentity } from "@shared/types";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { isClientGitError } from "@/utils/clientGitError";
 
@@ -29,7 +40,7 @@ interface CloneForgeProvider {
 
 interface CloneRepoDialogProps {
   isOpen: boolean;
-  onSuccess: (clonedPath: string) => void;
+  onSuccess: (clonedPath: string, identity?: ProjectCreationIdentity) => void;
   onCancel: () => void;
 }
 
@@ -70,10 +81,14 @@ function isValidCloneUrl(url: string, shorthandHost: string | null): boolean {
 }
 
 export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialogProps) {
+  const folderNameErrorId = useId();
   const [url, setUrl] = useState("");
   const [parentPath, setParentPath] = useState("");
   const [folderName, setFolderName] = useState("");
   const [folderNameEdited, setFolderNameEdited] = useState(false);
+  // Suggestion follows the folder name (however it got there — URL-derived or
+  // typed) until the user picks explicitly; after that the pick sticks.
+  const [pickedEmoji, setPickedEmoji] = useState<string | null>(null);
   const [shallowClone, setShallowClone] = useState(false);
   const [progressEvents, setProgressEvents] = useState<CloneRepoProgressEvent[]>([]);
   const [isCloning, setIsCloning] = useState(false);
@@ -90,11 +105,18 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const logEndRef = useRef<HTMLDivElement>(null);
   const hasFinalizedRef = useRef(false);
 
+  const suggestedEmoji = useMemo(() => {
+    const trimmed = folderName.trim();
+    return trimmed ? suggestProjectEmoji(trimmed) : DEFAULT_PROJECT_EMOJI;
+  }, [folderName]);
+  const effectiveEmoji = pickedEmoji ?? suggestedEmoji;
+
   const finalizeSuccess = useCallback(() => {
     if (hasFinalizedRef.current || !clonedPath) return;
     hasFinalizedRef.current = true;
-    onSuccess(clonedPath);
-  }, [onSuccess, clonedPath]);
+    const trimmedName = folderName.trim();
+    onSuccess(clonedPath, trimmedName ? { name: trimmedName, emoji: effectiveEmoji } : undefined);
+  }, [onSuccess, clonedPath, folderName, effectiveEmoji]);
 
   // Reset state when dialog opens/closes
   useEffect(() => {
@@ -103,6 +125,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       setParentPath("");
       setFolderName("");
       setFolderNameEdited(false);
+      setPickedEmoji(null);
       setShallowClone(false);
       setProgressEvents([]);
       setIsCloning(false);
@@ -266,42 +289,49 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     <AppDialog isOpen={isOpen} onClose={handleClose} size="md" dismissible={!isCloning}>
       <AppDialog.Header>
         <AppDialog.Title icon={<FolderGit2 className="h-5 w-5 text-daintree-accent" />}>
-          Clone Repository
+          Clone repository
         </AppDialog.Title>
         {!isCloning && <AppDialog.CloseButton />}
       </AppDialog.Header>
 
-      <AppDialog.Body className="space-y-4">
+      <AppDialog.Body className="space-y-5">
         {/* URL Input */}
         <div className="space-y-1.5">
-          <label className="text-sm font-medium text-daintree-text/70">Repository URL</label>
+          <label className={FIELD_LABEL_CLASS} htmlFor="clone-repo-url">
+            Repository URL
+          </label>
           <input
+            id="clone-repo-url"
             type="text"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="owner/repo or repository URL"
             disabled={isCloning || isComplete}
-            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
+            className={FIELD_INPUT_CLASS}
           />
         </div>
 
         {/* Parent Directory */}
         <div className="space-y-1.5">
-          <label className="text-sm font-medium text-daintree-text/70">Parent Directory</label>
+          <label className={FIELD_LABEL_CLASS} htmlFor="clone-parent-dir">
+            Parent directory
+          </label>
           <div className="flex gap-2">
             <input
+              id="clone-parent-dir"
               type="text"
               value={parentPath}
               readOnly
-              placeholder="Select a directory..."
-              className="flex-1 rounded-md border border-daintree-border bg-muted/50 px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder disabled:opacity-50 select-all"
+              aria-readonly="true"
+              placeholder="Select a directory…"
+              className={`${FIELD_READONLY_INPUT_CLASS} select-all`}
             />
             <Button
               variant="outline"
-              size="sm"
               onClick={() => void pickDirectory()}
               disabled={isCloning || isComplete}
+              className={FIELD_BROWSE_BUTTON_CLASS}
             >
               <FolderOpen className="h-4 w-4" />
               Browse
@@ -311,24 +341,41 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
 
         {/* Folder Name */}
         <div className="space-y-1.5">
-          <label className="text-sm font-medium text-daintree-text/70">Folder Name</label>
-          <input
-            type="text"
-            value={folderName}
-            onChange={(e) => {
-              const next = e.target.value;
-              setFolderName(next);
-              // Clearing the field re-enables URL-derived auto-suggest so the
-              // user can recover after a manual edit they no longer want.
-              setFolderNameEdited(next !== "");
-            }}
-            onKeyDown={handleKeyDown}
-            disabled={isCloning || isComplete}
-            aria-invalid={folderNameError != null}
-            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50 aria-invalid:border-status-error"
-          />
+          <label className={FIELD_LABEL_CLASS} htmlFor="clone-folder-name">
+            Folder name
+          </label>
+          <div className="flex items-center gap-2">
+            <ProjectEmojiButton
+              emoji={effectiveEmoji}
+              onEmojiChange={setPickedEmoji}
+              disabled={isCloning || isComplete}
+              ariaLabel="Choose project emoji"
+            />
+            <input
+              id="clone-folder-name"
+              type="text"
+              value={folderName}
+              onChange={(e) => {
+                const next = e.target.value;
+                setFolderName(next);
+                // Clearing the field re-enables URL-derived auto-suggest so the
+                // user can recover after a manual edit they no longer want.
+                setFolderNameEdited(next !== "");
+              }}
+              onKeyDown={handleKeyDown}
+              disabled={isCloning || isComplete}
+              aria-invalid={folderNameError != null}
+              aria-describedby={folderNameError ? folderNameErrorId : undefined}
+              className={FIELD_INPUT_CLASS}
+              placeholder="my-project"
+            />
+          </div>
           {folderNameError && (
-            <p role="alert" className="text-xs text-status-error">
+            <p
+              id={folderNameErrorId}
+              role="alert"
+              className={`${FIELD_EMOJI_ROW_INDENT} text-xs text-status-error`}
+            >
               {folderNameError}
             </p>
           )}
@@ -342,9 +389,9 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               checked={shallowClone}
               onChange={(e) => setShallowClone(e.target.checked)}
               disabled={isCloning || isComplete}
-              className="rounded border-daintree-border accent-daintree-accent"
+              className={FIELD_CHECKBOX_CLASS}
             />
-            <span className="text-sm text-daintree-text/70">Shallow clone (--depth 1)</span>
+            <span className="text-sm text-daintree-text/80">Shallow clone (--depth 1)</span>
           </label>
           <p className="ml-6 text-xs text-daintree-text/50">
             Only fetches the latest commit — faster for large repos, but limits history and some

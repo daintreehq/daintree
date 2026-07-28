@@ -11,7 +11,6 @@ import { type ProcessEntry, sendToEntryWindows } from "./types.js";
 import type { WorkspaceClientConfig } from "../../../shared/types/workspace-host.js";
 import type { ForgeProviderMatcher } from "../../../shared/utils/forgeHostnames.js";
 import { projectStore } from "../ProjectStore.js";
-import { generateProjectId } from "../projectStorePaths.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 
 const CLEANUP_GRACE_MS = 180_000;
@@ -40,7 +39,7 @@ async function readForgeSettingsForProject(projectPath: string): Promise<{
   let forgeProviderOverride: string | null = null;
   let forgeRemote: string | null = null;
   try {
-    const projectId = generateProjectId(projectPath);
+    const projectId = projectStore.resolveProjectIdForPath(projectPath);
     const settings = await projectStore.getProjectSettings(projectId).catch(() => null);
     forgeProviderOverride = settings?.forgeProviderOverride ?? null;
     forgeRemote = settings?.forgeRemote ?? settings?.githubRemote ?? null;
@@ -112,8 +111,7 @@ export class WorkspaceHostPool {
    * seeded into hosts created after the last push so a project opened while
    * a non-balanced profile is active doesn't run the in-host defaults. */
   private monitorConfigCache:
-    | import("../../../shared/types/workspace-host.js").MonitorConfig
-    | null = null;
+    import("../../../shared/types/workspace-host.js").MonitorConfig | null = null;
 
   private emit: EmitFn;
   private onProjectSwitch?: (windowId: number) => void;
@@ -198,7 +196,11 @@ export class WorkspaceHostPool {
 
   // ── Process lifecycle ──
 
-  private makeInitPromise(host: WorkspaceHostProcess, normalizedPath: string): Promise<void> {
+  private makeInitPromise(
+    host: WorkspaceHostProcess,
+    normalizedPath: string,
+    projectId: string
+  ): Promise<void> {
     return (async () => {
       const [, forgeSettings] = await Promise.all([
         host.waitForReady(),
@@ -209,6 +211,7 @@ export class WorkspaceHostPool {
         type: "load-project",
         requestId,
         rootPath: normalizedPath,
+        projectId,
         globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
         wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
         forgeProviderOverride: forgeSettings.forgeProviderOverride,
@@ -279,7 +282,8 @@ export class WorkspaceHostPool {
       host.updateMonitorConfig(this.monitorConfigCache);
     }
 
-    const initPromise = this.makeInitPromise(host, normalizedPath);
+    const projectId = projectStore.resolveProjectIdForPath(normalizedPath);
+    const initPromise = this.makeInitPromise(host, normalizedPath, projectId);
 
     const newEntry: ProcessEntry = {
       host,
@@ -289,6 +293,7 @@ export class WorkspaceHostPool {
       cleanupTimeout: null,
       windowIds: new Set([windowId]),
       projectPath: normalizedPath,
+      projectId,
       directPortViews: new Map(),
     };
 
@@ -350,7 +355,8 @@ export class WorkspaceHostPool {
       host.updateMonitorConfig(this.monitorConfigCache);
     }
 
-    const initPromise = this.makeInitPromise(host, normalizedPath);
+    const projectId = projectStore.resolveProjectIdForPath(normalizedPath);
+    const initPromise = this.makeInitPromise(host, normalizedPath, projectId);
 
     const entry: ProcessEntry = {
       host,
@@ -360,6 +366,7 @@ export class WorkspaceHostPool {
       cleanupTimeout: null,
       windowIds: new Set(),
       projectPath: normalizedPath,
+      projectId,
       directPortViews: new Map(),
     };
 
@@ -473,6 +480,27 @@ export class WorkspaceHostPool {
     return true;
   }
 
+  /**
+   * Force-evict the workspace host for a project being RELOCATED, even while a
+   * window still holds it (`refCount > 0`). The normal {@link evictProject}
+   * refuses a held host; relocation is the one caller that must drop a live one —
+   * its folder is moving out from under it, so the process (and its watchers,
+   * rooted at the vanishing old path) has to be torn down and respawned at the
+   * new path by a subsequent `loadProject`. Reverse routing rooted at the old
+   * path is cleared here so a worktree lookup for a since-moved path can't match
+   * a stale entry; the reload repopulates it for the new root. Fire-and-forget
+   * dispose: a same-volume `fs.rename` doesn't require the host to have exited
+   * first (POSIX moves the inode; open handles follow it).
+   */
+  evictProjectForRelocation(projectPath: string): void {
+    const normalized = this.normalizeProjectPath(projectPath);
+    const entry = this.entries.get(normalized);
+    if (entry) this.evictEntry(normalized, entry);
+    for (const [worktreePath, rootPath] of this.worktreePathToProject) {
+      if (rootPath === normalized) this.worktreePathToProject.delete(worktreePath);
+    }
+  }
+
   private evictEntry(projectPath: string, entry: ProcessEntry): void {
     if (entry.cleanupTimeout) {
       clearTimeout(entry.cleanupTimeout);
@@ -556,6 +584,7 @@ export class WorkspaceHostPool {
       type: "load-project",
       requestId,
       rootPath: entry.projectPath,
+      projectId: entry.projectId,
       globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
       wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
       forgeProviderOverride: forgeSettings.forgeProviderOverride,

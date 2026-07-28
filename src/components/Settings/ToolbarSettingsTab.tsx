@@ -28,7 +28,7 @@ import { GripVertical, LayoutGrid, Rocket, RotateCcw } from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
+import type { AnyToolbarButtonId, PluginToolbarButtonId } from "@/../../shared/types/toolbar";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import {
   TOOLBAR_BUTTON_METADATA,
@@ -37,7 +37,8 @@ import {
 } from "@/components/Layout/toolbarButtonMetadata";
 import { getAgentConfig } from "@/config/agents";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
-import { McpServerIcon } from "@/components/icons";
+import { DEFAULT_PLUGIN_ICON } from "@/components/icons/pluginIconRegistry";
+import { buildPluginToolbarMeta } from "@/components/Layout/pluginToolbarMeta";
 import { cn } from "@/lib/utils";
 import { DRAG_GHOST_OPACITY, EASE_OUT_EXPO, UI_ANIMATION_DURATION } from "@/lib/animationUtils";
 import { dispatchToolbarVisibility } from "@/lib/toolbarVisibilityDispatch";
@@ -59,6 +60,12 @@ interface SideLists {
 // a string subset. Narrow in one place so the unavoidable assertion lives here.
 function toButtonId(id: UniqueIdentifier): AnyToolbarButtonId {
   return id as AnyToolbarButtonId;
+}
+
+// Plugin button ids are namespaced `{pluginId}.{buttonId}` by main, so the dot
+// is structural — this narrows without an unsafe assertion.
+function isPluginToolbarButtonId(id: AnyToolbarButtonId): id is PluginToolbarButtonId {
+  return id.includes(".");
 }
 
 interface ToolbarButtonCardProps {
@@ -169,15 +176,16 @@ function SortableButtonItem({
 }
 
 interface PluginButtonRowProps {
-  buttonId: AnyToolbarButtonId;
+  buttonId: PluginToolbarButtonId;
   isVisible: boolean;
-  onToggle: (buttonId: AnyToolbarButtonId) => void;
+  onToggle: (buttonId: PluginToolbarButtonId) => void;
   metadata: ToolbarButtonMetadata | undefined;
 }
 
-// Plugin buttons are hide-only — they're never persisted into the position
-// arrays, so they get no drag handle and stay out of cross-side movement.
-// Reusing `SortableButtonItem` would call `useSortable` outside a
+// Plugin buttons toggle promotion, not visibility — they always remain
+// reachable in the plugin tray (#11304), and they're never persisted into the
+// position arrays, so they get no drag handle and stay out of cross-side
+// movement. Reusing `SortableButtonItem` would call `useSortable` outside a
 // `SortableContext` and crash; this is a plain non-sortable row.
 function PluginButtonRow({ buttonId, isVisible, onToggle, metadata }: PluginButtonRowProps) {
   if (!metadata) return null;
@@ -202,7 +210,7 @@ function PluginButtonRow({ buttonId, isVisible, onToggle, metadata }: PluginButt
       <SettingsSwitch
         checked={isVisible}
         onCheckedChange={() => onToggle(buttonId)}
-        aria-label={`Toggle ${metadata.label} visibility`}
+        aria-label={`Show ${metadata.label} in toolbar`}
         className="shrink-0"
       />
     </div>
@@ -283,6 +291,7 @@ export function ToolbarSettingsTab() {
   const setRightButtons = useToolbarPreferencesStore((s) => s.setRightButtons);
   const moveButton = useToolbarPreferencesStore((s) => s.moveButton);
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
+  const setPluginButtonPromoted = useToolbarPreferencesStore((s) => s.setPluginButtonPromoted);
   const setAlwaysShowDevServer = useToolbarPreferencesStore((s) => s.setAlwaysShowDevServer);
   const setDefaultSelection = useToolbarPreferencesStore((s) => s.setDefaultSelection);
   const reset = useToolbarPreferencesStore((s) => s.reset);
@@ -309,20 +318,14 @@ export function ToolbarSettingsTab() {
 
   const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
 
-  const allMetadata = useMemo(() => {
-    const pluginMeta: Record<string, ToolbarButtonMetadata> = {};
-    for (const id of pluginButtonIds) {
-      const config = pluginConfigs.get(id);
-      if (config) {
-        pluginMeta[id] = {
-          label: config.label,
-          icon: McpServerIcon,
-          description: `Plugin button (${config.pluginId})`,
-        };
-      }
-    }
-    return { ...TOOLBAR_BUTTON_METADATA, ...pluginMeta } as AllMetadata;
-  }, [pluginButtonIds, pluginConfigs]);
+  const allMetadata = useMemo(
+    () =>
+      ({
+        ...TOOLBAR_BUTTON_METADATA,
+        ...buildPluginToolbarMeta(pluginButtonIds, pluginConfigs),
+      }) as AllMetadata,
+    [pluginButtonIds, pluginConfigs]
+  );
 
   const getToolbarButtonLabel = useCallback(
     (id: UniqueIdentifier) => allMetadata[toButtonId(id)]?.label,
@@ -335,8 +338,14 @@ export function ToolbarSettingsTab() {
 
   const isVisible = useCallback(
     (id: AnyToolbarButtonId) =>
-      isToolbarButtonVisible(id, layout.pinnedButtons, agentSettings, agentAvailability),
-    [layout.pinnedButtons, agentSettings, agentAvailability]
+      isToolbarButtonVisible(
+        id,
+        layout.pinnedButtons,
+        agentSettings,
+        agentAvailability,
+        pluginConfigs.has(id)
+      ),
+    [layout.pinnedButtons, agentSettings, agentAvailability, pluginConfigs]
   );
 
   const findContainer = (id: UniqueIdentifier, lists: SideLists): ToolbarSide | null => {
@@ -465,13 +474,23 @@ export function ToolbarSettingsTab() {
     clearDrag();
   };
 
-  const handleToggle = (buttonId: AnyToolbarButtonId, side: ToolbarSide) =>
+  const handleToggle = (buttonId: AnyToolbarButtonId, side: ToolbarSide) => {
+    // A plugin id can still sit in a persisted side array (the v9 migration
+    // deliberately keeps ids a user dragged there). Its switch has to route
+    // through the promotion action: the generic toggle only alternates
+    // `false`/absent, and under tray-default neither of those is promoted, so
+    // the switch could never turn the button on (#11304).
+    if (pluginConfigs.has(buttonId) && isPluginToolbarButtonId(buttonId)) {
+      setPluginButtonPromoted(buttonId, !isVisible(buttonId));
+      return;
+    }
     dispatchToolbarVisibility(buttonId, side, {
       agentSettings,
       agentAvailability,
       setAgentPinned,
       toggleButtonVisibility,
     });
+  };
 
   const activeMetadata = activeId ? allMetadata[activeId] : undefined;
 
@@ -524,9 +543,9 @@ export function ToolbarSettingsTab() {
 
       {pluginButtonIds.length > 0 && (
         <SettingsSection
-          icon={McpServerIcon}
+          icon={DEFAULT_PLUGIN_ICON}
           title="Plugin buttons"
-          description={`Toggle to show or hide. ${pluginButtonIds.filter((id) => isVisible(id)).length} of ${pluginButtonIds.length} visible.`}
+          description={`Every plugin button lives in the plugin tray. Promote one to give it its own toolbar button too. ${pluginButtonIds.filter((id) => isVisible(id)).length} of ${pluginButtonIds.length} promoted.`}
         >
           <div className="space-y-2">
             {pluginButtonIds.map((buttonId) => (
@@ -534,7 +553,7 @@ export function ToolbarSettingsTab() {
                 key={buttonId}
                 buttonId={buttonId}
                 isVisible={isVisible(buttonId)}
-                onToggle={(id) => toggleButtonVisibility(id, "right")}
+                onToggle={(id) => handleToggle(id, "right")}
                 metadata={allMetadata[buttonId]}
               />
             ))}

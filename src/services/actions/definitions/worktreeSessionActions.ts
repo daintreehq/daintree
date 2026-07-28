@@ -8,7 +8,10 @@ import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm"
 
 // Shared by argsSchema + run() so the worktree id is extracted via a validated
 // parse rather than an unchecked `as` cast (keeps the lint ratchet green).
-const clearHistoryArgsSchema = z.object({ worktreeId: z.string().optional() });
+const clearHistoryArgsSchema = z.object({
+  worktreeId: z.string().optional(),
+  confirmed: z.boolean().optional(),
+});
 
 export function registerWorktreeSessionActions(
   actions: ActionRegistry,
@@ -209,20 +212,59 @@ export function registerWorktreeSessionActions(
     category: "worktree",
     kind: "command",
     danger: "confirm",
-    // danger:"confirm" with the confirm wired at the WorktreeCard call site
-    // (useWorktreeActions), NOT in run() — run() ends every session immediately.
-    // ActionService doesn't gate user-source dispatch, so a palette pick would
-    // bypass the D1 confirm. Hide from the palette; it stays reachable from the
-    // worktree card menu (with confirm).
+    // danger:"confirm" gated in run() (like `trashAll`), NOT only at the
+    // WorktreeCard call site: ActionService lets user/keybinding/menu dispatch
+    // through ungated, and `endAll` is a `BuiltInKeyAction` (keybinding-bindable),
+    // so a bound key or menu pick would otherwise end every session with no
+    // confirm (#11345). Palette-hidden is retained as a discoverability choice,
+    // not the safety mechanism.
     palette: { mode: "hidden" },
     scope: "renderer",
     dangerRationale: "Permanently ends all sessions for a worktree. All scrollback is lost.",
-    argsSchema: z.object({ worktreeId: z.string().optional() }),
+    argsSchema: z
+      .object({
+        worktreeId: z.string().optional(),
+        confirmed: z.boolean().optional(),
+      })
+      .optional(),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { worktreeId } = args as { worktreeId?: string };
+      const { worktreeId, confirmed } =
+        (args as { worktreeId?: string; confirmed?: boolean } | undefined) ?? {};
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
-      usePanelStore.getState().bulkCloseByWorktree(targetWorktreeId);
+      const state = usePanelStore.getState();
+      // Mirror `bulkCloseByWorktree`'s executor (isBulkActionTarget): it removes
+      // every panel for the worktree except ephemeral dialog panels — including
+      // trash/overlay — so the confirm count must use the same `!== "dialog"`
+      // filter rather than `trashAll`'s narrower grid+dock one, or it undercounts.
+      const targets = state.panelIds
+        .map((id) => state.panelsById[id])
+        .filter(
+          (t): t is NonNullable<typeof t> =>
+            t != null && t.worktreeId === targetWorktreeId && t.location !== "dialog"
+        );
+      if (targets.length === 0) return;
+      // An agent dispatch that reaches run() has already cleared ActionService's
+      // confirm gate via the host-attested `options.confirmed` (never in args),
+      // so `dispatchSource === "agent"` means confirmed too — re-requesting would
+      // double-prompt the MCP approval.
+      if (confirmed !== true && ctx.dispatchSource !== "agent") {
+        useTerminalPendingDestructiveActionStore.getState().request({
+          kind: "worktreeEndAll",
+          targetCount: targets.length,
+          runningAgentCount: collectRunningAgentTerminals(targets).length,
+          worktreeId: targetWorktreeId,
+        });
+        return;
+      }
+      const pending = useTerminalPendingDestructiveActionStore.getState().pending;
+      // Scope the cleanup to THIS worktree's pending entry (tighter than
+      // trashAll's kind-only clear) so a confirmed end-all for one worktree can't
+      // dismiss another worktree's still-open end-all confirmation.
+      if (pending && pending.kind === "worktreeEndAll" && pending.worktreeId === targetWorktreeId) {
+        useTerminalPendingDestructiveActionStore.getState().clear();
+      }
+      state.bulkCloseByWorktree(targetWorktreeId);
     },
   }));
 
@@ -230,27 +272,49 @@ export function registerWorktreeSessionActions(
     id: "worktree.sessions.clearHistory",
     title: "Clear Session History",
     description:
-      "Permanently delete this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents. Open sessions are unaffected.",
+      "Permanently delete this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents. Open sessions are unaffected, and bookmarked sessions are exempt — `session.bookmark.delete` is the only way to remove one.",
     category: "worktree",
     kind: "command",
     danger: "confirm",
-    // danger:"confirm" with the confirm wired at the WorktreeCard call site
-    // (useWorktreeActions), NOT in run() — run() clears the journal immediately.
-    // ActionService doesn't gate user-source dispatch, so a palette pick would
-    // bypass the D1 confirm. Hide from the palette; it stays reachable from the
-    // worktree card menu (with confirm). Mirrors `endAll`, not `trashAll`'s
-    // pending-store double-guard — that guard warns about *running* agent
-    // terminals being lost; this clears the historical journal, not live panels.
+    // danger:"confirm" gated in run() (like `endAll`), NOT only at the
+    // WorktreeCard call site: ActionService lets user/menu dispatch through
+    // ungated, so any present or future non-agent caller would otherwise clear
+    // the journal with no confirm (#11345). It carries no live panels, so the
+    // pending snapshot uses `targetCount: 0` and the dialog copy ignores counts.
+    // Palette-hidden is retained as a discoverability choice, not the safety
+    // mechanism.
     palette: { mode: "hidden" },
     scope: "renderer",
     dangerRationale:
-      "Permanently deletes this worktree's recorded resumable-session history. Records can't be recovered.",
+      "Permanently deletes this worktree's recorded resumable-session history, and those records can't be recovered. Bookmarked sessions are kept — deleting a bookmark is the only way to remove one.",
     argsSchema: clearHistoryArgsSchema,
     run: async (args: unknown, ctx: ActionContext) => {
       const parsed = clearHistoryArgsSchema.safeParse(args ?? {});
       const worktreeId = parsed.success ? parsed.data.worktreeId : undefined;
+      const confirmed = parsed.success ? parsed.data.confirmed : undefined;
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
+      // See `endAll`: `dispatchSource === "agent"` is already host-attested by
+      // ActionService's confirm gate, so it counts as confirmed here too.
+      if (confirmed !== true && ctx.dispatchSource !== "agent") {
+        useTerminalPendingDestructiveActionStore.getState().request({
+          kind: "worktreeClearHistory",
+          targetCount: 0,
+          runningAgentCount: 0,
+          worktreeId: targetWorktreeId,
+        });
+        return;
+      }
+      const pending = useTerminalPendingDestructiveActionStore.getState().pending;
+      // Scoped to this worktree's entry (see endAll) so a confirmed clear for one
+      // worktree can't dismiss another's open clear-history confirmation.
+      if (
+        pending &&
+        pending.kind === "worktreeClearHistory" &&
+        pending.worktreeId === targetWorktreeId
+      ) {
+        useTerminalPendingDestructiveActionStore.getState().clear();
+      }
       await window.electron.agentSessionHistory.clear(targetWorktreeId);
     },
   }));

@@ -5,7 +5,6 @@ import { broadcastToRenderer } from "../../ipc/utils.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
 import { clearWslGitEntry } from "../../store.js";
 import { gitServiceCache } from "../GitServiceCache.js";
-import { generateProjectId } from "../projectStorePaths.js";
 import { type ProcessEntry, type CopyTreeProgressCallback, sendToEntryWindows } from "./types.js";
 import type { WorkspaceHostEvent, WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 
@@ -327,10 +326,9 @@ export class WorkspaceHostEventRouter {
         // ignore it. No cache to drop on main's side: `GitService.getRemoteUrl`
         // re-runs `getRemotes` on every call, and `GitServiceCache` only pools
         // the client instance, never the URL.
-        const projectId = generateProjectId(entry.projectPath);
         broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
           name: "forge:remote-changed",
-          payload: { projectId },
+          payload: { projectId: entry.projectId },
         });
         break;
       }

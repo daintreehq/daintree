@@ -57,6 +57,42 @@ describe("useUnmountVisibilityCleanup", () => {
     expect(updateVisibility).toHaveBeenCalledWith("t1", false);
   });
 
+  it("still cleans up after this mount's own late attach advanced the generation", () => {
+    const updateVisibility = vi.fn();
+    const { rerender, unmount } = renderHook(
+      ({ attachEpoch }) => useUnmountVisibilityCleanup("t1", 0, updateVisibility, attachEpoch),
+      { initialProps: { attachEpoch: 0 } }
+    );
+
+    // XtermAdapter awaits getOrCreate, so this mount's own attach lands after
+    // the passive capture. Announcing it must re-capture, not be read as a
+    // warm-swap by someone else.
+    mocks.getAttachGeneration.mockReturnValue(2);
+    rerender({ attachEpoch: 1 });
+
+    // Re-capturing must not fire the cleanup while the pane is still mounted.
+    expect(updateVisibility).not.toHaveBeenCalled();
+
+    unmount();
+    expect(updateVisibility).toHaveBeenCalledTimes(1);
+    expect(updateVisibility).toHaveBeenCalledWith("t1", false);
+  });
+
+  it("still skips a genuinely superseded mount that never announced the attach", () => {
+    const updateVisibility = vi.fn();
+    const { unmount } = renderHook(
+      ({ attachEpoch }) => useUnmountVisibilityCleanup("t1", 0, updateVisibility, attachEpoch),
+      { initialProps: { attachEpoch: 0 } }
+    );
+
+    // A replacement pane attached — this mount's own epoch never moved, so the
+    // owned generation stays behind and the write must not land.
+    mocks.getAttachGeneration.mockReturnValue(2);
+    unmount();
+
+    expect(updateVisibility).not.toHaveBeenCalled();
+  });
+
   it("cleans up the outgoing id when the pane is reused for another terminal", () => {
     const updateVisibility = vi.fn();
     const { rerender } = renderHook(

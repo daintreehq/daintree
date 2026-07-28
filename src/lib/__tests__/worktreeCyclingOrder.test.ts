@@ -65,6 +65,33 @@ function setWorktrees(snaps: WorktreeSnapshot[]): void {
   });
 }
 
+// Parks a single working-agent terminal on `worktreeId` so that worktree
+// derives `hasWorkingAgent` and satisfies the "working" quick-state filter.
+function setWorkingAgentPanel(worktreeId: string): void {
+  const panelId = `term-${worktreeId}`;
+  usePanelStore.setState({
+    panelsById: {
+      [panelId]: {
+        id: panelId,
+        kind: "terminal",
+        type: "terminal",
+        title: "T",
+        cwd: "/repo",
+        cols: 80,
+        rows: 24,
+        worktreeId,
+        location: "grid",
+        hasPty: true,
+        isVisible: true,
+        agentState: "working",
+        detectedAgentId: "claude",
+      } as unknown as ReturnType<typeof usePanelStore.getState>["panelsById"][string],
+    },
+    panelIds: [panelId],
+    panelIdsByWorktreeId: { [worktreeId]: [panelId] },
+  } as never);
+}
+
 function resetFilterStore(): void {
   useWorktreeFilterStore.setState({
     query: "",
@@ -102,16 +129,80 @@ describe("getVisibleWorktreesForCycling", () => {
     expect(getVisibleWorktreesForCycling()).toEqual([]);
   });
 
-  it("places main worktree first and integration second", () => {
+  it("places main worktree first and sorts every other worktree normally (#11433)", () => {
+    // A worktree on `develop` used to be yanked out of the sorted list and
+    // pinned to slot 1 purely because of its branch name. It is an ordinary
+    // worktree: with alpha ordering it belongs between "bravo" and "echo",
+    // not immediately after main.
+    useWorktreeFilterStore.setState({ orderBy: "alpha" });
     setWorktrees([
-      createSnapshot({ id: "wt-b", name: "bravo", branch: "feature/bravo", createdAt: 100 }),
+      createSnapshot({ id: "wt-b", name: "bravo", branch: "feature/bravo" }),
+      createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
+      createSnapshot({ id: "dev", name: "charlie", branch: "develop" }),
+      createSnapshot({ id: "wt-a", name: "alpha", branch: "feature/alpha" }),
+      createSnapshot({ id: "wt-e", name: "echo", branch: "feature/echo" }),
+    ]);
+
+    const ordered = getVisibleWorktreesForCycling().map((w) => w.id);
+    expect(ordered).toEqual(["main", "wt-a", "wt-b", "dev", "wt-e"]);
+    // Appears exactly once — never both pinned and in the scrollable list.
+    expect(ordered.filter((id) => id === "dev")).toHaveLength(1);
+  });
+
+  it("subjects a worktree on an integration-style branch to quickStateFilter (#11433)", () => {
+    // The pinned slot bypassed quick-state filtering entirely, so a `develop`
+    // worktree stayed visible under "working" with no working agent — while
+    // simultaneously being excluded from the counts that drive the filter bar.
+    useWorktreeFilterStore.setState({ quickStateFilter: "working" });
+    setWorktrees([
       createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
       createSnapshot({ id: "dev", name: "develop", branch: "develop" }),
+      createSnapshot({ id: "wt-working", name: "working", branch: "feature/working" }),
+    ]);
+    setWorkingAgentPanel("wt-working");
+
+    const ids = getVisibleWorktreesForCycling().map((w) => w.id);
+    expect(ids).toContain("wt-working");
+    expect(ids).not.toContain("dev");
+  });
+
+  it("cycles to external worktrees last and never into the integration slot (#11434)", () => {
+    // Keyboard cycling must match the rendered order, and an external worktree
+    // on develop must not claim the integration slot ahead of everything else.
+    setWorktrees([
+      createSnapshot({
+        id: "ext",
+        name: "bench-baseline",
+        branch: "develop",
+        path: "/private/tmp/scratch/bench-baseline",
+        isExternal: true,
+        createdAt: 300,
+      }),
+      createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
       createSnapshot({ id: "wt-a", name: "alpha", branch: "feature/alpha", createdAt: 200 }),
     ]);
 
     const ordered = getVisibleWorktreesForCycling();
-    expect(ordered.map((w) => w.id)).toEqual(["main", "dev", "wt-a", "wt-b"]);
+
+    expect(ordered.map((w) => w.id)).toEqual(["main", "wt-a", "ext"]);
+  });
+
+  it("keeps external worktrees last in grouped mode", () => {
+    useWorktreeFilterStore.setState({ groupByType: true, orderBy: "alpha" });
+    setWorktrees([
+      createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
+      createSnapshot({
+        id: "ext-feat",
+        name: "aaa-scratch",
+        branch: "feature/scratch",
+        isExternal: true,
+      }),
+      createSnapshot({ id: "int-bug", name: "zzz-bug", branch: "bugfix/z" }),
+    ]);
+
+    const ordered = getVisibleWorktreesForCycling();
+
+    expect(ordered.map((w) => w.id)).toEqual(["main", "int-bug", "ext-feat"]);
   });
 
   it("sorts non-main worktrees alphabetically when orderBy is alpha", () => {
@@ -165,27 +256,7 @@ describe("getVisibleWorktreesForCycling", () => {
       createSnapshot({ id: "wt-working", name: "working", branch: "feature/working" }),
       createSnapshot({ id: "wt-idle", name: "idle", branch: "feature/idle" }),
     ]);
-    usePanelStore.setState({
-      panelsById: {
-        "term-working": {
-          id: "term-working",
-          kind: "terminal",
-          type: "terminal",
-          title: "T",
-          cwd: "/repo",
-          cols: 80,
-          rows: 24,
-          worktreeId: "wt-working",
-          location: "grid",
-          hasPty: true,
-          isVisible: true,
-          agentState: "working",
-          detectedAgentId: "claude",
-        } as unknown as ReturnType<typeof usePanelStore.getState>["panelsById"][string],
-      },
-      panelIds: ["term-working"],
-      panelIdsByWorktreeId: { "wt-working": ["term-working"] },
-    } as never);
+    setWorkingAgentPanel("wt-working");
 
     const ids = getVisibleWorktreesForCycling().map((w) => w.id);
     expect(ids).toContain("wt-working");
@@ -194,13 +265,13 @@ describe("getVisibleWorktreesForCycling", () => {
     expect(ids[0]).toBe("main");
   });
 
-  it("applies the live text query filter to main and integration worktrees", () => {
+  it("applies the live text query filter to the main and scrollable worktrees", () => {
     // Cycling mirrors the sidebar's visible list, which filters on the instant
     // liveQuery — not the debounced persisted query.
     useWorktreeFilterStore.setState({ liveQuery: "alpha" });
     setWorktrees([
       createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
-      createSnapshot({ id: "dev", name: "develop", branch: "develop" }),
+      createSnapshot({ id: "wt-bravo", name: "bravo", branch: "feature/bravo" }),
       createSnapshot({ id: "wt-alpha", name: "alpha", branch: "feature/alpha" }),
     ]);
 

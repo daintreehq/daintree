@@ -4,6 +4,7 @@ import type {
   BrowserPanelData,
   BuiltInPanelKind,
   FilePanelData,
+  FileBrowserPanelData,
   DiffPanelData,
   PanelExitBehavior,
 } from "@shared/types/panel";
@@ -260,6 +261,40 @@ const DIFF_FIELD_CLASSIFICATION = {
   viewedKey: false,
 } as const satisfies Record<keyof DiffPanelData, boolean>;
 
+// ── File browser field classification ────────────────────────────────
+
+const FILE_BROWSER_FIELD_CLASSIFICATION = {
+  // BasePanelData — persisted by the base serialization layer
+  id: false,
+  kind: false,
+  title: false,
+  titleMode: false,
+  location: false,
+  worktreeId: false,
+  isVisible: false,
+  extensionState: false,
+  pluginId: false,
+  // FileBrowserPanelData persisted fields — all user intent (where they are in
+  // the tree and how it's laid out), which is exactly what a pinned panel keeps.
+  browserSelectedPath: true,
+  browserExpandedPaths: true,
+  browserHideDotfiles: true,
+  browserRootPath: true,
+  browserSidebarCollapsed: true,
+  // The one derived persisted field: the last-known tree snapshot (#11367)
+  // must ride the panel record because nothing renderer-side survives LRU
+  // eviction.
+  browserTreeSnapshot: true,
+  browserSidebarWidth: true,
+  // BasePanelData carrier-bookkeeping timestamps — written by the base
+  // serialization layer in panelToSnapshot, not per-kind serializers.
+  createdAt: false,
+  lastActiveAt: false,
+  // Ephemerality flag: consumed by the persistence filter to decide whether a
+  // panel is written at all, so it is never part of a snapshot's payload.
+  excludeFromPersistence: false,
+} as const satisfies Record<keyof FileBrowserPanelData, boolean>;
+
 // ── Built-in kind exhaustiveness ─────────────────────────────────────
 
 const BUILT_IN_KINDS = [
@@ -268,6 +303,7 @@ const BUILT_IN_KINDS = [
   "dev-preview",
   "review",
   "file",
+  "file-browser",
   "diff",
 ] as const satisfies readonly BuiltInPanelKind[];
 
@@ -416,6 +452,45 @@ const savedFile: SavedTerminalData = {
   fileViewMode: "source",
 };
 
+const browserTreeSnapshotFixture = {
+  worktreeId: "wt-1",
+  rootPath: "src",
+  listings: [
+    {
+      dirPath: "src",
+      nodes: [{ name: "app.ts", path: "src/app.ts", isDirectory: false }],
+    },
+  ],
+};
+
+const fileBrowserFixture: FileBrowserPanelData = {
+  id: "panel-file-browser",
+  title: "Panel",
+  location: "grid",
+  kind: "file-browser",
+  browserSelectedPath: "src/app.ts",
+  browserExpandedPaths: ["src"],
+  browserHideDotfiles: true,
+  browserRootPath: "src",
+  browserSidebarCollapsed: true,
+  browserTreeSnapshot: browserTreeSnapshotFixture,
+  // A non-default width (the serializer omits 288), so the coverage spread emits
+  // the key instead of dropping it as a default.
+  browserSidebarWidth: 360,
+};
+
+const savedFileBrowser: SavedTerminalData = {
+  id: "panel-file-browser",
+  kind: "file-browser",
+  browserSelectedPath: "src/app.ts",
+  browserExpandedPaths: ["src"],
+  browserHideDotfiles: true,
+  browserRootPath: "src",
+  browserSidebarCollapsed: true,
+  browserTreeSnapshot: browserTreeSnapshotFixture,
+  browserSidebarWidth: 360,
+};
+
 const diffFixture: DiffPanelData = {
   id: "panel-diff",
   title: "Panel",
@@ -506,6 +581,33 @@ describe("panel serializer field coverage", () => {
     assertCovers("file serializer", output, persistedKeys(FILE_FIELD_CLASSIFICATION));
   });
 
+  it("file browser serializer covers every persisted file browser field", () => {
+    const output = getPanelKindConfig("file-browser")!.serialize!(fileBrowserFixture) as Record<
+      string,
+      unknown
+    >;
+    assertCovers(
+      "file-browser serializer",
+      output,
+      persistedKeys(FILE_BROWSER_FIELD_CLASSIFICATION)
+    );
+  });
+
+  it("file browser serializer keeps an explicit false for the dotfile toggle", () => {
+    const withDotfilesShown: FileBrowserPanelData = {
+      ...fileBrowserFixture,
+      browserHideDotfiles: false,
+    };
+    const output = getPanelKindConfig("file-browser")!.serialize!(withDotfilesShown) as Record<
+      string,
+      unknown
+    >;
+
+    // Truthiness-based spreading would drop this, and the restored panel would
+    // silently pick up whatever the default becomes.
+    expect(output.browserHideDotfiles).toBe(false);
+  });
+
   it("diff serializer covers every persisted diff field", () => {
     const output = getPanelKindConfig("diff")!.serialize!(diffFixture) as Record<string, unknown>;
     assertCovers("diff serializer", output, persistedKeys(DIFF_FIELD_CLASSIFICATION));
@@ -548,6 +650,62 @@ describe("panel deserializer field coverage", () => {
       {},
       ["cwd", "exitBehavior"]
     );
+  });
+
+  it("file browser deserializer covers every persisted file browser field", () => {
+    const deserializer = getDeserializer("file-browser");
+    expect(deserializer, "file-browser deserializer must be registered").toBeDefined();
+    const output = deserializer!(savedFileBrowser) as Record<string, unknown>;
+    assertCovers(
+      "file-browser deserializer",
+      output,
+      persistedKeys(FILE_BROWSER_FIELD_CLASSIFICATION)
+    );
+  });
+
+  it("file browser deserializer drops expanded paths that could escape the worktree root", () => {
+    const deserializer = getDeserializer("file-browser")!;
+
+    const output = deserializer({
+      ...savedFileBrowser,
+      browserExpandedPaths: ["src", "/etc", "../secrets", "a/../../b", 42],
+    }) as Record<string, unknown>;
+
+    // The list round-trips through JSON on disk, so a corrupted or hand-edited
+    // snapshot can hold anything. Only the safe relative entry survives.
+    expect(output.browserExpandedPaths).toEqual(["src"]);
+  });
+
+  it("file browser deserializer canonicalizes a non-canonical browse root", () => {
+    const deserializer = getDeserializer("file-browser")!;
+
+    // Tree row keys are canonical listing paths, so `src/` or `./src` would
+    // never prefix-match an expansion beneath them; `.` means the worktree
+    // root, which is represented by absence.
+    for (const [saved, restored] of [
+      ["src/", "src"],
+      ["./src//panels", "src/panels"],
+      [".", undefined],
+    ] as const) {
+      const output = deserializer({
+        ...savedFileBrowser,
+        browserRootPath: saved,
+      }) as Record<string, unknown>;
+      expect(output.browserRootPath).toBe(restored);
+    }
+  });
+
+  it("file browser deserializer drops a non-boolean dotfile toggle rather than coercing it", () => {
+    const deserializer = getDeserializer("file-browser")!;
+
+    const output = deserializer({
+      ...savedFileBrowser,
+      browserHideDotfiles: "yes",
+    }) as Record<string, unknown>;
+
+    // Coercing would turn any stray on-disk string into "hide every dotfile",
+    // which is the opposite of the safe default (dotfiles visible).
+    expect(output.browserHideDotfiles).toBeUndefined();
   });
 
   it("terminal has no deserializer registry entry", () => {
@@ -602,6 +760,19 @@ describe("panel deserializer field coverage", () => {
     });
     expect(output.fileViewMode).toBeUndefined();
     expect(output.filePath).toBe("/home/project/docs/spec.md");
+  });
+
+  // #11274: the sanitizer redeclares the mode union at runtime, so widening the
+  // type alone would silently drop a restored diff selection.
+  it("file deserializer restores a persisted diff view mode", () => {
+    const deserializer = getDeserializer("file")!;
+    const output = deserializer({
+      id: "panel-file",
+      kind: "file",
+      filePath: "/home/project/src/index.ts",
+      fileViewMode: "diff",
+    });
+    expect(output.fileViewMode).toBe("diff");
   });
 
   it("file deserializer reads legacy markdown panel fields", () => {

@@ -280,7 +280,12 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     });
     try {
       const [globalRecipesRaw, projectRecipesResult, inRepoRecipesRaw] = await Promise.all([
-        globalRecipesClient.getRecipes(),
+        // Degrade each source independently: a transient read failure in one
+        // store (e.g. GlobalFileStore.getRecipes now rethrows non-ENOENT read
+        // errors) must not clear the other two. The global read previously
+        // swallowed errors itself; keep loadRecipes resilient now that it does
+        // not.
+        globalRecipesClient.getRecipes().catch(() => [] as TerminalRecipe[]),
         projectClient
           .getRecipes(projectId)
           .catch(() => ({ recipes: [] as TerminalRecipe[], collisions: [] })),
@@ -291,7 +296,19 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       }
       const globalRecipes = globalRecipesRaw.map(stripSessionOverridesFromRecipe);
       const projectRecipes = projectRecipesResult.recipes.map(stripSessionOverridesFromRecipe);
-      const inRepoRecipes = inRepoRecipesRaw.map(stripSessionOverridesFromRecipe);
+      // The canonical .daintree/recipes/*.json files intentionally omit
+      // machine-local frecency (lastUsedAt/usageHistory) — it lives only in the
+      // ProjectFileStore mirror (#11354). RecipeManager renders inRepoRecipes
+      // directly, so hydrate those fields from the mirror; otherwise team
+      // recipes read "Never used" after every reload despite being persisted.
+      const inRepoMirrorMeta = new Map(
+        projectRecipes.filter((r) => isInRepoRecipeId(r)).map((r) => [r.id, r] as const)
+      );
+      const inRepoRecipes = inRepoRecipesRaw.map(stripSessionOverridesFromRecipe).map((r) => {
+        const mirror = inRepoMirrorMeta.get(r.id);
+        if (!mirror) return r;
+        return { ...r, lastUsedAt: mirror.lastUsedAt, usageHistory: mirror.usageHistory };
+      });
       set({
         globalRecipes,
         projectRecipes,
@@ -456,8 +473,25 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         const metadataOnlyKeys = new Set(["lastUsedAt", "usageHistory"]);
         const updateKeys = Object.keys(updates);
         const isMetadataOnly = updateKeys.every((k) => metadataOnlyKeys.has(k));
-        if (!isMetadataOnly) {
-          const projectId = get().currentProjectId;
+        const projectId = get().currentProjectId;
+        if (isMetadataOnly) {
+          // Frecency-only edit (lastUsedAt / usageHistory). Persist it to the
+          // ProjectFileStore mirror — never the canonical git-tracked
+          // .daintree/recipes/*.json file (that's exactly what metadataOnlyKeys
+          // keeps out) — so in-repo usage metadata survives a reload the same
+          // way project and global recipes already do (#11354). Best-effort:
+          // the mirror entry only exists once reconcileProjectRecipes has
+          // backfilled it (after the first load), so a not-yet-reconciled
+          // "recipe not found" degrades to losing this one stamp rather than
+          // rolling back the optimistic update or surfacing a toast for a
+          // low-stakes write. An empty patch stays a true no-op (updateKeys is
+          // empty, so `every` is vacuously true — don't issue a mirror write).
+          if (projectId && updateKeys.length > 0) {
+            await projectClient.updateRecipe(projectId, id, sanitizedUpdates).catch((error) => {
+              logError("Failed to persist in-repo recipe usage metadata", error);
+            });
+          }
+        } else {
           if (!projectId) throw new Error("No current project");
           const previousName =
             updates.name && updates.name !== recipe.name ? recipe.name : undefined;

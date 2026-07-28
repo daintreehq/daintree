@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from "react";
-import { render, fireEvent, screen } from "@testing-library/react";
+import { render, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitStatus } from "@shared/types/git";
 import type { DiffChangeSetEntry } from "@shared/types/git";
@@ -10,10 +10,15 @@ import type { DiffChangeSetEntry } from "@shared/types/git";
 // itself. These tests target that logic only, so the diff renderer, the
 // sidebar and the content fetch are all stubbed out.
 
-// The stub deliberately drops `toolbar` — nothing here asserts on it, and
-// leaving it unrendered keeps the toolbar's Radix/observer tree out of jsdom.
+// A fragment, so the toolbar stays a sibling of the keydown host rather than
+// wrapping it — the stepping shortcuts bubble through the same subtree as before.
 vi.mock("@/components/Panel/ContentPanel", () => ({
-  ContentPanel: (props: { children?: ReactNode }) => <>{props.children}</>,
+  ContentPanel: (props: { toolbar?: ReactNode; children?: ReactNode }) => (
+    <>
+      {props.toolbar}
+      {props.children}
+    </>
+  ),
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -25,14 +30,26 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 vi.mock("@/components/Worktree/DiffViewer", () => ({
   DiffViewer: () => <div data-testid="diff-viewer-mock" />,
+  FULL_FILE_MAX_LINES: 5000,
+}));
+
+// Controllable so a test can put the pane in image mode; `beforeEach` returns it
+// to text mode, which is what every other test in this file assumes.
+const { isImageDiffCandidateMock } = vi.hoisted(() => ({
+  isImageDiffCandidateMock:
+    vi.fn<typeof import("@/components/FileViewer/ImageDiffViewer").isImageDiffCandidate>(),
 }));
 vi.mock("@/components/FileViewer/ImageDiffViewer", () => ({
   ImageDiffViewer: () => <div data-testid="image-diff-mock" />,
-  isImageDiffCandidate: () => false,
+  isImageDiffCandidate: isImageDiffCandidateMock,
 }));
 vi.mock("@/components/ui/EmptyState", () => ({
-  EmptyState: (props: { title: string }) => (
-    <div data-testid="empty-state-mock" data-title={props.title} />
+  EmptyState: (props: { title: string; description?: string }) => (
+    <div
+      data-testid="empty-state-mock"
+      data-title={props.title}
+      data-description={props.description}
+    />
   ),
 }));
 
@@ -77,6 +94,8 @@ const preferences = {
   setDiffWrapLines: vi.fn(),
   diffShowFileList: true,
   setDiffShowFileList: vi.fn(),
+  diffFullFile: false,
+  setDiffFullFile: vi.fn(),
 };
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (state: unknown) => unknown) => selector(preferences),
@@ -91,6 +110,15 @@ vi.mock("@/store/diffViewedStore", () => ({
 
 vi.mock("../useDiffContent", () => ({
   useDiffContent: useDiffContentMock,
+}));
+
+// The full-file read is a real IPC call; these tests never exercise the scope,
+// so it stays inert rather than reaching for `window.electron`.
+vi.mock("../useDiffFileSource", () => ({
+  useDiffFileSource: () => ({
+    source: undefined,
+    errorCode: null,
+  }),
 }));
 
 import { DiffPane } from "../DiffPane";
@@ -140,6 +168,8 @@ beforeEach(() => {
     retry: vi.fn(),
   });
   viewedKeys.clear();
+  isImageDiffCandidateMock.mockReset();
+  isImageDiffCandidateMock.mockReturnValue(false);
   preferences.diffShowFileList = true;
   worktrees.clear();
   worktrees.set(WORKTREE_ID, { path: WORKTREE_PATH, branch: "feature/x" });
@@ -412,6 +442,58 @@ describe("DiffPane — workspace chrome", () => {
   });
 });
 
+describe("DiffPane — content-aware toolbar", () => {
+  it("drops the text-diff controls for an image, keeping the ones that still act", () => {
+    isImageDiffCandidateMock.mockReturnValue(true);
+    seedPanel({ filePath: "assets/logo.png", fileStatus: "modified" });
+    renderPane();
+
+    // The image branch is the one under test, not just any non-text render —
+    // and it is this file's path that classified it, not a blanket true.
+    expect(screen.getByTestId("image-diff-mock")).toBeTruthy();
+    expect(isImageDiffCandidateMock).toHaveBeenCalledWith("assets/logo.png");
+
+    // Nothing to lay out side by side, and no lines to wrap.
+    expect(screen.queryByText("Unified")).toBeNull();
+    expect(screen.queryByText("Split")).toBeNull();
+    expect(screen.queryByLabelText("Wrap long lines")).toBeNull();
+
+    // Refresh and the path pill act on any file kind, so they stay.
+    expect(screen.getByLabelText("Copy file path")).toBeTruthy();
+    expect(screen.getByLabelText("Refresh")).toBeTruthy();
+  });
+
+  it("keeps the text-diff controls for a text file", () => {
+    seedPanel({ filePath: "src/a.ts", fileStatus: "modified" });
+    renderPane();
+
+    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
+    expect(screen.getByText("Unified")).toBeTruthy();
+    expect(screen.getByText("Split")).toBeTruthy();
+    expect(screen.getByLabelText("Wrap long lines")).toBeTruthy();
+  });
+
+  it("keeps them for a base-branch image, which the text viewer still handles", () => {
+    // ImageDiffViewer compares the working tree against HEAD, so it has nothing
+    // to show for a base-branch comparison — those stay on DiffViewer whatever
+    // the extension. Gating the toolbar on candidacy alone would strip the
+    // controls off a body that is still the text viewer.
+    isImageDiffCandidateMock.mockReturnValue(true);
+    seedPanel({
+      filePath: "assets/logo.png",
+      fileStatus: "modified",
+      diffSource: "base-branch",
+      baseBranch: "main",
+    });
+    renderPane();
+
+    expect(screen.queryByTestId("image-diff-mock")).toBeNull();
+    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
+    expect(screen.getByText("Unified")).toBeTruthy();
+    expect(screen.getByLabelText("Wrap long lines")).toBeTruthy();
+  });
+});
+
 describe("DiffPane — empty state", () => {
   it("renders the empty state and no diff when the panel has no file", () => {
     seedPanel({ changeSet: [entry("a.ts"), entry("b.ts")] });
@@ -479,5 +561,350 @@ describe("DiffPane — unresolvable subject", () => {
 
     expect(screen.getByLabelText("Loading diff")).toBeTruthy();
     expect(screen.queryByTestId("empty-state-mock")).toBeNull();
+  });
+});
+
+describe("DiffPane — video current-version mode (#11382)", () => {
+  // FileVideoPreview fetch()es the bytes and plays a blob object URL —
+  // Chromium's custom-scheme media loader can't do follow-up range requests
+  // (electron#51442) — so the suite stubs the fetch/object-URL boundary.
+  const videoFetchMock = vi.fn();
+  beforeEach(() => {
+    videoFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      blob: () => Promise.resolve(new Blob(["x"])),
+    });
+    vi.stubGlobal("fetch", videoFetchMock);
+    let objectUrlSequence = 0;
+    URL.createObjectURL = vi.fn(() => `blob:app://daintree/video-${objectUrlSequence++}`);
+    URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    videoFetchMock.mockReset();
+  });
+
+  it("plays the working-tree version instead of rendering a diff", async () => {
+    const changeSet = [entry("media/demo.mp4")];
+    seedPanel({ filePath: "media/demo.mp4", fileStatus: "modified", changeSet });
+    const { container } = renderPane();
+
+    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+    // The absolute working-tree path rides the protocol URL — no diff content,
+    // no base64 diffMedia IPC (8 MB cap, unsuited to video).
+    expect(String(videoFetchMock.mock.calls[0]?.[0])).toContain(
+      encodeURIComponent("/repo/media/demo.mp4")
+    );
+    expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+  });
+
+  it("hides the text-diff layout controls in video mode", () => {
+    seedPanel({
+      filePath: "media/demo.mp4",
+      fileStatus: "modified",
+      changeSet: [entry("media/demo.mp4")],
+    });
+    renderPane();
+
+    expect(screen.queryByRole("button", { name: "Unified" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
+  });
+
+  it("reloads the video from the toolbar Refresh (nonce-busted refetch) and still retries the diff", async () => {
+    const retry = vi.fn();
+    useDiffContentMock.mockReturnValue({ content: "diff --git a/x b/x", stale: false, retry });
+    seedPanel({
+      filePath: "media/demo.mp4",
+      fileStatus: "modified",
+      changeSet: [entry("media/demo.mp4")],
+    });
+    const { container } = renderPane();
+    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+    const before = container.querySelector("video")?.getAttribute("src");
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    // A bumped nonce must produce a fresh protocol fetch (new &v= param) and a
+    // new blob URL — the old element would otherwise keep playing stale bytes.
+    await waitFor(() => expect(videoFetchMock).toHaveBeenCalledTimes(2));
+    expect(String(videoFetchMock.mock.calls[1]?.[0])).not.toBe(
+      String(videoFetchMock.mock.calls[0]?.[0])
+    );
+    await waitFor(() =>
+      expect(container.querySelector("video")?.getAttribute("src")).not.toBe(before)
+    );
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a playback-failure state instead of a dead control on media error", async () => {
+    seedPanel({
+      filePath: "media/demo.mp4",
+      fileStatus: "modified",
+      changeSet: [entry("media/demo.mp4")],
+    });
+    const { container } = renderPane();
+    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+
+    fireEvent.error(container.querySelector("video")!);
+
+    expect(container.querySelector("video")).toBeNull();
+    const titles = Array.from(container.querySelectorAll('[data-testid="empty-state-mock"]')).map(
+      (el) => el.getAttribute("data-title")
+    );
+    expect(titles).toContain("This video couldn't be played");
+  });
+
+  it("headlines the preview's own reason rather than repeating it under a generic title", async () => {
+    videoFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-length": String(2 * 1024 * 1024 * 1024) }),
+      blob: () => Promise.resolve(new Blob(["x"])),
+    });
+    seedPanel({
+      filePath: "media/demo.mp4",
+      fileStatus: "modified",
+      changeSet: [entry("media/demo.mp4")],
+    });
+    const { container } = renderPane();
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="empty-state-mock"]')).not.toBeNull()
+    );
+    const state = container.querySelector('[data-testid="empty-state-mock"]')!;
+    const title = state.getAttribute("data-title") ?? "";
+    const description = state.getAttribute("data-description") ?? "";
+    // The refusal is its own headline — the generic playback-failure title would
+    // be wrong (nothing failed to play) and would restate the description.
+    expect(title).not.toBe("This video couldn't be played");
+    expect(description).toBeTruthy();
+    expect(description).not.toContain(title);
+  });
+
+  it("shows a quiet empty state for a deleted video (no working-tree bytes to play)", () => {
+    seedPanel({
+      filePath: "media/demo.mp4",
+      fileStatus: "deleted",
+      changeSet: [entry("media/demo.mp4", "deleted")],
+    });
+    const { container } = renderPane();
+
+    expect(container.querySelector("video")).toBeNull();
+    const titles = Array.from(container.querySelectorAll('[data-testid="empty-state-mock"]')).map(
+      (el) => el.getAttribute("data-title")
+    );
+    expect(titles).toContain("No working-tree version to play");
+  });
+});
+
+describe("DiffPane — audio current-version mode (#11425)", () => {
+  // Same fetch/object-URL boundary as the video suite: audio shares the
+  // protocol path because electron#51442 covers <audio> too.
+  const audioFetchMock = vi.fn();
+  beforeEach(() => {
+    audioFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      blob: () => Promise.resolve(new Blob(["x"])),
+    });
+    vi.stubGlobal("fetch", audioFetchMock);
+    let objectUrlSequence = 0;
+    URL.createObjectURL = vi.fn(() => `blob:app://daintree/audio-${objectUrlSequence++}`);
+    URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    audioFetchMock.mockReset();
+  });
+
+  it("plays the working-tree version instead of rendering a diff", async () => {
+    seedPanel({
+      filePath: "media/track.mp3",
+      fileStatus: "modified",
+      changeSet: [entry("media/track.mp3")],
+    });
+    const { container } = renderPane();
+
+    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+    expect(String(audioFetchMock.mock.calls[0]?.[0])).toContain(
+      encodeURIComponent("/repo/media/track.mp3")
+    );
+    expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+  });
+
+  it("hides the text-diff layout controls in audio mode", () => {
+    seedPanel({
+      filePath: "media/track.mp3",
+      fileStatus: "modified",
+      changeSet: [entry("media/track.mp3")],
+    });
+    renderPane();
+
+    expect(screen.queryByRole("button", { name: "Unified" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
+  });
+
+  it("reloads the track from the toolbar Refresh (nonce-busted refetch)", async () => {
+    const retry = vi.fn();
+    useDiffContentMock.mockReturnValue({ content: "diff --git a/x b/x", stale: false, retry });
+    seedPanel({
+      filePath: "media/track.mp3",
+      fileStatus: "modified",
+      changeSet: [entry("media/track.mp3")],
+    });
+    const { container } = renderPane();
+    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+    const before = container.querySelector("audio")?.getAttribute("src");
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitFor(() => expect(audioFetchMock).toHaveBeenCalledTimes(2));
+    expect(String(audioFetchMock.mock.calls[1]?.[0])).not.toBe(
+      String(audioFetchMock.mock.calls[0]?.[0])
+    );
+    await waitFor(() =>
+      expect(container.querySelector("audio")?.getAttribute("src")).not.toBe(before)
+    );
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses audio-specific copy on a playback failure, not the video wording", async () => {
+    seedPanel({
+      filePath: "media/track.mp3",
+      fileStatus: "modified",
+      changeSet: [entry("media/track.mp3")],
+    });
+    const { container } = renderPane();
+    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+
+    fireEvent.error(container.querySelector("audio")!);
+
+    expect(container.querySelector("audio")).toBeNull();
+    const titles = Array.from(container.querySelectorAll('[data-testid="empty-state-mock"]')).map(
+      (el) => el.getAttribute("data-title")
+    );
+    expect(titles).toContain("This audio file couldn't be played");
+    expect(titles).not.toContain("This video couldn't be played");
+  });
+
+  it("headlines the preview's own refusal rather than the generic playback title", async () => {
+    audioFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-length": String(2 * 1024 * 1024 * 1024) }),
+      blob: () => Promise.resolve(new Blob(["x"])),
+    });
+    seedPanel({
+      filePath: "media/track.wav",
+      fileStatus: "modified",
+      changeSet: [entry("media/track.wav")],
+    });
+    const { container } = renderPane();
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="empty-state-mock"]')).not.toBeNull()
+    );
+    const state = container.querySelector('[data-testid="empty-state-mock"]')!;
+    const title = state.getAttribute("data-title") ?? "";
+    const description = state.getAttribute("data-description") ?? "";
+    // Nothing failed to play, so the generic title would be wrong — and the
+    // description carries the way forward instead of restating the headline.
+    expect(title).not.toBe("This audio file couldn't be played");
+    expect(description).toBeTruthy();
+    expect(description).not.toContain(title);
+  });
+
+  it("keeps Full file visible but disabled, explaining audio already shows it all", () => {
+    seedPanel({
+      filePath: "media/track.mp3",
+      fileStatus: "modified",
+      changeSet: [entry("media/track.mp3")],
+    });
+    renderPane();
+
+    expect(screen.getByText(/already shows the whole audio file/i)).toBeTruthy();
+  });
+
+  it("shows a quiet empty state for a deleted audio file", () => {
+    seedPanel({
+      filePath: "media/track.mp3",
+      fileStatus: "deleted",
+      changeSet: [entry("media/track.mp3", "deleted")],
+    });
+    const { container } = renderPane();
+
+    expect(container.querySelector("audio")).toBeNull();
+    const descriptions = Array.from(
+      container.querySelectorAll('[data-testid="empty-state-mock"]')
+    ).map((el) => el.getAttribute("data-description"));
+    // The shared title is kind-agnostic; the description must name audio so it
+    // doesn't tell someone their track was a video.
+    expect(descriptions.some((d) => d?.includes("audio file was deleted"))).toBe(true);
+  });
+});
+
+describe("DiffPane — PDF current-version mode (#11427)", () => {
+  function pdfFrame(container: HTMLElement): HTMLIFrameElement | null {
+    return container.querySelector("iframe");
+  }
+
+  it("shows the working-tree PDF instead of rendering a diff", () => {
+    seedPanel({
+      filePath: "docs/spec.pdf",
+      fileStatus: "modified",
+      changeSet: [entry("docs/spec.pdf")],
+    });
+    const { container } = renderPane();
+
+    const src = new URL(pdfFrame(container)?.getAttribute("src") ?? "");
+    expect(src.protocol).toBe("daintree-pdf:");
+    // The absolute working-tree path rides the protocol URL, and no text diff
+    // is attempted for a binary document.
+    expect(src.searchParams.get("path")).toBe("/repo/docs/spec.pdf");
+    expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+  });
+
+  it("hides the text-diff layout controls in PDF mode", () => {
+    seedPanel({
+      filePath: "docs/spec.pdf",
+      fileStatus: "modified",
+      changeSet: [entry("docs/spec.pdf")],
+    });
+    renderPane();
+
+    expect(screen.queryByRole("button", { name: "Unified" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
+  });
+
+  it("re-navigates the frame from the toolbar Refresh and still retries the diff", async () => {
+    const retry = vi.fn();
+    useDiffContentMock.mockReturnValue({ content: "diff --git a/x b/x", stale: false, retry });
+    seedPanel({
+      filePath: "docs/spec.pdf",
+      fileStatus: "modified",
+      changeSet: [entry("docs/spec.pdf")],
+    });
+    const { container } = renderPane();
+    const before = pdfFrame(container)?.getAttribute("src");
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitFor(() => expect(pdfFrame(container)?.getAttribute("src")).not.toBe(before));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains there is nothing to preview when the PDF was deleted", () => {
+    seedPanel({
+      filePath: "docs/spec.pdf",
+      fileStatus: "deleted",
+      changeSet: [entry("docs/spec.pdf", "deleted")],
+    });
+    const { container } = renderPane();
+
+    expect(pdfFrame(container)).toBeNull();
+    expect(screen.getByTestId("empty-state-mock")).toBeTruthy();
   });
 });

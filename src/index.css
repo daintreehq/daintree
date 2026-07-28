@@ -1501,8 +1501,8 @@ body,
 
 /* Fleet exit ring pulse — fired once on the panel that becomes the new
  * primary when the user exits fleet mode. Painted on a dedicated overlay
- * element so it doesn't fight the panel container's `::after` worktree
- * stripe or the existing border-color transitions.
+ * element so it doesn't fight the panel container's existing border-color
+ * transitions.
  */
 @keyframes fleet-exit-pulse {
   0% {
@@ -2012,24 +2012,6 @@ body,
   box-shadow:
     inset 0 0 0 1px color-mix(in oklab, var(--color-border-subtle) 14%, transparent),
     0 0 0 1px color-mix(in oklab, var(--color-border-subtle) 8%, transparent);
-}
-
-/* Per-worktree color identity — left-edge stripe on grid panels */
-.panel-worktree-identity {
-  position: relative;
-}
-
-.panel-worktree-identity::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: var(--panel-state-edge-inset-block);
-  bottom: var(--panel-state-edge-inset-block);
-  width: 3px;
-  border-radius: 0 var(--panel-state-edge-radius) var(--panel-state-edge-radius) 0;
-  background-color: var(--worktree-color);
-  z-index: 1;
-  pointer-events: none;
 }
 
 /* Backwards compatibility for older selection class */
@@ -2624,6 +2606,16 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
      data-state="open"; that is stripped here. Scope to [role="menuitem"] so the
      fallback doesn't collide with dialog/popover/combobox open states. */
   [role="menuitem"][data-state="open"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  /* The file-browser row whose context menu is open marks its target with a
+     background tint via data-state="open", which is stripped here. Right-click
+     no longer moves the selection, so without this the targeted row would carry
+     no forced-colors cue at all. Scoped to [role="treeitem"] so it stays
+     independent of the menuitem fallback above. */
+  [role="treeitem"][data-state="open"] {
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }

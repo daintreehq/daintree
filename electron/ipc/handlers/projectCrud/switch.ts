@@ -10,16 +10,21 @@ import { distributePortsToView } from "../../../window/portDistribution.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { ProjectSwitchService } from "../../../services/ProjectSwitchService.js";
+import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
 import { broadcastProjectSwitchUpdates } from "../../projectSwitchBroadcast.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
+import { notificationService } from "../../../services/NotificationService.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { logInfo } from "../../../utils/logger.js";
 import {
   sanitizeTerminals,
   sanitizeTerminalSizes,
   sanitizeDraftInputs,
+  sanitizeFieldEdits,
+  TERMINAL_FIELD_LEVEL_MERGE,
 } from "../terminalLayout.js";
 import { sanitizeTabGroups } from "../../../schemas/index.js";
+import { mergeIdArray, mergeRecord } from "../../../../shared/utils/layoutMerge.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import type { Project } from "../../../types/index.js";
 import type { ProjectSwitchOutgoingState } from "../../../../shared/types/ipc/project.js";
@@ -77,6 +82,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
         // whatever state we actually landed in — including when the outgoing
         // persist rejects after a visually successful activation.
         refreshProjectMenuState();
+        notificationService.refreshTitles();
       }
       return project;
     }
@@ -99,6 +105,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       return await projectSwitchService.switchProject(projectId);
     } finally {
       refreshProjectMenuState();
+      notificationService.refreshTitles();
     }
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_SWITCH, handleProjectSwitch));
@@ -149,6 +156,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
         await persistOutgoing;
       } finally {
         refreshProjectMenuState();
+        notificationService.refreshTitles();
       }
       return project;
     }
@@ -161,6 +169,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       return await projectSwitchService.reopenProject(projectId);
     } finally {
       refreshProjectMenuState();
+      notificationService.refreshTitles();
     }
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_REOPEN, handleProjectReopen));
@@ -296,15 +305,67 @@ async function persistOutgoingProjectState(
       : undefined;
   // Queued so the read-merge-write can't clobber concurrent queued writers
   // (terminalLayout handlers) now that the persist runs alongside the swap.
-  await projectStore.enqueueProjectStateUpdate(previousProjectId, (existing) => ({
-    ...(existing ?? { projectId: previousProjectId, sidebarWidth: 350, terminals: [] }),
-    projectId: previousProjectId,
-    ...(validTerminals !== undefined && { terminals: validTerminals }),
-    ...(validSizes !== undefined && { terminalSizes: validSizes }),
-    ...(validDrafts !== undefined && { draftInputs: validDrafts }),
-    ...(validTabGroups !== undefined && { tabGroups: validTabGroups }),
-    activeWorktreeId: outgoingState.activeWorktreeId,
-  }));
+  await projectStore.enqueueProjectStateUpdate(previousProjectId, (existing) => {
+    const terminalDelta = outgoingState.terminalDelta;
+    const tabGroupDelta = outgoingState.tabGroupDelta;
+    // With a delta, merge by id so a stale outgoing snapshot only affects the
+    // entries this window actually changed, preserving a sibling window's
+    // concurrent additions/moves/deletions (#11350). Without one, fall back to
+    // the legacy full replace.
+    const mergedTerminals =
+      validTerminals === undefined
+        ? undefined
+        : terminalDelta
+          ? mergeIdArray(
+              existing?.terminals ?? [],
+              validTerminals,
+              terminalDelta.changedIds,
+              terminalDelta.removedIds,
+              {
+                // Same out-of-band-field policy as the setTerminals handler: a
+                // stale outgoing snapshot must not erase a session id Main
+                // captured on shutdown (#11461).
+                fieldLevelMerge: TERMINAL_FIELD_LEVEL_MERGE,
+                fieldEdits: sanitizeFieldEdits(terminalDelta.fieldEdits),
+              }
+            )
+          : validTerminals;
+    const mergedTabGroups =
+      validTabGroups === undefined
+        ? undefined
+        : tabGroupDelta
+          ? mergeIdArray(
+              existing?.tabGroups ?? [],
+              validTabGroups,
+              tabGroupDelta.changedIds,
+              tabGroupDelta.removedIds
+            )
+          : validTabGroups;
+    const draftDelta = outgoingState.draftDelta;
+    // Merge drafts by terminal id so a stale outgoing snapshot only affects the
+    // drafts this window changed, preserving a sibling window's concurrent
+    // drafts (#11352). Without a delta, fall back to the legacy full replace.
+    const mergedDrafts =
+      validDrafts === undefined
+        ? undefined
+        : draftDelta
+          ? mergeRecord(
+              sanitizeDraftInputs((existing?.draftInputs ?? {}) as Record<string, unknown>),
+              validDrafts,
+              draftDelta.changedIds,
+              draftDelta.removedIds
+            )
+          : validDrafts;
+    return {
+      ...(existing ?? { projectId: previousProjectId, sidebarWidth: 350, terminals: [] }),
+      projectId: previousProjectId,
+      ...(mergedTerminals !== undefined && { terminals: mergedTerminals }),
+      ...(validSizes !== undefined && { terminalSizes: validSizes }),
+      ...(mergedDrafts !== undefined && { draftInputs: mergedDrafts }),
+      ...(mergedTabGroups !== undefined && { tabGroups: mergedTabGroups }),
+      activeWorktreeId: outgoingState.activeWorktreeId,
+    };
+  });
 }
 
 type ActivateOptions = {
@@ -401,6 +462,24 @@ async function activateProjectView(
   }
   const { view, isNew } = swapResult;
   const swapMs = Math.round(performance.now() - activateStart);
+
+  // Fold the completed switch into this window's project history. Recorded here
+  // — after the view swap has actually committed — because this is the path
+  // every real switch takes: `ProjectSwitchService` only runs on the legacy
+  // non-PVM fallback, so recording there alone left history empty in normal
+  // use. `windowId` comes from the captured operation, so a second window
+  // records into its own list rather than the first window's.
+  //
+  // The outgoing project is recorded first, so it lands directly behind the
+  // incoming one and becomes the toggle target. Nothing else records the
+  // project a window opens on — that load never reaches this path — so without
+  // it the most common flow of all, open on A and switch to B, would leave the
+  // toggle with nowhere to go.
+  if (windowId !== undefined) {
+    const history = getProjectHistory(windowId);
+    if (outgoingProjectId) history.record(outgoingProjectId);
+    history.record(projectId);
+  }
 
   // Mutually exclusive with scratch: switching to a project clears any
   // active scratch pointer + notifies renderers so palette/UI state stays

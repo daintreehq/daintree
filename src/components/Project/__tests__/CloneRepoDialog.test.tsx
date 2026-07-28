@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from "vite
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import type { CloneRepoProgressEvent } from "@shared/types/ipc/gitClone";
+import { suggestProjectEmoji } from "@shared/utils/projectEmoji";
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -187,8 +188,9 @@ describe("CloneRepoDialog", () => {
   it("renders input fields when opened", () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    expect(screen.getByPlaceholderText("owner/repo or repository URL")).toBeTruthy();
-    expect(screen.getByPlaceholderText("Select a directory...")).toBeTruthy();
+    expect(screen.getByLabelText(/repository url/i)).toBeTruthy();
+    expect(screen.getByLabelText(/parent directory/i)).toBeTruthy();
+    expect(screen.getByLabelText(/folder name/i)).toBeTruthy();
     expect(screen.getByText("Clone")).toBeTruthy();
   });
 
@@ -292,9 +294,16 @@ describe("CloneRepoDialog", () => {
 
     // Auto-close runs after AUTO_CLOSE_DELAY_MS (2s) — extend the waitFor
     // timeout so the assertion outlives the dialog's read-the-log delay.
-    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith("/tmp/my-repo"), {
-      timeout: 3000,
-    });
+    await waitFor(
+      () =>
+        expect(onSuccess).toHaveBeenCalledWith("/tmp/my-repo", {
+          name: "my-repo",
+          emoji: suggestProjectEmoji("my-repo"),
+        }),
+      {
+        timeout: 3000,
+      }
+    );
   });
 
   it("shows error and retry button on clone failure", async () => {

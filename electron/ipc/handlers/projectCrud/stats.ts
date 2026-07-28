@@ -5,6 +5,11 @@ import type { BulkProjectStats } from "../../../../shared/types/ipc/project.js";
 import type { MemoryRollup, MemoryRollupProject } from "../../../../shared/types/pty-host.js";
 import { ProjectStatsService } from "../../../services/ProjectStatsService.js";
 import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
+import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
+import { projectStore } from "../../../services/ProjectStore.js";
+import { CompletionAcknowledgementService } from "../../../services/CompletionAcknowledgementService.js";
+import { getWindowRegistry } from "../../../window/windowRef.js";
+import { BrowserWindow } from "electron";
 
 let projectStatsServiceInstance: ProjectStatsService | null = null;
 
@@ -31,6 +36,37 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     projectStatsService.stop();
     projectStatsServiceInstance = null;
   });
+
+  // Acknowledgement watermark for completed agents: the project the user has
+  // had on screen (focused window, active view) for a continuous dwell stops
+  // counting its completions as unacknowledged. Lives beside the stats service
+  // because the two are one feedback loop — the push surfaces completions, the
+  // dwell clears them, the refresh pushes the cleared state.
+  const completionAcknowledger = new CompletionAcknowledgementService({
+    getObservedProjectId: () => {
+      // Harness guard: unit tests mock the electron module without
+      // BrowserWindow; an unfocused null is the correct reading there.
+      if (typeof BrowserWindow?.getFocusedWindow !== "function") return null;
+      const focused = BrowserWindow.getFocusedWindow();
+      if (!focused || focused.isDestroyed() || focused.isMinimized() || !focused.isVisible()) {
+        return null;
+      }
+      const ctx = getWindowRegistry()?.getByWindowId(focused.id);
+      if (!ctx) return null;
+      // Only the focused window's OWN view manager may answer. The global
+      // current-project pointer names whichever window switched most recently
+      // (#11101) — falling back to it could acknowledge a project the focused
+      // window isn't showing. A window without a view manager observes nothing.
+      return ctx.services.projectViewManager?.getActiveProjectId() ?? null;
+    },
+    getStatusMap: () => projectStatsService.getLastBroadcast(),
+    markSeen: (projectId, seenUpTo) => {
+      projectStore.updateProject(projectId, { lastCompletionSeenAt: seenUpTo });
+    },
+    onAcknowledged: () => projectStatsService.refresh(),
+  });
+  completionAcknowledger.start();
+  handlers.push(() => completionAcknowledger.stop());
 
   const handleProjectGetStats = async (projectId: string) => {
     if (typeof projectId !== "string" || !projectId) {
@@ -90,38 +126,18 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       }
     }
 
-    // Group agent counts by projectId from the bulk terminal list
-    const agentCounts = new Map<string, { active: number; waiting: number }>();
-    for (const id of uniqueIds) {
-      agentCounts.set(id, { active: 0, waiting: 0 });
-    }
-    for (const terminal of allTerminals) {
-      if (!terminal.projectId) continue;
-      const counts = agentCounts.get(terminal.projectId);
-      if (!counts) continue;
-      if (terminal.isTrashed) continue;
-      if (terminal.kind === "dev-preview") continue;
-      if (terminal.hasPty === false) continue;
-      // Runtime identity wins; launch intent is only a boot-window fallback
-      // before detection has ever committed. Demoted ex-agents must not
-      // inflate active/waiting counts just because they were launched as agents.
-      const hasLiveOrBootAgent =
-        Boolean(terminal.detectedAgentId) ||
-        (Boolean(terminal.launchAgentId) && terminal.everDetectedAgent !== true);
-      if (!hasLiveOrBootAgent) continue;
-
-      if (terminal.agentState === "waiting") {
-        counts.waiting += 1;
-      } else if (terminal.agentState === "working") {
-        counts.active += 1;
-      }
-    }
+    const agentCounts = computeProjectAgentCounts(
+      uniqueIds,
+      allTerminals,
+      projectStore.getLastCompletionSeenMap()
+    );
 
     const result: BulkProjectStats = {};
     for (const entry of statsResults) {
       if (entry.status === "fulfilled") {
         const [id, ptyStats] = entry.value;
-        const counts = agentCounts.get(id) ?? { active: 0, waiting: 0 };
+        const counts = agentCounts.get(id);
+        if (!counts) continue;
         const measured = measuredByProject.get(id);
         // Trust the measurement only once at least one process resolved — a
         // just-spawned shell may not be in the process table yet, and reporting
@@ -129,13 +145,34 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
         const hasMeasured = measured !== undefined && measured.processCount > 0;
         const top = hasMeasured ? measured!.topProcesses[0] : undefined;
         result[id] = {
-          processCount: ptyStats.terminalCount,
+          // Net out the assistant help PTY, exactly as the pushed status map
+          // does. Reporting the raw host count here made opening the palette
+          // reintroduce the counts #10989 removed.
+          processCount: Math.max(0, ptyStats.terminalCount - counts.helpTerminals),
           terminalCount: ptyStats.terminalCount,
           estimatedMemoryMB: ptyStats.terminalCount * MEMORY_PER_TERMINAL_MB,
           terminalTypes: ptyStats.terminalTypes,
           processIds: ptyStats.processIds,
           activeAgentCount: counts.active,
           waitingAgentCount: counts.waiting,
+          blockedAgentCount: counts.blocked,
+          ...(counts.oldestWaitingSince !== null
+            ? { oldestWaitingSince: counts.oldestWaitingSince }
+            : {}),
+          completedAgentCount: counts.completed,
+          unacknowledgedCompletedAgentCount: counts.unacknowledgedCompleted,
+          ...(counts.oldestUnacknowledgedCompletionAt !== null
+            ? { oldestUnacknowledgedCompletionAt: counts.oldestUnacknowledgedCompletionAt }
+            : {}),
+          ...(counts.latestUnacknowledgedCompletionAt !== null
+            ? { latestUnacknowledgedCompletionAt: counts.latestUnacknowledgedCompletionAt }
+            : {}),
+          ...(counts.latestCompletionAt !== null
+            ? { latestCompletionAt: counts.latestCompletionAt }
+            : {}),
+          ...(counts.latestWorkingSince !== null
+            ? { latestWorkingSince: counts.latestWorkingSince }
+            : {}),
           terminalMemoryMB: hasMeasured ? Math.round(measured!.memoryKb / 1024) : undefined,
           topProcess: top
             ? { name: top.comm, memoryMB: Math.round(top.memoryKb / 1024) }

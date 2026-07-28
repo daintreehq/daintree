@@ -52,10 +52,12 @@ function makeHost(overrides: Partial<SnapshotBuilderHost> = {}): SnapshotBuilder
     baseMatchesUpstream: undefined,
     lastFetchedAt: null,
     lastGitStatusCheckedAt: 0,
+    workingTreeChangedAt: 0,
     fetchAuthFailed: false,
     fetchNetworkFailed: false,
     isFetchInFlight: false,
     matchedForgeProviderId: null,
+    isExternal: undefined,
     isWslPath: false,
     wslDistro: undefined,
     wslPosixPath: undefined,
@@ -201,5 +203,24 @@ describe("SnapshotBuilder", () => {
     expect(new SnapshotBuilder(makeHost({ worktreeMode: "remote" })).build().worktreeMode).toBe(
       "remote"
     );
+  });
+
+  it("omits workingTreeChangedAt until a fs write is observed, then surfaces it", () => {
+    // 0 → undefined keeps the snapshot lean for a worktree that has never seen a
+    // raw fs write; a real stamp passes straight through for the store side map.
+    expect(new SnapshotBuilder(makeHost()).build().workingTreeChangedAt).toBeUndefined();
+
+    const stamped = makeHost({ workingTreeChangedAt: 1_725_000_000_000 });
+    expect(new SnapshotBuilder(stamped).build().workingTreeChangedAt).toBe(1_725_000_000_000);
+  });
+
+  it("passes isExternal through without collapsing false into undefined", () => {
+    // Unlike the neighbouring `|| undefined` flags, false ("inside the boundary")
+    // and undefined ("boundary unknown") are distinct states downstream.
+    expect(new SnapshotBuilder(makeHost({ isExternal: true })).build().isExternal).toBe(true);
+    expect(new SnapshotBuilder(makeHost({ isExternal: false })).build().isExternal).toBe(false);
+    expect(
+      new SnapshotBuilder(makeHost({ isExternal: undefined })).build().isExternal
+    ).toBeUndefined();
   });
 });

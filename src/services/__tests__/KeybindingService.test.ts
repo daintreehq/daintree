@@ -411,23 +411,25 @@ describe("KeybindingService", () => {
   });
 
   describe("findConflicts scope filtering and chord shadowing", () => {
-    // Default `modal.close` is bound to Escape in "modal" scope.
-    // `terminal` and `modal` scopes are disjoint, so a terminal-scoped Escape
-    // candidate must not collide with `modal.close`.
+    // Default `portal.closeTab` is bound to Cmd+W in "portal" scope.
+    // `worktreeGrid` and `portal` scopes are disjoint, so a grid-scoped Cmd+W
+    // candidate must not collide with `portal.closeTab` (it still collides
+    // with the global `terminal.close`, which fires everywhere).
     it("does not flag scope-disjoint bindings as conflicts", () => {
       const service = new KeybindingService();
 
-      const conflicts = service.findConflicts("Escape", undefined, "terminal");
-      expect(conflicts.some((c) => c.actionId === "modal.close")).toBe(false);
+      const conflicts = service.findConflicts("Cmd+W", undefined, "worktreeGrid");
+      expect(conflicts.some((c) => c.actionId === "portal.closeTab")).toBe(false);
+      expect(conflicts.some((c) => c.actionId === "terminal.close")).toBe(true);
     });
 
     it("flags global-scoped candidates against any scope", () => {
       const service = new KeybindingService();
 
       // A "global" candidate would fire everywhere, so it must collide with the
-      // modal-scoped Escape binding.
-      const conflicts = service.findConflicts("Escape", undefined, "global");
-      expect(conflicts.some((c) => c.actionId === "modal.close")).toBe(true);
+      // portal-scoped Cmd+W binding.
+      const conflicts = service.findConflicts("Cmd+W", undefined, "global");
+      expect(conflicts.some((c) => c.actionId === "portal.closeTab")).toBe(true);
     });
 
     it("marks exact-combo collisions as kind: 'conflict'", () => {
@@ -494,8 +496,7 @@ describe("KeybindingService", () => {
 
     const all = service.getAllBindingsWithEffectiveCombos();
     const binding = all.find((entry) => entry.actionId === "terminal.duplicate") as
-      | (RegisteredKeybindingConfig & { effectiveCombo: string })
-      | undefined;
+      (RegisteredKeybindingConfig & { effectiveCombo: string }) | undefined;
 
     expect(binding).toBeTruthy();
     expect(binding?.effectiveCombo).toBe("");
@@ -511,12 +512,9 @@ describe("KeybindingService", () => {
     expect(service.getBinding("terminal.new")?.combo).toBe("Cmd+Alt+T");
   });
 
-  it("binds project MRU plus (older) and shift+plus (newer) by default; minus stays unbound", () => {
+  it("binds project switching to plus alone; shift+plus and minus stay unbound", () => {
     setPlatform("MacIntel");
     const service = new KeybindingService();
-
-    expect(service.getBinding("project.mruCycleOlder")?.combo).toBe("Cmd+Alt+=");
-    expect(service.getBinding("project.mruCycleNewer")?.combo).toBe("Cmd+Shift+Alt+=");
 
     const plus = createKeyboardEvent({
       key: "≠",
@@ -526,6 +524,8 @@ describe("KeybindingService", () => {
     });
     expect(service.findMatchingAction(plus)?.actionId).toBe("project.mruCycleOlder");
 
+    // Switching to the last project is its own inverse, so there is no shifted
+    // counterpart to claim the combo.
     const shiftedPlus = createKeyboardEvent({
       key: "+",
       code: "Equal",
@@ -533,7 +533,7 @@ describe("KeybindingService", () => {
       altKey: true,
       shiftKey: true,
     });
-    expect(service.findMatchingAction(shiftedPlus)?.actionId).toBe("project.mruCycleNewer");
+    expect(service.findMatchingAction(shiftedPlus)).toBeUndefined();
 
     const minus = createKeyboardEvent({
       key: "–",
@@ -1172,15 +1172,15 @@ describe("KeybindingService", () => {
         priority: 0,
       });
       service.registerBinding({
-        actionId: "test.terminalOnly",
+        actionId: "test.gridOnly",
         combo: "Cmd+Shift+F4",
-        scope: "terminal",
+        scope: "worktreeGrid",
         priority: 0,
       });
 
       expect(warnSpy).not.toHaveBeenCalled();
       expect(service.getBinding("test.portalOnly")).toBeDefined();
-      expect(service.getBinding("test.terminalOnly")).toBeDefined();
+      expect(service.getBinding("test.gridOnly")).toBeDefined();
 
       warnSpy.mockRestore();
     });
@@ -1495,14 +1495,14 @@ describe("KeybindingService", () => {
       expect(service.getPendingChord()).not.toBeNull();
 
       // First setScope changes scope and clears the chord (expected).
-      service.setScope("modal");
+      service.setScope("portal");
       expect(service.getPendingChord()).toBeNull();
 
       // Re-establish a chord under the new scope, then push the same scope again.
       service.resolveKeybinding(cmdK);
       expect(service.getPendingChord()).not.toBeNull();
 
-      service.setScope("modal");
+      service.setScope("portal");
 
       // Second push is the StrictMode/concurrent-instance case: scope didn't
       // change, so the chord must survive.
@@ -1513,16 +1513,16 @@ describe("KeybindingService", () => {
       const service = new KeybindingService();
       const stack = (service as unknown as { scopeStack: string[] }).scopeStack;
 
-      service.setScope("modal");
-      service.setScope("modal");
-      expect(stack.filter((s) => s === "modal").length).toBe(2);
+      service.setScope("portal");
+      service.setScope("portal");
+      expect(stack.filter((s) => s === "portal").length).toBe(2);
 
-      service.restoreScope("modal");
-      expect(stack.filter((s) => s === "modal").length).toBe(1);
-      expect(service.getScope()).toBe("modal");
+      service.restoreScope("portal");
+      expect(stack.filter((s) => s === "portal").length).toBe(1);
+      expect(service.getScope()).toBe("portal");
 
-      service.restoreScope("modal");
-      expect(stack.filter((s) => s === "modal").length).toBe(0);
+      service.restoreScope("portal");
+      expect(stack.filter((s) => s === "portal").length).toBe(0);
       expect(service.getScope()).toBe("global");
     });
   });
@@ -2167,5 +2167,140 @@ describe("KeybindingService", () => {
         }
       }
     });
+  });
+});
+
+describe("physical digit-row matching for command shortcuts", () => {
+  afterEach(() => {
+    setPlatform("MacIntel");
+  });
+
+  it("matches Cmd+1 on layouts where the digit row is shifted (non-mac)", () => {
+    setPlatform("Win32");
+    const service = new KeybindingService();
+    // French AZERTY: physical Digit1 produces "&" — event.key alone never
+    // matches "Cmd+1", so terminal focus switching was dead on these layouts.
+    const event = createKeyboardEvent({ key: "&", code: "Digit1", ctrlKey: true });
+    expect(service.matchesEvent(event, "Cmd+1")).toBe(true);
+  });
+
+  it("matches Cmd+Alt+1 worktree switching with a shifted digit row on mac", () => {
+    setPlatform("MacIntel");
+    const service = new KeybindingService();
+    const event = createKeyboardEvent({ key: "±", code: "Digit1", metaKey: true, altKey: true });
+    expect(service.matchesEvent(event, "Cmd+Alt+1")).toBe(true);
+  });
+
+  it("rejects AltGr digit input on non-mac so international characters keep typing", () => {
+    setPlatform("Win32");
+    const service = new KeybindingService();
+    const event = createKeyboardEvent({
+      key: "~",
+      code: "Digit2",
+      ctrlKey: true,
+      altKey: true,
+      getModifierState: (mod: string) => mod === "AltGraph",
+    });
+    expect(service.matchesEvent(event, "Cmd+2")).toBe(false);
+    expect(normalizeKeyForBinding(event)).toBe("~");
+  });
+
+  it("keeps bare digits character-based so terminal typing is untouched", () => {
+    setPlatform("Win32");
+    const event = createKeyboardEvent({ key: "&", code: "Digit1" });
+    expect(normalizeKeyForBinding(event)).toBe("&");
+  });
+
+  it("does not map numpad codes — NumLock-off Numpad1 means End", () => {
+    setPlatform("Win32");
+    const event = createKeyboardEvent({ key: "End", code: "Numpad1", ctrlKey: true });
+    expect(normalizeKeyForBinding(event)).toBe("End");
+  });
+
+  it("keeps recorder and matcher consistent: both normalize to the physical digit", () => {
+    // SettingsShortcutCapture records through the same normalizeKeyForBinding,
+    // so an AZERTY user records "Cmd+1" (not "Cmd+&") and the stored combo
+    // matches the same physical event later.
+    setPlatform("Win32");
+    const event = createKeyboardEvent({ key: "&", code: "Digit1", ctrlKey: true });
+    expect(normalizeKeyForBinding(event)).toBe("1");
+  });
+
+  it("still matches combos recorded before physical normalization (US Cmd+Shift+!)", () => {
+    // Pre-normalization profiles stored the produced character; those
+    // persisted rebinds must keep firing after the upgrade.
+    setPlatform("Win32");
+    const service = new KeybindingService();
+    const event = createKeyboardEvent({ key: "!", code: "Digit1", ctrlKey: true, shiftKey: true });
+    expect(service.matchesEvent(event, "Cmd+Shift+!")).toBe(true);
+  });
+
+  it("still matches legacy AZERTY character combos (Cmd+&)", () => {
+    setPlatform("Win32");
+    const service = new KeybindingService();
+    const event = createKeyboardEvent({ key: "&", code: "Digit1", ctrlKey: true });
+    expect(service.matchesEvent(event, "Cmd+&")).toBe(true);
+  });
+});
+
+describe("when-clause context provider", () => {
+  afterEach(() => {
+    setPlatform("MacIntel");
+  });
+
+  function registerWhenBinding(service: KeybindingService, when: string, actionId: string) {
+    service.registerBinding({
+      actionId,
+      combo: "Cmd+Shift+F9",
+      scope: "global",
+      priority: 0,
+      when,
+    } as RegisteredKeybindingConfig);
+  }
+
+  it("evaluates when clauses against the live provider snapshot", () => {
+    setPlatform("MacIntel");
+    const service = new KeybindingService();
+    registerWhenBinding(service, "testFlag", "test.whenGated");
+
+    const event = createKeyboardEvent({ key: "F9", code: "F9", metaKey: true, shiftKey: true });
+
+    service.setWhenContextProvider(() => ({ testFlag: false }));
+    expect(service.resolveKeybinding(event).match).toBeUndefined();
+
+    service.setWhenContextProvider(() => ({ testFlag: true }));
+    expect(service.resolveKeybinding(event).match?.actionId).toBe("test.whenGated");
+  });
+
+  it("computes the snapshot at most once per keydown", () => {
+    setPlatform("MacIntel");
+    const service = new KeybindingService();
+    registerWhenBinding(service, "testFlag", "test.whenGatedA");
+    service.registerBinding({
+      actionId: "test.whenGatedB",
+      combo: "Cmd+Shift+F8",
+      scope: "global",
+      priority: 0,
+      when: "testFlag",
+    } as RegisteredKeybindingConfig);
+
+    const provider = vi.fn(() => ({ testFlag: true }));
+    service.setWhenContextProvider(provider);
+
+    const event = createKeyboardEvent({ key: "F9", code: "F9", metaKey: true, shiftKey: true });
+    service.resolveKeybinding(event);
+    expect(provider).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the static setWhenContext value when no provider is wired", () => {
+    setPlatform("MacIntel");
+    const service = new KeybindingService();
+    registerWhenBinding(service, "testFlag", "test.whenGatedStatic");
+
+    const event = createKeyboardEvent({ key: "F9", code: "F9", metaKey: true, shiftKey: true });
+    expect(service.resolveKeybinding(event).match).toBeUndefined();
+
+    service.setWhenContext({ testFlag: true });
+    expect(service.resolveKeybinding(event).match?.actionId).toBe("test.whenGatedStatic");
   });
 });

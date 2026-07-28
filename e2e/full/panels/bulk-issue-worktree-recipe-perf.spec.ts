@@ -345,8 +345,7 @@ async function startFrameProbe(page: Page): Promise<void> {
 async function stopFrameProbe(page: Page): Promise<number> {
   return await page.evaluate(() => {
     const state = (window as any).__bulkIssueFrameProbe as
-      | { gaps: number[]; requestId: number }
-      | undefined;
+      { gaps: number[]; requestId: number } | undefined;
     if (!state) return 0;
     cancelAnimationFrame(state.requestId);
     delete (window as any).__bulkIssueFrameProbe;

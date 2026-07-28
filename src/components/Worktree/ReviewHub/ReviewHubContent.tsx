@@ -24,6 +24,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { basename } from "@shared/utils/path";
 import { usePanelDialogStore } from "@/store/panelDialogStore";
@@ -1499,11 +1500,10 @@ export function ReviewHubContent({
                 )}
                 aria-label="Refresh"
               >
-                <RefreshCw
-                  className={cn(
-                    "w-3.5 h-3.5",
-                    (loading || isBackgroundRefreshing) && "animate-spin"
-                  )}
+                <SpinningIcon
+                  icon={RefreshCw}
+                  active={loading || isBackgroundRefreshing}
+                  className="w-3.5 h-3.5"
                 />
               </button>
             )}

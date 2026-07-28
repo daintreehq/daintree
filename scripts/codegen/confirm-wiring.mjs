@@ -32,6 +32,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartAll",
+  "terminal.arm",
   "worktree.delete",
   "worktree.sessions.endAll",
   "worktree.sessions.trashAll",
@@ -62,6 +63,8 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "forge.editPR",
   "forge.closeIssue",
   "forge.editIssue",
+  "session.bookmarkAndClose",
+  "session.bookmark.delete",
 ]);
 
 // Actions with a ConfirmDialog-family component co-located in the same source file
@@ -98,6 +101,7 @@ const BYPASS_WIRED = new Set([
   "git.push", // deferred-promise via gitPushConfirmStore; GitPushConfirmDialog resolves it
   "git.pullRebase", // IPC bypass in ReviewHubContent.tsx; ConfirmDialog wired but ID not co-located
   "project.remove", // confirm in ProjectSwitcherPalette.tsx; action ID not co-located
+  "terminal.arm", // agent/MCP-only confirm gate (#11346); palette-hidden, user arming goes through the fleet ribbon (not ActionService), so no user-side ConfirmDialog to co-locate
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)
   "artifact.applyPatch", // ConfirmDialog in ArtifactOverlay.tsx; dispatch in useArtifacts.ts (ID not co-located)
   "agentSettings.reset", // agent/MCP-only; palette-hidden, configured from Settings via client (danger:"confirm" gates agent dispatch only)
@@ -113,6 +117,11 @@ const BYPASS_WIRED = new Set([
   "forge.editPR",
   "forge.closeIssue", // agent/MCP-only forge write (#10653); danger:"confirm" gates agent dispatch only, no user-side ConfirmDialog
   "forge.editIssue", // agent/MCP-only forge write (#10653); danger:"confirm" gates agent dispatch only, no user-side ConfirmDialog
+  // Session bookmarks (#11288): Phase 1 is programmatic/MCP-only and palette-hidden;
+  // confirmation is the explicit `confirmed: true` arg. The Phase-2 pane dialog
+  // will add a co-located ConfirmDialog; until then there is none to scan.
+  "session.bookmarkAndClose",
+  "session.bookmark.delete",
 ]);
 
 // Text tokens identifying a ConfirmDialog-family component in a source file.

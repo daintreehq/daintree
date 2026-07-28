@@ -90,6 +90,7 @@ import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalDragPreview, TERMINAL_DRAG_PREVIEW_WIDTH } from "./TerminalDragPreview";
 import { WorktreeDragPreview } from "./WorktreeDragPreview";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { moveTerminalToWorktreeAndFollowRescue } from "@/services/terminal/crossWorktreeMove";
 import { parseAccordionDragId } from "./SortableWorktreeTerminal";
 import { isWorktreeSortDragData, parseWorktreeSortDragId } from "./SortableWorktreeCard";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
@@ -106,11 +107,12 @@ import {
   resolveGroupPlacementIndex,
   resolveGridInsertionIndexFromRects,
   findGroupIndex,
-  isNonDockableDockDrop,
   filterOutDockDroppables,
+  shouldCancelDrop,
+  dragCarriesNonDockableIntoDock,
   type OverDropData,
 } from "./dropResolution";
-import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
+import { useDragRecovery } from "./useDragRecovery";
 import {
   DURATION_100,
   DURATION_300,
@@ -143,6 +145,14 @@ interface DndPlaceholderContextValue {
   activeGroupId: string | null;
   /** If dragging a tab group, the panel IDs in the group */
   activeGroupPanelIds: string[] | null;
+  /**
+   * True when the active drag can't be dropped in the dock — its kind, or ANY
+   * live member's kind for a group drag, is non-dockable (#11375). Consumers
+   * (the dock's `cursor-no-drop` cue) read this instead of re-checking the lone
+   * representative kind, so the cue matches what `cancelDrop`/`collisionDetection`
+   * actually enforce for a mixed group.
+   */
+  activeDragRejectsDock: boolean;
 }
 
 const DndPlaceholderContext = createContext<DndPlaceholderContextValue>({
@@ -153,6 +163,7 @@ const DndPlaceholderContext = createContext<DndPlaceholderContextValue>({
   isWorktreeSortDragging: false,
   activeGroupId: null,
   activeGroupPanelIds: null,
+  activeDragRejectsDock: false,
 });
 
 export function useDndPlaceholder() {
@@ -282,8 +293,7 @@ function getDragLabel(data: unknown): string {
 export function getOverDragLabel(over: Over): string {
   if (over.id === TRASH_DROPPABLE_ID) return "trash — drop to close panel";
   const overData = over.data.current as
-    | { container?: "grid" | "dock"; isPlaceholder?: boolean }
-    | undefined;
+    { container?: "grid" | "dock"; isPlaceholder?: boolean } | undefined;
   if (overData?.isPlaceholder) {
     return overData.container === "dock" ? "the dock" : "empty grid slot";
   }
@@ -664,7 +674,6 @@ export function DndProvider({ children }: DndProviderProps) {
   const reorderTabGroups = usePanelStore((s) => s.reorderTabGroups);
   const moveTerminalToPosition = usePanelStore((s) => s.moveTerminalToPosition);
   const moveTabGroupToLocation = usePanelStore((s) => s.moveTabGroupToLocation);
-  const moveTerminalToWorktree = usePanelStore((s) => s.moveTerminalToWorktree);
   const setFocused = usePanelStore((s) => s.setFocused);
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
@@ -681,48 +690,56 @@ export function DndProvider({ children }: DndProviderProps) {
     );
   }, [activeId, activeData]);
 
-  const handleDragStart = useCallback((event: DragStartEvent) => {
-    setIsCancelDrop(false);
+  const { beginDrag, finishDrag } = useDragRecovery();
 
-    const { active } = event;
-    const dragId = active.id as string;
+  const handleDragStart = useCallback(
+    (event: DragStartEvent) => {
+      // Synchronous: the data-dragging webview shield and the lost-mouseup
+      // watchdog must be armed before React commits the drag state (#11291).
+      beginDrag(event.activatorEvent);
+      setIsCancelDrop(false);
 
-    // Skip terminal-specific logic for worktree-sort drags
-    if (isWorktreeSortDragData(active.data.current as Record<string, unknown> | undefined)) {
-      // Pin a snapshot so handleDragEnd survives Virtuoso unmounting the
-      // source row when it scrolls outside the overscan window mid-drag.
-      activeWorktreeSortDataRef.current = active.data.current as Record<string, unknown>;
-      setActiveId(dragId);
-      setIsWorktreeSortActive(true);
-      const worktreeId = parseWorktreeSortDragId(dragId);
-      if (worktreeId) {
-        const wt = getCurrentViewStore().getState().worktrees.get(worktreeId);
-        setActiveSortWorktree(wt ?? null);
+      const { active } = event;
+      const dragId = active.id as string;
+
+      // Skip terminal-specific logic for worktree-sort drags
+      if (isWorktreeSortDragData(active.data.current as Record<string, unknown> | undefined)) {
+        // Pin a snapshot so handleDragEnd survives Virtuoso unmounting the
+        // source row when it scrolls outside the overscan window mid-drag.
+        activeWorktreeSortDataRef.current = active.data.current as Record<string, unknown>;
+        setActiveId(dragId);
+        setIsWorktreeSortActive(true);
+        const worktreeId = parseWorktreeSortDragId(dragId);
+        if (worktreeId) {
+          const wt = getCurrentViewStore().getState().worktrees.get(worktreeId);
+          setActiveSortWorktree(wt ?? null);
+        }
+        return;
       }
-      return;
-    }
 
-    const data = active.data.current as DragData | WorktreeDragData | undefined;
+      const data = active.data.current as DragData | WorktreeDragData | undefined;
 
-    const terminalId = data?.terminal?.id ?? parseAccordionDragId(dragId) ?? dragId;
+      const terminalId = data?.terminal?.id ?? parseAccordionDragId(dragId) ?? dragId;
 
-    setActiveId(dragId);
-    terminalInstanceService.lockResize(terminalId, true);
-    gridInsertMemoRef.current = null;
+      setActiveId(dragId);
+      terminalInstanceService.lockResize(terminalId, true);
+      gridInsertMemoRef.current = null;
 
-    // Clear any pending stabilization timers from previous drags
-    if (stabilizationTimerRef.current) {
-      clearTimeout(stabilizationTimerRef.current);
-      stabilizationTimerRef.current = null;
-    }
-    dockRetryTimersRef.current.forEach(clearTimeout);
-    dockRetryTimersRef.current.clear();
+      // Clear any pending stabilization timers from previous drags
+      if (stabilizationTimerRef.current) {
+        clearTimeout(stabilizationTimerRef.current);
+        stabilizationTimerRef.current = null;
+      }
+      dockRetryTimersRef.current.forEach(clearTimeout);
+      dockRetryTimersRef.current.clear();
 
-    if (data) {
-      setActiveData(data);
-      setOverContainer(data.sourceLocation);
-    }
-  }, []);
+      if (data) {
+        setActiveData(data);
+        setOverContainer(data.sourceLocation);
+      }
+    },
+    [beginDrag]
+  );
 
   const handleDragOver = useCallback((event: DragOverEvent) => {
     const { active, over } = event;
@@ -848,6 +865,7 @@ export function DndProvider({ children }: DndProviderProps) {
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
+      finishDrag();
       const { active, over } = event;
 
       // Handle worktree-sort drags before any terminal logic. The snapshot ref
@@ -968,23 +986,22 @@ export function DndProvider({ children }: DndProviderProps) {
           const draggedTerminal = freshTerminalsById[actualDraggedId];
           const isLiveTarget = getCurrentViewStore().getState().worktrees.has(targetWorktreeId);
           if (isLiveTarget && draggedTerminal && draggedTerminal.worktreeId !== targetWorktreeId) {
-            moveTerminalToWorktree(actualDraggedId, targetWorktreeId);
-            setFocused(null);
+            moveTerminalToWorktreeAndFollowRescue(actualDraggedId, targetWorktreeId);
           }
           return;
         }
 
         if (overTerminal && actualDraggedId !== actualOverId) {
-          const containerTerminals: CarrierPanel[] = [];
-          for (const tid of freshTerminalIds) {
-            const t = freshTerminalsById[tid];
-            if (!t || (t.worktreeId ?? null) !== (accordionWorktreeId ?? null)) continue;
-            if (sourceLocation === "dock") {
-              if (t.location === "dock") containerTerminals.push(t);
-            } else {
-              if (t.location === "grid" || t.location === undefined) containerTerminals.push(t);
-            }
-          }
+          // Index in the same scope space reorderTerminals splices — for a dock
+          // location that space includes global (worktree-less) panels even
+          // though the accordion only lists the worktree's own terminals; an
+          // exact-scoped index here would move the wrong chip (#11289).
+          const containerTerminals = filterTerminalsByContainer(
+            freshTerminalsById,
+            freshTerminalIds,
+            sourceLocation ?? "grid",
+            accordionWorktreeId
+          );
 
           const oldIndex = containerTerminals.findIndex((t) => t.id === actualDraggedId);
           const newIndex = containerTerminals.findIndex((t) => t.id === actualOverId);
@@ -1006,8 +1023,7 @@ export function DndProvider({ children }: DndProviderProps) {
         if (isGroupDrag) return; // Defensive: cancelDrop should catch this
         const currentTerminal = freshTerminalsById[draggedId];
         if (currentTerminal && currentTerminal.worktreeId !== overData.worktreeId) {
-          moveTerminalToWorktree(draggedId, overData.worktreeId!);
-          setFocused(null);
+          moveTerminalToWorktreeAndFollowRescue(draggedId, overData.worktreeId!);
         }
         // Don't return - fall through to stabilization
       }
@@ -1268,79 +1284,43 @@ export function DndProvider({ children }: DndProviderProps) {
       reorderTabGroups,
       moveTerminalToPosition,
       moveTabGroupToLocation,
-      moveTerminalToWorktree,
       setFocused,
       activeWorktreeId,
+      finishDrag,
     ]
   );
 
-  const cancelDrop = useCallback(
-    (event: DragEndEvent) => {
+  // dnd-kit awaits this callback with no try/catch before releasing its
+  // internal active lock, so a throw here wedges every future drag until
+  // reload (#11291) — the verdict lives in shouldCancelDrop, a total function,
+  // and this glue fails closed on anything unexpected. The snapshot ref check
+  // matters: if Virtuoso has unmounted the source row, active.data.current is
+  // undefined but the ref still holds the worktree-sort drag data — converting
+  // to cancel here would lose the reorder entirely (#8393).
+  const cancelDrop = useCallback((event: DragEndEvent) => {
+    try {
       const { active, over } = event;
-
-      if (!over) {
-        setIsCancelDrop(true);
-        return true;
-      }
-
-      // Worktree-sort drags own their own drop logic in handleDragEnd; let
-      // every drop through. Also check the snapshot ref: if Virtuoso has
-      // unmounted the source row, active.data.current is undefined but the
-      // ref still holds the original drag data — converting to cancel here
-      // would lose the reorder entirely.
-      if (
+      const isWorktreeSort =
         activeWorktreeSortDataRef.current !== null ||
-        isWorktreeSortDragData(active.data.current as Record<string, unknown> | undefined)
-      ) {
-        return false;
-      }
-
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- dnd-kit data.current is loosely typed
-      const activeDataRaw = active.data.current as DragData | undefined;
-      const draggedId = activeDataRaw?.terminal?.id ?? (active?.id ? String(active.id) : null);
-
-      if (!activeDataRaw || !draggedId) {
-        setIsCancelDrop(true);
-        return true;
-      }
-
-      const overData = over.data.current as OverDropData | undefined;
-
-      const isGroupDrag =
-        activeDataRaw.groupId &&
-        activeDataRaw.groupPanelIds &&
-        activeDataRaw.groupPanelIds.length > 1;
-      const isWorktreeDrop = overData?.type === "worktree" && !!overData.worktreeId;
-      if (isWorktreeDrop && isGroupDrag) {
-        setIsCancelDrop(true);
-        return true;
-      }
-
-      // A panel whose kind the dock can't render must never commit into the
-      // dock — it would strand invisibly (#11054). Reject the drop so it snaps
-      // back to its origin. `cursor-no-drop` already signals this during hover
-      // (ContentDock), and `collisionDetection` keeps the dock out of the hover
-      // candidates, so this is the defensive final gate on the same capability
-      // predicate the launch menu and move-to-dock use.
-      const targetContainer =
-        overData?.container ??
-        (overData?.sortable?.containerId
-          ? resolveContainerId(overData.sortable.containerId)
-          : null);
-      if (isNonDockableDockDrop(targetContainer, activeDataRaw.terminal.kind)) {
-        setIsCancelDrop(true);
-        return true;
-      }
-
-      // Scrollable panel grid (#8805) — dock→grid drops are never rejected on
-      // capacity grounds; the grid scrolls vertically to absorb new panels.
-
-      return false;
-    },
-    [overContainer]
-  );
+        isWorktreeSortDragData(active.data.current as Record<string, unknown> | undefined);
+      const cancel = shouldCancelDrop({
+        hasOver: over !== null,
+        activeData: active.data.current,
+        overData: over?.data.current as OverDropData | undefined,
+        isWorktreeSort,
+        panelsById: usePanelStore.getState().panelsById,
+      });
+      if (cancel) setIsCancelDrop(true);
+      return cancel;
+    } catch (error) {
+      console.warn("[DndProvider] cancelDrop failed; canceling drop to keep dnd-kit live", error);
+      setIsCancelDrop(true);
+      return true;
+    }
+  }, []);
 
   const handleDragCancel = useCallback(() => {
+    finishDrag();
     // Skip terminal unlock for worktree-sort drags (no lock was acquired)
     const isWorktreeSort = activeId ? parseWorktreeSortDragId(activeId) !== null : false;
     if (isWorktreeSort) {
@@ -1373,7 +1353,7 @@ export function DndProvider({ children }: DndProviderProps) {
     setIsWorktreeSortActive(false);
     setActiveSortWorktree(null);
     // No explicit refresh needed - terminals return to original state (no layout change)
-  }, [activeId, activeData]);
+  }, [activeId, activeData, finishDrag]);
 
   // Use rectIntersection as default (stable when cursor outside containers),
   // closestCenter for dock (1D horizontal) and worktree sort (1D vertical)
@@ -1389,11 +1369,18 @@ export function DndProvider({ children }: DndProviderProps) {
       // SortableContext reflows during hover before `cancelDrop` snaps it back.
       // Filter the dock droppable (and its chip sortables) out of the candidate
       // set and skip the dock-specific closestCenter branch, so the dock is
-      // invisible to collision detection for this drag. Read the kind
-      // synchronously from the drag data (no ref) to keep this callback stable.
+      // invisible to collision detection for this drag. For a group drag EVERY
+      // member's kind is checked, not just the representative (#11375) — member
+      // kinds are resolved from the live store by id. Read synchronously (no
+      // ref) to keep this callback stable.
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- dnd-kit data.current is loosely typed
       const activeDragData = args.active.data.current as DragData | undefined;
-      const rejectsDock = !panelKindIsDockable(activeDragData?.terminal?.kind ?? "terminal");
+      const rejectsDock = dragCarriesNonDockableIntoDock(
+        "dock",
+        activeDragData?.terminal?.kind,
+        activeDragData?.groupId ? activeDragData?.groupPanelIds : undefined,
+        usePanelStore.getState().panelsById
+      );
       const effectiveArgs = rejectsDock
         ? { ...args, droppableContainers: filterOutDockDroppables(args.droppableContainers) }
         : args;
@@ -1426,6 +1413,18 @@ export function DndProvider({ children }: DndProviderProps) {
       isWorktreeSortDragging: isWorktreeSortActive,
       activeGroupId: activeData?.groupId ?? null,
       activeGroupPanelIds: activeData?.groupPanelIds ?? null,
+      // Group-aware dock-reject state for the dock's hover cue: for a group drag
+      // ANY non-dockable live member poisons the drop, resolved from the store
+      // by id (#11375). Non-reactive `getState()` read is fine — panel kinds
+      // don't change mid-drag, and this recomputes when the active drag changes.
+      activeDragRejectsDock:
+        activeTerminal !== null &&
+        dragCarriesNonDockableIntoDock(
+          "dock",
+          activeTerminal.kind,
+          activeData?.groupId ? activeData?.groupPanelIds : undefined,
+          usePanelStore.getState().panelsById
+        ),
     }),
     [
       placeholderIndex,

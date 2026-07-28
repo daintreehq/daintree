@@ -92,6 +92,7 @@ import type { PtyHostLifecycle } from "./pty/PtyHostLifecycle.js";
 import type {
   PtyHostEvent,
   PtyHostSpawnOptions,
+  PluginPtyHostSpawnOptions,
   PtyHostActivityTier,
   CrashType,
   SpawnResult,
@@ -148,6 +149,18 @@ interface TerminalInfoResponse {
   detectedProcessId?: string;
   /** Capability mode — sealed-at-spawn agent capability surface. Set when the terminal was cold-launched as a built-in agent. */
   capabilityAgentId?: BuiltInAgentId;
+}
+
+/**
+ * Result of {@link PtyClient.gracefulKillByProjectConfirmed}. `confirmed` is
+ * false only when a live host timed out without acknowledging the kill — the
+ * caller must NOT clear restoration state in that case, or still-running agents
+ * are orphaned. On the confirmed path `sessions` holds one entry per terminal
+ * (agentSessionId null for non-agents / unresumable terminals).
+ */
+export interface GracefulKillByProjectOutcome {
+  confirmed: boolean;
+  sessions: Array<{ id: string; agentSessionId: string | null }>;
 }
 
 export interface PtyClientConfig {
@@ -764,7 +777,7 @@ export class PtyClient extends EventEmitter {
       // clearing) stay in respawnPendingForShard() above.
       for (const [id, options] of this.pendingSpawns) {
         if (this.ownerKey(id) !== shard.key) continue;
-        shard.send({ type: "spawn", id, options });
+        this.sendSpawnWithPostInput(shard, id, options);
       }
     }
     const pendingPortWindowIds = new Set(shard.pendingMessagePorts.keys());
@@ -773,6 +786,29 @@ export class PtyClient extends EventEmitter {
       shard.shouldResyncProjectContext = false;
       this.syncProjectContextToShard(shard, pendingPortWindowIds);
     }
+  }
+
+  /**
+   * Send a spawn to a shard. For command launches on shells that couldn't host
+   * a startup wrapper, the launch command rides `options.postSpawnInput` in
+   * `pendingSpawns`, and the host's spawn handler injects it right after a
+   * successful spawn (#11339). Every replay path (initial pre-ready replay,
+   * crash respawn, crash-budget migration) funnels through here and re-sends the
+   * same options, so the terminal comes back running its command — including a
+   * resume — instead of a bare prompt. Delivery is bound to spawn success on the
+   * host: a rejected spawn (e.g. TERMINAL_ALREADY_LIVE, #11341) never injects
+   * the command into a pre-existing live PTY.
+   */
+  private sendSpawnWithPostInput(shard: PtyShard, id: string, options: PtyHostSpawnOptions): void {
+    // Never deliver into a shard that isn't ready yet. A post-fork/pre-ready
+    // send is dropped here AND re-sent by the first-ready replay below, which
+    // for a command launch would run the command (and any resume) twice. The
+    // entry is already in `pendingSpawns`, so the first-ready replay (which runs
+    // after `markReady`, i.e. once this guard passes) delivers it exactly once.
+    // This makes the "double-spawn-safe" invariant explicit rather than relying
+    // on the pre-fork transport drop.
+    if (!shard.isRunning()) return;
+    shard.send({ type: "spawn", id, options });
   }
 
   private respawnPendingForShard(shard: PtyShard): void {
@@ -827,7 +863,7 @@ export class PtyClient extends EventEmitter {
       const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
       const stamped: PtyHostSpawnOptions = { ...options, launchGeneration: generation };
       this.pendingSpawns.set(id, stamped);
-      shard.send({ type: "spawn", id, options: stamped });
+      this.sendSpawnWithPostInput(shard, id, stamped);
     }
 
     // Re-enable IPC data mirrors that were active before crash
@@ -920,7 +956,7 @@ export class PtyClient extends EventEmitter {
       this.pendingSpawns.set(id, stamped);
       this.terminalOwners.set(id, DEFAULT_SHARD_KEY);
       migratedIds.push(id);
-      target.send({ type: "spawn", id, options: stamped });
+      this.sendSpawnWithPostInput(target, id, stamped);
     }
     for (const id of migratedIds) {
       if (this.ipcDataMirrorIds.has(id)) {
@@ -1377,7 +1413,35 @@ export class PtyClient extends EventEmitter {
     const shard = this.ensureShardForProject(resolvedProjectId);
     this.terminalOwners.set(id, shard.key);
     this.pendingSpawns.set(id, resolvedOptions);
-    shard.send({ type: "spawn", id, options: resolvedOptions });
+    this.sendSpawnWithPostInput(shard, id, resolvedOptions);
+  }
+
+  /**
+   * Raw plugin-PTY lane (#11300). These four bypass every terminal concern this
+   * class otherwise owns — no project shard placement, no terminal-owner entry,
+   * no lifecycle ledger, no pendingSpawns cap, no DAINTREE_* metadata stamping.
+   * A plugin's interactive process is not a terminal panel; it rides the default
+   * shard purely to reuse the pty-host's crash isolation and native-module
+   * rebuild machinery.
+   *
+   * Like {@link spawn}, `spawnPluginPty` is void — the outcome arrives as a
+   * `"plugin-pty"` event, so the caller must attach its listener BEFORE calling
+   * and filter by `(id, generation)`.
+   */
+  spawnPluginPty(id: string, generation: number, options: PluginPtyHostSpawnOptions): void {
+    this.defaultShard.send({ type: "plugin-pty-spawn", id, generation, options });
+  }
+
+  writePluginPty(id: string, generation: number, data: string): void {
+    this.defaultShard.send({ type: "plugin-pty-write", id, generation, data });
+  }
+
+  resizePluginPty(id: string, generation: number, cols: number, rows: number): void {
+    this.defaultShard.send({ type: "plugin-pty-resize", id, generation, cols, rows });
+  }
+
+  killPluginPty(id: string, generation: number, signal: "SIGTERM" | "SIGKILL"): void {
+    this.defaultShard.send({ type: "plugin-pty-kill", id, generation, signal });
   }
 
   write(id: string, data: string, traceId?: string): void {
@@ -1733,25 +1797,69 @@ export class PtyClient extends EventEmitter {
     return result.sessionId;
   }
 
+  /**
+   * Graceful project kill that reports whether the host actually confirmed the
+   * teardown, so destructive callers (project close+kill, project/scratch
+   * remove) can fail closed instead of wiping restoration state on a guess.
+   *
+   * Mirrors the single-terminal {@link gracefulKill} triage: a typed
+   * BrokerError of HOST_EXITED/APP_SHUTDOWN (or a locally-observed dead/disposed
+   * client) means the host is gone and teardown is real — confirmed, just with
+   * no sessions to capture. A per-request TIMEOUT with a live host means the
+   * teardown is NOT confirmed: agents may still be running, so the caller must
+   * keep the project's restoration state and let the user retry. Unexpected
+   * errors reject; callers treat that as fail-closed too.
+   *
+   * Contract of `confirmed: true`: the host acknowledged and ran the teardown
+   * (graceful shutdown + a fallback hard kill per terminal, see
+   * PtyManager.gracefulKillByProject), or the host is gone. It is NOT a
+   * guarantee that every OS process was reaped, and it does not reconcile with
+   * pty-host crash recovery, which can replay an in-flight `pendingSpawns`
+   * terminal as a fresh incarnation after a host exit — that race is owned by
+   * the crash-recovery path (#11339), not this method.
+   */
+  async gracefulKillByProjectConfirmed(
+    projectId: string,
+    options?: { preserveSession?: boolean }
+  ): Promise<GracefulKillByProjectOutcome> {
+    const shard = this.shardForProjectQuery(projectId);
+    try {
+      const sessions = await sendPtyHostRpc<Array<{ id: string; agentSessionId: string | null }>>(
+        shard,
+        `graceful-kill-by-project-${projectId}`,
+        (requestId) => ({
+          type: "graceful-kill-by-project",
+          projectId,
+          requestId,
+          ...(options?.preserveSession !== undefined
+            ? { preserveSession: options.preserveSession }
+            : {}),
+        }),
+        { method: "graceful-kill-by-project", timeoutMs: PTY_TIMEOUTS["graceful-kill-by-project"] }
+      );
+      return { confirmed: true, sessions };
+    } catch (error) {
+      const isHostGoneBrokerError = error instanceof BrokerError && error.code !== "TIMEOUT";
+      if (isHostGoneBrokerError || !shard.lifecycle.child || this.isDisposed) {
+        // Host is gone: its terminals are gone with it. Teardown is confirmed;
+        // no sessions were capturable.
+        return { confirmed: true, sessions: [] };
+      }
+      if (error instanceof BrokerError && error.code === "TIMEOUT") {
+        // Live host, per-request timeout — the kill was not acknowledged.
+        return { confirmed: false, sessions: [] };
+      }
+      throw error;
+    }
+  }
+
   async gracefulKillByProject(
     projectId: string,
     options?: { preserveSession?: boolean }
   ): Promise<Array<{ id: string; agentSessionId: string | null }>> {
-    const shard = this.shardForProjectQuery(projectId);
-    const promise = sendPtyHostRpc<Array<{ id: string; agentSessionId: string | null }>>(
-      shard,
-      `graceful-kill-by-project-${projectId}`,
-      (requestId) => ({
-        type: "graceful-kill-by-project",
-        projectId,
-        requestId,
-        ...(options?.preserveSession !== undefined
-          ? { preserveSession: options.preserveSession }
-          : {}),
-      }),
-      { method: "graceful-kill-by-project", timeoutMs: PTY_TIMEOUTS["graceful-kill-by-project"] }
-    );
-    return promise.catch(() => []);
+    return this.gracefulKillByProjectConfirmed(projectId, options)
+      .then((outcome) => outcome.sessions)
+      .catch(() => []);
   }
 
   async killByProject(projectId: string): Promise<number> {

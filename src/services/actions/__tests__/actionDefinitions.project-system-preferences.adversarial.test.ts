@@ -320,7 +320,6 @@ describe("project action hardening", () => {
     expectRegistryToMatchIds(actions, [
       "project.switcherPalette",
       "project.mruCycleOlder",
-      "project.mruCycleNewer",
       "project.add",
       "project.openDialog",
       "project.switch",
@@ -636,6 +635,21 @@ describe("system action hardening", () => {
     await expect(
       service.dispatch("copyTree.getFileTree", { worktreeId: "wt-1", dirPath: "src" })
     ).resolves.toEqual({ ok: true, result: { nodes: [{ path: "src", type: "directory" }] } });
+  });
+
+  it("keeps scoped folder paths in copyTree options instead of validating them away", async () => {
+    mocks.copyTreeClient.generate.mockResolvedValueOnce("tree");
+    const { service } = buildService(registerSystemActions);
+
+    await service.dispatch("copyTree.generate", {
+      worktreeId: "wt-1",
+      options: { scopePaths: ["src/panels"] },
+    });
+
+    const options = mocks.copyTreeClient.generate.mock.calls[0]?.[1];
+    // These actions validate against their own copy of the options schema, so a
+    // field added only to the IPC schema is stripped before it ever leaves here.
+    expect(options.scopePaths).toEqual(["src/panels"]);
   });
 
   it("blocks unconfirmed agent-driven artifact patches (danger:confirm — worktree mutation, #10020)", async () => {

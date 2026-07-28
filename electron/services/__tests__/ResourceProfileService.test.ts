@@ -53,6 +53,7 @@ import { resolveResourceProfileConfig } from "../../utils/resourceProfileConfig.
 import { resolveWebglThresholds } from "../../utils/webglContextBudget.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
 import { resetMemoryAccountingForTesting } from "../memoryAccounting.js";
+import { getSystemMemoryThresholds } from "../../utils/systemMemory.js";
 import type { MemoryRollup } from "../../../shared/types/pty-host.js";
 
 const EIGHT_GB = 8 * 1024 * 1024 * 1024;
@@ -135,12 +136,14 @@ interface MockHibernationService {
 }
 interface MockProjectViewManager {
   setCachedViewLimit: Mock;
-  setLowMemoryFreeThresholdMb: Mock;
+  setMemoryPressurePolicy: Mock;
   setEfficiencyFreeze: Mock;
   setPaintGateTimeoutMs: Mock;
   setPaintGateHardTimeoutMs: Mock;
   setWarmPaintGateTimeoutMs: Mock;
   setWarmPaintGateHardTimeoutMs: Mock;
+  setViewLoadTimeoutMs: Mock;
+  setViewLoadHardTimeoutMs: Mock;
 }
 interface MockProjectStatsService {
   updatePollInterval: Mock;
@@ -160,12 +163,14 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDe
   };
   const mockProjectViewManager: MockProjectViewManager = {
     setCachedViewLimit: vi.fn(),
-    setLowMemoryFreeThresholdMb: vi.fn(),
+    setMemoryPressurePolicy: vi.fn(),
     setEfficiencyFreeze: vi.fn(),
     setPaintGateTimeoutMs: vi.fn(),
     setPaintGateHardTimeoutMs: vi.fn(),
     setWarmPaintGateTimeoutMs: vi.fn(),
     setWarmPaintGateHardTimeoutMs: vi.fn(),
+    setViewLoadTimeoutMs: vi.fn(),
+    setViewLoadHardTimeoutMs: vi.fn(),
   };
   const mockProjectStatsService: MockProjectStatsService = {
     updatePollInterval: vi.fn(),
@@ -185,13 +190,32 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDe
 function makeMockPvm(): MockProjectViewManager {
   return {
     setCachedViewLimit: vi.fn(),
-    setLowMemoryFreeThresholdMb: vi.fn(),
+    setMemoryPressurePolicy: vi.fn(),
     setEfficiencyFreeze: vi.fn(),
     setPaintGateTimeoutMs: vi.fn(),
     setPaintGateHardTimeoutMs: vi.fn(),
     setWarmPaintGateTimeoutMs: vi.fn(),
     setWarmPaintGateHardTimeoutMs: vi.fn(),
+    setViewLoadTimeoutMs: vi.fn(),
+    setViewLoadHardTimeoutMs: vi.fn(),
   };
+}
+
+/**
+ * Every push must carry the machine's system-memory thresholds — the same
+ * pair that promotes the profile on the memory signal. Asserting the derived
+ * value (os.totalmem() is pinned to 8 GB in beforeEach) rather than merely
+ * "some positive increasing pair" is what catches a hardcoded or
+ * profile-derived band slipping back in (#11469).
+ */
+function expectArmedPolicy(pvm: MockProjectViewManager): void {
+  const expected = getSystemMemoryThresholds(EIGHT_GB / 1024 / 1024);
+  expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledWith({
+    criticalMb: expected.criticalMb,
+    warningMb: expected.warningMb,
+  });
+  // Without a gap between the edges there is no soft band to step through.
+  expect(expected.warningMb).toBeGreaterThan(expected.criticalMb);
 }
 
 describe("ResourceProfileService", () => {
@@ -712,14 +736,18 @@ describe("ResourceProfileService", () => {
       service.applyCurrentProfileTo(latePvm as unknown as ProjectViewManager);
 
       expect(latePvm.setEfficiencyFreeze).toHaveBeenCalledWith(true);
-      expect(latePvm.setLowMemoryFreeThresholdMb).toHaveBeenCalledWith(
-        RESOURCE_PROFILE_CONFIGS.efficiency.lowMemoryFreeThresholdMb
-      );
+      expectArmedPolicy(latePvm);
       expect(latePvm.setPaintGateTimeoutMs).toHaveBeenCalledWith(
         RESOURCE_PROFILE_CONFIGS.efficiency.paintGateTimeoutMs
       );
       expect(latePvm.setWarmPaintGateHardTimeoutMs).toHaveBeenCalledWith(
         RESOURCE_PROFILE_CONFIGS.efficiency.warmPaintGateHardTimeoutMs
+      );
+      expect(latePvm.setViewLoadTimeoutMs).toHaveBeenCalledWith(
+        RESOURCE_PROFILE_CONFIGS.efficiency.viewLoadTimeoutMs
+      );
+      expect(latePvm.setViewLoadHardTimeoutMs).toHaveBeenCalledWith(
+        RESOURCE_PROFILE_CONFIGS.efficiency.viewLoadHardTimeoutMs
       );
       // Efficiency entry never clamps cached views — it only freezes them.
       expect(latePvm.setCachedViewLimit).not.toHaveBeenCalled();
@@ -737,25 +765,21 @@ describe("ResourceProfileService", () => {
 
       expect(latePvm.setEfficiencyFreeze).not.toHaveBeenCalled();
       expect(latePvm.setCachedViewLimit).not.toHaveBeenCalled();
-      expect(latePvm.setLowMemoryFreeThresholdMb).toHaveBeenCalledWith(
-        RESOURCE_PROFILE_CONFIGS.balanced.lowMemoryFreeThresholdMb
-      );
+      expectArmedPolicy(latePvm);
 
       service.stop();
     });
   });
 
-  it("pushes the balanced profile's threshold on start() even without a transition", () => {
+  it("arms the memory-pressure policy on start() even without a transition", () => {
     const deps = createDeps();
     const service = new ResourceProfileService(deps);
     const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
 
     service.start();
 
-    expect(pvm.setLowMemoryFreeThresholdMb).toHaveBeenCalledWith(
-      RESOURCE_PROFILE_CONFIGS.balanced.lowMemoryFreeThresholdMb
-    );
-    expect(pvm.setLowMemoryFreeThresholdMb).toHaveBeenCalledTimes(1);
+    expectArmedPolicy(pvm);
+    expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
 
     service.stop();
   });
@@ -778,6 +802,12 @@ describe("ResourceProfileService", () => {
     );
     expect(pvm.setWarmPaintGateHardTimeoutMs).toHaveBeenCalledWith(
       RESOURCE_PROFILE_CONFIGS.balanced.warmPaintGateHardTimeoutMs
+    );
+    expect(pvm.setViewLoadTimeoutMs).toHaveBeenCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.viewLoadTimeoutMs
+    );
+    expect(pvm.setViewLoadHardTimeoutMs).toHaveBeenCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.viewLoadHardTimeoutMs
     );
 
     service.stop();
@@ -805,6 +835,12 @@ describe("ResourceProfileService", () => {
     );
     expect(pvm.setWarmPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
       RESOURCE_PROFILE_CONFIGS.efficiency.warmPaintGateHardTimeoutMs
+    );
+    expect(pvm.setViewLoadTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.efficiency.viewLoadTimeoutMs
+    );
+    expect(pvm.setViewLoadHardTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.efficiency.viewLoadHardTimeoutMs
     );
 
     service.stop();
@@ -848,11 +884,17 @@ describe("ResourceProfileService", () => {
     expect(pvm.setWarmPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
       RESOURCE_PROFILE_CONFIGS.balanced.warmPaintGateHardTimeoutMs
     );
+    expect(pvm.setViewLoadTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.viewLoadTimeoutMs
+    );
+    expect(pvm.setViewLoadHardTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.viewLoadHardTimeoutMs
+    );
 
     service.stop();
   });
 
-  it("pushes the efficiency profile's lowMemoryFreeThresholdMb on transition", () => {
+  it("does not re-push the memory-pressure policy on an efficiency transition", () => {
     const deps = createDeps();
     const service = new ResourceProfileService(deps);
     mockIsOnBatteryPower.mockReturnValue(true);
@@ -862,15 +904,16 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
+    // Armed once at start() and owned by the machine's RAM, not the profile —
+    // an efficiency transition must not re-push or alter it (#11469).
     const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
-    expect(pvm.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
-      RESOURCE_PROFILE_CONFIGS.efficiency.lowMemoryFreeThresholdMb
-    );
+    expectArmedPolicy(pvm);
+    expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
 
     service.stop();
   });
 
-  it("pushes the balanced profile's threshold on upgrade from efficiency", () => {
+  it("leaves the memory-pressure policy untouched across a full profile round trip", () => {
     const deps = createDeps({ getUserCachedViewLimit: () => 3 });
     const service = new ResourceProfileService(deps);
     mockIsOnBatteryPower.mockReturnValue(true);
@@ -886,9 +929,6 @@ describe("ResourceProfileService", () => {
     expect(service.getProfile()).toBe("efficiency");
 
     const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
-    expect(pvm.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
-      RESOURCE_PROFILE_CONFIGS.efficiency.lowMemoryFreeThresholdMb
-    );
 
     // Relieve to balanced
     mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700)]);
@@ -899,14 +939,17 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(30_000);
 
     expect(service.getProfile()).toBe("balanced");
-    expect(pvm.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
-      RESOURCE_PROFILE_CONFIGS.balanced.lowMemoryFreeThresholdMb
-    );
+    // balanced → efficiency → balanced, and the band never moved. Before
+    // #11469 this round trip swapped the active floor 768 ↔ 1024, which is what
+    // let the interactive efficiency→balanced clamp disarm reclaim at the exact
+    // moment memory was lowest.
+    expectArmedPolicy(pvm);
+    expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
 
     service.stop();
   });
 
-  it("pushes null threshold on performance transition", () => {
+  it("keeps the policy armed on a performance transition", () => {
     const deps = createDeps();
     const service = new ResourceProfileService(deps);
     service.start();
@@ -918,8 +961,12 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("performance");
 
+    // Performance used to push `null`, disarming reclaim entirely. The band is
+    // now inert above its warning edge on its own, so there is nothing to
+    // disarm — and no window where memory craters before the profile catches up.
     const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
-    expect(pvm.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(null);
+    expectArmedPolicy(pvm);
+    expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
 
     service.stop();
   });
@@ -946,7 +993,6 @@ describe("ResourceProfileService", () => {
     expect(balanced.processTreePollInterval).toBe(2500);
     expect(balanced.projectStatsPollInterval).toBe(5000);
     expect(balanced.memoryPressureInactiveMs).toBe(30 * 60 * 1000);
-    expect(balanced.lowMemoryFreeThresholdMb).toBe(768);
   });
 
   it("resolves per-profile WebGL thresholds off the RAM-tiered ceiling", () => {
@@ -1752,12 +1798,8 @@ describe("ResourceProfileService", () => {
 
     service.start();
 
-    expect(pvmA.setLowMemoryFreeThresholdMb).toHaveBeenCalledWith(
-      RESOURCE_PROFILE_CONFIGS.balanced.lowMemoryFreeThresholdMb
-    );
-    expect(pvmB.setLowMemoryFreeThresholdMb).toHaveBeenCalledWith(
-      RESOURCE_PROFILE_CONFIGS.balanced.lowMemoryFreeThresholdMb
-    );
+    expectArmedPolicy(pvmA);
+    expectArmedPolicy(pvmB);
 
     service.stop();
   });
@@ -1784,14 +1826,13 @@ describe("ResourceProfileService", () => {
     // Entry freezes both windows' cached views but destroys neither.
     expect(pvmA.setCachedViewLimit).not.toHaveBeenCalled();
     expect(pvmA.setEfficiencyFreeze).toHaveBeenCalledWith(true);
-    expect(pvmA.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
-      RESOURCE_PROFILE_CONFIGS.efficiency.lowMemoryFreeThresholdMb
-    );
     expect(pvmB.setCachedViewLimit).not.toHaveBeenCalled();
     expect(pvmB.setEfficiencyFreeze).toHaveBeenCalledWith(true);
-    expect(pvmB.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
-      RESOURCE_PROFILE_CONFIGS.efficiency.lowMemoryFreeThresholdMb
-    );
+    // Both windows armed once at start(); the transition adds nothing.
+    expectArmedPolicy(pvmA);
+    expectArmedPolicy(pvmB);
+    expect(pvmA.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
+    expect(pvmB.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
 
     service.stop();
   });
@@ -1822,9 +1863,7 @@ describe("ResourceProfileService", () => {
     // sequence, unblocked by A's failure — split try/catch per call/per PVM.
     expect(pvmA.setEfficiencyFreeze).toHaveBeenCalledWith(true);
     expect(pvmB.setEfficiencyFreeze).toHaveBeenCalledWith(true);
-    expect(pvmB.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
-      RESOURCE_PROFILE_CONFIGS.efficiency.lowMemoryFreeThresholdMb
-    );
+    expectArmedPolicy(pvmB);
 
     service.stop();
   });

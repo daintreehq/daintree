@@ -26,6 +26,16 @@ export interface ProjectStateReadResult {
 export class ProjectStateManager {
   private projectStateCache = new Map<string, ProjectStateCacheEntry>();
   private pendingQuarantines = new Map<string, string>();
+  // Projects whose state.json existed on disk this session but could not be read
+  // into a complete terminal enumeration — future-schema quarantine, parse
+  // failure, or any non-ENOENT read error. Distinct from `pendingQuarantines`
+  // (a one-shot signal drained by hydration): this set is append-only and never
+  // cleared for the lifetime of the process, so destructive maintenance that
+  // relies on a *complete* set of known terminal ids (the boot .restore sweep)
+  // can fail closed for a project whose ids it could never learn. An ENOENT
+  // (genuinely no saved state) is authoritative emptiness, not unreadability,
+  // and must never land here.
+  private unreadableProjectIds = new Set<string>();
   private writeQueues = new Map<string, Promise<void>>();
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -182,7 +192,11 @@ export class ProjectStateManager {
       }
     }
 
-    this.setProjectStateCache(projectId, validatedState);
+    // Stamp the id we actually saved under, so a cached read and a fresh disk
+    // read agree. The disk path treats the state directory as authoritative, and
+    // a caller passing a stale embedded id must not get a different answer just
+    // because the cache happened to be warm.
+    this.setProjectStateCache(projectId, { ...validatedState, projectId });
   }
 
   async getProjectState(projectId: string): Promise<ProjectState | null> {
@@ -211,6 +225,10 @@ export class ProjectStateManager {
           ? rawVersion
           : 0;
       if (onDiskVersion > PROJECT_STATE_SCHEMA_VERSION) {
+        // Record unreadability before touching disk: a future-version file
+        // holds terminal ids this build can't parse, so its scrollback must
+        // survive the orphan sweep even if the quarantine rename below fails.
+        this.unreadableProjectIds.add(projectId);
         // Avoid a deterministic destination so neither POSIX silently
         // clobbers a prior quarantine nor Windows throws EEXIST. A previously
         // quarantined .future-v{N} file is preserved with a timestamp suffix.
@@ -235,6 +253,16 @@ export class ProjectStateManager {
         return null;
       }
 
+      // A present-but-non-array `terminals` field means the enumeration we can
+      // recover is incomplete — we fall back to zero ids below, so this project
+      // can't be trusted to gate the destructive orphan sweep any more than a
+      // corrupt file could. Flag it. A missing or null field is a legitimately
+      // empty project, not corruption, and must not flag. (Individual entries
+      // that fail schema validation are dropped as genuine orphans — the
+      // terminal won't be restored, so its scrollback is already dead.)
+      if (parsed.terminals != null && !Array.isArray(parsed.terminals)) {
+        this.unreadableProjectIds.add(projectId);
+      }
       const rawTerminals = Array.isArray(parsed.terminals) ? parsed.terminals : [];
       const validTerminals = filterValidTerminalEntries(
         rawTerminals,
@@ -243,7 +271,12 @@ export class ProjectStateManager {
       );
 
       const state: ProjectState = {
-        projectId: parsed.projectId || projectId,
+        // The state directory this was read from is the authority. An embedded
+        // id can be stale — older builds copied the state dir wholesale when a
+        // relocation minted a new id, leaving the previous id inside the file
+        // (#11282) — and trusting it hands callers an id that no longer names
+        // any project.
+        projectId,
         activeWorktreeId: parsed.activeWorktreeId,
         sidebarWidth: typeof parsed.sidebarWidth === "number" ? parsed.sidebarWidth : 350,
         terminals: validTerminals,
@@ -287,6 +320,10 @@ export class ProjectStateManager {
         this.setProjectStateCache(projectId, null);
         return null;
       }
+      // State existed but couldn't be read (parse failure, EACCES/EMFILE/EIO,
+      // etc.). Record it before the corruption quarantine below so a double
+      // fault — unreadable AND unrenameable — is still visible to the sweep.
+      this.unreadableProjectIds.add(projectId);
       console.error(`[ProjectStateManager] Failed to load state for project ${projectId}:`, error);
       try {
         const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
@@ -310,6 +347,20 @@ export class ProjectStateManager {
       return { state, quarantinedPath };
     }
     return { state };
+  }
+
+  /**
+   * Whether this project's state.json existed but could not be read into a
+   * complete terminal enumeration at any point this session (future-schema
+   * quarantine, parse failure, or a non-ENOENT read error). Unlike
+   * `getProjectStateWithRecovery`, this is a non-draining peek — reading it
+   * never clears it — because destructive maintenance that gates on a complete
+   * set of known ids must fail closed for the whole process lifetime, not just
+   * until the recovery signal is consumed by hydration. A project that has
+   * simply never persisted state (ENOENT) reads back false.
+   */
+  wasStateUnreadableThisSession(projectId: string): boolean {
+    return this.unreadableProjectIds.has(projectId);
   }
 
   async clearProjectState(projectId: string): Promise<void> {

@@ -1,22 +1,20 @@
 import * as fs from "fs/promises";
 import * as path from "path";
-import { checkIgnoredPaths } from "../utils/gitCheckIgnore.js";
-import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { FileTreeNode } from "../../shared/types/ipc.js";
+
+// Natural-numeric name ordering so `version_10` sorts after `version_9`
+// instead of between `version_1` and `version_2`. Locale is left undefined so
+// the host-locale collation of the plain `localeCompare` it replaces is
+// preserved — this only adds numeric ordering; default "variant" sensitivity
+// likewise keeps the existing case tie-break. Constructed once at module scope:
+// `getFileTree` runs on every directory read and bulk scan, and per-call
+// collator construction is costly.
+const NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true });
 
 const _baseRealpathCache = new Map<string, Promise<string>>();
 
-// Throttle for the fail-closed warn so a sustained git failure (e.g. a
-// broken FUSE mount on a refresh storm) doesn't spam the main process log
-// with one line per `getFileTree` call. First occurrence is logged
-// immediately; subsequent occurrences within the throttle window are
-// suppressed.
-const WARN_THROTTLE_MS = 30_000;
-const _lastWarnAt = new Map<string, number>();
-
 export function _resetBaseRealpathCacheForTests(): void {
   _baseRealpathCache.clear();
-  _lastWarnAt.clear();
 }
 
 function _getBaseRealpath(resolvedBasePath: string): Promise<string> {
@@ -30,6 +28,17 @@ function _getBaseRealpath(resolvedBasePath: string): Promise<string> {
   return promise;
 }
 
+/**
+ * Raw directory listing: filesystem identity and containment only, no opinion
+ * about what belongs in a context.
+ *
+ * Every entry is returned, `.git` included, so visibility stays a caller
+ * concern — the file browser hides entries client-side (junk list + dotfile
+ * toggle, #11330) and the context picker asks CopyTree which of these entries
+ * it would actually copy (`CopyTreeService.getFileTree`, #11439). This service
+ * used to run a `git check-ignore` subprocess for the picker; that engine
+ * disagreed with the one that builds the bundle, so it is gone.
+ */
 export class FileTreeService {
   async getFileTree(basePath: string, dirPath: string = ""): Promise<FileTreeNode[]> {
     const resolvedBasePath = path.resolve(basePath);
@@ -73,50 +82,13 @@ export class FileTreeService {
       const entries = await fs.readdir(targetPath, { withFileTypes: true });
 
       const toGitPath = (p: string) => p.split(path.sep).join("/");
-      const pathsToCheck = entries
-        .filter((e) => e.name !== ".git")
-        .map((e) => toGitPath(path.join(relativeDirPath, e.name)));
-      const ignoredPaths = new Set<string>();
-
-      try {
-        if (pathsToCheck.length > 0) {
-          const ignored = await checkIgnoredPaths(resolvedBasePath, pathsToCheck);
-          for (const p of ignored) {
-            ignoredPaths.add(p);
-          }
-        }
-      } catch (error) {
-        // Fail closed: if the check-ignore invocation errors (E2BIG, ENOMEM,
-        // missing git, broken repo, …) populate the set with every path we
-        // tried to check so the downstream filter hides all of them. This
-        // is the same shape as "everything in this dir is gitignored" and
-        // prevents gitignored entries (build output, dependency folders,
-        // secret-like files) from leaking into the tree. A transient
-        // failure self-heals on the next successful call.
-        const now = Date.now();
-        const last = _lastWarnAt.get(resolvedBasePath) ?? 0;
-        if (now - last >= WARN_THROTTLE_MS) {
-          _lastWarnAt.set(resolvedBasePath, now);
-          console.warn("git check-ignore failed; hiding checked entries to prevent leak", {
-            code: (error as NodeJS.ErrnoException)?.code,
-            message: formatErrorMessage(error, "Unknown git check-ignore error"),
-            entryCount: pathsToCheck.length,
-          });
-        }
-        for (const p of pathsToCheck) {
-          ignoredPaths.add(p);
-        }
-      }
 
       const statResults = await Promise.all(
         entries.map(async (entry) => {
-          if (entry.name === ".git") return null;
           if (entry.isSymbolicLink()) return null;
 
           const relativePath = path.join(relativeDirPath, entry.name);
           const gitRelativePath = toGitPath(relativePath);
-
-          if (ignoredPaths.has(gitRelativePath)) return null;
 
           const absolutePath = path.join(resolvedBasePath, relativePath);
           try {
@@ -140,7 +112,12 @@ export class FileTreeService {
         }
 
         try {
-          nodes.push({ name, path: gitRelativePath, isDirectory, size: fileStat.size });
+          nodes.push({
+            name,
+            path: gitRelativePath,
+            isDirectory,
+            size: fileStat.size,
+          });
         } catch {
           // skip entries where size read fails
         }
@@ -149,7 +126,17 @@ export class FileTreeService {
       nodes.sort((a, b) => {
         if (a.isDirectory && !b.isDirectory) return -1;
         if (!a.isDirectory && b.isDirectory) return 1;
-        return a.name.localeCompare(b.name);
+        const byName = NAME_COLLATOR.compare(a.name, b.name);
+        if (byName !== 0) return byName;
+        // Numeric collation is not a total order: padded and unpadded forms of
+        // the same value (`file1` / `file01` / `file001`) compare equal, and
+        // the tie would otherwise fall through to readdir order, which is
+        // filesystem- and platform-dependent. Codepoint comparison (not
+        // localeCompare) keeps those ties deterministic regardless of host
+        // locale.
+        if (a.name < b.name) return -1;
+        if (a.name > b.name) return 1;
+        return 0;
       });
 
       return nodes;

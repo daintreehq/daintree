@@ -52,7 +52,7 @@ Action tier exposes several spawn/send tools that look similar. Pick by what you
 - **Spawn an AI agent with a task** → `agent.launch` (single round-trip, takes `prompt` and a `name` for the tab title). Use for "run /research on X", "have Claude work on issue #123", etc. Always set `name` to a short task label so parallel agents are distinguishable.
 - **Spawn a plain shell** → `terminal.new` or `agent.terminal` (aliases — both spawn a non-agent shell). Use only when the user wants a raw terminal, not an agent.
 - **Send a prompt to a running agent** → `terminal.sendCommand` (raw text + Enter). Use for follow-ups.
-- **Inject project context into the focused terminal** → `terminal.inject` (no args; dumps the project's prepared CopyTree context). Use only when the user explicitly asks to inject context — not a general-purpose prompt sender.
+- **Inject project context into a terminal** → `terminal.inject({ terminalId })` — dumps the project's prepared CopyTree context into the named terminal. Pass an explicit `terminalId` (panel UUID from `terminal.list`); agent/MCP dispatch **requires** it and errors without it, so a focus shift can't route the dump into the wrong terminal. Use only when the user explicitly asks to inject context — not a general-purpose prompt sender.
 - **Inject context into a specific terminal** → `copyTree.injectToTerminal({ terminalId })`. Same as above, targeted.
 
 If the right tool isn't in this list, you probably need a higher tier — explain that to the user rather than improvising.

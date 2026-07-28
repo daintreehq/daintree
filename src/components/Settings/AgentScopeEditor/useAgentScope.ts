@@ -69,7 +69,12 @@ export function useAgentScope({
   }, [scopeKind, selectedPreset]);
 
   const agentCfg = getAgentConfig(agentId);
-  const supportsInlineMode = !!agentCfg?.capabilities?.inlineModeFlag;
+  // Either polarity is enough to make the control do something: an agent may
+  // declare only `altScreenFlag` (forces full-screen) or only `inlineModeFlag`
+  // (forces inline) and still ride its CLI default in the other direction
+  // (#11423). Gating on `inlineModeFlag` alone would hide a working control.
+  const supportsInlineMode =
+    !!agentCfg?.capabilities?.inlineModeFlag || !!agentCfg?.capabilities?.altScreenFlag;
 
   const agentDefaultCustomFlags = activeEntry.customFlags ?? "";
 

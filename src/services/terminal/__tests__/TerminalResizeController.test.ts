@@ -330,6 +330,10 @@ describe("TerminalResizeController", () => {
     expect(resetForTerminal).toHaveBeenCalledWith("term-1");
     expect(managed.terminal.resize).toHaveBeenCalledWith(132, 41);
     expect(resizeMock).toHaveBeenCalledWith("term-1", 132, 41);
+    // A bottom-following pane (latestWasAtBottom && !isUserScrolledBack) is
+    // re-pinned after the commit — the shared pin the reveal path now mirrors
+    // (#11316).
+    expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
   });
 
   describe("pre-resize flush budget", () => {
@@ -529,6 +533,8 @@ describe("TerminalResizeController", () => {
 
     expect(managed.terminal.resize).not.toHaveBeenCalled();
     expect(resizeMock).not.toHaveBeenCalled();
+    // No resize happened → no pin (#11316).
+    expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
   });
 
   it("applyDeferredResize defers a grid change on a streaming main-buffer pane to the watchdog (#10863 choke point)", () => {
@@ -556,6 +562,9 @@ describe("TerminalResizeController", () => {
     expect(resizeMock).not.toHaveBeenCalled();
     expect(managed.revealPendingRepair).toBe(true);
     expect(managed.revealPendingGeneration).toBe(7);
+    // The resize was deferred to the watchdog → the pin must not fire here
+    // either (#11316).
+    expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
   });
 
   it("applyDeferredResize still applies a grid change on a streaming ALT-buffer pane (alt exempt from the re-wrap hazard)", () => {
@@ -580,6 +589,11 @@ describe("TerminalResizeController", () => {
     expect(managed.terminal.resize).toHaveBeenCalledWith(120, 40);
     expect(resizeMock).toHaveBeenCalledWith("term-1", 120, 40);
     expect(managed.revealPendingRepair).toBeUndefined();
+    // applyDeferredResize does resize alt buffers, so the shared pin runs here
+    // too — intentionally mirroring commitResize (a real alt buffer has no
+    // scrollback, so scrollToBottom is a no-op). reconcileGeometryFresh differs:
+    // it exits above the pin for alt. Locking the asymmetry (#11316).
+    expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
   });
 
   it("applyDeferredResize is a no-op when xterm dims already match latest", () => {
@@ -603,6 +617,8 @@ describe("TerminalResizeController", () => {
 
     expect(managed.terminal.resize).not.toHaveBeenCalled();
     expect(resizeMock).not.toHaveBeenCalled();
+    // Cache-match early return → no resize, no pin (#11316).
+    expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
   });
 
   it("applyDeferredResize syncs xterm and PTY atomically for settled-strategy agents", () => {
@@ -641,6 +657,67 @@ describe("TerminalResizeController", () => {
     vi.advanceTimersByTime(500);
     expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
     expect(resizeMock).toHaveBeenCalledTimes(1);
+    // The wake-path resize re-pins a bottom-following pane — the reveal-path gap
+    // this fix closes (#11316: a reflow shifts the viewport off-bottom without
+    // firing onScroll, so the deferred resize must restore the bottom).
+    expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
+  });
+
+  it("applyDeferredResize preserves a deliberately user-scrolled viewport", () => {
+    const managed = createManagedTerminal();
+    managed.terminal.cols = 80;
+    managed.terminal.rows = 24;
+    managed.latestCols = 160;
+    managed.latestRows = 40;
+    // The user scrolled up before hiding — the reveal-path resize must reflow
+    // but NEVER yank the viewport back to the bottom (#11316).
+    managed.isUserScrolledBack = true;
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      } as any,
+    });
+
+    controller.applyDeferredResize("term-1");
+
+    expect(managed.terminal.resize).toHaveBeenCalledWith(160, 40);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+    expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
+  });
+
+  it("applyDeferredResize does not pin when the pane was not following the bottom", () => {
+    const managed = createManagedTerminal();
+    managed.terminal.cols = 80;
+    managed.terminal.rows = 24;
+    managed.latestCols = 160;
+    managed.latestRows = 40;
+    // Auto-follow was already off before the hide (latestWasAtBottom captured
+    // false), and the user has not scrolled back — the pin's OTHER predicate.
+    // Guards against the helper degenerating to `if (!isUserScrolledBack)`, which
+    // every other test would still pass (#11316).
+    managed.latestWasAtBottom = false;
+    managed.isUserScrolledBack = false;
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      } as any,
+    });
+
+    controller.applyDeferredResize("term-1");
+
+    expect(managed.terminal.resize).toHaveBeenCalledWith(160, 40);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+    expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
   });
 
   it("applyDeferredResize cancels a pending settled timer before atomic resync", () => {
@@ -1369,7 +1446,7 @@ describe("TerminalResizeController", () => {
       expect(resizeMock).toHaveBeenCalledWith("term-1", 140, 45);
     });
 
-    it("a PTY-only target supersedes an older debounce job without reflowing xterm", () => {
+    it("a background target supersedes an older debounce job and lands exactly once", () => {
       const managed = createManagedTerminal();
       managed.isFocused = false;
       managed.terminal.buffer.active.length = 300;
@@ -1380,10 +1457,13 @@ describe("TerminalResizeController", () => {
       });
 
       controller.resize("term-1", 1200, 800);
-      controller.resizePtyOnly("term-1", 1500, 800);
+      controller.applyBackgroundResize("term-1", 1500, 800);
       vi.advanceTimersByTime(100);
 
-      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      // The superseded 1200px job must not fire afterwards: both grids sit at
+      // the newer target, applied once.
+      expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1500), 40);
       expect(resizeMock).toHaveBeenCalledTimes(1);
       expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1500), 40);
     });
@@ -1628,7 +1708,7 @@ describe("TerminalResizeController", () => {
     });
   });
 
-  describe("resizePtyOnly", () => {
+  describe("applyBackgroundResize", () => {
     function makeController(managed: ReturnType<typeof createManagedTerminal> | undefined) {
       return new TerminalResizeController({
         getInstance: vi.fn(() => managed),
@@ -1641,7 +1721,12 @@ describe("TerminalResizeController", () => {
       });
     }
 
-    it("resizes the PTY without reflowing xterm, even for a visible focused terminal", () => {
+    it("moves xterm and the PTY to the same grid, xterm first", () => {
+      // The grids must never disagree while the view is cached: bytes keep
+      // being written, so a PTY-only resize would land the app's
+      // cursor-addressed output on the wrong rows (#11443). Ordering matters
+      // too — SIGWINCH must not reach the app for a grid the parser hasn't
+      // adopted. No DOM measurement is involved; a detached view has none.
       const managed = createManagedTerminal();
       managed.isFocused = true;
       managed.isVisible = true;
@@ -1650,22 +1735,83 @@ describe("TerminalResizeController", () => {
         _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
       });
 
+      const order: string[] = [];
+      vi.mocked(managed.terminal.resize).mockImplementation(() => {
+        order.push("xterm");
+      });
+      resizeMock.mockImplementation(() => {
+        order.push("pty");
+      });
+
       const controller = makeController(managed);
-      const result = controller.resizePtyOnly("term-1", 1600, 800);
+      const result = controller.applyBackgroundResize("term-1", 1600, 800);
 
       expect(result).toEqual({ cols: colsFor(1600), rows: 40 });
-      expect(managed.terminal.resize).not.toHaveBeenCalled();
-      expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1600), 40);
       expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+      expect(order).toEqual(["xterm", "pty"]);
+      expect(managed.fitAddon.fit).not.toHaveBeenCalled();
       expect(managed.latestCols).toBe(colsFor(1600));
       expect(managed.latestRows).toBe(40);
       expect(managed.lastWidth).toBe(1600);
       expect(managed.lastHeight).toBe(800);
     });
 
+    it("refuses an alt-screen pane outright, leaving both grids untouched", () => {
+      const managed = createManagedTerminal();
+      managed.isAltBuffer = true;
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+      });
+
+      const controller = makeController(managed);
+
+      expect(controller.applyBackgroundResize("term-1", 1600, 800)).toBeNull();
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(managed.lastWidth).toBe(800);
+      expect(managed.lastHeight).toBe(600);
+    });
+
+    it("drops a lock-stashed resize when the pane entered the alternate screen meanwhile", () => {
+      // The stash outlives the buffer-mode change, so re-checking only at the
+      // caller would replay a resize onto a live TUI at unlock (#11443).
+      const managed = createManagedTerminal();
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+      });
+      const controller = makeController(managed);
+
+      controller.lockResize("term-1", true);
+      expect(controller.applyBackgroundResize("term-1", 1600, 800)).toBeNull();
+      expect(managed.pendingBackgroundResize).toEqual({ width: 1600, height: 800 });
+
+      managed.isAltBuffer = true;
+      controller.lockResize("term-1", false);
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(managed.pendingBackgroundResize).toBeUndefined();
+    });
+
+    it("replays a lock-stashed resize for a pane still on the main buffer", () => {
+      const managed = createManagedTerminal();
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+      });
+      const controller = makeController(managed);
+
+      controller.lockResize("term-1", true);
+      controller.applyBackgroundResize("term-1", 1600, 800);
+      controller.lockResize("term-1", false);
+
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1600), 40);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+    });
+
     it("returns null for a missing instance", () => {
       const controller = makeController(undefined);
-      expect(controller.resizePtyOnly("term-1", 1600, 800)).toBeNull();
+      expect(controller.applyBackgroundResize("term-1", 1600, 800)).toBeNull();
       expect(resizeMock).not.toHaveBeenCalled();
     });
 
@@ -1677,7 +1823,7 @@ describe("TerminalResizeController", () => {
       const controller = makeController(managed);
       controller.lockResize("term-1", true);
 
-      expect(controller.resizePtyOnly("term-1", 1600, 800)).toBeNull();
+      expect(controller.applyBackgroundResize("term-1", 1600, 800)).toBeNull();
       expect(resizeMock).not.toHaveBeenCalled();
     });
 
@@ -1688,10 +1834,10 @@ describe("TerminalResizeController", () => {
       });
       const controller = makeController(managed);
 
-      controller.resizePtyOnly("term-1", 1600, 800);
+      controller.applyBackgroundResize("term-1", 1600, 800);
       expect(resizeMock).toHaveBeenCalledTimes(1);
 
-      expect(controller.resizePtyOnly("term-1", 1600, 800)).toBeNull();
+      expect(controller.applyBackgroundResize("term-1", 1600, 800)).toBeNull();
       expect(resizeMock).toHaveBeenCalledTimes(1);
     });
 
@@ -1711,7 +1857,7 @@ describe("TerminalResizeController", () => {
       expect(controller.hasPendingResize("term-1")).toBe(true);
       expect(resizeMock).not.toHaveBeenCalled();
 
-      expect(controller.resizePtyOnly("term-1", 1600, 800)).toBeNull();
+      expect(controller.applyBackgroundResize("term-1", 1600, 800)).toBeNull();
 
       expect(controller.hasPendingResize("term-1")).toBe(false);
       expect(managed.terminal.resize).not.toHaveBeenCalled();
@@ -1728,7 +1874,7 @@ describe("TerminalResizeController", () => {
       });
       const controller = makeController(managed);
 
-      controller.resizePtyOnly("term-1", 1600, 800);
+      controller.applyBackgroundResize("term-1", 1600, 800);
       expect(resizeMock).toHaveBeenCalledTimes(1);
 
       // Grow the container to the widest pixel that still yields the same column
@@ -1740,7 +1886,7 @@ describe("TerminalResizeController", () => {
       const subCellWidth = 1600 + (CELL.width - 1 - ((1600 - SCROLLBAR_PX) % CELL.width));
       expect(colsFor(subCellWidth)).toBe(colsFor(1600));
 
-      const second = controller.resizePtyOnly("term-1", subCellWidth, 800);
+      const second = controller.applyBackgroundResize("term-1", subCellWidth, 800);
       expect(second).toBeNull();
       expect(resizeMock).toHaveBeenCalledTimes(1);
       expect(managed.lastWidth).toBe(subCellWidth);
@@ -1750,7 +1896,7 @@ describe("TerminalResizeController", () => {
       const managed = createManagedTerminal();
       const controller = makeController(managed);
 
-      expect(controller.resizePtyOnly("term-1", 1600, 800)).toBeNull();
+      expect(controller.applyBackgroundResize("term-1", 1600, 800)).toBeNull();
       expect(resizeMock).not.toHaveBeenCalled();
       expect(managed.lastWidth).toBe(800);
       expect(managed.lastHeight).toBe(600);
@@ -1763,10 +1909,10 @@ describe("TerminalResizeController", () => {
       });
       const controller = makeController(managed);
 
-      expect(controller.resizePtyOnly("term-1", Number.NaN, 800)).toBeNull();
-      expect(controller.resizePtyOnly("term-1", 1600, Number.POSITIVE_INFINITY)).toBeNull();
-      expect(controller.resizePtyOnly("term-1", 0, 800)).toBeNull();
-      expect(controller.resizePtyOnly("term-1", -100, 800)).toBeNull();
+      expect(controller.applyBackgroundResize("term-1", Number.NaN, 800)).toBeNull();
+      expect(controller.applyBackgroundResize("term-1", 1600, Number.POSITIVE_INFINITY)).toBeNull();
+      expect(controller.applyBackgroundResize("term-1", 0, 800)).toBeNull();
+      expect(controller.applyBackgroundResize("term-1", -100, 800)).toBeNull();
       expect(resizeMock).not.toHaveBeenCalled();
       expect(managed.lastWidth).toBe(800);
       expect(managed.latestCols).toBe(80);
@@ -1784,15 +1930,18 @@ describe("TerminalResizeController", () => {
       });
 
       const controller = makeController(managed);
-      const result = controller.resizePtyOnly("term-1", 1600, 800);
+      const result = controller.applyBackgroundResize("term-1", 1600, 800);
 
       expect(result).toEqual({ cols: colsFor(1600), rows: 40 });
-      // Direct delivery — not deferred behind the settled 500ms timer, which
-      // would also reflow xterm in a hidden (possibly frozen) renderer.
+      // Direct delivery — not deferred behind the settled 500ms timer, whose
+      // whole purpose (coalescing a live drag) is moot for a burst Main has
+      // already debounced to resize-end.
       expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+      expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
 
+      // Nothing lands a second time when the settled window elapses.
       vi.advanceTimersByTime(500);
-      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
       expect(resizeMock).toHaveBeenCalledTimes(1);
     });
 
@@ -1812,13 +1961,14 @@ describe("TerminalResizeController", () => {
       controller.sendPtyResize("term-1", 120, 30);
       expect(resizeMock).not.toHaveBeenCalled();
 
-      controller.resizePtyOnly("term-1", 1600, 800);
+      controller.applyBackgroundResize("term-1", 1600, 800);
       expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
 
       vi.advanceTimersByTime(500);
-      // The stale timer must not fire its 120x30 resize or reflow xterm.
+      // The stale timer must not fire its 120x30 resize into either grid.
       expect(resizeMock).toHaveBeenCalledTimes(1);
-      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1600), 40);
     });
   });
 
@@ -1851,6 +2001,26 @@ describe("TerminalResizeController", () => {
       // Must NOT route through fitAddon.fit() — that resizes xterm before the PTY
       // and would break settled-strategy atomicity.
       expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+      // The reveal-path reflow re-pins a bottom-following pane — the missing
+      // pin that left docked terminals parked above the bottom (#11316).
+      expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
+    });
+
+    it("preserves a deliberately user-scrolled viewport across a fresh reflow", () => {
+      const managed = createManagedTerminal();
+      // Grid drifts (box proposes 100x30, xterm is 80x24) so a real reflow runs,
+      // but the user had scrolled up before hiding — the reveal must not yank the
+      // viewport back to the bottom (#11316).
+      managed.isUserScrolledBack = true;
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+
+      const controller = makeController(managed);
+      const ok = controller.reconcileGeometryFresh("term-1");
+
+      expect(ok).toBe(true);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+      expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
     });
 
     it("does NOT reflow a live alt-screen TUI even when the grid drifted (OpenCode clobber regression)", () => {
@@ -1870,6 +2040,9 @@ describe("TerminalResizeController", () => {
       expect(ok).toBe(true);
       expect(managed.terminal.resize).not.toHaveBeenCalled();
       expect(resizeMock).not.toHaveBeenCalled();
+      // The alt-buffer early return sits above the pin — never scroll a live
+      // full-screen TUI (#11316).
+      expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
     });
 
     it("defers a grid-changing reflow while the pane is still streaming output (#10863)", () => {
@@ -1946,6 +2119,9 @@ describe("TerminalResizeController", () => {
       expect(ok).toBe(true);
       expect(managed.terminal.resize).not.toHaveBeenCalled();
       expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+      // Streaming only blocks a grid-CHANGING reflow; a successful no-drift
+      // reconcile still self-heals bottom-follow (#11316).
+      expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
     });
 
     it("ignores an active resize lock without clearing it (the reveal exception)", () => {
@@ -2025,6 +2201,10 @@ describe("TerminalResizeController", () => {
       expect(ok).toBe(true);
       expect(managed.terminal.resize).not.toHaveBeenCalled();
       expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+      // Even with no xterm reflow, a successful main-buffer reconcile re-pins a
+      // bottom-following pane — this self-heals a viewport left off-bottom by an
+      // earlier silent reflow, and is a no-op when already at bottom (#11316).
+      expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
     });
 
     it("falls back to cell-metric math when no proposable dimensions exist", () => {
@@ -2117,7 +2297,7 @@ describe("TerminalResizeController", () => {
       const controller = makeCtl(managed);
 
       controller.lockResize("term-1", true);
-      const result = controller.resizePtyOnly("term-1", 1600, 800);
+      const result = controller.applyBackgroundResize("term-1", 1600, 800);
 
       // Locked: the PTY is not resized now, but the geometry is preserved.
       expect(result).toBeNull();
@@ -2130,7 +2310,7 @@ describe("TerminalResizeController", () => {
       const controller = makeCtl(managed);
 
       controller.lockResize("term-1", true);
-      controller.resizePtyOnly("term-1", 1600, 800);
+      controller.applyBackgroundResize("term-1", 1600, 800);
       expect(resizeMock).not.toHaveBeenCalled();
 
       controller.lockResize("term-1", false);

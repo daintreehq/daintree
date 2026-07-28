@@ -27,6 +27,7 @@ import { cleanupEntry } from "./ProjectViewLifecycleController.js";
 import * as EvictionController from "./ProjectViewEvictionController.js";
 import { hasActiveAgent, initAgentStateCache } from "./ProjectViewAgentStateCache.js";
 import type { PaintGate, PaintGateOutcome, ViewEntry } from "./ProjectViewManagerTypes.js";
+import type { MemoryPressurePolicy } from "../utils/cachedProjectViews.js";
 
 // Trailing-edge debounce on freeze entry: the lag-pressure path can flip
 // efficiency on/off without going through the 30 s downgrade hysteresis, so
@@ -65,6 +66,22 @@ const DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS = 4_000;
  */
 const DEFAULT_WARM_PAINT_GATE_TIMEOUT_MS = 500;
 const DEFAULT_WARM_PAINT_GATE_HARD_TIMEOUT_MS = 1_500;
+/**
+ * Soft view-load timeout (ms). At this point the cold-start load is taking far
+ * longer than the measured distribution (p90 ~177ms) and that fact is logged,
+ * but the load keeps running — crossing this bound is observable, never fatal.
+ */
+const DEFAULT_VIEW_LOAD_TIMEOUT_MS = 10_000;
+/**
+ * Hard view-load timeout (ms). Absolute ceiling at which the load is abandoned
+ * and the switch rolls back. Previously the soft bound doubled as this ceiling,
+ * so a load that was merely slow — a main process saturated by concurrent agent
+ * CLIs and git enumeration also stalls the `app://` chunks the renderer is
+ * waiting on — lost the switch outright (#11459). Progress signals deliberately
+ * do NOT extend it: the same stall that delays the load delays any event that
+ * would reset it, so only a wall-clock backstop can bound the wait.
+ */
+const DEFAULT_VIEW_LOAD_HARD_TIMEOUT_MS = 30_000;
 /**
  * Period between renderer-memory samples for cached (non-active) views. 30 s
  * matches `ProcessMemoryMonitor` and keeps the synchronous `app.getAppMetrics()`
@@ -135,6 +152,18 @@ export interface ProjectViewManagerOptions {
    */
   warmPaintGateHardTimeoutMs?: number;
   /**
+   * Override the soft view-load timeout (default 10000 ms). Crossing this bound
+   * only logs `projectview.load.softtimeout` — the load stays alive. Lower
+   * values let tests exercise the slow-load warning path without a real stall.
+   */
+  viewLoadTimeoutMs?: number;
+  /**
+   * Override the hard view-load timeout (default 30000 ms). At this bound the
+   * load is abandoned and the switch rolls back. Lower values let tests drive
+   * the rejection deterministically without advancing 30s of fake time.
+   */
+  viewLoadHardTimeoutMs?: number;
+  /**
    * Resolve the Daintree Assistant backend bound to a project — its PTY and the
    * WebContents its help session pinned — or null when it has no session.
    * Injected from the composition root so the eviction policy can consult
@@ -165,7 +194,7 @@ export class ProjectViewManager {
   webContentsToProject = new Map<number, string>();
   activeProjectId: string | null = null;
   maxCachedViews = 1;
-  lowMemoryFreeThresholdMb: number | null = null;
+  memoryPressurePolicy: MemoryPressurePolicy | null = null;
   win: BrowserWindow;
   dirname: string;
   onRecreateWindow?: () => Promise<void>;
@@ -186,10 +215,30 @@ export class ProjectViewManager {
   private efficiencyFreezeTimer: NodeJS.Timeout | null = null;
   private backgroundResizeTimer: NodeJS.Timeout | null = null;
   pendingPaintGate: PaintGate | null = null;
+  /**
+   * The cold switch currently between `loadView` starting and the outgoing
+   * view being detached (or the switch rolling back).
+   *
+   * `pendingPaintGate` cannot answer "is the outgoing view still on screen?":
+   * the gate resolves on the incoming view's skeleton signal — or its own 4s
+   * hard timeout — and nulls itself, while the outgoing view stays attached
+   * and visible until `loadView` resolves. With the load ceiling raised to
+   * 30s (#11459) that divergence is wide enough to matter, so the two
+   * consumers that need the real answer read this instead:
+   *   - eviction, so a pressure pass can't destroy the visible outgoing view
+   *     and leave a blank window behind (the guard in
+   *     ProjectViewEvictionController exists for exactly this case but was
+   *     keyed off the gate);
+   *   - the persistent crash handler, so a renderer that dies mid-load takes
+   *     only `loadView`'s rollback and not crash recovery as well.
+   */
+  pendingColdSwitch: { projectId: string; outgoingProjectId: string | null } | null = null;
   paintGateTimeoutMs = DEFAULT_PAINT_GATE_TIMEOUT_MS;
   paintGateHardTimeoutMs = DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS;
   warmPaintGateTimeoutMs = DEFAULT_WARM_PAINT_GATE_TIMEOUT_MS;
   warmPaintGateHardTimeoutMs = DEFAULT_WARM_PAINT_GATE_HARD_TIMEOUT_MS;
+  viewLoadTimeoutMs = DEFAULT_VIEW_LOAD_TIMEOUT_MS;
+  viewLoadHardTimeoutMs = DEFAULT_VIEW_LOAD_HARD_TIMEOUT_MS;
   // One-shot focus intent consumed by the next switchTo for this projectId.
   // Lives on the instance (not module) so multi-window does not cross-leak.
   // Cleared after delivery or discard so a later unrelated switch can't
@@ -236,6 +285,12 @@ export class ProjectViewManager {
     }
     if (opts.warmPaintGateHardTimeoutMs != null) {
       this.warmPaintGateHardTimeoutMs = Math.max(0, opts.warmPaintGateHardTimeoutMs);
+    }
+    if (opts.viewLoadTimeoutMs != null) {
+      this.viewLoadTimeoutMs = Math.max(0, opts.viewLoadTimeoutMs);
+    }
+    if (opts.viewLoadHardTimeoutMs != null) {
+      this.viewLoadHardTimeoutMs = Math.max(0, opts.viewLoadHardTimeoutMs);
     }
 
     // Single resize handler that always updates the active view's bounds.
@@ -353,6 +408,37 @@ export class ProjectViewManager {
     return task;
   }
 
+  /**
+   * Repoint a project's cached view at its new folder after a phase-3 relocation
+   * (#11282). The view stays on-screen with its live React/xterm state intact —
+   * only `ViewEntry.projectPath` (consumed by the next `switchTo`, the
+   * swap-failure rollback and diagnostics) is stale after the move. Enqueued on
+   * the same `switchChain` as `switchTo`, so it can't interleave with a
+   * concurrent switch that would read or overwrite the entry mid-rebind
+   * (#10808/#10931). Resolves to the view's live `WebContents` (for the
+   * coordinator's targeted repoint send), or `null` when no cached view exists
+   * or it was torn down — the Electron 41+ `webContents` getter can be undefined
+   * for a destroyed view, so it is guarded before any read.
+   */
+  async rebindProjectPath(
+    projectId: string,
+    newPath: string
+  ): Promise<Electron.WebContents | null> {
+    const task = this.switchChain.then(() => {
+      const entry = this.views.get(projectId);
+      if (!entry) return null;
+      entry.projectPath = newPath;
+      const wc = entry.view?.webContents;
+      if (!wc || wc.isDestroyed()) return null;
+      return wc;
+    });
+    this.switchChain = task.then(
+      () => undefined,
+      () => undefined
+    );
+    return task;
+  }
+
   clearPaintGate(): void {
     PaintGateController.clearPaintGate(this);
   }
@@ -426,14 +512,24 @@ export class ProjectViewManager {
   }
 
   /**
-   * Project whose view is the still-visible anti-flash bridge of an open paint
-   * gate. During a cold switch `activeProjectId` is already the incoming
-   * project, but the outgoing project's view stays on-screen until the gate
-   * settles — so it is non-evictable for the same reason as the active view.
-   * Eviction paths must skip both (mirrors the LRU guard in `evictStaleViews`).
+   * Project whose view is the still-visible anti-flash bridge of a cold switch.
+   * During a cold switch `activeProjectId` is already the incoming project, but
+   * the outgoing project's view stays on-screen until the load settles — so it
+   * is non-evictable for the same reason as the active view. Eviction paths
+   * must skip both (mirrors the LRU guard in `evictStaleViews`).
+   *
+   * Spans the whole load, not just the paint gate: the gate resolves on the
+   * incoming skeleton signal (or its own hard timeout) and nulls itself, while
+   * the outgoing view stays attached until `loadView` settles — up to the load
+   * ceiling (#11459). Falling back to `pendingColdSwitch` closes that window
+   * for every consumer (hibernation, idle auto-close, relocation, menu state),
+   * any of which would otherwise destroy the visible outgoing view and leave
+   * rollback with nothing to restore.
    */
   getOutgoingBridgeProjectId(): string | null {
-    return this.pendingPaintGate?.outgoingProjectId ?? null;
+    return (
+      this.pendingPaintGate?.outgoingProjectId ?? this.pendingColdSwitch?.outgoingProjectId ?? null
+    );
   }
 
   getActiveView(): WebContentsView | null {
@@ -511,7 +607,9 @@ export class ProjectViewManager {
   }
 
   setCachedViewLimit(n: number): void {
-    const safe = Number.isFinite(n) ? n : 1;
+    // Rounded, not just clamped: the cap counts views, and a fractional limit
+    // would propagate into the pressure ladder's stepping arithmetic.
+    const safe = Number.isFinite(n) ? Math.round(n) : 1;
     this.maxCachedViews = Math.max(1, Math.min(5, safe));
     EvictionController.evictStaleViews(this, "limit-change");
   }
@@ -576,20 +674,66 @@ export class ProjectViewManager {
   }
 
   /**
-   * Set the available-memory floor (MB) below which eviction clamps the
-   * effective cap to 1 view for the current pass without mutating
-   * `maxCachedViews`. `null` disables the override.
+   * Set the soft view-load timeout (ms). Does NOT retime an in-flight load —
+   * the value is captured when `loadView` is called. Called by
+   * `ResourceProfileService` to push per-profile timing.
+   */
+  setViewLoadTimeoutMs(ms: number): void {
+    if (!Number.isFinite(ms) || ms < 0) return;
+    this.viewLoadTimeoutMs = ms;
+  }
+
+  /**
+   * Set the hard view-load timeout (ms). Does NOT retime an in-flight load —
+   * the value is captured when `loadView` is called. Called by
+   * `ResourceProfileService` to push per-profile timing.
+   */
+  setViewLoadHardTimeoutMs(ms: number): void {
+    if (!Number.isFinite(ms) || ms < 0) return;
+    this.viewLoadHardTimeoutMs = ms;
+  }
+
+  /**
+   * Set the available-memory band governing cached-view reclaim, without
+   * mutating `maxCachedViews`. Pushed once at ResourceProfileService start (and
+   * per late-created window), never on a profile transition — the band is a
+   * property of the machine, not of the profile, so the interactive
+   * efficiency→balanced clamp cannot loosen it (#11469). `null` disables
+   * reclaim entirely.
+   *
+   * The pair is copied: the caller's object is a long-lived service field, and
+   * an inverted or non-finite edge disables rather than half-arms the policy.
+   */
+  setMemoryPressurePolicy(policy: MemoryPressurePolicy | null): void {
+    if (
+      policy == null ||
+      !Number.isFinite(policy.criticalMb) ||
+      !Number.isFinite(policy.warningMb) ||
+      policy.criticalMb <= 0 ||
+      policy.warningMb < policy.criticalMb
+    ) {
+      this.memoryPressurePolicy = null;
+      return;
+    }
+    this.memoryPressurePolicy = { criticalMb: policy.criticalMb, warningMb: policy.warningMb };
+  }
+
+  /**
+   * Legacy single-floor setter, retained as the E2E escape hatch (six specs
+   * push `null` to neutralize pressure eviction so host memory can't perturb
+   * their deterministic assertions). A positive value collapses the band to a
+   * cliff at `mb`, reproducing the pre-#11469 clamp-to-1 exactly.
    */
   setLowMemoryFreeThresholdMb(mb: number | null): void {
     if (mb == null || !Number.isFinite(mb) || mb <= 0) {
-      this.lowMemoryFreeThresholdMb = null;
+      this.memoryPressurePolicy = null;
     } else {
-      this.lowMemoryFreeThresholdMb = mb;
+      this.memoryPressurePolicy = { criticalMb: mb, warningMb: mb };
     }
   }
 
   getLowMemoryFreeThresholdMb(): number | null {
-    return this.lowMemoryFreeThresholdMb;
+    return this.memoryPressurePolicy?.criticalMb ?? null;
   }
 
   /**
@@ -734,6 +878,7 @@ export class ProjectViewManager {
     }
 
     PaintGateController.clearPaintGate(this);
+    this.pendingColdSwitch = null;
     for (const projectId of Array.from(this.views.keys())) {
       cleanupEntry(this, projectId);
     }

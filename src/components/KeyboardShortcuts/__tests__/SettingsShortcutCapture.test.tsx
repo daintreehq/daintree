@@ -350,7 +350,7 @@ describe("SettingsShortcutCapture", () => {
         onCapture={mockOnCapture}
         onCancel={mockOnCancel}
         excludeActionId="test.action"
-        scope="terminal"
+        scope="portal"
       />
     );
 
@@ -370,7 +370,7 @@ describe("SettingsShortcutCapture", () => {
     expect(keybindingService.findConflicts).toHaveBeenCalledWith(
       expect.any(String),
       "test.action",
-      "terminal"
+      "portal"
     );
   });
 

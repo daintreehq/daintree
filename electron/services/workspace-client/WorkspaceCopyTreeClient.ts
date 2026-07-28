@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { type ProcessEntry, type CopyTreeProgressCallback } from "./types.js";
 import type { WorkspaceHostProcess } from "../WorkspaceHostProcess.js";
-import type { CopyTreeOptions, CopyTreeResult } from "../../../shared/types/ipc.js";
+import type { CopyTreeOptions, CopyTreeResult, FileTreeNode } from "../../../shared/types/ipc.js";
 
 export interface WorkspaceCopyTreeClientDeps {
   resolveHostForPath: (targetPath: string) => WorkspaceHostProcess | undefined;
@@ -75,7 +75,6 @@ export class WorkspaceCopyTreeClient {
       return {
         includedFiles: 0,
         includedSize: 0,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
         error: "No workspace host for path",
       };
     }
@@ -103,9 +102,55 @@ export class WorkspaceCopyTreeClient {
       return {
         includedFiles: 0,
         includedSize: 0,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
         error: formatErrorMessage(error, "Failed to generate context"),
       };
+    } finally {
+      this.activeCopyTreeOperations.delete(operationId);
+    }
+  }
+
+  /**
+   * List a directory as the context sees it — a CopyTree dry run decides what
+   * is in, so the listing and the generated bundle can't disagree (#11439).
+   *
+   * Tracked in `activeCopyTreeOperations` like the other CopyTree work so a
+   * cancel-all reclaims a listing still walking the tree.
+   */
+  async getContextFileTree(
+    rootPath: string,
+    dirPath?: string,
+    options?: CopyTreeOptions,
+    includeExcluded?: boolean
+  ): Promise<FileTreeNode[]> {
+    const host = this.resolveHostForPath(rootPath);
+    if (!host) throw new Error("No workspace host for path");
+
+    const requestId = host.generateRequestId();
+    const operationId = crypto.randomUUID();
+
+    this.activeCopyTreeOperations.set(operationId, rootPath);
+
+    try {
+      const result = await host.sendWithResponse<{
+        nodes: FileTreeNode[];
+        error?: string;
+      }>(
+        {
+          type: "copytree:get-file-tree",
+          requestId,
+          operationId,
+          worktreePath: rootPath,
+          dirPath,
+          options,
+          includeExcluded,
+        },
+        120000
+      );
+
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      return result.nodes;
     } finally {
       this.activeCopyTreeOperations.delete(operationId);
     }

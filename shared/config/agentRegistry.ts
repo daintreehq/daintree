@@ -296,6 +296,58 @@ export type AgentResume =
     };
 
 /**
+ * How an agent's conversation history fares when its project folder is moved or
+ * renamed (#11282, phase 5). Surfaced in the relocation preview so the user is
+ * warned BEFORE a move when a conversation can't be resumed at the new path.
+ *
+ * The tier is a static property of the provider's resume mechanism, computed
+ * live from this config at preview time and never persisted (a captured tier
+ * would go stale as CLIs change). `resume.kind` alone is NOT a reliable
+ * discriminator: two agents can both be `kind: "session-id"` yet differ — Codex
+ * resumes by a globally-addressable id, while Claude's store is path-slug-scoped
+ * and can't resume at a new path.
+ *
+ * - `preserved` — a captured session resumes automatically at the new path
+ *   (globally-addressable session ids, e.g. Codex, Copilot).
+ * - `project-local` — the history physically lives inside the project folder, so
+ *   it travels with the move and resumes at the new path (e.g. Aider, which
+ *   writes `.aider.chat.history.md` into the git root). A cwd-scoped LOOKUP into
+ *   a home-dir store is NOT this tier — that's `provider-migration`.
+ * - `provider-migration` — the conversation persists on disk but the provider
+ *   can't resume it at the new path, and Daintree must never touch the
+ *   provider's private store (#4100), so recovery needs a manual provider step
+ *   (e.g. Claude Code's path-slug store, Kiro's absolute-path-keyed SQLite).
+ * - `unavailable` — the agent has no usable resume path for a moved folder
+ *   (e.g. Gemini's retired CLI, Crush which omits `resume` entirely).
+ * - `unverified` — continuity across a move hasn't been confirmed for this
+ *   provider; the default for any unclassified agent so we never overclaim.
+ *
+ * `CONVERSATION_CONTINUITY_TIERS` below is the canonical runtime list; the type
+ * is derived from it so a single source of truth backs both. Tests iterate that
+ * tuple instead of re-declaring the union (which would just duplicate a typed
+ * literal).
+ */
+export const CONVERSATION_CONTINUITY_TIERS = [
+  "preserved",
+  "project-local",
+  "provider-migration",
+  "unavailable",
+  "unverified",
+] as const;
+
+export type ConversationContinuityTier = (typeof CONVERSATION_CONTINUITY_TIERS)[number];
+
+export interface AgentContinuity {
+  tier: ConversationContinuityTier;
+  /**
+   * One short, provider-specific sentence shown beneath the tier in the
+   * relocation preview. Sentence case, no trailing period. Omit to let the UI
+   * fall back to a generic per-tier line.
+   */
+  detail?: string;
+}
+
+/**
  * Capability shape describing how an agent participates in the Daintree
  * assistant overlay. Each field captures a distinct wiring concern; the older
  * `supportsAssistant: boolean` collapsed all of them into one bit and
@@ -402,6 +454,20 @@ export interface AgentConfig {
     /** CLI flag to disable alt-screen and use inline rendering (e.g., "--no-alt-screen") */
     inlineModeFlag?: string;
     /**
+     * CLI flag that forces the full-screen alternate buffer (e.g. "--fullscreen"),
+     * the opposite polarity of {@link inlineModeFlag}. Declare it for a CLI that
+     * picks inline on its own — via its own config file or terminal
+     * auto-detection — so choosing "Alt screen" is more than the absence of the
+     * inline flag (#11423). Omit it when the CLI already defaults to alt-screen;
+     * dropping `inlineModeFlag` is then enough.
+     *
+     * Both are single tokens and mutually exclusive: exactly one is injected per
+     * launch, and the launch path strips the other. Never pair this with
+     * `blockAltScreen: true` — forcing a full-screen TUI while the terminal
+     * strips its alt-screen escape sequences leaves the agent unusable.
+     */
+    altScreenFlag?: string;
+    /**
      * Default inline-mode state when the user hasn't chosen one. Agents with an
      * `inlineModeFlag` otherwise default to inline (`true`); set this to `false`
      * for a full-screen TUI that renders better on the alternate screen (clean
@@ -479,6 +545,14 @@ export interface AgentConfig {
    * See {@link AgentResume} for the full shape per variant.
    */
   resume?: AgentResume;
+  /**
+   * How this agent's conversation history fares across a project-folder move
+   * (#11282, phase 5). Read live by the relocation preview via
+   * {@link resolveAgentContinuity}; unset ⇒ `unverified`, so an unclassified
+   * agent never claims its conversation survives. See
+   * {@link ConversationContinuityTier}.
+   */
+  continuity?: AgentContinuity;
   /**
    * Prerequisites required for this agent to function.
    * Merged with baseline prerequisites during health checks.
@@ -691,15 +765,32 @@ export function getEffectiveAgentIds(): string[] {
 }
 
 export function getEffectiveAgentConfig(agentId: string): AgentConfig | undefined {
-  return getEffectiveRegistry()[agentId];
+  // Own-key check to match `isEffectivelyRegisteredAgent` below: `agentId` can
+  // come from a plugin manifest, and a bare index would return an inherited
+  // `Object.prototype` member (e.g. `toString`) as a truthy "config".
+  const registry = getEffectiveRegistry();
+  return Object.hasOwn(registry, agentId) ? registry[agentId] : undefined;
 }
 
 export function isEffectivelyRegisteredAgent(agentId: string): boolean {
   return Object.prototype.hasOwnProperty.call(getEffectiveRegistry(), agentId);
 }
 
+/**
+ * Resolve an agent's conversation-continuity classification for the relocation
+ * preview (#11282, phase 5). Reads the effective registry so plugin/user agents
+ * resolve too, and defaults to `unverified` for any agent that hasn't declared a
+ * `continuity` block — we never assume a conversation survives a move. Pure and
+ * side-effect free; computed live at preview time, never cached or persisted.
+ */
+export function resolveAgentContinuity(agentId: string): AgentContinuity {
+  return getEffectiveAgentConfig(agentId)?.continuity ?? { tier: "unverified" };
+}
+
 export function isBuiltInAgent(agentId: string): boolean {
-  return agentId in AGENT_REGISTRY;
+  // Own-key check: a user agent legitimately named `toString` passes the
+  // safe-id rules, and `in` would falsely reject it as a built-in.
+  return Object.hasOwn(AGENT_REGISTRY, agentId);
 }
 
 export function getAgentModelConfig(

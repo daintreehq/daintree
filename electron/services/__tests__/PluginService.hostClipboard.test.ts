@@ -16,7 +16,16 @@ vi.mock("electron", () => ({
   webContents: { getAllWebContents: vi.fn(() => []) },
   clipboard: {
     writeText: vi.fn(),
+    writeImage: vi.fn(),
     readText: vi.fn(() => ""),
+  },
+  // Mirrors Electron's real contract: createFromBuffer never throws on
+  // malformed input, it returns an image whose isEmpty() is true. Bytes
+  // starting with the PNG magic number stand in for a decodable image.
+  nativeImage: {
+    createFromBuffer: vi.fn((buf: Buffer) => ({
+      isEmpty: () => !(buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50),
+    })),
   },
 }));
 
@@ -27,8 +36,9 @@ vi.mock("../ProjectStore.js", () => ({
   },
 }));
 
+const appendSpy = vi.fn();
 vi.mock("../PluginActionAuditService.js", () => ({
-  getPluginActionAuditService: () => ({ append: vi.fn() }),
+  getPluginActionAuditService: () => ({ append: appendSpy }),
 }));
 
 import { clipboard } from "electron";
@@ -71,7 +81,16 @@ function registerPlugin(capabilities: string[]): PluginHostApi {
   return seam._createHostForTests("acme.clip");
 }
 
+/** Bytes that the nativeImage mock decodes to a non-empty image. */
+function pngBytes(length = 8): Uint8Array {
+  const bytes = new Uint8Array(length);
+  bytes.set([0x89, 0x50, 0x4e, 0x47], 0);
+  return bytes;
+}
+
 beforeEach(() => {
+  appendSpy.mockClear();
+  mockClipboard.writeImage.mockClear();
   mockClipboard.writeText.mockClear();
   mockClipboard.readText.mockClear();
   mockClipboard.readText.mockReturnValue("");
@@ -181,5 +200,102 @@ describe("host.clipboard write size guard", () => {
     expect(payload.length).toBeLessThan(LIMIT); // under the limit by .length
     await expect(host.clipboard.writeText(payload)).rejects.toThrow(/PAYLOAD_TOO_LARGE/);
     expect(mockClipboard.writeText).not.toHaveBeenCalled();
+  });
+});
+
+describe("host.clipboard.writeImage", () => {
+  const LIMIT = 20 * 1024 * 1024;
+
+  it("hands the decoded image to the OS clipboard", async () => {
+    const { nativeImage } = await import("electron");
+    const sentinel = { isEmpty: () => false };
+    vi.mocked(nativeImage.createFromBuffer).mockReturnValueOnce(
+      sentinel as unknown as ReturnType<typeof nativeImage.createFromBuffer>
+    );
+    const host = registerPlugin(["clipboard:write"]);
+
+    await expect(host.clipboard.writeImage(pngBytes())).resolves.toBeUndefined();
+    // Assert the decoded object, not just a call count — passing the raw
+    // buffer or a re-decoded image would still satisfy a count check.
+    expect(mockClipboard.writeImage).toHaveBeenCalledWith(sentinel);
+  });
+
+  it("rejects without clipboard:write", async () => {
+    const host = registerPlugin(["clipboard:read"]);
+    await expect(host.clipboard.writeImage(pngBytes())).rejects.toThrow(/PERMISSION_REQUIRED/);
+    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-Uint8Array payload", async () => {
+    const host = registerPlugin(["clipboard:write"]);
+    await expect(host.clipboard.writeImage("not-bytes" as unknown as Uint8Array)).rejects.toThrow(
+      /VALIDATION/
+    );
+    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects bytes that do not decode to an image", async () => {
+    // nativeImage.createFromBuffer returns an empty image rather than
+    // throwing, so without the isEmpty() check this would silently put a
+    // blank image on the clipboard and report success.
+    const host = registerPlugin(["clipboard:write"]);
+    await expect(host.clipboard.writeImage(new Uint8Array([1, 2, 3, 4]))).rejects.toThrow(
+      /VALIDATION/
+    );
+    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects a payload one byte over the 20 MiB limit without decoding it", async () => {
+    const { nativeImage } = await import("electron");
+    vi.mocked(nativeImage.createFromBuffer).mockClear();
+    const host = registerPlugin(["clipboard:write"]);
+
+    await expect(host.clipboard.writeImage(pngBytes(LIMIT + 1))).rejects.toThrow(
+      /PAYLOAD_TOO_LARGE/
+    );
+    // The cap exists to bound memory: decoding allocates a bitmap several
+    // times the compressed size, so admitting the bytes to the decoder first
+    // would defeat it.
+    expect(vi.mocked(nativeImage.createFromBuffer)).not.toHaveBeenCalled();
+    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+  });
+
+  it("accepts a payload exactly at the limit", async () => {
+    const host = registerPlugin(["clipboard:write"]);
+    await expect(host.clipboard.writeImage(pngBytes(LIMIT))).resolves.toBeUndefined();
+    expect(mockClipboard.writeImage).toHaveBeenCalledTimes(1);
+  });
+
+  it("decodes a subarray view's own bytes, not its whole backing buffer", async () => {
+    // Buffer.from(view.buffer) without the byteOffset/byteLength triple would
+    // hand over the wrong bytes for any caller whose data is a view — and
+    // would do so silently, since the leading bytes still look like a PNG.
+    const backing = new Uint8Array(64);
+    backing.set([0x89, 0x50, 0x4e, 0x47], 16);
+    const view = backing.subarray(16, 32);
+    const host = registerPlugin(["clipboard:write"]);
+    await expect(host.clipboard.writeImage(view)).resolves.toBeUndefined();
+
+    const { nativeImage } = await import("electron");
+    const passed = vi.mocked(nativeImage.createFromBuffer).mock.calls.at(-1)?.[0];
+    expect(passed?.length).toBe(16);
+    expect(passed?.[0]).toBe(0x89);
+  });
+
+  it("audits a successful image write by byte count only", async () => {
+    const host = registerPlugin(["clipboard:write"]);
+    await host.clipboard.writeImage(pngBytes(64));
+
+    const audits = appendSpy.mock.calls.filter(
+      (c) => (c[0] as { channel: string }).channel === "plugin:clipboard-write-image"
+    );
+    expect(audits).toHaveLength(1);
+  });
+
+  it("rejects with PLUGIN_UNLOADED after unload, before the capability check", async () => {
+    const host = registerPlugin(["clipboard:write"]);
+    svc.unloadPlugin("acme.clip");
+    await expect(host.clipboard.writeImage(pngBytes())).rejects.toThrow(/PLUGIN_UNLOADED/);
+    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
   });
 });

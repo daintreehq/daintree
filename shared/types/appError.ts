@@ -12,6 +12,13 @@ export type AppErrorCode =
   | "LFS_POINTER"
   | "NOT_FOUND"
   | "NOT_A_GIT_REPO"
+  // Folder-open failures classified by a pre-flight stat rather than by
+  // pattern-matching library error text after the fact (#11409). `NOT_FOUND`
+  // and `PERMISSION` cover the rest of that set.
+  | "NOT_A_DIRECTORY"
+  | "GIT_NOT_INSTALLED"
+  | "DUBIOUS_OWNERSHIP"
+  | "PROJECT_OPEN_FAILED"
   | "CLIPBOARD_EMPTY"
   | "CLIPBOARD_INVALID"
   | "UNSUPPORTED"
@@ -23,4 +30,11 @@ export type AppErrorCode =
   | "PAYLOAD_TOO_LARGE"
   | "RECIPE_STALE_CONFLICT"
   | "PLUGIN_ACTIVATION_FAILED"
+  // Session-bookmark capture/persistence outcomes (#11288). Stable codes so the
+  // UI (and MCP/automation callers) surface copy from the code, not exception text.
+  | "NOT_BOOKMARKABLE"
+  | "SESSION_CAPTURE_FAILED"
+  | "STALE_GENERATION"
+  | "PERSIST_FAILED"
+  | "SESSION_NOT_FOUND"
   | "INTERNAL";

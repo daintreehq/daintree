@@ -2,6 +2,7 @@ import type { TabGroup } from "@shared/types";
 import type { PanelKind } from "@shared/types/panel";
 import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { panelMatchesWorktreeScope } from "@/store/slices/panelRegistry/worktreeIndex";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -112,6 +113,97 @@ export function isNonDockableDockDrop(
   return targetContainer === "dock" && !panelKindIsDockable(kind ?? "terminal");
 }
 
+/**
+ * Group-aware version of {@link isNonDockableDockDrop}. A tab-group drag carries
+ * every member into the dock, so the drop must be rejected if ANY live member's
+ * kind is non-dockable — checking only the dragged representative would let a
+ * dockable chip smuggle a `dockable:false` sibling into the dock (#11375). A
+ * single-panel drag falls back to the representative kind. The drag payload only
+ * carries member IDs, so kinds are resolved from the live `panelsById`. Fails
+ * closed: a member id that resolves to no live panel is treated as non-dockable
+ * so a mid-drag unmount can't sneak a phantom into the dock.
+ *
+ * @param groupPanelIds `active.data.current.groupPanelIds` (untyped from dnd-kit);
+ *   a real group drag is an array of length > 1, anything else is single-panel.
+ */
+export function dragCarriesNonDockableIntoDock(
+  targetContainer: "grid" | "dock" | null,
+  representativeKind: PanelKind | undefined,
+  groupPanelIds: unknown,
+  panelsById: Record<string, CarrierPanel | undefined>
+): boolean {
+  if (targetContainer !== "dock") return false;
+  if (Array.isArray(groupPanelIds) && groupPanelIds.length > 1) {
+    return groupPanelIds.some((memberId) => {
+      if (typeof memberId !== "string") return true;
+      const panel = panelsById[memberId];
+      if (!panel) return true;
+      return !panelKindIsDockable(panel.kind ?? "terminal");
+    });
+  }
+  return isNonDockableDockDrop(targetContainer, representativeKind);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** Inputs for the cancel-drop verdict, straight off dnd-kit's DragEndEvent. */
+export interface CancelDropParams {
+  hasOver: boolean;
+  /** `active.data.current` — untrusted: the empty-dock placeholder registers `{ container, isPlaceholder }` with no `terminal` (#11291). */
+  activeData: unknown;
+  overData: OverDropData | undefined;
+  isWorktreeSort: boolean;
+  /** Live panel map, so a group drag resolves every member's kind for the dockability check (#11375). */
+  panelsById: Record<string, CarrierPanel | undefined>;
+}
+
+/**
+ * Total cancel-drop verdict for panel drags. dnd-kit awaits the `cancelDrop`
+ * callback with no try/catch before releasing its internal active lock, so a
+ * single throw here silently wedges every future drag until reload (#11291).
+ * This resolver never throws: drag data without a real `terminal` cancels
+ * instead of dereferencing, and any unexpected failure fails closed to cancel.
+ */
+export function shouldCancelDrop(params: CancelDropParams): boolean {
+  try {
+    const { hasOver, activeData, overData, isWorktreeSort, panelsById } = params;
+    if (!hasOver) return true;
+
+    // Worktree-sort drags own their drop logic in handleDragEnd; let every
+    // drop through, even when the source row unmounted mid-drag.
+    if (isWorktreeSort) return false;
+
+    if (!isRecord(activeData) || !isRecord(activeData.terminal)) return true;
+    const { id, kind } = activeData.terminal;
+    if (typeof id !== "string") return true;
+
+    const groupPanelIds = activeData.groupPanelIds;
+    const isGroupDrag =
+      !!activeData.groupId && Array.isArray(groupPanelIds) && groupPanelIds.length > 1;
+    const isWorktreeDrop = overData?.type === "worktree" && !!overData.worktreeId;
+    if (isGroupDrag && isWorktreeDrop) return true;
+
+    // A panel whose kind the dock can't render must never commit into the
+    // dock — it would strand invisibly (#11054). For a group drag EVERY member
+    // is checked, not just the dragged representative (#11375). `cursor-no-drop`
+    // already signals this during hover and `collisionDetection` keeps the dock
+    // out of the hover candidates; this is the defensive final gate.
+    const targetContainer =
+      overData?.container ??
+      (overData?.sortable?.containerId ? resolveContainerId(overData.sortable.containerId) : null);
+    return dragCarriesNonDockableIntoDock(
+      targetContainer,
+      typeof kind === "string" ? (kind as PanelKind) : undefined,
+      isGroupDrag ? groupPanelIds : undefined,
+      panelsById
+    );
+  } catch {
+    return true;
+  }
+}
+
 /** Minimal dnd-kit droppable shape the dock collision filter reads. */
 interface DockCollisionCandidate {
   data: { current?: { container?: string; sortable?: { containerId?: string } } | null };
@@ -132,7 +224,12 @@ export function filterOutDockDroppables<T extends DockCollisionCandidate>(contai
   );
 }
 
-/** Filter terminals to those in a given container and worktree, preserving panelIds order. */
+/**
+ * Filter terminals to those in a given container and worktree, preserving
+ * panelIds order. Scope matching is shared with the dock render path so drop
+ * indices are computed over exactly the chips the dock shows — global panels
+ * included (#11289); grid stays worktree-exact.
+ */
 export function filterTerminalsByContainer(
   terminalsById: Record<string, CarrierPanel | undefined>,
   panelIds: readonly string[],
@@ -142,7 +239,7 @@ export function filterTerminalsByContainer(
   const result: CarrierPanel[] = [];
   for (const tid of panelIds) {
     const t = terminalsById[tid];
-    if (!t || (t.worktreeId ?? undefined) !== (worktreeId ?? undefined)) continue;
+    if (!t || !panelMatchesWorktreeScope(t.worktreeId, worktreeId, container)) continue;
     if (container === "dock") {
       if (t.location === "dock") result.push(t);
     } else {

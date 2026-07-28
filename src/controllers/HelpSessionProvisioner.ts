@@ -3,6 +3,7 @@
 // functions with no controller state — moved verbatim, no behavior change.
 
 import { logError } from "@/utils/logger";
+import { extractHelpSessionErrorCode } from "@/utils/clientHelpSessionError";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionContext } from "@shared/types/actions";
 import type { HelpProjectRef, LaunchErrorKind } from "./HelpSessionController";
@@ -30,6 +31,7 @@ export type ProvisionFailureCode =
   | "MCP_NOT_READY"
   | "MCP_SERVER_NOT_STARTED"
   | "MCP_PROBE_FAILED"
+  | "USER_CONTENT_SYNC_FAILED"
   | "UNKNOWN";
 
 export type ProvisionOutcome =
@@ -58,15 +60,15 @@ export async function provisionHelpSession(
     return { ok: true, session: result };
   } catch (err) {
     logError("Failed to provision help session", err);
-    const code =
-      err && typeof err === "object" && "code" in err
-        ? (err as Record<string, unknown>).code
-        : undefined;
+    // Decode BEFORE formatting: the contextBridge strips the custom `code`
+    // property, so it rides an encoded message prefix the decoder strips.
+    const code = extractHelpSessionErrorCode(err);
     const message = formatErrorMessage(err, "Couldn't provision help session");
     if (
       code === "MCP_SERVER_NOT_STARTED" ||
       code === "MCP_PROBE_FAILED" ||
-      code === "MCP_NOT_READY"
+      code === "MCP_NOT_READY" ||
+      code === "USER_CONTENT_SYNC_FAILED"
     ) {
       return { ok: false, code, message };
     }
@@ -83,6 +85,8 @@ export function provisionFailureKind(code: ProvisionFailureCode): LaunchErrorKin
     case "MCP_PROBE_FAILED":
     case "MCP_NOT_READY":
       return "mcp-probe-failed";
+    case "USER_CONTENT_SYNC_FAILED":
+      return "skills-sync-failed";
     default:
       return "spawn-failed";
   }

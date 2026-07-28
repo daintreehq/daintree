@@ -2,12 +2,15 @@ import { logDebug, logWarn } from "../utils/logger.js";
 import { fileSearchService } from "./FileSearchService.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
+import {
+  VOICE_DICTATION_AI_MODEL,
+  VOICE_DICTATION_REASONING_EFFORT,
+} from "../../shared/config/voiceCorrection.js";
 
 const P = "[VoiceFileLinkResolver]";
 const NL_CONFIDENCE_THRESHOLD = 0.67;
 const MIN_MATCHING_TOKENS = 2;
 const AI_RERANK_TIMEOUT_MS = 4000;
-const AI_RERANK_MODEL = "gpt-5-nano";
 const AI_RERANK_CACHE_PREFIX = "voice-file-rerank-v1";
 
 const AI_RERANK_SCHEMA = {
@@ -152,13 +155,13 @@ export class VoiceFileLinkResolver {
           ? AbortSignal.any([signal, AbortSignal.timeout(AI_RERANK_TIMEOUT_MS)])
           : AbortSignal.timeout(AI_RERANK_TIMEOUT_MS),
         body: JSON.stringify({
-          model: AI_RERANK_MODEL,
+          model: VOICE_DICTATION_AI_MODEL,
           instructions:
             "Given a natural language description and a list of file paths from a project, return the path that best matches the description. If no path is a good match, return null.",
           input: `Description: ${description}\n\nCandidates:\n${candidates.map((c, i) => `${i + 1}. ${c}`).join("\n")}`,
           prompt_cache_key: AI_RERANK_CACHE_PREFIX,
           service_tier: "auto",
-          reasoning: { effort: "minimal" },
+          reasoning: { effort: VOICE_DICTATION_REASONING_EFFORT },
           text: {
             format: {
               type: "json_schema",

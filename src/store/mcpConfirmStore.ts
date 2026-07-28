@@ -12,6 +12,13 @@ export interface PendingMcpConfirm {
   actionId: string;
   actionTitle: string;
   actionDescription: string;
+  /**
+   * The action's `dangerRationale` — the "why this is gated" reasoning the
+   * model sees. Surfaced in the confirm dialog so the human approving a
+   * destructive MCP call sees the same justification (#11342). Optional: only
+   * `danger !== "safe"` actions carry a rationale.
+   */
+  dangerRationale?: string;
   argsSummary: string;
   /**
    * The dispatched action's registry `danger` classification. Drives the
@@ -26,6 +33,22 @@ export interface PendingMcpConfirm {
    * the dialog shows a "Requested by" row only for genuine external clients.
    */
   callerInfo?: McpBearerIdentity;
+  /**
+   * Fresh, human-readable preview lines describing the ACTUAL content this
+   * dispatch would affect — e.g. the changed-file list a `worktree.delete`
+   * would discard (#11343). The bridge computes these from a live fetch that
+   * runs off the critical path (so the modal opens immediately); the lines are
+   * patched in via `setPreview` when the fetch lands. Absent for dispatches
+   * with no meaningful preview.
+   */
+  preview?: string[];
+  /**
+   * True while the fresh preview fetch is still in flight (#11343). The modal
+   * opens immediately but keeps its approve button disabled until the preview
+   * (or a verification-failure note) arrives, so an approver can't confirm a
+   * destructive dispatch before seeing what it affects. Cleared by `setPreview`.
+   */
+  previewPending?: boolean;
   enqueuedAt: number;
 }
 
@@ -36,6 +59,7 @@ interface McpConfirmState {
 
 interface McpConfirmActions {
   enqueue: (item: PendingMcpConfirm) => void;
+  setPreview: (requestId: string, preview: string[]) => void;
   resolveCurrent: (decision: McpConfirmationDecision) => void;
   drop: (requestId: string) => void;
   reset: () => void;
@@ -73,6 +97,26 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
     } else {
       set({ queue: [...queue, item] });
     }
+  },
+
+  // Attach a late-arriving preview to an already-enqueued item and clear its
+  // pending flag (#11343). The fresh changed-file fetch runs off the critical
+  // path so the modal appears immediately; when it lands we patch the matching
+  // item (current or queued) in place and re-enable approval. A no-op if the
+  // request already resolved/dropped — the fetch is best-effort and must never
+  // resurrect a settled confirmation.
+  setPreview: (requestId, preview) => {
+    const { current, queue } = get();
+    if (current !== null && current.requestId === requestId) {
+      set({ current: { ...current, preview, previewPending: false } });
+      return;
+    }
+    const idx = queue.findIndex((item) => item.requestId === requestId);
+    const target = queue[idx];
+    if (target === undefined) return;
+    const next = [...queue];
+    next[idx] = { ...target, preview, previewPending: false };
+    set({ queue: next });
   },
 
   resolveCurrent: (decision) => {

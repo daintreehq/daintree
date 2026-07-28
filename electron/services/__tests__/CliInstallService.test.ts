@@ -304,7 +304,10 @@ describe("CliInstallService", () => {
       );
       const content = writeCall![1] as string;
       expect(content).toContain("#!/usr/bin/env bash");
-      expect(content).toContain("--cli-path");
+      // Single-token form only — the two-token form is displaceable by
+      // Chromium's command-line reconstruction (#11410).
+      expect(content).toContain('--cli-path="$ABSOLUTE_PATH"');
+      expect(content).not.toContain('--cli-path "$ABSOLUTE_PATH"');
       expect(content).toContain("set -euo pipefail");
     });
   });

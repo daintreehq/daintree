@@ -51,12 +51,14 @@ const EIGHT_GB = 8 * 1024 * 1024 * 1024;
 function makeMockPvm() {
   return {
     setCachedViewLimit: vi.fn(),
-    setLowMemoryFreeThresholdMb: vi.fn(),
+    setMemoryPressurePolicy: vi.fn(),
     setEfficiencyFreeze: vi.fn(),
     setPaintGateTimeoutMs: vi.fn(),
     setPaintGateHardTimeoutMs: vi.fn(),
     setWarmPaintGateTimeoutMs: vi.fn(),
     setWarmPaintGateHardTimeoutMs: vi.fn(),
+    setViewLoadTimeoutMs: vi.fn(),
+    setViewLoadHardTimeoutMs: vi.fn(),
   };
 }
 
@@ -125,9 +127,6 @@ describe("ResourceProfileService fan-out isolation", () => {
       broken.setEfficiencyFreeze.mockImplementation(() => {
         throw new Error("freeze exploded");
       });
-      broken.setLowMemoryFreeThresholdMb.mockImplementation(() => {
-        throw new Error("threshold exploded");
-      });
       const healthy = makeMockPvm();
       const { deps, pty } = createDeps({
         getAllProjectViewManagers: () => asPvms([broken, healthy]),
@@ -143,12 +142,17 @@ describe("ResourceProfileService fan-out isolation", () => {
       const balanced = RESOURCE_PROFILE_CONFIGS.balanced;
       expect(healthy.setCachedViewLimit).toHaveBeenCalledWith(2);
       expect(healthy.setEfficiencyFreeze).toHaveBeenLastCalledWith(false);
-      expect(healthy.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
-        balanced.lowMemoryFreeThresholdMb
-      );
+      // The reclaim band is not part of a transition's fan-out (#11469) — it is
+      // armed once per PVM at start/late-create, so a transition must not touch
+      // it on either the broken or the healthy window.
+      expect(healthy.setMemoryPressurePolicy).not.toHaveBeenCalled();
       expect(healthy.setPaintGateTimeoutMs).toHaveBeenLastCalledWith(balanced.paintGateTimeoutMs);
       expect(healthy.setWarmPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
         balanced.warmPaintGateHardTimeoutMs
+      );
+      expect(healthy.setViewLoadTimeoutMs).toHaveBeenLastCalledWith(balanced.viewLoadTimeoutMs);
+      expect(healthy.setViewLoadHardTimeoutMs).toHaveBeenLastCalledWith(
+        balanced.viewLoadHardTimeoutMs
       );
       // Downstream consumers after the PVM loop still ran.
       expect(pty.setResourceProfile).toHaveBeenLastCalledWith("balanced");
@@ -283,7 +287,7 @@ describe("ResourceProfileService fan-out isolation", () => {
   describe("late-created PVM under a throwing sibling setter", () => {
     it("applyCurrentProfileTo pushes the remaining settings when an early setter throws", () => {
       const pvm = makeMockPvm();
-      pvm.setLowMemoryFreeThresholdMb.mockImplementation(() => {
+      pvm.setMemoryPressurePolicy.mockImplementation(() => {
         throw new Error("threshold exploded");
       });
       const { deps } = createDeps();
@@ -294,6 +298,9 @@ describe("ResourceProfileService fan-out isolation", () => {
         service.applyCurrentProfileTo(pvm as unknown as ProjectViewManager)
       ).not.toThrow();
 
+      // The throwing setter was genuinely reached — without this the rest of the
+      // assertions would pass even if the policy push were dropped entirely.
+      expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledOnce();
       // Every setter after the throwing one still landed with efficiency values.
       const efficiency = RESOURCE_PROFILE_CONFIGS.efficiency;
       expect(pvm.setEfficiencyFreeze).toHaveBeenCalledWith(true);
@@ -302,6 +309,29 @@ describe("ResourceProfileService fan-out isolation", () => {
       expect(pvm.setWarmPaintGateTimeoutMs).toHaveBeenCalledWith(efficiency.warmPaintGateTimeoutMs);
       expect(pvm.setWarmPaintGateHardTimeoutMs).toHaveBeenCalledWith(
         efficiency.warmPaintGateHardTimeoutMs
+      );
+      expect(pvm.setViewLoadTimeoutMs).toHaveBeenCalledWith(efficiency.viewLoadTimeoutMs);
+      expect(pvm.setViewLoadHardTimeoutMs).toHaveBeenCalledWith(efficiency.viewLoadHardTimeoutMs);
+    });
+
+    it("a throwing soft view-load setter still lets the hard bound land", () => {
+      // The two bounds must not share a try block: a soft-setter throw that
+      // skipped the hard setter would leave the ceiling on the previous
+      // profile's value while the soft bound moved.
+      const pvm = makeMockPvm();
+      pvm.setViewLoadTimeoutMs.mockImplementation(() => {
+        throw new Error("soft bound exploded");
+      });
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service._forceProfileForTesting("efficiency");
+
+      expect(() =>
+        service.applyCurrentProfileTo(pvm as unknown as ProjectViewManager)
+      ).not.toThrow();
+
+      expect(pvm.setViewLoadHardTimeoutMs).toHaveBeenCalledWith(
+        RESOURCE_PROFILE_CONFIGS.efficiency.viewLoadHardTimeoutMs
       );
     });
   });

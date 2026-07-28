@@ -7,7 +7,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { notify, EVENT_KIND_TO_SETTING_KEY, EVENT_KIND_LABEL } from "@/lib/notify";
 import type { NotificationEventKind } from "@/lib/notify";
-import { switchProjectByMruDirection } from "@/lib/projectMruSwitch";
+import { switchToLastProject } from "@/lib/projectHistoryNav";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export function registerProjectActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
@@ -25,26 +25,18 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     },
   }));
 
+  // Id kept from when this was one half of a cycle pair; renaming it would
+  // orphan any binding a user has already customised.
   actions.set("project.mruCycleOlder", () => ({
     id: "project.mruCycleOlder",
-    title: "Switch Down Project List",
-    description: "Switch to the next project in MRU order",
+    title: "Switch to Last Project",
+    description:
+      "Switch to the project this window was in before the current one. Running it again returns to where you started.",
     category: "project",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: () => switchProjectByMruDirection("older"),
-  }));
-
-  actions.set("project.mruCycleNewer", () => ({
-    id: "project.mruCycleNewer",
-    title: "Switch Up Project List",
-    description: "Switch to the previous project in MRU order",
-    category: "project",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: () => switchProjectByMruDirection("newer"),
+    run: () => switchToLastProject(),
   }));
 
   actions.set("project.add", () => ({
@@ -378,12 +370,10 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
           const current = await window.electron?.notification?.getSettings();
           if (current) {
             priorValue = (current as unknown as Record<string, unknown>)[settingKey] as
-              | boolean
-              | undefined;
+              boolean | undefined;
             priorGlobalSnapshot = {
               [settingKey]: (current as unknown as Record<string, unknown>)[settingKey] as
-                | boolean
-                | undefined,
+                boolean | undefined,
             };
             await window.electron.notification.setSettings({ [settingKey]: false });
           }

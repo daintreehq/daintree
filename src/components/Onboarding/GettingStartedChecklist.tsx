@@ -7,11 +7,22 @@ import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
+import { KbdChord } from "@/components/ui/Kbd";
 import type { ChecklistState, ChecklistItemId } from "@shared/types/ipc/maps";
 import { CHECKLIST_ITEMS } from "./checklistItems";
 
 const CHECKLIST_BODY_ID = "getting-started-checklist-body";
+
+// Teaches the shortcut at the moment of highest engagement: the checklist CTA
+// the user is about to click. Reads the live effective binding so rebinds
+// show correctly; renders nothing for unbound actions.
+function RowShortcut({ actionId }: { actionId: string }) {
+  const combo = useEffectiveCombo(actionId);
+  if (!combo) return null;
+  return <KbdChord shortcut={combo} className="shrink-0 opacity-60" />;
+}
 
 interface CheckBadgeProps {
   done: boolean;
@@ -271,13 +282,16 @@ export function GettingStartedChecklist({
                       )}
                     />
                     <div className="flex flex-col min-w-0 flex-1">
-                      <span
-                        className={cn(
-                          "text-xs leading-snug",
-                          done ? "line-through text-daintree-text/40" : "text-daintree-text/90"
-                        )}
-                      >
-                        {label}
+                      <span className="flex items-center justify-between gap-2 min-w-0">
+                        <span
+                          className={cn(
+                            "text-xs leading-snug",
+                            done ? "line-through text-daintree-text/40" : "text-daintree-text/90"
+                          )}
+                        >
+                          {label}
+                        </span>
+                        {!done && <RowShortcut actionId={actionId} />}
                       </span>
                       {description && (
                         <span
@@ -330,6 +344,23 @@ export function GettingStartedChecklist({
                 );
               }
             )}
+            {/* Utility link, deliberately not a checklist milestone — the
+                item IDs are persisted completion state, so adding one would
+                regress previously completed checklists. */}
+            <button
+              type="button"
+              onClick={() => {
+                void actionService.dispatch("help.shortcuts", undefined, { source: "user" });
+              }}
+              className={cn(
+                "w-full text-left px-2 py-1 rounded-[var(--radius-xs)]",
+                "text-[10px] text-daintree-text/50 transition-colors duration-150",
+                "hover:text-daintree-text/80 hover:bg-tint/10",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              )}
+            >
+              View keyboard shortcuts
+            </button>
           </div>
         </div>
       </div>

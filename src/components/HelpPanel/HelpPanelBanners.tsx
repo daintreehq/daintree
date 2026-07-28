@@ -149,6 +149,8 @@ const LAUNCH_ERROR_BODY: Record<LaunchErrorKind, string> = {
   "mcp-server-not-started":
     "Daintree's assistant services didn't start. Check assistant settings, then try again.",
   "mcp-probe-failed": "Daintree's assistant services didn't respond in time. Try again.",
+  "skills-sync-failed":
+    "Daintree couldn't refresh this project's assistant commands and skills, so the session didn't start. Retry, or check the logs if it keeps failing.",
   "spawn-failed": "The agent didn't start. Try again.",
   "folder-unavailable":
     "Daintree's bundled assistant files are missing. Reinstall Daintree or check the logs.",
@@ -157,7 +159,10 @@ const LAUNCH_ERROR_BODY: Record<LaunchErrorKind, string> = {
 // Per-kind recovery surface. `folder-unavailable` is non-retryable: the
 // resolver's module-scope cache returns the same null on retry, so the only
 // honest affordances are the installer page and the error log. `Retry` is
-// kept for the transient kinds (spawn/probe/server). The CTA handler is
+// kept for the transient kinds (spawn/probe/server). `skills-sync-failed`
+// pairs both: some causes clear on retry, but a corrupt manifest or an
+// unremovable stale file fails identically forever, so the log — which names
+// the session dir to clear — is the only way out. The CTA handler is
 // resolved in the component from this discriminator — no callbacks in the
 // data, so the data stays serializable and easy to assert against.
 type LaunchErrorCtaHandler = "retry" | "settings" | "logs" | "installer";
@@ -176,6 +181,10 @@ const LAUNCH_ERROR_CTAS: Record<LaunchErrorKind, LaunchErrorCta[]> = {
   "mcp-probe-failed": [
     { label: "Retry", handler: "retry", variant: "primary" },
     { label: "Open settings", handler: "settings", variant: "secondary" },
+  ],
+  "skills-sync-failed": [
+    { label: "Retry", handler: "retry", variant: "primary" },
+    { label: "Open logs", handler: "logs", variant: "secondary" },
   ],
   "spawn-failed": [{ label: "Retry", handler: "retry", variant: "primary" }],
   "folder-unavailable": [

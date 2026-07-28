@@ -19,7 +19,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 import {
   useWorktreeSelectionStore,
   getDeletedWorktreeTerminalIds,
-  getPinnedDeletedWorktreeIndex,
+  getPinnedDeletedWorktreeAnchorId,
   recordSidebarWorktreeOrder,
   type DeletedWorktree,
 } from "@/store/worktreeStore";
@@ -31,7 +31,8 @@ function makeDeleted(overrides: Partial<DeletedWorktree> = {}): DeletedWorktree 
     path: "/repo/wt-1",
     deletedAt: 1000,
     expiresAt: null,
-    pinnedIndex: 0,
+    holdReason: null,
+    pinnedBeforeWorktreeId: null,
     ...overrides,
   };
 }
@@ -76,15 +77,20 @@ describe("getDeletedWorktreeTerminalIds", () => {
   });
 });
 
-describe("pinned index", () => {
-  it("reports the slot a worktree occupied in the last recorded sidebar order", () => {
+describe("placement anchor", () => {
+  it("reports the successor a worktree sat before in the last recorded sidebar order", () => {
     recordSidebarWorktreeOrder(["a", "b", "c"]);
-    expect(getPinnedDeletedWorktreeIndex("b")).toBe(1);
+    expect(getPinnedDeletedWorktreeAnchorId("b")).toBe("c");
   });
 
-  it("reports -1 for a worktree that was not visible", () => {
+  it("reports null for the last worktree in the order (no successor)", () => {
+    recordSidebarWorktreeOrder(["a", "b", "c"]);
+    expect(getPinnedDeletedWorktreeAnchorId("c")).toBeNull();
+  });
+
+  it("reports null for a worktree that was not visible", () => {
     recordSidebarWorktreeOrder(["a", "b"]);
-    expect(getPinnedDeletedWorktreeIndex("hidden")).toBe(-1);
+    expect(getPinnedDeletedWorktreeAnchorId("hidden")).toBeNull();
   });
 });
 
@@ -97,12 +103,12 @@ describe("addDeletedWorktree", () => {
 
   it("keeps the first record when the same id is added twice", () => {
     const store = useWorktreeSelectionStore.getState();
-    store.addDeletedWorktree(makeDeleted({ deletedAt: 1000, pinnedIndex: 2 }));
-    store.addDeletedWorktree(makeDeleted({ deletedAt: 9999, pinnedIndex: 7 }));
+    store.addDeletedWorktree(makeDeleted({ deletedAt: 1000, pinnedBeforeWorktreeId: "first" }));
+    store.addDeletedWorktree(makeDeleted({ deletedAt: 9999, pinnedBeforeWorktreeId: "second" }));
 
     const stored = useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1");
     expect(stored?.deletedAt).toBe(1000);
-    expect(stored?.pinnedIndex).toBe(2);
+    expect(stored?.pinnedBeforeWorktreeId).toBe("first");
   });
 });
 
@@ -119,6 +125,54 @@ describe("dismissDeletedWorktree", () => {
     store.addDeletedWorktree(makeDeleted());
     const before = useWorktreeSelectionStore.getState().deletedWorktrees;
     store.dismissDeletedWorktree("nope");
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees).toBe(before);
+  });
+});
+
+describe("setDeletedWorktreeCleanupState", () => {
+  it("moves the deadline and the hold reason in a single update", () => {
+    const store = useWorktreeSelectionStore.getState();
+    store.addDeletedWorktree(makeDeleted());
+
+    const seen: Array<{ expiresAt: number | null; holdReason: string | null }> = [];
+    const unsubscribe = useWorktreeSelectionStore.subscribe((state) => {
+      const row = state.deletedWorktrees.get("wt-1");
+      if (row) seen.push({ expiresAt: row.expiresAt, holdReason: row.holdReason });
+    });
+    store.setDeletedWorktreeCleanupState("wt-1", { expiresAt: 5_000, holdReason: "drag" });
+    unsubscribe();
+
+    // One emission carrying both fields — two sequential writes would publish a
+    // torn frame (new deadline, stale reason) to every sidebar subscriber.
+    expect(seen).toEqual([{ expiresAt: 5_000, holdReason: "drag" }]);
+  });
+
+  it("returns the same state when neither field changes", () => {
+    const store = useWorktreeSelectionStore.getState();
+    store.addDeletedWorktree(makeDeleted({ expiresAt: 5_000, holdReason: "agent" }));
+    const before = useWorktreeSelectionStore.getState().deletedWorktrees;
+    store.setDeletedWorktreeCleanupState("wt-1", { expiresAt: 5_000, holdReason: "agent" });
+
+    // The sweep calls this every second; an unconditional clone would re-render
+    // the whole sidebar at 1 Hz.
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees).toBe(before);
+  });
+
+  it("writes when only the hold reason changes", () => {
+    const store = useWorktreeSelectionStore.getState();
+    store.addDeletedWorktree(makeDeleted({ expiresAt: 5_000, holdReason: "drag" }));
+    store.setDeletedWorktreeCleanupState("wt-1", { expiresAt: 5_000, holdReason: null });
+
+    expect(
+      useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1")?.holdReason
+    ).toBeNull();
+  });
+
+  it("leaves state untouched for an unknown id", () => {
+    const store = useWorktreeSelectionStore.getState();
+    store.addDeletedWorktree(makeDeleted());
+    const before = useWorktreeSelectionStore.getState().deletedWorktrees;
+    store.setDeletedWorktreeCleanupState("nope", { expiresAt: 1, holdReason: null });
     expect(useWorktreeSelectionStore.getState().deletedWorktrees).toBe(before);
   });
 });
@@ -225,5 +279,62 @@ describe("clearRestoreTarget", () => {
     useWorktreeSelectionStore.getState().clearRestoreTarget("wt-1");
 
     expect(useWorktreeSelectionStore.getState()._previousRestoreWorktreeId).toBeNull();
+  });
+});
+
+describe("deleted-worktree group expansion (#11260)", () => {
+  function addRows(count: number): void {
+    setPanels(Array.from({ length: count }, (_, i) => ({ id: `t${i}`, worktreeId: `wt-${i}` })));
+    for (let i = 0; i < count; i++) {
+      useWorktreeSelectionStore
+        .getState()
+        .addDeletedWorktree(makeDeleted({ id: `wt-${i}`, title: `feature/${i}` }));
+    }
+  }
+
+  it("starts collapsed so a burst never opens to a wall of cards", () => {
+    addRows(3);
+
+    expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(false);
+  });
+
+  it("toggles expansion", () => {
+    addRows(3);
+    useWorktreeSelectionStore.getState().toggleDeletedWorktreeGroupExpanded();
+
+    expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(true);
+  });
+
+  it("latches shut once dismissals drop the cohort below the threshold", () => {
+    addRows(3);
+    useWorktreeSelectionStore.getState().toggleDeletedWorktreeGroupExpanded();
+
+    useWorktreeSelectionStore.getState().dismissDeletedWorktree("wt-0");
+    // Two rows still form a group, so the expansion the user chose survives.
+    expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(true);
+
+    useWorktreeSelectionStore.getState().dismissDeletedWorktree("wt-1");
+    expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(false);
+  });
+
+  it("latches shut when pruning empties the cohort", () => {
+    addRows(3);
+    useWorktreeSelectionStore.getState().toggleDeletedWorktreeGroupExpanded();
+    setPanels([{ id: "t0", worktreeId: "wt-0" }]);
+    useWorktreeSelectionStore.getState().pruneDeletedWorktrees(new Set());
+
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.size).toBe(1);
+    expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(false);
+  });
+
+  it("does not inherit a stale expansion into the next burst", () => {
+    addRows(3);
+    useWorktreeSelectionStore.getState().toggleDeletedWorktreeGroupExpanded();
+    for (let i = 0; i < 3; i++) {
+      useWorktreeSelectionStore.getState().dismissDeletedWorktree(`wt-${i}`);
+    }
+    addRows(3);
+
+    expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(false);
   });
 });

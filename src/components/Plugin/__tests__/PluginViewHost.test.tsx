@@ -211,6 +211,43 @@ describe("makePluginViewHost", () => {
     expect(onPanelKindsChangedMock).not.toHaveBeenCalled();
   });
 
+  it("hands the content a close callback that forwards no arguments (#11301)", async () => {
+    const captured = vi.hoisted(() => ({ onRequestClose: undefined as undefined | (() => void) }));
+    vi.doMock("@/components/Plugin/PluginViewContent", () => ({
+      makePluginViewContent: () => (props: { onRequestClose?: () => void }) => {
+        captured.onRequestClose = props.onRequestClose;
+        return <div data-testid="content-probe" />;
+      },
+    }));
+
+    try {
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
+      const onClose = vi.fn();
+
+      render(
+        <Host
+          id="panel-close"
+          title="Dashboard"
+          isFocused={false}
+          onFocus={(): void => {}}
+          onClose={onClose}
+        />
+      );
+
+      expect(captured.onRequestClose).toBeTypeOf("function");
+      captured.onRequestClose!();
+
+      // `onClose(force?: boolean)`. Passing the panel's handler straight through
+      // to a button would hand it the click event as a truthy `force`, turning
+      // the fallback's recoverable close into a forced one.
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onClose).toHaveBeenCalledWith();
+    } finally {
+      vi.doUnmock("@/components/Plugin/PluginViewContent");
+    }
+  });
+
   it("renders an inline error when extensionId is missing", async () => {
     const { makePluginViewHost } = await import("../PluginViewHost");
     const Host = makePluginViewHost(makeConfig({ extensionId: undefined }));
@@ -273,6 +310,45 @@ describe("makePluginViewHost", () => {
       // Unmock in `finally`: a failed assertion above would otherwise leak the
       // capturing `lazy` into every later test in this file (`vi.resetModules`
       // clears the module cache but not the registered mock).
+      vi.doUnmock("react");
+    }
+  });
+
+  it("passes the panel's own worktreeId to the mounted view (#11297)", async () => {
+    const capturedProps: Array<Record<string, unknown>> = [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CapturingView(props: Record<string, unknown>) {
+            capturedProps.push(props);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    try {
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
+
+      render(
+        <Host
+          id="panel-wt"
+          title="Dashboard"
+          isFocused={false}
+          onFocus={(): void => {}}
+          onClose={(): void => {}}
+          worktreeId="wt-owning"
+        />
+      );
+
+      await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
+      // The value already rides the panel instance; before #11297 the host
+      // dropped it on the floor, leaving a view opened from the generic New
+      // Panel palette with no way to know which worktree it belonged to.
+      expect(capturedProps[capturedProps.length - 1]!.worktreeId).toBe("wt-owning");
+    } finally {
       vi.doUnmock("react");
     }
   });

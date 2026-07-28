@@ -32,6 +32,9 @@ import type {
   PluginIpcHandler,
   PluginProcessHandle,
   PluginProcessSpawnOptions,
+  PluginProcessApi,
+  PluginPtyProcessHandle,
+  PluginPtyProcessSpawnOptions,
   PluginQuickPickItem,
   PluginQuickPickOptions,
   PluginSettingsScope,
@@ -40,6 +43,7 @@ import type {
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
   PluginAgentSnapshot,
+  PluginPanelLifecycleEvent,
   PluginGitCommitResult,
   PluginPanelBadge,
   SettingDefinition,
@@ -79,7 +83,7 @@ export interface ShownToastRecord {
 /** Captured `host.process.spawn(command, options)` calls. */
 export interface SpawnRecord {
   command: string;
-  options: PluginProcessSpawnOptions | undefined;
+  options: PluginProcessSpawnOptions | PluginPtyProcessSpawnOptions | undefined;
 }
 
 export interface DispatchedActionRecord {
@@ -162,6 +166,17 @@ export interface MockHostState {
   readonly gitCommitCalls: ReadonlyArray<GitCommitRecord>;
   /** Captured `host.clipboard.writeText(text)` calls, in order. */
   readonly clipboardWriteCalls: ReadonlyArray<string>;
+  /**
+   * Captured `host.clipboard.writeImage(pngData)` calls, in order. Records the
+   * byte length rather than the bytes: a test asserts that an image of the
+   * right size was written, and holding multi-MiB buffers alive for the
+   * lifetime of the mock is a memory trap in a suite that builds many hosts.
+   */
+  readonly clipboardWriteImageCalls: ReadonlyArray<number>;
+  /** Captured `host.system.openPath(path)` calls, in order. */
+  readonly systemOpenPathCalls: ReadonlyArray<string>;
+  /** Captured `host.system.showItemInFolder(path)` calls, in order. */
+  readonly systemShowItemCalls: ReadonlyArray<string>;
 
   /**
    * Replace the active worktree and notify every `onDidChangeActiveWorktree`
@@ -177,6 +192,14 @@ export interface MockHostState {
    * cache-then-notify behaviour.
    */
   simulateAgentStateChange(snapshot: PluginAgentSnapshot): void;
+
+  /**
+   * Push a panel lifecycle transition to every `onDidChangePanelLifecycle`
+   * subscriber. Use it to prove a plugin releases durable resources on
+   * `"removed"` and survives `"hidden"` — the distinction the single
+   * `disposeSignal` could not express (#11301).
+   */
+  simulatePanelLifecycleChange(event: PluginPanelLifecycleEvent): void;
 
   /**
    * Pre-seed a deterministic `dispatch()` result for one action id. Overrides
@@ -443,6 +466,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const fsWriteCalls: FsWriteRecord[] = [];
   const gitCommitCalls: GitCommitRecord[] = [];
   const clipboardWriteCalls: string[] = [];
+  const clipboardWriteImageCalls: number[] = [];
+  const systemOpenPathCalls: string[] = [];
+  const systemShowItemCalls: string[] = [];
   let clipboardText = "";
 
   const activeWorktreeSubs = new Set<(snapshot: PluginWorktreeSnapshot | null) => void>();
@@ -450,6 +476,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
 
   let lastAgentSnapshot: PluginAgentSnapshot | null = null;
   const agentStateSubs = new Set<(snapshot: PluginAgentSnapshot) => void>();
+  const panelLifecycleSubs = new Set<(event: PluginPanelLifecycleEvent) => void>();
 
   // Capability gating + active-agent presence for the agent APIs (#10617).
   // Default permissive so manifest-free tests are unaffected; restrict to assert
@@ -871,6 +898,18 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       };
       return Promise.resolve(dispose);
     },
+    onDidChangePanelLifecycle(callback) {
+      // No capability gate and no replay: the mock holds no panel registry, so
+      // tests drive phases explicitly via `simulatePanelLifecycleChange`.
+      panelLifecycleSubs.add(callback);
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        panelLifecycleSubs.delete(callback);
+      };
+      return Promise.resolve(dispose);
+    },
     registerForgeProvider(descriptor, impl) {
       // Mirrors PluginService.createHost L1738-L1817. Validation order matches
       // production: non-object descriptor, non-empty string id, non-object impl.
@@ -1072,21 +1111,29 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       },
     },
     process: {
-      async spawn(command, options): Promise<PluginProcessHandle> {
+      async spawn(
+        command: string,
+        options?: PluginProcessSpawnOptions | PluginPtyProcessSpawnOptions
+      ): Promise<PluginProcessHandle | PluginPtyProcessHandle> {
         spawnCalls.push({ command, options });
         // A no-op handle: the mock records the call without spawning anything.
-        // Lifecycle callbacks never fire (no real process), and kill/restart
-        // are inert — tests that exercise real process behavior use
-        // PluginProcessManager directly with an injected fake spawner.
-        return {
+        // Lifecycle and data callbacks never fire (no real process), and
+        // kill/restart/write/resize are inert — tests that exercise real process
+        // behavior use PluginProcessManager directly with an injected fake spawner.
+        const base: PluginProcessHandle = {
           id: `mock-process-${spawnCalls.length}`,
           kill: () => {},
           restart: async () => {},
           onExit: () => () => {},
           onCrash: () => () => {},
+          onData: () => () => {},
         };
+        // Shape matches the real host: `write`/`resize` exist only for a PTY, so
+        // a test asserting "pipe mode has no writable input" stays honest.
+        if (options?.mode !== "pty") return base;
+        return { ...base, write: () => {}, resize: () => {} };
       },
-    },
+    } as PluginProcessApi,
     // In-memory fs mock: writes land in `fsFiles` and are recorded; reads return
     // a previously-written value or reject ENOENT. No containment is modeled
     // (containment lives in pluginFsContainment and is unit-tested directly) —
@@ -1201,8 +1248,27 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         clipboardWriteCalls.push(text);
         clipboardText = text;
       },
+      async writeImage(pngData) {
+        clipboardWriteImageCalls.push(pngData.byteLength);
+        // A real image write replaces the clipboard, so text no longer reads
+        // back — leaving the buffer intact would let a test pass that the
+        // real host would fail.
+        clipboardText = "";
+      },
       async readText() {
         return clipboardText;
+      },
+    },
+    // Records only — a mock must never actually launch a file or open a
+    // Finder window, which is exactly what the real implementation does.
+    // Containment and capability gating live in PluginService and are unit
+    // tested there, matching the fs/git/clipboard mocks.
+    system: {
+      async openPath(targetPath) {
+        systemOpenPathCalls.push(targetPath);
+      },
+      async showItemInFolder(targetPath) {
+        systemShowItemCalls.push(targetPath);
       },
     },
     settings,
@@ -1231,6 +1297,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     fsWriteCalls,
     gitCommitCalls,
     clipboardWriteCalls,
+    clipboardWriteImageCalls,
+    systemOpenPathCalls,
+    systemShowItemCalls,
 
     simulateActiveWorktreeChange(snapshot) {
       activeWorktree = snapshot;
@@ -1243,6 +1312,12 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     simulateAgentStateChange(snapshot) {
       lastAgentSnapshot = snapshot;
       for (const cb of agentStateSubs) cb(snapshot);
+    },
+    simulatePanelLifecycleChange(event) {
+      // Frozen like production delivery, so a plugin that mutates the event
+      // fails in tests rather than in the wild.
+      const frozen = Object.freeze({ ...event });
+      for (const cb of [...panelLifecycleSubs]) cb(frozen);
     },
     setDispatchResult(actionId, result) {
       dispatchOverrides.set(actionId, result);

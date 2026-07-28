@@ -1,11 +1,18 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { TypedNameConfirmInput } from "@/components/ui/TypedNameConfirmInput";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { FolderGit2 } from "@/components/icons";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
+import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm";
 import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
+import {
+  buildWorktreeDeletePreview,
+  formatWorktreeChangeRows,
+  summarizeWorktreeChanges,
+  type WorktreeDeletePreview,
+} from "@/components/Worktree/worktreeDeletePreview";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import type { WorktreeState } from "@/types";
@@ -24,18 +31,58 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const [deleteBranch, setDeleteBranch] = useState(false);
   const [confirmInput, setConfirmInput] = useState("");
   const [hasDevPreview, setHasDevPreview] = useState(false);
+  // Fresh git-status snapshot fetched when the dialog opens and re-checked on
+  // submit (#11343). The prop `worktree.worktreeChanges` can be ~30s stale for
+  // a backgrounded worktree, which would let a force-delete skip the D3 gate
+  // and silently discard uncommitted work. `null` = not yet fetched / monitor
+  // gone (fall back to the prop snapshot); `verifyFailed` = the fresh fetch
+  // errored, so we FAIL CLOSED (treat the tree as dirty, escalate the tier).
+  const [freshPreview, setFreshPreview] = useState<WorktreeDeletePreview | null>(null);
+  const [verifyFailed, setVerifyFailed] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  // Monotonic session token bumped on every open/close/worktree change (in the
+  // open effect below). An in-flight submit revalidation captures the token and
+  // aborts if it changed while awaiting — so a close→reopen (or worktree swap)
+  // during the fetch can't let a stale closure dispatch against the new session
+  // (an ABA race a plain boolean flag would miss). `mountedRef` covers unmount.
+  const sessionRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    // Set on SETUP as well as clearing on cleanup — under React StrictMode the
+    // mount effect runs setup → cleanup → setup, so a setup that only cleared
+    // would leave `mountedRef` false after remount and make every force-delete
+    // abort at the revalidation guard in dev.
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
-  const { counts: terminalCounts } = useWorktreeTerminals(worktree.id);
+  const { counts: terminalCounts, terminals } = useWorktreeTerminals(worktree.id);
+  // Surface the risk-relevant subset (agents mid-work) in the D2 preview instead
+  // of a bare total — closing an idle shell is cheap, interrupting a running
+  // agent is not (#11344, mirrors the tracked/untracked split from #4927).
+  const runningAgentCount = collectRunningAgentTerminals(terminals).length;
 
-  const changes = worktree.worktreeChanges?.changes ?? [];
-  const trackedChangeCount = changes.filter(
-    (c) => c.status !== "untracked" && c.status !== "ignored"
-  ).length;
-  const untrackedFileCount = changes.filter((c) => c.status === "untracked").length;
-  const hasTrackedChanges = trackedChangeCount > 0;
-  const hasUntrackedFiles = untrackedFileCount > 0;
+  // Preview + tier derive from the FRESH fetch when available, else the prop
+  // snapshot as an initial seed. A failed fetch fails closed via
+  // `hasTrackedChanges` so the D3 typed-name gate is never skipped on stale
+  // (or unverifiable) state.
+  const seedSummary = summarizeWorktreeChanges(worktree.worktreeChanges?.changes);
+  const effectiveSummary = freshPreview ?? seedSummary;
+  const trackedChangeCount = effectiveSummary.trackedChangeCount;
+  const untrackedFileCount = effectiveSummary.untrackedFileCount;
+  const hasTrackedChanges = verifyFailed || effectiveSummary.hasTrackedChanges;
+  const hasUntrackedFiles = effectiveSummary.hasUntrackedFiles;
   const hasChanges = hasTrackedChanges || hasUntrackedFiles;
   const hasTerminals = terminalCounts.total > 0;
+
+  // Actual file list a force-delete would discard — a D2 preview must show
+  // real content, not just a count (#11343). Prefer the fresh fetch's changes,
+  // fall back to the prop snapshot before it resolves.
+  const previewChangeRows = formatWorktreeChangeRows(
+    freshPreview?.changes ?? worktree.worktreeChanges?.changes ?? []
+  );
 
   const isProtectedBranch = isProtectedBranchName(worktree.branch?.toLowerCase());
   const isDetachedHead = !worktree.branch;
@@ -55,7 +102,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       hasTrackedChanges,
     }) === "D3";
   const isConfirmMatched = confirmInput === confirmTarget;
-  const canSubmit = !isHighTier || isConfirmMatched;
+  const canSubmit = (!isHighTier || isConfirmMatched) && !isDeleting;
 
   useEffect(() => {
     if (isOpen) {
@@ -64,7 +111,33 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       setDeleteBranch(false);
       setConfirmInput("");
       setHasDevPreview(false);
+      setIsDeleting(false);
     }
+  }, [isOpen, worktree.id]);
+
+  // Fetch a FRESH git-status snapshot when the dialog opens so the tier + the
+  // changed-file preview reflect live changes, not a possibly-stale cache
+  // (#11343). Guarded against stale-closure on unmount/worktree change. A
+  // failed fetch fails closed (`verifyFailed`) — we never silently fall back to
+  // the stale snapshot and offer the lower tier.
+  useEffect(() => {
+    // Bump the session on every open/close/worktree change so an in-flight
+    // submit revalidation can detect it's stale (see `revalidateThenDelete`).
+    sessionRef.current += 1;
+    if (!isOpen) return;
+    let cancelled = false;
+    setFreshPreview(null);
+    setVerifyFailed(false);
+    buildWorktreeDeletePreview(worktree.id)
+      .then((preview) => {
+        if (!cancelled) setFreshPreview(preview);
+      })
+      .catch(() => {
+        if (!cancelled) setVerifyFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen, worktree.id]);
 
   // Disclose a running dev server in the "What will happen" list so the user
@@ -100,9 +173,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     }
   }, [canDeleteBranch, deleteBranch]);
 
-  const handleDelete = () => {
-    if (isHighTier && !isConfirmMatched) return;
-
+  const dispatchDelete = () => {
     const effectiveDeleteBranch = deleteBranch && canDeleteBranch;
     const options = {
       force,
@@ -117,6 +188,55 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     onClose();
   };
 
+  // Re-check LIVE changes immediately before a force-delete dispatch (#11343).
+  // An agent can write files between open and submit; without this, a delete
+  // that looked D2 at open could discard tracked work the typed-name gate was
+  // meant to guard. If the fresh check now escalates to D3 and the name isn't
+  // matched, we surface the gate instead of dispatching. Fails closed on fetch
+  // error. Only the force path needs this — a non-force delete can never
+  // discard tracked changes (the backend guard rejects a dirty non-force
+  // delete), so it dispatches synchronously and keeps its immediate dismiss.
+  const revalidateThenDelete = async () => {
+    const session = sessionRef.current;
+    setIsDeleting(true);
+    let preview: WorktreeDeletePreview | null = null;
+    let failed = false;
+    try {
+      preview = await buildWorktreeDeletePreview(worktree.id);
+    } catch {
+      failed = true;
+    }
+    // Abort if the dialog closed/reopened/changed worktree or unmounted while
+    // the fresh re-check was in flight — never dispatch against a session the
+    // user is no longer looking at.
+    if (!mountedRef.current || sessionRef.current !== session) return;
+    setFreshPreview(preview);
+    setVerifyFailed(failed);
+    const freshHasTracked = failed ? true : (preview ?? seedSummary).hasTrackedChanges;
+    const freshTier = deriveEffectiveTier("worktree.delete", {
+      force: true,
+      isProtectedBranch,
+      isMainWorktree: worktree.isMainWorktree === true,
+      hasTrackedChanges: freshHasTracked,
+    });
+    if (freshTier === "D3" && confirmInput !== confirmTarget) {
+      // Escalated on fresh data — show the typed-name gate, do not dispatch.
+      setIsDeleting(false);
+      return;
+    }
+    dispatchDelete();
+  };
+
+  const handleDelete = () => {
+    if (isHighTier && !isConfirmMatched) return;
+    if (isDeleting) return;
+    if (!force) {
+      dispatchDelete();
+      return;
+    }
+    void revalidateThenDelete();
+  };
+
   const deleteButtonLabel = !force
     ? "Delete worktree"
     : isHighTier
@@ -124,7 +244,23 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       : "Force delete worktree";
 
   let advisoryBanner: React.ReactNode = null;
-  if (hasChanges) {
+  if (verifyFailed) {
+    // Fresh-status fetch failed: we can't confirm what's in the tree, so we
+    // fail closed (the tier is already escalated via `hasTrackedChanges`) and
+    // say so plainly rather than implying a clean/known state.
+    advisoryBanner = (
+      <div
+        role="alert"
+        className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded text-status-error text-xs"
+      >
+        <AlertTriangle className="w-4 h-4 shrink-0" />
+        <p>
+          Couldn't verify this worktree's current changes. Force delete may discard uncommitted work
+          — proceed only if you're sure. This is irreversible.
+        </p>
+      </div>
+    );
+  } else if (hasChanges) {
     if (!force) {
       advisoryBanner = (
         <div
@@ -213,6 +349,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               >
                 {terminalCounts.total} terminal{terminalCounts.total === 1 ? "" : "s"} will be
                 closed
+                {runningAgentCount > 0 ? ` (${runningAgentCount} running an agent)` : ""}
               </li>
               <li
                 className={cn(
@@ -258,6 +395,24 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           </div>
 
           {advisoryBanner}
+
+          {force && !verifyFailed && previewChangeRows.length > 0 && (
+            <div>
+              <span
+                role="heading"
+                aria-level={3}
+                className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60"
+              >
+                Files that will be lost
+              </span>
+              <pre
+                data-testid="delete-worktree-file-list"
+                className="mt-2 max-h-32 overflow-auto text-xs text-daintree-text/70 bg-daintree-bg p-3 rounded border border-border-strong font-mono whitespace-pre-wrap break-all"
+              >
+                {previewChangeRows.join("\n")}
+              </pre>
+            </div>
+          )}
 
           <label className="flex items-center gap-2 cursor-pointer">
             <input

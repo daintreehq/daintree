@@ -1,10 +1,12 @@
 import type { PushProgressEvent } from "./gitPush.js";
+import type { IdArrayFieldEdit } from "../../utils/layoutMerge.js";
 import type { GitStatus, StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
 import type { TabGroup } from "../panel.js";
 import type { WorktreeState } from "../worktree.js";
 import type {
   Project,
+  ProjectAddOptions,
   ProjectSettings,
   RecipeNameCollision,
   RunCommand,
@@ -72,7 +74,11 @@ import type {
   AgentHelpRequest,
   AgentHelpResult,
 } from "./agent.js";
-import type { AgentSessionRecord, AgentSessionRetentionDays } from "./agentSessionHistory.js";
+import type {
+  AgentSessionBookmarkMetadata,
+  AgentSessionRecord,
+  AgentSessionRetentionDays,
+} from "./agentSessionHistory.js";
 import type {
   DemoScreenshotResult,
   DemoStartCapturePayload,
@@ -358,7 +364,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): Promise<CopyTreeResult>;
     isAvailable(): Promise<boolean>;
     cancel(injectionId?: string): Promise<void>;
-    getFileTree(worktreeId: string, dirPath?: string): Promise<FileTreeNode[]>;
+    getFileTree(
+      worktreeId: string,
+      dirPath?: string,
+      includeExcluded?: boolean
+    ): Promise<FileTreeNode[]>;
     testConfig(
       worktreeId: string,
       options?: CopyTreeTestConfigOptions
@@ -531,7 +541,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   project: {
     getAll(): Promise<Project[]>;
     getCurrent(): Promise<Project | null>;
-    add(path: string): Promise<Project>;
+    add(path: string, options?: ProjectAddOptions): Promise<Project>;
     remove(projectId: string): Promise<void>;
     update(projectId: string, updates: Partial<Project>): Promise<Project>;
     switch(
@@ -558,6 +568,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onWorktreeLoadStatus(
       callback: (payload: { projectId: string; worktreeLoadError: string | null }) => void
     ): () => void;
+    onOpenGitInitDialog(callback: (payload: { directoryPath: string }) => void): () => void;
     onFocusOnActivate(callback: (payload: { intent: "focus-next-waiting" }) => void): () => void;
     onBackgroundResize(callback: (payload: { width: number; height: number }) => void): () => void;
     onUpdated(callback: (project: Project) => void): () => void;
@@ -639,8 +650,20 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /**
      * Save terminal snapshots for a project (per-project panel state).
      * Used for preserving panel layout when switching away from a project.
+     * `changedIds`/`removedIds` describe what this renderer changed relative to
+     * its last-persisted baseline so Main can merge concurrent writes from
+     * sibling windows of the same project (#11350). Omit both for a full replace.
+     * `fieldEdits` names, per entry, which fields Main may also author that this
+     * renderer actually changed — those move, the rest keep their on-disk value
+     * (#11461).
      */
-    setTerminals(projectId: string, terminals: TerminalSnapshot[]): Promise<void>;
+    setTerminals(
+      projectId: string,
+      terminals: TerminalSnapshot[],
+      changedIds?: string[],
+      removedIds?: string[],
+      fieldEdits?: IdArrayFieldEdit[]
+    ): Promise<void>;
     /**
      * Get terminal dimensions for a project.
      * Used for restoring terminal sizes when switching to a project.
@@ -661,9 +684,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getDraftInputs(projectId: string): Promise<Record<string, string>>;
     /**
      * Save draft inputs for a project.
-     * Used for preserving hybrid input bar drafts when switching away from a project.
+     * Used for preserving hybrid input bar drafts when switching away from a
+     * project and when a view is torn down (window close, #11352).
+     * `changedIds`/`removedIds` (terminal ids) let Main merge concurrent writes
+     * from sibling windows of the same project instead of full-replacing the
+     * record. Omit both for a legacy full replace.
      */
-    setDraftInputs(projectId: string, draftInputs: Record<string, string>): Promise<void>;
+    setDraftInputs(
+      projectId: string,
+      draftInputs: Record<string, string>,
+      changedIds?: string[],
+      removedIds?: string[]
+    ): Promise<void>;
     /**
      * Get tab groups for a project.
      * Used for restoring tab groups when switching to a project.
@@ -671,9 +703,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getTabGroups(projectId: string): Promise<TabGroup[]>;
     /**
      * Save tab groups for a project.
-     * Used for persisting tab group state per-project.
+     * Used for persisting tab group state per-project. `changedIds`/`removedIds`
+     * merge concurrent writes from sibling windows of the same project (#11350).
      */
-    setTabGroups(projectId: string, tabGroups: TabGroup[]): Promise<void>;
+    setTabGroups(
+      projectId: string,
+      tabGroups: TabGroup[],
+      changedIds?: string[],
+      removedIds?: string[]
+    ): Promise<void>;
     /**
      * Get focus mode state for a project.
      * Used for restoring focus mode when switching projects.
@@ -1279,6 +1317,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     clear(worktreeId?: string): Promise<void>;
     getRetentionDays(): Promise<AgentSessionRetentionDays>;
     setRetentionDays(days: AgentSessionRetentionDays): Promise<void>;
+    // Session bookmarks (#11288). `metadata` carries only pane-presentation
+    // hints; `bookmarkedAt`/`label` are set by main.
+    prepareBookmark(input: {
+      terminalId: string;
+      label: string;
+      metadata?: Omit<AgentSessionBookmarkMetadata, "bookmarkedAt" | "label">;
+    }): Promise<{ record: AgentSessionRecord }>;
+    promoteBookmark(input: { sessionId: string; label: string }): Promise<AgentSessionRecord>;
+    renameBookmark(input: { sessionId: string; label: string }): Promise<AgentSessionRecord>;
+    deleteBookmark(input: { sessionId: string }): Promise<void>;
+    listBookmarks(input?: { projectId?: string }): Promise<AgentSessionRecord[]>;
   };
   // clipboard is generated — see GeneratedElectronAPI.
   webUtils: {
@@ -1866,6 +1915,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onProvenanceChanged(callback: (payload: Record<string, never>) => void): () => void;
     /**
+     * Subscribe to phase/entry progress for installs started with a `jobId`
+     * (#11302). Only the window that started the install receives its events;
+     * filter by `jobId` anyway, since one window can start several in sequence.
+     * Returns a cleanup.
+     */
+    onInstallProgress(
+      callback: (event: import("../plugin.js").PluginInstallProgressEvent) => void
+    ): () => void;
+    /**
      * Subscribe to background update-check results (#10893). Fires with the
      * batched set of URL-installed plugins that have updates available. Returns
      * a cleanup.
@@ -1903,6 +1961,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * a cleanup.
      */
     onDeepLink(callback: (intent: import("../plugin.js").PluginDeepLinkIntent) => void): () => void;
+    /**
+     * Subscribe to double-clicked `.dntr` archives awaiting install
+     * confirmation (#11280). One call per archive, in arrival order.
+     */
+    onArchiveInstallIntent(
+      callback: (intent: import("../plugin.js").PluginArchiveInstallIntent) => void
+    ): () => void;
     /** Subscribe to plugin panel kind registry changes. Returns a cleanup. */
     onPanelKindsChanged(
       callback: (payload: {
@@ -2003,11 +2068,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
 }
 
 export type MicPermissionStatus =
-  | "granted"
-  | "denied"
-  | "not-determined"
-  | "restricted"
-  | "unknown";
+  "granted" | "denied" | "not-determined" | "restricted" | "unknown";
 
 export type VoiceTranscriptionModel = "gpt-realtime-whisper";
 
@@ -2022,7 +2083,15 @@ export type VoiceTranscriptionModel = "gpt-realtime-whisper";
  */
 export type VoiceTranscriptionProvider = "openai" | "deepgram";
 
-export type VoiceCorrectionModel = "gpt-5-nano" | "gpt-5-mini";
+/**
+ * The correction model is single-valued: gpt-5.6-luna replaced both the retired
+ * gpt-5-mini (quality) and gpt-5-nano (speed) tiers, so there is no longer a
+ * user-facing model choice. Kept as a named type (rather than inlining the
+ * literal) so the persisted setting, the runtime constant in
+ * `shared/config/voiceCorrection.ts` (`VOICE_DICTATION_AI_MODEL`), and this
+ * union stay recognizably one concept.
+ */
+export type VoiceCorrectionModel = "gpt-5.6-luna";
 
 /**
  * Paragraphing strategy for voice dictation.

@@ -28,6 +28,7 @@ import {
 } from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import { PluginProcessManager } from "./plugin/PluginProcessManager.js";
+import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
 import { PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
 import type { HostGitFactory } from "./plugin/pluginHostGit.js";
@@ -36,6 +37,7 @@ import {
   type PluginProcessInfo,
 } from "../../shared/types/ipc/pluginProcess.js";
 import { z } from "zod";
+import { isBuiltInPluginCapability } from "../../shared/types/plugin.js";
 import type {
   PluginManifest,
   PluginIpcHandler,
@@ -61,6 +63,11 @@ import type {
 } from "../../shared/types/plugin.js";
 import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
 import { PluginContributionBroadcaster } from "./plugin/PluginContributionBroadcaster.js";
+import {
+  PluginPanelLifecycleBroker,
+  type PanelLifecycleSourceHandle,
+} from "./plugin/PluginPanelLifecycleBroker.js";
+import { PLUGIN_VIEW_GENERATION_PREFIX } from "../../shared/utils/pluginViewUrl.js";
 import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
 import { PluginUIPromptDispatcher } from "./plugin/PluginUIPromptDispatcher.js";
 import { PluginSettingsManager } from "./plugin/PluginSettingsManager.js";
@@ -98,12 +105,14 @@ import type {
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeStatus } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import { getPtyClient } from "../window/serviceRefs.js";
+import { getWindowForWebContents } from "../window/webContentsRegistry.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import {
   registerPanelKind,
   unregisterPluginPanelKinds,
   onPanelKindRegistered,
   onPanelKindUnregistered,
+  getPanelKindConfig,
 } from "../../shared/config/panelKindRegistry.js";
 import {
   registerToolbarButton,
@@ -305,14 +314,45 @@ function safeArgsHash(args: unknown[]): string {
 }
 
 /**
- * Build the `plugin://{pluginId}/{path}` URL that `PluginViewHost` passes to
- * `import()`. Strips a single leading `./` so the host segment doesn't end up
- * with an awkward `./dist/view.js` path component — the URL handler accepts
- * either form, but the canonical shape matches the protocol docs.
+ * Monotonic counter behind the view-generation segment. Session-scoped and
+ * never reset: the renderer's module map is rebuilt whenever main restarts, so
+ * a generation only has to be unique within one main-process lifetime.
  */
-function buildPluginViewUrl(pluginId: string, componentPath: string): string {
+let nextPluginViewGeneration = 1;
+
+/** Allocate the generation stamped into a plugin's view URLs for this load. */
+export function allocatePluginViewGeneration(): number {
+  return nextPluginViewGeneration++;
+}
+
+/**
+ * Build the `plugin://{pluginId}/{PLUGIN_VIEW_GENERATION_PREFIX}{n}/{path}` URL
+ * that `PluginViewHost` passes to `import()`. Strips a single leading `./` so
+ * the host segment doesn't end up with an awkward `./dist/view.js` path
+ * component — the URL handler accepts either form, but the canonical shape
+ * matches the protocol docs.
+ *
+ * The generation segment is what makes a plugin upgrade visible without a Force
+ * Reload (#11301). V8 caches ESM module records by URL and Chromium has no
+ * eviction API, so a re-imported identical specifier returns the OLD module no
+ * matter how thoroughly the React tree remounts. A fresh segment is a specifier
+ * V8 has never seen, so the new bundle is actually fetched and evaluated.
+ *
+ * This is deliberately NOT a per-load cache-buster — that is the thing the
+ * renderer's own comment warns against, because one entry per panel open grows
+ * the module map without bound. The generation changes only when the plugin is
+ * (re)loaded in main: a genuine install, upgrade, or dev reload. That is the
+ * same bounded cost plugin authors already pay by hand-versioning their bundle
+ * filename every release, minus the manual step.
+ *
+ * A path SEGMENT rather than a `?v=` query on purpose: a relative import inside
+ * the entry module resolves against the entry's URL and inherits a path prefix,
+ * but drops the query — so a query would refresh the entry chunk and leave
+ * every secondary chunk stale.
+ */
+function buildPluginViewUrl(pluginId: string, componentPath: string, generation: number): string {
   const normalized = componentPath.startsWith("./") ? componentPath.slice(2) : componentPath;
-  return `plugin://${pluginId}/${normalized}`;
+  return `plugin://${pluginId}/${PLUGIN_VIEW_GENERATION_PREFIX}${generation}/${normalized}`;
 }
 
 /**
@@ -515,6 +555,8 @@ export class PluginService {
    * each spawn in the plugin audit trail.
    */
   private processManager: PluginProcessManager | null = null;
+  /** Lazily built on the first interactive spawn; see {@link getPluginPtyTransport}. */
+  private pluginPtyTransport: PluginPtyTransport | null = null;
   /**
    * Active `host.fs.watch` watchers keyed by pluginId — each entry is a disposer
    * that closes the underlying `fs.watch` handle. Torn down on unload so a
@@ -571,6 +613,9 @@ export class PluginService {
    * after {@link initPromise} is set, so it can await the init gate.
    */
   private readonly broadcaster: PluginContributionBroadcaster;
+  private readonly panelLifecycleBroker: PluginPanelLifecycleBroker;
+  /** sourceId → detach its `destroyed` listener. See `watchPanelLifecycleSource`. */
+  private readonly panelLifecycleSourceCleanups = new Map<number, () => void>();
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
   /**
@@ -647,6 +692,13 @@ export class PluginService {
       listPluginActions: () => this.listPluginActions(),
       initPromise: this.initPromise,
     });
+
+    // Ownership is resolved against the live kind registry rather than trusted
+    // from the renderer's payload, so a plugin can never be addressed with
+    // another plugin's panel events (#11301).
+    this.panelLifecycleBroker = new PluginPanelLifecycleBroker(
+      (panelKindId) => getPanelKindConfig(panelKindId)?.extensionId
+    );
 
     this.dispatcher = new PluginRendererDispatcher({
       isDisposed: () => this.disposed,
@@ -733,6 +785,57 @@ export class PluginService {
   }
 
   /**
+   * Accept a renderer's batch of plugin panel lifecycle transitions (#11301).
+   * `sourceId` is the sender's `webContentsId`, taken from the IPC context
+   * rather than the payload, so each project view's panels stay in their own
+   * bucket and one view's teardown can't erase another's.
+   */
+  ingestPanelLifecycleEvents(
+    sourceId: number,
+    events: readonly unknown[],
+    sender?: PanelLifecycleSourceHandle
+  ): void {
+    if (this.disposed) return;
+    if (sender) this.watchPanelLifecycleSource(sourceId, sender);
+    this.panelLifecycleBroker.ingest(sourceId, events);
+  }
+
+  /**
+   * Attach a one-shot `destroyed` listener the first time a renderer reports,
+   * so its panels are forgotten when its `WebContentsView` goes away. Without
+   * this the broker would keep a closed project view's panels forever and
+   * replay them to the next subscriber as though they were live.
+   *
+   * The handle is structurally typed rather than `Electron.WebContents` so this
+   * stays unit-testable without an Electron stub.
+   */
+  private watchPanelLifecycleSource(sourceId: number, sender: PanelLifecycleSourceHandle): void {
+    if (this.panelLifecycleSourceCleanups.has(sourceId)) return;
+    const onDestroyed = (): void => {
+      this.panelLifecycleSourceCleanups.delete(sourceId);
+      // Deliberately does NOT synthesize `removed`: a view being destroyed or
+      // evicted says nothing about whether the user closed the panel, and a
+      // false terminal event is the exact destructive misread this API exists
+      // to prevent.
+      this.panelLifecycleBroker.clearSource(sourceId);
+    };
+    try {
+      sender.once("destroyed", onDestroyed);
+    } catch {
+      // An already-torn-down WebContents can throw; nothing to track then.
+      return;
+    }
+    this.panelLifecycleSourceCleanups.set(sourceId, () => {
+      try {
+        sender.removeListener("destroyed", onDestroyed);
+      } catch {
+        // Electron throws if the WebContents is already gone — the listener
+        // died with it.
+      }
+    });
+  }
+
+  /**
    * Stop forwarding shared registry events to the renderer. Intended for
    * tests that need a clean teardown — production code holds a single
    * `pluginService` singleton for the app lifetime. Also drops any pending
@@ -761,6 +864,13 @@ export class PluginService {
     this.resolveInit = null;
     this.dispatcher.dispose();
     this.promptDispatcher.dispose();
+    for (const detach of this.panelLifecycleSourceCleanups.values()) detach();
+    this.panelLifecycleSourceCleanups.clear();
+    this.panelLifecycleBroker.dispose();
+    // Drops the PtyClient subscriptions and force-kills any plugin PTY the
+    // unload cascade above left running.
+    this.pluginPtyTransport?.dispose();
+    this.pluginPtyTransport = null;
   }
 
   /**
@@ -1136,6 +1246,11 @@ export class PluginService {
     // Index views by bare id so the panels loop can attach `componentPath` in
     // a single registerPanelKind pass (#9229). View ids are pre-namespace; the
     // runtime panel id is `${manifest.name}.${panel.id}`.
+    // One generation per load, shared by every view this plugin contributes, so
+    // a reload swaps the whole plugin's view modules together (#11301). Reading
+    // it here rather than per-panel also keeps a plugin's chunks in one virtual
+    // namespace, which is what lets relative imports inherit the generation.
+    const viewGeneration = allocatePluginViewGeneration();
     const viewsByBareId = new Map<string, ViewContribution>();
     const unmatchedViewIds = new Set<string>();
     for (const view of manifest.contributes.views) {
@@ -1168,9 +1283,13 @@ export class PluginService {
         canRestart: panel.canRestart,
         canConvert: panel.canConvert,
         showInPalette: panel.showInPalette,
+        // Dockable by default; only forward an explicit opt-out (or opt-in) so
+        // absence stays `undefined` and `panelKindIsDockable` applies the
+        // default. #11332.
+        ...(panel.dockable !== undefined ? { dockable: panel.dockable } : {}),
         extensionId: manifest.name,
         ...(view && !panel.hasPty
-          ? { componentPath: buildPluginViewUrl(manifest.name, view.componentPath) }
+          ? { componentPath: buildPluginViewUrl(manifest.name, view.componentPath, viewGeneration) }
           : {}),
       });
       if (view && panel.hasPty) {
@@ -2038,6 +2157,7 @@ export class PluginService {
       pluginBadges: this.pluginBadges,
       pluginFsWatchers: this.pluginFsWatchers,
       broadcaster: this.broadcaster,
+      panelLifecycleBroker: this.panelLifecycleBroker,
       dispatcher: this.dispatcher,
       promptDispatcher: this.promptDispatcher,
       settings: this.settings,
@@ -2087,18 +2207,29 @@ export class PluginService {
   private getProcessManager(): PluginProcessManager {
     if (!this.processManager) {
       this.processManager = new PluginProcessManager({
-        streamSink: (pluginId, event) => {
+        streamSink: (pluginId, event, panelId) => {
           // Membership-gated like postToPanel: a late stream emit after the
           // plugin unloads is dropped rather than broadcast.
           if (!this.plugins.has(pluginId)) return;
           // Same per-instance envelope as host.postToPanel — the process stream
           // rides the same transport and is consumed by the same `plugin.on`
-          // dispatcher. Process events are not panel-scoped, so broadcast (null).
+          // dispatcher. `panelId` is the spawn-time routing target (#11300):
+          // non-null targets the panel that started the process, null keeps the
+          // historical broadcast to every panel the plugin owns.
           broadcastToRenderer(`plugin:${pluginId}:${PLUGIN_PROCESS_STREAM_CHANNEL}`, {
-            panelId: null,
+            panelId,
             payload: event,
           });
         },
+        ptySpawner: (config, context) =>
+          this.getPluginPtyTransport().spawn(context.id, context.generation, {
+            command: config.command,
+            args: config.args,
+            cwd: config.cwd,
+            env: config.env,
+            cols: config.cols,
+            rows: config.rows,
+          }),
         auditor: ({ pluginId, command, args, processId }) => {
           // Surface the spawn in the audit trail so process execution is
           // observable. Best-effort — an audit failure must never block a spawn.
@@ -2116,6 +2247,23 @@ export class PluginService {
       });
     }
     return this.processManager;
+  }
+
+  /**
+   * Lazily construct the interactive-process transport (#11300). Deferred until
+   * a plugin actually spawns a PTY so the plugin subsystem never forces the
+   * pty-host up on its own — the terminal path is what boots it, and this only
+   * borrows the crash-isolated process once it exists.
+   */
+  private getPluginPtyTransport(): PluginPtyTransport {
+    if (!this.pluginPtyTransport) {
+      const client = getPtyClient();
+      if (!client) {
+        throw new Error("process.spawn: interactive (pty) mode requires the terminal backend");
+      }
+      this.pluginPtyTransport = new PluginPtyTransport(client);
+    }
+    return this.pluginPtyTransport;
   }
 
   /** Read-only process snapshot for the `plugin-process:list` IPC, optionally scoped to one plugin. */
@@ -2292,14 +2440,75 @@ export class PluginService {
     return { path: suffix.length > 0 ? path.join(base, suffix) : base, rootClass: "project" };
   }
 
+  /**
+   * Worktree snapshots for the project the plugin is acting on behalf of.
+   *
+   * The host APIs this feeds (`getActiveWorktree` / `getWorktrees` /
+   * `getWorktreeStatus`, plus worktree-scoped storage, `${worktree}`/`${project}`
+   * allowlist roots and the `process.spawn` cwd default) hang off a single
+   * long-lived closure per plugin — `createHost()` runs once at activation and
+   * its methods take no arguments — so there is no per-call sender to key off.
+   * Scoping to the focused window is the only resolution structurally available
+   * without redesigning the utility-process RPC bridge, which #11297 does not
+   * ask for. It is genuinely weaker than a real per-invocation context: a plugin
+   * acting from a timer observes whichever project is focused *then*, not the
+   * one it was invoked from.
+   *
+   * Returns `[]` when no window resolves rather than falling back to the
+   * cross-project aggregate. This is not merely narrowing — the selected root
+   * can change from one project to another, which is the point — but the empty
+   * case fails closed: `getActiveWorktree` → `null`, worktree storage → no
+   * target, and token-rooted allowlist entries drop so containment denies
+   * (#9492). An aggregate would instead answer confidently with an arbitrary
+   * project's worktree, which is exactly the bug being fixed.
+   */
   private async fetchAllWorktreeSnapshots(): Promise<WorktreeSnapshot[]> {
     const client = this.workspaceClient;
     if (!client) return [];
+    const windowId = this.resolveScopeWindowId();
+    if (windowId === undefined) return [];
     try {
-      return await client.getAllStatesAsync();
+      return await client.getAllStatesAsync(windowId);
     } catch (err) {
       console.error("[PluginService] Failed to fetch worktree snapshots:", err);
       return [];
+    }
+  }
+
+  /**
+   * The BrowserWindow id whose visible project the plugin is acting on, or
+   * `undefined` when none resolves. Uses the dispatcher's strict scope resolver,
+   * not its dispatch-targeting one — the latter scans every window in insertion
+   * order, which would reintroduce "some other project's worktree" here.
+   */
+  private resolveScopeWindowId(): number | undefined {
+    const webContents = this.dispatcher.resolveScopeWebContents();
+    if (!webContents) return undefined;
+    return getWindowForWebContents(webContents)?.id;
+  }
+
+  /**
+   * The active worktree id for a specific window, for `plugin:invoke`'s IPC
+   * context (#11297). Unlike {@link fetchAllWorktreeSnapshots} this is
+   * sender-precise: the IPC handler has the real invoking `webContents`, so it
+   * resolves the window that actually made the call rather than the focused
+   * one. The asymmetry is deliberate — use real sender scope wherever one
+   * exists.
+   *
+   * Returns `null` for an unresolved window instead of widening to the
+   * cross-project aggregate, and swallows lookup failures: this sits on the
+   * critical path of every plugin invocation, so a wedged or crashed workspace
+   * host must degrade the context rather than fail the invoke.
+   */
+  async getActiveWorktreeIdForWindow(windowId: number | undefined): Promise<string | null> {
+    const client = this.workspaceClient;
+    if (!client || windowId === undefined) return null;
+    try {
+      const snapshots = await client.getAllStatesAsync(windowId);
+      return snapshots.find((s) => s.isCurrent === true)?.id ?? null;
+    } catch (err) {
+      console.error("[PluginService] Failed to resolve active worktree for window:", err);
+      return null;
     }
   }
 
@@ -2800,6 +3009,12 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "unregisterPluginPanelKinds", () =>
       unregisterPluginPanelKinds(pluginId)
+    );
+    // Its own step (#9322): the per-subscription disposers already ran via
+    // `flushPluginEventCleanups`, but a disposer lost to an earlier throw would
+    // otherwise strand a listener holding this plugin's closure alive.
+    runUnloadStep(pluginId, "clearPanelLifecycleListeners", () =>
+      this.panelLifecycleBroker.clearPlugin(pluginId)
     );
     runUnloadStep(pluginId, "unregisterForgeProviders", () => unregisterForgeProviders(pluginId));
     runUnloadStep(pluginId, "unregisterForgeProviderImpls", () =>
@@ -3495,10 +3710,28 @@ export class PluginService {
     // confirm/MRU/repeatLast gates.
     const manifest = this.plugins.get(pluginId)?.manifest;
     const manifestCapabilities = manifest?.capabilities ?? [];
-    const hasHighRiskCapability = manifestCapabilities.some((p) =>
+
+    // Per-action capability intent (#11299). `requires` narrows *which*
+    // capabilities the derivation below consults — it never changes who
+    // derives the verdict, and it grants no access (host APIs still gate on
+    // manifest.capabilities at call time). Validated fail-closed as a subset
+    // of the manifest, mirroring PluginChannelRegistry.registerHandler, so an
+    // action can't name authority the user was never asked to grant.
+    const requires = this.validateActionRequires(pluginId, id, contribution, manifestCapabilities);
+
+    // Omitted (not merely empty) means "no intent declared" — fall back to the
+    // whole manifest so pre-#11299 plugins keep today's conservative
+    // elevation. An explicit `[]` is a real declaration meaning "this action
+    // exercises nothing" and must reach the checks below as an empty set.
+    // The trap to avoid is any emptiness test (`requires.length > 0 ? … : …`)
+    // that folds `[]` back into the omitted case and silently re-elevates
+    // every opted-in action; `??` would be equivalent to this ternary, since
+    // validateActionRequires rejects a null.
+    const dangerCapabilities = requires === undefined ? manifestCapabilities : requires;
+    const hasHighRiskCapability = dangerCapabilities.some((p) =>
       CONFIRM_TRIGGERING_CAPABILITIES.has(p)
     );
-    const hasCompoundElevation = manifestTriggersCompoundElevation(manifest, manifestCapabilities);
+    const hasCompoundElevation = manifestTriggersCompoundElevation(manifest, dangerCapabilities);
     const effectiveDanger: "safe" | "confirm" =
       danger === "confirm" || hasHighRiskCapability || hasCompoundElevation ? "confirm" : "safe";
 
@@ -3516,7 +3749,58 @@ export class PluginService {
         contribution.inputSchema && typeof contribution.inputSchema === "object"
           ? { ...contribution.inputSchema }
           : undefined,
+      requires,
     };
+  }
+
+  /**
+   * Validate a contribution's optional per-action capability intent (#11299)
+   * and return a defensive copy, or `undefined` when the action declared none.
+   *
+   * Fail-closed on every rejection path: an unknown token, a token the plugin
+   * never declared, or a malformed value throws rather than being dropped.
+   * Silently ignoring a bad `requires` would be the dangerous failure — the
+   * action would fall back to whole-manifest elevation, which is safe, but the
+   * author's typo would go unreported until someone wondered why their action
+   * still confirms. Throwing surfaces it at load, matching how
+   * `PluginChannelRegistry` handles the same mistake on channels.
+   *
+   * `requires` is copied because the descriptor is broadcast to renderers and
+   * cached; sharing the plugin's array would let a plugin mutate a
+   * host-authoritative record after validation.
+   */
+  private validateActionRequires(
+    pluginId: string,
+    actionId: string,
+    contribution: PluginActionContribution,
+    manifestCapabilities: readonly BuiltInPluginCapability[]
+  ): readonly BuiltInPluginCapability[] | undefined {
+    // Typed as `readonly BuiltInPluginCapability[]`, but the main-side
+    // `host.registerAction` path hands us whatever the plugin passed, so the
+    // runtime shape is genuinely unknown and every check below earns its keep.
+    const raw: unknown = contribution.requires;
+    if (raw === undefined) return undefined;
+    if (!Array.isArray(raw)) {
+      throw new Error(
+        `Plugin action "${actionId}" has invalid "requires": expected an array of capabilities`
+      );
+    }
+    const declared: ReadonlySet<string> = new Set(manifestCapabilities);
+    const validated: BuiltInPluginCapability[] = [];
+    for (const cap of raw) {
+      if (!isBuiltInPluginCapability(cap)) {
+        throw new Error(
+          `Plugin action "${actionId}" lists unknown capability "${String(cap)}" in "requires"`
+        );
+      }
+      if (!declared.has(cap)) {
+        throw new Error(
+          `PERMISSION_REQUIRED: action "${actionId}" requires capability "${cap}" which is not declared in plugin "${pluginId}" manifest.capabilities`
+        );
+      }
+      validated.push(cap);
+    }
+    return validated;
   }
 
   /**

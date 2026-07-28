@@ -19,7 +19,12 @@ async function getRunCommandDetector(): Promise<
   return cachedRunCommandDetector;
 }
 import { z } from "zod";
-import { typedHandle, typedHandleValidated, checkRateLimit } from "../../utils.js";
+import {
+  typedHandle,
+  typedHandleValidated,
+  checkRateLimit,
+  broadcastToRenderer,
+} from "../../utils.js";
 import { validateFolderName } from "../../../../shared/utils/folderName.js";
 import { ProjectSettingsSaveSchema } from "../../../services/projectSettingsCodec.js";
 import type { ProjectSettings } from "../../../types/index.js";
@@ -67,6 +72,17 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
           console.warn("[IPC] Failed to push forge settings to workspace host:", error);
         });
       }
+    }
+    if (remoteChanged) {
+      // The renderer caches provider resolution per project and only drops it
+      // on `forge:remote-changed` (#11155). That event is signature-gated on
+      // `.git/config`, which a settings change never touches — so without this
+      // broadcast the toolbar keeps resolving against the OLD remote until a
+      // reload, which is the bug this fix exists to close (#11408).
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+        name: "forge:remote-changed",
+        payload: { projectId },
+      });
     }
   };
   handlers.push(

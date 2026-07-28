@@ -1,4 +1,3 @@
-// eager-import-allow: reads worktree config via store.get synchronously to derive worktree parent dirs for path-guard checks
 import { app, shell } from "electron";
 import os from "os";
 import * as nodePath from "path";
@@ -6,15 +5,9 @@ import * as nodeFs from "fs";
 import { CHANNELS } from "../channels.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
 import { projectStore } from "../../services/ProjectStore.js";
-import { store } from "../../store.js";
+import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { resolveContainedPath } from "./pathGuard.js";
-import {
-  DEFAULT_WORKTREE_PATH_PATTERN,
-  buildPathPatternVariables,
-  resolvePathPattern,
-  validatePathPattern,
-} from "../../../shared/utils/pathPattern.js";
+import { resolveContainedPath, assertExtensionAllowed } from "./pathGuard.js";
 import {
   SystemOpenExternalPayloadSchema,
   SystemOpenPathPayloadSchema,
@@ -31,103 +24,100 @@ import type {
   SystemOpenInEditorPayload,
 } from "../../schemas/ipc.js";
 
-// Extensions that shell.openPath / the OS would execute rather than reveal.
-// On macOS, opening a .app (or .command/.scpt) launches it; on Windows a
-// .exe/.bat/.lnk runs; on Linux a .desktop/.sh/.AppImage executes. We deny
-// these for renderer-supplied paths regardless of containment, since a
-// malicious file dropped inside an allowed root must not become a launch
-// primitive. Selected per-platform at module init.
-const DENIED_EXTENSIONS_BY_PLATFORM: Record<string, readonly string[]> = {
-  darwin: [".app", ".command", ".terminal", ".scpt", ".scptd", ".pkg", ".dmg", ".desktop"],
-  linux: [".desktop", ".sh", ".appimage", ".run"],
-  win32: [
-    ".exe",
-    ".bat",
-    ".cmd",
-    ".com",
-    ".scr",
-    ".pif",
-    ".vbs",
-    ".ps1",
-    ".msi",
-    ".lnk",
-    ".jar",
-    ".reg",
-    ".cpl",
-    ".wsf",
-    ".hta",
-  ],
-};
+/**
+ * Collect the worktree roots git actually tracks for each project.
+ *
+ * This replaces an earlier heuristic that reconstructed a worktree *parent*
+ * directory from the configured path pattern. That approach admitted the whole
+ * predicted parent (including directories that were never worktrees) yet still
+ * missed real ones: it only consulted the global pattern, so a per-project
+ * `worktreePathPattern` override was invisible to it, and a worktree created
+ * by hand via `git worktree add` lands wherever the user chose — no pattern
+ * predicts it. Asking git is both narrower and complete.
+ *
+ * Each returned path is a root in its own right; the parent is never admitted.
+ * Enumeration runs concurrently and per-project failures degrade to an empty
+ * list, so one broken or deleted repository can't suppress healthy ones — the
+ * project root itself stays allowed regardless.
+ *
+ * Git reports more than live working trees, so every candidate is confirmed to
+ * still be one before it earns containment. Bare entries are excluded outright:
+ * a linked checkout backed by a bare repository reports that repository, and
+ * granting it would hand out its object store and hooks. The rest are checked
+ * for a `.git` entry, which every working tree has (a directory in the main
+ * one, a gitdir pointer file in linked ones). That check is what makes stale
+ * "prunable" records safe — git keeps reporting a worktree directory the user
+ * deleted behind its back, and if that path is later reused by something
+ * unrelated, the absent `.git` is the only thing separating it from a granted
+ * root. Recreation is exactly the case a realpath-only test misses. We never
+ * prune: this is a read-time authorization check, not worktree lifecycle code.
+ */
+async function collectTrackedWorktreeRoots(projectRoots: readonly string[]): Promise<string[]> {
+  const perProject = await Promise.all(
+    projectRoots.map((root) =>
+      gitServiceCache
+        .getGitService(root)
+        .listWorktrees()
+        .catch(() => [])
+    )
+  );
 
-const DENIED_EXTENSIONS = new Set<string>(DENIED_EXTENSIONS_BY_PLATFORM[process.platform] ?? []);
+  const candidates = [
+    ...new Set(
+      perProject.flatMap((worktrees) =>
+        worktrees.filter(isAdmissibleRecord).map((worktree) => worktree.path)
+      )
+    ),
+  ];
+  const live = await Promise.all(candidates.map((candidate) => isLiveWorkingTree(candidate)));
 
-function assertExtensionAllowed(candidate: string): void {
-  const ext = nodePath.extname(candidate).toLowerCase();
-  if (DENIED_EXTENSIONS.has(ext)) {
-    throw new AppError({
-      code: "INVALID_PATH",
-      message: `Refusing to open executable file type: ${ext}`,
-      context: { candidate, ext },
-    });
-  }
+  return candidates.filter((_, index) => live[index]);
 }
 
-// A placeholder branch slug used purely to resolve a worktree path pattern down
-// to its parent directory. Worktrees for a project all share the parent of the
-// resolved pattern; the slug value itself is discarded after `dirname()`.
-const WORKTREE_PARENT_PROBE_SLUG = "__daintree_probe__";
+function isAdmissibleRecord(worktree: { path: string; bare: boolean }): boolean {
+  if (worktree.bare) return false;
+  // pathGuard treats the filesystem root as containing every absolute path, so
+  // a record pointing there would silently grant the whole disk.
+  return nodePath.parse(worktree.path).root !== worktree.path;
+}
 
 /**
- * Compute the set of "worktree parent" directories implied by the configured
- * worktree path pattern(s) and the global default. Worktrees aren't tracked
- * in `projectStore` (they live in workspace-host state), but they always sit
- * under a deterministic parent derived from the project root + pattern. We
- * include both the global-configured pattern and the built-in default so a
- * stale or temporarily-changed pattern doesn't lock the user out of the
- * "Reveal in Finder" / "Open in Editor" flows on existing worktrees.
+ * True when `candidate` still looks like a working tree worth trusting.
+ *
+ * Only a definitively absent `.git` disqualifies it. Any other error — a
+ * permission failure while traversing, an unreachable network volume, a
+ * transient I/O fault — says nothing about whether this is a worktree, and git
+ * just told us it is; rejecting on those would lock a user out of a perfectly
+ * good worktree for an unrelated reason.
  */
-function collectWorktreeParentDirs(projectRoots: readonly string[]): string[] {
-  const patterns = new Set<string>([DEFAULT_WORKTREE_PATH_PATTERN]);
+async function isLiveWorkingTree(candidate: string): Promise<boolean> {
   try {
-    const configured = store.get("worktreeConfig.pathPattern");
-    if (typeof configured === "string" && configured.trim()) {
-      const validation = validatePathPattern(configured);
-      if (validation.valid) {
-        patterns.add(configured);
-      }
-    }
-  } catch {
-    // Store read failures fall through to the default-only set.
+    await nodeFs.promises.access(nodePath.join(candidate, ".git"));
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code !== "ENOENT" && code !== "ENOTDIR";
   }
-
-  const parents = new Set<string>();
-  for (const root of projectRoots) {
-    for (const pattern of patterns) {
-      try {
-        const variables = buildPathPatternVariables(root, WORKTREE_PARENT_PROBE_SLUG);
-        const resolved = resolvePathPattern(pattern, variables, root);
-        const parent = nodePath.dirname(resolved);
-        if (parent && parent !== "." && parent !== nodePath.sep) {
-          parents.add(parent);
-        }
-      } catch {
-        // Skip patterns that fail to resolve for a given root.
-      }
-    }
-  }
-  return [...parents];
 }
 
 /**
  * Guard a renderer-supplied path before forwarding it to a system sink
  * (shell.openPath / EditorService.openFile). Rejects non-absolute paths,
  * executable extensions, and any path not contained within a known project
- * root, a known worktree parent directory, or the app's userData dir (where
- * crash logs live). The extension is checked twice — on the raw input and on
- * the realpath-resolved target — so a benignly-named symlink (`notes.txt` →
- * `Evil.app`) inside a root can't smuggle an executable past the deny-list.
- * Returns the resolved path so the caller hands the canonical target to the
- * sink, shrinking the TOCTOU window.
+ * root, a git-tracked worktree of one of those projects, or the app's userData
+ * dir (where crash logs live). The extension is checked twice — on the raw
+ * input and on the realpath-resolved target — so a benignly-named symlink
+ * (`notes.txt` → `Evil.app`) inside a root can't smuggle an executable past
+ * the deny-list. Returns the resolved path so the caller hands the canonical
+ * target to the sink, shrinking the TOCTOU window.
+ *
+ * Worktree enumeration shells out to git, so it is deferred until a path is
+ * otherwise about to be rejected. Containment against a union is the same
+ * question as containment against any one member, so escalating only after an
+ * OUTSIDE_ROOT miss decides identical cases while keeping the common
+ * inside-the-project case free of subprocess work. A path that fails for any
+ * other reason (non-absolute, unresolvable) would fail against every root set,
+ * so it propagates immediately rather than paying for enumeration.
  *
  * `flavor` controls the executable deny-list. The OS launcher (`shell.openPath`)
  * runs scripts and binaries, so it gets the full deny-list. Editors only read
@@ -143,12 +133,24 @@ async function assertPathAllowed(
     assertExtensionAllowed(targetPath);
   }
 
-  const projectRoots = projectStore.getAllProjects().map((p) => p.path);
-  const roots: string[] = [...projectRoots];
-  roots.push(...collectWorktreeParentDirs(projectRoots));
-  roots.push(app.getPath("userData"));
+  const projectRoots = [...new Set(projectStore.getAllProjects().map((p) => p.path))];
+  const baseRoots = [...projectRoots, app.getPath("userData")];
 
-  const realTarget = await resolveContainedPath(targetPath, roots);
+  let realTarget: string;
+  try {
+    realTarget = await resolveContainedPath(targetPath, baseRoots);
+  } catch (error) {
+    if (!(error instanceof AppError) || error.code !== "OUTSIDE_ROOT") {
+      throw error;
+    }
+    const worktreeRoots = await collectTrackedWorktreeRoots(projectRoots);
+    if (worktreeRoots.length === 0) {
+      throw error;
+    }
+    realTarget = await resolveContainedPath(targetPath, [
+      ...new Set([...baseRoots, ...worktreeRoots]),
+    ]);
+  }
 
   // shell.openPath / openFile follow symlinks, so re-check the resolved
   // extension to defeat a safe-named symlink pointing at an executable.

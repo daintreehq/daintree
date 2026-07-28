@@ -1,7 +1,18 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { StorageValue } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import {
+  mergeRecordByWriterDelta,
+  pickFieldByWriterDelta,
+  type PersistWriteMergeContext,
+} from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
+import {
+  DEFAULT_OTHER_PROJECTS_SORT_MODE,
+  isOtherProjectsSortMode,
+  type OtherProjectsSortMode,
+} from "@/lib/projectSort";
 
 export type DockDensity = "compact" | "normal" | "comfortable";
 
@@ -15,6 +26,50 @@ export type DiffFontSize = "s" | "m" | "l";
 export type DeletedWorktreeCleanupSeconds = 0 | 30 | 60 | 300;
 
 export const DELETED_WORKTREE_CLEANUP_DEFAULT: DeletedWorktreeCleanupSeconds = 60;
+
+/**
+ * File-browser "always hidden" junk list. Basename globs (literal text plus `*`
+ * wildcards) matched against entry names, hiding OS/tooling cruft in every
+ * panel regardless of the per-panel dotfile toggle (#11330). User-editable in
+ * settings; `.git` is a default rather than a structural exclusion so it can be
+ * removed to browse repository internals.
+ */
+export const DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN: readonly string[] = [
+  ".DS_Store",
+  "Thumbs.db",
+  "desktop.ini",
+  "._*",
+  ".git",
+];
+
+/** Caps kept small — this is a curated junk list, not a general ignore file. */
+export const MAX_ALWAYS_HIDDEN_PATTERNS = 100;
+export const MAX_ALWAYS_HIDDEN_PATTERN_LENGTH = 200;
+
+/**
+ * Coerce arbitrary input (hydrated JSON or a setter argument) into a clean
+ * basename-pattern list: strings only, trimmed, no empties, no path separators
+ * (basename matching only), de-duplicated in order, and bounded. A non-array
+ * falls back to the defaults; an array that legitimately reduces to empty stays
+ * empty — clearing the list is a deliberate "hide nothing" choice, not
+ * corruption.
+ */
+export function sanitizeAlwaysHiddenPatterns(value: unknown): string[] {
+  if (!Array.isArray(value)) return [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    if (trimmed === "" || trimmed.length > MAX_ALWAYS_HIDDEN_PATTERN_LENGTH) continue;
+    if (trimmed.includes("/") || trimmed.includes("\\")) continue;
+    if (seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+    if (result.length >= MAX_ALWAYS_HIDDEN_PATTERNS) break;
+  }
+  return result;
+}
 
 interface PreferencesState {
   showProjectPulse: boolean;
@@ -43,6 +98,13 @@ interface PreferencesState {
   /** Show the changed-files sidebar in the diff workspace (multi-file review). */
   diffShowFileList: boolean;
   setDiffShowFileList: (value: boolean) => void;
+  /**
+   * Expand every hunk to cover the whole file instead of showing changed
+   * regions with their context. Orthogonal to `diffViewType` — full file is a
+   * content scope, and stays meaningful in both unified and split layouts.
+   */
+  diffFullFile: boolean;
+  setDiffFullFile: (value: boolean) => void;
   diffFontSize: DiffFontSize;
   setDiffFontSize: (value: DiffFontSize) => void;
   /** Soft-wrap long lines in markdown Source view (panel + file viewer). */
@@ -57,13 +119,28 @@ interface PreferencesState {
   setSkipPushConfirmForWorktree: (worktreePath: string, value: boolean) => void;
   /**
    * How long a deleted worktree's row holds its surviving terminals before
-   * they are moved to trash automatically. The countdown starts at deletion
-   * and defers only while a drag is in progress, an agent is still working,
-   * or the row's close-confirm dialog is open (`deletedWorktreeCleanup.ts`).
+   * they are moved to trash automatically. The countdown measures time the
+   * project view was actually awake, and holds — for a bounded stretch — while
+   * a drag is in progress, an agent is still working, or the row's
+   * close-confirm dialog is open (`deletedWorktreeCleanup.ts`).
    * 0 disables auto-cleanup.
    */
   deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds;
+  /**
+   * Sort order for the project switcher's "Other projects" band and the welcome
+   * screen's recent list (#11455). Global rather than per-project: it names how
+   * the user reads their whole project set, not anything about one project.
+   */
+  projectSwitcherOtherSortMode: OtherProjectsSortMode;
+  setProjectSwitcherOtherSortMode: (mode: OtherProjectsSortMode) => void;
   setDeletedWorktreeCleanupSeconds: (value: DeletedWorktreeCleanupSeconds) => void;
+  /**
+   * Basename globs always hidden in the file browser, across every panel. See
+   * {@link DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN}.
+   */
+  fileBrowserAlwaysHiddenPatterns: string[];
+  setFileBrowserAlwaysHiddenPatterns: (patterns: string[]) => void;
+  resetFileBrowserAlwaysHiddenPatterns: () => void;
 }
 
 function isDockDensity(value: unknown): value is DockDensity {
@@ -107,12 +184,21 @@ function sanitizePersistedPreferences(
   if (typeof sanitized.diffWrapLines !== "boolean") sanitized.diffWrapLines = false;
   if (typeof sanitized.diffIgnoreWhitespace !== "boolean") sanitized.diffIgnoreWhitespace = false;
   if (typeof sanitized.diffShowFileList !== "boolean") sanitized.diffShowFileList = true;
+  if (typeof sanitized.diffFullFile !== "boolean") sanitized.diffFullFile = false;
   if (!isDiffFontSize(sanitized.diffFontSize)) sanitized.diffFontSize = "m";
   if (typeof sanitized.markdownWrapLines !== "boolean") sanitized.markdownWrapLines = true;
   if (typeof sanitized.showAgentTaskTitles !== "boolean") sanitized.showAgentTaskTitles = true;
   if (!isDeletedWorktreeCleanupSeconds(sanitized.deletedWorktreeCleanupSeconds)) {
     sanitized.deletedWorktreeCleanupSeconds = DELETED_WORKTREE_CLEANUP_DEFAULT;
   }
+  if (!isOtherProjectsSortMode(sanitized.projectSwitcherOtherSortMode)) {
+    sanitized.projectSwitcherOtherSortMode = DEFAULT_OTHER_PROJECTS_SORT_MODE;
+  }
+  // Absent (new field) → defaults; a hand-edited array is filtered to valid
+  // basename patterns; a legitimately empty list is preserved.
+  sanitized.fileBrowserAlwaysHiddenPatterns = sanitizeAlwaysHiddenPatterns(
+    sanitized.fileBrowserAlwaysHiddenPatterns
+  );
 
   // A truthy non-record value here would otherwise bypass the push-confirm gate.
   const skip = sanitized.skipPushConfirmByWorktreePath;
@@ -125,6 +211,238 @@ function sanitizePersistedPreferences(
   sanitized.skipPushConfirmByWorktreePath = validatedSkip;
 
   return sanitized;
+}
+
+type PreferencesPersistedState = Pick<
+  PreferencesState,
+  | "showProjectPulse"
+  | "showDeveloperTools"
+  | "showGridAgentHighlights"
+  | "showAgentTaskTitles"
+  | "showDockAgentHighlights"
+  | "dockDensity"
+  | "assignWorktreeToSelf"
+  | "reduceAnimations"
+  | "diffViewType"
+  | "diffWrapLines"
+  | "diffIgnoreWhitespace"
+  | "diffShowFileList"
+  | "diffFullFile"
+  | "diffFontSize"
+  | "markdownWrapLines"
+  | "deletedWorktreeCleanupSeconds"
+  | "projectSwitcherOtherSortMode"
+  | "lastSelectedWorktreeRecipeIdByProject"
+  | "skipPushConfirmByWorktreePath"
+  | "fileBrowserAlwaysHiddenPatterns"
+>;
+
+const PREFERENCES_PERSISTED_DEFAULTS: PreferencesPersistedState = {
+  showProjectPulse: true,
+  showDeveloperTools: false,
+  showGridAgentHighlights: false,
+  showAgentTaskTitles: true,
+  showDockAgentHighlights: false,
+  dockDensity: "normal",
+  assignWorktreeToSelf: false,
+  reduceAnimations: false,
+  diffViewType: "split",
+  diffWrapLines: false,
+  diffIgnoreWhitespace: false,
+  diffShowFileList: true,
+  diffFullFile: false,
+  diffFontSize: "m",
+  markdownWrapLines: true,
+  deletedWorktreeCleanupSeconds: DELETED_WORKTREE_CLEANUP_DEFAULT,
+  projectSwitcherOtherSortMode: DEFAULT_OTHER_PROJECTS_SORT_MODE,
+  lastSelectedWorktreeRecipeIdByProject: {},
+  skipPushConfirmByWorktreePath: {},
+  fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN],
+};
+
+function coerceBool(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+/**
+ * Coerce the per-project recipe map, dropping `undefined` values: JSON omits them
+ * on disk, and `mergeRecordByWriterDelta` reads `undefined` as "key absent", so an
+ * explicit `undefined` (a cleared selection — semantically a deletion) must not
+ * reach the diff as a live value.
+ */
+function normalizeRecipeMap(value: unknown): Record<string, string | null> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<string, string | null> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry === null || typeof entry === "string") result[key] = entry;
+  }
+  return result;
+}
+
+function normalizeSkipMap(value: unknown): Record<string, boolean> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<string, boolean> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === "boolean") result[key] = entry;
+  }
+  return result;
+}
+
+/**
+ * Coerce a persisted (or in-memory) snapshot into a fully-defined persisted shape
+ * so the write merge compares canonical values (issue #11351). Reuses the store's
+ * closed-set guards and the pattern sanitizers.
+ */
+function toPreferencesPersisted(
+  state: Partial<PreferencesState> | null | undefined
+): PreferencesPersistedState {
+  const raw = (state ?? {}) as Record<string, unknown>;
+  const d = PREFERENCES_PERSISTED_DEFAULTS;
+  return {
+    showProjectPulse: coerceBool(raw.showProjectPulse, d.showProjectPulse),
+    showDeveloperTools: coerceBool(raw.showDeveloperTools, d.showDeveloperTools),
+    showGridAgentHighlights: coerceBool(raw.showGridAgentHighlights, d.showGridAgentHighlights),
+    showAgentTaskTitles: coerceBool(raw.showAgentTaskTitles, d.showAgentTaskTitles),
+    showDockAgentHighlights: coerceBool(raw.showDockAgentHighlights, d.showDockAgentHighlights),
+    dockDensity: isDockDensity(raw.dockDensity) ? raw.dockDensity : d.dockDensity,
+    assignWorktreeToSelf: coerceBool(raw.assignWorktreeToSelf, d.assignWorktreeToSelf),
+    reduceAnimations: coerceBool(raw.reduceAnimations, d.reduceAnimations),
+    diffViewType: isDiffViewType(raw.diffViewType) ? raw.diffViewType : d.diffViewType,
+    diffWrapLines: coerceBool(raw.diffWrapLines, d.diffWrapLines),
+    diffIgnoreWhitespace: coerceBool(raw.diffIgnoreWhitespace, d.diffIgnoreWhitespace),
+    diffShowFileList: coerceBool(raw.diffShowFileList, d.diffShowFileList),
+    diffFullFile: coerceBool(raw.diffFullFile, d.diffFullFile),
+    diffFontSize: isDiffFontSize(raw.diffFontSize) ? raw.diffFontSize : d.diffFontSize,
+    markdownWrapLines: coerceBool(raw.markdownWrapLines, d.markdownWrapLines),
+    deletedWorktreeCleanupSeconds: isDeletedWorktreeCleanupSeconds(
+      raw.deletedWorktreeCleanupSeconds
+    )
+      ? raw.deletedWorktreeCleanupSeconds
+      : d.deletedWorktreeCleanupSeconds,
+    projectSwitcherOtherSortMode: isOtherProjectsSortMode(raw.projectSwitcherOtherSortMode)
+      ? raw.projectSwitcherOtherSortMode
+      : d.projectSwitcherOtherSortMode,
+    lastSelectedWorktreeRecipeIdByProject: normalizeRecipeMap(
+      raw.lastSelectedWorktreeRecipeIdByProject
+    ),
+    skipPushConfirmByWorktreePath: normalizeSkipMap(raw.skipPushConfirmByWorktreePath),
+    fileBrowserAlwaysHiddenPatterns: sanitizeAlwaysHiddenPatterns(
+      raw.fileBrowserAlwaysHiddenPatterns
+    ),
+  };
+}
+
+/**
+ * Baseline-aware three-way merge for preferences writes across project views
+ * (issue #11351). The two id-keyed maps are the primary victims —
+ * `lastSelectedWorktreeRecipeIdByProject` (per project) and
+ * `skipPushConfirmByWorktreePath` (per worktree path): each view writes its own
+ * keys, so a stale whole-snapshot write must not wipe a sibling's entries. Every
+ * scalar (and the Settings-edited hidden-patterns list) defers to a sibling's
+ * on-disk value unless this writer changed it. Version guards keep the raw
+ * (un-migrated) reads from diffing a foreign schema across the v13 migrate chain.
+ */
+function mergePreferencesPersistedWrite({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<PreferencesPersistedState>): StorageValue<PreferencesPersistedState> {
+  if (!onDisk || onDisk.version !== incoming.version) return incoming;
+  const disk = toPreferencesPersisted(onDisk.state);
+  const inc = toPreferencesPersisted(incoming.state);
+  if (baseline && typeof baseline.version === "number" && baseline.version !== incoming.version) {
+    return { version: incoming.version, state: disk };
+  }
+  const base = toPreferencesPersisted(baseline?.state);
+  return {
+    version: incoming.version,
+    state: {
+      showProjectPulse: pickFieldByWriterDelta(
+        base.showProjectPulse,
+        inc.showProjectPulse,
+        disk.showProjectPulse
+      ),
+      showDeveloperTools: pickFieldByWriterDelta(
+        base.showDeveloperTools,
+        inc.showDeveloperTools,
+        disk.showDeveloperTools
+      ),
+      showGridAgentHighlights: pickFieldByWriterDelta(
+        base.showGridAgentHighlights,
+        inc.showGridAgentHighlights,
+        disk.showGridAgentHighlights
+      ),
+      showAgentTaskTitles: pickFieldByWriterDelta(
+        base.showAgentTaskTitles,
+        inc.showAgentTaskTitles,
+        disk.showAgentTaskTitles
+      ),
+      showDockAgentHighlights: pickFieldByWriterDelta(
+        base.showDockAgentHighlights,
+        inc.showDockAgentHighlights,
+        disk.showDockAgentHighlights
+      ),
+      dockDensity: pickFieldByWriterDelta(base.dockDensity, inc.dockDensity, disk.dockDensity),
+      assignWorktreeToSelf: pickFieldByWriterDelta(
+        base.assignWorktreeToSelf,
+        inc.assignWorktreeToSelf,
+        disk.assignWorktreeToSelf
+      ),
+      reduceAnimations: pickFieldByWriterDelta(
+        base.reduceAnimations,
+        inc.reduceAnimations,
+        disk.reduceAnimations
+      ),
+      diffViewType: pickFieldByWriterDelta(base.diffViewType, inc.diffViewType, disk.diffViewType),
+      diffWrapLines: pickFieldByWriterDelta(
+        base.diffWrapLines,
+        inc.diffWrapLines,
+        disk.diffWrapLines
+      ),
+      diffIgnoreWhitespace: pickFieldByWriterDelta(
+        base.diffIgnoreWhitespace,
+        inc.diffIgnoreWhitespace,
+        disk.diffIgnoreWhitespace
+      ),
+      diffShowFileList: pickFieldByWriterDelta(
+        base.diffShowFileList,
+        inc.diffShowFileList,
+        disk.diffShowFileList
+      ),
+      diffFullFile: pickFieldByWriterDelta(base.diffFullFile, inc.diffFullFile, disk.diffFullFile),
+      diffFontSize: pickFieldByWriterDelta(base.diffFontSize, inc.diffFontSize, disk.diffFontSize),
+      markdownWrapLines: pickFieldByWriterDelta(
+        base.markdownWrapLines,
+        inc.markdownWrapLines,
+        disk.markdownWrapLines
+      ),
+      deletedWorktreeCleanupSeconds: pickFieldByWriterDelta(
+        base.deletedWorktreeCleanupSeconds,
+        inc.deletedWorktreeCleanupSeconds,
+        disk.deletedWorktreeCleanupSeconds
+      ),
+      projectSwitcherOtherSortMode: pickFieldByWriterDelta(
+        base.projectSwitcherOtherSortMode,
+        inc.projectSwitcherOtherSortMode,
+        disk.projectSwitcherOtherSortMode
+      ),
+      lastSelectedWorktreeRecipeIdByProject: mergeRecordByWriterDelta(
+        base.lastSelectedWorktreeRecipeIdByProject,
+        inc.lastSelectedWorktreeRecipeIdByProject,
+        disk.lastSelectedWorktreeRecipeIdByProject
+      ),
+      skipPushConfirmByWorktreePath: mergeRecordByWriterDelta(
+        base.skipPushConfirmByWorktreePath,
+        inc.skipPushConfirmByWorktreePath,
+        disk.skipPushConfirmByWorktreePath
+      ),
+      fileBrowserAlwaysHiddenPatterns: pickFieldByWriterDelta(
+        base.fileBrowserAlwaysHiddenPatterns,
+        inc.fileBrowserAlwaysHiddenPatterns,
+        disk.fileBrowserAlwaysHiddenPatterns
+      ),
+    },
+  };
 }
 
 export const usePreferencesStore = create<PreferencesState>()(
@@ -154,6 +472,8 @@ export const usePreferencesStore = create<PreferencesState>()(
       setDiffIgnoreWhitespace: (value) => set({ diffIgnoreWhitespace: value }),
       diffShowFileList: true,
       setDiffShowFileList: (value) => set({ diffShowFileList: value }),
+      diffFullFile: false,
+      setDiffFullFile: (value) => set({ diffFullFile: value }),
       diffFontSize: "m",
       setDiffFontSize: (value) => set({ diffFontSize: value }),
       markdownWrapLines: true,
@@ -187,11 +507,45 @@ export const usePreferencesStore = create<PreferencesState>()(
         }),
       deletedWorktreeCleanupSeconds: DELETED_WORKTREE_CLEANUP_DEFAULT,
       setDeletedWorktreeCleanupSeconds: (value) => set({ deletedWorktreeCleanupSeconds: value }),
+      projectSwitcherOtherSortMode: DEFAULT_OTHER_PROJECTS_SORT_MODE,
+      setProjectSwitcherOtherSortMode: (mode) => set({ projectSwitcherOtherSortMode: mode }),
+      fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN],
+      setFileBrowserAlwaysHiddenPatterns: (patterns) =>
+        set({ fileBrowserAlwaysHiddenPatterns: sanitizeAlwaysHiddenPatterns(patterns) }),
+      resetFileBrowserAlwaysHiddenPatterns: () =>
+        set({ fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN] }),
     }),
     {
       name: "daintree-preferences",
-      storage: createSafeJSONStorage(),
-      version: 13,
+      storage: createSafeJSONStorage<PreferencesPersistedState>({
+        mergeOnWrite: mergePreferencesPersistedWrite,
+      }),
+      version: 14,
+      // Explicit persisted subset — matches the pre-existing default (setters are
+      // dropped by JSON serialization); named so the write merge (#11351) has a
+      // typed persisted shape to reconcile.
+      partialize: (state): PreferencesPersistedState => ({
+        showProjectPulse: state.showProjectPulse,
+        showDeveloperTools: state.showDeveloperTools,
+        showGridAgentHighlights: state.showGridAgentHighlights,
+        showAgentTaskTitles: state.showAgentTaskTitles,
+        showDockAgentHighlights: state.showDockAgentHighlights,
+        dockDensity: state.dockDensity,
+        assignWorktreeToSelf: state.assignWorktreeToSelf,
+        reduceAnimations: state.reduceAnimations,
+        diffViewType: state.diffViewType,
+        diffWrapLines: state.diffWrapLines,
+        diffIgnoreWhitespace: state.diffIgnoreWhitespace,
+        diffShowFileList: state.diffShowFileList,
+        diffFullFile: state.diffFullFile,
+        diffFontSize: state.diffFontSize,
+        markdownWrapLines: state.markdownWrapLines,
+        deletedWorktreeCleanupSeconds: state.deletedWorktreeCleanupSeconds,
+        projectSwitcherOtherSortMode: state.projectSwitcherOtherSortMode,
+        lastSelectedWorktreeRecipeIdByProject: state.lastSelectedWorktreeRecipeIdByProject,
+        skipPushConfirmByWorktreePath: state.skipPushConfirmByWorktreePath,
+        fileBrowserAlwaysHiddenPatterns: state.fileBrowserAlwaysHiddenPatterns,
+      }),
       // Runs on every hydration (unlike `migrate`, which Zustand skips when the
       // persisted version matches). Closed-set normalisation lives here so a
       // corrupt-but-parseable value is clamped even at the current version.
@@ -299,6 +653,11 @@ export const usePreferencesStore = create<PreferencesState>()(
             persisted.deletedWorktreeCleanupSeconds = DELETED_WORKTREE_CLEANUP_DEFAULT;
           }
         }
+        if (version < 14 && isRecord(persisted)) {
+          if (!isOtherProjectsSortMode(persisted.projectSwitcherOtherSortMode)) {
+            persisted.projectSwitcherOtherSortMode = DEFAULT_OTHER_PROJECTS_SORT_MODE;
+          }
+        }
         return persisted as PreferencesState;
       },
     }
@@ -309,5 +668,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; fileBrowserAlwaysHiddenPatterns: string[] }",
 });

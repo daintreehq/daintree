@@ -836,12 +836,10 @@ describe("McpServerService", () => {
     });
 
     it("listResources still returns the static issues URI when enumeration fails", async () => {
-      const dispatchMock = vi.fn(
-        (_payload: DispatchRequest): ActionDispatchResult => ({
-          ok: false,
-          error: { code: "EXECUTION_ERROR", message: "no view" },
-        })
-      );
+      const dispatchMock = vi.fn((_payload: DispatchRequest): ActionDispatchResult => ({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "no view" },
+      }));
       const { window } = createMockWindow({
         getManifest: manifestForResources,
         dispatchAction: dispatchMock,
@@ -1087,9 +1085,10 @@ describe("McpServerService", () => {
     });
 
     it("workbench tier sees resources and is permitted to read them", async () => {
-      const dispatchMock = vi.fn(
-        (_payload: DispatchRequest): ActionDispatchResult => ({ ok: true, result: [] })
-      );
+      const dispatchMock = vi.fn((_payload: DispatchRequest): ActionDispatchResult => ({
+        ok: true,
+        result: [],
+      }));
       const { window } = createMockWindow({
         getManifest: manifestForResources,
         dispatchAction: dispatchMock,

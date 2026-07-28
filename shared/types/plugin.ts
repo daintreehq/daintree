@@ -31,6 +31,11 @@ export interface PanelContribution {
   canRestart: boolean;
   canConvert: boolean;
   showInPalette: boolean;
+  /**
+   * Whether this panel kind can live in the dock. Dockable by default; set
+   * `false` to opt out (for a kind with no meaningful compact chip-row form).
+   */
+  dockable?: boolean;
 }
 
 export interface ToolbarButtonContribution {
@@ -83,9 +88,31 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "clipboard:read",
   "clipboard:write",
   "shell:exec",
+  // Disclosure-only (#11299). A plugin's `main` runs Node-capable, so it can
+  // already `net.connect()` a Unix-domain socket or Windows named pipe — the
+  // Docker socket being the motivating case — with no host mediation possible.
+  // This token doesn't add that power and doesn't gate it; it exists so the
+  // Plugin Manager can *tell the user* the plugin claims it, and so the claim
+  // can carry an optional `scopes.socket.allowedPaths` intent. Deliberately
+  // excluded from CONFIRM_TRIGGERING_CAPABILITIES: elevating on a token the
+  // host cannot enforce would buy friction without buying safety.
+  "socket:connect",
 ] as const;
 
 export type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
+
+const BUILT_IN_PLUGIN_CAPABILITY_SET: ReadonlySet<string> = new Set(BUILT_IN_PLUGIN_CAPABILITIES);
+
+/**
+ * Runtime narrowing for a capability token arriving from an untrusted source —
+ * a manifest field or a `host.registerAction` argument, where the declared TS
+ * type is a promise the plugin has not actually kept. Host-internal: the SDK
+ * barrel deliberately omits the capability list, so plugins narrow against the
+ * schema instead.
+ */
+export function isBuiltInPluginCapability(value: unknown): value is BuiltInPluginCapability {
+  return typeof value === "string" && BUILT_IN_PLUGIN_CAPABILITY_SET.has(value);
+}
 
 export type PluginCapability = BuiltInPluginCapability;
 
@@ -100,7 +127,9 @@ export interface MenuItemContribution {
 export interface KeybindingContribution {
   actionId: ActionId;
   combo: string;
-  scope?: string;
+  // Mirrors the manifest schema's scope enum (electron/schemas/plugin.ts) so
+  // plugin authors can't compile against a scope the manifest gate rejects.
+  scope?: import("./keybinding.js").KeyScope;
   description?: string;
   when?: string;
 }
@@ -155,11 +184,38 @@ export interface ViewContribution {
  *   broadcast fires before the main process tears down plugin IPC handlers,
  *   so signal-driven cleanup (fetch aborts, subscription teardown) runs
  *   while the plugin host APIs are still live.
+ * - `panelRemovedSignal` aborts ONLY when the panel is permanently gone.
  */
 export interface PanelViewProps {
   readonly panelId: string;
   readonly pluginId: string;
+  /**
+   * Lifetime of THIS mounted view attempt — not of the panel (#11301).
+   *
+   * Aborts on React unmount, on "Try again", and when a
+   * `plugin:panel-kinds-changed` push drops this kind. Crucially, a temporary
+   * unmount aborts it too: maximizing a sibling pane, switching away from a
+   * dock tab, or caching a background project view all tear the subtree down
+   * while the panel itself lives on. Tie only view-scoped work to it — in-flight
+   * `fetch`es, DOM observers, `postToPanel` subscriptions.
+   *
+   * NEVER tie a durable resource (a spawned process, a long-lived session) to
+   * this signal: it will be killed the first time the user maximizes another
+   * pane. Durable resources belong in the plugin's worker, which observes the
+   * panel across every remount via `host.onDidChangePanelLifecycle`.
+   */
   readonly disposeSignal: AbortSignal;
+  /**
+   * Lifetime of the PANEL RECORD (#11301). The same `AbortSignal` object is
+   * handed to every mount of a given `panelId`, so it survives remounts,
+   * retries, trash-then-restore, and plugin view upgrades.
+   *
+   * Aborts exactly once, when the panel is permanently removed from the panel
+   * store — never for a temporary unmount and never while a trashed panel is
+   * still restorable. This is the signal to use for cleanup that must happen
+   * once and only when the user is genuinely done with the panel.
+   */
+  readonly panelRemovedSignal: AbortSignal;
   /**
    * Opaque argument bag handed to the view when the panel is spawned with one
    * — e.g. `{ path }` from a "open file in plugin panel" intent. Sourced from
@@ -169,6 +225,52 @@ export interface PanelViewProps {
    * host never mutates it; plugins should treat the contents as read-only.
    */
   readonly initialArgs?: Record<string, unknown>;
+  /**
+   * The worktree the panel instance belongs to, as recorded on the panel at
+   * spawn time. Lets a view reconstruct its own context without dispatching
+   * `worktree.getCurrent` — which resolves the *visible* worktree, not the
+   * one that owns the panel, and so returns the wrong answer for a background
+   * or restored panel. `undefined` for a panel spawned without a worktree.
+   */
+  readonly worktreeId?: string;
+}
+
+/**
+ * What just happened to one plugin panel instance (#11301). The renderer owns
+ * the transitions; the worker observes them through
+ * `host.onDidChangePanelLifecycle`.
+ *
+ * `mounted` / `hidden` are the two *view* states — a panel whose React subtree
+ * is currently rendered vs. one whose subtree has been torn down while the panel
+ * record lives on (sibling maximize, an inactive dock tab, a cached project
+ * view). `hidden` explicitly does NOT mean the user closed anything.
+ *
+ * `backgrounded` / `trashed` / `restored` / `removed` are *panel record* states
+ * read off `PanelLocation`: `backgrounded` is `location: "background"`,
+ * `trashed` is the recoverable soft close, `restored` is the one-shot edge out
+ * of trash (a transition, never a resting state), and `removed` is the terminal
+ * event — the panel is gone and will never come back under this id.
+ *
+ * `render-failed` means the current view attempt reached the host's error
+ * boundary. It is cleared by a successful retry. The failure detail stays in the
+ * renderer's diagnostics pane; only the fact of failure crosses to the worker.
+ */
+export type PluginPanelLifecyclePhase =
+  "mounted" | "hidden" | "backgrounded" | "trashed" | "restored" | "removed" | "render-failed";
+
+/**
+ * One panel lifecycle transition delivered to a plugin worker (#11301).
+ * Deliberately minimal and frozen before delivery: it carries identity and
+ * phase, never renderer internals, error text, or user paths.
+ */
+export interface PluginPanelLifecycleEvent {
+  /** Runtime panel instance id — matches `PanelViewProps.panelId`. */
+  readonly panelId: string;
+  /** Namespaced panel kind, i.e. `${pluginId}.${panel.id}`. */
+  readonly panelKindId: string;
+  /** Owning plugin's manifest `name`. Always this plugin's own id. */
+  readonly pluginId: string;
+  readonly phase: PluginPanelLifecyclePhase;
 }
 
 /**
@@ -254,9 +356,29 @@ export interface PluginFsScope {
   allowedPaths: string[];
 }
 
+/**
+ * Optional path intent for the `socket:connect` capability (#11299). Purely
+ * declarative: unlike {@link PluginFsScope}, nothing enforces it, because a
+ * plugin's `main` reaches `node:net` directly and the host has no interception
+ * point. Its job is disclosure — the Permissions tab renders these entries so
+ * "connects to local sockets" reads as "connects to `/var/run/docker.sock`".
+ *
+ * Entries are validated for shape only (a Unix-domain path or a Windows
+ * `\\.\pipe\…` name, no globs), and validated identically on every platform so
+ * a cross-platform manifest parses on all of them.
+ */
+export interface PluginLocalSocketScope {
+  /**
+   * Declared local endpoints the plugin intends to connect to — Unix-domain
+   * socket paths and/or Windows named pipes. Advisory, not enforced.
+   */
+  allowedPaths: string[];
+}
+
 export interface PluginManifestScopes {
   network?: PluginNetworkScope;
   fs?: PluginFsScope;
+  socket?: PluginLocalSocketScope;
 }
 
 /**
@@ -414,15 +536,7 @@ export interface PluginManifest {
  *   `mustExist` is set the form flags a stored path that no longer resolves.
  */
 export type SettingFieldType =
-  | "string"
-  | "number"
-  | "boolean"
-  | "enum"
-  | "json"
-  | "secret"
-  | "path"
-  | "directory"
-  | "file";
+  "string" | "number" | "boolean" | "enum" | "json" | "secret" | "path" | "directory" | "file";
 
 /**
  * Declaration for a single plugin setting under `contributes.settings` (#9301).
@@ -680,8 +794,45 @@ export type PluginInstallSource = "builtin" | "sideload" | "url" | "catalog";
  *   Manager scrolled to the named plugin.
  */
 export type PluginDeepLinkIntent =
-  | { action: "install"; url: string }
-  | { action: "open"; pluginId: string };
+  { action: "install"; url: string } | { action: "open"; pluginId: string };
+
+/**
+ * Manifest identity shown in the sideload confirmation dialog (#11280). A
+ * narrow projection of {@link PluginManifest} read by `readArchiveManifest`
+ * without extracting the archive — `contributes` and the rest of the manifest
+ * tree never cross IPC. Arrays are normalized to `[]` so the dialog renders
+ * explicit empty states rather than omitting rows.
+ */
+export interface PluginArchiveManifestPreview {
+  name: string;
+  displayName?: string;
+  version: string;
+  /**
+   * Resolved on main from the full validated manifest (`resolvePluginCategory`
+   * needs `contributes`, which never crosses IPC) so the dialog can render the
+   * same category icon tile the catalog uses.
+   */
+  category: PluginCategoryId;
+  authors: PluginAuthor[];
+  capabilities: PluginCapability[];
+}
+
+/**
+ * One `.dntr` archive awaiting the user's install decision (#11280). Raised
+ * when the OS hands the app a double-clicked archive — macOS `open-file`, or a
+ * Windows/Linux argv entry — and delivered to the primary window once it has
+ * painted. Carrying the parsed manifest (not just the path) is what makes the
+ * confirmation a D2 preview of actual content rather than a filename prompt.
+ *
+ * `archivePath` is the approval token: the renderer hands it back to
+ * `plugin.installFromPath`, which re-runs every trust gate in main.
+ */
+export interface PluginArchiveInstallIntent {
+  intentId: string;
+  archivePath: string;
+  archiveFileName: string;
+  manifest: PluginArchiveManifestPreview;
+}
 
 /**
  * Discriminant for {@link PluginCheckUpdateResult}. A manual update check
@@ -828,10 +979,14 @@ export interface InstalledPluginRecord {
  * - `fetch_timeout` — the download exceeded the shared `PLUGIN_DOWNLOAD_TIMEOUT_MS` deadline (30s)
  * - `size_exceeded` — declared `Content-Length` or the streamed bytes exceeded 30 MB
  * - `content_type_rejected` — response wasn't a plugin archive (bad MIME and the URL doesn't end in `.dntr`)
+ * - `extraction_timeout` — extraction ran past `PLUGIN_ARCHIVE_TOTAL_DEADLINE_MS` (#11302), distinct
+ *   from `archive_invalid`: the archive may be fine and the source merely too slow, so the
+ *   actionable advice is "try again", not "check the file"
  */
 export type PluginInstallErrorCode =
   | "lock_failed"
   | "archive_invalid"
+  | "extraction_timeout"
   | "manifest_invalid"
   | "engine_incompatible"
   | "namespace_unauthorized"
@@ -894,6 +1049,38 @@ export interface PluginInstallOptions {
   source?: PluginInstallSource;
   /** Original download URL for catalog/url installs. Never logged. */
   originalUrl?: string | null;
+  /**
+   * Correlation id for progress reporting and cancellation (#11302). Minted by
+   * the caller that wants feedback; omitting it installs exactly as before, just
+   * without progress events or a cancel target. Not persisted.
+   */
+  jobId?: string;
+}
+
+/**
+ * Coarse stage of an in-flight install (#11302). Deliberately a small fixed
+ * sequence rather than the agent installer's raw stdout chunks — a plugin
+ * install is a known series of steps, not a subprocess emitting text.
+ *
+ * `downloading` only occurs for install-from-URL. Everything through
+ * `validating` is staged in a scratch directory and freely cancellable;
+ * `activating` marks the commit point, past which cancellation is refused
+ * because the swap and load are already underway.
+ */
+export type PluginInstallPhase = "downloading" | "extracting" | "validating" | "activating";
+
+/** Progress push for an install started with a {@link PluginInstallOptions.jobId}. */
+export interface PluginInstallProgressEvent {
+  /** The `jobId` the caller supplied; events for other jobs must be ignored. */
+  jobId: string;
+  phase: PluginInstallPhase;
+  /**
+   * The archive entry currently being written, during `extracting` only.
+   * Throttled — this is a liveness detail, not a complete log of every entry.
+   */
+  entry?: string;
+  /** False once the install has passed the commit point and can no longer be cancelled. */
+  cancellable: boolean;
 }
 
 export interface LoadedPluginInfo {
@@ -1243,19 +1430,74 @@ export interface PluginConfirmOptions {
 export type ActionHandler = (args: unknown) => unknown | Promise<unknown>;
 
 /**
- * Options for {@link PluginProcessApi.spawn}. All fields are optional; `command`
- * is the positional first argument. The host anchors a relative spawn against
- * `cwd` (defaulting to the active worktree path, then the process cwd) and
- * merges `env` over the host environment — a plugin cannot blank the inherited
- * env, only add to / override it.
+ * Execution backend for a managed process (#11300).
+ *
+ * - `pipe` (the default): a plain child process with stdin closed and
+ *   stdout/stderr piped. Output arrives split by stream.
+ * - `pty`: the command runs under a real pseudo-terminal, so it sees a TTY,
+ *   accepts input via {@link PluginPtyProcessHandle.write}, and can be resized.
+ *   A PTY merges stdout and stderr into one stream by construction.
+ */
+export type PluginProcessMode = "pipe" | "pty";
+
+/**
+ * One chunk of output from a managed process, delivered to
+ * {@link PluginProcessHandle.onData}.
+ */
+export interface PluginProcessDataChunk {
+  /**
+   * `stdout` / `stderr` in pipe mode. `data` in PTY mode — a pseudo-terminal
+   * has a single combined stream, so there is no split to report.
+   */
+  readonly stream: "stdout" | "stderr" | "data";
+  /** The decoded UTF-8 chunk. */
+  readonly chunk: string;
+}
+
+/**
+ * Options for {@link PluginProcessApi.spawn} in the default pipe mode. All
+ * fields are optional; `command` is the positional first argument. The host
+ * anchors a relative spawn against `cwd` (defaulting to the active worktree
+ * path, then the process cwd).
+ *
+ * The child does NOT inherit the host environment. It is built from a fixed
+ * allowlist of essentials (PATH, HOME, locale, temp dir, and the Windows keys a
+ * child cannot run without) plus whatever this call passes in {@link env} — so
+ * a plugin never receives the main process's tokens, and anything else the
+ * command needs must be handed to it explicitly.
  */
 export interface PluginProcessSpawnOptions {
   /** Argument vector. Each entry is passed verbatim — no shell interpolation. */
   args?: string[];
   /** Working directory for the child. Defaults to the active worktree, then the host cwd. */
   cwd?: string;
-  /** Extra environment variables, merged over (not replacing) the host environment. */
+  /**
+   * Environment entries applied over the host's safe-key allowlist. These are
+   * additions to a minimal base, NOT overrides on the full host environment —
+   * a key the plugin does not pass and the allowlist does not cover is absent.
+   */
   env?: Record<string, string>;
+  /** Execution backend. Omit (or pass `"pipe"`) for the default piped child. */
+  mode?: "pipe";
+  /**
+   * Route this process's stream events to a single panel instead of every panel
+   * the plugin owns. `undefined` / `null` broadcast, matching `postToPanel`.
+   */
+  panelId?: string | null;
+}
+
+/**
+ * Options for an interactive {@link PluginProcessApi.spawn}. Same anchoring and
+ * environment rules as {@link PluginProcessSpawnOptions}, plus the initial
+ * terminal size. Selecting `mode: "pty"` narrows the returned handle to
+ * {@link PluginPtyProcessHandle}.
+ */
+export interface PluginPtyProcessSpawnOptions extends Omit<PluginProcessSpawnOptions, "mode"> {
+  mode: "pty";
+  /** Initial column count. Defaults to 80. Must be a positive integer. */
+  cols?: number;
+  /** Initial row count. Defaults to 24. Must be a positive integer. */
+  rows?: number;
 }
 
 /**
@@ -1294,6 +1536,38 @@ export interface PluginProcessHandle {
    * code or a signal the plugin did not request via `kill()`). Returns a disposer.
    */
   onCrash(callback: (info: { exitCode: number | null; signal: string | null }) => void): () => void;
+  /**
+   * Receive the process's output in the plugin's own code (#11300) — the
+   * counterpart to the panel stream, for a plugin that needs to parse what it
+   * spawned (a `--machine`-mode daemon's line-delimited JSON, say) rather than
+   * just display it. Returns a disposer.
+   *
+   * Output produced before the first subscriber attaches is buffered (bounded)
+   * and replayed on subscription, so a daemon that greets immediately is not
+   * missed by a callback registered on the next tick. Once any subscriber has
+   * attached, delivery is live-only. Panel streaming is unaffected either way.
+   */
+  onData(callback: (chunk: PluginProcessDataChunk) => void): () => void;
+}
+
+/**
+ * A {@link PluginProcessHandle} for a process spawned with `mode: "pty"`. Adds
+ * the two operations a pseudo-terminal makes possible: writing to the child's
+ * input and telling it the window changed size.
+ *
+ * Both are no-ops once the process has exited, and both are safe to call
+ * immediately after `spawn()` resolves. A `resize()` issued while a `restart()`
+ * is still allocating the replacement PTY is retained (last write wins) and
+ * folded into that PTY's initial size rather than replayed as a late SIGWINCH.
+ */
+export interface PluginPtyProcessHandle extends PluginProcessHandle {
+  /**
+   * Write to the child's input. Passed through verbatim — the caller supplies
+   * its own line terminator (`"\n"`) when the command expects one.
+   */
+  write(data: string): void;
+  /** Report a new terminal size to the child. Both values must be positive integers. */
+  resize(cols: number, rows: number): void;
 }
 
 /**
@@ -1309,11 +1583,21 @@ export interface PluginProcessHandle {
  */
 export interface PluginProcessApi {
   /**
+   * Spawn the command under a real pseudo-terminal. The returned handle adds
+   * `write()` and `resize()`; output arrives as a single combined stream on
+   * `onData()` and as `{ kind: "data" }` panel events. The PTY is allocated in
+   * the crash-isolated pty-host utility process, so a native failure cannot
+   * take the app down with it.
+   */
+  spawn(command: string, options: PluginPtyProcessSpawnOptions): Promise<PluginPtyProcessHandle>;
+  /**
    * Spawn a child process on the plugin's behalf and return a live handle. The
    * child's stdout/stderr stream to the plugin's panels over
-   * `postToPanel("process", …)` keyed by the handle id. Rejects when the plugin
-   * lacks `shell:exec`, when the per-plugin concurrency cap is reached, or when
-   * the plugin has been unloaded.
+   * `postToPanel("process", …)` keyed by the handle id (targeted at
+   * `options.panelId` when given, broadcast otherwise), and to the plugin's own
+   * code via {@link PluginProcessHandle.onData}. Rejects when the plugin lacks
+   * `shell:exec`, when the per-plugin concurrency cap is reached, or when the
+   * plugin has been unloaded.
    */
   spawn(command: string, options?: PluginProcessSpawnOptions): Promise<PluginProcessHandle>;
 }
@@ -1482,11 +1766,14 @@ export interface PluginGitApi {
 
 /**
  * Host-mediated access to the OS clipboard, backing the `clipboard:read` /
- * `clipboard:write` capability tokens. Text-only — the surface deliberately
- * omits image/HTML/file-list variants so a plugin cannot read or smuggle
- * richer payloads than it declared. Both methods run in the main process
- * (Electron's `clipboard` module is unavailable in the plugin utility worker),
- * so they remain callable from a headless plugin with no mounted panel.
+ * `clipboard:write` capability tokens. The *read* surface is deliberately
+ * text-only — omitting image/HTML/file-list reads is what stops a plugin
+ * smuggling out richer payloads than it declared. Writes carry no such risk
+ * (the plugin already has the bytes), so a bounded {@link writeImage} is
+ * offered alongside {@link writeText}; there is still no HTML or file-list
+ * write. Every method runs in the main process (Electron's `clipboard` module
+ * is unavailable in the plugin utility worker), so they remain callable from a
+ * headless plugin with no mounted panel.
  *
  * Like {@link PluginFsApi} and {@link PluginGitApi} this is NOT revoke-guarded:
  * plugins read/write from post-activation timers and callbacks. Once the plugin
@@ -1500,11 +1787,72 @@ export interface PluginClipboardApi {
    */
   writeText(text: string): Promise<void>;
   /**
+   * Replace the clipboard's contents with a PNG image. Gated on the same
+   * `clipboard:write` token as {@link writeText} — putting an image on the
+   * clipboard is no less reversible than putting text there, so it earns no
+   * separate capability and does not elevate action danger.
+   *
+   * `pngData` must be the raw PNG bytes. Rejects with a `PAYLOAD_TOO_LARGE:`
+   * prefix above 20 MiB (matching the renderer IPC clipboard guard) and with a
+   * `VALIDATION:` prefix when the bytes don't decode to a non-empty image —
+   * Electron's `nativeImage.createFromBuffer` reports malformed input by
+   * returning an empty image rather than throwing, so the emptiness check is
+   * the only signal available. Successful writes append an audit record
+   * carrying the byte count only, never the image bytes.
+   *
+   * Decoding happens in the main process by necessity: the renderer's
+   * `navigator.clipboard.write()` path crashes on Linux with binary PNG
+   * payloads (#4900), so this is the only safe route for image writes.
+   */
+  writeImage(pngData: Uint8Array): Promise<void>;
+  /**
    * Read the clipboard's text contents. Gated on `clipboard:read`. Resolves to
    * `""` when the clipboard is empty or holds non-text content (image, file
    * list) — it never rejects on content type.
    */
   readText(): Promise<string>;
+}
+
+/**
+ * Host-mediated OS "reveal / open with the default app" surface (#11299).
+ *
+ * Exists because the renderer's built-in `system.openPath` action validates
+ * against the *user's* roots — open projects, tracked worktrees, Electron's
+ * `userData` — and carries no caller identity, so a plugin dispatching it
+ * cannot reach the one directory that is unambiguously its own:
+ * `~/.daintree/plugin-data/<plugin-id>/`. A plugin that just wrote a
+ * screenshot there had no sanctioned way to reveal it, and shelled out to
+ * `/usr/bin/open` instead — trading a contained call for arbitrary execution.
+ *
+ * Both methods resolve paths against the calling plugin's *declared* filesystem
+ * scope (`scopes.fs.allowedPaths` plus its implicit plugin-data namespace), and
+ * the plugin id is bound at host construction rather than travelling as an
+ * argument, so one plugin can never name another's namespace. Containment is
+ * realpath-based, so a symlink cannot walk out of scope. Gated on the `fs:*`
+ * capability matching the resolved root's class: revealing something under the
+ * plugin-data namespace needs `fs:user-data-read` or `fs:user-data-write`,
+ * under a project root `fs:project-read` or `fs:project-write` — a plugin that
+ * could legitimately create the file can always reveal it.
+ *
+ * Like {@link PluginFsApi} this is NOT revoke-guarded, and every method rejects
+ * once the plugin is unloaded.
+ */
+export interface PluginSystemApi {
+  /**
+   * Open `targetPath` with the OS default application. Rejects paths outside
+   * the plugin's declared scope (`OUTSIDE_ROOT:`), non-absolute or unresolvable
+   * paths (`INVALID_PATH:`), and executable file types (`.app`, `.exe`, `.sh`,
+   * … — checked on both the raw path and its realpath target, so a benignly
+   * named symlink cannot smuggle a launch primitive past the deny-list).
+   */
+  openPath(targetPath: string): Promise<void>;
+  /**
+   * Reveal `targetPath` in the OS file manager, selecting it. Same containment
+   * and capability rules as {@link openPath}, but without the executable
+   * deny-list: revealing a file in Finder/Explorer shows it, it does not run
+   * it. The path must exist.
+   */
+  showItemInFolder(targetPath: string): Promise<void>;
 }
 
 /**
@@ -1684,6 +2032,36 @@ export interface PluginActivationApi {
    *   out (the host is revoked).
    */
   onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void): Promise<() => void>;
+  /**
+   * Subscribe to panel lifecycle transitions for this plugin's own contributed
+   * panels (#11301). No capability is required — a plugin only ever sees events
+   * for panel instances of kinds it contributed itself.
+   *
+   * This is how a worker learns the difference a view's `disposeSignal` cannot
+   * express: that signal aborts for a temporary unmount (sibling maximize,
+   * inactive dock tab, cached project view) exactly as it does for a permanent
+   * close, so a worker that treats it as deletion tears down durable resources
+   * the user still wants. Keep those resources in the worker and release them on
+   * `"removed"` — the terminal phase — rather than guessing from the view.
+   *
+   * On subscribe the host replays the current phase of every live panel of this
+   * plugin, so a plugin that activated lazily *because* a view opened still sees
+   * that panel's state. One-shot transitions (`"restored"`) are not replayed.
+   *
+   * Callbacks receive a frozen {@link PluginPanelLifecycleEvent}. Resolves to a
+   * disposer; calling it more than once is a no-op, and all subscriptions are
+   * disposed automatically when the plugin is unloaded.
+   *
+   * Subscribing is revoke-guarded — call it during `activate()`. The callback
+   * itself fires for the plugin's whole lifetime; only the act of subscribing
+   * is restricted to the activation window.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and the subscription is rejected.
+   */
+  onDidChangePanelLifecycle(
+    callback: (event: PluginPanelLifecycleEvent) => void
+  ): Promise<() => void>;
 }
 
 /**
@@ -1994,12 +2372,24 @@ export interface PluginHostApi extends PluginActivationApi {
   readonly git: PluginGitApi;
   /**
    * Host-mediated OS clipboard surface. Reads gated on `clipboard:read`, writes
-   * on `clipboard:write`. Text-only; runs in the main process so it works from a
-   * headless plugin. See {@link PluginClipboardApi}.
+   * on `clipboard:write`. Text reads/writes plus bounded PNG writes; runs in the
+   * main process so it works from a headless plugin. See
+   * {@link PluginClipboardApi}.
    *
    * NOT revoke-guarded — same membership lifetime as {@link fs}.
    */
   readonly clipboard: PluginClipboardApi;
+  /**
+   * Host-mediated "open with the default app" / "reveal in file manager"
+   * surface, scoped to the plugin's own declared filesystem roots — including
+   * its implicit `~/.daintree/plugin-data/<plugin-id>/` namespace, which the
+   * renderer's built-in `system.openPath` action cannot reach. Gated on the
+   * `fs:*` capability matching the resolved root's class. See
+   * {@link PluginSystemApi}.
+   *
+   * NOT revoke-guarded — same membership lifetime as {@link fs}.
+   */
+  readonly system: PluginSystemApi;
 }
 
 /**
@@ -2044,6 +2434,30 @@ export interface PluginActionContribution {
   danger: "safe" | "confirm";
   keywords?: string[];
   inputSchema?: Record<string, unknown>;
+  /**
+   * Per-action capability intent: the subset of the plugin's declared
+   * `manifest.capabilities` this specific action actually exercises. Mirrors
+   * {@link PluginChannelSchema.requires} in both spelling and enforcement — the
+   * host rejects registration if any entry is missing from the manifest, so an
+   * action can never claim authority the plugin never asked the user for.
+   *
+   * This narrows which capabilities the danger computation consults, so a
+   * no-authority action in a high-authority plugin stays one click:
+   *
+   * - **omitted** — every manifest capability is consulted (today's behavior,
+   *   preserved verbatim so existing plugins need no migration and a plugin
+   *   that never opts in cannot accidentally de-escalate).
+   * - **`[]`** — the action declares no capability intent and may stay `"safe"`
+   *   even when the plugin holds `shell:exec` elsewhere.
+   * - **non-empty** — only the listed capabilities are consulted, both for the
+   *   flat high-risk set and the compound-capability lattice.
+   *
+   * It is a *classification* input only: it never grants access. Host APIs
+   * still gate on `manifest.capabilities` at call time, so listing a capability
+   * here neither adds nor removes runtime authority. Declaring
+   * `danger: "confirm"` still pins the action to confirm regardless.
+   */
+  requires?: readonly BuiltInPluginCapability[];
 }
 
 export interface PluginActionDescriptor extends PluginActionContribution {
@@ -2058,6 +2472,11 @@ export interface PluginActionDescriptor extends PluginActionContribution {
    * the user-source confirm dialog. The renderer must read this field — not
    * `danger` — for any classification decision, and fail safe to `"confirm"`
    * if it is absent (e.g. a stale descriptor from a pre-migration cache).
+   *
+   * When the contribution declares {@link PluginActionContribution.requires},
+   * the capabilities consulted here narrow to that subset — the host still
+   * derives the verdict itself, it just asks a more precise question. Omitting
+   * `requires` keeps the whole-manifest derivation.
    */
   effectiveDanger: "safe" | "confirm";
 }

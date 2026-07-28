@@ -66,14 +66,6 @@ export interface ResourceProfileConfig {
   /** HibernationService memory-pressure inactivity threshold (ms) */
   memoryPressureInactiveMs: number;
   /**
-   * Available system memory (MB) below which ProjectViewManager clamps its
-   * effective cached-view limit to 1 for the current eviction pass. `null`
-   * disables the override (the user-configured cachedProjectViews limit stays
-   * authoritative). "Available" on macOS means free + purgeable; on other
-   * platforms it is free alone.
-   */
-  lowMemoryFreeThresholdMb: number | null;
-  /**
    * Cold-start paint-gate SOFT timeout (ms). Bounds the wait for the incoming
    * project view's renderer to emit `APP_VIEW_PAINTED`. Crossing this bound
    * does NOT detach the outgoing view — it only logs a warning so the gate
@@ -106,6 +98,24 @@ export interface ResourceProfileConfig {
    * signal path instead of revealing a partially repainted grid.
    */
   warmPaintGateHardTimeoutMs: number;
+  /**
+   * Cold-start view-load SOFT timeout (ms). Bounds the wait for the incoming
+   * project view's `did-finish-load`. Crossing it does NOT abandon the switch —
+   * it only logs `projectview.load.softtimeout` so slow loads are observable;
+   * the load stays alive until it finishes or the hard ceiling fires. Sized
+   * far above the measured cold-load distribution (p90 ~177ms) so the warning
+   * means "something is genuinely wrong", not "this machine is busy".
+   */
+  viewLoadTimeoutMs: number;
+  /**
+   * Cold-start view-load HARD timeout (ms). Absolute ceiling that rejects the
+   * load and rolls the switch back, assuming the renderer is wedged. Never
+   * extended by progress signals — a stalled main process delays the load and
+   * this timer alike, so only a wall-clock backstop can bound the wait. Should
+   * stay comfortably above `viewLoadTimeoutMs` so a load that is merely slow
+   * lands instead of being abandoned (#11459).
+   */
+  viewLoadHardTimeoutMs: number;
 }
 
 /**
@@ -173,7 +183,6 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfi
     processTreePollInterval: 2000,
     projectStatsPollInterval: 5000,
     memoryPressureInactiveMs: 60 * 60 * 1000, // 60 min
-    lowMemoryFreeThresholdMb: null,
     agentScrollbackMaxLines: 10000,
     fetchIntervalActiveMs: 20_000,
     fetchIntervalBackgroundMs: 3 * 60_000,
@@ -182,6 +191,8 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfi
     paintGateHardTimeoutMs: 4_000,
     warmPaintGateTimeoutMs: 500,
     warmPaintGateHardTimeoutMs: 1_500,
+    viewLoadTimeoutMs: 10_000,
+    viewLoadHardTimeoutMs: 30_000,
   },
   balanced: {
     pollIntervalActive: 2000,
@@ -190,21 +201,22 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfi
     processTreePollInterval: 2500,
     projectStatsPollInterval: 5000,
     memoryPressureInactiveMs: 30 * 60 * 1000, // 30 min
-    lowMemoryFreeThresholdMb: 768,
     agentScrollbackMaxLines: 10000,
     fetchIntervalActiveMs: 30_000,
     fetchIntervalBackgroundMs: 5 * 60_000,
     // Must match PORT_BATCH_THROUGHPUT_DELAY_MS — the pty-host's fallback
     // until the first set-resource-profile push lands.
     portBatchThroughputDelayMs: 16,
-    // Balanced paint-gate values (cold and warm) must match the
-    // `DEFAULT_*_PAINT_GATE_*_MS` constants in
+    // Balanced paint-gate and view-load values must match the
+    // `DEFAULT_*_PAINT_GATE_*_MS` / `DEFAULT_VIEW_LOAD_*_MS` constants in
     // `electron/window/ProjectViewManager.ts` — those constants are the
     // fallback used until the profile push lands. Keep them in lockstep.
     paintGateTimeoutMs: 1_500,
     paintGateHardTimeoutMs: 4_000,
     warmPaintGateTimeoutMs: 500,
     warmPaintGateHardTimeoutMs: 1_500,
+    viewLoadTimeoutMs: 10_000,
+    viewLoadHardTimeoutMs: 30_000,
   },
   efficiency: {
     pollIntervalActive: 4000,
@@ -213,7 +225,6 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfi
     processTreePollInterval: 5000,
     projectStatsPollInterval: 25000,
     memoryPressureInactiveMs: 15 * 60 * 1000, // 15 min
-    lowMemoryFreeThresholdMb: 1024,
     // Lower agent history ceiling on constrained hardware — ~7MB less buffer
     // headroom per filled agent terminal versus the 10k perf/balanced ceiling,
     // consistent with the efficiency profile's other fidelity trades. Still
@@ -238,5 +249,10 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfi
     // rationale as the cold-gate values above.
     warmPaintGateTimeoutMs: 800,
     warmPaintGateHardTimeoutMs: 2_500,
+    // The main-process contention that puts the app in efficiency is the same
+    // contention that slows the `app://` chunk serving the incoming view is
+    // waiting on, so the load bounds get the same 1.5x headroom as the gates.
+    viewLoadTimeoutMs: 15_000,
+    viewLoadHardTimeoutMs: 45_000,
   },
 };

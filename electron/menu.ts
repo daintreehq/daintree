@@ -1,14 +1,17 @@
 import { Menu, dialog, BrowserWindow, app, webContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { projectStore } from "./services/ProjectStore.js";
+import { notificationService } from "./services/NotificationService.js";
 import { openExternalUrl } from "./utils/openExternal.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { broadcastProjectSwitchUpdates } from "./ipc/projectSwitchBroadcast.js";
+import { getProjectHistory } from "./services/ProjectHistoryService.js";
 import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
 import { isAssistantOnlyAgentId } from "../shared/config/agentIds.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
 import { isAgentInstalled } from "../shared/utils/agentAvailability.js";
 import * as CliInstallService from "./services/CliInstallService.js";
+import * as FinderQuickActionService from "./services/FinderQuickActionService.js";
 import { getWindowRegistry } from "./window/windowRef.js";
 import { toggleWindowFullscreen } from "./window/fullscreen.js";
 import {
@@ -25,7 +28,20 @@ import { getAppWebContents } from "./window/webContentsRegistry.js";
 import { PROJECT_MENU_ITEM_IDS, resolveProjectIdForApplicationMenu } from "./projectMenuState.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
+import { getUserMessage, isAppError } from "./utils/errorTypes.js";
+import {
+  getProjectOpenFailure,
+  withRemoveFromRecent,
+  PROJECT_OPEN_RECOVERY_LABELS,
+} from "../shared/utils/projectOpenErrors.js";
+import { removeProjectWithCleanup } from "./ipc/handlers/projectCrud/crud.js";
 import { isWindowsStoreBuild, getBuildChannelLabel } from "../shared/config/distribution.js";
+import {
+  getMenuAccelerator,
+  isKeybindingOwnedAction,
+  rendererMenuAccelerator,
+  resetRendererOwnedAccelerators,
+} from "./services/menuAccelerators.js";
 
 // The About panel's build-version slot shows the release channel for
 // prerelease builds (Nightly/Beta/RC) and stays blank for stable releases —
@@ -99,6 +115,16 @@ export function createApplicationMenu(
   mainWindow: BrowserWindow,
   cliAvailabilityService?: CliAvailabilityService
 ): void {
+  // Accelerators for renderer-owned actions are derived from the effective
+  // keybindings (defaults + user overrides) and collected into a suppression
+  // set — see electron/services/menuAccelerators.ts. They stay natively
+  // registered on every platform; before-input-event in app renderer contexts
+  // suppresses their native dispatch per keystroke so the renderer's
+  // KeybindingService owns keyboard execution there, while guest webviews and
+  // DevTools (which app renderers never see keys from) fall back to native
+  // execution instead of the shortcut going dead.
+  resetRendererOwnedAccelerators();
+
   const getTargetBrowserWindow = (
     browserWindow: Electron.BaseWindow | undefined
   ): BrowserWindow | null => {
@@ -135,9 +161,20 @@ export function createApplicationMenu(
       // Assistant-only agents are never offered as a launchable native menu item.
       if (isAssistantOnlyAgentId(agent.id)) return;
       if (isAgentInstalled(availability?.[agent.id])) {
+        // Agents the keybinding system owns (a default row or user override
+        // exists for agent.<id>) take their accelerator from the effective
+        // bindings — including "none" when cleared or chord-bound; the
+        // registry fallback would silently resurrect the old shortcut. Only
+        // agents outside the keybinding system entirely use the registry's
+        // shortcut field, natively registered and executing.
+        const keybindingOwned = isKeybindingOwnedAction(`agent.${agent.id}`);
         items.push({
           label: `New ${agent.name}`,
-          accelerator: agent.shortcut ? convertShortcutToAccelerator(agent.shortcut) : undefined,
+          accelerator: keybindingOwned
+            ? rendererMenuAccelerator(`agent.${agent.id}`)
+            : agent.shortcut
+              ? convertShortcutToAccelerator(agent.shortcut)
+              : undefined,
           click: (_item, browserWindow) =>
             sendAction("agent.launch", getTargetBrowserWindow(browserWindow), {
               agentId: agent.id,
@@ -193,15 +230,7 @@ export function createApplicationMenu(
           click: async (_item, browserWindow) => {
             const win = getTargetBrowserWindow(browserWindow);
             if (!win) return;
-            const result = await dialog.showOpenDialog(win, {
-              properties: ["openDirectory", "createDirectory"],
-              title: "Open Git Repository",
-            });
-
-            if (!result.canceled && result.filePaths.length > 0) {
-              const directoryPath = result.filePaths[0];
-              await handleDirectoryOpen(directoryPath, win, cliAvailabilityService);
-            }
+            await promptForDirectoryOpen(win, cliAvailabilityService);
           },
         },
         {
@@ -211,13 +240,18 @@ export function createApplicationMenu(
         },
         {
           label: "New Window",
-          accelerator: "CommandOrControl+Shift+Alt+N",
+          accelerator: rendererMenuAccelerator("app.newWindow"),
           click: (_item, browserWindow) =>
             sendAction("app.newWindow", getTargetBrowserWindow(browserWindow)),
         },
         {
+          // No native accelerator: the default binding is the chord
+          // Cmd+K Cmd+N, which Electron accelerators can't express. The old
+          // hardcoded CommandOrControl+N silently swallowed the renderer's
+          // Cmd+N (panel palette) on macOS while Linux/Windows resolved it in
+          // the renderer — the same physical key did different things per OS.
           label: "New Worktree…",
-          accelerator: "CommandOrControl+N",
+          accelerator: rendererMenuAccelerator("worktree.createDialog.open"),
           click: (_item, browserWindow) =>
             sendAction("worktree.createDialog.open", getTargetBrowserWindow(browserWindow)),
         },
@@ -230,7 +264,7 @@ export function createApplicationMenu(
           ? [
               {
                 label: "Settings…",
-                accelerator: "CommandOrControl+,",
+                accelerator: rendererMenuAccelerator("app.settings"),
                 click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) =>
                   sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
               },
@@ -269,10 +303,19 @@ export function createApplicationMenu(
     },
     {
       label: "Edit",
+      // registerAccelerator: false (Linux/Windows-only property, no-op on
+      // macOS): Ctrl+Z/X/C/V/A are terminal control keys (SIGINT, SIGTSTP,
+      // readline editing) — a registered accelerator would fire the menu item
+      // whenever xterm leaves the event uncanceled, stealing the key from the
+      // PTY. Chromium's native editing handles these keys in inputs without
+      // menu help; the items stay clickable and display the accelerator. On
+      // macOS the Cmd-based accelerators stay registered — the terminal paste
+      // path depends on the native Edit menu roles.
       submenu: [
         {
           label: "Undo",
           accelerator: "CommandOrControl+Z",
+          registerAccelerator: false,
           click: () => {
             const focused = webContents.getFocusedWebContents();
             if (focused && !focused.isDestroyed()) focused.undo();
@@ -281,6 +324,7 @@ export function createApplicationMenu(
         {
           label: "Redo",
           accelerator: "CommandOrControl+Shift+Z",
+          registerAccelerator: false,
           click: () => {
             const focused = webContents.getFocusedWebContents();
             if (focused && !focused.isDestroyed()) focused.redo();
@@ -290,6 +334,7 @@ export function createApplicationMenu(
         {
           label: "Cut",
           accelerator: "CommandOrControl+X",
+          registerAccelerator: false,
           click: () => {
             const focused = webContents.getFocusedWebContents();
             if (focused && !focused.isDestroyed()) focused.cut();
@@ -298,6 +343,7 @@ export function createApplicationMenu(
         {
           label: "Copy",
           accelerator: "CommandOrControl+C",
+          registerAccelerator: false,
           click: () => {
             const focused = webContents.getFocusedWebContents();
             if (focused && !focused.isDestroyed()) focused.copy();
@@ -306,6 +352,7 @@ export function createApplicationMenu(
         {
           label: "Paste",
           accelerator: "CommandOrControl+V",
+          registerAccelerator: false,
           click: () => {
             const focused = webContents.getFocusedWebContents();
             if (focused && !focused.isDestroyed()) focused.paste();
@@ -314,6 +361,7 @@ export function createApplicationMenu(
         {
           label: "Select All",
           accelerator: "CommandOrControl+A",
+          registerAccelerator: false,
           click: () => {
             const focused = webContents.getFocusedWebContents();
             if (focused && !focused.isDestroyed()) focused.selectAll();
@@ -326,12 +374,15 @@ export function createApplicationMenu(
       submenu: [
         {
           label: "Toggle Sidebar",
-          accelerator: "CommandOrControl+B",
+          accelerator: rendererMenuAccelerator("nav.toggleSidebar"),
           click: (_item, browserWindow) =>
             sendAction("nav.toggleSidebar", getTargetBrowserWindow(browserWindow)),
         },
         {
+          // Default binding is the chord Cmd+K Cmd+F → no native accelerator
+          // unless the user rebinds to a single stroke.
           label: "Toggle Focus Mode",
+          accelerator: rendererMenuAccelerator("nav.toggleFocusMode"),
           click: (_item, browserWindow) =>
             sendAction("nav.toggleFocusMode", getTargetBrowserWindow(browserWindow)),
         },
@@ -374,9 +425,14 @@ export function createApplicationMenu(
               },
             ]),
         { type: "separator" },
+        // Zoom accelerators display the effective window.zoom* bindings but
+        // stay natively registered (not renderer-owned): the menu clicks zoom
+        // the app shell view while the renderer IPC zooms the sender view —
+        // two deliberate implementations, so native registration preserves
+        // today's macOS behavior exactly.
         {
           label: "Actual Size",
-          accelerator: "CommandOrControl+0",
+          accelerator: getMenuAccelerator("window.zoomReset"),
           click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) => {
             const win = getTargetBrowserWindow(browserWindow);
             if (!win) return;
@@ -385,7 +441,7 @@ export function createApplicationMenu(
         },
         {
           label: "Zoom In",
-          accelerator: "CommandOrControl+=",
+          accelerator: getMenuAccelerator("window.zoomIn"),
           click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) => {
             const win = getTargetBrowserWindow(browserWindow);
             if (!win) return;
@@ -395,7 +451,7 @@ export function createApplicationMenu(
         },
         {
           label: "Zoom Out",
-          accelerator: "CommandOrControl+-",
+          accelerator: getMenuAccelerator("window.zoomOut"),
           click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) => {
             const win = getTargetBrowserWindow(browserWindow);
             if (!win) return;
@@ -420,14 +476,18 @@ export function createApplicationMenu(
       label: "Terminal",
       submenu: [
         {
+          // Renderer-owned so scoped bindings win: the portal binds
+          // portal.newTab on the same Cmd+T at higher priority — without
+          // per-event suppression the native accelerator would fire
+          // terminal.duplicate regardless of portal focus.
           label: "Duplicate Panel",
-          accelerator: "CommandOrControl+T",
+          accelerator: rendererMenuAccelerator("terminal.duplicate"),
           click: (_item, browserWindow) =>
             sendAction("terminal.duplicate", getTargetBrowserWindow(browserWindow)),
         },
         {
           label: "New Terminal",
-          accelerator: "CommandOrControl+Alt+T",
+          accelerator: rendererMenuAccelerator("terminal.new"),
           click: (_item, browserWindow) =>
             sendAction("terminal.new", getTargetBrowserWindow(browserWindow)),
         },
@@ -439,13 +499,13 @@ export function createApplicationMenu(
           : []),
         {
           label: "Quick Switcher…",
-          accelerator: "CommandOrControl+P",
+          accelerator: rendererMenuAccelerator("nav.quickSwitcher"),
           click: (_item, browserWindow) =>
             sendAction("nav.quickSwitcher", getTargetBrowserWindow(browserWindow)),
         },
         {
           label: "Command Palette…",
-          accelerator: "CommandOrControl+Shift+P",
+          accelerator: rendererMenuAccelerator("action.palette.open"),
           click: (_item, browserWindow) =>
             sendAction("action.palette.open", getTargetBrowserWindow(browserWindow)),
         },
@@ -483,6 +543,74 @@ export function createApplicationMenu(
             }
           },
         },
+        {
+          label: `Install "Open in ${PRODUCT_NAME}" Quick Action`,
+          enabled: process.platform === "darwin",
+          click: async (_item, browserWindow) => {
+            const targetWin = getTargetBrowserWindow(browserWindow);
+            try {
+              const installPath = await FinderQuickActionService.install();
+              if (targetWin && !targetWin.isDestroyed()) {
+                const wc = getAppWebContents(targetWin);
+                if (!wc.isDestroyed()) {
+                  wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+                    type: "success",
+                    title: "Quick Action installed",
+                    message: `Right-click a folder in Finder and choose "Open in ${PRODUCT_NAME}". Installed at ${installPath}`,
+                  });
+                }
+              }
+            } catch (err) {
+              const message = formatErrorMessage(err, "Failed to install Quick Action");
+              if (targetWin && !targetWin.isDestroyed()) {
+                const wc = getAppWebContents(targetWin);
+                if (!wc.isDestroyed()) {
+                  wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+                    type: "error",
+                    title: "Quick Action installation failed",
+                    message,
+                  });
+                }
+              }
+            }
+          },
+        },
+        {
+          // The bundle lives in ~/Library/Services, which no app uninstaller
+          // touches — without this the Quick Action outlives Daintree.
+          label: `Remove "Open in ${PRODUCT_NAME}" Quick Action`,
+          enabled: process.platform === "darwin",
+          click: async (_item, browserWindow) => {
+            const targetWin = getTargetBrowserWindow(browserWindow);
+            try {
+              const { removed, path: quickActionPath } = await FinderQuickActionService.remove();
+              if (targetWin && !targetWin.isDestroyed()) {
+                const wc = getAppWebContents(targetWin);
+                if (!wc.isDestroyed()) {
+                  wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+                    type: "success",
+                    title: removed ? "Quick Action removed" : "Quick Action wasn't installed",
+                    message: removed
+                      ? `"Open in ${PRODUCT_NAME}" is gone from Finder. Removed from ${quickActionPath}`
+                      : `Nothing to remove at ${quickActionPath}`,
+                  });
+                }
+              }
+            } catch (err) {
+              const message = formatErrorMessage(err, "Failed to remove Quick Action");
+              if (targetWin && !targetWin.isDestroyed()) {
+                const wc = getAppWebContents(targetWin);
+                if (!wc.isDestroyed()) {
+                  wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+                    type: "error",
+                    title: "Quick Action removal failed",
+                    message,
+                  });
+                }
+              }
+            }
+          },
+        },
       ],
     },
     {
@@ -500,9 +628,19 @@ export function createApplicationMenu(
           click: (_item, browserWindow) =>
             sendAction("help.gettingStarted.show", getTargetBrowserWindow(browserWindow)),
         },
+        {
+          // The searchable shortcut reference was previously reachable only
+          // via combos you'd already have to know (Cmd+/ or Cmd+K Cmd+S) or
+          // the command palette — the Help menu is where new users look.
+          label: "Keyboard Shortcuts",
+          accelerator: rendererMenuAccelerator("help.shortcutsAlt"),
+          click: (_item, browserWindow) =>
+            sendAction("help.shortcutsAlt", getTargetBrowserWindow(browserWindow)),
+        },
         { type: "separator" },
         {
           label: "Launch Help Agent",
+          accelerator: rendererMenuAccelerator("help.launchAgent"),
           click: (_item, browserWindow) =>
             sendAction("help.launchAgent", getTargetBrowserWindow(browserWindow)),
         },
@@ -554,7 +692,7 @@ export function createApplicationMenu(
         { type: "separator" },
         {
           label: "Settings…",
-          accelerator: "CommandOrControl+,",
+          accelerator: rendererMenuAccelerator("app.settings"),
           click: (_item, browserWindow) =>
             sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
         },
@@ -621,6 +759,130 @@ function buildRecentProjectsMenu(
   return menuItems;
 }
 
+/**
+ * Show the folder picker and open whatever the user chooses. Shared by the File
+ * menu's Open Directory… item and the "Choose another folder" recovery on a
+ * failed open (#11409), so both configure the dialog identically.
+ */
+async function promptForDirectoryOpen(
+  targetWindow: BrowserWindow,
+  cliAvailabilityService?: CliAvailabilityService
+): Promise<void> {
+  if (targetWindow.isDestroyed()) return;
+
+  const result = await dialog.showOpenDialog(targetWindow, {
+    properties: ["openDirectory", "createDirectory"],
+    // Matches the IPC picker: a folder without a repository is openable too, so
+    // the title mustn't imply a requirement it no longer has (#11405).
+    title: "Open Folder",
+  });
+
+  if (result.canceled || result.filePaths.length === 0) return;
+  await handleDirectoryOpen(result.filePaths[0], targetWindow, cliAvailabilityService);
+}
+
+/**
+ * Render a classified open failure as a native dialog with a single recovery
+ * action, and run that action if the user picks it.
+ *
+ * Copy comes from the shared presentation table keyed on the `AppError` code —
+ * never from `error.message`, so an internal method or library name can't reach
+ * the dialog the way "Git operation failed: getRepositoryRoot" once did.
+ */
+async function showProjectOpenFailure(
+  error: unknown,
+  directoryPath: string,
+  targetWindow: BrowserWindow,
+  cliAvailabilityService?: CliAvailabilityService
+): Promise<void> {
+  let failure = (isAppError(error) && getProjectOpenFailure(error.code, directoryPath)) || {
+    title: "Couldn't open folder",
+    message: `Something went wrong opening "${directoryPath}".`,
+    recovery: "retry" as const,
+    removable: false,
+  };
+
+  // A dead Recent Projects entry is the case worth acting on: the row itself is
+  // the problem, so offer to drop it rather than sending the user to a picker.
+  // The id is captured now and reused on confirmation — re-resolving by path
+  // afterwards could land on a different row if one took this path meanwhile.
+  // A lookup failure must not swallow the dialog, so it degrades to the picker.
+  const deadProjectId = failure.removable
+    ? await projectStore
+        .getProjectByPath(directoryPath)
+        .then((project) => project?.id ?? null)
+        .catch(() => null)
+    : null;
+  if (deadProjectId) failure = withRemoveFromRecent(failure);
+
+  if (targetWindow.isDestroyed()) return;
+
+  const { response } = await dialog.showMessageBox(targetWindow, {
+    type: "error",
+    title: failure.title,
+    message: failure.title,
+    // Removal deletes the project's saved state, so the dialog says so rather
+    // than presenting it as a tidy-up of the list.
+    detail:
+      failure.recovery === "remove-from-recent"
+        ? `${failure.message}\n\nRemoving it forgets this project's saved settings and session history. The folder itself isn't touched.`
+        : failure.message,
+    buttons: [PROJECT_OPEN_RECOVERY_LABELS[failure.recovery], "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+  });
+
+  if (response !== 0 || targetWindow.isDestroyed()) return;
+
+  switch (failure.recovery) {
+    case "remove-from-recent":
+      if (deadProjectId) {
+        try {
+          await removeProjectWithCleanup(deadProjectId, {
+            ptyClient: getPtyClient() ?? undefined,
+            worktreeService: getWorkspaceClientRef() ?? undefined,
+          });
+        } catch (removalError) {
+          // Removal can refuse — it fails closed when the pty-host can't confirm
+          // the project's terminals stopped. Silently logging that would leave
+          // the row in place with no explanation.
+          console.error("Failed to remove project from recent:", removalError);
+          if (!targetWindow.isDestroyed()) {
+            await dialog.showMessageBox(targetWindow, {
+              type: "error",
+              title: "Couldn't remove project",
+              message: "Couldn't remove project",
+              detail: getUserMessage(removalError),
+              buttons: ["OK"],
+              defaultId: 0,
+              cancelId: 0,
+            });
+          }
+          break;
+        }
+        // Recent Projects is a static submenu built at menu-construction time,
+        // so the removed row lingers until the whole menu is rebuilt —
+        // refreshProjectMenuState only toggles the project-gated item states.
+        // Rebuilt in its own try so a menu failure can't look like the removal
+        // failed; by here it has already committed.
+        try {
+          if (!targetWindow.isDestroyed()) {
+            createApplicationMenu(targetWindow, cliAvailabilityService);
+          }
+        } catch (menuError) {
+          console.error("Failed to rebuild menu after removing project:", menuError);
+        }
+      }
+      break;
+    case "choose-folder":
+      await promptForDirectoryOpen(targetWindow, cliAvailabilityService);
+      break;
+    case "retry":
+      await handleDirectoryOpen(directoryPath, targetWindow, cliAvailabilityService);
+      break;
+  }
+}
+
 export async function handleDirectoryOpen(
   directoryPath: string,
   targetWindow: BrowserWindow,
@@ -646,6 +908,14 @@ export async function handleDirectoryOpen(
       // departing and activated rows so cached views' MRU timestamps stay
       // fresh; otherwise the next `Cmd+Alt+=` targets the wrong project.
       broadcastProjectSwitchUpdates(previousProjectId, project.id);
+
+      // Third switch entry point, and the one that bypasses `activateProjectView`
+      // entirely. Without this, opening a project from File → Recent Projects as
+      // the very first switch of a session leaves the history holding only the
+      // destination, so `Cmd+Alt+=` has nowhere to go back to.
+      const menuHistory = getProjectHistory(targetWindow.id);
+      if (previousProjectId) menuHistory.record(previousProjectId);
+      menuHistory.record(project.id);
 
       // Notify the activated view of the switch so it refreshes its cache, MRU,
       // and polling, mirroring activateProjectView. Targeted send to the
@@ -704,28 +974,52 @@ export async function handleDirectoryOpen(
 
     createApplicationMenu(targetWindow, cliAvailabilityService);
   } catch (error) {
-    console.error("Failed to open project:", error);
+    // A folder that isn't a repository yet is a guided-setup opportunity, not an
+    // error: hand it to the renderer's existing GitInitDialog so the user can
+    // confirm initializing it. Keyed to the structured AppError code rather than
+    // message text — `addProject` is called in-process here, so the thrown
+    // AppError instance survives intact (no structured-clone boundary). Covers
+    // Dock drop, Cmd+O, and Recent Projects alike, since all three land here.
+    if (isAppError(error) && error.code === "NOT_A_GIT_REPO") {
+      if (targetWindow.isDestroyed()) return;
 
-    let errorMessage = "An unknown error occurred";
-    if (error instanceof Error) {
-      if (error.message.includes("Not a git repository")) {
-        errorMessage = "The selected directory is not a Git repository.";
-      } else if (error.message.includes("ENOENT")) {
-        errorMessage = "The selected directory does not exist.";
-      } else if (error.message.includes("EACCES")) {
-        errorMessage = "Permission denied. You don't have access to this directory.";
+      const rendererTarget = getAppWebContents(targetWindow);
+      const sendOpenGitInitDialog = (): void => {
+        if (rendererTarget.isDestroyed()) return;
+        rendererTarget.send(CHANNELS.PROJECT_OPEN_GIT_INIT_DIALOG, { directoryPath });
+      };
+
+      // A send before `did-finish-load` is dropped with no queue, which is the
+      // cold-launch Dock-drop case (the folder opens while the window is still
+      // loading). Gate on `isLoadingMainFrame()`, not `isLoading()`: the latter
+      // is true while *any* frame is loading (an HTML preview iframe, say), but
+      // `did-finish-load` only fires for the main frame — so a bare `isLoading()`
+      // could park the send on an event that never arrives. Read it here rather
+      // than before the await above, so a load that finished while `addProject`
+      // was running isn't waited on forever.
+      if (rendererTarget.isLoadingMainFrame()) {
+        rendererTarget.once("did-finish-load", sendOpenGitInitDialog);
       } else {
-        errorMessage = error.message;
+        sendOpenGitInitDialog();
       }
+      return;
     }
 
-    dialog
-      .showMessageBox(targetWindow, {
-        type: "error",
-        title: "Failed to Open Project",
-        message: errorMessage,
-        buttons: ["OK"],
-      })
-      .catch(console.error);
+    // Logged only after the guided path declines the error — a folder that just
+    // needs initializing is an expected user choice, not a failure.
+    console.error("Failed to open project:", error);
+
+    try {
+      await showProjectOpenFailure(error, directoryPath, targetWindow, cliAvailabilityService);
+    } catch (dialogError) {
+      console.error("Failed to surface project open error:", dialogError);
+    }
+  } finally {
+    // The third switch entry point, and the one that bypasses
+    // `activateProjectView` — nothing else on this path writes the title, and
+    // the next notification tick may be far off. In `finally` for the same
+    // reason the IPC switch handler converges there: a swap that committed
+    // visually before a later step threw still moved what this window shows.
+    notificationService.refreshTitles();
   }
 }

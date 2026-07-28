@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { app } from "electron";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
+import { rebaseAbsolutePath } from "../../shared/utils/projectPathRelocation.js";
 
 const FILE_NAME = "help-pending-hibernation.json";
 const FILE_VERSION = 1;
@@ -95,6 +96,22 @@ export class PendingHelpHibernationStore {
     if (!this.entries.has(projectId)) return Promise.resolve();
     this.entries.delete(projectId);
     return this.persist();
+  }
+
+  /**
+   * Rebase a project's captured Assistant cwd after a folder move/rename
+   * (#11282, phase 2), so the hibernated conversation resumes in the moved
+   * folder rather than the vanished old one. No-op when the project has no
+   * entry or its cwd is unaffected by the move.
+   */
+  async rewriteProjectPath(projectId: string, oldRoot: string, newRoot: string): Promise<void> {
+    await this.load();
+    const entry = this.entries.get(projectId);
+    if (!entry) return;
+    const nextCwd = rebaseAbsolutePath(entry.cwd, oldRoot, newRoot);
+    if (nextCwd === entry.cwd) return;
+    this.entries.set(projectId, { ...entry, cwd: nextCwd });
+    await this.persist();
   }
 
   private isValid(value: unknown): value is PendingHelpHibernation {

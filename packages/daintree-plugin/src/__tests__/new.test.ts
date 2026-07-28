@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { scaffoldPlugin, runNew } from "../commands/new.js";
 import { getPluginManifestSchema } from "../../../../electron/schemas/plugin.js";
-import { isValidPanelIconId } from "../../../../shared/config/panelIconIds.js";
+import { isPluginIconId } from "../../../../shared/config/pluginIconIds.js";
 import { TEMPLATE_KINDS } from "../scaffold/templates.js";
 
 let tmpDir: string;
@@ -47,6 +47,15 @@ describe("scaffoldPlugin", () => {
       expect((pkg.scripts as Record<string, string>).package).toContain("daintree-plugin package");
       await expect(fs.access(path.join(result.dir, "src", "index.ts"))).resolves.toBeUndefined();
       await expect(fs.access(path.join(result.dir, ".gitignore"))).resolves.toBeUndefined();
+
+      // The starter .dntrignore documents the mechanism but must not actually
+      // drop anything from a fresh plugin — every rule ships commented out.
+      const dntrignore = await fs.readFile(path.join(result.dir, ".dntrignore"), "utf8");
+      const activeRules = dntrignore
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#"));
+      expect(activeRules).toEqual([]);
     });
   }
 
@@ -344,7 +353,7 @@ describe("scaffoldPlugin", () => {
     for (const panel of panels) {
       // Guards against the scaffold drifting to an iconId that renders as the
       // generic terminal fallback (the advisory validator would flag it).
-      expect(isValidPanelIconId(panel.iconId)).toBe(true);
+      expect(isPluginIconId(panel.iconId)).toBe(true);
     }
   });
 

@@ -5,8 +5,7 @@ export const migration004: Migration = {
   description: "Upgrade default voice correction model from gpt-5-nano to gpt-5-mini",
   up: (store) => {
     const voiceInput = store.get("voiceInput") as
-      | { correctionModel?: string; [key: string]: unknown }
-      | undefined;
+      { correctionModel?: string; [key: string]: unknown } | undefined;
 
     if (!voiceInput) {
       console.log("[Migration 004] No voiceInput settings found, skipping");

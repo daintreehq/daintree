@@ -386,6 +386,67 @@ export const AgentSessionRetentionDaysSchema = z.union([
   z.literal(0),
 ]);
 
+// ============================================================================
+// Session bookmark payloads (#11288)
+// ============================================================================
+
+/** Bounded, trimmed bookmark label — the durable retrieval key. */
+const BookmarkLabelSchema = z.string().trim().min(1).max(120);
+/** Bounded id addressing a terminal, journaled session, panel, or preset. */
+const BookmarkRefSchema = z.string().trim().min(1).max(256);
+
+/**
+ * Renderer-supplied pane-presentation metadata captured with a bookmark. Every
+ * field is optional and additive; `.strict()` rejects unknown keys so no
+ * terminal output, transcript, prompt, or environment value can be smuggled
+ * into the durable record (the feature's privacy boundary).
+ */
+export const AgentSessionBookmarkMetadataInputSchema = z
+  .object({
+    sourcePanelId: BookmarkRefSchema.optional(),
+    sourceLocation: z.enum(["grid", "dock"]).optional(),
+    titleMode: TitleModeSchema.optional(),
+    agentPresetId: BookmarkRefSchema.optional(),
+    agentPresetColor: z.string().trim().min(1).max(64).optional(),
+    originalPresetId: BookmarkRefSchema.optional(),
+    isUsingFallback: z.boolean().optional(),
+    fallbackChainIndex: z.number().int().nonnegative().optional(),
+    isInputLocked: z.boolean().optional(),
+  })
+  .strict();
+
+/** `prepareBookmark` — capture a live agent pane's native session and pin it. */
+export const PrepareBookmarkPayloadSchema = z
+  .object({
+    terminalId: BookmarkRefSchema,
+    label: BookmarkLabelSchema,
+    metadata: AgentSessionBookmarkMetadataInputSchema.optional(),
+  })
+  .strict();
+
+/** `promote`/`rename` — pin or relabel an existing journaled session by id. */
+export const BookmarkMutatePayloadSchema = z
+  .object({
+    sessionId: BookmarkRefSchema,
+    label: BookmarkLabelSchema,
+  })
+  .strict();
+
+/** `delete` — remove exactly one bookmark by session id. */
+export const BookmarkDeletePayloadSchema = z
+  .object({
+    sessionId: BookmarkRefSchema,
+  })
+  .strict();
+
+/** `listBookmarks` — optional project scope. */
+export const ListBookmarksPayloadSchema = z
+  .object({
+    projectId: BookmarkRefSchema.optional(),
+  })
+  .strict()
+  .optional();
+
 export const FileSearchPayloadSchema = z.object({
   cwd: z.string().min(1),
   query: z.string(),
@@ -409,6 +470,10 @@ export const CopyTreeOptionsSchema = z
     exclude: z.union([z.string(), z.array(z.string())]).optional(),
     always: z.array(z.string()).optional(),
     includePaths: z.array(z.string()).optional(),
+    // Non-empty at both levels: an empty list or a blank entry would resolve to
+    // the worktree root, turning a folder copy into a whole-worktree copy that
+    // no caller asked for. Absent still means "no scoping".
+    scopePaths: z.array(z.string().min(1)).min(1).optional(),
     modified: z.boolean().optional(),
     changed: z.string().optional(),
     maxFileSize: z.number().int().positive().optional(),
@@ -465,15 +530,31 @@ export const CopyTreeProgressSchema = z.object({
   stage: z.string(),
   progress: z.number().min(0).max(1),
   message: z.string(),
-  filesProcessed: z.number().int().nonnegative().optional(),
-  totalFiles: z.number().int().nonnegative().optional(),
-  currentFile: z.string().optional(),
   traceId: z.string().optional(),
 });
 
 export const CopyTreeGetFileTreePayloadSchema = z.object({
   worktreeId: z.string().min(1),
   dirPath: z.string().optional(),
+  /**
+   * Return the entries CopyTree would leave out, flagged `excluded`, instead of
+   * omitting them. Off by default so the listing keeps its no-leak shape.
+   */
+  includeExcluded: z.boolean().optional(),
+});
+
+// Both strings are capped: they cross the boundary as untrusted input and end
+// up in path joins, which should never see a megabyte-long value.
+export const FileBrowserListDirectoryPayloadSchema = z.object({
+  worktreeId: z.string().min(1).max(4096),
+  dirPath: z.string().max(4096).optional(),
+});
+
+// Batch-capped: one call validates the directory candidates of a single
+// hovered terminal line, which is a handful of tokens, never hundreds.
+export const FileBrowserStatPathsPayloadSchema = z.object({
+  worktreeId: z.string().min(1).max(4096),
+  paths: z.array(z.string().min(1).max(4096)).max(32),
 });
 
 export const FileReadPayloadSchema = z.object({

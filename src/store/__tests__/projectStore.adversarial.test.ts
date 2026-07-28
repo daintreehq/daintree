@@ -20,6 +20,7 @@ type StorageMock = {
 type ProjectApi = {
   onUpdated?: (callback: (project: ProjectShape) => void) => () => void;
   onRemoved?: (callback: (projectId: string) => void) => () => void;
+  onOpenGitInitDialog?: (callback: (payload: { directoryPath: string }) => void) => () => void;
 };
 
 const projectClientMock = vi.hoisted(() => ({
@@ -45,6 +46,10 @@ const projectClientMock = vi.hoisted(() => ({
 
 const notifyMock = vi.hoisted(() => vi.fn());
 const clearHibernateSessionMock = vi.hoisted(() => vi.fn());
+const setHibernateSessionMock = vi.hoisted(() => vi.fn());
+const hibernateSessionsMock = vi.hoisted(
+  () => ({}) as Record<string, { sessionId: string; cwd: string; agentId: string }>
+);
 const logErrorWithContextMock = vi.hoisted(() => vi.fn());
 const setProjectIdGetterMock = vi.hoisted(() => vi.fn());
 const panelPersistenceCancelMock = vi.hoisted(() => vi.fn());
@@ -68,6 +73,8 @@ vi.mock("@/utils/logger", () => ({
 vi.mock("../persistence/panelPersistence", () => ({
   panelPersistence: {
     setProjectIdGetter: setProjectIdGetterMock,
+    flush: vi.fn(),
+    whenIdle: vi.fn(() => Promise.resolve()),
     cancel: panelPersistenceCancelMock,
   },
   panelToSnapshot: vi.fn((panel: { id: string; kind: string }) => ({
@@ -87,6 +94,8 @@ vi.mock("../urlHistoryStore", () => ({
 vi.mock("../helpPanelStore", () => ({
   useHelpPanelStore: {
     getState: () => ({
+      hibernateSessions: hibernateSessionsMock,
+      setHibernateSession: setHibernateSessionMock,
       clearHibernateSession: clearHibernateSessionMock,
     }),
   },
@@ -198,6 +207,9 @@ describe("projectStore adversarial", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    for (const key of Object.keys(hibernateSessionsMock)) {
+      delete hibernateSessionsMock[key];
+    }
     clearListenerState();
     restoreLocalStorage();
     projectClientMock.getAll.mockResolvedValue([]);
@@ -277,6 +289,44 @@ describe("projectStore adversarial", () => {
 
     updatedCallbacks[0]!(projectB);
     expect(useProjectStore.getState().projects).toEqual([projectB]);
+  });
+
+  // #11281: main pushes this when a folder opened via the Dock/Cmd+O/Recent
+  // isn't a repo yet. Registration lives at module scope so it is wired before
+  // the renderer finishes loading, which is when the cold-launch send arrives.
+  it("opens the git-init dialog when main pushes a non-repository folder", async () => {
+    const callbacks: Array<(payload: { directoryPath: string }) => void> = [];
+    const onOpenGitInitDialog = vi.fn((callback: (payload: { directoryPath: string }) => void) => {
+      callbacks.push(callback);
+      return vi.fn();
+    });
+    installProjectApi({ onOpenGitInitDialog });
+    installLocalStorage(createStorageMock());
+
+    await import("../projectStore");
+    vi.resetModules();
+    const { useProjectStore } = await import("../projectStore");
+
+    expect(onOpenGitInitDialog).toHaveBeenCalledTimes(1);
+    expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
+
+    callbacks[0]!({ directoryPath: "/repos/not-a-repo" });
+
+    expect(useProjectStore.getState().gitInitDialogOpen).toBe(true);
+    expect(useProjectStore.getState().gitInitDirectoryPath).toBe("/repos/not-a-repo");
+    // Nothing is written until the user confirms in-dialog.
+    expect(projectClientMock.add).not.toHaveBeenCalled();
+
+    // Dropping a second folder must not swap the path under the open dialog:
+    // mid-initialization that would init the first folder and then add the
+    // second, since the success handler rereads the store.
+    callbacks[0]!({ directoryPath: "/repos/second-folder" });
+    expect(useProjectStore.getState().gitInitDirectoryPath).toBe("/repos/not-a-repo");
+
+    useProjectStore.getState().closeGitInitDialog();
+    expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
+    expect(useProjectStore.getState().gitInitDirectoryPath).toBeNull();
+    expect(projectClientMock.add).not.toHaveBeenCalled();
   });
 
   it("ignores stale switch rejections once a newer switch has started", async () => {
@@ -517,9 +567,14 @@ describe("projectStore adversarial", () => {
     expect(useProjectStore.getState().error).toBe("Failed to remove project");
   });
 
-  it("GCs the old hibernate session when locating a project changes its id", async () => {
+  it("carries the hibernate session over if locating still changes the id", async () => {
     installProjectApi({});
     installLocalStorage(createStorageMock());
+    hibernateSessionsMock[projectA.id] = {
+      sessionId: "session-1",
+      cwd: "/tmp/project-a",
+      agentId: "claude",
+    };
     const relocated = { ...projectA, id: "project-a-relocated", path: "/tmp/project-a-moved" };
     projectClientMock.locate.mockResolvedValueOnce(relocated);
     projectClientMock.getAll.mockResolvedValue([relocated]);
@@ -527,8 +582,39 @@ describe("projectStore adversarial", () => {
     const { useProjectStore } = await import("../projectStore");
     await useProjectStore.getState().locateProject(projectA.id);
 
-    expect(clearHibernateSessionMock).toHaveBeenCalledTimes(1);
+    // Preserved under the new id and repointed at the new folder — the whole
+    // point of #11282 is that relocating never costs the user a conversation.
+    expect(setHibernateSessionMock).toHaveBeenCalledWith("project-a-relocated", {
+      sessionId: "session-1",
+      cwd: "/tmp/project-a-moved",
+      agentId: "claude",
+    });
     expect(clearHibernateSessionMock).toHaveBeenCalledWith(projectA.id);
+  });
+
+  it("still refreshes the project list when hibernate migration fails", async () => {
+    installProjectApi({});
+    installLocalStorage(createStorageMock());
+    setHibernateSessionMock.mockImplementationOnce(() => {
+      throw new Error("store unavailable");
+    });
+    hibernateSessionsMock[projectA.id] = {
+      sessionId: "session-1",
+      cwd: "/tmp/project-a",
+      agentId: "claude",
+    };
+    const relocated = { ...projectA, id: "project-a-relocated", path: "/tmp/project-a-moved" };
+    projectClientMock.locate.mockResolvedValueOnce(relocated);
+    projectClientMock.getAll.mockResolvedValue([relocated]);
+
+    const { useProjectStore } = await import("../projectStore");
+    await useProjectStore.getState().locateProject(projectA.id);
+
+    // The throwing setter must actually have been reached, and its failure must
+    // not cost the caller its list refresh or drop the surviving old entry.
+    expect(setHibernateSessionMock).toHaveBeenCalledTimes(1);
+    expect(clearHibernateSessionMock).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().projects).toEqual([relocated]);
   });
 
   it("does not GC the hibernate session when locating returns the same id", async () => {
@@ -552,5 +638,58 @@ describe("projectStore adversarial", () => {
     await useProjectStore.getState().locateProject(projectA.id);
 
     expect(clearHibernateSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("rebases the hibernated Assistant cwd when onUpdated changes the path (same id, #11282)", async () => {
+    const updatedCallbacks: Array<(project: ProjectShape) => void> = [];
+    installProjectApi({
+      onUpdated: (callback) => {
+        updatedCallbacks.push(callback);
+        return vi.fn();
+      },
+    });
+    installLocalStorage(createStorageMock());
+    hibernateSessionsMock[projectA.id] = {
+      sessionId: "session-1",
+      cwd: `${projectA.path}/sub`,
+      agentId: "claude",
+    };
+
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA], currentProject: projectA });
+
+    updatedCallbacks[0]!({ ...projectA, path: "/tmp/project-a-moved" });
+    await vi.dynamicImportSettled();
+
+    // Same id, new folder: the resume pointer is repointed in place, never GC'd.
+    expect(setHibernateSessionMock).toHaveBeenCalledWith(projectA.id, {
+      sessionId: "session-1",
+      cwd: "/tmp/project-a-moved/sub",
+      agentId: "claude",
+    });
+    expect(clearHibernateSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves the hibernated cwd untouched when onUpdated does not change the path", async () => {
+    const updatedCallbacks: Array<(project: ProjectShape) => void> = [];
+    installProjectApi({
+      onUpdated: (callback) => {
+        updatedCallbacks.push(callback);
+        return vi.fn();
+      },
+    });
+    installLocalStorage(createStorageMock());
+    hibernateSessionsMock[projectA.id] = {
+      sessionId: "session-1",
+      cwd: projectA.path,
+      agentId: "claude",
+    };
+
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA], currentProject: projectA });
+
+    updatedCallbacks[0]!({ ...projectA, name: "Renamed only" });
+
+    expect(setHibernateSessionMock).not.toHaveBeenCalled();
   });
 });

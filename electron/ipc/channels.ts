@@ -71,11 +71,19 @@ export const CHANNELS = {
   AGENT_SESSION_CLEAR: "agent-session:clear",
   AGENT_SESSION_GET_RETENTION: "agent-session:get-retention",
   AGENT_SESSION_SET_RETENTION: "agent-session:set-retention",
+  AGENT_SESSION_PREPARE_BOOKMARK: "agent-session:prepare-bookmark",
+  AGENT_SESSION_PROMOTE_BOOKMARK: "agent-session:promote-bookmark",
+  AGENT_SESSION_RENAME_BOOKMARK: "agent-session:rename-bookmark",
+  AGENT_SESSION_DELETE_BOOKMARK: "agent-session:delete-bookmark",
+  AGENT_SESSION_LIST_BOOKMARKS: "agent-session:list-bookmarks",
 
   FILES_SEARCH: "files:search",
   FILES_READ: "files:read",
 
   DIFF_MEDIA_READ_FILE_VERSIONS: "diff-media:read-file-versions",
+
+  FILE_BROWSER_LIST_DIRECTORY: "file-browser:list-directory",
+  FILE_BROWSER_STAT_PATHS: "file-browser:stat-paths",
 
   TERMINAL_ACTIVITY: "terminal:activity",
 
@@ -231,10 +239,12 @@ export const CHANNELS = {
   PROJECT_GET_BULK_STATS: "project:get-bulk-stats",
   PROJECT_GET_NOTIFICATION_OVERRIDES: "project:get-notification-overrides",
   PROJECT_STATS_UPDATED: "project:stats-updated",
+  PROJECT_HISTORY_PEEK: "project-history:peek",
   PROJECT_CREATE_FOLDER: "project:create-folder",
   PROJECT_INIT_GIT: "project:init-git",
   PROJECT_INIT_GIT_GUIDED: "project:init-git-guided",
   PROJECT_INIT_GIT_PROGRESS: "project:init-git-progress",
+  PROJECT_OPEN_GIT_INIT_DIALOG: "project:open-git-init-dialog",
   PROJECT_CLONE_REPO: "project:clone-repo",
   PROJECT_CLONE_PROGRESS: "project:clone-progress",
   PROJECT_CLONE_CANCEL: "project:clone-cancel",
@@ -274,6 +284,8 @@ export const CHANNELS = {
   PROJECT_DISABLE_IN_REPO_SETTINGS: "project:disable-in-repo-settings",
   PROJECT_CHECK_MISSING: "project:check-missing",
   PROJECT_LOCATE: "project:locate",
+  PROJECT_RELOCATION_PREVIEW: "project-relocation:preview",
+  PROJECT_RELOCATION_APPLY: "project-relocation:apply",
   AGENT_SETTINGS_GET: "agent-settings:get",
   AGENT_SETTINGS_SET: "agent-settings:set",
   AGENT_SETTINGS_SET_GLOBAL: "agent-settings:set-global",
@@ -942,6 +954,8 @@ export const CHANNELS = {
   PLUGIN_PANEL_KINDS_GET: "plugin:panel-kinds-get",
   /** Lazy activation: force the plugin owning a contributed panel view to `activate()` before its module loads. */
   PLUGIN_ACTIVATE_FOR_VIEW: "plugin:activate-for-view",
+  /** Renderer reports plugin panel lifecycle transitions (mounted/hidden/trashed/removed) for worker delivery. */
+  PLUGIN_REPORT_PANEL_LIFECYCLE: "plugin:report-panel-lifecycle",
   PLUGIN_AGENTS_GET: "plugin:agents-get",
   PLUGIN_FORGE_PROVIDERS_GET: "plugin:forge-providers-get",
   PLUGIN_FILE_DECORATIONS_GET: "plugin:file-decorations-get",
@@ -957,6 +971,10 @@ export const CHANNELS = {
   PLUGIN_SETTINGS_SET_VALUE: "plugin:settings-set-value",
   PLUGIN_SETTINGS_DELETE_VALUE: "plugin:settings-delete-value",
   PLUGIN_SETTINGS_REVEAL_SECRET: "plugin:settings-reveal-secret",
+  /** Cancel an in-flight plugin install by its job id (#11302). */
+  PLUGIN_CANCEL_INSTALL: "plugin:cancel-install",
+  /** Phase/entry progress for an in-flight install, targeted at the initiating window (#11302). */
+  PLUGIN_INSTALL_PROGRESS: "plugin:install-progress",
   /** Native folder/file chooser for plugin path/directory/file settings fields. */
   PLUGIN_PICK_PATH: "plugin:pick-path",
   /** Existence probe for a stored plugin `mustExist` path setting. */

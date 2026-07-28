@@ -7,7 +7,9 @@ const shared = vi.hoisted(() => ({
   stat: vi.fn(),
   readdir: vi.fn(),
   lstat: vi.fn(),
-  checkIgnoredPaths: vi.fn(),
+  spawn: vi.fn(() => {
+    throw new Error("a raw listing must not spawn a subprocess");
+  }),
 }));
 
 vi.mock("fs/promises", () => ({
@@ -17,8 +19,12 @@ vi.mock("fs/promises", () => ({
   lstat: shared.lstat,
 }));
 
-vi.mock("../../utils/gitCheckIgnore.js", () => ({
-  checkIgnoredPaths: shared.checkIgnoredPaths,
+// Poisoned so reintroducing a subprocess to this listing fails loudly rather
+// than quietly costing a spawn per directory read.
+vi.mock("node:child_process", () => ({
+  spawn: shared.spawn,
+  execFile: shared.spawn,
+  exec: shared.spawn,
 }));
 
 interface DirEntry {
@@ -79,7 +85,6 @@ describe("FileTreeService adversarial", () => {
     shared.stat.mockResolvedValue(createStats({ isDirectory: true }));
     shared.readdir.mockResolvedValue([]);
     shared.lstat.mockResolvedValue(createStats({ size: 0 }));
-    shared.checkIgnoredPaths.mockResolvedValue(new Set());
   });
 
   it("READDIR_EACCES_WRAPPED_CLEANLY", async () => {
@@ -117,63 +122,20 @@ describe("FileTreeService adversarial", () => {
     expect(shared.lstat).not.toHaveBeenCalled();
   });
 
-  it("GIT_IGNORE_FAILURE_FAILS_CLOSED", async () => {
-    // When the check-ignore invocation errors (E2BIG on huge dirs, missing
-    // git, broken repo, …) the file tree must NOT leak entries that the
-    // gitignore would otherwise have hidden. The service populates the
-    // ignored set with every path it tried to check so the downstream
-    // filter hides all of them — a transient failure self-heals on the
-    // next successful call.
-    shared.readdir.mockResolvedValueOnce([d("visible.txt")]);
-    shared.checkIgnoredPaths.mockRejectedValueOnce(new Error("git unavailable"));
+  it("NO_SUBPROCESS_FOR_A_LISTING", async () => {
+    // The listing used to spawn `git check-ignore` per directory, which made it
+    // require a git repository and fail closed — an empty tree — on E2BIG or
+    // ENOMEM in a large directory (#10003). It is now pure filesystem work, so
+    // there is no subprocess left to fail and a non-repo folder lists normally.
+    shared.readdir.mockResolvedValueOnce([d("visible.txt"), d("node_modules", { dir: true })]);
+    shared.lstat.mockImplementation(async (target: string) =>
+      createStats({ isDirectory: target.endsWith("node_modules"), size: 1 })
+    );
 
-    await expect(service.getFileTree("/repo")).resolves.toEqual([]);
-  });
+    const result = await service.getFileTree("/not-a-repo");
 
-  it("E2BIG_GIT_IGNORE_FAILURE_DOES_NOT_LEAK_IGNORED_ENTRIES", async () => {
-    // Regression for issue #10003: a directory with so many entries that
-    // `git check-ignore <paths>` (argv-based) failed with E2BIG used to be
-    // swallowed silently — ignoredPaths stayed empty and all entries,
-    // including gitignored ones, leaked into the tree. The fix pipes
-    // paths over stdin, but if the check still errors for any reason the
-    // failure must be fail-closed.
-    shared.readdir.mockResolvedValueOnce([
-      d("visible.txt"),
-      d("node_modules"),
-      d(".env"),
-      d("build"),
-    ]);
-    shared.lstat.mockResolvedValue(createStats({ size: 1 }));
-    const e2big = new Error("spawnSync git ENOMEM") as NodeJS.ErrnoException;
-    e2big.code = "ENOMEM";
-    shared.checkIgnoredPaths.mockRejectedValueOnce(e2big);
-
-    const result = await service.getFileTree("/repo");
-
-    expect(result).toEqual([]);
-  });
-
-  it("WARN_THROTTLE_DEDUPES_REPEATED_GIT_IGNORE_FAILURES", async () => {
-    // Sustained git failure (e.g. a broken FUSE mount on a refresh storm)
-    // must not spam the main process log. The first call logs; the
-    // second within the throttle window is suppressed.
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      shared.readdir.mockResolvedValue([d("visible.txt")]);
-      shared.checkIgnoredPaths.mockRejectedValue(new Error("git unavailable"));
-
-      await service.getFileTree("/repo");
-      await service.getFileTree("/repo");
-      await service.getFileTree("/repo");
-
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(warnSpy).toHaveBeenCalledWith(
-        "git check-ignore failed; hiding checked entries to prevent leak",
-        expect.objectContaining({ entryCount: 1 })
-      );
-    } finally {
-      warnSpy.mockRestore();
-    }
+    expect(result.map((node) => node.name)).toEqual(["node_modules", "visible.txt"]);
+    expect(shared.spawn).not.toHaveBeenCalled();
   });
 
   it("CONCURRENT_CALLS_NO_SHARED_SNAPSHOT", async () => {
@@ -248,12 +210,11 @@ describe("FileTreeService adversarial", () => {
     expect(second[0]?.size).toBe(999);
   });
 
-  it("WINDOWS_PATH_NORMALIZES_FOR_IGNORE", async () => {
-    shared.readdir.mockResolvedValueOnce([d("ignored.txt"), d("visible.txt")]);
-    shared.checkIgnoredPaths.mockImplementationOnce(async (_cwd, paths: string[]) => {
-      expect(paths).toEqual(["nested/dir/ignored.txt", "nested/dir/visible.txt"]);
-      return new Set(["nested/dir/ignored.txt"]);
-    });
+  it("WINDOWS_SEPARATORS_NORMALIZE_TO_POSIX_PATHS", async () => {
+    // Emitted paths are POSIX on every platform: they are matched against a
+    // CopyTree manifest, which is POSIX-relative to the root, and handed to
+    // agents as `@`-references.
+    shared.readdir.mockResolvedValueOnce([d("visible.txt")]);
     shared.lstat.mockResolvedValue(createStats({ size: 7 }));
 
     await expect(service.getFileTree("/repo", "nested\\dir")).resolves.toEqual([
@@ -266,15 +227,15 @@ describe("FileTreeService adversarial", () => {
     ]);
   });
 
-  it("DOT_GIT_EXCLUDED_FROM_CHECK_IGNORE", async () => {
+  it("DOT_GIT_IS_RETURNED_LIKE_ANY_OTHER_ENTRY", async () => {
+    // Raw listing: `.git` is the caller's to hide. The file browser's junk list
+    // does it (#11330), and the context listing drops it because CopyTree never
+    // descends into it (#11439).
     shared.readdir.mockResolvedValueOnce([d(".git", { dir: true }), d("src", { dir: true })]);
-    shared.checkIgnoredPaths.mockImplementationOnce(async (_cwd, paths: string[]) => {
-      expect(paths).toEqual(["src"]);
-      return new Set();
-    });
     shared.lstat.mockResolvedValue(createStats({ isDirectory: true }));
 
     await expect(service.getFileTree("/repo")).resolves.toEqual([
+      { name: ".git", path: ".git", isDirectory: true },
       { name: "src", path: "src", isDirectory: true },
     ]);
   });

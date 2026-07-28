@@ -152,6 +152,11 @@ const DURABLE_ALLOWLIST = new Set([
 
   // Find bar match-case toggle active state (single primary anchor per active focus region)
   "src/components/Browser/FindBar.tsx",
+
+  // File-browser tree-column resize handle: focus ring + grip accent mark the
+  // one keyboard-focusable separator (single focus anchor per active focus
+  // region), mirroring the PortalDock/Sidebar resize-handle convention (#11331)
+  "src/panels/file-browser/FileBrowserPane.tsx",
 ]);
 
 // Pre-existing accent usage inherited from cleanup buckets #5978-#5986 (all

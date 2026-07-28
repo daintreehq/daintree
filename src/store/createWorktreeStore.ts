@@ -2,7 +2,12 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import type { WorktreeSnapshot, WorktreeEventVersion, AttachIssuePayload } from "@shared/types";
 import { usePanelStore } from "./panelStore";
 import { worktreeClient } from "@/clients";
-import { closeTerminalsForWorktree } from "@/components/Worktree/worktreeDeleteHelper";
+import {
+  captureWorktreeTerminalSnapshot,
+  closeTerminalsForWorktree,
+  restoreClosedTerminals,
+  type WorktreeTerminalRestoreSnapshot,
+} from "@/components/Worktree/worktreeDeleteHelper";
 import { logDebug } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -142,9 +147,7 @@ export interface DetachIssueOutboxEntry extends MutationOutboxEntryBase {
 }
 
 export type MutationOutboxEntry =
-  | DeleteWorktreeOutboxEntry
-  | AttachIssueOutboxEntry
-  | DetachIssueOutboxEntry;
+  DeleteWorktreeOutboxEntry | AttachIssueOutboxEntry | DetachIssueOutboxEntry;
 
 /** True for the issue-association mutation arms (#9163). */
 function isIssueMutation(
@@ -219,6 +222,16 @@ export interface WorktreeViewState {
    * always read freshness from here.
    */
   statusCheckedAt: Map<string, number>;
+  /**
+   * `worktreeId → workingTreeChangedAt` (monotonic epoch ms) — the last raw
+   * filesystem write the recursive watcher observed, independent of git status.
+   * Kept in a side map for the same reason as {@link statusCheckedAt}: it
+   * advances on writes that don't change the snapshot's compared fields, so
+   * folding it into `snapshotsEqual` would churn the `worktrees` Map identity.
+   * The file browser reads it per-id to refresh on writes into gitignored paths
+   * that leave `git status` unmoved (#11330).
+   */
+  workingTreeChangedAtById: Map<string, number>;
   manualAssociations: Map<string, ManualIssueAssociation>;
   /**
    * Host-minted `(epoch, seq)` stamp of the most recently applied event.
@@ -364,6 +377,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
   return createStore<WorktreeViewStore>((set, get) => ({
     worktrees: new Map(),
     statusCheckedAt: new Map(),
+    workingTreeChangedAtById: new Map(),
     manualAssociations: new Map(),
     version: { epoch: "", seq: 0 },
     tombstones: new Map(),
@@ -423,6 +437,25 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       }
       const statusCheckedAtChanged = nextStatusCheckedAt !== prev.statusCheckedAt;
 
+      // Same rebuild for the working-tree-changed side map (also prunes removed
+      // ids), keeping identity when every stamp matches so browser subscribers
+      // see no spurious tick.
+      let nextWorkingTreeChangedAt = prev.workingTreeChangedAtById;
+      {
+        const rebuilt = new Map<string, number>();
+        for (const s of merged) {
+          if (s.workingTreeChangedAt !== undefined) {
+            rebuilt.set(s.id, s.workingTreeChangedAt);
+          }
+        }
+        const unchanged =
+          rebuilt.size === prev.workingTreeChangedAtById.size &&
+          [...rebuilt].every(([id, t]) => prev.workingTreeChangedAtById.get(id) === t);
+        if (!unchanged) nextWorkingTreeChangedAt = rebuilt;
+      }
+      const workingTreeChangedAtChanged =
+        nextWorkingTreeChangedAt !== prev.workingTreeChangedAtById;
+
       // Once hydrated, suppress redundant Map identity churn when every
       // incoming snapshot is value-equal to its existing counterpart. Cold
       // starts always rebuild so `isInitialized` flips correctly even when
@@ -443,6 +476,9 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
           isReconnecting: false,
           reconnectingAt: null,
           ...(statusCheckedAtChanged ? { statusCheckedAt: nextStatusCheckedAt } : {}),
+          ...(workingTreeChangedAtChanged
+            ? { workingTreeChangedAtById: nextWorkingTreeChangedAt }
+            : {}),
           ...(tombstonesChanged ? { tombstones: new Map() } : {}),
           ...(associationsChanged ? { manualAssociations: manual } : {}),
         });
@@ -458,6 +494,9 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         isReconnecting: false,
         reconnectingAt: null,
         ...(statusCheckedAtChanged ? { statusCheckedAt: nextStatusCheckedAt } : {}),
+        ...(workingTreeChangedAtChanged
+          ? { workingTreeChangedAtById: nextWorkingTreeChangedAt }
+          : {}),
         ...(tombstonesChanged ? { tombstones: new Map() } : {}),
         ...(associationsChanged ? { manualAssociations: manual } : {}),
       });
@@ -507,10 +546,26 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       }
       const statusCheckedAtChanged = statusCheckedAt !== prevState.statusCheckedAt;
 
+      // The raw fs-write stamp advances independently of git status (it's the
+      // whole point of the signal), so a snapshot that's otherwise value-equal
+      // still needs to land in the side map — which is why it's applied even on
+      // the snapshotsEqual fast path below.
+      let workingTreeChangedAtById = prevState.workingTreeChangedAtById;
+      if (
+        merged.workingTreeChangedAt !== undefined &&
+        workingTreeChangedAtById.get(state.id) !== merged.workingTreeChangedAt
+      ) {
+        workingTreeChangedAtById = new Map(workingTreeChangedAtById);
+        workingTreeChangedAtById.set(state.id, merged.workingTreeChangedAt);
+      }
+      const workingTreeChangedAtChanged =
+        workingTreeChangedAtById !== prevState.workingTreeChangedAtById;
+
       if (existing && snapshotsEqual(existing, merged)) {
         set({
           version,
           ...(statusCheckedAtChanged ? { statusCheckedAt } : {}),
+          ...(workingTreeChangedAtChanged ? { workingTreeChangedAtById } : {}),
           ...(tombstonesChanged ? { tombstones } : {}),
         });
         return;
@@ -521,6 +576,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         worktrees: next,
         version,
         ...(statusCheckedAtChanged ? { statusCheckedAt } : {}),
+        ...(workingTreeChangedAtChanged ? { workingTreeChangedAtById } : {}),
         ...(tombstonesChanged ? { tombstones } : {}),
       });
     },
@@ -589,6 +645,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
 
       const hadWorktree = prevState.worktrees.has(worktreeId);
       const hadStatusCheckedAt = prevState.statusCheckedAt.has(worktreeId);
+      const hadWorkingTreeChangedAt = prevState.workingTreeChangedAtById.has(worktreeId);
       const hadDeletingId = prevState.deletingIds.has(worktreeId);
       const hadDeleteError = prevState.deleteErrors.has(worktreeId);
       const hadDeleteErrorArgs = prevState.deleteErrorArgs.has(worktreeId);
@@ -602,6 +659,10 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         ? new Map(prevState.statusCheckedAt)
         : prevState.statusCheckedAt;
       if (hadStatusCheckedAt) nextStatusCheckedAt.delete(worktreeId);
+      const nextWorkingTreeChangedAt = hadWorkingTreeChangedAt
+        ? new Map(prevState.workingTreeChangedAtById)
+        : prevState.workingTreeChangedAtById;
+      if (hadWorkingTreeChangedAt) nextWorkingTreeChangedAt.delete(worktreeId);
       const nextDeletingIds = hadDeletingId
         ? new Set(prevState.deletingIds)
         : prevState.deletingIds;
@@ -637,6 +698,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       set({
         worktrees: nextWorktrees,
         statusCheckedAt: nextStatusCheckedAt,
+        workingTreeChangedAtById: nextWorkingTreeChangedAt,
         deletingIds: nextDeletingIds,
         deleteErrors: nextDeleteErrors,
         deleteErrorArgs: nextDeleteErrorArgs,
@@ -646,6 +708,19 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         version,
         tombstones,
       });
+
+      if (hadWorktree) {
+        // The worktree is authoritatively gone (#11344): drop its restore
+        // bookkeeping so a snapshot from a since-superseded delete can't leak or
+        // replay. Do NOT touch the worktree's panels here — the deleted-worktree
+        // ghost row (#11232) deliberately leaves surviving panels alive (their
+        // agent processes keep running) until the user acts or the auto-cleanup
+        // TTL trashes them.
+        discardTerminalRestores(
+          worktreeId,
+          outboxEntries.map((entry) => entry.mutationId)
+        );
+      }
     },
 
     startDelete(worktreeId: string, options: WorktreeDeleteOptions) {
@@ -1136,6 +1211,50 @@ function mintMutationId(): string {
 }
 
 /**
+ * Terminals closed ahead of a `git worktree remove`, held by `mutationId` so
+ * they can be relaunched if the delete is ultimately abandoned (#11344). Keyed
+ * by mutationId — not worktreeId — so the snapshot survives the outbox retry
+ * loop: a connectivity or generic failure leaves the delete `pending` and
+ * replays `runDeleteAsync`, but the replay finds no live terminals to snapshot
+ * (they're already dead), so the ORIGINAL capture must persist here until the
+ * delete either succeeds (entry discarded) or is definitively abandoned (entry
+ * consumed to restore). In-memory only: a host crash mid-delete loses the
+ * snapshot, which is acceptable — the PTYs died with the host regardless.
+ */
+const pendingTerminalRestores = new Map<string, WorktreeTerminalRestoreSnapshot[]>();
+
+/**
+ * In-flight relaunch per worktree. A relaunch is a sequence of async `addPanel`
+ * spawns; a fresh `runDeleteAsync` for the same worktree awaits this before
+ * closing terminals, so a rapid retry can't interleave its close with spawns
+ * still in flight (which would strand panels against the git remove or leak them
+ * onto a deleted worktree).
+ */
+const restoreInFlight = new Map<string, Promise<void>>();
+
+/** Relaunch the terminals closed for a delete that has been definitively
+ *  abandoned (won't be auto-retried), then drop the snapshot. No-op when the
+ *  delete closed no terminals or a prior branch already consumed it. Tracks the
+ *  relaunch promise per worktree so a concurrent delete can await it. */
+function consumeTerminalRestore(worktreeId: string, mutationId: string): void {
+  const snapshot = pendingTerminalRestores.get(mutationId);
+  if (!snapshot) return;
+  pendingTerminalRestores.delete(mutationId);
+  const done = restoreClosedTerminals(snapshot).finally(() => {
+    if (restoreInFlight.get(worktreeId) === done) restoreInFlight.delete(worktreeId);
+  });
+  restoreInFlight.set(worktreeId, done);
+}
+
+/** Drop any pending/in-flight restore bookkeeping for a worktree. Called when
+ *  the worktree is authoritatively gone (`applyRemove`) so the module maps don't
+ *  leak a snapshot that will never be replayed. */
+function discardTerminalRestores(worktreeId: string, mutationIds: readonly string[]): void {
+  for (const mutationId of mutationIds) pendingTerminalRestores.delete(mutationId);
+  restoreInFlight.delete(worktreeId);
+}
+
+/**
  * Fire-and-forget delete async chain. The dialog dismisses immediately after
  * calling `startDelete`; this runs in the background driven by the store, so
  * `get()` / `set()` must never close over component state. The success cleanup
@@ -1161,7 +1280,22 @@ async function runDeleteAsync(
   mutationId: string
 ): Promise<void> {
   try {
+    // A rapid retry after a prior attempt's restore must not start closing
+    // terminals while that restore is still spawning panels (#11344) — wait it
+    // out so this attempt sees the fully-restored set.
+    const inFlightRestore = restoreInFlight.get(worktreeId);
+    if (inFlightRestore) await inFlightRestore;
+
     if (options.closeTerminals) {
+      // Capture BEFORE the destructive close so a close-wait timeout can't lose
+      // the snapshot. Set only on the FIRST attempt that finds live terminals —
+      // a retry replay finds none (already dead) and must not clobber it; a
+      // later non-empty capture (e.g. the user opened new terminals mid-retry)
+      // must not either.
+      const snapshot = captureWorktreeTerminalSnapshot(worktreeId);
+      if (snapshot.length > 0 && !pendingTerminalRestores.has(mutationId)) {
+        pendingTerminalRestores.set(mutationId, snapshot);
+      }
       await closeTerminalsForWorktree(worktreeId);
     }
     // Stop any running dev preview BEFORE `git worktree remove` (#9084). On
@@ -1189,11 +1323,13 @@ async function runDeleteAsync(
         transient: true,
       });
     }
-    // Success: `worktree-removed` will fire `applyRemove`, which clears
-    // `deletingIds` + delete-error maps. The outbox entry is pruned either by
-    // `applyRemove` (success path) or by the next `get-all-states` reply via
-    // `pruneAcknowledgedMutations` (post-crash replay path). Either way, no
-    // post-success bookkeeping is owned here.
+    // Success: the worktree is gone, so the closed terminals stay closed —
+    // discard their restore snapshot. `worktree-removed` will fire
+    // `applyRemove`, which clears `deletingIds` + delete-error maps. The outbox
+    // entry is pruned either by `applyRemove` (success path) or by the next
+    // `get-all-states` reply via `pruneAcknowledgedMutations` (post-crash replay
+    // path). Either way, no post-success bookkeeping is owned here.
+    pendingTerminalRestores.delete(mutationId);
     pruneOutboxEntry(get, set, mutationId);
   } catch (err) {
     const message = formatErrorMessage(err, "Failed to delete worktree");
@@ -1205,6 +1341,10 @@ async function runDeleteAsync(
     // learns the branch was not cleaned up. Without this, the failure is
     // silently swallowed (the original race guard's bug).
     if (!prev.deletingIds.has(worktreeId) && !prev.worktrees.has(worktreeId)) {
+      // The worktree directory is already gone (only the branch delete failed),
+      // so the closed terminals have no home to come back to — drop the snapshot
+      // rather than relaunch them against a deleted worktree.
+      pendingTerminalRestores.delete(mutationId);
       pruneOutboxEntry(get, set, mutationId);
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
@@ -1293,7 +1433,9 @@ function handleDeleteFailure(
 
   if (!entry) {
     // No outbox entry — shouldn't happen since `startDelete` always creates
-    // one, but defensive: still surface the error on the card.
+    // one, but defensive: still surface the error on the card. Nothing will
+    // auto-retry this delete, so bring the closed terminals back (#11344).
+    consumeTerminalRestore(worktreeId, mutationId);
     set({
       deletingIds: nextDeletingIds,
       deleteErrors: nextDeleteErrors,
@@ -1313,6 +1455,12 @@ function handleDeleteFailure(
     retryCount: nextRetryCount,
     lastError: message,
   });
+
+  // Only a `failed` delete is definitively abandoned; a `pending` one will be
+  // replayed (reconnect or generic retry), so relaunching now would flicker the
+  // terminals and re-close them on the next attempt. Restore solely on the
+  // terminal transition (#11344).
+  if (nextStatus === "failed") consumeTerminalRestore(worktreeId, mutationId);
 
   set({
     deletingIds: nextDeletingIds,
@@ -1606,10 +1754,11 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.baseAheadCount === b.baseAheadCount &&
     a.baseBehindCount === b.baseBehindCount &&
     a.baseMatchesUpstream === b.baseMatchesUpstream &&
-    // lastGitStatusCheckedAt is deliberately NOT compared (like `timestamp`):
-    // it advances on every completed poll, so comparing it here would force a
-    // new worktrees Map identity per quiet tick. Freshness lives in the
-    // store's `statusCheckedAt` side map instead.
+    // lastGitStatusCheckedAt and workingTreeChangedAt are deliberately NOT
+    // compared (like `timestamp`): both advance on events that change nothing
+    // else in the snapshot, so comparing either here would force a new
+    // worktrees Map identity per quiet tick. They live in the store's
+    // `statusCheckedAt` / `workingTreeChangedAtById` side maps instead.
     a.lastFetchedAt === b.lastFetchedAt &&
     a.fetchAuthFailed === b.fetchAuthFailed &&
     a.fetchNetworkFailed === b.fetchNetworkFailed &&
@@ -1624,6 +1773,7 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.hasResumeCommand === b.hasResumeCommand &&
     a.hasTeardownCommand === b.hasTeardownCommand &&
     a.resourceConnectCommand === b.resourceConnectCommand &&
+    a.isExternal === b.isExternal &&
     a.isWslPath === b.isWslPath &&
     a.wslDistro === b.wslDistro &&
     a.wslPosixPath === b.wslPosixPath &&

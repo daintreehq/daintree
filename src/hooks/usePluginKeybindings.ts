@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { keybindingService } from "@/services/KeybindingService";
 import { KEYBINDING_PRIORITY } from "@/services/defaultKeybindings";
-import type { KeyScope } from "@/services/keybindingUtils";
 import type { PluginKeybindingDescriptor } from "@shared/types/plugin";
 
 /**
@@ -39,7 +38,7 @@ export function usePluginKeybindings(): void {
         keybindingService.registerBinding({
           actionId: item.actionId,
           combo: item.combo,
-          scope: (item.scope as KeyScope | undefined) ?? "global",
+          scope: item.scope ?? "global",
           priority: KEYBINDING_PRIORITY.PLUGIN,
           when: item.when,
           description: item.description,

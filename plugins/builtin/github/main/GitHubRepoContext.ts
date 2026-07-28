@@ -38,6 +38,9 @@ export async function getRepoContext(cwd: string): Promise<RepoContext | null> {
     const gitService = new GitService(cwd);
 
     let fetchUrl: string | null = null;
+    // Set once we know the project named a remote, so a lookup miss below
+    // stays a miss instead of quietly resolving against origin (#11408).
+    let remoteWasConfigured = false;
 
     try {
       const { projectStore } = await import("../../../../electron/services/ProjectStore.js");
@@ -47,6 +50,7 @@ export async function getRepoContext(cwd: string): Promise<RepoContext | null> {
         const settings = await projectStore.getProjectSettings(project.id);
         const selectedRemote = settings.forgeRemote ?? settings.githubRemote;
         if (selectedRemote) {
+          remoteWasConfigured = true;
           const remotes = await gitService.listRemotes(cwd);
           const match = remotes.find((r) => r.name === selectedRemote);
           if (match?.fetchUrl) {
@@ -58,7 +62,7 @@ export async function getRepoContext(cwd: string): Promise<RepoContext | null> {
       // Fall through to default origin lookup
     }
 
-    if (!fetchUrl) {
+    if (!fetchUrl && !remoteWasConfigured) {
       fetchUrl = await gitService.getRemoteUrl(cwd);
     }
 

@@ -1,12 +1,19 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { StorageValue } from "zustand/middleware";
 import type {
   ToolbarPreferences,
   ToolbarButtonId,
   AnyToolbarButtonId,
+  PluginToolbarButtonId,
   ToolbarPinnedState,
 } from "@/../../shared/types/toolbar";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import {
+  mergeRecordByWriterDelta,
+  pickFieldByWriterDelta,
+  type PersistWriteMergeContext,
+} from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { BUILT_IN_AGENT_IDS, LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 
@@ -21,6 +28,7 @@ const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
 const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "voice-recording",
   "forge-stats",
+  "plugin-tray",
   "notification-center",
   "copy-tree",
   "resume-sessions",
@@ -83,6 +91,126 @@ function mergeButtonList(
   return sanitizeButtonList(result);
 }
 
+/**
+ * The exact subset persisted by `partialize` (note: the launcher's `defaultAgent`
+ * is deliberately not persisted). The write merge (#11351) reconciles against
+ * this shape, not the full runtime state.
+ */
+type ToolbarPreferencesPersistedState = {
+  layout: ToolbarPreferences["layout"];
+  launcher: Pick<ToolbarPreferences["launcher"], "alwaysShowDevServer" | "defaultSelection">;
+};
+
+function asButtonList(value: unknown): AnyToolbarButtonId[] | undefined {
+  return Array.isArray(value)
+    ? value.filter((id): id is AnyToolbarButtonId => typeof id === "string")
+    : undefined;
+}
+
+function normalizePinnedButtons(value: unknown): ToolbarPinnedState {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
+  // Keyed by plain string then returned as ToolbarPinnedState
+  // (Partial<Record<AnyToolbarButtonId, boolean>>) — a total string→boolean map
+  // is assignable to it, so no per-key assertion is needed.
+  const result: Record<string, boolean> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === "boolean") result[key] = entry;
+  }
+  return result;
+}
+
+/**
+ * Coerce a persisted (or in-memory) snapshot into the canonical persisted shape.
+ * Button lists are only deduped/fixed-stripped via `sanitizeButtonList` (NOT
+ * `mergeButtonList`): the reconciler takes the writer's own list verbatim rather
+ * than diffing it, so there's no need to re-materialize defaults — and doing so
+ * would duplicate a button the user moved across sides. A null/malformed blob
+ * maps to defaults (issue #11351).
+ */
+function toToolbarPersisted(
+  state: Partial<ToolbarPreferencesState> | null | undefined
+): ToolbarPreferencesPersistedState {
+  const layout = state?.layout;
+  const launcher = state?.launcher;
+  return {
+    layout: {
+      leftButtons: sanitizeButtonList(asButtonList(layout?.leftButtons) ?? DEFAULT_LEFT_BUTTONS),
+      rightButtons: sanitizeButtonList(asButtonList(layout?.rightButtons) ?? DEFAULT_RIGHT_BUTTONS),
+      pinnedButtons: normalizePinnedButtons(layout?.pinnedButtons),
+    },
+    launcher: {
+      alwaysShowDevServer:
+        typeof launcher?.alwaysShowDevServer === "boolean" ? launcher.alwaysShowDevServer : false,
+      defaultSelection: launcher?.defaultSelection,
+    },
+  };
+}
+
+/**
+ * Baseline-aware three-way merge for toolbar-preferences writes across project
+ * views (issue #11351). `pinnedButtons` merges per button id so a stale view
+ * neither drops nor resurrects a sibling's plugin pin/hide; launcher scalars
+ * defer to a sibling's on-disk value unless this writer changed them. Button
+ * orderings are the writer's own arrangement — two divergent orders can't be
+ * merged, so they're taken verbatim (last-writer-wins).
+ *
+ * Migration coexistence: `onDisk` is read raw (no `migrate`), so the reconciler
+ * must never diff against a foreign schema version — the 11-step migrate chain
+ * reshapes the persisted blob (e.g. v7 `hiddenButtons` array → v8 `pinnedButtons`
+ * map, v10 `github-stats` → `forge-stats`). Two guards cover the app-upgrade
+ * window: a foreign on-disk version skips the merge outright; a foreign
+ * *baseline* version (this writer's first post-migrate write, before any user
+ * edit) defers wholesale to the sibling's already-current disk value rather than
+ * mistaking the migration for an edit.
+ */
+function mergeToolbarPreferencesPersistedWrite({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<ToolbarPreferencesPersistedState>): StorageValue<ToolbarPreferencesPersistedState> {
+  // Disk absent, or disk is a foreign (unmigrated) schema version we can't safely
+  // diff against → take this writer's already-migrated snapshot.
+  if (!onDisk || onDisk.version !== incoming.version) return incoming;
+  const disk = toToolbarPersisted(onDisk.state);
+  const inc = toToolbarPersisted(incoming.state);
+  // This writer's baseline predates a migration: its first post-migrate write
+  // carries no user edit yet, so defer to the sibling's already-current value
+  // instead of reading the migration as an edit. (`migrate` runs only on the
+  // numeric-version branch, so an unversioned baseline is not "foreign".)
+  if (baseline && typeof baseline.version === "number" && baseline.version !== incoming.version) {
+    return { version: incoming.version, state: disk };
+  }
+  const base = toToolbarPersisted(baseline?.state);
+  return {
+    version: incoming.version,
+    state: {
+      layout: {
+        // Take the writer's own ordering verbatim (last-writer-wins) — see the
+        // JSDoc; this also avoids re-materializing a moved default onto both sides.
+        leftButtons: inc.layout.leftButtons,
+        rightButtons: inc.layout.rightButtons,
+        pinnedButtons: mergeRecordByWriterDelta(
+          base.layout.pinnedButtons,
+          inc.layout.pinnedButtons,
+          disk.layout.pinnedButtons
+        ),
+      },
+      launcher: {
+        alwaysShowDevServer: pickFieldByWriterDelta(
+          base.launcher.alwaysShowDevServer,
+          inc.launcher.alwaysShowDevServer,
+          disk.launcher.alwaysShowDevServer
+        ),
+        defaultSelection: pickFieldByWriterDelta(
+          base.launcher.defaultSelection,
+          inc.launcher.defaultSelection,
+          disk.launcher.defaultSelection
+        ),
+      },
+    },
+  };
+}
+
 interface ToolbarPreferencesState extends ToolbarPreferences {
   setLeftButtons: (buttons: AnyToolbarButtonId[]) => void;
   setRightButtons: (buttons: AnyToolbarButtonId[]) => void;
@@ -94,6 +222,22 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
   ) => void;
   toggleButtonVisibility: (buttonId: AnyToolbarButtonId, side: "left" | "right") => void;
   /**
+   * Promote a plugin contribution to its own top-level toolbar button, or
+   * demote it back to tray-only (#11304).
+   *
+   * Plugin buttons live in the plugin tray by default, so — unlike
+   * `toggleButtonVisibility`, which only ever records a departure-from-visible
+   * as `false` — promotion has to persist an explicit `true`. Demoting deletes
+   * the key rather than writing `false`: both read as tray-only, and an absent
+   * key keeps the map sparse (and lets a legacy pre-#11304 `false` hide entry
+   * clear itself the first time a user toggles that button).
+   *
+   * Ordering arrays are deliberately untouched — a promoted button with no
+   * persisted position appends to the right side in `Toolbar.tsx`, matching
+   * how plugin buttons behaved before the tray landed.
+   */
+  setPluginButtonPromoted: (buttonId: PluginToolbarButtonId, promoted: boolean) => void;
+  /**
    * Prune `pinnedButtons` entries for plugin buttons that are no longer in
    * the loaded plugin set. `pinnedButtons` is renderer-local persisted state
    * with no main-process access, so an uninstalled plugin's stale hide entry
@@ -104,6 +248,8 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
    * hyphens or single tokens, never dots, so `key.includes(".")` cleanly
    * separates the two. No-ops (returns state unchanged) when nothing is
    * stale so the per-snapshot call doesn't churn the persist layer.
+   *
+   * Explicit promotions (`true`, #11304) are exempt — see the filter below.
    */
   sweepStalePluginPinnedButtons: (validIds: string[]) => void;
   setAlwaysShowDevServer: (value: boolean) => void;
@@ -169,11 +315,36 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             layout: { ...state.layout, pinnedButtons: pinned },
           };
         }),
+      setPluginButtonPromoted: (buttonId, promoted) =>
+        set((state) => {
+          const current = state.layout.pinnedButtons[buttonId];
+          if (promoted ? current === true : current === undefined) return state;
+          const pinned: ToolbarPinnedState = { ...state.layout.pinnedButtons };
+          if (promoted) {
+            pinned[buttonId] = true;
+          } else {
+            delete pinned[buttonId];
+          }
+          return {
+            layout: { ...state.layout, pinnedButtons: pinned },
+          };
+        }),
       sweepStalePluginPinnedButtons: (validIds) =>
         set((state) => {
           const validSet = new Set(validIds);
           const staleKeys = Object.keys(state.layout.pinnedButtons).filter(
-            (key) => key.includes(".") && !validSet.has(key)
+            (key) =>
+              key.includes(".") &&
+              !validSet.has(key) &&
+              // Never reclaim an explicit promotion (#11304). A `complete`
+              // broadcast means "a plugin unloaded", not "a plugin was
+              // uninstalled" — `unloadPlugin` also runs for an update and for
+              // disable/re-enable, so sweeping promotions here would silently
+              // undo the user's placement every time a plugin updates. A
+              // promotion left behind by a genuine uninstall is inert (no
+              // registry entry means nothing renders) and restores the user's
+              // choice if they reinstall.
+              state.layout.pinnedButtons[key as AnyToolbarButtonId] !== true
           );
           if (staleKeys.length === 0) return state;
           const pinned: ToolbarPinnedState = { ...state.layout.pinnedButtons };
@@ -201,13 +372,14 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     {
       name: "daintree-toolbar-preferences",
       version: 11,
-      storage: createSafeJSONStorage(),
+      storage: createSafeJSONStorage<ToolbarPreferencesPersistedState>({
+        mergeOnWrite: mergeToolbarPreferencesPersistedWrite,
+      }),
       migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>;
         if (version < 1) {
           const layout = state.layout as
-            | { leftButtons?: string[]; rightButtons?: string[] }
-            | undefined;
+            { leftButtons?: string[]; rightButtons?: string[] } | undefined;
           if (layout?.leftButtons) {
             layout.leftButtons = layout.leftButtons.filter((id) => id !== "dev-server");
           }
@@ -296,8 +468,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           // visibility uses the same tri-state semantics as agent pinning
           // (#7666). Existing hides translate to explicit `false` entries.
           const layout = state.layout as
-            | { hiddenButtons?: unknown; pinnedButtons?: Record<string, boolean> }
-            | undefined;
+            { hiddenButtons?: unknown; pinnedButtons?: Record<string, boolean> } | undefined;
           if (layout) {
             const pinned: Record<string, boolean> = { ...(layout.pinnedButtons ?? {}) };
             const hidden = Array.isArray(layout.hiddenButtons) ? layout.hiddenButtons : [];
@@ -383,8 +554,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           // the repair explicit and matches the per-version migration
           // convention. `pinnedButtons` is a map, so its keys can't duplicate.
           const layout = state.layout as
-            | { leftButtons?: string[]; rightButtons?: string[] }
-            | undefined;
+            { leftButtons?: string[]; rightButtons?: string[] } | undefined;
           const dedupe = (buttons?: string[]) =>
             Array.isArray(buttons) ? Array.from(new Set(buttons)) : buttons;
           if (layout) {

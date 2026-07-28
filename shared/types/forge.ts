@@ -547,9 +547,7 @@ export interface PRSnapshot {
  *     cache); the caller must run its full revalidation as if no probe existed.
  */
 export type PRListProbeResult =
-  | { kind: "unchanged" }
-  | { kind: "changed"; changed: PRSnapshot[] }
-  | { kind: "fallback" };
+  { kind: "unchanged" } | { kind: "changed"; changed: PRSnapshot[] } | { kind: "fallback" };
 
 /**
  * Optional multi-key batch lookups. The host's host-side `BatchLoader`

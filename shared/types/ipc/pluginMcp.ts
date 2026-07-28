@@ -110,8 +110,7 @@ export interface PluginMcpListToolsResult {
  * an unknown server rather than throwing.
  */
 export type PluginMcpGetFullSchemaResult =
-  | { found: true; tool: PluginMcpFullTool }
-  | { found: false };
+  { found: true; tool: PluginMcpFullTool } | { found: false };
 
 /**
  * Input to `plugin-mcp:call-tool`. Identifies one supervised server plus the

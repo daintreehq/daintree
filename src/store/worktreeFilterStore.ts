@@ -1,11 +1,16 @@
 import { create, useStore } from "zustand";
 import { persist } from "zustand/middleware";
+import type { StorageValue } from "zustand/middleware";
 import {
   createSafeJSONStorage,
   createDebouncedSafeJSONStorage,
   readLocalStorageItemSafely,
   safeJSONParse,
 } from "./persistence/safeStorage";
+import {
+  pickFieldByWriterDelta,
+  type PersistWriteMergeContext,
+} from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import type { QuickStateFilter } from "@/lib/worktreeFilters";
 
@@ -294,6 +299,85 @@ function loadLegacySeedForProject(): Partial<ProjectPersistedShape> {
 
 const _legacySeed = loadLegacySeedForProject();
 
+const GLOBAL_PREFS_PERSISTED_DEFAULTS: GlobalPersistedShape = {
+  orderBy: "created",
+  groupByType: false,
+  alwaysShowActive: true,
+  alwaysShowWaiting: true,
+  hideMainWorktree: false,
+};
+
+function isOrderBy(value: unknown): value is OrderBy {
+  return value === "recent" || value === "created" || value === "alpha" || value === "manual";
+}
+
+function toGlobalPrefsPersisted(
+  state: Partial<GlobalPrefsState> | null | undefined
+): GlobalPersistedShape {
+  const raw = (state ?? {}) as Record<string, unknown>;
+  const d = GLOBAL_PREFS_PERSISTED_DEFAULTS;
+  return {
+    orderBy: isOrderBy(raw.orderBy) ? raw.orderBy : d.orderBy,
+    groupByType: typeof raw.groupByType === "boolean" ? raw.groupByType : d.groupByType,
+    alwaysShowActive:
+      typeof raw.alwaysShowActive === "boolean" ? raw.alwaysShowActive : d.alwaysShowActive,
+    alwaysShowWaiting:
+      typeof raw.alwaysShowWaiting === "boolean" ? raw.alwaysShowWaiting : d.alwaysShowWaiting,
+    hideMainWorktree:
+      typeof raw.hideMainWorktree === "boolean" ? raw.hideMainWorktree : d.hideMainWorktree,
+  };
+}
+
+/**
+ * Baseline-aware three-way merge for the GLOBAL worktree-filter prefs across
+ * project views (issue #11351). These five fields share one literal key
+ * (`daintree-worktree-filters`) and are set independently, so each defers to a
+ * sibling's on-disk value unless this writer changed it. The per-project store
+ * (`_projectStore`) has its own reconciler below — its key embeds the project id,
+ * so it's immune to cross-project clobber, but two windows on the same project
+ * still share it. After merging, we reapply the `merge()`-time invariant that
+ * `manual` order is invalid while grouping (a cross-view merge could otherwise
+ * recombine them).
+ */
+function mergeGlobalPrefsPersistedWrite({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<GlobalPersistedShape>): StorageValue<GlobalPersistedShape> {
+  if (!onDisk || onDisk.version !== incoming.version) return incoming;
+  const disk = toGlobalPrefsPersisted(onDisk.state);
+  const inc = toGlobalPrefsPersisted(incoming.state);
+  if (baseline && typeof baseline.version === "number" && baseline.version !== incoming.version) {
+    return { version: incoming.version, state: disk };
+  }
+  const base = toGlobalPrefsPersisted(baseline?.state);
+  const groupByType = pickFieldByWriterDelta(base.groupByType, inc.groupByType, disk.groupByType);
+  const rawOrderBy = pickFieldByWriterDelta(base.orderBy, inc.orderBy, disk.orderBy);
+  const orderBy: OrderBy = groupByType && rawOrderBy === "manual" ? "created" : rawOrderBy;
+  return {
+    version: incoming.version,
+    state: {
+      orderBy,
+      groupByType,
+      alwaysShowActive: pickFieldByWriterDelta(
+        base.alwaysShowActive,
+        inc.alwaysShowActive,
+        disk.alwaysShowActive
+      ),
+      alwaysShowWaiting: pickFieldByWriterDelta(
+        base.alwaysShowWaiting,
+        inc.alwaysShowWaiting,
+        disk.alwaysShowWaiting
+      ),
+      hideMainWorktree: pickFieldByWriterDelta(
+        base.hideMainWorktree,
+        inc.hideMainWorktree,
+        disk.hideMainWorktree
+      ),
+    },
+  };
+}
+
 const _globalPrefsStore = create<GlobalPrefsState>()(
   persist(
     (): GlobalPrefsState => ({
@@ -306,7 +390,9 @@ const _globalPrefsStore = create<GlobalPrefsState>()(
     {
       name: GLOBAL_KEY,
       version: 1,
-      storage: createSafeJSONStorage(),
+      storage: createSafeJSONStorage<GlobalPersistedShape>({
+        mergeOnWrite: mergeGlobalPrefsPersistedWrite,
+      }),
       partialize: (state): GlobalPersistedShape => ({
         orderBy: state.orderBy,
         groupByType: state.groupByType,
@@ -348,6 +434,95 @@ const _globalPrefsStore = create<GlobalPrefsState>()(
   )
 );
 
+/**
+ * Coerce a persisted (or baseline) per-project blob to the exact
+ * `ProjectPersistedShape`, substituting the store's defaults for any field with
+ * the wrong runtime type. Mirrors `toGlobalPrefsPersisted`: without it a corrupt
+ * on-disk field (e.g. `statusFilters` stored as a string) would be treated as
+ * "unchanged by this writer" and written straight back on every write, so the
+ * blob never self-heals and the bad value reaches `new Set(...)` at hydration.
+ */
+function toProjectFiltersPersisted(
+  state: Partial<ProjectPersistedShape> | null | undefined
+): ProjectPersistedShape {
+  const raw = (state ?? {}) as Record<string, unknown>;
+  return {
+    query: typeof raw.query === "string" ? raw.query : "",
+    statusFilters: arrayOrUndefined<StatusFilter>(raw.statusFilters) ?? [],
+    typeFilters: arrayOrUndefined<TypeFilter>(raw.typeFilters) ?? [],
+    prIssueFilters: arrayOrUndefined<PrIssueFilter>(raw.prIssueFilters) ?? [],
+    sessionFilters: arrayOrUndefined<SessionFilter>(raw.sessionFilters) ?? [],
+    activityFilters: arrayOrUndefined<ActivityFilter>(raw.activityFilters) ?? [],
+    pinnedWorktrees: arrayOrUndefined<string>(raw.pinnedWorktrees) ?? [],
+    collapsedWorktrees: arrayOrUndefined<string>(raw.collapsedWorktrees) ?? [],
+    manualOrder: arrayOrUndefined<string>(raw.manualOrder) ?? [],
+  };
+}
+
+/**
+ * Baseline-aware three-way merge for the PER-PROJECT worktree-filter state
+ * (issue #11351). Its storage key already embeds the project id
+ * (`daintree-worktree-filters:{projectId}`), so it's immune to CROSS-project
+ * clobber — but two windows showing the SAME project share this key (see
+ * `ProjectViewManager`), and a stale window's write (even the transient
+ * `setLiveQuery` on every keystroke persists this partialized snapshot) would
+ * otherwise wipe a sibling window's pin/filter. Each persisted field defers to a
+ * sibling's on-disk value unless this writer changed it; divergent filter/list
+ * values across two windows can't be element-merged, so it's whole-value
+ * last-writer-wins on a genuine concurrent edit.
+ */
+function mergeProjectFiltersPersistedWrite({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<ProjectPersistedShape>): StorageValue<ProjectPersistedShape> {
+  if (!onDisk || onDisk.version !== incoming.version) return incoming;
+  const disk = toProjectFiltersPersisted(onDisk.state);
+  const inc = toProjectFiltersPersisted(incoming.state);
+  if (baseline && typeof baseline.version === "number" && baseline.version !== incoming.version) {
+    return { version: incoming.version, state: disk };
+  }
+  const base = toProjectFiltersPersisted(baseline?.state);
+  return {
+    version: incoming.version,
+    state: {
+      query: pickFieldByWriterDelta(base.query, inc.query, disk.query),
+      statusFilters: pickFieldByWriterDelta(
+        base.statusFilters,
+        inc.statusFilters,
+        disk.statusFilters
+      ),
+      typeFilters: pickFieldByWriterDelta(base.typeFilters, inc.typeFilters, disk.typeFilters),
+      prIssueFilters: pickFieldByWriterDelta(
+        base.prIssueFilters,
+        inc.prIssueFilters,
+        disk.prIssueFilters
+      ),
+      sessionFilters: pickFieldByWriterDelta(
+        base.sessionFilters,
+        inc.sessionFilters,
+        disk.sessionFilters
+      ),
+      activityFilters: pickFieldByWriterDelta(
+        base.activityFilters,
+        inc.activityFilters,
+        disk.activityFilters
+      ),
+      pinnedWorktrees: pickFieldByWriterDelta(
+        base.pinnedWorktrees,
+        inc.pinnedWorktrees,
+        disk.pinnedWorktrees
+      ),
+      collapsedWorktrees: pickFieldByWriterDelta(
+        base.collapsedWorktrees,
+        inc.collapsedWorktrees,
+        disk.collapsedWorktrees
+      ),
+      manualOrder: pickFieldByWriterDelta(base.manualOrder, inc.manualOrder, disk.manualOrder),
+    },
+  };
+}
+
 const _projectStore = create<ProjectScopedState>()(
   persist(
     (): ProjectScopedState => ({
@@ -367,7 +542,9 @@ const _projectStore = create<ProjectScopedState>()(
     {
       name: PROJECT_KEY,
       version: 2,
-      storage: createDebouncedSafeJSONStorage(300),
+      storage: createDebouncedSafeJSONStorage<ProjectPersistedShape>(300, {
+        mergeOnWrite: mergeProjectFiltersPersistedWrite,
+      }),
       partialize: (state): ProjectPersistedShape => ({
         query: state.query,
         statusFilters: Array.from(state.statusFilters),
@@ -700,8 +877,7 @@ const _mergedApi = {
 };
 
 type SetStatePatch =
-  | Partial<WorktreeFilterStore>
-  | ((state: WorktreeFilterStore) => Partial<WorktreeFilterStore>);
+  Partial<WorktreeFilterStore> | ((state: WorktreeFilterStore) => Partial<WorktreeFilterStore>);
 
 function _routedSetState(update: SetStatePatch): void {
   const patch = typeof update === "function" ? update(_getMergedState()) : update;

@@ -2,41 +2,63 @@ const path = require("path");
 const fs = require("fs");
 const { spawnSync } = require("child_process");
 
+// electron-builder passes `context.arch` as an integer from the `Arch` enum
+// (ia32=0, x64=1, armv7l=2, arm64=3, universal=5).
+const ARCH_ENUM_NAMES = { 0: "ia32", 1: "x64", 2: "armv7l", 3: "arm64" };
+
 /**
- * Validate that better_sqlite3.node has Electron ABI, not Node ABI.
- *
- * better-sqlite3 uses the raw V8/NAN C++ API (not N-API), so the binary is
- * ABI-specific. Whether the binary was downloaded via prebuild-install or
- * compiled from source, a Node-ABI binary will load successfully under Node
- * (which runs afterPack) but crash at Electron runtime with a
- * NODE_MODULE_VERSION mismatch. We exploit this: if dlopen succeeds here
- * (under Node), the binary is wrong; if it fails with an ABI mismatch error,
- * the binary has the correct Electron ABI.
+ * The prebuild arches a package must carry. A macOS universal package merges
+ * both slices, so both darwin prebuilds must be present; otherwise the single
+ * target arch (falling back to the runner arch when electron-builder passes
+ * no arch, e.g. in tests).
  */
-function validateBetterSqliteAbi(nativeBinaryPath) {
-  const testModule = { exports: {} };
-  try {
-    process.dlopen(testModule, nativeBinaryPath);
-    // Loaded under Node.js — this means it was compiled for Node ABI, not Electron
-    throw new Error(
-      `[afterPack] CRITICAL: better_sqlite3.node was compiled for Node.js ABI (MODULE_VERSION ${process.versions.modules}), not Electron. ` +
-        'Run "npm run rebuild" to recompile for Electron. Path: ' +
-        nativeBinaryPath
+function getBetterSqlitePrebuildArches(contextArch) {
+  if (contextArch === 5) return ["x64", "arm64"];
+  const name = ARCH_ENUM_NAMES[contextArch];
+  return [name || process.arch];
+}
+
+/**
+ * Validate better-sqlite3's packaged prebuild. Since v13, better-sqlite3 is an
+ * N-API addon loaded from prebuilds/<platform>-<arch>.node shipped inside the
+ * package — install-time compilation is suppressed while a prebuild exists, so
+ * build/Release/ never contains a binary. N-API is ABI-stable: the same
+ * prebuild loads under Node (which runs afterPack) and Electron, so a
+ * successful dlopen proves the binary is sound — the same polarity as
+ * validateWinJobObjectAbi, and the OPPOSITE of the pre-v13 raw-V8 ABI probe
+ * this replaces. The load probe only runs when the prebuild targets the
+ * runner's own platform and arch; cross-target packages get a presence check.
+ */
+function validateBetterSqlitePrebuilds(betterSqlitePath, electronPlatformName, contextArch) {
+  for (const arch of getBetterSqlitePrebuildArches(contextArch)) {
+    const prebuildPath = path.join(
+      betterSqlitePath,
+      "prebuilds",
+      `${electronPlatformName}-${arch}.node`
     );
-  } catch (err) {
-    const msg = err.message || "";
-    if (msg.includes("compiled for Node.js ABI")) throw err;
-    if (
-      msg.includes("NODE_MODULE_VERSION") ||
-      msg.includes("was compiled against a different Node.js version") ||
-      msg.includes("invalid ELF header") ||
-      msg.includes("not a valid Win32 application")
-    ) {
-      console.log("[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)");
-      return;
+    if (!fs.existsSync(prebuildPath)) {
+      throw new Error(
+        `[afterPack] CRITICAL: better-sqlite3 prebuild not found at ${prebuildPath}. ` +
+          "Database functionality will not work. Check that the packaged prebuild " +
+          "survived the files/asarUnpack configuration."
+      );
     }
-    // Unknown error — warn but don't fail (e.g. missing DLL dependency on Windows)
-    console.warn(`[afterPack] Warning: better-sqlite3 ABI probe inconclusive: ${msg}`);
+    if (electronPlatformName !== process.platform || arch !== process.arch) {
+      console.log(`[afterPack] better-sqlite3 prebuild present (cross-target): ${prebuildPath}`);
+      continue;
+    }
+    const testModule = { exports: {} };
+    try {
+      process.dlopen(testModule, prebuildPath);
+      console.log(`[afterPack] better-sqlite3 load check passed: ${prebuildPath}`);
+    } catch (err) {
+      const msg = err && err.message ? err.message : String(err);
+      throw new Error(
+        `[afterPack] CRITICAL: better-sqlite3 prebuild failed to load: ${msg}. ` +
+          "Database functionality will not work. Path: " +
+          prebuildPath
+      );
+    }
   }
 }
 
@@ -337,17 +359,9 @@ exports.default = async function afterPack(context) {
     );
   }
 
-  const betterSqliteNative = path.join(betterSqlitePath, "build/Release/better_sqlite3.node");
-  if (!fs.existsSync(betterSqliteNative)) {
-    throw new Error(
-      `[afterPack] CRITICAL: better-sqlite3 native binary not found at ${betterSqliteNative}. ` +
-        'Run "npm run rebuild" to build the native module.'
-    );
-  }
+  validateBetterSqlitePrebuilds(betterSqlitePath, electronPlatformName, context.arch);
 
-  validateBetterSqliteAbi(betterSqliteNative);
-
-  console.log(`[afterPack] better-sqlite3 verified: ${betterSqliteNative}`);
+  console.log(`[afterPack] better-sqlite3 verified: ${betterSqlitePath}`);
 
   validateOnnxRuntime(unpackedPath);
 

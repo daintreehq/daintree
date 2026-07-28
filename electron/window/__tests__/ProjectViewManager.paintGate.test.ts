@@ -1034,8 +1034,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     // beforeEach via win.on; we re-fire it directly here.
     const onCalls = win.on.mock.calls;
     const resizeHandler = onCalls.find(([event]) => event === "resize")?.[1] as
-      | (() => void)
-      | undefined;
+      (() => void) | undefined;
     expect(resizeHandler).toBeDefined();
     win.getContentBounds.mockReturnValueOnce({ x: 0, y: 0, width: 1024, height: 768 });
     resizeHandler?.();

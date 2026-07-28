@@ -36,6 +36,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
       getSerializedStateAsync: vi.fn(async () => null),
       getSerializedState: vi.fn(() => null),
     } as unknown as HostContext["ptyManager"],
+    pluginPtyManager: {} as HostContext["pluginPtyManager"],
     processTreeCache: {} as HostContext["processTreeCache"],
     terminalResourceMonitor: {} as HostContext["terminalResourceMonitor"],
     backpressureManager: {

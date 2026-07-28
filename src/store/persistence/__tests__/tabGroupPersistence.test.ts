@@ -52,6 +52,8 @@ const createMockProjectClient = () => ({
   disableInRepoSettings: vi.fn().mockResolvedValue({}),
   checkMissing: vi.fn().mockResolvedValue([]),
   locate: vi.fn().mockResolvedValue(null),
+  previewRelocation: vi.fn().mockResolvedValue({}),
+  applyRelocation: vi.fn().mockResolvedValue({}),
   cloneRepo: vi.fn().mockResolvedValue({ success: true }),
   onCloneProgress: vi.fn().mockReturnValue(() => {}),
   cancelClone: vi.fn().mockResolvedValue(undefined),
@@ -110,7 +112,12 @@ describe("PanelPersistence.saveTabGroups", () => {
       persistence.saveTabGroups(tabGroups, projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(client.setTabGroups).toHaveBeenCalledWith(projectId, [explicitGroup]);
+      expect(client.setTabGroups).toHaveBeenCalledWith(
+        projectId,
+        [explicitGroup],
+        expect.any(Array),
+        expect.any(Array)
+      );
     });
 
     it("persists multiple explicit groups", async () => {
@@ -141,7 +148,9 @@ describe("PanelPersistence.saveTabGroups", () => {
 
       expect(client.setTabGroups).toHaveBeenCalledWith(
         projectId,
-        expect.arrayContaining([group1, group2])
+        expect.arrayContaining([group1, group2]),
+        expect.any(Array),
+        expect.any(Array)
       );
       const savedGroups = client.setTabGroups.mock.calls[0]![1] as TabGroup[];
       expect(savedGroups).toHaveLength(2);
@@ -173,7 +182,12 @@ describe("PanelPersistence.saveTabGroups", () => {
       persistence.saveTabGroups(tabGroups, projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(client.setTabGroups).toHaveBeenCalledWith(projectId, []);
+      expect(client.setTabGroups).toHaveBeenCalledWith(
+        projectId,
+        [],
+        expect.any(Array),
+        expect.any(Array)
+      );
     });
   });
 
@@ -214,7 +228,12 @@ describe("PanelPersistence.saveTabGroups", () => {
 
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(client.setTabGroups).toHaveBeenCalledWith("from-option", expect.any(Array));
+      expect(client.setTabGroups).toHaveBeenCalledWith(
+        "from-option",
+        expect.any(Array),
+        expect.any(Array),
+        expect.any(Array)
+      );
     });
   });
 
@@ -246,7 +265,12 @@ describe("PanelPersistence.saveTabGroups", () => {
       await vi.advanceTimersByTimeAsync(100);
 
       expect(client.setTabGroups).toHaveBeenCalledTimes(1);
-      expect(client.setTabGroups).toHaveBeenCalledWith(projectId, [group1]);
+      expect(client.setTabGroups).toHaveBeenCalledWith(
+        projectId,
+        [group1],
+        expect.any(Array),
+        expect.any(Array)
+      );
     });
 
     it("skips redundant tab group persist when payload is unchanged", async () => {
@@ -307,7 +331,7 @@ describe("PanelPersistence.saveTabGroups", () => {
       expect(client.setTabGroups).not.toHaveBeenCalled();
 
       persistence.flush();
-      await vi.runAllTicks();
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(client.setTabGroups).toHaveBeenCalledTimes(1);
     });
@@ -350,6 +374,50 @@ describe("PanelPersistence.saveTabGroups", () => {
 
       const savedGroups = client.setTabGroups.mock.calls[0]![1] as TabGroup[];
       expect(savedGroups[0]!.worktreeId).toBeUndefined();
+    });
+  });
+
+  describe("layout merge delta (#11350)", () => {
+    const g = (id: string, panelIds: string[]): TabGroup => ({
+      id,
+      panelIds,
+      activeTabId: panelIds[0]!,
+      location: "grid",
+    });
+
+    it("emits a deleted group in removedIds once the baseline is primed", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      persistence.primeTabGroups(projectId, [g("g1", ["a", "b"]), g("g2", ["c", "d"])]);
+
+      // User dissolves g2, leaving only g1.
+      persistence.saveTabGroups(new Map([["g1", g("g1", ["a", "b"])]]), projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , changedIds, removedIds] = client.setTabGroups.mock.calls[0]!;
+      expect(changedIds).toEqual([]);
+      expect(removedIds).toEqual(["g2"]);
+    });
+
+    it("emits a newly added group in changedIds against a primed baseline", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      persistence.primeTabGroups(projectId, [g("g1", ["a", "b"])]);
+
+      persistence.saveTabGroups(
+        new Map([
+          ["g1", g("g1", ["a", "b"])],
+          ["g2", g("g2", ["c", "d"])],
+        ]),
+        projectId
+      );
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , changedIds, removedIds] = client.setTabGroups.mock.calls[0]!;
+      expect(changedIds).toEqual(["g2"]);
+      expect(removedIds).toEqual([]);
     });
   });
 });

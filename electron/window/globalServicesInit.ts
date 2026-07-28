@@ -117,10 +117,28 @@ async function evictStaleSessionFiles(): Promise<void> {
       }
     }
 
+    // If any project's state was unreadable this session, `knownIds` is
+    // incomplete — it's missing every terminal id belonging to that project.
+    // A .restore file carries only a bare terminal id (no project reference),
+    // so the missing ids can't be attributed back to the affected project;
+    // the orphan pass can't tell "this project's scrollback" from a genuine
+    // orphan. Fail closed: skip the orphan-eviction pass entirely this cycle
+    // (pass knownIds: undefined) rather than delete recoverable scrollback.
+    // TTL and max-size passes don't depend on cross-project attribution, so
+    // they keep running as backstops.
+    const orphanSweepUnsafe = allProjects.some((p) =>
+      projectStore.wasStateUnreadableThisSession(p.id)
+    );
+    if (orphanSweepUnsafe) {
+      console.warn(
+        "[MAIN] Session eviction: skipping orphan pass — at least one project's state was unreadable or quarantined this session; retaining all .restore files to avoid deleting recoverable scrollback (TTL and size-cap passes still active)"
+      );
+    }
+
     const result = await evictSessionFiles({
       ttlMs: SESSION_EVICTION_TTL_MS,
       maxBytes: SESSION_EVICTION_MAX_BYTES,
-      knownIds,
+      knownIds: orphanSweepUnsafe ? undefined : knownIds,
     });
 
     if (result.deleted > 0) {
@@ -323,8 +341,10 @@ export async function initGlobalServices(
               // space instead of waiting for the next boot or idle sweep
               // (#9537). This callback runs synchronously on the event loop, so
               // every reclamation routine is fire-and-forget and must never
-              // block or throw. The scratch sweep checks `getWritesSuppressed()`
-              // internally, so it deletes directories without writing the DB.
+              // block or throw. The scratch sweep reclaims mature tombstones
+              // immediately (its hard-delete DB write is what `getWritesSuppressed()`
+              // defers); newly-stale scratches are tombstoned now and reaped on a
+              // later sweep once past the grace window (#11353).
               runScratchCleanup().catch((err) => {
                 logError("[DiskSpaceMonitor] scratch cleanup threw", err);
               });
@@ -869,9 +889,13 @@ export async function initGlobalServices(
       setPluginDirResolver((pluginId) => pluginService.getPluginDir(pluginId));
       // macOS: drain any `.dntr` paths queued during cold launch (Finder
       // double-click / "Open With") and take over live open-file events now
-      // that PluginService can install them. Fire-and-forget — install runs
-      // concurrently with the remaining deferred tasks. #9293
-      void activateOpenFileInstaller(pluginService);
+      // that PluginService can install an approved archive. Each path is queued
+      // for the install-confirmation prompt, never installed outright (#11280).
+      // Fire-and-forget — previewing runs concurrently with the remaining
+      // deferred tasks. #9293
+      void activateOpenFileInstaller().catch((err) =>
+        console.error("[MAIN] Failed to activate the open-file archive queue:", err)
+      );
       // Fire-and-forget — activations fan out in parallel and report errors
       // via the per-plugin `loadError` provenance record. Awaiting here would
       // delay subsequent deferred tasks behind the slowest plugin's activate().

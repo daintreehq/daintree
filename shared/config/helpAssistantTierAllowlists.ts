@@ -49,6 +49,9 @@ export const WORKBENCH_TIER_TOOLS = [
   "agent.listToolbar",
   "agent.listAvailable",
   "agentSessionHistory.list",
+  // Read-only bookmark metadata (#11288) — same workbench tier as the history
+  // listing. Bookmark mutation actions are intentionally NOT tier-exposed.
+  "session.bookmarks.list",
 
   "agentSettings.get",
   "keybinding.getOverrides",

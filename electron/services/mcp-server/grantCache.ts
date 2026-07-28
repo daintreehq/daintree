@@ -28,8 +28,7 @@ export interface GrantEntry {
 }
 
 export type GrantCheckResult =
-  | { granted: true; issuedAt: number; expiresAt: number }
-  | { granted: false };
+  { granted: true; issuedAt: number; expiresAt: number } | { granted: false };
 
 /**
  * A native session-scoped automation grant (#10648). Unlike a {@link GrantEntry}

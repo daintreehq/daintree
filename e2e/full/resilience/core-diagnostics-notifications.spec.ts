@@ -3,8 +3,6 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
-const mod = process.platform === "darwin" ? "Meta" : "Control";
-
 let ctx: AppContext;
 
 test.describe.serial("Core: Diagnostics & Notifications", () => {
@@ -22,7 +20,7 @@ test.describe.serial("Core: Diagnostics & Notifications", () => {
     test("opens via keyboard shortcut with Problems tab active", async () => {
       const { window } = ctx;
 
-      await window.keyboard.press(`${mod}+Shift+D`);
+      await window.keyboard.press("Control+Shift+J");
 
       const dock = window.locator(SEL.diagnostics.dock);
       await expect(dock).toBeVisible({ timeout: T_MEDIUM });
@@ -164,7 +162,7 @@ test.describe.serial("Core: Diagnostics & Notifications", () => {
       const { window } = ctx;
 
       await test.step("Reopen diagnostics dock via toggle shortcut", async () => {
-        await window.keyboard.press(`${mod}+Shift+D`);
+        await window.keyboard.press("Control+Shift+J");
 
         await expect(window.locator(SEL.diagnostics.dock)).toBeVisible({
           timeout: T_MEDIUM,

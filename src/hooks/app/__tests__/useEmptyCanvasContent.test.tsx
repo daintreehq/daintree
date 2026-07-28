@@ -3,7 +3,15 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, renderHook } from "@testing-library/react";
 
 const h = vi.hoisted(() => ({
-  projectState: { currentProject: null as { id: string; name: string; path: string } | null },
+  projectState: {
+    currentProject: null as {
+      id: string;
+      name: string;
+      path: string;
+      emoji?: string;
+      gitBacked?: boolean;
+    } | null,
+  },
   scratchState: {
     currentScratch: null as { id: string; name: string; path: string } | null,
   },
@@ -116,6 +124,61 @@ describe("useEmptyCanvasContent", () => {
 
       expect(result.emptyContent).toBeUndefined();
       expect(result.workspaceId).toBe(project.id);
+    });
+  });
+
+  describe("with a project opened without git (#11405)", () => {
+    const lightweight = {
+      id: "project-2",
+      name: "downloads",
+      path: "/Users/someone/Downloads",
+      emoji: "🌳",
+      gitBacked: false,
+    };
+
+    beforeEach(() => {
+      h.projectState.currentProject = lightweight;
+    });
+
+    // Deferring would hand the grid `hasLaunchTarget: ctx.hasActiveWorktree`,
+    // and there is no worktree — so the folder the user just opened would offer
+    // no way to start an agent in it.
+    it("supplies the launcher instead of deferring to worktree-derived context", () => {
+      render(<>{renderContent().current.emptyContent}</>);
+
+      expect(emptyStateProps().hasLaunchTarget).toBe(true);
+    });
+
+    it("launches into the folder itself", () => {
+      render(<>{renderContent().current.emptyContent}</>);
+
+      const props = emptyStateProps();
+      expect(props.defaultCwd).toBe(lightweight.path);
+      expect(props.activeWorktreePath).toBe(lightweight.path);
+      expect(props.workspaceName).toBe(lightweight.name);
+    });
+
+    it("keeps the project affordances a scratch lacks", () => {
+      render(<>{renderContent().current.emptyContent}</>);
+
+      // It is a real project row, so settings and recipes apply — unlike a
+      // scratch, which has neither.
+      expect(emptyStateProps().hasProjectContext).toBe(true);
+    });
+
+    it("claims no worktrees and no git-derived pulse", () => {
+      render(<>{renderContent().current.emptyContent}</>);
+
+      const props = emptyStateProps();
+      expect(props.hasWorktrees).toBe(false);
+      expect(props.isWorktreeInitialized).toBe(false);
+      expect(props.showProjectPulse).toBe(false);
+    });
+
+    it("still defers for a git-backed project", () => {
+      h.projectState.currentProject = { ...lightweight, gitBacked: undefined };
+
+      expect(renderContent().current.emptyContent).toBeUndefined();
     });
   });
 

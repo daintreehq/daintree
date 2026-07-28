@@ -1015,6 +1015,35 @@ describe("worktree action hardening", () => {
     );
   });
 
+  it("forwards scoped folder paths and glob patterns as independent options", async () => {
+    const actions = buildRegistry(registerWorktreeActions);
+    const copyTree = actions.get("worktree.copyTree")!();
+    mocks.copyTreeClient.generateAndCopyFile.mockResolvedValueOnce({ fileCount: 2 });
+
+    await copyTree.run({ scopePaths: ["src/panels"], includePaths: ["**/*.ts"] }, {
+      activeWorktreeId: "wt-1",
+    } as never);
+
+    const options = mocks.copyTreeClient.generateAndCopyFile.mock.calls[0]?.[1];
+    // Scope is a literal walk root, filter is a pattern — folding one into the
+    // other is what made folder copies ignore the project's ignore rules.
+    expect(options.scopePaths).toEqual(["src/panels"]);
+    expect(options.includePaths).toEqual(["**/*.ts"]);
+  });
+
+  it.each([
+    ["an empty list", []],
+    ["a blank entry", [""]],
+  ])("rejects %s instead of copying the whole worktree", async (_label, scopePaths) => {
+    const actions = buildRegistry(registerWorktreeActions);
+    const copyTree = actions.get("worktree.copyTree")!();
+
+    // Both would resolve to the worktree root. Silently widening a folder copy
+    // to the entire worktree is worse than refusing the request.
+    expect(() => copyTree.argsSchema!.parse({ scopePaths })).toThrow();
+    expect(mocks.copyTreeClient.generateAndCopyFile).not.toHaveBeenCalled();
+  });
+
   it("returns structured metadata for successful copy-tree requests", async () => {
     const actions = buildRegistry(registerWorktreeActions);
     const copyTree = actions.get("worktree.copyTree")!();

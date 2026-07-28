@@ -15,11 +15,22 @@ export const projects = sqliteTable(
     pinned: integer("pinned").notNull().default(0),
     frecencyScore: real("frecency_score").notNull().default(3.0),
     lastAccessedAt: integer("last_accessed_at").notNull().default(0),
+    // Epoch ms up to which the user has seen this project's completed agents:
+    // stamped after the project has been current in a focused window for a
+    // 2s dwell. Completions with a later lastStateChange are "unacknowledged"
+    // and hold the project in the switcher's Needs attention band — there is
+    // deliberately no time-based expiry, so work finished while the user was
+    // away stays surfaced until actually seen. Null = nothing ever seen.
+    lastCompletionSeenAt: integer("last_completion_seen_at"),
     // Timestamp (ms) the background-idle auto-close swept this project to `closed`.
     // Null for projects closed manually or still open; drives the distinct
     // "Suspended to free memory" label in the project switcher. Cleared when the
     // project is reopened (`setCurrentProject`).
     autoParkedAt: integer("auto_parked_at"),
+    // False for a folder adopted without git (issue #11405). Null for every
+    // legacy row and every repository-backed project — absence means
+    // git-backed, so no backfill is needed.
+    gitBacked: integer("git_backed", { mode: "boolean" }),
     // Last-known repository counts (issue #11078), so switch-back can seed the
     // toolbar pills from real numbers instead of em-dashes that resize once a
     // poll lands. All nullable: absent until the project's first clean stats
@@ -55,10 +66,12 @@ export const scratches = sqliteTable("scratches", {
   name: text("name").notNull(),
   createdAt: integer("created_at").notNull(),
   lastOpened: integer("last_opened").notNull(),
-  // Set when the auto-cleanup sweep tombstones a stale scratch. The DB row is
-  // retained as crash-safe state so a partially-deleted directory can be
-  // re-attempted on the next startup; rows with `deletedAt` set are filtered
-  // out of all renderer-facing queries.
+  // Millisecond timestamp set when the auto-cleanup sweep tombstones a stale
+  // scratch. The DB row is retained as crash-safe state: the directory is only
+  // physically reaped on a later sweep once this timestamp is older than the
+  // grace window (SCRATCH_CLEANUP_GRACE_MS), which also covers re-attempting a
+  // partially-deleted directory. Rows with `deletedAt` set are filtered out of
+  // all renderer-facing queries.
   deletedAt: integer("deleted_at"),
 });
 

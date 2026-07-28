@@ -43,16 +43,10 @@ describe("afterPack", () => {
       stderr: Buffer.from(""),
     });
 
-    // Default dlopen branches by binary: better-sqlite3 (NAN/V8-raw) throwing an
-    // ABI mismatch under Node means the binary is correctly built for Electron,
-    // so the better-sqlite3 probe passes. win-job-object (N-API, ABI-stable)
-    // must load successfully under Node, so its probe expects no throw.
-    process.dlopen = ((_module: unknown, filename: string) => {
-      if (filename.includes("win_job_object")) return;
-      throw new Error(
-        "was compiled against a different Node.js version using NODE_MODULE_VERSION 131"
-      );
-    }) as typeof process.dlopen;
+    // Both load probes (win-job-object and better-sqlite3's packaged prebuild)
+    // are N-API addons — ABI-stable, so a successful dlopen under Node is the
+    // passing case. Default: everything loads cleanly.
+    process.dlopen = (() => {}) as typeof process.dlopen;
 
     const originalRequire = Module.prototype.require;
 
@@ -96,7 +90,7 @@ describe("afterPack", () => {
         path.join(unpackedBase, "node_modules/better-sqlite3")
       );
       expect(mockExistsSync).toHaveBeenCalledWith(
-        path.join(unpackedBase, "node_modules/better-sqlite3/build/Release/better_sqlite3.node")
+        path.join(unpackedBase, `node_modules/better-sqlite3/prebuilds/darwin-${process.arch}.node`)
       );
     });
 
@@ -152,17 +146,17 @@ describe("afterPack", () => {
       );
     });
 
-    it("should throw when better_sqlite3.node binary is missing", async () => {
+    it("should throw when the better-sqlite3 prebuild is missing", async () => {
       mockExistsSync
         .mockReturnValueOnce(true) // node-pty dir
         .mockReturnValueOnce(true) // pty.node
         .mockReturnValueOnce(true) // posix-pty-reaper supervisor
         .mockReturnValueOnce(false) // Assets.car (macOS icon injection)
         .mockReturnValueOnce(true) // better-sqlite3 dir
-        .mockReturnValueOnce(false); // better_sqlite3.node
+        .mockReturnValueOnce(false); // prebuilds/darwin-<arch>.node
 
       await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
-        /better-sqlite3 native binary not found/
+        /better-sqlite3 prebuild not found/
       );
     });
 
@@ -295,7 +289,7 @@ describe("afterPack", () => {
         path.join(unpackedBase, "node_modules/better-sqlite3")
       );
       expect(mockExistsSync).toHaveBeenCalledWith(
-        path.join(unpackedBase, "node_modules/better-sqlite3/build/Release/better_sqlite3.node")
+        path.join(unpackedBase, `node_modules/better-sqlite3/prebuilds/linux-${process.arch}.node`)
       );
     });
 
@@ -350,115 +344,89 @@ describe("afterPack", () => {
     });
   });
 
-  describe("better-sqlite3 ABI validation", () => {
-    it("should fail when better_sqlite3.node loads under Node (Node-ABI binary)", async () => {
-      mockExistsSync.mockReturnValue(true);
-      process.dlopen = (() => {
-        // Successfully loads — means binary is Node ABI (wrong for Electron)
-      }) as typeof process.dlopen;
+  describe("better-sqlite3 prebuild validation", () => {
+    // The packaged prebuild is probed with dlopen only when it targets the
+    // runner's own platform and arch (N-API polarity: loading successfully
+    // under Node proves the binary is sound). Cross-target packages get a
+    // presence check. Contexts are built from process.platform/process.arch
+    // so these tests are deterministic on any runner.
+    const runnerPlatform = process.platform as "darwin" | "linux" | "win32";
+    const runnerOutDir =
+      runnerPlatform === "darwin"
+        ? "/build/mac"
+        : runnerPlatform === "win32"
+          ? "/build/win"
+          : "/build/linux";
+    const runnerArchEnum = process.arch === "arm64" ? 3 : 1;
 
-      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
-        /compiled for Node\.js ABI/
-      );
-    });
-
-    it("should pass when dlopen throws NODE_MODULE_VERSION mismatch (Electron-ABI binary)", async () => {
-      mockExistsSync.mockReturnValue(true);
-      process.dlopen = (() => {
-        throw new Error(
-          "was compiled against a different Node.js version using NODE_MODULE_VERSION 131"
-        );
-      }) as typeof process.dlopen;
-
-      await afterPack(createContext("linux", "/build/linux"));
-
-      expect(consoleSpy).toHaveBeenCalledWith(
-        "[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)"
-      );
-    });
-
-    it("should pass when dlopen throws invalid ELF header", async () => {
-      mockExistsSync.mockReturnValue(true);
-      process.dlopen = (() => {
-        throw new Error("invalid ELF header");
-      }) as typeof process.dlopen;
-
-      await afterPack(createContext("linux", "/build/linux"));
-
-      expect(consoleSpy).toHaveBeenCalledWith(
-        "[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)"
-      );
-    });
-
-    it("should pass when dlopen throws not a valid Win32 application", async () => {
-      mockExistsSync.mockReturnValue(true);
-      // win-job-object (N-API) still loads; only the better-sqlite3 probe sees
-      // the cross-arch error that proves it was built for Electron.
-      process.dlopen = ((_mod: unknown, filename: string) => {
-        if (filename.includes("win_job_object")) return;
-        throw new Error("not a valid Win32 application");
-      }) as typeof process.dlopen;
-
-      await afterPack(createContext("win32", "/build/win"));
-
-      expect(consoleSpy).toHaveBeenCalledWith(
-        "[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)"
-      );
-    });
-
-    it("should warn when dlopen throws a non-Error object", async () => {
-      mockExistsSync.mockReturnValue(true);
-      process.dlopen = (() => {
-        throw "unexpected string error";
-      }) as typeof process.dlopen;
-
-      await afterPack(createContext("linux", "/build/linux"));
-
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ABI probe inconclusive"));
-    });
-
-    it("should warn but continue on inconclusive probe (e.g. missing DLL)", async () => {
-      mockExistsSync.mockReturnValue(true);
-      // win-job-object loads fine; only the better-sqlite3 probe is inconclusive.
-      process.dlopen = ((_mod: unknown, filename: string) => {
-        if (filename.includes("win_job_object")) return;
-        throw new Error("The specified module could not be found");
-      }) as typeof process.dlopen;
-
-      await afterPack(createContext("win32", "/build/win"));
-
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ABI probe inconclusive"));
-    });
-
-    it("should run ABI validation on all platforms", async () => {
+    it("probes the prebuild when it targets the runner platform and arch", async () => {
       mockExistsSync.mockReturnValue(true);
       const dlopenCalls: string[] = [];
-      process.dlopen = ((_mod: any, path: string) => {
-        dlopenCalls.push(path);
-        if (path.includes("win_job_object")) return; // N-API addon loads under Node
-        throw new Error("NODE_MODULE_VERSION mismatch");
+      process.dlopen = ((_mod: unknown, filename: string) => {
+        dlopenCalls.push(filename);
       }) as typeof process.dlopen;
 
-      for (const platform of ["darwin", "win32", "linux"]) {
-        dlopenCalls.length = 0;
-        await afterPack(
-          createContext(
-            platform,
-            platform === "darwin"
-              ? "/build/mac"
-              : `/build/${platform === "win32" ? "win" : "linux"}`
-          )
-        );
-        // The better-sqlite3 ABI probe runs on every platform.
-        expect(dlopenCalls.some((c) => c.includes("better_sqlite3.node"))).toBe(true);
-        // The win-job-object load probe runs only on Windows.
-        if (platform === "win32") {
-          expect(dlopenCalls.some((c) => c.includes("win_job_object"))).toBe(true);
-          expect(dlopenCalls.length).toBe(2);
-        } else {
-          expect(dlopenCalls.length).toBe(1);
+      await afterPack(createContext(runnerPlatform, runnerOutDir, "Daintree", runnerArchEnum));
+
+      expect(
+        dlopenCalls.some((c) =>
+          c.includes(path.join("prebuilds", `${runnerPlatform}-${process.arch}.node`))
+        )
+      ).toBe(true);
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining("better-sqlite3 load check passed")
+      );
+    });
+
+    it("throws when the runner-native prebuild fails to load", async () => {
+      mockExistsSync.mockReturnValue(true);
+      process.dlopen = ((_mod: unknown, filename: string) => {
+        if (filename.includes("prebuilds")) {
+          throw new Error("dlopen failed: missing symbol");
         }
+      }) as typeof process.dlopen;
+
+      await expect(
+        afterPack(createContext(runnerPlatform, runnerOutDir, "Daintree", runnerArchEnum))
+      ).rejects.toThrow(/better-sqlite3 prebuild failed to load/);
+    });
+
+    it("skips the load probe for a cross-arch package", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const crossArchEnum = process.arch === "arm64" ? 1 : 3;
+      const dlopenCalls: string[] = [];
+      process.dlopen = ((_mod: unknown, filename: string) => {
+        dlopenCalls.push(filename);
+      }) as typeof process.dlopen;
+
+      await afterPack(createContext("linux", "/build/linux", "Daintree", crossArchEnum));
+
+      expect(dlopenCalls.some((c) => c.includes("prebuilds"))).toBe(false);
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining("better-sqlite3 prebuild present (cross-target)")
+      );
+    });
+
+    it("requires both darwin prebuilds for a universal package", async () => {
+      // Arch enum 5 = universal: the merged app carries both slices.
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("darwin", "/build/mac", "Daintree", 5));
+
+      const unpackedBase = "/build/mac/Daintree.app/Contents/Resources/app.asar.unpacked";
+      for (const arch of ["x64", "arm64"]) {
+        expect(mockExistsSync).toHaveBeenCalledWith(
+          path.join(unpackedBase, `node_modules/better-sqlite3/prebuilds/darwin-${arch}.node`)
+        );
       }
+    });
+
+    it("throws when a universal package is missing one darwin prebuild", async () => {
+      mockExistsSync.mockImplementation((p) => !String(p).includes("darwin-x64.node"));
+
+      await expect(afterPack(createContext("darwin", "/build/mac", "Daintree", 5))).rejects.toThrow(
+        /better-sqlite3 prebuild not found/
+      );
     });
   });
 
@@ -478,8 +446,6 @@ describe("afterPack", () => {
       const dlopenCalls: string[] = [];
       process.dlopen = ((_mod: unknown, filename: string) => {
         dlopenCalls.push(filename);
-        if (filename.includes("win_job_object")) return;
-        throw new Error("NODE_MODULE_VERSION mismatch");
       }) as typeof process.dlopen;
 
       await afterPack(createContext("win32", "/build/win"));
@@ -531,8 +497,6 @@ describe("afterPack", () => {
       const dlopenCalls: string[] = [];
       process.dlopen = ((_mod: unknown, filename: string) => {
         dlopenCalls.push(filename);
-        if (filename.includes("win_job_object")) return;
-        throw new Error("NODE_MODULE_VERSION mismatch");
       }) as typeof process.dlopen;
 
       await afterPack(createContext("linux", "/build/linux"));

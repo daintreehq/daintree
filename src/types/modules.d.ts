@@ -69,7 +69,7 @@ declare module "react-diff-view" {
     value?: string;
     markType?: string;
     className?: string;
-    properties?: { className?: string };
+    properties?: { className?: string | string[] };
     children?: TokenNode[];
   }
 

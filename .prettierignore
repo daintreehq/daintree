@@ -30,6 +30,11 @@ plugins/sample/rich-daintree/view/hook-panel-view.js
 # Generated API-surface snapshots (raw tsup .d.ts output — see scripts/ci/check-api-surface.mjs)
 packages/*/api-report/
 
+# Generated shortcut reference — `npm run codegen:keybindings` output, compared
+# byte-for-byte by check:keybindings. Formatting it here would make every
+# regeneration fail that check.
+docs/keyboard-shortcuts.md
+
 # Assets
 build/
 *.ico

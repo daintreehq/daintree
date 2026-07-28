@@ -788,7 +788,7 @@ describe("requiresEnabled metadata", () => {
   });
 
   it("Voice AI correction sub-settings reference voice-ai-correction-enable", () => {
-    for (const id of ["voice-correction-model", "voice-custom-instructions"]) {
+    for (const id of ["voice-custom-instructions"]) {
       const entry = byId(id);
       expect(
         entry?.requiresEnabled?.settingId,
@@ -822,8 +822,8 @@ describe("requiresEnabled metadata", () => {
   });
 
   it("two-level dependency chain is fully connected", () => {
-    const correctionModel = byId("voice-correction-model");
-    expect(correctionModel?.requiresEnabled?.settingId).toBe("voice-ai-correction-enable");
+    const customInstructions = byId("voice-custom-instructions");
+    expect(customInstructions?.requiresEnabled?.settingId).toBe("voice-ai-correction-enable");
     const aiCorrection = byId("voice-ai-correction-enable");
     expect(aiCorrection?.requiresEnabled?.settingId).toBe("voice-enable");
     const voiceEnable = byId("voice-enable");
@@ -831,7 +831,7 @@ describe("requiresEnabled metadata", () => {
   });
 
   it("legacy voice registry IDs are not re-introduced", () => {
-    for (const id of ["voice-transcription-model", "voice-openai-key"]) {
+    for (const id of ["voice-transcription-model", "voice-openai-key", "voice-correction-model"]) {
       expect(
         byId(id),
         `${id} was removed for the OpenAI-only rebuild and must not return`

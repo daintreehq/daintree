@@ -644,7 +644,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         onConfirm={() => void handleClearSessionHistory()}
         onClose={() => setShowClearHistoryConfirm(false)}
         title="Clear all session history?"
-        description="This permanently deletes recorded resumable-session history across every project on this machine. Open sessions aren't affected; the records can't be recovered."
+        description="This permanently deletes recorded resumable-session history across every project on this machine, and those records can't be recovered. Open sessions aren't affected, and bookmarked sessions are kept — deleting a bookmark is the only way to remove one."
         confirmLabel="Clear history"
       />
     </div>

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,25 @@ const mockListPluginActions = vi.fn();
 const mockRegisterPluginAction = vi.fn();
 const mockUnregisterPluginAction = vi.fn();
 const mockActivatePluginForView = vi.fn();
+const mockGetActiveWorktreeIdForWindow =
+  vi.fn<(windowId: number | undefined) => Promise<string | null>>();
+const mockGetProjectForWebContents = vi.fn<(webContentsId: number) => string | null>();
+const mockGetWindowForWebContents = vi.fn<(wc: { id: number }) => { id: number } | null>();
+const mockIsCachedViewWebContents = vi.fn<(webContentsId: number) => boolean>();
+
+// plugin:invoke resolves the sender's project/worktree through the registry
+// (#11297). Mocked so a test can register a sender without standing up a real
+// BrowserWindow; unregistered senders fall through to null, which is what the
+// pre-existing null-context assertions below rely on.
+// Spread the real module rather than replacing it: a bare factory would drop
+// every other export, so any transitive importer reaching for one gets
+// `undefined` and fails far from here.
+vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../window/webContentsRegistry.js")>()),
+  getProjectForWebContents: (...args: [number]) => mockGetProjectForWebContents(...args),
+  getWindowForWebContents: (...args: [{ id: number }]) => mockGetWindowForWebContents(...args),
+  isCachedViewWebContents: (...args: [number]) => mockIsCachedViewWebContents(...args),
+}));
 
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
@@ -27,6 +46,8 @@ vi.mock("../../../services/PluginService.js", () => ({
     registerPluginAction: (...args: unknown[]) => mockRegisterPluginAction(...args),
     unregisterPluginAction: (...args: unknown[]) => mockUnregisterPluginAction(...args),
     activatePluginForView: (...args: unknown[]) => mockActivatePluginForView(...args),
+    getActiveWorktreeIdForWindow: (windowId: number | undefined) =>
+      mockGetActiveWorktreeIdForWindow(windowId),
     // No-op for tests that don't care about implicit activation; the IPC
     // handler awaits it before resolving the impl set.
     activatePluginsForFileDecorationScope: vi.fn().mockResolvedValue(undefined),
@@ -95,6 +116,7 @@ vi.mock("electron", () => ({
 import { registerPluginHandlers } from "../plugin.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../ipcGuard.js";
 import { PluginInvokeOwnershipError } from "../../../services/plugin/PluginInvokeErrors.js";
+import { pluginInstallJobs } from "../../../services/plugin/PluginInstallJobRegistry.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -109,6 +131,12 @@ beforeEach(() => {
   mockShowOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
   mockInstallPlugin.mockResolvedValue({ status: "installed", pluginId: "acme.my-plugin" });
   mockNetFetch.mockReset();
+  // Default: the sender is not a registered project view, so plugin:invoke
+  // resolves a null project / no window — the pre-#11297 context shape.
+  mockGetProjectForWebContents.mockReturnValue(null);
+  mockGetWindowForWebContents.mockReturnValue(null);
+  mockIsCachedViewWebContents.mockReturnValue(false);
+  mockGetActiveWorktreeIdForWindow.mockResolvedValue(null);
   _resetIpcGuardForTesting();
   markIpcSecurityReady();
 });
@@ -116,8 +144,12 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(38);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(40);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:report-panel-lifecycle",
+      expect.any(Function)
+    );
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:install", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:set-enabled", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
@@ -433,7 +465,7 @@ describe("registerPluginHandlers", () => {
 
   it("PLUGIN_INSTALL_FROM_URL rejects an empty URL without claiming not-implemented", async () => {
     const handler = getHandler("plugin:install-from-url");
-    const result = await handler({}, "  ");
+    const result = await handler({ sender: { id: 1 } }, "  ");
     expect(result).toEqual({ status: "invalid-url" });
   });
 
@@ -475,7 +507,7 @@ describe("registerPluginHandlers", () => {
       mockResponse({ headers: { "content-type": "application/zip" } })
     );
     const handler = getHandler("plugin:install-from-url");
-    const result = await handler({}, "https://example.com/p.dntr");
+    const result = await handler({ sender: { id: 1 } }, "https://example.com/p.dntr");
     expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
     expect(mockInstallPlugin).toHaveBeenCalledTimes(1);
     const [archivePath, opts] = mockInstallPlugin.mock.calls[0] as [string, unknown];
@@ -488,7 +520,7 @@ describe("registerPluginHandlers", () => {
       mockResponse({ headers: { "content-type": "application/x-dntr" } })
     );
     const handler = getHandler("plugin:install-from-url");
-    const result = await handler({}, "https://example.com/download");
+    const result = await handler({ sender: { id: 1 } }, "https://example.com/download");
     expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
   });
 
@@ -500,7 +532,7 @@ describe("registerPluginHandlers", () => {
     async (contentType) => {
       mockNetFetch.mockResolvedValue(mockResponse({ headers: { "content-type": contentType } }));
       const handler = getHandler("plugin:install-from-url");
-      const result = await handler({}, "https://example.com/download");
+      const result = await handler({ sender: { id: 1 } }, "https://example.com/download");
       expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
     }
   );
@@ -508,7 +540,7 @@ describe("registerPluginHandlers", () => {
   it("PLUGIN_INSTALL_FROM_URL falls back to the .dntr suffix for an unrecognised MIME", async () => {
     mockNetFetch.mockResolvedValue(mockResponse({ headers: { "content-type": "text/html" } }));
     const handler = getHandler("plugin:install-from-url");
-    const result = await handler({}, "https://example.com/p.dntr");
+    const result = await handler({ sender: { id: 1 } }, "https://example.com/p.dntr");
     expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
   });
 
@@ -517,7 +549,7 @@ describe("registerPluginHandlers", () => {
       mockResponse({ headers: { "content-type": "application/zip; charset=utf-8" } })
     );
     const handler = getHandler("plugin:install-from-url");
-    const result = await handler({}, "https://example.com/download");
+    const result = await handler({ sender: { id: 1 } }, "https://example.com/download");
     expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
   });
 
@@ -526,7 +558,7 @@ describe("registerPluginHandlers", () => {
       mockResponse({ headers: { "content-type": "application/zipper" } })
     );
     const handler = getHandler("plugin:install-from-url");
-    const result = (await handler({}, "https://example.com/download")) as {
+    const result = (await handler({ sender: { id: 1 } }, "https://example.com/download")) as {
       status: string;
       errors: Array<{ code: string }>;
     };
@@ -540,7 +572,7 @@ describe("registerPluginHandlers", () => {
       mockResponse({ headers: { "content-type": "application/zip" }, body: null })
     );
     const handler = getHandler("plugin:install-from-url");
-    const result = (await handler({}, "https://example.com/p.dntr")) as {
+    const result = (await handler({ sender: { id: 1 } }, "https://example.com/p.dntr")) as {
       status: string;
       errors: Array<{ code: string }>;
     };
@@ -558,7 +590,7 @@ describe("registerPluginHandlers", () => {
       })
     );
     const handler = getHandler("plugin:install-from-url");
-    const result = await handler({}, "https://example.com/p.dntr");
+    const result = await handler({ sender: { id: 1 } }, "https://example.com/p.dntr");
     expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
     // Writing the full 30 MB to a real temp file and hashing it back is slow on
     // Windows CI (disk + Defender), so this boundary case gets a wider timeout.
@@ -573,7 +605,7 @@ describe("registerPluginHandlers", () => {
       })
     );
     const handler = getHandler("plugin:install-from-url");
-    const result = (await handler({}, "https://example.com/p.dntr")) as {
+    const result = (await handler({ sender: { id: 1 } }, "https://example.com/p.dntr")) as {
       status: string;
       errors: Array<{ code: string }>;
     };
@@ -585,7 +617,7 @@ describe("registerPluginHandlers", () => {
   it("PLUGIN_INSTALL_FROM_URL rejects an unknown MIME with no .dntr suffix", async () => {
     mockNetFetch.mockResolvedValue(mockResponse({ headers: { "content-type": "text/html" } }));
     const handler = getHandler("plugin:install-from-url");
-    const result = await handler({}, "https://example.com/oops");
+    const result = await handler({ sender: { id: 1 } }, "https://example.com/oops");
     expect(result).toEqual({
       status: "failed",
       errors: [{ code: "content_type_rejected", message: expect.any(String) }],
@@ -596,7 +628,7 @@ describe("registerPluginHandlers", () => {
   it("PLUGIN_INSTALL_FROM_URL returns fetch_failed on a non-2xx response", async () => {
     mockNetFetch.mockResolvedValue(mockResponse({ ok: false, status: 404 }));
     const handler = getHandler("plugin:install-from-url");
-    const result = (await handler({}, "https://example.com/p.dntr")) as {
+    const result = (await handler({ sender: { id: 1 } }, "https://example.com/p.dntr")) as {
       status: string;
       errors: Array<{ code: string }>;
     };
@@ -608,7 +640,7 @@ describe("registerPluginHandlers", () => {
   it("PLUGIN_INSTALL_FROM_URL returns fetch_failed on a network error", async () => {
     mockNetFetch.mockRejectedValue(new Error("ENOTFOUND"));
     const handler = getHandler("plugin:install-from-url");
-    const result = (await handler({}, "https://example.com/p.dntr")) as {
+    const result = (await handler({ sender: { id: 1 } }, "https://example.com/p.dntr")) as {
       status: string;
       errors: Array<{ code: string }>;
     };
@@ -619,7 +651,7 @@ describe("registerPluginHandlers", () => {
   it("PLUGIN_INSTALL_FROM_URL returns fetch_timeout when the request aborts", async () => {
     mockNetFetch.mockRejectedValue(abortError("AbortError"));
     const handler = getHandler("plugin:install-from-url");
-    const result = (await handler({}, "https://example.com/p.dntr")) as {
+    const result = (await handler({ sender: { id: 1 } }, "https://example.com/p.dntr")) as {
       status: string;
       errors: Array<{ code: string }>;
     };
@@ -637,7 +669,7 @@ describe("registerPluginHandlers", () => {
       })
     );
     const handler = getHandler("plugin:install-from-url");
-    const result = (await handler({}, "https://example.com/p.dntr")) as {
+    const result = (await handler({ sender: { id: 1 } }, "https://example.com/p.dntr")) as {
       status: string;
       errors: Array<{ code: string }>;
     };
@@ -655,7 +687,7 @@ describe("registerPluginHandlers", () => {
       })
     );
     const handler = getHandler("plugin:install-from-url");
-    const result = (await handler({}, "https://example.com/p.dntr")) as {
+    const result = (await handler({ sender: { id: 1 } }, "https://example.com/p.dntr")) as {
       status: string;
       errors: Array<{ code: string }>;
     };
@@ -666,7 +698,7 @@ describe("registerPluginHandlers", () => {
 
   it("PLUGIN_INSTALL_FROM_URL rejects a non-http(s) scheme as invalid-url", async () => {
     const handler = getHandler("plugin:install-from-url");
-    const result = await handler({}, "file:///etc/passwd");
+    const result = await handler({ sender: { id: 1 } }, "file:///etc/passwd");
     expect(result).toEqual({ status: "invalid-url" });
     expect(mockNetFetch).not.toHaveBeenCalled();
   });
@@ -680,7 +712,7 @@ describe("registerPluginHandlers", () => {
     "https://10.0.0.5/p.dntr",
   ])("PLUGIN_INSTALL_FROM_URL rejects private/loopback host %s as invalid-url", async (url) => {
     const handler = getHandler("plugin:install-from-url");
-    const result = await handler({}, url);
+    const result = await handler({ sender: { id: 1 } }, url);
     expect(result).toEqual({ status: "invalid-url" });
     expect(mockNetFetch).not.toHaveBeenCalled();
   });
@@ -693,7 +725,7 @@ describe("registerPluginHandlers", () => {
     "PLUGIN_INSTALL_FROM_URL rejects an embedded-credentials URL %s as invalid-url",
     async (url) => {
       const handler = getHandler("plugin:install-from-url");
-      const result = await handler({}, url);
+      const result = await handler({ sender: { id: 1 } }, url);
       expect(result).toEqual({ status: "invalid-url" });
       // Never fetched, so the credentials are never sent or persisted as
       // installer originalUrl provenance.
@@ -710,7 +742,7 @@ describe("registerPluginHandlers", () => {
       )
       .mockResolvedValueOnce(mockResponse({ headers: { "content-type": "application/zip" } }));
     const handler = getHandler("plugin:install-from-url");
-    const result = await handler({}, "https://example.com/p.dntr");
+    const result = await handler({ sender: { id: 1 } }, "https://example.com/p.dntr");
     expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
     expect(mockNetFetch).toHaveBeenCalledTimes(2);
     // Redirects are followed manually so each hop can be revalidated.
@@ -731,7 +763,7 @@ describe("registerPluginHandlers", () => {
         mockResponse({ status: 302, headers: { location: privateTarget } })
       );
       const handler = getHandler("plugin:install-from-url");
-      const result = (await handler({}, "https://example.com/p.dntr")) as {
+      const result = (await handler({ sender: { id: 1 } }, "https://example.com/p.dntr")) as {
         status: string;
         errors: Array<{ code: string }>;
       };
@@ -751,7 +783,7 @@ describe("registerPluginHandlers", () => {
       )
     );
     const handler = getHandler("plugin:install-from-url");
-    const result = (await handler({}, "https://example.com/p.dntr")) as {
+    const result = (await handler({ sender: { id: 1 } }, "https://example.com/p.dntr")) as {
       status: string;
       errors: Array<{ code: string }>;
     };
@@ -769,7 +801,7 @@ describe("registerPluginHandlers", () => {
       errors: [{ code: "manifest_invalid", message: "bad manifest" }],
     });
     const handler = getHandler("plugin:install-from-url");
-    const result = await handler({}, "https://example.com/p.dntr");
+    const result = await handler({ sender: { id: 1 } }, "https://example.com/p.dntr");
     expect(result).toEqual({
       status: "failed",
       errors: [{ code: "manifest_invalid", message: "bad manifest" }],
@@ -778,7 +810,7 @@ describe("registerPluginHandlers", () => {
 
   it("PLUGIN_INSTALL_FROM_PATH rejects an empty path without touching the installer", async () => {
     const handler = getHandler("plugin:install-from-path");
-    const result = await handler({}, "");
+    const result = await handler({ sender: { id: 1 } }, "");
     expect(result).toEqual({
       status: "failed",
       errors: [{ code: "archive_invalid", message: expect.any(String) }],
@@ -788,14 +820,14 @@ describe("registerPluginHandlers", () => {
 
   it("PLUGIN_INSTALL_FROM_PATH rejects a relative path", async () => {
     const handler = getHandler("plugin:install-from-path");
-    const result = await handler({}, "relative/plugin.dntr");
+    const result = await handler({ sender: { id: 1 } }, "relative/plugin.dntr");
     expect(result).toMatchObject({ status: "failed", errors: [{ code: "archive_invalid" }] });
     expect(mockInstallPlugin).not.toHaveBeenCalled();
   });
 
   it("PLUGIN_INSTALL_FROM_PATH rejects a non-.dntr extension", async () => {
     const handler = getHandler("plugin:install-from-path");
-    const result = await handler({}, "/tmp/not-a-plugin.txt");
+    const result = await handler({ sender: { id: 1 } }, "/tmp/not-a-plugin.txt");
     expect(result).toEqual({
       status: "failed",
       errors: [{ code: "archive_invalid", message: "Only .dntr files can be installed" }],
@@ -805,7 +837,7 @@ describe("registerPluginHandlers", () => {
 
   it("PLUGIN_INSTALL_FROM_PATH fails when the file can't be read", async () => {
     const handler = getHandler("plugin:install-from-path");
-    const result = await handler({}, "/tmp/does-not-exist-9295.dntr");
+    const result = await handler({ sender: { id: 1 } }, "/tmp/does-not-exist-9295.dntr");
     expect(result).toMatchObject({ status: "failed", errors: [{ code: "archive_invalid" }] });
     expect(mockInstallPlugin).not.toHaveBeenCalled();
   });
@@ -815,7 +847,7 @@ describe("registerPluginHandlers", () => {
     await writeFile(file, Buffer.from("not a zip"));
     try {
       const handler = getHandler("plugin:install-from-path");
-      const result = await handler({}, file);
+      const result = await handler({ sender: { id: 1 } }, file);
       expect(result).toMatchObject({ status: "failed", errors: [{ code: "archive_invalid" }] });
       expect(mockInstallPlugin).not.toHaveBeenCalled();
     } finally {
@@ -830,7 +862,7 @@ describe("registerPluginHandlers", () => {
     mockInstallPlugin.mockResolvedValue({ status: "installed", pluginId: "acme.dropped" });
     try {
       const handler = getHandler("plugin:install-from-path");
-      const result = await handler({}, file);
+      const result = await handler({ sender: { id: 1 } }, file);
       expect(mockInstallPlugin).toHaveBeenCalledWith(file);
       expect(result).toEqual({ status: "installed", pluginId: "acme.dropped" });
     } finally {
@@ -844,7 +876,7 @@ describe("registerPluginHandlers", () => {
     mockInstallPlugin.mockResolvedValue({ status: "installed", pluginId: "acme.upper" });
     try {
       const handler = getHandler("plugin:install-from-path");
-      const result = await handler({}, file);
+      const result = await handler({ sender: { id: 1 } }, file);
       expect(mockInstallPlugin).toHaveBeenCalledWith(file);
       expect(result).toEqual({ status: "installed", pluginId: "acme.upper" });
     } finally {
@@ -1004,6 +1036,125 @@ describe("registerPluginHandlers", () => {
       webContentsId: 7,
       pluginId: "acme.my-plugin",
     });
+  });
+
+  // ── #11297: plugin:invoke carries the sender's real project/worktree ──
+
+  function getInvokeHandler(): (...args: unknown[]) => unknown {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === "plugin:invoke")![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  const trustedSender = (id: number) => ({
+    senderFrame: { url: "app://daintree/" },
+    sender: { id },
+  });
+
+  it("PLUGIN_INVOKE resolves the sender's project and active worktree into ctx", async () => {
+    mockDispatchHandler.mockResolvedValue(undefined);
+    mockGetProjectForWebContents.mockReturnValue("proj-a");
+    mockGetWindowForWebContents.mockReturnValue({ id: 42 });
+    mockGetActiveWorktreeIdForWindow.mockResolvedValue("wt-a");
+
+    await getInvokeHandler()(trustedSender(7), "acme.my-plugin", "get-data");
+
+    expect(mockGetActiveWorktreeIdForWindow).toHaveBeenCalledWith(42);
+    expect(mockDispatchHandler.mock.calls[0][2]).toEqual({
+      projectId: "proj-a",
+      worktreeId: "wt-a",
+      webContentsId: 7,
+      pluginId: "acme.my-plugin",
+    });
+  });
+
+  it("PLUGIN_INVOKE yields a null worktree when the sender has no window", async () => {
+    mockDispatchHandler.mockResolvedValue(undefined);
+    mockGetProjectForWebContents.mockReturnValue("proj-a");
+    mockGetWindowForWebContents.mockReturnValue(null);
+
+    await getInvokeHandler()(trustedSender(7), "acme.my-plugin", "get-data");
+
+    // Never a guessed window: without one there is nothing to scope to, so the
+    // workspace is not consulted at all rather than widening to an aggregate.
+    expect(mockGetActiveWorktreeIdForWindow).not.toHaveBeenCalled();
+    expect(mockDispatchHandler.mock.calls[0][2]).toMatchObject({
+      projectId: "proj-a",
+      worktreeId: null,
+    });
+  });
+
+  it("PLUGIN_INVOKE nulls the worktree when the sender's project rebinds mid-lookup", async () => {
+    mockDispatchHandler.mockResolvedValue(undefined);
+    mockGetWindowForWebContents.mockReturnValue({ id: 42 });
+    mockGetProjectForWebContents.mockReturnValue("proj-a");
+
+    // Hold the worktree lookup open so the rebind provably lands *during* the
+    // await. Flipping the registry between two synchronous calls would pass
+    // even if both ran before the lookup started, leaving the real race open.
+    let releaseLookup!: (id: string) => void;
+    mockGetActiveWorktreeIdForWindow.mockReturnValue(
+      new Promise<string>((resolve) => {
+        releaseLookup = resolve;
+      })
+    );
+
+    const pending = getInvokeHandler()(trustedSender(7), "acme.my-plugin", "get-data");
+    await Promise.resolve();
+    // The window moved to proj-b while the lookup was in flight, so the
+    // worktree it returns is proj-b's. Pairing it with the pinned proj-a would
+    // recreate exactly the cross-project mismatch #11297 is about.
+    mockGetProjectForWebContents.mockReturnValue("proj-b");
+    releaseLookup("wt-b");
+    await pending;
+
+    expect(mockDispatchHandler.mock.calls[0][2]).toEqual({
+      projectId: "proj-a",
+      worktreeId: null,
+      webContentsId: 7,
+      pluginId: "acme.my-plugin",
+    });
+  });
+
+  it("PLUGIN_INVOKE never gives an unbound sender a worktree", async () => {
+    // A sender with no project binding has no project to speak for, so a
+    // window-keyed worktree would attach another project's state to a context
+    // whose projectId is null. Null is an identity here, not a wildcard.
+    mockDispatchHandler.mockResolvedValue(undefined);
+    mockGetProjectForWebContents.mockReturnValue(null);
+    mockGetWindowForWebContents.mockReturnValue({ id: 42 });
+    mockGetActiveWorktreeIdForWindow.mockResolvedValue("wt-somebody-elses");
+
+    await getInvokeHandler()(trustedSender(7), "acme.my-plugin", "get-data");
+
+    expect(mockDispatchHandler.mock.calls[0][2]).toEqual({
+      projectId: null,
+      worktreeId: null,
+      webContentsId: 7,
+      pluginId: "acme.my-plugin",
+    });
+    // Resolved to no window, so the workspace is never even asked.
+    expect(mockGetActiveWorktreeIdForWindow).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INVOKE never gives a cached background view a worktree", async () => {
+    // A deactivated project view stays registered to its own project while its
+    // window displays another, so the window's binding does not speak for it.
+    mockDispatchHandler.mockResolvedValue(undefined);
+    mockGetProjectForWebContents.mockReturnValue("proj-a");
+    mockGetWindowForWebContents.mockReturnValue({ id: 42 });
+    mockIsCachedViewWebContents.mockReturnValue(true);
+    mockGetActiveWorktreeIdForWindow.mockResolvedValue("wt-b");
+
+    await getInvokeHandler()(trustedSender(7), "acme.my-plugin", "get-data");
+
+    expect(mockDispatchHandler.mock.calls[0][2]).toMatchObject({
+      projectId: "proj-a",
+      worktreeId: null,
+    });
+    // A cached view resolves to no window, so the workspace is never asked.
+    expect(mockGetActiveWorktreeIdForWindow).not.toHaveBeenCalled();
   });
 
   it("PLUGIN_INVOKE handler propagates errors from dispatchHandler", async () => {
@@ -2104,5 +2255,143 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// #11302: install progress + cancellation. The handler layer owns job
+// registration and the targeted progress push; the registry owns the state
+// machine (covered separately). These assert the seam between them.
+describe("plugin install jobs (#11302)", () => {
+  // Must be UUID-shaped: the handler rejects anything else before registering.
+  const JOB_ID = "3f1c9a20-7d44-4e1b-9c88-0a5b6d2e4f77";
+
+  function getHandler(channel: string) {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  afterEach(() => {
+    pluginInstallJobs.end(JOB_ID);
+  });
+
+  it("registers a cancel op alongside the install ops", () => {
+    registerPluginHandlers();
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:cancel-install", expect.any(Function));
+  });
+
+  it("threads the jobId into installPlugin so the installer can find its signal", async () => {
+    const file = join(tmpdir(), `plugin-job-${process.pid}.dntr`);
+    await writeFile(file, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    mockInstallPlugin.mockResolvedValue({ status: "installed", pluginId: "acme.job" });
+    try {
+      const handler = getHandler("plugin:install-from-path");
+      await handler({ sender: { id: 1 } }, file, JOB_ID);
+      expect(mockInstallPlugin).toHaveBeenCalledWith(file, { jobId: JOB_ID });
+    } finally {
+      await rm(file, { force: true });
+    }
+  });
+
+  it("registers the job for the duration of the install and drops it afterwards", async () => {
+    const file = join(tmpdir(), `plugin-job-live-${process.pid}.dntr`);
+    await writeFile(file, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    let signalDuringInstall: AbortSignal | undefined;
+    mockInstallPlugin.mockImplementation(() => {
+      signalDuringInstall = pluginInstallJobs.signal(JOB_ID);
+      return Promise.resolve({ status: "installed", pluginId: "acme.job" });
+    });
+    try {
+      const handler = getHandler("plugin:install-from-path");
+      await handler({ sender: { id: 1 } }, file, JOB_ID);
+      // Live while the install runs...
+      expect(signalDuringInstall).toBeDefined();
+      // ...and reaped by the handler's finally, so nothing leaks between installs.
+      expect(pluginInstallJobs.signal(JOB_ID)).toBeUndefined();
+    } finally {
+      await rm(file, { force: true });
+    }
+  });
+
+  it("ignores a malformed jobId rather than registering it", async () => {
+    const file = join(tmpdir(), `plugin-job-bad-${process.pid}.dntr`);
+    await writeFile(file, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    const BAD_ID = "../../etc/passwd";
+    // Inspect DURING the install: the wrapper's `finally` reaps the record
+    // either way, so checking after the handler returns would pass even if the
+    // malformed id had been accepted.
+    let registeredDuringInstall: AbortSignal | undefined;
+    let optsDuringInstall: unknown;
+    mockInstallPlugin.mockImplementation((_p: string, opts: unknown) => {
+      registeredDuringInstall = pluginInstallJobs.signal(BAD_ID);
+      optsDuringInstall = opts;
+      return Promise.resolve({ status: "installed", pluginId: "acme.job" });
+    });
+    try {
+      const handler = getHandler("plugin:install-from-path");
+      // Not UUID-shaped: a compromised renderer must not be able to push
+      // arbitrary strings into the registry or the progress payload.
+      await handler({ sender: { id: 1 } }, file, BAD_ID);
+      expect(registeredDuringInstall).toBeUndefined();
+      // ...and the rejected id must not reach the installer either.
+      expect(optsDuringInstall).toBeUndefined();
+    } finally {
+      await rm(file, { force: true });
+    }
+  });
+
+  it("installs without a job rather than joining an id another install already owns", async () => {
+    // Two installs under one id would share a controller and an emitter:
+    // cancelling one would abort the other, either could commit the other's
+    // record, and progress would be pushed to the wrong window. The second must
+    // therefore run detached — no progress — rather than latch onto the first.
+    const file = join(tmpdir(), `plugin-job-dup-${process.pid}.dntr`);
+    await writeFile(file, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    const firstEmit = vi.fn();
+    pluginInstallJobs.begin(JOB_ID, firstEmit);
+    let optsDuringInstall: unknown = "unset";
+    mockInstallPlugin.mockImplementation((_p: string, opts: unknown) => {
+      optsDuringInstall = opts;
+      return Promise.resolve({ status: "installed", pluginId: "acme.job" });
+    });
+    try {
+      const handler = getHandler("plugin:install-from-path");
+      await handler({ sender: { id: 1 } }, file, JOB_ID);
+      expect(optsDuringInstall).toBeUndefined();
+      // The pre-existing owner's emitter never saw the interloper's progress.
+      expect(firstEmit).not.toHaveBeenCalled();
+      // ...and its job survived the second install's teardown.
+      expect(pluginInstallJobs.signal(JOB_ID)).toBeDefined();
+    } finally {
+      await rm(file, { force: true });
+    }
+  });
+
+  it("cancels a live job and reports it", async () => {
+    const file = join(tmpdir(), `plugin-job-cancel-${process.pid}.dntr`);
+    await writeFile(file, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    const cancel = getHandler("plugin:cancel-install");
+    let cancelResult: unknown;
+    mockInstallPlugin.mockImplementation(async () => {
+      cancelResult = await cancel({}, JOB_ID);
+      return { status: "cancelled" };
+    });
+    try {
+      const handler = getHandler("plugin:install-from-path");
+      const result = await handler({ sender: { id: 1 } }, file, JOB_ID);
+      expect(cancelResult).toBe(true);
+      expect(result).toEqual({ status: "cancelled" });
+    } finally {
+      await rm(file, { force: true });
+    }
+  });
+
+  it("reports false for an unknown or already-finished job", async () => {
+    const cancel = getHandler("plugin:cancel-install");
+    // Nothing is in flight — the renderer must learn the cancel did nothing
+    // rather than see a button that silently no-ops.
+    expect(await cancel({}, "00000000-0000-4000-8000-000000000000")).toBe(false);
+    expect(await cancel({}, "not a job id")).toBe(false);
   });
 });

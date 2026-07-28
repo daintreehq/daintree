@@ -449,8 +449,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     switch (type) {
       case "Results": {
         const channel = payload.channel as
-          | { alternatives?: Array<{ transcript?: string }> }
-          | undefined;
+          { alternatives?: Array<{ transcript?: string }> } | undefined;
         const transcript = channel?.alternatives?.[0]?.transcript ?? "";
         const isFinal = payload.is_final === true;
         const speechFinal = payload.speech_final === true;

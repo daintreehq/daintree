@@ -601,7 +601,7 @@ const storeOptions = {
       transcriptionProvider: "openai",
       transcriptionModel: "gpt-realtime-whisper",
       correctionEnabled: false,
-      correctionModel: "gpt-5-mini",
+      correctionModel: "gpt-5.6-luna",
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,
@@ -714,9 +714,7 @@ function resolveConfigPath(cwd: string | undefined): string | null {
 // of reading config.json a second time. It is absent only on the fail-open
 // branch below, where no usable bytes were obtained.
 type ConfigPreflightResult =
-  | { status: "valid"; rawBuffer?: Buffer }
-  | { status: "missing" }
-  | { status: "corrupt" };
+  { status: "valid"; rawBuffer?: Buffer } | { status: "missing" } | { status: "corrupt" };
 
 function preflightValidateConfig(configPath: string): ConfigPreflightResult {
   if (!fs.existsSync(configPath)) return { status: "missing" };

@@ -120,3 +120,27 @@ export function isLikelyAtSynthesizedPointer(
   if (lastMoveAt === null) return true;
   return now - lastMoveAt > thresholdMs;
 }
+
+/**
+ * Whether a pointerdown on xterm should record `"xterm"` as the session-wide
+ * focus preference. Only a deliberate click that lands in xterm counts as the
+ * explicit "I want the terminal" gesture.
+ *
+ * The two exclusions are independent. AT cursor routing does reach xterm, but
+ * it isn't a mode switch — a screen reader reading terminal output must not
+ * clobber a hybrid-input preference. `shouldSuppress` marks the activation
+ * click on an unfocused grid pane, which should restore the remembered target
+ * the same way `Cmd+<n>` does rather than overwrite it (#11465); a physical
+ * one is swallowed before xterm sees it, and an AT-routed one is already
+ * excluded by the rule above.
+ *
+ * Callers must pair this with *not* forcing xterm focus on the suppressed
+ * path — DOM focus on xterm fires `focusin`, which records `"xterm"`
+ * unconditionally and would undo the preservation.
+ */
+export function shouldRecordXtermFocusPreference(options: {
+  isAtSynthesized: boolean;
+  shouldSuppress: boolean;
+}): boolean {
+  return !options.isAtSynthesized && !options.shouldSuppress;
+}

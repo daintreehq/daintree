@@ -15,7 +15,6 @@ import {
   ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { summarizeMcpArgs } from "../../../shared/utils/mcpArgsSummary.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { events } from "../events.js";
 import type { AuditOutcome } from "./auditLog.js";
@@ -39,9 +38,6 @@ import {
   RESOURCE_BACKING_ACTIONS,
   TIER_NOT_PERMITTED_CODE,
   CONFIRMATION_REQUIRED_CODE,
-  CONFIRMATION_TIMEOUT_CODE,
-  USER_REJECTED_CODE,
-  ELICITATION_FAILED_CODE,
   MCP_DEDUP_ALLOWLIST,
   MCP_DEDUP_TTL_MS,
   MCP_DEDUP_MAX_ENTRIES_PER_SESSION,
@@ -615,12 +611,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       | { kind: "throw"; error: unknown }
       | undefined;
     let confirmationDecision:
-      | import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision
-      | undefined;
+      import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision | undefined;
     // A native automation grant is an explicit user approval of the tool's
     // scope, so it authorizes a `danger: "confirm"` dispatch without surfacing
     // a per-call modal — exactly as if the user had just approved it.
-    let dispatchConfirmed = nativeGrantId !== undefined;
+    const dispatchConfirmed = nativeGrantId !== undefined;
     // Tracks whether a live "tool-call-started" push fired for this dispatch so
     // the shared `finally` only emits the matching "settled" push for calls the
     // activity strip is actually showing (#9759). Pre-dispatch rejections never
@@ -856,44 +851,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
 
         const entry = await lookupManifestEntry(actionId, getCachedManifest, requestManifest);
-        // Announce the in-flight call now that `danger` is known — before any
-        // elicitation await, so the strip can show "awaiting confirmation"
-        // while the user decides on a `danger: "confirm"` dispatch (#9759).
+        // Announce the in-flight call now that `danger` is known — before the
+        // host-side confirmation wait, so the strip can show "awaiting
+        // confirmation" while the user decides on a `danger: "confirm"`
+        // dispatch (#9759). Confirmation for `danger: "confirm"` is always
+        // performed host-side: the unconfirmed `dispatchAction` below routes to
+        // the renderer's native ConfirmDialog (or `CONFIRMATION_REQUIRED` when
+        // no window is open). A client's self-declared `elicitation.form`
+        // capability and its in-band elicitation response are NEVER treated as
+        // proof of human authorization — a headless/agentic client could
+        // otherwise self-approve its own destructive call (#11342). Only a
+        // host-issued native grant (`nativeGrantId`) pre-authorizes a dispatch.
         emitToolCallStarted(entry?.danger === "confirm");
-        if (!dispatchConfirmed && entry?.danger === "confirm") {
-          const supportsForm = server.getClientCapabilities()?.elicitation?.form !== undefined;
-          if (supportsForm) {
-            const elicitationOutcome = await runElicitationConfirmation(server, entry, args);
-            if (elicitationOutcome.kind === "throw") {
-              const failureMessage = formatErrorMessage(
-                elicitationOutcome.error,
-                "Elicitation request failed"
-              );
-              const value: import("../../../shared/types/actions.js").ActionDispatchResult = {
-                ok: false,
-                error: {
-                  code: ELICITATION_FAILED_CODE,
-                  message: failureMessage,
-                },
-              };
-              outcome = { kind: "result", value };
-              return buildToolError({
-                code: ELICITATION_FAILED_CODE,
-                message: failureMessage,
-              });
-            }
-            if (elicitationOutcome.kind === "rejected") {
-              outcome = { kind: "result", value: elicitationOutcome.value };
-              return buildToolError({
-                code: elicitationOutcome.value.error.code,
-                message: elicitationOutcome.value.error.message,
-                details: elicitationOutcome.value.error.details,
-              });
-            }
-            dispatchConfirmed = true;
-            confirmationDecision = "approved";
-          }
-        }
 
         try {
           const envelope = await dispatchAction(actionId, args, dispatchConfirmed);
@@ -907,10 +876,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               message: err.message,
             });
           }
-          // No live renderer to route the dispatch through (#10640). When a
-          // headless client lacks `elicitation.form`, the unconfirmed dispatch
-          // is forwarded to the renderer bridge so the human can approve it in a
-          // native ConfirmDialog; with no Daintree window open,
+          // No live renderer to route the dispatch through (#10640). Every
+          // unconfirmed `danger: "confirm"` dispatch is forwarded to the
+          // renderer bridge so the human can approve it in a native
+          // ConfirmDialog (#11342); with no Daintree window open,
           // `getActiveProjectWebContents` throws `RendererBridgeUnavailableError`.
           if (err instanceof RendererBridgeUnavailableError) {
             // Confirm-gated tool we KNOW needs human approval (manifest entry
@@ -1557,75 +1526,11 @@ async function lookupManifestEntry(
     try {
       // Use the value returned directly — pinned sessions (#7002) deliberately
       // skip the shared `cachedManifest` so a re-read here would always return
-      // null and silently drop confirmation elicitation + structuredContent.
+      // null and silently drop host confirmation + structuredContent.
       manifest = await requestManifest();
     } catch {
       return undefined;
     }
   }
   return manifest.find((e) => e.id === actionId);
-}
-
-async function runElicitationConfirmation(
-  server: Server,
-  entry: import("../../../shared/types/actions.js").ActionManifestEntry,
-  args: unknown
-): Promise<
-  | { kind: "approved" }
-  | {
-      kind: "rejected";
-      value: Extract<
-        import("../../../shared/types/actions.js").ActionDispatchResult,
-        { ok: false }
-      >;
-    }
-  | { kind: "throw"; error: unknown }
-> {
-  const argsSummary = summarizeMcpArgs(args);
-  const rationaleLine = entry.dangerRationale ? `\n${entry.dangerRationale}\n` : "";
-  const message =
-    argsSummary && argsSummary !== "{}"
-      ? `Confirm ${entry.title}: ${entry.description}${rationaleLine}\nArguments: ${argsSummary}`
-      : `Confirm ${entry.title}: ${entry.description}${rationaleLine}`;
-
-  let result;
-  try {
-    result = await server.elicitInput({
-      message,
-      requestedSchema: {
-        type: "object",
-        properties: {},
-      },
-    });
-  } catch (err) {
-    return { kind: "throw", error: err };
-  }
-
-  if (result.action === "cancel") {
-    return {
-      kind: "rejected",
-      value: {
-        ok: false,
-        error: {
-          code: CONFIRMATION_TIMEOUT_CODE,
-          message: "Confirmation request timed out before the user responded.",
-        },
-      },
-    };
-  }
-
-  if (result.action !== "accept") {
-    return {
-      kind: "rejected",
-      value: {
-        ok: false,
-        error: {
-          code: USER_REJECTED_CODE,
-          message: "User rejected the confirmation request.",
-        },
-      },
-    };
-  }
-
-  return { kind: "approved" };
 }

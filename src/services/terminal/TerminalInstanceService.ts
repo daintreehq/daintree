@@ -1,5 +1,6 @@
 import { Terminal, IBufferRange } from "@xterm/xterm";
 import { isMac } from "@/lib/platform";
+import { isProjectViewCached } from "@/lib/viewCacheState";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import type { AgentState } from "@/types";
@@ -412,14 +413,15 @@ class TerminalInstanceService {
 
   /**
    * Returns the resolved absolute path of the currently-hovered link when it's
-   * a file link (not a URL / OSC 8 link), else null. Used by the right-click
-   * context menu to show a "Reveal in Finder" item only for genuine file
-   * paths. Distinct from {@link getHoveredLinkText}, which returns the raw
-   * matched text for any link kind.
+   * a file or directory link (not a URL / OSC 8 link), else null. Used by the
+   * right-click context menu to show a "Reveal in Finder" item only for
+   * genuine on-disk paths — revealing works identically for both kinds.
+   * Distinct from {@link getHoveredLinkText}, which returns the raw matched
+   * text for any link kind.
    */
   getHoveredFilePath(id: string): string | null {
     const link = this.instances.get(id)?.hoveredLink;
-    return link?.kind === "file" ? (link.absolutePath ?? null) : null;
+    return link?.kind === "file" || link?.kind === "directory" ? (link.absolutePath ?? null) : null;
   }
 
   /**
@@ -1689,16 +1691,19 @@ class TerminalInstanceService {
   } | null = null;
 
   /**
-   * PTY-tracking resize for a backgrounded project view (#10415). A detached
+   * Window-ratio resize for a backgrounded project view (#10415). A detached
    * WebContentsView keeps its stale viewport until reattach — setBounds()
    * does not propagate while detached and ResizeObservers never fire in a
    * hidden page — so per-panel pixel sizes cannot be re-measured here.
    * Instead each terminal's host size is scaled by the window-bounds ratio,
    * which is exact for 1fr grid tracks and at worst off by ~1 col where
-   * fixed chrome doesn't scale. The PTY-only resize keeps agents wrapping
-   * at the right width the whole time; the wake path
-   * (`fullWakeForVisibilityRestore` → `applyDeferredResize`) reconciles
-   * xterm and corrects any residual error from real layout on reattach.
+   * fixed chrome doesn't scale. `applyBackgroundResize` moves xterm and the
+   * PTY together, so agents wrap at the right width the whole time and the
+   * parser never trails the grid the app is drawing for; alt-screen panes are
+   * excluded and both grids stay at their pre-background size. By reattach
+   * the wake path's `applyDeferredResize` therefore finds cache == current and
+   * early-returns; only `reconcileGeometryFresh` on reveal corrects the
+   * residual error between the scaled estimate and real layout.
    *
    * Scaling is anchored to a per-background-session snapshot: the basis is
    * the stale viewport (which all `lastWidth`/`lastHeight` measurements were
@@ -1706,9 +1711,17 @@ class TerminalInstanceService {
    * time it's seen. Every event computes absolute targets from that anchor,
    * so repeated resizes never compound and a terminal skipped in one pass
    * (resize-locked) still lands on the correct size in the next.
+   *
+   * Gated on `isProjectViewCached()` as well as page visibility (#11443).
+   * Caching a project view is `removeChildView` + `setVisible(false)`, and
+   * neither flips `document.visibilityState` for a child WebContentsView, so
+   * the original visibility-only guard early-returned for every genuinely
+   * backgrounded view — the one case this method exists to serve. The reset
+   * stays on the "not cached AND visible" branch: a cached view that still
+   * reports "visible" must keep its session anchor, not drop it.
    */
   applyBackgroundWindowResize(width: number, height: number): void {
-    if (document.visibilityState === "visible") {
+    if (!isProjectViewCached() && document.visibilityState === "visible") {
       // Queued delivery after reactivation — real layout owns geometry again.
       this.backgroundResizeSession = null;
       return;
@@ -1725,13 +1738,19 @@ class TerminalInstanceService {
     const heightRatio = height / session.basis.height;
     for (const [id, managed] of this.instances) {
       if (!managed.isOpened) continue;
+      // Never resize a live alt-screen TUI from here (#11443) — see the choke
+      // point in `applyBackgroundResize`. Skipping before the origin capture
+      // also keeps the anchor keyed to first eligibility, so a pane that leaves
+      // the alternate screen mid-session still scales from its pre-background
+      // size rather than a partially-applied one.
+      if (managed.isAltBuffer) continue;
       let origin = session.origin.get(id);
       if (!origin) {
         if (managed.lastWidth <= 0 || managed.lastHeight <= 0) continue;
         origin = { width: managed.lastWidth, height: managed.lastHeight };
         session.origin.set(id, origin);
       }
-      this.resizeController.resizePtyOnly(
+      this.resizeController.applyBackgroundResize(
         id,
         origin.width * widthRatio,
         origin.height * heightRatio

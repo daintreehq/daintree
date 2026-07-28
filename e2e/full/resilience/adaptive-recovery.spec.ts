@@ -8,10 +8,11 @@ import { T_LONG } from "../../helpers/timeouts";
 // pressure. The service normally moves balanced ⇄ performance ⇄ efficiency off
 // real memory/thermal/event-loop signals — CI can't reproduce those reliably,
 // so the fault-mode hook `__daintreeForceResourceProfile` drives `applyProfile`
-// directly. The observable side-effect is the per-profile low-memory floor that
-// `applyProfile` fans out to every window's ProjectViewManager, read back via
-// the existing `__daintreeGetPvm` accessor. Values mirror RESOURCE_PROFILE_CONFIGS
-// (shared/types/resourceProfile.ts): performance→null, balanced→768, efficiency→1024.
+// directly. The observable side-effect is the cached-view reclaim floor on every
+// window's ProjectViewManager, read back via the existing `__daintreeGetPvm`
+// accessor. Since #11469 that floor is derived from the machine's system-memory
+// thresholds rather than the profile, so the assertion is that it stays armed
+// and INVARIANT across transitions — not that it takes any particular value.
 
 let ctx: AppContext;
 let fixtureCleanups: Array<() => void> = [];
@@ -32,9 +33,7 @@ async function readLowMemoryFloor(app: AppContext["app"]): Promise<number | null
     const g = globalThis as Record<string, unknown>;
     const getPvm = g.__daintreeGetPvm as (() => unknown) | undefined;
     const pvm = getPvm?.() as
-      | { getLowMemoryFreeThresholdMb: () => number | null }
-      | null
-      | undefined;
+      { getLowMemoryFreeThresholdMb: () => number | null } | null | undefined;
     return pvm?.getLowMemoryFreeThresholdMb() ?? null;
   });
 }
@@ -77,29 +76,30 @@ test.describe.serial("Resilience: adaptive resource-profile recovery", () => {
     for (const cleanup of fixtureCleanups) cleanup();
   });
 
-  test("efficiency entry arms the low-memory floor on the active window's PVM", async () => {
+  test("the reclaim floor is armed on the active window's PVM", async () => {
     await forceProfile(ctx.app, "efficiency");
-    expect(await readLowMemoryFloor(ctx.app)).toBe(1024);
+    const floor = await readLowMemoryFloor(ctx.app);
+    expect(floor).not.toBeNull();
+    expect(floor).toBeGreaterThan(0);
   });
 
-  test("upgrading out of efficiency releases the stricter floor", async () => {
-    // efficiency → performance must clear the floor entirely (null), proving the
-    // exit branch in applyProfile runs and isn't left stuck at the strict value.
+  test("the floor never moves across profile transitions", async () => {
+    // Before #11469 each profile pushed its own floor, so efficiency→balanced —
+    // the exact redirect the interactive override performs — loosened reclaim
+    // from 1024 to 768 at the moment memory was lowest, and performance cleared
+    // it entirely. The floor is a property of the machine's RAM now, so it must
+    // survive every transition unchanged.
     await forceProfile(ctx.app, "efficiency");
-    expect(await readLowMemoryFloor(ctx.app)).toBe(1024);
+    const armed = await readLowMemoryFloor(ctx.app);
+    expect(armed).not.toBeNull();
 
-    await forceProfile(ctx.app, "performance");
-    expect(await readLowMemoryFloor(ctx.app)).toBeNull();
-  });
-
-  test("each profile pushes its own configured floor", async () => {
     await forceProfile(ctx.app, "balanced");
-    expect(await readLowMemoryFloor(ctx.app)).toBe(768);
+    expect(await readLowMemoryFloor(ctx.app)).toBe(armed);
 
     await forceProfile(ctx.app, "performance");
-    expect(await readLowMemoryFloor(ctx.app)).toBeNull();
+    expect(await readLowMemoryFloor(ctx.app)).toBe(armed);
 
     await forceProfile(ctx.app, "efficiency");
-    expect(await readLowMemoryFloor(ctx.app)).toBe(1024);
+    expect(await readLowMemoryFloor(ctx.app)).toBe(armed);
   });
 });

@@ -91,9 +91,9 @@ export interface WorktreeSnapshot {
   isCurrent: boolean;
   /**
    * Whether this is the main worktree (project permanent worktree).
-   * Determined by canonical path match with project root, not git primary status.
+   * Taken from git's first `worktree list --porcelain` entry, which is always
+   * the main worktree — not a path match against the project root (#2251).
    * Main worktrees are protected from deletion and cleanup operations.
-   * False when project root path is unavailable (no protection applied).
    */
   isMainWorktree?: boolean;
   gitDir?: string;
@@ -182,6 +182,16 @@ export interface WorktreeSnapshot {
   /** Epoch ms of the last completed git status check for this worktree. */
   lastGitStatusCheckedAt?: number;
 
+  /**
+   * Monotonic epoch ms of the last recursive-watcher flush — a raw filesystem
+   * write, whether or not git status changed. Independent of
+   * `lastGitStatusCheckedAt`, and (like it) excluded from snapshot dedup and
+   * carried through the store's side map so a timestamp-only bump doesn't churn
+   * the worktree map. Drives the file browser's live refresh for writes into
+   * gitignored paths (#11330). Absent until the first fs write is observed.
+   */
+  workingTreeChangedAt?: number;
+
   /** True when this worktree's repo is in an auth-failed fetch state. */
   fetchAuthFailed?: boolean;
 
@@ -234,6 +244,13 @@ export interface WorktreeSnapshot {
 
   /** Cached display label for the environment (e.g., "Docker", "Akash") */
   worktreeEnvironmentLabel?: string;
+
+  /**
+   * True when the worktree lives outside `dirname(projectRootPath)` — git
+   * reports it, but Daintree did not place it (mirrors `Worktree.isExternal`).
+   * `undefined` when the boundary is unknown; only `true` means external.
+   */
+  isExternal?: boolean;
 
   /** True when the worktree path is mounted via \\wsl$\ or \\wsl.localhost\. */
   isWslPath?: boolean;
@@ -300,6 +317,13 @@ export type WorkspaceHostRequest =
       type: "load-project";
       requestId: string;
       rootPath: string;
+      /**
+       * Immutable project id resolved by main (`resolveProjectIdForPath`) and
+       * threaded in because the host has no DB access (#11282). The host must
+       * never hash `rootPath` for identity — a relocated project's id no longer
+       * equals `sha256(path)`, so hashing would read the wrong state directory.
+       */
+      projectId: string;
       globalEnvVars?: Record<string, string>;
       /**
        * Persisted per-worktree WSL git opt-in state (Windows only). Map key is
@@ -464,6 +488,19 @@ export type WorkspaceHostRequest =
       requestId: string;
       worktreePath: string;
       dirPath?: string;
+    }
+  // The context listing: same request, but answered by a CopyTree dry run so it
+  // matches what generation would actually copy (#11439). Shares the
+  // `file-tree-result` response envelope — request ids disambiguate callers.
+  | {
+      type: "copytree:get-file-tree";
+      requestId: string;
+      operationId: string;
+      worktreePath: string;
+      dirPath?: string;
+      options?: CopyTreeOptions;
+      /** Return excluded entries flagged rather than omitting them */
+      includeExcluded?: boolean;
     }
   // Project Pulse operations
   | {

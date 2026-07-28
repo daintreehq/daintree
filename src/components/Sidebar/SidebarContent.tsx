@@ -20,6 +20,8 @@ import {
 } from "react-virtuoso";
 import { AlertTriangle, FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { Button } from "@/components/ui/button";
+import { isGitBackedProject } from "@shared/types";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { ScrollIndicator } from "@/components/Worktree/ScrollIndicator";
@@ -32,7 +34,6 @@ import {
   useKeybindingDisplay,
   useDohertyGate,
   useKeepMounted,
-  useSkeletonDisplayFloor,
 } from "@/hooks";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { WorktreeSidebarSearchBar, QuickStateFilterBar } from "@/components/Worktree";
@@ -40,6 +41,7 @@ import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { useDndMonitor } from "@dnd-kit/core";
@@ -52,8 +54,13 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore, useWorktreeSelectionStore, useProjectStore } from "@/store";
 import type { PendingCreation, DeletedWorktree } from "@/store/worktreeStore";
-import { recordSidebarWorktreeOrder } from "@/store/worktreeStore";
+import {
+  recordSidebarWorktreeOrder,
+  DELETED_WORKTREE_GROUP_THRESHOLD,
+} from "@/store/worktreeStore";
+import { planDeletedWorktreePlacement } from "@/components/Sidebar/deletedWorktreePlacement";
 import { DeletedWorktreeCard } from "@/components/Sidebar/DeletedWorktreeCard";
+import { DeletedWorktreeGroup } from "@/components/Sidebar/DeletedWorktreeGroup";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import {
   selectSidebarVisiblePanelIds,
@@ -71,7 +78,7 @@ import {
   sortWorktrees,
   sortWorktreesByRelevance,
   groupByType,
-  findIntegrationWorktree,
+  isExternalWorktree,
   scoreWorktree,
   computeChipCounts,
   type DerivedWorktreeMeta,
@@ -187,7 +194,23 @@ interface SidebarDeletedWorktreeFlatItem {
   ariaRowIndex: number;
 }
 
-type SidebarFlatItem = SidebarHeaderFlatItem | SidebarRowFlatItem | SidebarDeletedWorktreeFlatItem;
+/**
+ * Several deleted worktrees collapsed behind one summary row (#11260). One
+ * Virtuoso item regardless of expansion — the member cards render inside it —
+ * so it spans a variable number of ARIA rows while occupying a single index.
+ */
+interface SidebarDeletedWorktreeGroupFlatItem {
+  kind: "deletedWorktreeGroup";
+  id: string;
+  worktrees: DeletedWorktree[];
+  ariaRowIndex: number;
+}
+
+type SidebarFlatItem =
+  | SidebarHeaderFlatItem
+  | SidebarRowFlatItem
+  | SidebarDeletedWorktreeFlatItem
+  | SidebarDeletedWorktreeGroupFlatItem;
 
 interface SidebarVirtuosoContext {
   activeWorktreeId: string | null;
@@ -262,6 +285,18 @@ function renderSidebarFlatItem(
       <div role="row" aria-rowindex={item.ariaRowIndex}>
         <div role="gridcell">
           <DeletedWorktreeCard worktree={item.worktree} />
+        </div>
+      </div>
+    );
+  }
+  if (item.kind === "deletedWorktreeGroup") {
+    // One grid row whether collapsed or expanded: the group is a disclosure
+    // inside its own cell, so expanding changes the row's height rather than
+    // the grid's shape, and `aria-rowindex` stays stable for everything below.
+    return (
+      <div role="row" aria-rowindex={item.ariaRowIndex}>
+        <div role="gridcell">
+          <DeletedWorktreeGroup worktrees={item.worktrees} />
         </div>
       </div>
     );
@@ -475,13 +510,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     Date.now() - reconnectingAt >= RECONNECT_ESCALATE_MS;
   const deferredWorktrees = useDeferredValue(worktrees);
   const [isRefreshing, startRefreshTransition] = useTransition();
-  // Pressing Refresh is a direct user action, so the icon must spin *immediately*
-  // — not behind the Doherty onset gate (that gate defers spinners for passive
-  // background work, where sub-400ms churn shouldn't flash). The display floor
-  // shows the spin on press and holds it for a minimum dwell so fast refreshes
-  // still complete a perceptible spin instead of flickering. See the
-  // direct-action vs. background-work distinction in animationUtils.ts.
-  const showRefreshSpinner = useSkeletonDisplayFloor(isRefreshing);
   // Gate the "Reconnecting…" indicator behind the Doherty threshold so routine
   // sub-400ms port replacements don't flash the spinner. A real host crash
   // takes 2–4s to recover, well past the threshold.
@@ -820,16 +848,20 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     [deferredWorktrees]
   );
 
-  const integrationWorktree = useMemo(
-    () => findIntegrationWorktree(deferredWorktrees, mainWorktree?.id),
+  // Single source for every "worktrees other than the main card" set below —
+  // quick-state counts, chip counts, the main card's aggregate, and the
+  // filtered list all read this one array so they can never disagree about
+  // which worktrees exist. #11433 was exactly that drift: a second, branch-name
+  // derived exclusion removed a worktree from the counts while it stayed on
+  // screen, so the filter bar read "All 0" above a visible row.
+  const nonMainWorktrees = useMemo(
+    () => deferredWorktrees.filter((w) => w.id !== mainWorktree?.id),
     [deferredWorktrees, mainWorktree]
   );
 
   const quickStateCounts = useMemo(() => {
-    const counts = { all: 0, working: 0, waiting: 0, finished: 0 };
-    for (const w of deferredWorktrees) {
-      if (w.id === mainWorktree?.id || w.id === integrationWorktree?.id) continue;
-      counts.all++;
+    const counts = { all: nonMainWorktrees.length, working: 0, waiting: 0, finished: 0 };
+    for (const w of nonMainWorktrees) {
       const meta = derivedMetaMap.get(w.id);
       if (!meta) continue;
       if (matchesQuickStateFilter("working", meta)) counts.working++;
@@ -837,14 +869,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       if (matchesQuickStateFilter("finished", meta)) counts.finished++;
     }
     return counts;
-  }, [deferredWorktrees, derivedMetaMap, mainWorktree, integrationWorktree]);
+  }, [nonMainWorktrees, derivedMetaMap]);
 
   const chipCounts = useMemo(() => {
-    const nonMain = deferredWorktrees.filter(
-      (w) => w.id !== mainWorktree?.id && w.id !== integrationWorktree?.id
-    );
     return computeChipCounts(
-      nonMain,
+      nonMainWorktrees,
       derivedMetaMap,
       activeWorktreeId,
       {
@@ -859,10 +888,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       devServerSessions
     );
   }, [
-    deferredWorktrees,
+    nonMainWorktrees,
     derivedMetaMap,
-    mainWorktree,
-    integrationWorktree,
     activeWorktreeId,
     deferredQuery,
     statusFilters,
@@ -875,7 +902,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   ]);
 
   const mainWorktreeAggregateCounts = useMemo(() => {
-    const nonMainCount = deferredWorktrees.length - 1 - (integrationWorktree ? 1 : 0);
+    const nonMainCount = nonMainWorktrees.length;
     if (
       nonMainCount === 0 &&
       quickStateCounts.working === 0 &&
@@ -890,7 +917,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       waiting: quickStateCounts.waiting,
       finished: quickStateCounts.finished,
     };
-  }, [deferredWorktrees.length, integrationWorktree, quickStateCounts]);
+  }, [nonMainWorktrees.length, quickStateCounts]);
 
   const { filteredWorktrees, groupedSections, hasResultsWithoutQuickState, totalCount } =
     useMemo(() => {
@@ -904,12 +931,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         devServerFilters,
       };
 
-      // Filter non-main worktrees only (exclude main and integration by ID)
-      const nonMain = deferredWorktrees.filter(
-        (w) => w.id !== mainWorktree?.id && w.id !== integrationWorktree?.id
-      );
       let withoutQuickStateMatch = false;
-      const filtered = nonMain.filter((worktree) => {
+      const filtered = nonMainWorktrees.filter((worktree) => {
         const derived = derivedMetaMap.get(worktree.id) ?? {
           terminalCount: 0,
           hasWorkingAgent: false,
@@ -988,7 +1011,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           filteredWorktrees: sorted,
           groupedSections: groupByType(sorted, orderBy, validPinnedWorktrees),
           hasResultsWithoutQuickState: withoutQuickStateMatch,
-          totalCount: nonMain.length,
+          totalCount: nonMainWorktrees.length,
         };
       }
 
@@ -996,10 +1019,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         filteredWorktrees: sorted,
         groupedSections: null,
         hasResultsWithoutQuickState: withoutQuickStateMatch,
-        totalCount: nonMain.length,
+        totalCount: nonMainWorktrees.length,
       };
     }, [
       deferredWorktrees,
+      nonMainWorktrees,
       deferredQuery,
       orderBy,
       isGroupedByType,
@@ -1014,8 +1038,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       alwaysShowWaiting,
       pinnedWorktrees,
       manualOrder,
-      mainWorktree,
-      integrationWorktree,
       derivedMetaMap,
       activeWorktreeId,
       quickStateFilter,
@@ -1114,28 +1136,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       ));
   const mainVisible = mainMatchesQueryPre && mainMatchesFacetsPre;
 
-  const integrationMatchesQueryPre =
-    integrationWorktree && worktreeMatchesQueryPre(integrationWorktree);
-  const integrationMatchesFacetsPre =
-    !hasFacetFiltersActive ||
-    (integrationWorktree &&
-      matchesFilters(
-        integrationWorktree,
-        pinnedFiltersPre,
-        derivedMetaMap.get(integrationWorktree.id) ?? {
-          terminalCount: 0,
-          hasWorkingAgent: false,
-          hasWaitingAgent: false,
-          hasCompletedAgent: false,
-          hasExitedAgent: false,
-          hasMergeConflict: false,
-          chipState: null,
-        },
-        integrationWorktree.id === activeWorktreeId,
-        devServerSessions
-      ));
-  const integrationVisible = integrationMatchesQueryPre && integrationMatchesFacetsPre;
-
   const hasQuery = liveQuery.trim().length > 0;
   const isSortDisabled = isGroupedByType || hasQuery;
   useEffect(() => {
@@ -1200,24 +1200,28 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   }, [dragDisabledReason]);
 
   const mainRowIndex = mainVisible ? 1 : 0;
-  const integrationRowIndex = integrationVisible ? mainRowIndex + 1 : mainRowIndex;
-  const firstScrollableRowIndex = integrationRowIndex + 1;
+  const firstScrollableRowIndex = mainRowIndex + 1;
 
-  // Total rows in the grid — pinned rows + group header rows + data rows.
+  // Total rows in the grid — the main row + group header rows + data rows.
   // Group header rows count toward aria-rowcount because they carry role="row".
+  // Deleted rows carry `role="row"` too, so they count — a collapsed group is
+  // one row no matter how many worktrees it holds.
+  const deletedRowCount =
+    deletedWorktrees.size >= DELETED_WORKTREE_GROUP_THRESHOLD ? 1 : deletedWorktrees.size;
   const ariaRowCount =
-    integrationRowIndex +
+    mainRowIndex +
     (groupedSections
       ? groupedSections.reduce((n, s) => n + 1 + s.worktrees.length, 0)
-      : filteredWorktrees.length);
+      : filteredWorktrees.length) +
+    deletedRowCount;
 
   // Build the flat item array that drives the virtualized scroll region. The
   // grouped path interleaves sticky header sentinels with static rows; the
   // ungrouped path emits sortable rows so dnd-kit's SortableContext can
   // wrap the whole Virtuoso surface.
-  // Publish the visible order so a worktree deleted later can pin its row to
-  // the slot it currently occupies (#11232). Recorded from an effect rather
-  // than during render because it is a write to module state — reading it
+  // Publish the visible order so a worktree deleted later can anchor its row to
+  // the live successor it currently precedes (#11232). Recorded from an effect
+  // rather than during render because it is a write to module state — reading it
   // happens once, at deletion, well after this has settled.
   useEffect(() => {
     recordSidebarWorktreeOrder(filteredWorktrees.map((w) => w.id));
@@ -1226,31 +1230,39 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const sidebarItems = useMemo<SidebarFlatItem[]>(() => {
     const items: SidebarFlatItem[] = [];
     const pinnedSet = new Set(pinnedWorktrees);
+    // External worktrees sort below the pinned area regardless of a leftover pin
+    // entry, so their rows must not claim pinned affordances either (#11434).
+    const isRowPinned = (w: WorktreeState) => pinnedSet.has(w.id) && !isExternalWorktree(w);
     let nextRowIndex = firstScrollableRowIndex;
 
-    // Deleted worktrees hold the slot their row occupied when it was deleted,
-    // so the terminals the user is looking for stay where they left them
-    // instead of jumping to an edge of the list (#11232). Ties and unknown
-    // positions fall back to deletion order for a stable render.
+    // Deleted worktrees anchor their row to the live neighbour it sat above
+    // when it was deleted, so the terminals the user is looking for stay where
+    // they left them instead of jumping to an edge of the list (#11232). Ties
+    // and gone anchors fall back to deletion order / trailing for a stable
+    // render. `dragStartOrder` is the live filtered id order (see line ~1060).
     const deletedList = Array.from(deletedWorktrees.values()).sort(
       (a, b) => a.deletedAt - b.deletedAt
     );
-    const deletedByIndex = new Map<number, DeletedWorktree[]>();
-    const trailingDeleted: DeletedWorktree[] = [];
-    for (const deleted of deletedList) {
-      if (deleted.pinnedIndex >= 0 && deleted.pinnedIndex < filteredWorktrees.length) {
-        const bucket = deletedByIndex.get(deleted.pinnedIndex);
-        if (bucket) bucket.push(deleted);
-        else deletedByIndex.set(deleted.pinnedIndex, [deleted]);
-      } else {
-        trailingDeleted.push(deleted);
-      }
-    }
+    const {
+      isGrouped,
+      groupSlot,
+      byIndex: deletedByIndex,
+      trailing: trailingDeleted,
+    } = planDeletedWorktreePlacement(deletedList, dragStartOrder);
+    const hasGroupSlot = groupSlot >= 0;
     const pushDeleted = (deleted: DeletedWorktree) => {
       items.push({
         kind: "deletedWorktree",
         id: `deleted-${deleted.id}`,
         worktree: deleted,
+        ariaRowIndex: nextRowIndex++,
+      });
+    };
+    const pushDeletedGroup = () => {
+      items.push({
+        kind: "deletedWorktreeGroup",
+        id: "deleted-worktree-group",
+        worktrees: deletedList,
         ariaRowIndex: nextRowIndex++,
       });
     };
@@ -1273,20 +1285,23 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             worktreeId: w.id,
             ariaRowIndex: nextRowIndex++,
             rowIndex: orderIndex.get(w.id) ?? -1,
-            isPinned: pinnedSet.has(w.id),
+            isPinned: isRowPinned(w),
             mode: "static",
           });
         }
       }
       // Type grouping has no slot for a worktree that no longer has a type to
       // group by, so deleted rows collect at the end rather than inventing a
-      // section for them.
-      for (const deleted of deletedList) pushDeleted(deleted);
+      // section for them. Piling up there is exactly what made a burst
+      // unreadable, so the group summary matters most in this path.
+      if (isGrouped) pushDeletedGroup();
+      else for (const deleted of deletedList) pushDeleted(deleted);
       return items;
     }
 
     for (let i = 0; i < filteredWorktrees.length; i++) {
-      for (const deleted of deletedByIndex.get(i) ?? []) pushDeleted(deleted);
+      if (hasGroupSlot && i === groupSlot) pushDeletedGroup();
+      if (!isGrouped) for (const deleted of deletedByIndex.get(i) ?? []) pushDeleted(deleted);
       const w = filteredWorktrees[i]!;
       items.push({
         kind: "row",
@@ -1294,11 +1309,15 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         worktreeId: w.id,
         ariaRowIndex: nextRowIndex++,
         rowIndex: i,
-        isPinned: pinnedSet.has(w.id),
+        isPinned: isRowPinned(w),
         mode: "sortable",
       });
     }
-    for (const deleted of trailingDeleted) pushDeleted(deleted);
+    if (isGrouped) {
+      if (!hasGroupSlot) pushDeletedGroup();
+    } else {
+      for (const deleted of trailingDeleted) pushDeleted(deleted);
+    }
     return items;
   }, [
     groupedSections,
@@ -1332,17 +1351,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     [scrollIndicatorScrollerRef]
   );
 
-  // The pinned main + integration rows live OUTSIDE the Virtuoso surface but
-  // INSIDE the role="grid" container, so keyboard navigation must visit them
-  // before descending into the virtualized list. They carry isPinned so the
-  // hook skips scrollToIndex (they're always rendered, never windowed).
+  // The pinned main row lives OUTSIDE the Virtuoso surface but INSIDE the
+  // role="grid" container, so keyboard navigation must visit it before
+  // descending into the virtualized list. It carries isPinned so the hook
+  // skips scrollToIndex (it's always rendered, never windowed).
   const keyboardItems = useMemo<SidebarKeyboardItem[]>(() => {
     const items: SidebarKeyboardItem[] = [];
     if (mainVisible && mainWorktree) {
       items.push({ kind: "row", worktreeId: mainWorktree.id, isPinned: true });
-    }
-    if (integrationVisible && integrationWorktree) {
-      items.push({ kind: "row", worktreeId: integrationWorktree.id, isPinned: true });
     }
     for (const item of sidebarItems) {
       items.push(
@@ -1350,7 +1366,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       );
     }
     return items;
-  }, [sidebarItems, mainVisible, mainWorktree, integrationVisible, integrationWorktree]);
+  }, [sidebarItems, mainVisible, mainWorktree]);
 
   const {
     gridRef,
@@ -1478,6 +1494,51 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     />
   );
 
+  // A workspace opened without git has no worktrees to wait for or fail at, so
+  // it takes neither the skeleton nor the "Open a Git repository" nudge. Paired
+  // with the empty list rather than read alone: a folder that has since been
+  // initialized externally loads worktrees normally, and those must win over a
+  // flag that is only reconciled the next time the folder is opened (#11405).
+  if (!isGitBackedProject(currentProject) && worktrees.length === 0) {
+    return (
+      <>
+        <div className="flex flex-col h-full">
+          <div className="flex items-center px-4 py-2 border-b border-divider shrink-0">
+            <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
+          </div>
+          <EmptyState
+            variant="zero-data"
+            scale="sidebar"
+            icon={<FolderOpen />}
+            title="Initialize a repository to use worktrees"
+            action={
+              <div className="flex flex-col items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (currentProject) {
+                      useProjectStore
+                        .getState()
+                        .openGitInitDialog(currentProject.path, { step: "initialize" });
+                    }
+                  }}
+                >
+                  Initialize repository
+                </Button>
+                <span className="text-xs text-daintree-text/50">
+                  Terminals, agents, and recipes work without one
+                </span>
+              </div>
+            }
+            className="flex-1"
+          />
+        </div>
+        {restartConfirmDialog}
+      </>
+    );
+  }
+
   if (isLoading && worktrees.length === 0) {
     return (
       <div className="flex flex-col h-full">
@@ -1548,7 +1609,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     );
   }
 
-  const hasNonMainWorktrees = deferredWorktrees.length > 1;
+  const hasNonMainWorktrees = nonMainWorktrees.length > 0;
   const showQuickStateEmptyState =
     filteredWorktrees.length === 0 &&
     quickStateFilter !== "all" &&
@@ -1665,7 +1726,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               aria-keyshortcuts={refreshAriaShortcut}
               title={formatButtonTitle("Refresh sidebar", refreshShortcut)}
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${showRefreshSpinner ? "animate-spin" : ""}`} />
+              <SpinningIcon icon={RefreshCw} active={isRefreshing} className="w-3.5 h-3.5" />
             </button>
           </div>
           <button
@@ -1747,30 +1808,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               homeDir={homeDir}
               aggregateCounts={mainWorktreeAggregateCounts}
               ariaRowIndex={mainRowIndex}
-            />
-          </div>
-        )}
-
-        {/* Integration branch (develop/trunk/next) — pinned below main, subject to text search and facet filters */}
-        {integrationVisible && (
-          <div
-            role="rowgroup"
-            className="shrink-0"
-            style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
-          >
-            <StaticWorktreeRow
-              key={integrationWorktree.id}
-              worktreeId={integrationWorktree.id}
-              activeWorktreeId={activeWorktreeId}
-              focusedWorktreeId={focusedWorktreeId}
-              keyboardCursorId={keyboardCursorId}
-              totalWorktreeCount={deferredWorktrees.length}
-              selectWorktree={selectWorktree}
-              worktreeActions={worktreeActions}
-              availability={availability}
-              agentSettings={agentSettings}
-              homeDir={homeDir}
-              ariaRowIndex={integrationRowIndex}
             />
           </div>
         )}
@@ -1866,7 +1903,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           ) : filteredWorktrees.length === 0 &&
             hasFilters &&
             hasNonMainWorktrees &&
-            !(mainVisible || integrationVisible) ? (
+            !mainVisible ? (
             <EmptyState
               variant="filtered-empty"
               scale="sidebar"

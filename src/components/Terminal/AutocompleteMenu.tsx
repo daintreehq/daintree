@@ -43,8 +43,7 @@ export type CompletionResolverId = "diff" | "terminal" | "selection";
  * still resolves.
  */
 export type AutocompleteInsert =
-  | "literal"
-  | { insert: "resolve"; resolverId: CompletionResolverId };
+  "literal" | { insert: "resolve"; resolverId: CompletionResolverId };
 
 export interface AutocompleteItem {
   key: string;

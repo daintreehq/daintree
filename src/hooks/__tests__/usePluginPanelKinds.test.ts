@@ -117,6 +117,40 @@ describe("usePluginPanelKinds", () => {
     clearPanelKindRegistry();
   });
 
+  it("re-registers a kind when a push changes only its dockable flag (#11332)", async () => {
+    // `dockable` is in PANEL_KIND_META_KEYS, so a redeploy that flips only the
+    // dock opt-out must be detected as a change and re-applied to the registry
+    // — otherwise the stale config keeps the kind's old dockability.
+    let emit: ((payload: { kinds: PanelKindConfig[] }) => void) | null = null;
+    onPanelKindsChangedMock.mockImplementation(
+      (cb: (payload: { kinds: PanelKindConfig[] }) => void) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+
+    const { getPanelKindConfig, clearPanelKindRegistry } =
+      await import("@shared/config/panelKindRegistry");
+    const { usePluginPanelKinds } = await import("../usePluginPanelKinds");
+
+    renderHook(() => usePluginPanelKinds());
+    await waitFor(() => expect(onPanelKindsChangedMock).toHaveBeenCalled());
+
+    const dockable = pluginKind({ id: "acme.viewer", hasPty: false, componentPath: "./v.js" });
+    act(() => emit!({ kinds: [dockable] }));
+    // Assert the kind registered before checking key absence, so a missing
+    // config can't make `?.dockable` pass vacuously.
+    const registered = getPanelKindConfig(dockable.id);
+    expect(registered).toBeDefined();
+    expect(registered?.dockable).toBeUndefined();
+
+    const optedOut = { ...dockable, dockable: false };
+    act(() => emit!({ kinds: [optedOut] }));
+    expect(getPanelKindConfig(dockable.id)?.dockable).toBe(false);
+
+    clearPanelKindRegistry();
+  });
+
   it("does not register a definition for non-PTY plugin kinds without componentPath", async () => {
     const nonPty = pluginKind({ id: "acme.note", hasPty: false });
     getPanelKindsMock.mockResolvedValue([nonPty]);

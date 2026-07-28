@@ -10,9 +10,14 @@ import {
   onPanelKindUnregistered,
   panelKindUsesTerminalUi,
   panelKindIsDockable,
+  normalizeDockLocation,
+  normalizeGroupDockLocation,
   registerPanelKind,
+  unregisterPanelKind,
   unregisterPluginPanelKinds,
   clearPanelKindRegistry,
+  subscribeToPanelKindRegistry,
+  getPanelKindRegistrySnapshot,
   getBuiltInPanelKinds,
   getFirstRenderSeeds,
   getFirstRenderPreloadSeeds,
@@ -463,6 +468,7 @@ describe("getFirstRenderSeeds", () => {
       "src/components/Browser/BrowserPane.tsx",
       "src/components/DevPreview/DevPreviewPane.tsx",
       "src/panels/diff/DiffPane.tsx",
+      "src/panels/file-browser/FileBrowserPane.tsx",
       "src/panels/file/FilePane.tsx",
       "src/panels/review/ReviewPane.tsx",
     ]);
@@ -533,21 +539,168 @@ describe("getFirstRenderPreloadSeeds", () => {
 });
 
 describe("panelKindIsDockable", () => {
-  it("PTY kinds are always dockable", () => {
-    expect(panelKindIsDockable("terminal")).toBe(true);
+  afterEach(() => {
+    clearPanelKindRegistry();
   });
 
-  it("file and browser panels opt in via the dockable capability", () => {
+  it("registered kinds are dockable by default (opt-out model)", () => {
+    // PTY terminal and the non-PTY reading surfaces carry no `dockable` flag —
+    // the default is dockable, not the old opt-in.
+    expect(panelKindIsDockable("terminal")).toBe(true);
     expect(panelKindIsDockable("file")).toBe(true);
     expect(panelKindIsDockable("browser")).toBe(true);
   });
 
-  it("non-PTY kinds without the capability are not dockable", () => {
-    expect(panelKindIsDockable("dev-preview")).toBe(false);
-    expect(panelKindIsDockable("review")).toBe(false);
+  it("the four built-ins that opt out are not dockable", () => {
+    for (const kind of ["dev-preview", "review", "file-browser", "diff"]) {
+      expect(panelKindIsDockable(kind), `${kind} opts out via dockable:false`).toBe(false);
+    }
+  });
+
+  it("a plugin kind without an explicit flag is dockable", () => {
+    registerPanelKind(makeExtensionConfig("ext-a.viewer", "ext-a"));
+    expect(panelKindIsDockable("ext-a.viewer")).toBe(true);
+  });
+
+  it("a plugin kind that declares dockable:false opts out", () => {
+    registerPanelKind({ ...makeExtensionConfig("ext-a.viewer", "ext-a"), dockable: false });
+    expect(panelKindIsDockable("ext-a.viewer")).toBe(false);
+  });
+
+  it("an explicit dockable:false wins even for a PTY kind", () => {
+    // Predicate contract only: `hasPty` no longer forces dockability, so the
+    // implementation must be `dockable !== false`, not `hasPty || …`. (At the
+    // store boundary a spawned PTY panel collapses to kind `terminal`, so this
+    // combination can't describe a live panel — this pins the pure function.)
+    registerPanelKind({
+      ...makeExtensionConfig("ext-a.pty", "ext-a"),
+      hasPty: true,
+      dockable: false,
+    });
+    expect(panelKindIsDockable("ext-a.pty")).toBe(false);
   });
 
   it("unknown kinds are not dockable", () => {
     expect(panelKindIsDockable("no-such-kind")).toBe(false);
+  });
+});
+
+describe("normalizeDockLocation", () => {
+  afterEach(() => {
+    clearPanelKindRegistry();
+  });
+
+  it("passes a dock location through for a dockable kind", () => {
+    expect(normalizeDockLocation("terminal", "dock")).toBe("dock");
+    expect(normalizeDockLocation("browser", "dock")).toBe("dock");
+  });
+
+  it("redirects a dock location to grid for a non-dockable built-in", () => {
+    expect(normalizeDockLocation("review", "dock")).toBe("grid");
+    expect(normalizeDockLocation("diff", "dock")).toBe("grid");
+  });
+
+  it("redirects a dock location to grid for an unknown kind", () => {
+    // An unregistered kind is never dockable — a dock request would strand it.
+    expect(normalizeDockLocation("no-such-kind", "dock")).toBe("grid");
+  });
+
+  it("treats a missing kind as the always-dockable legacy terminal", () => {
+    expect(normalizeDockLocation(undefined, "dock")).toBe("dock");
+  });
+
+  it("leaves non-dock locations untouched regardless of dockability", () => {
+    for (const location of ["grid", "overlay", "trash", "background", "dialog"] as const) {
+      expect(normalizeDockLocation("review", location)).toBe(location);
+      expect(normalizeDockLocation("terminal", location)).toBe(location);
+    }
+  });
+
+  it("follows a live dockable flip", () => {
+    registerPanelKind({ ...makeExtensionConfig("ext-a.viewer", "ext-a"), dockable: true });
+    expect(normalizeDockLocation("ext-a.viewer", "dock")).toBe("dock");
+    registerPanelKind({ ...makeExtensionConfig("ext-a.viewer", "ext-a"), dockable: false });
+    expect(normalizeDockLocation("ext-a.viewer", "dock")).toBe("grid");
+  });
+});
+
+describe("normalizeGroupDockLocation", () => {
+  it("keeps a dock target only when every member is dockable", () => {
+    expect(normalizeGroupDockLocation(["terminal", "browser", "file"], "dock")).toBe("dock");
+  });
+
+  it("rescues the whole group to grid when any member is non-dockable", () => {
+    // All-or-nothing: one non-dockable sibling redirects the entire group.
+    expect(normalizeGroupDockLocation(["terminal", "review"], "dock")).toBe("grid");
+    expect(normalizeGroupDockLocation(["diff", "terminal"], "dock")).toBe("grid");
+  });
+
+  it("treats an unknown or missing member kind as non-dockable (grid)", () => {
+    expect(normalizeGroupDockLocation(["terminal", "no-such-kind"], "dock")).toBe("grid");
+    expect(normalizeGroupDockLocation(["terminal", undefined], "dock")).toBe("dock");
+  });
+
+  it("passes a grid target through unchanged", () => {
+    expect(normalizeGroupDockLocation(["review", "diff"], "grid")).toBe("grid");
+  });
+
+  it("an empty group trivially satisfies the dock target", () => {
+    expect(normalizeGroupDockLocation([], "dock")).toBe("dock");
+  });
+});
+
+describe("panel kind registry external store", () => {
+  afterEach(() => {
+    clearPanelKindRegistry();
+  });
+
+  it("getSnapshot returns a stable reference until a mutation", () => {
+    const first = getPanelKindRegistrySnapshot();
+    expect(getPanelKindRegistrySnapshot()).toBe(first);
+  });
+
+  it("replaces the snapshot reference on register", () => {
+    const before = getPanelKindRegistrySnapshot();
+    registerPanelKind(makeExtensionConfig("ext-a.viewer", "ext-a"));
+    const after = getPanelKindRegistrySnapshot();
+    expect(after).not.toBe(before);
+    expect(after["ext-a.viewer"]).toBeDefined();
+  });
+
+  it("notifies subscribers on register, flip, and unregister", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeToPanelKindRegistry(listener);
+
+    registerPanelKind({ ...makeExtensionConfig("ext-a.viewer", "ext-a"), dockable: true });
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    // A dockable-only flip re-registers the same id and must still notify.
+    registerPanelKind({ ...makeExtensionConfig("ext-a.viewer", "ext-a"), dockable: false });
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    unregisterPanelKind("ext-a.viewer");
+    expect(listener).toHaveBeenCalledTimes(3);
+
+    unsubscribe();
+    registerPanelKind(makeExtensionConfig("ext-b.viewer", "ext-b"));
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
+
+  it("emits once per batch unregister, not once per removed kind", () => {
+    registerPanelKind(makeExtensionConfig("ext-a.one", "ext-a"));
+    registerPanelKind(makeExtensionConfig("ext-a.two", "ext-a"));
+    const listener = vi.fn();
+    const unsubscribe = subscribeToPanelKindRegistry(listener);
+    unregisterPluginPanelKinds("ext-a");
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it("does not notify when a batch unregister removes nothing", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeToPanelKindRegistry(listener);
+    unregisterPluginPanelKinds("never-loaded");
+    expect(listener).not.toHaveBeenCalled();
+    unsubscribe();
   });
 });

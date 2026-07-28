@@ -9,6 +9,15 @@ const FILE_SCHEMES = "daintree-file:";
 // protocol handler serves (scoped to its exact token authority), never this one.
 const HTML_PREVIEW_SCHEME = "daintree-html:";
 
+// Inline PDF preview (#11427). Only appears in `frame-src`, so the file viewer
+// can mount a `daintree-pdf://load?…` iframe that Chromium hands to its built-in
+// PDFium viewer. `daintree-file:` is deliberately NOT granted this: it serves
+// arbitrary repo files under extension-derived MIME types, so framing it would
+// let a repo-controlled document render as a live page. The PDF scheme's handler
+// rejects any canonical path that isn't `.pdf` and answers with a hard-coded
+// `application/pdf`, so this allowance can never resolve to anything else.
+const PDF_PREVIEW_SCHEME = "daintree-pdf:";
+
 // Plugin-served renderer modules. `plugin:` is a hardened first-party scheme
 // (`standard: true, secure: true`, no `bypassCSP`) — see
 // `electron/main.ts:120-130` — that resolves to the plugin's installed-on-disk
@@ -105,9 +114,14 @@ export function getDaintreeAppProdCSP(options?: DaintreeCspOptions): string {
     `connect-src 'self' ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
     `img-src 'self' ${GITHUB_AVATARS} ${GRAVATAR} ${DAINTREE_DOCS} ${FILE_SCHEMES} data: blob:`,
     "font-src 'self' data:",
-    "media-src 'self'",
+    // blob:: the file viewer fetch()es video bytes from daintree-file:// and
+    // plays them through a blob object URL — Chromium's custom-scheme media
+    // loader can't consume follow-up range requests (electron#51442), so
+    // <video src> never points at FILE_SCHEMES directly. FILE_SCHEMES stays
+    // for WebAudio-style consumers that stream media without the blob detour.
+    `media-src 'self' ${FILE_SCHEMES} blob:`,
     "worker-src 'self' blob:",
-    `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
+    `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${PDF_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'none'",
@@ -139,9 +153,10 @@ export function getDaintreeAppDevCSP(): string {
     `connect-src 'self' ${origins} ${wsOrigins} ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
     `img-src 'self' ${origins} ${GITHUB_AVATARS} ${GRAVATAR} ${DAINTREE_DOCS} ${FILE_SCHEMES} data: blob:`,
     `font-src 'self' ${origins} data:`,
-    "media-src 'self'",
+    // blob: mirrors the production policy — see getDaintreeAppProdCSP.
+    `media-src 'self' ${FILE_SCHEMES} blob:`,
     "worker-src 'self' blob:",
-    `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
+    `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${PDF_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'none'",

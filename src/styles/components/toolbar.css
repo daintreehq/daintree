@@ -117,16 +117,18 @@
  * provides the containment edge.
  *
  * Comes after :hover in source order so the ring survives hover-over-armed (equal
- * specificity, later wins). The sidebar toggle opts out via
- * [data-sidebar-toggle]: it's pressed nearly all the time (sidebar visible),
- * so an always-on armed state reads as noise rather than state — the
- * PanelLeftClose/PanelLeftOpen icon swap carries the signal instead (#8357).
- * The exclusion is wrapped in :where() so armed stays (0,2,0) — equal to
- * hover and :active, preserving both the source-order tiebreaker above and
- * the momentary :active background on other pressed buttons. */
+ * specificity, later wins). Sidebar toggles opt out via [data-sidebar-toggle]:
+ * they sit in their "on" state nearly all the time (sidebar visible), so an
+ * always-on armed chip reads as noise rather than state — the
+ * PanelLeftClose/PanelLeftOpen icon swap carries the signal instead (#8357,
+ * #11328). The opt-out covers both the app sidebar toggle (aria-pressed) and
+ * the file-browser tree toggle (aria-expanded disclosure). The exclusion is
+ * wrapped in :where() so armed stays (0,2,0) — equal to hover and :active,
+ * preserving both the source-order tiebreaker above and the momentary :active
+ * background on other pressed buttons. */
 .toolbar-icon-button[aria-pressed="true"]:where(:not([data-sidebar-toggle])),
 .toolbar-icon-button[aria-checked="true"],
-.toolbar-icon-button[aria-expanded="true"],
+.toolbar-icon-button[aria-expanded="true"]:where(:not([data-sidebar-toggle])),
 .toolbar-icon-button[data-state="open"],
 .toolbar-agent-button[aria-pressed="true"],
 .toolbar-agent-button[aria-expanded="true"],
@@ -154,7 +156,8 @@
 :where(.light, [data-color-mode="light"])
   .toolbar-icon-button[aria-pressed="true"]:where(:not([data-sidebar-toggle])),
 :where(.light, [data-color-mode="light"]) .toolbar-icon-button[aria-checked="true"],
-:where(.light, [data-color-mode="light"]) .toolbar-icon-button[aria-expanded="true"],
+:where(.light, [data-color-mode="light"])
+  .toolbar-icon-button[aria-expanded="true"]:where(:not([data-sidebar-toggle])),
 :where(.light, [data-color-mode="light"]) .toolbar-icon-button[data-state="open"],
 :where(.light, [data-color-mode="light"]) .toolbar-agent-button[aria-pressed="true"],
 :where(.light, [data-color-mode="light"]) .toolbar-agent-button[aria-expanded="true"],
@@ -592,7 +595,7 @@
 @media (forced-colors: active) {
   .toolbar-icon-button[aria-pressed="true"]:where(:not([data-sidebar-toggle])),
   .toolbar-icon-button[aria-checked="true"],
-  .toolbar-icon-button[aria-expanded="true"],
+  .toolbar-icon-button[aria-expanded="true"]:where(:not([data-sidebar-toggle])),
   .toolbar-icon-button[data-state="open"],
   .toolbar-agent-button[aria-pressed="true"],
   .toolbar-agent-button[aria-expanded="true"],

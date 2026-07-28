@@ -14,7 +14,9 @@ import type {
   GitInitProgressEvent,
 } from "../../../../shared/types/ipc/gitInit.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { DEFAULT_GITIGNORE_TEMPLATE_ID } from "../../../../shared/config/gitignoreTemplates.js";
 import { AppError } from "../../../utils/errorTypes.js";
+import { getGitignoreTemplate } from "./gitignoreTemplates.js";
 
 export function registerGitInitHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -53,7 +55,7 @@ export function registerGitInitHandlers(): () => void {
       createInitialCommit = true,
       initialCommitMessage = "Initial commit",
       createGitignore = true,
-      gitignoreTemplate = "node",
+      gitignoreTemplate = DEFAULT_GITIGNORE_TEMPLATE_ID,
     } = options;
 
     if (typeof directoryPath !== "string" || !directoryPath) {
@@ -128,9 +130,10 @@ export function registerGitInitHandlers(): () => void {
             if (missing.length === 0) {
               skipMessage = "Existing .gitignore kept — covers all template entries";
             } else {
-              const preview = missing.slice(0, 5).join(", ");
-              const overflow = missing.length > 5 ? `, and ${missing.length - 5} more` : "";
-              skipMessage = `Existing .gitignore kept — missing template entries: ${preview}${overflow}`;
+              // Templates are large enough that itemising the diff is noise —
+              // report the size and point at the part that actually matters.
+              const label = missing.length === 1 ? "entry" : "entries";
+              skipMessage = `Existing .gitignore kept — missing ${missing.length} template ${label}; review it for secrets`;
             }
           } catch {
             // Fall through to default message
@@ -195,11 +198,17 @@ export function registerGitInitHandlers(): () => void {
   return () => handlers.forEach((cleanup) => cleanup());
 }
 
+/**
+ * Collects the exclusion patterns from a .gitignore, dropping comments, blank
+ * lines, and negations. A negation only re-includes something an exclusion took
+ * away, so it is meaningless on its own — reporting `!.env.example` as "missing"
+ * from a file that never excluded `.env.example` would be noise.
+ */
 function parseGitignoreLines(content: string): Set<string> {
   const lines = new Set<string>();
   for (const raw of content.split(/\r?\n/)) {
     const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
+    if (!line || line.startsWith("#") || line.startsWith("!")) continue;
     lines.add(line);
   }
   return lines;
@@ -216,101 +225,4 @@ export function computeMissingTemplateEntries(
     if (!existing.has(entry)) missing.push(entry);
   }
   return missing;
-}
-
-export function getGitignoreTemplate(template: string): string | null {
-  switch (template) {
-    case "node":
-      return `# Node.js
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.npm
-.yarn
-.pnp.*
-
-# Environment
-.env
-.env.*
-!.env.example
-.env.local
-.env.*.local
-
-# Build outputs
-dist/
-build/
-out/
-.next/
-.nuxt/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-`;
-    case "python":
-      return `# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-.venv
-
-# Distribution
-build/
-dist/
-*.egg-info/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Environment / secrets
-.env
-.env.*
-!.env.example
-.env.local
-.env.*.local
-
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-*.swp
-`;
-    case "minimal":
-      return `# Secrets
-.env
-.env.*
-!.env.example
-*.pem
-*.key
-
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-*.swp
-`;
-    default:
-      return null;
-  }
 }

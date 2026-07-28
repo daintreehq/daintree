@@ -277,10 +277,12 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
       expect(source).toMatch(/if \(mainVisible && mainWorktree\)[\s\S]{0,200}isPinned: true/);
     });
 
-    it("prepends the integration worktree to keyboardItems when visible", () => {
-      expect(source).toMatch(
-        /if \(integrationVisible && integrationWorktree\)[\s\S]{0,200}isPinned: true/
-      );
+    it("keeps the main worktree as the only row pinned outside Virtuoso (#11433)", () => {
+      // A second pinned slot used to hold whichever worktree happened to sit on
+      // `develop`/`trunk`/`next`, which removed it from the counts and the list.
+      // Every other worktree now reaches the grid through sidebarItems. The test
+      // above pins down *which* row stays pinned; this one pins the count.
+      expect(source.match(/isPinned: true/g)).toHaveLength(1);
     });
   });
 
@@ -297,6 +299,16 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
         expect(source).toMatch(
           /groupedSections[\s\S]*?\.reduce\([\s\S]*?1 \+ s\.worktrees\.length/
         );
+      });
+
+      it("anchors the virtualized rows directly after the single pinned main row", async () => {
+        // With only the main row pinned, the first virtualized row sits one slot
+        // past it and the row count starts from the same base. A second pinned
+        // slot would have to reintroduce an offset here (#11433).
+        const source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+        expect(source).toMatch(/const firstScrollableRowIndex = mainRowIndex \+ 1;/);
+        expect(source).toMatch(/const ariaRowCount =\s*\n?\s*mainRowIndex \+/);
+        expect(source).toMatch(/let nextRowIndex = firstScrollableRowIndex;/);
       });
 
       it("StaticWorktreeRow applies aria-rowindex to its role='row' div", async () => {
@@ -478,10 +490,10 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
     });
 
     it("threads only the worktreeId (not a full worktree object) into StaticWorktreeRow across all render paths", () => {
-      // Integration (pinned) row stays as inline JSX outside the Virtuoso
+      // The main (pinned) row stays as inline JSX outside the Virtuoso
       // surface; its id-only prop shape is preserved.
       expect(source).toMatch(
-        /<StaticWorktreeRow\s+key=\{integrationWorktree\.id\}\s+worktreeId=\{integrationWorktree\.id\}/
+        /<StaticWorktreeRow\s+key=\{mainWorktree\.id\}\s+worktreeId=\{mainWorktree\.id\}/
       );
       // Virtualized rows are produced by renderSidebarFlatItem which reads
       // `item.worktreeId` off each Virtuoso item — never a full worktree

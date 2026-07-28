@@ -221,8 +221,7 @@ async function measureCreate(round: number, branch: string): Promise<CreateSampl
   const sample = await ctx.window.evaluate(
     async ({ rootPath, branch, wtPath }) => {
       const dispatch = (window as any).__daintreeDispatchAction as
-        | ((id: string, args?: unknown, opts?: unknown) => Promise<any>)
-        | undefined;
+        ((id: string, args?: unknown, opts?: unknown) => Promise<any>) | undefined;
       if (!dispatch) {
         return {
           createResolvedMs: -1,

@@ -4,6 +4,7 @@ import type { BrowserHistory } from "@shared/types/browser";
 import type {
   FileViewMode,
   DiffSource,
+  FileBrowserTreeSnapshot,
   PanelExitBehavior,
   PanelTitleMode,
 } from "@shared/types/panel";
@@ -24,6 +25,7 @@ import {
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
 import { isAbsolute } from "@shared/utils/path";
+import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { resolveAgentRuntimeSettings } from "@/utils/agentRuntimeSettings";
@@ -59,6 +61,13 @@ export interface AddTerminalArgs extends AddPanelOptionsBase {
   fileStatus?: GitStatus;
   diffSource?: DiffSource;
   baseBranch?: string;
+  browserSelectedPath?: string;
+  browserExpandedPaths?: string[];
+  browserHideDotfiles?: boolean;
+  browserRootPath?: string;
+  browserSidebarCollapsed?: boolean;
+  browserTreeSnapshot?: FileBrowserTreeSnapshot;
+  browserSidebarWidth?: number;
   /**
    * Preserved user-initiated focus timestamp from the saved snapshot. The
    * post-hydration focus picker in `useAppHydration` reads this off
@@ -111,6 +120,18 @@ export interface SavedTerminalData {
   fileStatus?: string;
   diffSource?: string;
   baseBranch?: string;
+  /**
+   * Untrusted on-disk JSON — the snapshot schema passes unknown keys through,
+   * so these are typed `unknown` and sanitized at the file-browser deserializer
+   * boundary rather than trusted as their eventual shapes.
+   */
+  browserSelectedPath?: unknown;
+  browserExpandedPaths?: unknown;
+  browserHideDotfiles?: unknown;
+  browserRootPath?: unknown;
+  browserSidebarCollapsed?: unknown;
+  browserTreeSnapshot?: unknown;
+  browserSidebarWidth?: unknown;
   exitBehavior?: PanelExitBehavior;
   agentSessionId?: string;
   agentLaunchFlags?: string[];
@@ -436,6 +457,45 @@ export function buildArgsForReconnectedFallback(
   };
 }
 
+/**
+ * Resolve the agent identity a respawn will actually launch under: the legacy
+ * on-disk `agentId`/`type` migration plus the title-based recovery for snapshots
+ * written under the old `kind: "agent"` marker. Shared with restore's
+ * resume-latest election (#11461) so slot eligibility can never disagree with the
+ * command the respawn goes on to build. Pure — safe to call in a pre-pass.
+ */
+export function resolveRespawnAgentId(
+  saved: SavedTerminalData,
+  kind: PanelKind | undefined
+): string | undefined {
+  const savedLaunchAgentId =
+    saved.launchAgentId ?? (saved.type === "claude" ? "claude" : saved.agentId);
+  return inferAgentIdFromTitle(
+    saved.title,
+    kind,
+    resolveAgentId(savedLaunchAgentId),
+    saved.id,
+    "Respawn"
+  );
+}
+
+export interface BuildArgsForRespawnOptions {
+  resolvedAgentBaseCommand?: string;
+  /**
+   * False when a sibling pane already owns this agent+cwd's single resume-latest
+   * slot, or when something else in that directory already holds a session the
+   * fallback would resolve to (#11461).
+   */
+  allowResumeLatest?: boolean;
+  /**
+   * False when a sibling pane owns the exact `agentSessionId` this snapshot
+   * carries (#11461). Two panes can persist one session id — that is what the
+   * collision this guards against leaves behind — and replaying both would put
+   * two writers on one transcript, so the loser resumes nothing.
+   */
+  allowSessionIdResume?: boolean;
+}
+
 export function buildArgsForRespawn(
   saved: SavedTerminalData,
   kind: PanelKind,
@@ -444,19 +504,18 @@ export function buildArgsForRespawn(
   reconnectTimedOut: boolean,
   clipboardDirectory: string | undefined,
   projectPresetsByAgent?: Record<string, AgentPreset[]>,
-  resolvedAgentBaseCommand?: string
+  options?: BuildArgsForRespawnOptions
 ): AddTerminalArgs {
-  // Migrate legacy on-disk agentId/type to launchAgentId at the read boundary.
-  const savedLaunchAgentId =
-    saved.launchAgentId ?? (saved.type === "claude" ? "claude" : saved.agentId);
-  let effectiveAgentId = resolveAgentId(savedLaunchAgentId);
-  effectiveAgentId = inferAgentIdFromTitle(
-    saved.title,
-    kind,
-    effectiveAgentId,
-    saved.id,
-    "Respawn"
-  );
+  const resolvedAgentBaseCommand = options?.resolvedAgentBaseCommand;
+  const allowResumeLatest = options?.allowResumeLatest ?? true;
+  const allowSessionIdResume = options?.allowSessionIdResume ?? true;
+  // True once a resume this snapshot could have replayed was withheld on purpose.
+  // `command` still holds `saved.command`, which is itself a resume command
+  // whenever an earlier restore built one, so the suppressed paths below have to
+  // rebuild it rather than inherit it — that would reinstate the very collision
+  // the suppression exists to prevent.
+  const resumeWithheld = Boolean(saved.agentSessionId) && !allowSessionIdResume;
+  const effectiveAgentId = resolveRespawnAgentId(saved, kind);
 
   const isAgentPanel = Boolean(effectiveAgentId);
   const agentId = effectiveAgentId;
@@ -535,7 +594,7 @@ export function buildArgsForRespawn(
         shareClipboardDirectory,
       });
 
-    if (saved.agentSessionId) {
+    if (saved.agentSessionId && allowSessionIdResume) {
       const resumeCmd = resolvedAgentBaseCommand
         ? buildResumeCommand(agentId, saved.agentSessionId, resumeFlags, baseCommand)
         : buildResumeCommand(agentId, saved.agentSessionId, resumeFlags);
@@ -555,12 +614,23 @@ export function buildArgsForRespawn(
         sessionLostOnRestore = true;
       }
     } else {
-      // No session ID was captured (graceful-shutdown pattern match missed or
-      // timed out). Try the agent's resume-latest fallback before falling
-      // through to a fresh launch so the user keeps their prior conversation.
-      const resumeLatestCmd = resolvedAgentBaseCommand
-        ? buildResumeLatestCommand(agentId, resumeFlags, baseCommand)
-        : buildResumeLatestCommand(agentId, resumeFlags);
+      // Either no session id was captured (graceful-shutdown pattern match missed
+      // or timed out) or a sibling owns the one this snapshot carries. Try the
+      // agent's resume-latest fallback before falling through to a fresh launch so
+      // the user keeps their prior conversation. Suppressed when a sibling pane
+      // owns this agent+cwd's single slot, or holds a session in that directory:
+      // resume-latest resolves to the most recent session in scope, so several
+      // panes running it would all land in the SAME conversation (#11461).
+      // `resumeWithheld` gates it too, so the two allowances can't be set
+      // inconsistently by a caller: a pane denied the session id it carries must
+      // not reach that same conversation through the back door, since the owner
+      // replaying it is exactly what resume-latest would resolve to.
+      let resumeLatestCmd: string | undefined;
+      if (allowResumeLatest && !resumeWithheld) {
+        resumeLatestCmd = resolvedAgentBaseCommand
+          ? buildResumeLatestCommand(agentId, resumeFlags, baseCommand)
+          : buildResumeLatestCommand(agentId, resumeFlags);
+      }
       if (resumeLatestCmd) {
         command = resumeLatestCmd;
       } else if (hasPersistedFlags) {
@@ -573,6 +643,23 @@ export function buildArgsForRespawn(
           presetArgs: preset?.args?.join(" "),
           globalSkipPermissions,
           globalUseAltScreen,
+        });
+        sessionLostOnRestore = true;
+      } else if (
+        resumeWithheld ||
+        (!allowResumeLatest && buildResumeLatestCommand(agentId) !== undefined)
+      ) {
+        // Nothing above rebuilt the command, so `command` still holds
+        // `saved.command` — which is itself a persisted resume command whenever an
+        // earlier restore built one. Inheriting it would reinstate the very
+        // collision this suppression exists to prevent, so launch clean. The bare
+        // capability probe (config-only, so flag-independent and in agreement with
+        // the restore election's) keeps resume-latest suppression from touching an
+        // agent that has no such fallback; a withheld session id needs no probe,
+        // since the id in hand is proof the snapshot can carry a resume command.
+        command = buildLaunchCommandFromFlags(baseCommand, agentId, injectedFromEmpty, {
+          clipboardDirectory,
+          shareClipboardDirectory,
         });
         sessionLostOnRestore = true;
       }
@@ -651,15 +738,29 @@ export function buildArgsForRespawn(
 export function buildArgsForNonPtyRecreation(
   saved: SavedTerminalData,
   kind: PanelKind,
-  projectRoot: string
+  projectRoot: string,
+  activeWorktreeId?: string | null
 ): AddTerminalArgs {
-  const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
+  const savedLocation = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
+  // Rescue a persisted dock panel whose kind can't dock (or isn't registered yet
+  // during this hydration) HERE, where the saved active worktree is known —
+  // `addPanel`'s own dock→grid rescue runs too late to adopt a worktree (worktree
+  // selection hydrates AFTER panel restore), so a worktree-less rescued panel
+  // would strand in the global-only grid bucket, invisible once a worktree is
+  // active (#11375 point 3). A worktree-less panel adopts the active worktree so
+  // it returns VISIBLY to the grid; a dockable kind keeps its dock placement.
+  const rescueDockToGrid = savedLocation === "dock" && !panelKindIsDockable(kind);
+  const location = rescueDockToGrid ? "grid" : savedLocation;
+  const worktreeId =
+    rescueDockToGrid && saved.worktreeId == null && activeWorktreeId != null
+      ? activeWorktreeId
+      : saved.worktreeId;
   const base: AddTerminalArgs = {
     kind,
     title: saved.title,
     titleMode: saved.titleMode,
     cwd: resolveSavedCwd(saved.cwd, projectRoot),
-    worktreeId: saved.worktreeId,
+    worktreeId,
     location,
     requestedId: saved.id,
     exitBehavior: saved.exitBehavior,

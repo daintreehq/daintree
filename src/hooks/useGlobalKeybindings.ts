@@ -7,6 +7,8 @@ import {
 import { actionService } from "../services/ActionService";
 import { logError } from "@/utils/logger";
 import { dispatchEscape, hasHandlers } from "@/lib/escapeStack";
+import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
+import { buildKeybindingWhenContext } from "@/services/keybindingWhenContext";
 import { usePaletteStore, usePanelStore } from "../store";
 
 /**
@@ -73,9 +75,13 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // Handle Shift+F10 and ContextMenu key for panel context menus.
       // Must be checked before the editable/terminal bailouts below.
       // Respects user overrides — if the binding is disabled, fall through.
+      // Target-guarded: a surface marked `data-row-menu` (the file-browser
+      // tree) routes these keys to its own row-level menu, and this capture
+      // handler consuming them first would make that menu mouse-only.
       if (
-        e.key === "ContextMenu" ||
-        (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey)
+        (e.key === "ContextMenu" ||
+          (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey)) &&
+        target.closest("[data-row-menu]") === null
       ) {
         const effectiveCombo = keybindingService.getEffectiveCombo("terminal.contextMenu");
         if (effectiveCombo !== undefined) {
@@ -205,6 +211,17 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         return;
       }
 
+      // Terminal-first ownership: readline Ctrl+keys and the Windows/Linux
+      // clipboard conventions belong to the PTY while a terminal has focus.
+      // This capture handler runs before xterm's custom key handler, so the
+      // exemption must live here — the xterm-side allowlist can't protect a
+      // key this handler already consumed (on non-mac, Ctrl+W would resolve
+      // as Cmd+W → terminal.close instead of deleting a word). A pending
+      // chord still wins: the user explicitly opened it.
+      if (isInTerminal && !pendingChord && isTerminalReservedKey(e)) {
+        return;
+      }
+
       // Use resolveKeybinding for proper chord and priority resolution
       const result = keybindingService.resolveKeybinding(e);
 
@@ -282,10 +299,14 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
     window.addEventListener("keydown", handler, { capture: true });
     window.addEventListener("blur", handleBlur);
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    // Live `when`-clause context for bindings that carry one (plugin
+    // contributions). Registered here, alongside the handler that consumes it.
+    keybindingService.setWhenContextProvider(buildKeybindingWhenContext);
     return () => {
       window.removeEventListener("keydown", handler, { capture: true });
       window.removeEventListener("blur", handleBlur);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      keybindingService.setWhenContextProvider(null);
     };
   }, [enabled]);
 }

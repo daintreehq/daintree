@@ -233,7 +233,7 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
     );
   });
 
-  test("MRU ordering in project switcher", async () => {
+  test("project switcher lists every switched-to project, current one first", async () => {
     test.slow();
 
     await test.step(
@@ -250,7 +250,7 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
     );
 
     await test.step(
-      "verify palette shows C, B, A order",
+      "verify the palette reaches every project, with the current one first",
       async () => {
         const page = ctx.window;
         const palette = await openProjectSwitcherPalette(page);
@@ -263,16 +263,22 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
           return Array.from(options).map((o) => o.textContent ?? "");
         });
 
-        // Find positions of each project in the option list
         const posC = optionTexts.findIndex((t) => t.includes(PROJECT_C));
         const posB = optionTexts.findIndex((t) => t.includes(PROJECT_B));
         const posA = optionTexts.findIndex((t) => t.includes(PROJECT_A));
 
+        // Every project is reachable. This is the guarantee that matters and
+        // the one the old fifteen-row cap broke.
         expect(posC).toBeGreaterThanOrEqual(0);
         expect(posB).toBeGreaterThanOrEqual(0);
         expect(posA).toBeGreaterThanOrEqual(0);
-        expect(posC).toBeLessThan(posB);
-        expect(posB).toBeLessThan(posA);
+
+        // The project being shown anchors the list. Relative order below it is
+        // deliberately NOT asserted: browse ranks by frecency now, not by raw
+        // last-opened, so a project used repeatedly earlier in this file
+        // outranks one visited once a moment ago. Asserting C-then-B-then-A
+        // would be re-asserting the recency ordering this replaced.
+        expect(posC).toBe(0);
 
         await page.keyboard.press("Escape");
         await expect(palette).not.toBeVisible({ timeout: T_MEDIUM });

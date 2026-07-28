@@ -64,6 +64,15 @@ export interface GitFileWatcherOptions {
    * config write instead of one per status pass (#9997).
    */
   onGitConfigChanged?: () => void;
+  /**
+   * Fired once per recursive-worktree flush — a raw filesystem write happened,
+   * regardless of whether git status content changed. Rides the existing
+   * adaptive-burst debounce (never the git-internal path), so it inherits the
+   * same coalescing as `onChange`. Drives the file browser's live refresh when
+   * a write lands in a gitignored path that leaves `git status` unchanged
+   * (#11330).
+   */
+  onWorktreeFilesChanged?: () => void;
   /** Watch the working tree recursively for file edits (macOS FSEvents). */
   watchWorktree?: boolean;
   /** Minimum debounce delay for worktree events — first event in a burst fires at this delay. */
@@ -114,6 +123,7 @@ export class GitFileWatcher {
   private readonly worktreeDebounceRampMs = 10;
   private readonly onChange: () => void;
   private readonly onGitConfigChanged: (() => void) | undefined;
+  private readonly onWorktreeFilesChanged: (() => void) | undefined;
   /** Set when the current (unflushed) burst touched `.git/config`. */
   private gitConfigChangePending = false;
   /** Directory holding `.git/config` — always the common dir. */
@@ -134,6 +144,7 @@ export class GitFileWatcher {
     this.worktreeQuietWindowMs = options.worktreeQuietWindowMs ?? 2_000;
     this.onChange = options.onChange;
     this.onGitConfigChanged = options.onGitConfigChanged;
+    this.onWorktreeFilesChanged = options.onWorktreeFilesChanged;
     this.onWatcherFailed = options.onWatcherFailed;
     this.onInotifyLimitReached = options.onInotifyLimitReached;
     this.onEmfileLimitReached = options.onEmfileLimitReached;
@@ -544,6 +555,11 @@ export class GitFileWatcher {
     this.worktreeBurstCount = 0;
     this.lastWorktreeFlushAt = Date.now();
     if (!this.disposed) {
+      // Raw-filesystem signal first, then the git-status recompute: a browser
+      // subscriber that only cares about files-on-disk shouldn't have to wait
+      // for the status pass, and firing it here (not the git-internal path)
+      // keeps it scoped to actual working-tree writes.
+      this.onWorktreeFilesChanged?.();
       this.onChange();
     }
   }

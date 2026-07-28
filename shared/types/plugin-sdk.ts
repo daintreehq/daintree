@@ -36,11 +36,16 @@ export type {
   PluginManifestScopes,
   PluginNetworkScope,
   PluginFsScope,
+  PluginLocalSocketScope,
 } from "./plugin.js";
 
 // ── View component props ────────────────────────────────────────────
 
 export type { PanelViewProps } from "./plugin.js";
+
+// ── Panel lifecycle (worker-facing) ─────────────────────────────────
+
+export type { PluginPanelLifecycleEvent, PluginPanelLifecyclePhase } from "./plugin.js";
 
 // ── Manifest root ───────────────────────────────────────────────────
 
@@ -67,6 +72,10 @@ export type {
   PluginProcessApi,
   PluginProcessHandle,
   PluginProcessSpawnOptions,
+  PluginProcessMode,
+  PluginProcessDataChunk,
+  PluginPtyProcessHandle,
+  PluginPtyProcessSpawnOptions,
   PluginFsApi,
   PluginFsDirEntry,
   PluginFsStat,
@@ -76,6 +85,7 @@ export type {
   PluginGitCommitOptions,
   PluginGitCommitResult,
   PluginClipboardApi,
+  PluginSystemApi,
 } from "./plugin.js";
 
 // ── Settings (host.settings) ────────────────────────────────────────

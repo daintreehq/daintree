@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import { ChevronRight, MoreHorizontal, Trash2 } from "lucide-react";
 import {
   WorktreeMenuItems,
-  type WorktreeLaunchAgentItem,
+  type WorktreeMenuActions,
   type WorktreeMenuComponents,
 } from "../WorktreeMenuItems";
 import {
@@ -37,68 +37,9 @@ interface WorktreeActionsToolbarProps {
   canCollapse: boolean;
   onToggleCollapse?: (e: React.MouseEvent) => void;
   contentId?: string;
-  menu: {
-    launchAgents: WorktreeLaunchAgentItem[];
-    recipes: { id: string; name: string }[];
-    runningRecipeId: string | null;
-    counts: {
-      grid: number;
-      dock: number;
-      active: number;
-      completed: number;
-      all: number;
-      waiting: number;
-      working: number;
-    };
-    onCopyContextFull: () => void;
-    onCopyContextModified: () => void;
-    onCopyPath: () => void;
-    onOpenEditor: () => void;
-    onRevealInFinder: () => void;
-    onOpenIssueExternal?: () => void;
-    onOpenPRExternal?: () => void;
-    onRunRecipe: (recipeId: string) => void;
-    onSaveLayout?: () => void;
-    onTogglePin?: () => void;
-    onToggleCollapse?: () => void;
-    isCollapsed?: boolean;
-    onLaunchAgent?: (agentId: string) => void;
-    onMoveUp?: () => void;
-    onMoveDown?: () => void;
-    canMoveUp?: boolean;
-    canMoveDown?: boolean;
-    onDockAll: () => void;
-    onMaximizeAll: () => void;
-    onCloseAll: () => void;
-    onTerminateAll: () => void;
-    onClearHistory: () => void;
-    onResetRenderers: () => void;
-    onSelectAllAgents: () => void;
-    onSelectWaitingAgents: () => void;
-    onSelectWorkingAgents: () => void;
-    onAttachIssue?: () => void;
-    onViewPlan?: () => void;
-    onOpenReviewHub?: () => void;
-    onCompareDiff?: () => void;
-    onOpenPanelPalette?: () => void;
-    onDeleteWorktree?: () => void;
-    hasResourceConfig?: boolean;
-    worktreeMode?: string;
-    resourceEnvironmentKeys?: string[];
-    onSwitchEnvironment?: (envKey: string) => void;
-    resourceStatus?: string;
-    onResourceProvision?: () => void;
-    onResourceResume?: () => void;
-    onResourcePause?: () => void;
-    onResourceConnect?: () => void;
-    onResourceStatus?: () => void;
-    onResourceTeardown?: () => void;
-    onStopDevServer?: (worktreeId: string) => void;
-    onRestartDevServer?: (worktreeId: string) => void;
-  };
+  menu: WorktreeMenuActions;
   worktree: WorktreeState;
   isPinned: boolean;
-  handleLaunchAgent: (agentId: string) => void;
 }
 
 // APG toolbar keyboard support: arrow keys move focus between the toolbar's
@@ -137,7 +78,6 @@ export function WorktreeActionsToolbar({
   menu,
   worktree,
   isPinned,
-  handleLaunchAgent,
 }: WorktreeActionsToolbarProps) {
   return (
     <div
@@ -223,56 +163,8 @@ export function WorktreeActionsToolbar({
           <WorktreeMenuItems
             worktree={worktree}
             components={DROPDOWN_COMPONENTS}
-            launchAgents={menu.launchAgents}
-            recipes={menu.recipes}
-            runningRecipeId={menu.runningRecipeId}
             isPinned={isPinned}
-            counts={menu.counts}
-            onLaunchAgent={menu.onLaunchAgent ? handleLaunchAgent : undefined}
-            onMoveUp={menu.onMoveUp}
-            onMoveDown={menu.onMoveDown}
-            canMoveUp={menu.canMoveUp}
-            canMoveDown={menu.canMoveDown}
-            onCopyContextFull={menu.onCopyContextFull}
-            onCopyContextModified={menu.onCopyContextModified}
-            onCopyPath={menu.onCopyPath}
-            onOpenEditor={menu.onOpenEditor}
-            onRevealInFinder={menu.onRevealInFinder}
-            onOpenIssueExternal={menu.onOpenIssueExternal}
-            onOpenPRExternal={menu.onOpenPRExternal}
-            onAttachIssue={menu.onAttachIssue}
-            onViewPlan={menu.onViewPlan}
-            onOpenReviewHub={menu.onOpenReviewHub}
-            onCompareDiff={menu.onCompareDiff}
-            onRunRecipe={menu.onRunRecipe}
-            onSaveLayout={menu.onSaveLayout}
-            onTogglePin={menu.onTogglePin}
-            onToggleCollapse={menu.onToggleCollapse}
-            isCollapsed={menu.isCollapsed}
-            onDockAll={menu.onDockAll}
-            onMaximizeAll={menu.onMaximizeAll}
-            onCloseAll={menu.onCloseAll}
-            onTerminateAll={menu.onTerminateAll}
-            onClearHistory={menu.onClearHistory}
-            onResetRenderers={menu.onResetRenderers}
-            onSelectAllAgents={menu.onSelectAllAgents}
-            onSelectWaitingAgents={menu.onSelectWaitingAgents}
-            onSelectWorkingAgents={menu.onSelectWorkingAgents}
-            onOpenPanelPalette={menu.onOpenPanelPalette}
-            onDeleteWorktree={menu.onDeleteWorktree}
-            hasResourceConfig={menu.hasResourceConfig}
-            worktreeMode={menu.worktreeMode}
-            resourceEnvironmentKeys={menu.resourceEnvironmentKeys}
-            onSwitchEnvironment={menu.onSwitchEnvironment}
-            resourceStatus={menu.resourceStatus}
-            onResourceProvision={menu.onResourceProvision}
-            onResourceResume={menu.onResourceResume}
-            onResourcePause={menu.onResourcePause}
-            onResourceConnect={menu.onResourceConnect}
-            onResourceStatus={menu.onResourceStatus}
-            onResourceTeardown={menu.onResourceTeardown}
-            onStopDevServer={menu.onStopDevServer}
-            onRestartDevServer={menu.onRestartDevServer}
+            {...menu}
           />
         </DropdownMenuContent>
       </DropdownMenu>

@@ -380,3 +380,83 @@ describe("projectClient getSettings caching", () => {
     expect(fresh).toBe(settingsB);
   });
 });
+
+describe("projectClient.setDraftInputs delta forwarding (#11352)", () => {
+  let setDraftInputsMock: ReturnType<typeof vi.fn>;
+  let client: typeof import("../projectClient").projectClient;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    setDraftInputsMock = vi.fn().mockResolvedValue(undefined);
+    typedGlobal.window = {
+      electron: {
+        project: {
+          onSwitch: vi.fn(() => () => {}),
+          setDraftInputs: setDraftInputsMock,
+        },
+      },
+    };
+    client = (await import("../projectClient")).projectClient;
+  });
+
+  afterEach(() => {
+    delete typedGlobal.window;
+  });
+
+  it("forwards changedIds and removedIds unchanged to the IPC layer", async () => {
+    await client.setDraftInputs("proj-1", { t1: "draft" }, ["t1"], ["t2"]);
+    expect(setDraftInputsMock).toHaveBeenCalledWith("proj-1", { t1: "draft" }, ["t1"], ["t2"]);
+  });
+
+  it("passes undefined delta args through for a legacy full-replace call", async () => {
+    await client.setDraftInputs("proj-1", { t1: "draft" });
+    expect(setDraftInputsMock).toHaveBeenCalledWith(
+      "proj-1",
+      { t1: "draft" },
+      undefined,
+      undefined
+    );
+  });
+});
+
+describe("projectClient.setTerminals fieldEdits forwarding (#11461)", () => {
+  let setTerminalsMock: ReturnType<typeof vi.fn>;
+  let client: typeof import("../projectClient").projectClient;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    setTerminalsMock = vi.fn().mockResolvedValue(undefined);
+    typedGlobal.window = {
+      electron: {
+        project: {
+          onSwitch: vi.fn(() => () => {}),
+          setTerminals: setTerminalsMock,
+        },
+      },
+    };
+    client = (await import("../projectClient")).projectClient;
+  });
+
+  afterEach(() => {
+    delete typedGlobal.window;
+  });
+
+  it("forwards field-level authority claims to the IPC layer", async () => {
+    // Without this hop the renderer computes claims that never reach Main, so an
+    // explicit session-id clear would silently stop applying.
+    const snapshots = [{ id: "t1", title: "T", cwd: "/p", location: "grid" as const }];
+    const fieldEdits = [{ id: "t1", fields: ["agentSessionId"] }];
+
+    await client.setTerminals("proj-1", snapshots, ["t1"], [], fieldEdits);
+
+    expect(setTerminalsMock).toHaveBeenCalledWith("proj-1", snapshots, ["t1"], [], fieldEdits);
+  });
+
+  it("passes undefined through when there is nothing to claim", async () => {
+    const snapshots = [{ id: "t1", title: "T", cwd: "/p", location: "grid" as const }];
+
+    await client.setTerminals("proj-1", snapshots, ["t1"], []);
+
+    expect(setTerminalsMock).toHaveBeenCalledWith("proj-1", snapshots, ["t1"], [], undefined);
+  });
+});

@@ -100,6 +100,22 @@ function makeProcessHandle(id = "p1") {
   };
 }
 
+/** The PTY variant: adds the two methods the bridge's structural check reads. */
+function makePtyProcessHandle(id = "p1") {
+  const base = makeProcessHandle(id);
+  let dataCb: ((chunk: unknown) => void) | undefined;
+  return {
+    ...base,
+    write: vi.fn(),
+    resize: vi.fn(),
+    onData: vi.fn((cb: (chunk: unknown) => void) => {
+      dataCb = cb;
+      return vi.fn();
+    }),
+    emitData: (chunk: unknown) => dataCb?.(chunk),
+  };
+}
+
 function makeBridge(
   overrides?: Partial<{
     capabilities: string[];
@@ -653,7 +669,11 @@ describe("PluginDevWorkerMainBridge", () => {
   });
 
   describe("host.process relay (#10526)", () => {
-    async function spawn(workerHost: any, host: any, handle = makeProcessHandle("p1")) {
+    async function spawn<T = ReturnType<typeof makeProcessHandle>>(
+      workerHost: any,
+      host: any,
+      handle: T = makeProcessHandle("p1") as T
+    ): Promise<T> {
       host.process.spawn.mockResolvedValueOnce(handle);
       workerHost.emit("worker-message", {
         type: "host-call",
@@ -673,6 +693,86 @@ describe("PluginDevWorkerMainBridge", () => {
         (m: any) => m.type === "host-result" && m.requestId === "spawn1"
       );
       expect(res).toMatchObject({ ok: true, result: { id: "p1" } });
+    });
+
+    it("reports mode from the handle the host actually built, not the request", async () => {
+      const { host, workerHost } = makeBridge();
+      await spawn(workerHost, host, makePtyProcessHandle("p1"));
+      const res = workerHost.sent.find(
+        (m: any) => m.type === "host-result" && m.requestId === "spawn1"
+      );
+      // The worker proxy builds write()/resize() off this value, so it must
+      // describe the real backend.
+      expect(res).toMatchObject({ ok: true, result: { id: "p1", mode: "pty" } });
+    });
+
+    it("relays write and resize to an interactive handle", async () => {
+      const { host, workerHost } = makeBridge();
+      const handle = await spawn(workerHost, host, makePtyProcessHandle("p1"));
+      workerHost.emit("worker-message", {
+        type: "host-notify",
+        method: "process.write",
+        params: { processId: "p1", data: "q\n" },
+      });
+      workerHost.emit("worker-message", {
+        type: "host-notify",
+        method: "process.resize",
+        params: { processId: "p1", cols: 120, rows: 40 },
+      });
+      await flush();
+      expect(handle.write).toHaveBeenCalledWith("q\n");
+      expect(handle.resize).toHaveBeenCalledWith(120, 40);
+    });
+
+    it("refuses a fabricated write/resize against a pipe-mode handle", async () => {
+      const { host, workerHost } = makeBridge();
+      const handle: any = await spawn(workerHost, host, makeProcessHandle("p1"));
+      workerHost.emit("worker-message", {
+        type: "host-notify",
+        method: "process.write",
+        params: { processId: "p1", data: "x" },
+      });
+      workerHost.emit("worker-message", {
+        type: "host-notify",
+        method: "process.resize",
+        params: { processId: "p1", cols: 10, rows: 10 },
+      });
+      await flush();
+      // A pipe child has stdin closed; the proxy never exposes these, so
+      // reaching here means the payload was fabricated.
+      expect((handle as any).write).toBeUndefined();
+      expect(host.process.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores a write for an unknown process id", async () => {
+      const { host, workerHost } = makeBridge();
+      const handle = await spawn(workerHost, host, makePtyProcessHandle("p1"));
+      workerHost.emit("worker-message", {
+        type: "host-notify",
+        method: "process.write",
+        params: { processId: "nope", data: "x" },
+      });
+      await flush();
+      expect(handle.write).not.toHaveBeenCalled();
+    });
+
+    it("opens a process-data subscription and streams chunks to the worker", async () => {
+      const { host, workerHost } = makeBridge();
+      const handle = await spawn(workerHost, host, makePtyProcessHandle("p1"));
+      workerHost.emit("worker-message", {
+        type: "subscribe",
+        subscriptionId: "s9",
+        kind: "process-data",
+        processId: "p1",
+      });
+      await flush();
+      expect(handle.onData).toHaveBeenCalled();
+
+      handle.emitData({ stream: "data", chunk: "$ " });
+      const event = workerHost.sent.find(
+        (m: any) => m.type === "subscription-event" && m.subscriptionId === "s9"
+      );
+      expect(event).toMatchObject({ payload: { stream: "data", chunk: "$ " } });
     });
 
     it("process.kill notify kills the stored handle", async () => {

@@ -125,8 +125,7 @@ describe("usePluginContextMenuItems", () => {
 
   it("drops the mount-time pull if a push has already resolved (pushReceived guard)", async () => {
     let resolvePull:
-      | ((v: Array<{ pluginId: string; item: ContextMenuContribution }>) => void)
-      | null = null;
+      ((v: Array<{ pluginId: string; item: ContextMenuContribution }>) => void) | null = null;
     contextMenuItemsMock.mockImplementation(
       () =>
         new Promise<Array<{ pluginId: string; item: ContextMenuContribution }>>((res) => {

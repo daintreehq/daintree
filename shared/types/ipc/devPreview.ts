@@ -137,11 +137,7 @@ export interface DevPreviewMintBrowserTokenResult {
 // has no live server to dial; the `upstream-*` causes classify a dial that was
 // attempted and failed.
 export type DevPreviewProxyFailureCause =
-  | "no-session"
-  | "not-running"
-  | "upstream-refused"
-  | "upstream-timeout"
-  | "upstream-error";
+  "no-session" | "not-running" | "upstream-refused" | "upstream-timeout" | "upstream-error";
 
 // What the proxy would dial for a subdomain right now. Splits the old
 // `{port,isHttps} | null` resolver result so a 502 can say WHY there is no

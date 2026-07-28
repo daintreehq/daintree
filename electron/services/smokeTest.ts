@@ -317,7 +317,12 @@ async function runSmokeProjectPersistenceChecks(window: BrowserWindow): Promise<
         `(async () => {
           const projectId = ${projectIdJson};
           const terminals = ${terminalsJson};
-          await window.electron.project.setTerminals(projectId, terminals);
+          await window.electron.project.setTerminals(
+            projectId,
+            terminals,
+            terminals.map((t) => t.id),
+            []
+          );
           const saved = await window.electron.project.getTerminals(projectId);
           return {
             count: Array.isArray(saved) ? saved.length : -1,

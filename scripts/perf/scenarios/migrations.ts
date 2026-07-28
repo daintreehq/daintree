@@ -160,8 +160,7 @@ function runMigrationChain(fixture: ReturnType<typeof createHeavyMigrationFixtur
 
   // Migration 014 — Consolidate telemetry consent (O(1))
   const legacyTelemetry = (state as Record<string, unknown>).telemetry as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
   const privacy014 = state.privacy as Record<string, unknown> | undefined;
   if (privacy014) {
     if (privacy014.telemetryLevel === undefined) {

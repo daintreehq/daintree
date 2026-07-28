@@ -8,6 +8,7 @@ import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js
 
 const mockSimpleGit = {
   raw: vi.fn(),
+  checkIsRepo: vi.fn().mockResolvedValue(true),
   branch: vi.fn().mockResolvedValue({ current: "main" }),
 };
 
@@ -90,6 +91,7 @@ describe("WorkspaceService adversarial", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockSimpleGit.raw.mockResolvedValue(undefined);
+    mockSimpleGit.checkIsRepo.mockResolvedValue(true);
     waitForPathExistsMock.mockResolvedValue(undefined);
 
     sentEvents = [];
@@ -114,7 +116,7 @@ describe("WorkspaceService adversarial", () => {
       throw new Error("Corrupted worktree metadata");
     });
 
-    await service.loadProject("req-load", "/repo");
+    await service.loadProject("req-load", "/repo", "ws-test-project-id");
 
     expect(sentEvents).toContainEqual(
       expect.objectContaining({
@@ -130,7 +132,7 @@ describe("WorkspaceService adversarial", () => {
     // The project directory was removed/moved externally before this load.
     vi.mocked(existsSync).mockReturnValueOnce(false);
 
-    await service.loadProject("req-missing", "/missing/path");
+    await service.loadProject("req-missing", "/missing/path", "ws-test-project-id");
 
     expect(sentEvents).toContainEqual(
       expect.objectContaining({
@@ -147,6 +149,112 @@ describe("WorkspaceService adversarial", () => {
     // assignment the failure event would still fire, but the dead path would
     // be primed and the polling loops would resume. Pin the ordering.
     expect(service["projectRootPath"]).toBeNull();
+  });
+
+  describe("a folder with no git repository (#11405)", () => {
+    /**
+     * Every monitor is a `GitStatusPass` poller, and its first tick against a
+     * non-repo raises `WorktreeRemovedError` — which the pass answers by
+     * removing the workspace. So the invariant under test is that none is ever
+     * created, not that they cope.
+     */
+    function monitorCount(): number {
+      return (service["monitors"] as Map<string, unknown>).size;
+    }
+
+    beforeEach(() => {
+      mockSimpleGit.checkIsRepo.mockResolvedValue(false);
+    });
+
+    it("loads successfully instead of surfacing a worktree-load failure", async () => {
+      await service.loadProject("req-plain", "/downloads", "ws-plain");
+
+      expect(sentEvents).toContainEqual({
+        type: "load-project-result",
+        requestId: "req-plain",
+        success: true,
+      });
+      expect(sentEvents.some((e) => e.type === "load-project-result" && !e.success)).toBe(false);
+    });
+
+    it("starts no worktree monitor, watcher, or enumeration", async () => {
+      const listService = service["listService"] as unknown as { list: Mock };
+      listService.list = vi.fn();
+      const startWatcher = vi.spyOn(
+        service["topologyWatcher"] as unknown as { startWatcher: () => Promise<void> },
+        "startWatcher"
+      );
+
+      await service.loadProject("req-plain", "/downloads", "ws-plain");
+
+      expect(monitorCount()).toBe(0);
+      expect(listService.list).not.toHaveBeenCalled();
+      expect(startWatcher).not.toHaveBeenCalled();
+      // `worktree prune` writes into `.git`; a folder Daintree merely adopted
+      // must never be written to.
+      expect(mockSimpleGit.raw).not.toHaveBeenCalled();
+    });
+
+    it("stays inert when the workspace is foregrounded again", async () => {
+      await service.loadProject("req-plain", "/downloads", "ws-plain");
+      const startWatcher = vi.spyOn(
+        service["topologyWatcher"] as unknown as { startWatcher: () => Promise<void> },
+        "startWatcher"
+      );
+
+      service.pause();
+      service.resume();
+
+      expect(startWatcher).not.toHaveBeenCalled();
+      expect(monitorCount()).toBe(0);
+    });
+
+    it("does not mint a monitor on a later topology reconcile", async () => {
+      await service.loadProject("req-plain", "/downloads", "ws-plain");
+
+      await (service as unknown as { discoverAndSyncWorktrees: () => Promise<void> })[
+        "discoverAndSyncWorktrees"
+      ]();
+
+      expect(monitorCount()).toBe(0);
+    });
+
+    it("ignores a sync carrying worktrees from main", async () => {
+      await service.loadProject("req-plain", "/downloads", "ws-plain");
+
+      // `WorkspaceClient.sync` fans out to every live host, so a lightweight
+      // one can be handed another project's worktree list. Accepting it would
+      // arm a monitor whose first poll deletes this workspace.
+      await service.syncMonitors(
+        [
+          {
+            id: "wt-1",
+            path: "/downloads",
+            branch: "main",
+            isMainWorktree: true,
+          } as unknown as Parameters<typeof service.syncMonitors>[0][number],
+        ],
+        "wt-1",
+        "main"
+      );
+
+      expect(monitorCount()).toBe(0);
+    });
+
+    it("treats a throwing repository probe as no repository", async () => {
+      // simple-git rejects rather than answering false on permission denials
+      // and other environment faults.
+      mockSimpleGit.checkIsRepo.mockRejectedValue(new Error("EACCES"));
+
+      await service.loadProject("req-denied", "/downloads", "ws-plain");
+
+      expect(sentEvents).toContainEqual({
+        type: "load-project-result",
+        requestId: "req-denied",
+        success: true,
+      });
+      expect(monitorCount()).toBe(0);
+    });
   });
 
   it("returns a failure when git worktree add hits index.lock contention", async () => {
@@ -544,12 +652,10 @@ describe("WorkspaceService adversarial", () => {
       // The monitor write and both outbound events keep success — no blink.
       expect(setPRInfo).toHaveBeenCalledWith(expect.objectContaining({ prCiStatus: "success" }));
       const prDetected = sentEvents.find((e) => e.type === "pr-detected") as
-        | (WorkspaceHostEvent & { prCiStatus?: string })
-        | undefined;
+        (WorkspaceHostEvent & { prCiStatus?: string }) | undefined;
       expect(prDetected?.prCiStatus).toBe("success");
       const wtUpdate = sentEvents.find((e) => e.type === "worktree-update") as
-        | (WorkspaceHostEvent & { worktree: { prCiStatus?: string } })
-        | undefined;
+        (WorkspaceHostEvent & { worktree: { prCiStatus?: string } }) | undefined;
       expect(wtUpdate?.worktree.prCiStatus).toBe("success");
     });
 
@@ -565,8 +671,7 @@ describe("WorkspaceService adversarial", () => {
 
       expect(setPRInfo).toHaveBeenCalledWith(expect.objectContaining({ prCiStatus: undefined }));
       const prDetected = sentEvents.find((e) => e.type === "pr-detected") as
-        | (WorkspaceHostEvent & { prCiStatus?: string })
-        | undefined;
+        (WorkspaceHostEvent & { prCiStatus?: string }) | undefined;
       expect(prDetected?.prCiStatus).toBeUndefined();
     });
 

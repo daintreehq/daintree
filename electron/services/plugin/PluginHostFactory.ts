@@ -1,13 +1,17 @@
 import fs from "fs/promises";
 import path from "path";
 import { watch as fsWatch, type FSWatcher } from "node:fs";
-import { clipboard } from "electron";
+import { clipboard, shell } from "electron";
+import { decodeClipboardPng, MAX_CLIPBOARD_IMAGE_BYTES } from "../../utils/clipboardImage.js";
+import { assertExtensionAllowed } from "../../utils/executablePathGuard.js";
 
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import { resolveContainedPath, PluginPathNotAllowedError } from "./pluginFsContainment.js";
 import { PluginHostGit, type HostGitFactory } from "./pluginHostGit.js";
 import type { PluginProcessManager } from "./PluginProcessManager.js";
+import { PLUGIN_PTY_DEFAULT_COLS, PLUGIN_PTY_DEFAULT_ROWS } from "./PluginProcessManager.js";
 import type { PluginContributionBroadcaster } from "./PluginContributionBroadcaster.js";
+import type { PluginPanelLifecycleBroker } from "./PluginPanelLifecycleBroker.js";
 import type { PluginRendererDispatcher } from "./PluginRendererDispatcher.js";
 import type { PluginUIPromptDispatcher } from "./PluginUIPromptDispatcher.js";
 import { assertSettingsKey, type PluginSettingsManager } from "./PluginSettingsManager.js";
@@ -58,14 +62,19 @@ import type {
   PluginSettingsScope,
   PluginStorageScope,
   PluginAgentSnapshot,
+  PluginPanelLifecycleEvent,
   PluginProcessApi,
   PluginProcessHandle,
   PluginProcessSpawnOptions,
+  PluginProcessMode,
+  PluginPtyProcessHandle,
+  PluginPtyProcessSpawnOptions,
   PluginFsApi,
   PluginFsDirEntry,
   PluginFsStat,
   PluginGitApi,
   PluginClipboardApi,
+  PluginSystemApi,
   PluginGitStatus,
   PluginGitCommitOptions,
   PluginGitCommitResult,
@@ -205,6 +214,7 @@ export interface PluginHostFactoryDeps {
   pluginBadges: Map<string, Map<string, PluginPanelBadge>>;
   pluginFsWatchers: Map<string, Set<() => void>>;
   broadcaster: PluginContributionBroadcaster;
+  panelLifecycleBroker: PluginPanelLifecycleBroker;
   dispatcher: PluginRendererDispatcher;
   promptDispatcher: PluginUIPromptDispatcher;
   settings: PluginSettingsManager;
@@ -642,6 +652,50 @@ export function createHost(
       const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => unsub());
       return Promise.resolve(dispose);
     },
+    onDidChangePanelLifecycle: (callback) => {
+      if (revoked) {
+        throw new Error(
+          `Plugin "${pluginId}" host revoked: onDidChangePanelLifecycle called after activate() returned or timed out`
+        );
+      }
+      // No capability gate: the broker resolves panel ownership from main's own
+      // kind registry, so a plugin can only ever be handed events for panel
+      // instances of kinds it contributed itself (#11301).
+      const failures = createListenerFailureState();
+      // Teardown lives in a holder rather than a closed-over binding because,
+      // unlike every other subscription here, `subscribe` REPLAYS synchronously
+      // — `handler` can run before the disposer below exists. A replayed event
+      // that exhausts the failure budget would otherwise touch that binding in
+      // its temporal dead zone and throw ReferenceError instead of quarantining
+      // the listener.
+      const teardown: { dispose?: () => void; unsub?: () => void } = {};
+      const handler = (event: PluginPanelLifecycleEvent): void => {
+        // Runtime delivery is membership-gated, never revoke-gated (#5596):
+        // these events fire for the plugin's whole life, long after activate()
+        // returned, and must fall silent once it unloads.
+        if (!deps.plugins.has(pluginId)) return;
+        invokeTrackedListener(
+          failures,
+          pluginId,
+          "onDidChangePanelLifecycle",
+          () => callback(event),
+          () => {
+            // Mid-replay the tracked disposer does not exist yet, so fall back
+            // to unsubscribing directly.
+            if (teardown.dispose) teardown.dispose();
+            else teardown.unsub?.();
+          }
+        );
+      };
+      // `subscribe` replays live panels synchronously, so a plugin activated BY
+      // a view opening still sees that panel's `mounted` phase.
+      teardown.unsub = deps.panelLifecycleBroker.subscribe(pluginId, handler);
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () =>
+        teardown.unsub?.()
+      );
+      teardown.dispose = dispose;
+      return Promise.resolve(dispose);
+    },
     registerForgeProvider: (descriptor, impl) => {
       if (revoked) {
         throw new Error(
@@ -1003,6 +1057,11 @@ export function createHost(
     // from a headless plugin with no mounted panel. NOT revoke-guarded —
     // liveness is plugin membership; once unloaded every method rejects.
     clipboard: buildClipboardApi(deps, pluginId),
+    // Host-mediated open/reveal, scoped to the plugin's own declared fs roots
+    // (including its implicit plugin-data namespace) rather than the user's
+    // project roots — the gap that pushed plugins into shelling out to
+    // /usr/bin/open. NOT revoke-guarded, same as fs/clipboard.
+    system: buildSystemApi(deps, pluginId),
     // NOT revoke-guarded: plugins read/write settings throughout their
     // lifetime (IPC handlers, timers), long after activate() resolves. The
     // store is the source of truth, so a late call is harmless.
@@ -1175,8 +1234,8 @@ export function createHost(
 function buildProcessApi(deps: PluginHostFactoryDeps, pluginId: string): PluginProcessApi {
   const spawn = async (
     command: string,
-    options?: PluginProcessSpawnOptions
-  ): Promise<PluginProcessHandle> => {
+    options?: PluginProcessSpawnOptions | PluginPtyProcessSpawnOptions
+  ): Promise<PluginProcessHandle | PluginPtyProcessHandle> => {
     if (!deps.plugins.has(pluginId)) {
       throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
     }
@@ -1194,6 +1253,32 @@ function buildProcessApi(deps: PluginHostFactoryDeps, pluginId: string): PluginP
     // (e.g. spawn("")) and then execute real commands unprompted (#10524).
     if (typeof command !== "string" || command.length === 0) {
       throw new Error(`Plugin "${pluginId}" process.spawn: command must be a non-empty string`);
+    }
+    const rawMode: unknown = options?.mode;
+    if (rawMode !== undefined && rawMode !== "pipe" && rawMode !== "pty") {
+      throw new Error(
+        `Plugin "${pluginId}" process.spawn: mode must be "pipe" or "pty": ${String(rawMode)}`
+      );
+    }
+    const mode: PluginProcessMode = rawMode === "pty" ? "pty" : "pipe";
+    // `undefined` and `null` both mean broadcast, matching postToPanel. An empty
+    // string is an authoring mistake — it would silently match no subscriber —
+    // so reject it loudly rather than coercing.
+    const rawPanelId: unknown = options?.panelId;
+    if (rawPanelId !== undefined && rawPanelId !== null) {
+      if (typeof rawPanelId !== "string" || rawPanelId.length === 0) {
+        throw new Error(
+          `Plugin "${pluginId}" process.spawn: panelId must be a non-empty string, null, or undefined: ${String(rawPanelId)}`
+        );
+      }
+    }
+    const panelId = typeof rawPanelId === "string" ? rawPanelId : null;
+    let cols = PLUGIN_PTY_DEFAULT_COLS;
+    let rows = PLUGIN_PTY_DEFAULT_ROWS;
+    if (mode === "pty") {
+      const ptyOptions = options as PluginPtyProcessSpawnOptions;
+      cols = resolvePtyDimension(pluginId, "cols", ptyOptions.cols, PLUGIN_PTY_DEFAULT_COLS);
+      rows = resolvePtyDimension(pluginId, "rows", ptyOptions.rows, PLUGIN_PTY_DEFAULT_ROWS);
     }
     const args = Array.isArray(options?.args)
       ? options.args.filter((a): a is string => typeof a === "string")
@@ -1222,8 +1307,22 @@ function buildProcessApi(deps: PluginHostFactoryDeps, pluginId: string): PluginP
       throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
     }
 
-    const handle = deps.getProcessManager().spawn(pluginId, { command, args, cwd, env });
-    return {
+    const handle = await deps
+      .getProcessManager()
+      .spawn(
+        pluginId,
+        mode === "pty"
+          ? { mode, command, args, cwd, env, panelId, cols, rows }
+          : { mode, command, args, cwd, env, panelId }
+      );
+    // Interactive allocation is asynchronous (it round-trips to the pty-host), so
+    // an unload can land while it is in flight. Kill rather than hand back a
+    // live process the unload teardown already walked past.
+    if (!deps.plugins.has(pluginId)) {
+      handle.kill();
+      throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
+    }
+    const base: PluginProcessHandle = {
       get id() {
         return handle.id;
       },
@@ -1240,9 +1339,45 @@ function buildProcessApi(deps: PluginHostFactoryDeps, pluginId: string): PluginP
       },
       onExit: (cb) => handle.onExit(cb),
       onCrash: (cb) => handle.onCrash(cb),
+      onData: (cb) => handle.onData(cb),
     };
+    if (mode !== "pty") return base;
+    return {
+      ...base,
+      get id() {
+        return handle.id;
+      },
+      write: (data) => {
+        if (!deps.plugins.has(pluginId) || typeof data !== "string") return;
+        handle.write(data);
+      },
+      resize: (nextCols, nextRows) => {
+        if (!deps.plugins.has(pluginId)) return;
+        handle.resize(nextCols, nextRows);
+      },
+    } satisfies PluginPtyProcessHandle;
   };
-  return { spawn };
+  return { spawn } as PluginProcessApi;
+}
+
+/**
+ * Validate one PTY dimension. Omitted falls back to the default; a value that is
+ * present but not a positive integer is an authoring mistake worth rejecting
+ * before the JIT consent prompt, so a bad call never spends a user grant.
+ */
+function resolvePtyDimension(
+  pluginId: string,
+  name: "cols" | "rows",
+  value: unknown,
+  fallback: number
+): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(
+      `Plugin "${pluginId}" process.spawn: ${name} must be a positive integer: ${String(value)}`
+    );
+  }
+  return value;
 }
 
 /**
@@ -1380,24 +1515,8 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
       );
     }
   };
-  // Contain against the call-time-expanded roots and report which root class
-  // matched. We contain per-entry so the matched entry's class is exact (the
-  // first containing root wins, same "any allowed root" semantics as before).
-  const containWithClass = async (
-    targetPath: string
-  ): Promise<{ resolved: string; rootClass: FsRootClass }> => {
-    const entries = await deps.expandAllowedPathEntries(pluginId, { includeDataDir: true });
-    let lastErr: unknown;
-    for (const entry of entries) {
-      try {
-        const resolved = await resolveContainedPath(pluginId, targetPath, [entry.path]);
-        return { resolved, rootClass: entry.rootClass };
-      } catch (err) {
-        lastErr = err;
-      }
-    }
-    throw lastErr instanceof Error ? lastErr : new PluginPathNotAllowedError(pluginId, targetPath);
-  };
+  const containWithClass = (targetPath: string) =>
+    containToDeclaredRoots(deps, pluginId, targetPath);
 
   return {
     readFile: async (filePath, options) => {
@@ -1474,14 +1593,12 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
       requireLoaded("readdir");
       requireReadCapForClass("readdir", rootClass);
       const entries = await fs.readdir(resolved, { withFileTypes: true });
-      return entries.map(
-        (e): PluginFsDirEntry => ({
-          name: e.name,
-          isDirectory: e.isDirectory(),
-          isFile: e.isFile(),
-          isSymbolicLink: e.isSymbolicLink(),
-        })
-      );
+      return entries.map((e): PluginFsDirEntry => ({
+        name: e.name,
+        isDirectory: e.isDirectory(),
+        isFile: e.isFile(),
+        isSymbolicLink: e.isSymbolicLink(),
+      }));
     },
     stat: async (targetPath, options) => {
       options?.signal?.throwIfAborted();
@@ -1711,8 +1828,41 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
 }
 
 /**
+ * Contain a plugin-supplied path against the plugin's call-time-expanded
+ * allowed roots and report which root class matched.
+ *
+ * Containment runs per entry rather than against the union so the matched
+ * entry's class is exact — the union would only tell us "some root", and the
+ * capability gate needs to know *which*. The first containing root wins; when
+ * a path sits inside two roots of different classes the earlier declaration
+ * decides, which is the same "any allowed root" semantics the fs API has
+ * always had.
+ *
+ * Shared by `host.fs` and `host.system` so the two can never drift into
+ * disagreeing about what a plugin may reach or which capability guards it.
+ */
+async function containToDeclaredRoots(
+  deps: PluginHostFactoryDeps,
+  pluginId: string,
+  targetPath: string
+): Promise<{ resolved: string; rootClass: FsRootClass }> {
+  const entries = await deps.expandAllowedPathEntries(pluginId, { includeDataDir: true });
+  let lastErr: unknown;
+  for (const entry of entries) {
+    try {
+      const resolved = await resolveContainedPath(pluginId, targetPath, [entry.path]);
+      return { resolved, rootClass: entry.rootClass };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new PluginPathNotAllowedError(pluginId, targetPath);
+}
+
+/**
  * Host-mediated OS clipboard surface backing the `clipboard:read` /
- * `clipboard:write` tokens. Text-only; both methods run here in the main
+ * `clipboard:write` tokens. Text reads/writes plus bounded PNG writes
+ * (#11299); every method runs here in the main
  * process because Electron's `clipboard` module is undefined inside the
  * dev-worker utility process (a worker-side call would silently no-op). Like
  * {@link buildGitApi} the liveness check precedes the capability check so a
@@ -1750,6 +1900,50 @@ function buildClipboardApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
       }
       clipboard.writeText(text);
     },
+    writeImage: async (pngData): Promise<void> => {
+      requireLoaded("writeImage");
+      // Same token as writeText: putting an image on the clipboard is exactly
+      // as reversible as putting text there, so it earns no second capability
+      // and doesn't elevate the plugin's action danger.
+      if (!deps.declaredCapabilities(pluginId).has("clipboard:write")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" clipboard.writeImage requires the "clipboard:write" capability, which is not declared in manifest.capabilities`
+        );
+      }
+      if (!(pngData instanceof Uint8Array)) {
+        throw new Error(
+          `VALIDATION: plugin "${pluginId}" clipboard.writeImage requires a Uint8Array of PNG bytes`
+        );
+      }
+      // Size-check before decoding: createFromBuffer allocates a decoded
+      // bitmap several times the compressed size, so admitting the bytes
+      // first would defeat the cap it exists to enforce.
+      if (pngData.byteLength > MAX_CLIPBOARD_IMAGE_BYTES) {
+        throw new Error(
+          `PAYLOAD_TOO_LARGE: plugin "${pluginId}" clipboard.writeImage image exceeds the ${MAX_CLIPBOARD_IMAGE_BYTES} byte limit`
+        );
+      }
+      const image = decodeClipboardPng(pngData);
+      if (image === null) {
+        throw new Error(
+          `VALIDATION: plugin "${pluginId}" clipboard.writeImage could not decode the data as an image`
+        );
+      }
+      clipboard.writeImage(image);
+      // Audit the byte count only — never the bytes. An image write is
+      // user-visible state the plugin changed without a prompt, so it belongs
+      // in the trail even though it isn't destructive.
+      deps.safeAppendAudit({
+        pluginId,
+        actionId: "clipboard.writeImage",
+        recordType: "ipc-invoke",
+        channel: "plugin:clipboard-write-image",
+        result: "success",
+        errorMessage: "",
+        argsHash: deps.safeArgsHash([{ bytes: pngData.byteLength }]),
+        durationMs: 0,
+      });
+    },
     readText: async (): Promise<string> => {
       requireLoaded("readText");
       if (!deps.declaredCapabilities(pluginId).has("clipboard:read")) {
@@ -1759,6 +1953,130 @@ function buildClipboardApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
       }
       // Electron returns "" for empty or non-text clipboard content.
       return clipboard.readText();
+    },
+  };
+}
+
+/**
+ * Host-mediated "open / reveal" surface (#11299), scoped to the calling
+ * plugin's own filesystem roots.
+ *
+ * The renderer's built-in `system.openPath` action validates against the
+ * *user's* roots — open projects, tracked worktrees, `userData` — and carries
+ * no caller identity, so a plugin dispatching it could not reach
+ * `~/.daintree/plugin-data/<plugin-id>/`: the one directory that is
+ * unambiguously its own. Plugins worked around that by shelling out to
+ * `/usr/bin/open`, trading a contained call for arbitrary execution.
+ *
+ * `pluginId` is bound here at construction rather than travelling as an
+ * argument, which is what makes the scoping trustworthy — there is no
+ * parameter for one plugin to name another's namespace. That is also why this
+ * is a host API rather than plugin identity threaded through the generic
+ * ActionService dispatch payload, which every non-plugin caller shares.
+ *
+ * Stateless — no watchers or handles, so nothing to tear down on unload.
+ */
+function buildSystemApi(deps: PluginHostFactoryDeps, pluginId: string): PluginSystemApi {
+  const requireLoaded = (op: string): void => {
+    if (!deps.plugins.has(pluginId)) {
+      throw new Error(
+        `PLUGIN_UNLOADED: plugin "${pluginId}" system.${op}: plugin is no longer loaded`
+      );
+    }
+  };
+  // Accept either the read or the write capability for the matched root's
+  // class. Revealing a file is strictly less authority than the read that
+  // would let the plugin exfiltrate its contents, and a plugin that could
+  // legitimately *create* the file should not also have to declare read
+  // access just to show the user where it landed.
+  const requireCapForClass = (op: string, rootClass: FsRootClass): void => {
+    const read = rootClass === "project" ? "fs:project-read" : "fs:user-data-read";
+    const write = rootClass === "project" ? "fs:project-write" : "fs:user-data-write";
+    const held = deps.declaredCapabilities(pluginId);
+    if (!held.has(read) && !held.has(write)) {
+      throw new Error(
+        `PERMISSION_REQUIRED: plugin "${pluginId}" system.${op} requires the "${read}" or "${write}" capability for ${rootClass} paths, which is not declared in manifest.capabilities`
+      );
+    }
+  };
+  const containWithClass = (targetPath: string) =>
+    containToDeclaredRoots(deps, pluginId, targetPath);
+  // The plugin path resolver deliberately admits a non-existent final
+  // component so `fs.writeFile` can create a new file inside an allowed root.
+  // That is wrong for these sinks: `shell.showItemInFolder` silently no-ops on
+  // a missing path, so without this gate a plugin revealing a deleted file
+  // would be told it succeeded while nothing opened. Checked after the
+  // capability gate so an unauthorized plugin can't probe for existence.
+  const requireExists = async (op: string, resolved: string): Promise<void> => {
+    try {
+      await fs.stat(resolved);
+    } catch (err) {
+      // Report only a genuine absence as absence. A permissions or I/O error
+      // says the path is unreadable, not missing, and collapsing the two sends
+      // an author hunting for a file that is sitting right there.
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      const reason =
+        code === "ENOENT" || code === "ENOTDIR" ? "path does not exist" : `stat failed (${code})`;
+      throw new Error(`INVALID_PATH: plugin "${pluginId}" system.${op}: ${reason}: ${resolved}`, {
+        cause: err,
+      });
+    }
+  };
+
+  return {
+    openPath: async (targetPath): Promise<void> => {
+      requireLoaded("openPath");
+      // Deny executables on the raw path before any I/O, then again on the
+      // realpath target below — a benignly named symlink inside an allowed
+      // root would otherwise be a launch primitive.
+      assertExtensionAllowed(targetPath);
+      const { resolved, rootClass } = await containWithClass(targetPath);
+      // Re-check liveness after the await: expansion and realpath are async,
+      // and the plugin can unload underneath them (#9533).
+      requireLoaded("openPath");
+      requireCapForClass("openPath", rootClass);
+      assertExtensionAllowed(resolved);
+      await requireExists("openPath", resolved);
+      requireLoaded("openPath");
+      // shell.openPath reports failure through a non-empty return string
+      // rather than by rejecting, so an unchecked call fails silently.
+      const error = await shell.openPath(resolved);
+      if (error !== "") {
+        throw new Error(`plugin "${pluginId}" system.openPath failed: ${error}`);
+      }
+      deps.safeAppendAudit({
+        pluginId,
+        actionId: `system.openPath:${resolved}`,
+        recordType: "ipc-invoke",
+        channel: "plugin:system-open-path",
+        result: "success",
+        errorMessage: "",
+        argsHash: deps.safeArgsHash([{ path: resolved }]),
+        durationMs: 0,
+      });
+    },
+    showItemInFolder: async (targetPath): Promise<void> => {
+      requireLoaded("showItemInFolder");
+      // No executable deny-list here: revealing a file in Finder/Explorer
+      // shows it, it does not run it. Containment still applies in full.
+      const { resolved, rootClass } = await containWithClass(targetPath);
+      requireLoaded("showItemInFolder");
+      requireCapForClass("showItemInFolder", rootClass);
+      await requireExists("showItemInFolder", resolved);
+      requireLoaded("showItemInFolder");
+      // Returns void and no-ops on a missing path — requireExists above is
+      // what turns that silent nothing into a reported failure.
+      shell.showItemInFolder(resolved);
+      deps.safeAppendAudit({
+        pluginId,
+        actionId: `system.showItemInFolder:${resolved}`,
+        recordType: "ipc-invoke",
+        channel: "plugin:system-show-item",
+        result: "success",
+        errorMessage: "",
+        argsHash: deps.safeArgsHash([{ path: resolved }]),
+        durationMs: 0,
+      });
     },
   };
 }

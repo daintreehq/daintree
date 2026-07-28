@@ -62,8 +62,7 @@ vi.mock("ws", () => {
       const hasProtocols = Array.isArray(protocolsOrOptions);
       this.subprotocols = hasProtocols ? (protocolsOrOptions as string[]) : [];
       const options = (hasProtocols ? maybeOptions : protocolsOrOptions) as
-        | { headers?: WsHeaders }
-        | undefined;
+        { headers?: WsHeaders } | undefined;
       this.headers = options?.headers ?? {};
 
       if (wsBehavior.mode === "throw") {
@@ -175,8 +174,7 @@ describe("waitForServerReady", () => {
 
         setTimeout(() => {
           const errorHandler = req.on.mock.calls.find((c: unknown[]) => c[0] === "error")?.[1] as
-            | ((err: Error) => void)
-            | undefined;
+            ((err: Error) => void) | undefined;
           errorHandler?.(new Error("ECONNREFUSED"));
         }, 0);
         return req;

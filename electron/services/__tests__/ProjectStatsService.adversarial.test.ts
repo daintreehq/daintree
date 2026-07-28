@@ -51,6 +51,13 @@ function makePtyClient(): FakePtyClient {
   };
 }
 
+function makeWebContents() {
+  return {
+    isDestroyed: vi.fn<() => boolean>(() => false),
+    send: vi.fn<(channel: string, payload: unknown) => void>(),
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
@@ -153,6 +160,149 @@ describe("ProjectStatsService adversarial", () => {
     ];
     expect(payload.p1.activeAgentCount).toBe(2);
     expect(payload.p1.waitingAgentCount).toBe(1);
+    svc.stop();
+  });
+
+  it("reports the blocked subset and the oldest wait's start", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      {
+        projectId: "p1",
+        kind: "terminal",
+        launchAgentId: "x",
+        agentState: "waiting",
+        waitingReason: "error",
+        lastStateChange: 1_000,
+      },
+      {
+        projectId: "p1",
+        kind: "terminal",
+        launchAgentId: "x",
+        agentState: "waiting",
+        waitingReason: "prompt",
+        lastStateChange: 500,
+      },
+      {
+        projectId: "p1",
+        kind: "terminal",
+        launchAgentId: "x",
+        agentState: "working",
+        lastStateChange: 10,
+      },
+    ]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const [, payload] = broadcastMock.mock.calls.at(-1) as [
+      string,
+      {
+        p1: {
+          waitingAgentCount: number;
+          blockedAgentCount: number;
+          oldestWaitingSince?: number;
+        };
+      },
+    ];
+    // Blocked is a subset of waiting, never additional to it.
+    expect(payload.p1.waitingAgentCount).toBe(2);
+    expect(payload.p1.blockedAgentCount).toBe(1);
+    // Earliest waiting transition wins; the working agent's older stamp is not a wait.
+    expect(payload.p1.oldestWaitingSince).toBe(500);
+    svc.stop();
+  });
+
+  it("omits oldestWaitingSince when no waiting terminal has recorded a transition", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      { projectId: "p1", kind: "terminal", launchAgentId: "x", agentState: "waiting" },
+    ]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const [, payload] = broadcastMock.mock.calls.at(-1) as [
+      string,
+      { p1: { waitingAgentCount: number; oldestWaitingSince?: number } },
+    ];
+    expect(payload.p1.waitingAgentCount).toBe(1);
+    // Absent rather than 0 — a wait with no known start must not read as epoch.
+    expect(payload.p1.oldestWaitingSince).toBeUndefined();
+    svc.stop();
+  });
+
+  it("broadcasts when only the blocked subset changes", async () => {
+    // The equality gate decides whether a recomputation reaches the renderer at
+    // all. A field missing from it means the UI silently keeps showing the old
+    // reading, so every field the payload carries has to be compared.
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    const waiting = (waitingReason: string) => [
+      {
+        projectId: "p1",
+        kind: "terminal",
+        launchAgentId: "x",
+        agentState: "waiting",
+        waitingReason,
+        lastStateChange: 1_000,
+      },
+    ];
+    ptyClient.getAllTerminalsAsync.mockResolvedValue(waiting("prompt"));
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    const before = broadcastMock.mock.calls.length;
+
+    // Same counts, different reason — only `blockedAgentCount` moves.
+    ptyClient.getAllTerminalsAsync.mockResolvedValue(waiting("error"));
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(broadcastMock.mock.calls.length).toBeGreaterThan(before);
+    const [, payload] = broadcastMock.mock.calls.at(-1) as [
+      string,
+      { p1: { blockedAgentCount: number } },
+    ];
+    expect(payload.p1.blockedAgentCount).toBe(1);
+    svc.stop();
+  });
+
+  it("broadcasts when only the oldest wait's start changes", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    const waitingSince = (lastStateChange: number) => [
+      {
+        projectId: "p1",
+        kind: "terminal",
+        launchAgentId: "x",
+        agentState: "waiting",
+        waitingReason: "prompt",
+        lastStateChange,
+      },
+    ];
+    ptyClient.getAllTerminalsAsync.mockResolvedValue(waitingSince(1_000));
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    const before = broadcastMock.mock.calls.length;
+
+    // One agent's wait ends and another's begins: counts identical, age is not.
+    ptyClient.getAllTerminalsAsync.mockResolvedValue(waitingSince(9_000));
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(broadcastMock.mock.calls.length).toBeGreaterThan(before);
+    const [, payload] = broadcastMock.mock.calls.at(-1) as [
+      string,
+      { p1: { oldestWaitingSince?: number } },
+    ];
+    expect(payload.p1.oldestWaitingSince).toBe(9_000);
     svc.stop();
   });
 
@@ -409,6 +559,62 @@ describe("ProjectStatsService adversarial", () => {
     const after2 = broadcastMock.mock.calls.length;
 
     expect(after2).toBe(after1);
+    svc.stop();
+  });
+
+  it("replays the retained snapshot to a view that missed every broadcast", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    const [liveChannel, livePayload] = broadcastMock.mock.calls[0]!;
+
+    // The fleet goes static: the next compute produces the same map and is
+    // suppressed, so a view loading now never receives a first broadcast.
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+
+    const wc = makeWebContents();
+    svc.pushSnapshotTo(wc as never);
+
+    // Same channel and same payload as the live broadcast, so the replay lands
+    // on the listener the renderer already has attached.
+    expect(wc.send.mock.calls).toEqual([[liveChannel, livePayload]]);
+    svc.stop();
+  });
+
+  it("does not replay before the deferred initial compute has produced a map", () => {
+    const svc = new ProjectStatsService(makePtyClient() as never);
+    const wc = makeWebContents();
+
+    // `{}` here means "nothing computed yet", which is indistinguishable on the
+    // wire from "no projects" — sending it would only clobber a renderer that
+    // seeded itself from bulk stats.
+    svc.pushSnapshotTo(wc as never);
+
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("skips a destroyed view and swallows a send that throws", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const destroyed = makeWebContents();
+    destroyed.isDestroyed.mockReturnValue(true);
+    svc.pushSnapshotTo(destroyed as never);
+    expect(destroyed.send).not.toHaveBeenCalled();
+
+    const racing = makeWebContents();
+    racing.send.mockImplementation(() => {
+      throw new Error("Object has been destroyed");
+    });
+    expect(() => svc.pushSnapshotTo(racing as never)).not.toThrow();
     svc.stop();
   });
 

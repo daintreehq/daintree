@@ -123,13 +123,7 @@ export interface GitHubPR {
   ciSummary?: GitHubPRCISummary;
   /** Merge state status from the PR. UNKNOWN on freshly-opened PRs that GitHub hasn't backgrounded yet. */
   mergeStateStatus?:
-    | "BEHIND"
-    | "BLOCKED"
-    | "CLEAN"
-    | "DIRTY"
-    | "HAS_HOOKS"
-    | "UNKNOWN"
-    | "UNSTABLE";
+    "BEHIND" | "BLOCKED" | "CLEAN" | "DIRTY" | "HAS_HOOKS" | "UNKNOWN" | "UNSTABLE";
   /** Global CI status derived from in-band statusCheckRollup.contexts aggregates (not required-filtered) */
   globalCIStatus?: GitHubPRCIStatus;
   /** Global CI aggregate counts from in-band statusCheckRollup.contexts (not required-filtered) */

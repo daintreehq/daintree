@@ -226,7 +226,6 @@ export const AUDIT_FLUSH_DEBOUNCE_MS = 2000;
 export const CONFIRMATION_REQUIRED_CODE = "CONFIRMATION_REQUIRED";
 export const USER_REJECTED_CODE = "USER_REJECTED";
 export const CONFIRMATION_TIMEOUT_CODE = "CONFIRMATION_TIMEOUT";
-export const ELICITATION_FAILED_CODE = "ELICITATION_FAILED";
 export const EXECUTION_ERROR_CODE = "EXECUTION_ERROR";
 export const BINDING_STALE = "BINDING_STALE";
 export const SESSION_BINDING_GONE = "SESSION_BINDING_GONE";
@@ -342,6 +341,8 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "agent.listToolbar",
   "agent.listAvailable",
   "agentSessionHistory.list",
+  // Read-only bookmark metadata (#11288); mutation actions stay off the MCP surface.
+  "session.bookmarks.list",
 
   "git.getProjectPulse",
   "git.getFileDiff",

@@ -1,5 +1,5 @@
 import { ipcMain, dialog, BrowserWindow, net } from "electron";
-import { open, writeFile, rm, access } from "node:fs/promises";
+import { open, writeFile, rm, access, stat } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -47,6 +47,8 @@ import {
   type PanelKindConfig,
 } from "../../../shared/config/panelKindRegistry.js";
 import { isPluginInvokeOwnershipError } from "../../services/plugin/PluginInvokeErrors.js";
+import { pluginInstallJobs } from "../../services/plugin/PluginInstallJobRegistry.js";
+import { sendToRendererContext } from "../utils.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
 import { getPluginKeybindings } from "../../services/pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../../services/pluginContextMenuRegistry.js";
@@ -75,10 +77,16 @@ import type {
   PluginPickPathRequest,
   PluginWorktreeStatus,
   PluginActivationResult,
+  PluginPanelLifecycleEvent,
 } from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
+import {
+  getProjectForWebContents,
+  getWindowForWebContents,
+  isCachedViewWebContents,
+} from "../../window/webContentsRegistry.js";
 
 type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
 
@@ -142,6 +150,18 @@ async function validateDntrArchivePath(archivePath: string): Promise<PluginInsta
   if (extname(archivePath).toLowerCase() !== ".dntr") {
     return fail("Only .dntr files can be installed");
   }
+  // Require a REGULAR file before opening it. `open()` on a FIFO blocks forever
+  // when no writer exists, and the extension check alone doesn't stop someone
+  // dropping a `pipe.dntr` — that would wedge the IPC call and strand its
+  // install job with no timeout to rescue it. `stat` follows symlinks, so a
+  // symlink to a real archive still installs.
+  try {
+    if (!(await stat(archivePath)).isFile()) {
+      return fail("That path isn't a regular file");
+    }
+  } catch {
+    return fail("Couldn't read the dropped file");
+  }
   let header: Buffer;
   try {
     const fh = await open(archivePath, "r");
@@ -180,12 +200,69 @@ async function handleInstall(
   return (await getPluginService()).installPlugin(archivePath, opts);
 }
 
+// Job ids are renderer-minted UUIDs used only as a correlation key. Bound the
+// shape so a hostile renderer can't push unbounded strings into the registry or
+// into the log line that echoes the id.
+const INSTALL_JOB_ID_PATTERN = /^[0-9a-fA-F-]{8,64}$/;
+
+/**
+ * Run an install under an optional progress/cancellation job (#11302).
+ *
+ * Registration lives here rather than in the install handlers themselves so the
+ * exported `handleInstallFromPath` / `handleInstallFromUrl` keep their plain
+ * signatures for the CLI server (`PluginCliServer.ts`), which installs with no
+ * renderer to report to. Progress is targeted at the initiating window: a
+ * background install in another project view must not paint this one's UI.
+ *
+ * The `finally` is the only place a record is dropped — cancellation merely
+ * aborts the signal, and the install's own `finally` still owns the staging
+ * directory and the install lock.
+ *
+ * `run` receives the id to actually use, which is `undefined` whenever the job
+ * could not be registered. That matters: the installer resolves its signal by
+ * looking the id up in the process-wide registry, so running with an id owned
+ * by a DIFFERENT live install would splice the two together — cancelling one
+ * would abort the other, either could commit the other's record, and progress
+ * would be pushed to the wrong window. Better to install without progress than
+ * to install under someone else's job.
+ */
+async function withInstallJob(
+  ctx: IpcContext,
+  jobId: string | undefined,
+  run: (effectiveJobId: string | undefined) => Promise<PluginInstallResult>
+): Promise<PluginInstallResult> {
+  if (!jobId || !INSTALL_JOB_ID_PATTERN.test(jobId)) return run(undefined);
+  const registered = pluginInstallJobs.begin(jobId, (event) => {
+    sendToRendererContext(ctx, CHANNELS.PLUGIN_INSTALL_PROGRESS, event);
+  });
+  if (!registered) return run(undefined);
+  try {
+    return await run(jobId);
+  } finally {
+    pluginInstallJobs.end(jobId);
+  }
+}
+
+/**
+ * Abort an in-flight install. Returns false when the job is unknown (already
+ * finished, or never existed) or has passed the commit point — the renderer
+ * surfaces that as "too late" rather than leaving a Cancel button that silently
+ * does nothing.
+ */
+function handleCancelInstall(jobId: string): boolean {
+  if (typeof jobId !== "string" || !INSTALL_JOB_ID_PATTERN.test(jobId)) return false;
+  return pluginInstallJobs.cancel(jobId);
+}
+
 // Install-from-file owns the native-picker entry point; the selected path runs
 // the SAME trust gate + installer as the drag-and-drop path
 // ({@link handleInstallFromPath}) so both renderer entries validate identically.
 // A dismissed picker resolves `cancelled`; validation failures come back as
 // structured `{ status: "failed" }` data the dialog can render inline.
-async function handleInstallFromFile(ctx: IpcContext): Promise<PluginInstallResult> {
+async function handleInstallFromFile(
+  ctx: IpcContext,
+  jobId?: string
+): Promise<PluginInstallResult> {
   const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
   const dialogOptions = {
     title: "Install plugin",
@@ -198,7 +275,9 @@ async function handleInstallFromFile(ctx: IpcContext): Promise<PluginInstallResu
   if (result.canceled || result.filePaths.length === 0) {
     return { status: "cancelled" };
   }
-  return handleInstallFromPath(result.filePaths[0]!);
+  // The job starts once a path exists — time spent in the native picker isn't
+  // install progress, and a Cancel button for it would duplicate the picker's own.
+  return withInstallJob(ctx, jobId, (id) => handleInstallFromPath(result.filePaths[0]!, id));
 }
 
 // Bounded download limits for install-from-URL (F24). Mirrors the spec in
@@ -228,10 +307,39 @@ function isAbortLikeError(err: unknown): boolean {
  * `{ status: "failed" }` data (never thrown) so the tab can render an inline
  * message.
  */
-export async function handleInstallFromPath(path: string): Promise<PluginInstallResult> {
+export async function handleInstallFromPath(
+  path: string,
+  jobId?: string
+): Promise<PluginInstallResult> {
   const invalid = await validateDntrArchivePath(path);
   if (invalid) return invalid;
-  return (await getPluginService()).installPlugin(path);
+  const service = await getPluginService();
+  // A double-clicked archive can be approved before the deferred plugin-service
+  // task finishes (#11280), and `initialize()` assumes no install overlaps it:
+  // its startup sweep deletes staging directories and the kill-switch blocklist
+  // is still unset. Wait it out — a no-op once init has settled.
+  await service.waitForInit();
+  // Call through with a single argument when there is no job, so the installer
+  // sees exactly the same shape it always did.
+  return jobId === undefined ? service.installPlugin(path) : service.installPlugin(path, { jobId });
+}
+
+/** Namespace entry for install-from-path — registers the job, then delegates. */
+async function handleInstallFromPathOp(
+  ctx: IpcContext,
+  path: string,
+  jobId?: string
+): Promise<PluginInstallResult> {
+  return withInstallJob(ctx, jobId, (id) => handleInstallFromPath(path, id));
+}
+
+/** Namespace entry for install-from-URL — registers the job, then delegates. */
+async function handleInstallFromUrlOp(
+  ctx: IpcContext,
+  url: string,
+  jobId?: string
+): Promise<PluginInstallResult> {
+  return withInstallJob(ctx, jobId, (id) => handleInstallFromUrl(url, id));
 }
 
 /**
@@ -249,7 +357,10 @@ export async function handleInstallFromPath(path: string): Promise<PluginInstall
  * (PluginService extracts into its own temp dir and doesn't take ownership of
  * the download artifact).
  */
-export async function handleInstallFromUrl(url: string): Promise<PluginInstallResult> {
+export async function handleInstallFromUrl(
+  url: string,
+  jobId?: string
+): Promise<PluginInstallResult> {
   if (typeof url !== "string" || url.trim().length === 0) {
     return { status: "invalid-url" };
   }
@@ -288,10 +399,18 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
   let sizeAborted = false;
   let wroteTempFile = false;
 
+  // The user's cancel joins the size cap and the download deadline on the same
+  // composed signal (#11302), so aborting during the download drops the socket
+  // instead of waiting for the installer to notice at the next checkpoint.
+  const jobSignal = pluginInstallJobs.signal(jobId);
+  const cancelledDuringDownload = () => jobSignal?.aborted === true;
+
   try {
+    pluginInstallJobs.setPhase(jobId, "downloading");
     const signal = AbortSignal.any([
       sizeController.signal,
       AbortSignal.timeout(PLUGIN_DOWNLOAD_TIMEOUT_MS),
+      ...(jobSignal ? [jobSignal] : []),
     ]);
 
     let response: Response;
@@ -309,6 +428,9 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
       }
       response = guarded.response;
     } catch (err) {
+      // A user cancel aborts the same composed signal as the deadline, so check
+      // it first — otherwise cancelling would report a timeout that never happened.
+      if (cancelledDuringDownload()) return { status: "cancelled" };
       if (isAbortLikeError(err)) {
         return failed("fetch_timeout", "The download timed out before it finished.");
       }
@@ -376,6 +498,9 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
       if (sizeAborted) {
         return failed("size_exceeded", "The plugin file is larger than the 30 MB limit.");
       }
+      // The size cap sets its own flag above, so anything abort-like left here
+      // is either the user's cancel or the deadline — cancel wins.
+      if (cancelledDuringDownload()) return { status: "cancelled" };
       if (isAbortLikeError(err)) {
         return failed("fetch_timeout", "The download timed out before it finished.");
       }
@@ -385,6 +510,7 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
     return (await getPluginService()).installPlugin(tempPath, {
       source: "url",
       originalUrl: trimmed,
+      ...(jobId === undefined ? {} : { jobId }),
     });
   } finally {
     if (wroteTempFile) {
@@ -554,6 +680,31 @@ async function handleActivateForView(panelKindId: string): Promise<void> {
       userMessage: result.error,
     });
   }
+}
+
+/**
+ * Ingest a renderer's batch of plugin panel lifecycle transitions (#11301).
+ *
+ * The renderer is the only process that can distinguish a temporary unmount
+ * (sibling maximize, inactive dock tab) from a permanent close, so it owns the
+ * phase. `sourceId` comes from the IPC context — never the payload — so each
+ * project view's panels stay in their own bucket. Per-event shape validation
+ * and ownership resolution happen in the broker; this handler stays a thin,
+ * non-throwing sink so a lifecycle report can never surface an error dialog on
+ * a background bookkeeping call.
+ */
+async function handleReportPanelLifecycle(
+  ctx: IpcContext,
+  events: PluginPanelLifecycleEvent[]
+): Promise<void> {
+  // `ctx.event.sender` lets the service forget this renderer's panels when its
+  // view is destroyed — otherwise a closed project view's panels linger and get
+  // replayed to the next subscriber as though they were still open.
+  (await getPluginService()).ingestPanelLifecycleEvents(
+    ctx.webContentsId,
+    events,
+    ctx.event.sender
+  );
 }
 
 async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {
@@ -969,8 +1120,13 @@ export const pluginNamespace = defineIpcNamespace({
     installFromFile: op(PLUGIN_METHOD_CHANNELS.installFromFile, handleInstallFromFile, {
       withContext: true,
     }),
-    installFromPath: op(PLUGIN_METHOD_CHANNELS.installFromPath, handleInstallFromPath),
-    installFromUrl: op(PLUGIN_METHOD_CHANNELS.installFromUrl, handleInstallFromUrl),
+    installFromPath: op(PLUGIN_METHOD_CHANNELS.installFromPath, handleInstallFromPathOp, {
+      withContext: true,
+    }),
+    installFromUrl: op(PLUGIN_METHOD_CHANNELS.installFromUrl, handleInstallFromUrlOp, {
+      withContext: true,
+    }),
+    cancelInstall: op(PLUGIN_METHOD_CHANNELS.cancelInstall, handleCancelInstall),
     uninstall: op(PLUGIN_METHOD_CHANNELS.uninstall, handleUninstall),
     checkForUpdate: op(PLUGIN_METHOD_CHANNELS.checkForUpdate, handleCheckForUpdate),
     toolbarButtons: op(PLUGIN_METHOD_CHANNELS.toolbarButtons, handleToolbarButtons),
@@ -982,6 +1138,11 @@ export const pluginNamespace = defineIpcNamespace({
     unregisterAction: op(PLUGIN_METHOD_CHANNELS.unregisterAction, handleActionsUnregister),
     getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet),
     activateForView: op(PLUGIN_METHOD_CHANNELS.activateForView, handleActivateForView),
+    reportPanelLifecycle: op(
+      PLUGIN_METHOD_CHANNELS.reportPanelLifecycle,
+      handleReportPanelLifecycle,
+      { withContext: true }
+    ),
     getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
     getForgeProviders: op(PLUGIN_METHOD_CHANNELS.getForgeProviders, handleForgeProvidersGet),
     getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet),
@@ -1031,6 +1192,25 @@ export function registerPluginHandlers(): () => void {
     CHANNELS.PLUGIN_INVOKE,
     async (event, pluginId: string, channel: string, ...args: unknown[]) => {
       const start = Date.now();
+      // Pin the sender's scope synchronously, before any await: a project view
+      // can be evicted (LRU, under memory pressure) or rebound to another
+      // project while the dispatch is in flight, taking its registry binding
+      // with it. Resolved here, the context always describes the renderer that
+      // actually made the call.
+      const senderWebContentsId = event.sender.id;
+      const senderProjectId = getProjectForWebContents(senderWebContentsId);
+      // The worktree lookup is keyed by window, but a window's workspace binding
+      // tracks its *visible* project — so it only speaks for this sender when
+      // this sender is the visible view. A cached (deactivated) view stays
+      // registered to its own project while its window shows another, and an
+      // unregistered sender has no project to speak for at all; in both cases a
+      // window-keyed answer would pair one project's id with another project's
+      // worktree, which is the mismatch #11297 is about. Leave the window
+      // unresolved and take the null.
+      const senderWindowId =
+        senderProjectId !== null && !isCachedViewWebContents(senderWebContentsId)
+          ? getWindowForWebContents(event.sender)?.id
+          : undefined;
       const senderUrl = event.senderFrame?.url;
       if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
         // Trust check rejected — args are attacker-controlled and unvalidated,
@@ -1054,14 +1234,35 @@ export function registerPluginHandlers(): () => void {
         });
         throw new Error(`plugin:invoke rejected: untrusted sender (url=${senderUrl ?? "unknown"})`);
       }
-      const ctx: PluginIpcContext = {
-        projectId: null,
-        worktreeId: null,
-        webContentsId: event.sender.id,
-        pluginId,
-      };
       try {
-        return await (await getPluginService()).dispatchHandler(pluginId, channel, ctx, args);
+        const service = await getPluginService();
+        // No trustworthy window means no worktree — short-circuit rather than
+        // query, so the invariant holds here regardless of what the service
+        // would answer.
+        let worktreeId: string | null = null;
+        if (senderWindowId !== undefined) {
+          // Resolving the worktree needs a round-trip to the workspace host, so
+          // it can't be pinned synchronously like the ids above.
+          // `getActiveWorktreeIdForWindow` swallows its own failures — a wedged
+          // workspace host degrades the context rather than failing the
+          // invocation it sits in front of.
+          worktreeId = await service.getActiveWorktreeIdForWindow(senderWindowId);
+          // The window id survives a project switch, so a rebind during the
+          // await would pair the sender's projectId with the *replacement*
+          // project's worktree. Snapshots carry no project id to filter on, so
+          // re-check the binding instead and drop to null on a mismatch: a null
+          // worktree is honest, a cross-project one is the bug this fixes.
+          if (getProjectForWebContents(senderWebContentsId) !== senderProjectId) {
+            worktreeId = null;
+          }
+        }
+        const ctx: PluginIpcContext = {
+          projectId: senderProjectId,
+          worktreeId,
+          webContentsId: senderWebContentsId,
+          pluginId,
+        };
+        return await service.dispatchHandler(pluginId, channel, ctx, args);
       } catch (err) {
         // A throwing plugin handler is already audited at the dispatch
         // boundary (#10463); recording it again here would double-count the

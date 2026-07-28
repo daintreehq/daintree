@@ -54,6 +54,19 @@ port.on("message", (message: CopytreeWorkerRequest) => {
       );
       break;
     }
+    case "get-file-tree": {
+      const { id, rootPath, dirPath, options, includeExcluded } = message;
+      void copyTreeService.getFileTree(rootPath, dirPath, options, { includeExcluded }, id).then(
+        (nodes) => post({ type: "get-file-tree-result", id, nodes }),
+        (error: unknown) =>
+          post({
+            type: "get-file-tree-error",
+            id,
+            error: formatErrorMessage(error, "Failed to read the project files"),
+          })
+      );
+      break;
+    }
     case "cancel":
       copyTreeService.cancel(message.id);
       break;

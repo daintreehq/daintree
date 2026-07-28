@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { PanelPersistence, panelToSnapshot } from "../panelPersistence";
+import { setWorktreeGitDirAccessor } from "@/store/storeAccessors";
 import type { TerminalInstance, TerminalSnapshot } from "@/types";
 
 initBuiltInPanelKinds();
@@ -60,6 +61,8 @@ const createMockProjectClient = () => ({
   disableInRepoSettings: vi.fn().mockResolvedValue({}),
   checkMissing: vi.fn().mockResolvedValue([]),
   locate: vi.fn().mockResolvedValue(null),
+  previewRelocation: vi.fn().mockResolvedValue({}),
+  applyRelocation: vi.fn().mockResolvedValue({}),
   cloneRepo: vi.fn().mockResolvedValue({ success: true }),
   onCloneProgress: vi.fn().mockReturnValue(() => {}),
   cancelClone: vi.fn().mockResolvedValue(undefined),
@@ -140,7 +143,10 @@ describe("PanelPersistence", () => {
         expect.arrayContaining([
           expect.objectContaining({ id: "grid-1" }),
           expect.objectContaining({ id: "dock-1" }),
-        ])
+        ]),
+        expect.any(Array),
+        expect.any(Array),
+        undefined
       );
 
       const savedTerminals = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
@@ -246,20 +252,26 @@ describe("PanelPersistence", () => {
       persistence.save([terminal], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(client.setTerminals).toHaveBeenCalledWith(projectId, [
-        {
-          id: "test-1",
-          kind: "terminal",
-          launchAgentId: "claude",
-          title: "Claude",
-          cwd: "/test",
-          worktreeId: "wt-1",
-          location: "grid",
-          command: "claude --model sonnet-4",
-          agentState: "working",
-          lastStateChange: 1700000000000,
-        },
-      ]);
+      expect(client.setTerminals).toHaveBeenCalledWith(
+        projectId,
+        [
+          {
+            id: "test-1",
+            kind: "terminal",
+            launchAgentId: "claude",
+            title: "Claude",
+            cwd: "/test",
+            worktreeId: "wt-1",
+            location: "grid",
+            command: "claude --model sonnet-4",
+            agentState: "working",
+            lastStateChange: 1700000000000,
+          },
+        ],
+        expect.any(Array),
+        expect.any(Array),
+        undefined
+      );
     });
 
     it("excludes transient detectedProcessId from persisted snapshots", async () => {
@@ -326,13 +338,19 @@ describe("PanelPersistence", () => {
       persistence.save([terminal], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(client.setTerminals).toHaveBeenCalledWith(projectId, [
-        expect.objectContaining({
-          id: "test-1",
-          title: "Custom",
-          cwd: "/custom/path",
-        }),
-      ]);
+      expect(client.setTerminals).toHaveBeenCalledWith(
+        projectId,
+        [
+          expect.objectContaining({
+            id: "test-1",
+            title: "Custom",
+            cwd: "/custom/path",
+          }),
+        ],
+        expect.any(Array),
+        expect.any(Array),
+        undefined
+      );
     });
 
     it("skips save if no project ID is provided", async () => {
@@ -359,7 +377,13 @@ describe("PanelPersistence", () => {
 
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(client.setTerminals).toHaveBeenCalledWith("from-option", expect.any(Array));
+      expect(client.setTerminals).toHaveBeenCalledWith(
+        "from-option",
+        expect.any(Array),
+        expect.any(Array),
+        expect.any(Array),
+        undefined
+      );
     });
 
     it("skips redundant persist when transformed payload is unchanged", async () => {
@@ -391,8 +415,164 @@ describe("PanelPersistence", () => {
       expect(client.setTerminals).toHaveBeenCalledTimes(2);
       expect(client.setTerminals).toHaveBeenLastCalledWith(
         projectId,
-        expect.arrayContaining([expect.objectContaining({ title: "Two" })])
+        expect.arrayContaining([expect.objectContaining({ title: "Two" })]),
+        expect.any(Array),
+        expect.any(Array),
+        undefined
       );
+    });
+  });
+
+  describe("layout merge delta (#11350)", () => {
+    // Mirror how a baseline is actually seeded at hydration: read back from
+    // disk (JSON), which drops undefined-valued keys. A strict key-count
+    // comparison would then mark an untouched panel changed on the first save.
+    const hydratedBaseline = (...terminals: TerminalInstance[]): TerminalSnapshot[] =>
+      terminals.map((t) => JSON.parse(JSON.stringify(panelToSnapshot(t))) as TerminalSnapshot);
+
+    it("sends no session-id tombstone when the baseline never carried one (#11461)", async () => {
+      // The shutdown-capture case: Main wrote the id straight to disk after this
+      // renderer primed, so the renderer omits a value it never held. That must
+      // read as "unknown" — no tombstone — or Main would erase the capture.
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const a = createMockTerminal({ id: "a" });
+      persistence.primeProject(projectId, hydratedBaseline(a));
+
+      persistence.save([createMockTerminal({ id: "a", title: "renamed" })], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , changedIds, , fieldEdits] = client.setTerminals.mock.calls[0]!;
+      expect(changedIds).toEqual(["a"]);
+      expect(fieldEdits).toBeUndefined();
+    });
+
+    it("sends a session-id tombstone when the renderer drops a known id (#11461)", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const withSession = createMockTerminal({ id: "a", agentSessionId: "sess-1" });
+      persistence.primeProject(projectId, hydratedBaseline(withSession));
+
+      persistence.save([createMockTerminal({ id: "a" })], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , , , fieldEdits] = client.setTerminals.mock.calls[0]!;
+      expect(fieldEdits).toEqual([{ id: "a", fields: ["agentSessionId"] }]);
+    });
+
+    it("carries the same tombstone through the project-switch delta (#11461)", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const withSession = createMockTerminal({ id: "a", agentSessionId: "sess-1" });
+      persistence.primeProject(projectId, hydratedBaseline(withSession));
+
+      const delta = persistence.computeTerminalDelta(projectId, [
+        panelToSnapshot(createMockTerminal({ id: "a" })),
+      ]);
+
+      expect(delta.fieldEdits).toEqual([{ id: "a", fields: ["agentSessionId"] }]);
+    });
+
+    it("marks every panel changed when there is no primed baseline", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      persistence.save([createMockTerminal({ id: "a" })], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , changedIds, removedIds] = client.setTerminals.mock.calls[0]!;
+      expect(changedIds).toEqual(["a"]);
+      expect(removedIds).toEqual([]);
+    });
+
+    it("emits an empty delta for panels unchanged since a JSON-round-tripped baseline", async () => {
+      // Regression for the undefined-vs-missing key mismatch: a baseline read
+      // back from disk drops undefined-valued keys, but the delta must still
+      // report no change so Main's merge is a no-op and cannot overwrite a
+      // sibling's edit.
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const a = createMockTerminal({ id: "a" });
+      const b = createMockTerminal({ id: "b" });
+      persistence.primeProject(projectId, hydratedBaseline(a, b));
+
+      persistence.save([a, b], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , changedIds, removedIds] = client.setTerminals.mock.calls[0]!;
+      expect(changedIds).toEqual([]);
+      expect(removedIds).toEqual([]);
+    });
+
+    it("emits only the newly added panel in changedIds against a hydrated baseline", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const a = createMockTerminal({ id: "a" });
+      const b = createMockTerminal({ id: "b" });
+      persistence.primeProject(projectId, hydratedBaseline(a, b));
+
+      persistence.save([a, b, createMockTerminal({ id: "c" })], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , changedIds, removedIds] = client.setTerminals.mock.calls[0]!;
+      expect(changedIds).toEqual(["c"]);
+      expect(removedIds).toEqual([]);
+    });
+
+    it("emits a closed panel in removedIds against a hydrated baseline", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const a = createMockTerminal({ id: "a" });
+      const b = createMockTerminal({ id: "b" });
+      persistence.primeProject(projectId, hydratedBaseline(a, b));
+
+      persistence.save([a], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , changedIds, removedIds] = client.setTerminals.mock.calls[0]!;
+      expect(changedIds).toEqual([]);
+      expect(removedIds).toEqual(["b"]);
+    });
+
+    it("computes an overlapping save's delta against the acknowledged baseline", async () => {
+      // Regression: while the first send (add b) is still in flight, a second
+      // save (remove b) must diff against the baseline the first write commits
+      // ([a, b]), so it emits removedIds:["b"]. If it diffed against the stale
+      // [a], it would omit the tombstone and Main would resurrect b.
+      const client = createMockProjectClient();
+      let resolveFirst: (() => void) | undefined;
+      const firstSend = new Promise<void>((resolve) => {
+        resolveFirst = () => resolve();
+      });
+      client.setTerminals.mockReturnValueOnce(firstSend).mockResolvedValue(undefined);
+
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+      const a = createMockTerminal({ id: "a" });
+      const b = createMockTerminal({ id: "b" });
+      persistence.primeProject(projectId, hydratedBaseline(a));
+
+      persistence.save([a, b], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(client.setTerminals).toHaveBeenCalledTimes(1);
+
+      persistence.save([a], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+      // Second write is chained behind the in-flight first write.
+      expect(client.setTerminals).toHaveBeenCalledTimes(1);
+
+      resolveFirst?.();
+      await vi.runAllTimersAsync();
+
+      expect(client.setTerminals).toHaveBeenCalledTimes(2);
+      const [, , changedIds, removedIds] = client.setTerminals.mock.calls[1]!;
+      expect(changedIds).toEqual([]);
+      expect(removedIds).toEqual(["b"]);
     });
   });
 
@@ -467,13 +647,19 @@ describe("PanelPersistence", () => {
       persistence.save([browserPanel], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(client.setTerminals).toHaveBeenCalledWith(projectId, [
-        expect.objectContaining({
-          id: "browser-1",
-          kind: "browser",
-          browserUrl: "https://localhost:3000",
-        }),
-      ]);
+      expect(client.setTerminals).toHaveBeenCalledWith(
+        projectId,
+        [
+          expect.objectContaining({
+            id: "browser-1",
+            kind: "browser",
+            browserUrl: "https://localhost:3000",
+          }),
+        ],
+        expect.any(Array),
+        expect.any(Array),
+        undefined
+      );
     });
   });
 
@@ -567,6 +753,48 @@ describe("PanelPersistence", () => {
       const panel = createMockTerminal({ id: "no-plugin", kind: "browser" });
       const snapshot = panelToSnapshot(panel);
       expect(snapshot).not.toHaveProperty("pluginId");
+    });
+
+    it("stamps worktreeGitDir from the worktree store, omitting it when unknown (#11388)", () => {
+      // The stable admin-dir handle lets restore survive a `git worktree move`.
+      setWorktreeGitDirAccessor((id) => (id === "wt-1" ? "/repo/.git/worktrees/wt-1" : undefined));
+      try {
+        const withHandle = panelToSnapshot(createMockTerminal({ id: "p1", worktreeId: "wt-1" }));
+        expect(withHandle.worktreeGitDir).toBe("/repo/.git/worktrees/wt-1");
+
+        // No handle available (unknown / legacy worktree) ⇒ field omitted.
+        const noHandle = panelToSnapshot(
+          createMockTerminal({ id: "p2", worktreeId: "wt-unknown" })
+        );
+        expect(noHandle).not.toHaveProperty("worktreeGitDir");
+      } finally {
+        setWorktreeGitDirAccessor(() => undefined);
+      }
+    });
+
+    it("carries the previous worktreeGitDir when the live store can't answer, only for the same worktree (#11388)", () => {
+      // First capture a snapshot with the handle from a populated store.
+      setWorktreeGitDirAccessor((id) => (id === "wt-1" ? "/repo/.git/worktrees/wt-1" : undefined));
+      const prev = panelToSnapshot(createMockTerminal({ id: "p1", worktreeId: "wt-1" }));
+      expect(prev.worktreeGitDir).toBe("/repo/.git/worktrees/wt-1");
+
+      try {
+        // Simulate the #11234 empty-list race: the view store can't answer yet.
+        setWorktreeGitDirAccessor(() => undefined);
+
+        // Same worktree ⇒ the durable handle is preserved, not erased.
+        const unchanged = panelToSnapshot(
+          createMockTerminal({ id: "p1", worktreeId: "wt-1" }),
+          prev
+        );
+        expect(unchanged.worktreeGitDir).toBe("/repo/.git/worktrees/wt-1");
+
+        // Panel now bound to a DIFFERENT worktree ⇒ the stale handle is dropped.
+        const moved = panelToSnapshot(createMockTerminal({ id: "p1", worktreeId: "wt-2" }), prev);
+        expect(moved).not.toHaveProperty("worktreeGitDir");
+      } finally {
+        setWorktreeGitDirAccessor(() => undefined);
+      }
     });
   });
 
@@ -751,14 +979,12 @@ describe("PanelPersistence", () => {
       // is tied to the default transform (panelToSnapshot); custom transforms
       // own their own output entirely.
       const client = createMockProjectClient();
-      const customTransform = vi.fn(
-        (t: TerminalInstance): TerminalSnapshot => ({
-          id: t.id,
-          kind: t.kind,
-          title: t.title,
-          location: t.location === "trash" ? "grid" : t.location,
-        })
-      );
+      const customTransform = vi.fn((t: TerminalInstance): TerminalSnapshot => ({
+        id: t.id,
+        kind: t.kind,
+        title: t.title,
+        location: t.location === "trash" ? "grid" : t.location,
+      }));
       const persistence = new PanelPersistence(client, {
         debounceMs: 100,
         transform: customTransform,
@@ -917,6 +1143,13 @@ describe("PanelPersistence", () => {
 
       persistence.save([createMockTerminal({ ...panel, title: "Renamed" })], projectId);
       await vi.advanceTimersByTimeAsync(100);
+      // The fragment is captured from queued state synchronously at save() time,
+      // but the second write is serialized behind the in-flight first write and
+      // is not sent until that resolves (#11350).
+      expect(client.setTerminals).toHaveBeenCalledTimes(1);
+
+      resolveFirstPersist?.();
+      await persistence.whenIdle();
 
       expect(client.setTerminals).toHaveBeenCalledTimes(2);
       const secondSave = client.setTerminals.mock.calls[1]![1] as TerminalSnapshot[];
@@ -927,9 +1160,6 @@ describe("PanelPersistence", () => {
           browserUrl: "https://example.com",
         })
       );
-
-      resolveFirstPersist?.();
-      await persistence.whenIdle();
     });
   });
 
@@ -955,15 +1185,21 @@ describe("PanelPersistence", () => {
       persistence.save([devPreviewPanel], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(client.setTerminals).toHaveBeenCalledWith(projectId, [
-        expect.objectContaining({
-          id: "dev-preview-1",
-          kind: "dev-preview",
-          browserUrl: "http://localhost:5173",
-          command: "npm run dev",
-          devPreviewConsoleOpen: true,
-        }),
-      ]);
+      expect(client.setTerminals).toHaveBeenCalledWith(
+        projectId,
+        [
+          expect.objectContaining({
+            id: "dev-preview-1",
+            kind: "dev-preview",
+            browserUrl: "http://localhost:5173",
+            command: "npm run dev",
+            devPreviewConsoleOpen: true,
+          }),
+        ],
+        expect.any(Array),
+        expect.any(Array),
+        undefined
+      );
 
       const saved = client.setTerminals.mock.calls[0]![1][0] as Record<string, unknown>;
       expect(saved.devServerStatus).toBeUndefined();

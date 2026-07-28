@@ -16,9 +16,18 @@ import type { HandlerDependencies, IpcContext } from "../../types.js";
 import {
   TerminalSpawnOptionsSchema,
   AgentSessionRetentionDaysSchema,
+  PrepareBookmarkPayloadSchema,
+  BookmarkMutatePayloadSchema,
+  BookmarkDeletePayloadSchema,
+  ListBookmarksPayloadSchema,
 } from "../../../schemas/ipc.js";
 import { store } from "../../../store.js";
-import type { AgentSessionRetentionDays } from "../../../../shared/types/ipc/agentSessionHistory.js";
+import { AppError } from "../../../utils/errorTypes.js";
+import type {
+  AgentSessionBookmarkMetadata,
+  AgentSessionRecord,
+  AgentSessionRetentionDays,
+} from "../../../../shared/types/ipc/agentSessionHistory.js";
 import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
 import { DEFAULT_DANGEROUS_ARGS } from "../../../../shared/types/agentSettings.js";
 import {
@@ -144,9 +153,17 @@ import {
   listAgentSessions,
   clearAgentSessions,
   pruneAgentSessions,
+  readSessionHistorySync,
+  promoteBookmark,
+  renameBookmark,
+  deleteBookmark,
+  listBookmarks,
 } from "../../../services/pty/agentSessionHistory.js";
 import { getAgentSessionRetentionDays } from "../../../services/pty/agentSessionRetention.js";
-import { journalAgentSession } from "../../../services/pty/agentSessionJournal.js";
+import {
+  journalAgentSession,
+  journalAgentSessionRecord,
+} from "../../../services/pty/agentSessionJournal.js";
 import { getLifecycleLedger } from "../../../services/pty/lifecycleLedger.js";
 import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
 import { getDefaultShell } from "../../../services/pty/terminalShell.js";
@@ -598,6 +615,18 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       ? commandLaunchShell.shell
       : validatedOptions.shell || projectShell;
 
+    // Shells that can't host a startup wrapper (fish, nushell, unrecognized
+    // Windows shells) launch bare and get the command typed in after spawn.
+    // Cache it on the spawn options so it rides every pendingSpawns replay — a
+    // pty-host crash respawn would otherwise bring these terminals back as an
+    // empty prompt, losing the (possibly resume) launch entirely (#11339). The
+    // pty-host spawn handler injects it, and only after a successful spawn, so a
+    // rejected spawn can't type it into a pre-existing live PTY (#11341).
+    // Wrapper shells already carry the command in `args`, so they replay
+    // faithfully with no postSpawnInput.
+    const postSpawnInput =
+      safeCommand.length > 0 && !commandLaunchShell ? `${safeCommand}\r` : undefined;
+
     try {
       // Every terminal is an interactive shell. Agent launches inject their
       // command after the shell's first prompt renders — never `exec`'d over
@@ -626,17 +655,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         agentPresetColor: validatedOptions.agentPresetColor,
         originalAgentPresetId:
           validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
+        // Executed immediately by PtyClient after the spawn message (FIFO on the
+        // same channel), so users don't stare at a blank prompt; the shell stays
+        // the parent process and reclaims the foreground when the command exits.
+        postSpawnInput,
       });
-
-      if (safeCommand.length > 0 && !commandLaunchShell) {
-        // Execute immediately. node-pty queues the write against the spawned
-        // shell, so users do not stare at a blank prompt while we wait for RC
-        // files/prompt detection. The shell still remains the parent process;
-        // when the command exits, the terminal returns to a normal shell.
-        if (ptyClient.hasTerminal(id)) {
-          ptyClient.write(id, `${safeCommand}\r`);
-        }
-      }
 
       return id;
     } catch (error) {
@@ -822,6 +845,234 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     });
   };
 
+  // Bookmark a live agent pane's conversation and capture its native session
+  // durably BEFORE the renderer removes the pane (#11288). Prepare-before-remove:
+  // if any step here throws, the renderer keeps the pane. Main is authoritative
+  // for the lifecycle generation — a same-id restart during capture is rejected
+  // with STALE_GENERATION rather than journaling or closing the successor.
+  const handleAgentSessionPrepareBookmark = async (
+    payload: z.output<typeof PrepareBookmarkPayloadSchema>
+  ): Promise<{ record: AgentSessionRecord }> => {
+    const { terminalId, label, metadata } = payload;
+
+    const info = await ptyClient.getTerminalAsync(terminalId).catch(() => null);
+    if (!info?.launchAgentId) {
+      throw new AppError({
+        code: "NOT_BOOKMARKABLE",
+        message: `Terminal ${terminalId} is not a live agent pane`,
+      });
+    }
+    // Only agents with an exact-session resume can be bookmarked — a
+    // rolling-history / resume-latest agent has no specific conversation to pin.
+    const resume = getEffectiveAgentConfig(info.launchAgentId)?.resume;
+    if (resume?.kind !== "session-id") {
+      throw new AppError({
+        code: "NOT_BOOKMARKABLE",
+        message: `Agent ${info.launchAgentId} has no exact-session resume to bookmark`,
+      });
+    }
+    // Bookmarks are only reachable through the project-scoped list, so pinning a
+    // record with no owning project would strand it: exempt from age pruning and
+    // the per-worktree cap, yet never listable and so never deletable. Refuse
+    // before the capture kill rather than orphan it. A missing projectId is the
+    // degenerate spawn path that already warns "spawned without projectId".
+    if (!info.projectId) {
+      throw new AppError({
+        code: "NOT_BOOKMARKABLE",
+        message: `Terminal ${terminalId} has no owning project to scope a bookmark to`,
+      });
+    }
+
+    // Freeze the incarnation before capture (mirrors the kill path) so the
+    // record stays attributed to the conversation that produced it. `?? null` is
+    // the frozen-but-unknown sentinel (#11340): when the ledger has evicted the
+    // entry we must NOT fall back to the current generation, which could belong
+    // to a same-id successor and consume its journal reservation.
+    const ledger = getLifecycleLedger();
+    const generation = ledger.currentGeneration(terminalId) ?? null;
+
+    let sessionId: string | null;
+    try {
+      sessionId = await ptyClient.gracefulKill(terminalId);
+    } catch (err) {
+      throw new AppError({
+        code: "SESSION_CAPTURE_FAILED",
+        message: `Failed to capture the agent session for ${terminalId}`,
+        cause: err instanceof Error ? err : undefined,
+      });
+    }
+    if (!sessionId) {
+      throw new AppError({
+        code: "SESSION_CAPTURE_FAILED",
+        message: `No resumable session id was captured for ${terminalId}`,
+      });
+    }
+
+    // A successor took the terminal id while we captured — the pane the renderer
+    // would remove is no longer this conversation. Abort before any journal write.
+    // Only checkable when we froze a concrete generation; a `null` (evicted)
+    // freeze can't be compared, so it fails open like the journal path.
+    if (typeof generation === "number" && !ledger.isCurrent(terminalId, generation)) {
+      throw new AppError({
+        code: "STALE_GENERATION",
+        message: `Terminal ${terminalId} was restarted during bookmark capture`,
+      });
+    }
+
+    const branch = await resolveBranchForMain(info.worktreeId, deps.worktreeService);
+    const bookmark: AgentSessionBookmarkMetadata = {
+      bookmarkedAt: Date.now(),
+      label,
+      ...metadata,
+    };
+
+    let record: AgentSessionRecord | null;
+    try {
+      record = await journalAgentSessionRecord(
+        {
+          sessionId,
+          agentId: info.launchAgentId,
+          worktreeId: info.worktreeId ?? null,
+          // Match the kill path: prefer the observed task title unless the user
+          // locked the tab title, which the resume row should mirror.
+          title:
+            (info.titleMode === "user" ? info.title : (info.lastObservedTitle ?? info.title)) ??
+            null,
+          projectId: info.projectId ?? null,
+          agentLaunchFlags: info.agentLaunchFlags,
+          agentModelId: info.agentModelId,
+          cwd: info.cwd ?? undefined,
+          branch,
+          bookmark,
+        },
+        { terminalId, generation }
+      );
+    } catch (err) {
+      throw new AppError({
+        code: "PERSIST_FAILED",
+        message: `Failed to persist the bookmark for ${terminalId}`,
+        cause: err instanceof Error ? err : undefined,
+      });
+    }
+
+    // journalAgentSessionRecord returns null when this generation was already
+    // journaled by a concurrent close path — the captured sessionId may differ
+    // from the one that actually landed, so promoting by our sessionId could pin
+    // the wrong record or drop the prepared metadata. Fail closed instead: the
+    // pane stays as an exited/restartable panel and the user can retry or use
+    // Add bookmark from history on the resulting record.
+    if (!record) {
+      throw new AppError({
+        code: "PERSIST_FAILED",
+        message: `Bookmark for ${terminalId} raced a concurrent session capture; retry`,
+      });
+    }
+
+    // A successor may have taken the terminal id while we resolved the branch and
+    // wrote the record. The bookmark is durable for the correct (old) session, but
+    // the pane now shows the successor — reject so the renderer keeps it open
+    // rather than removing (and orphaning) the successor's backend.
+    if (typeof generation === "number" && !ledger.isCurrent(terminalId, generation)) {
+      throw new AppError({
+        code: "STALE_GENERATION",
+        message: `Terminal ${terminalId} was restarted during bookmark capture`,
+      });
+    }
+
+    return { record };
+  };
+
+  // A thrown mutator (unreadable journal, atomic-write failure) must surface the
+  // stable PERSIST_FAILED code, not a raw errno — SESSION_NOT_FOUND is reserved
+  // for a successful read that finds no target (the null return).
+  const asBookmarkPersistError = (err: unknown, sessionId: string): AppError =>
+    new AppError({
+      code: "PERSIST_FAILED",
+      message: `Failed to persist bookmark change for session ${sessionId}`,
+      cause: err instanceof Error ? err : undefined,
+    });
+
+  const handleAgentSessionPromoteBookmark = async (
+    payload: z.output<typeof BookmarkMutatePayloadSchema>
+  ): Promise<AgentSessionRecord> => {
+    const { app } = await import("electron");
+    const userData = app.getPath("userData");
+    // Same scoping guard as the capture path: a record with no owning project can
+    // never appear in the project-scoped bookmark list, so promoting it would
+    // create a pin the user can't see or delete. A record's projectId is fixed at
+    // journal time, so reading it before the write is sufficient; a record that
+    // disappears in between still falls through to promoteBookmark's null →
+    // SESSION_NOT_FOUND.
+    const target = readSessionHistorySync(userData).find((r) => r.sessionId === payload.sessionId);
+    if (target && !target.projectId) {
+      throw new AppError({
+        code: "NOT_BOOKMARKABLE",
+        message: `Session ${payload.sessionId} has no owning project to scope a bookmark to`,
+      });
+    }
+    let record: AgentSessionRecord | null;
+    try {
+      record = await promoteBookmark(payload.sessionId, payload.label, userData);
+    } catch (err) {
+      throw asBookmarkPersistError(err, payload.sessionId);
+    }
+    if (!record) {
+      throw new AppError({
+        code: "SESSION_NOT_FOUND",
+        message: `No resumable session ${payload.sessionId} to bookmark`,
+      });
+    }
+    return record;
+  };
+
+  const handleAgentSessionRenameBookmark = async (
+    payload: z.output<typeof BookmarkMutatePayloadSchema>
+  ): Promise<AgentSessionRecord> => {
+    const { app } = await import("electron");
+    let record: AgentSessionRecord | null;
+    try {
+      record = await renameBookmark(payload.sessionId, payload.label, app.getPath("userData"));
+    } catch (err) {
+      throw asBookmarkPersistError(err, payload.sessionId);
+    }
+    if (!record) {
+      throw new AppError({
+        code: "SESSION_NOT_FOUND",
+        message: `No bookmark ${payload.sessionId} to rename`,
+      });
+    }
+    return record;
+  };
+
+  const handleAgentSessionDeleteBookmark = async (
+    payload: z.output<typeof BookmarkDeletePayloadSchema>
+  ): Promise<void> => {
+    const { app } = await import("electron");
+    let removed: boolean;
+    try {
+      removed = await deleteBookmark(
+        payload.sessionId,
+        app.getPath("userData"),
+        getAgentSessionRetentionDays()
+      );
+    } catch (err) {
+      throw asBookmarkPersistError(err, payload.sessionId);
+    }
+    if (!removed) {
+      throw new AppError({
+        code: "SESSION_NOT_FOUND",
+        message: `No bookmark ${payload.sessionId} to delete`,
+      });
+    }
+  };
+
+  const handleAgentSessionListBookmarks = async (
+    payload: z.output<typeof ListBookmarksPayloadSchema>
+  ): Promise<AgentSessionRecord[]> => {
+    const { app } = await import("electron");
+    return listBookmarks(payload?.projectId, app.getPath("userData"));
+  };
+
   const namespace = defineIpcNamespace({
     name: "terminalLifecycle",
     ops: {
@@ -843,6 +1094,31 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         CHANNELS.AGENT_SESSION_SET_RETENTION,
         AgentSessionRetentionDaysSchema,
         handleAgentSessionSetRetention
+      ),
+      agentSessionPrepareBookmark: opValidated(
+        CHANNELS.AGENT_SESSION_PREPARE_BOOKMARK,
+        PrepareBookmarkPayloadSchema,
+        handleAgentSessionPrepareBookmark
+      ),
+      agentSessionPromoteBookmark: opValidated(
+        CHANNELS.AGENT_SESSION_PROMOTE_BOOKMARK,
+        BookmarkMutatePayloadSchema,
+        handleAgentSessionPromoteBookmark
+      ),
+      agentSessionRenameBookmark: opValidated(
+        CHANNELS.AGENT_SESSION_RENAME_BOOKMARK,
+        BookmarkMutatePayloadSchema,
+        handleAgentSessionRenameBookmark
+      ),
+      agentSessionDeleteBookmark: opValidated(
+        CHANNELS.AGENT_SESSION_DELETE_BOOKMARK,
+        BookmarkDeletePayloadSchema,
+        handleAgentSessionDeleteBookmark
+      ),
+      agentSessionListBookmarks: opValidated(
+        CHANNELS.AGENT_SESSION_LIST_BOOKMARKS,
+        ListBookmarksPayloadSchema,
+        handleAgentSessionListBookmarks
       ),
     },
   });

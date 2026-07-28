@@ -10,6 +10,7 @@ import path from "path";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { AppError, isAppError } from "../utils/errorTypes.js";
 import { logWarn } from "../utils/logger.js";
 import {
   injectSkeletonCss,
@@ -26,7 +27,17 @@ import { isDemoMode } from "../setup/runtimeFlags.js";
 import { projectStore } from "../services/ProjectStore.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 
-const LOAD_TIMEOUT_MS = 10_000;
+/**
+ * Two-phase load timing, captured per call. The soft bound is observability
+ * only — it logs that the load is far outside the measured distribution and
+ * keeps waiting. The hard bound is the absolute ceiling that abandons the
+ * switch. See `DEFAULT_VIEW_LOAD_*_MS` in ProjectViewManager.ts for the
+ * defaults and `RESOURCE_PROFILE_CONFIGS` for the per-profile values.
+ */
+export interface LoadViewTimings {
+  softMs: number;
+  hardMs: number;
+}
 
 export function createView(host: ProjectViewManager, projectId: string): WebContentsView {
   const ses = session.fromPartition("persist:daintree");
@@ -79,47 +90,169 @@ export function createView(host: ProjectViewManager, projectId: string): WebCont
   return view;
 }
 
-export function loadView(view: WebContentsView, projectId: string): Promise<void> {
+/**
+ * Which stage of the cold start a `loadView` rejection happened in. Carried in
+ * the error's `context` so a production report can tell "the page never
+ * navigated" apart from "the page loaded but the renderer never answered the
+ * bootstrap eval" — one hard budget spans both, so the bare message could not
+ * distinguish them (#11458).
+ */
+type LoadPhase = "navigation" | "bootstrap";
+
+/**
+ * True when a `loadView` rejection was settled by the `destroyed` listener
+ * rather than by a load event. Purely diagnostic: it feeds the `cancelled`
+ * field of the `projectview.coldstart.abandoned` log. Rollback and user-facing
+ * error reporting are keyed on host liveness ALONE, never on this predicate
+ * (see ProjectViewSwitchController's catch).
+ *
+ * Keyed on the code alone: `loadView` is the only producer of `CANCELLED` here,
+ * and every other rejection path — including anything thrown by the bootstrap
+ * eval — is wrapped as `INTERNAL` with the original attached as `cause`.
+ */
+export function isViewLoadCancelled(error: unknown): boolean {
+  return isAppError(error) && error.code === "CANCELLED";
+}
+
+export function loadView(
+  view: WebContentsView,
+  projectId: string,
+  timings: LoadViewTimings
+): Promise<void> {
   return new Promise<void>((resolve, reject) => {
+    // Captured once: `view.webContents` reads back undefined once the view is
+    // destroyed (electron#50249), and every path below — including the
+    // teardown listener — must keep working past that point.
     const wc = view.webContents;
     let settled = false;
+    let phase: LoadPhase = "navigation";
+
+    const failure = (message: string, cause?: Error) =>
+      new AppError({
+        code: "INTERNAL",
+        message,
+        context: { phase, projectId },
+        cause,
+      });
+
+    const softMs = timings.softMs;
+    // Guarantee hard >= soft so the soft warning always precedes the hard
+    // rejection, regardless of how the two resource-profile setters are
+    // ordered. Mirrors the paint gate's clamp in waitForPaint().
+    const hardMs = Math.max(timings.hardMs, softMs);
 
     const cleanup = () => {
       wc.removeListener("did-finish-load", onFinish);
       wc.removeListener("did-fail-load", onFail);
       wc.removeListener("preload-error", onPreloadError);
       wc.removeListener("render-process-gone", onProcessGone);
+      wc.removeListener("dom-ready", onDomReady);
+      wc.removeListener("destroyed", onDestroyed);
     };
 
     const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
-      cleanup();
+      clearTimeout(softTimeout);
+      clearTimeout(hardTimeout);
+      try {
+        cleanup();
+      } catch {
+        // Electron can throw from removeListener once the WebContents is torn
+        // down (same hazard webContentsRegistry guards). The teardown path is
+        // the one that always cleans up against a destroyed webContents, and
+        // `settled` is already latched here — letting a throw escape would
+        // skip the settle callback below and strand the promise pending
+        // FOREVER, which is strictly worse than the hard-bound stall being
+        // fixed.
+      }
       fn();
     };
 
-    const timeout = setTimeout(() => {
-      settle(() => reject(new Error("View load timed out")));
-    }, LOAD_TIMEOUT_MS);
+    // Soft tail: log only. A cold load runs ~141ms at p50 and ~454ms at the
+    // observed max, so crossing this bound means something is genuinely
+    // wrong — but "wrong" is not "dead", and abandoning here is what lost
+    // the switch in #11459. Keep waiting for a real event or the hard bound.
+    const armedAt = performance.now();
+    const softTimeout = setTimeout(() => {
+      logWarn("projectview.load.softtimeout", {
+        projectId,
+        waitedMs: softMs,
+        hardMs,
+        // How much later than scheduled this callback actually ran. A large
+        // value means the main process was blocked (concurrent agent CLIs,
+        // git enumeration) rather than the renderer being slow — the two are
+        // indistinguishable from the elapsed time alone, and which one it is
+        // decides whether the fix is here or upstream. Clamped because the
+        // fake timers used in unit tests advance virtual time only.
+        timerLateByMs: Math.max(0, Math.round(performance.now() - armedAt - softMs)),
+      });
+    }, softMs);
+
+    // Hard ceiling: the load is presumed wedged. Deliberately never extended
+    // by progress signals — the main-process stall that delays the load
+    // delays any event that would reset it, so a wall-clock backstop is the
+    // only bound that holds.
+    const hardTimeout = setTimeout(() => {
+      settle(() =>
+        reject(
+          failure(
+            phase === "bootstrap"
+              ? "View load timed out: project bootstrap never reported"
+              : "View load timed out: page never finished loading"
+          )
+        )
+      );
+    }, hardMs);
 
     const onFinish = () => {
+      // Flipped synchronously, before the eval's first await, so a timeout
+      // landing during the round trip is attributed to the bootstrap phase
+      // rather than to navigation. The hard budget deliberately stays
+      // end-to-end — restarting it here would double the worst-case cold start.
+      phase = "bootstrap";
       void verifyProjectBootstrap(wc, projectId).then(
         () => settle(() => resolve()),
-        (error) => settle(() => reject(error))
+        // Always re-wrapped, never passed through: `CANCELLED` must be
+        // reachable only from `onDestroyed`, which is the invariant
+        // `isViewLoadCancelled` keys on.
+        (error: unknown) =>
+          settle(() =>
+            reject(
+              failure(
+                formatErrorMessage(error, "Project view bootstrap verification failed"),
+                error instanceof Error ? error : undefined
+              )
+            )
+          )
       );
     };
     const onFail = (_event: Electron.Event, errorCode: number, errorDescription: string) =>
-      settle(() => reject(new Error(`View load failed: ${errorDescription} (${errorCode})`)));
+      settle(() => reject(failure(`View load failed: ${errorDescription} (${errorCode})`)));
     const onPreloadError = (_event: Electron.Event, _preloadPath: string, error: Error) =>
-      settle(() => reject(error ?? new Error("Preload script failed")));
+      settle(() =>
+        reject(failure(formatErrorMessage(error, "Preload script failed"), error ?? undefined))
+      );
     const onProcessGone = (_event: Electron.Event, details: Electron.RenderProcessGoneDetails) =>
-      settle(() => reject(new Error(`Renderer process gone during load: ${details.reason}`)));
-
-    wc.once("did-finish-load", onFinish);
-    wc.once("did-fail-load", onFail);
-    wc.once("preload-error", onPreloadError);
-    wc.once("render-process-gone", onProcessGone);
+      settle(() => reject(failure(`Renderer process gone during load: ${details.reason}`)));
+    // Fifth race participant (#11458). Teardown closes the webContents without
+    // firing any of the four load events above, so before this the promise sat
+    // until the full hard timeout and then reported a timeout that never
+    // happened — surfacing a spurious error toast long after an ordinary window
+    // close, and the wait got longer once #11459 widened the hard bound.
+    // `destroyed` is the right granularity: a merely *deactivated*
+    // (cached) view stays alive and must not cancel its own pending load, while
+    // every real teardown path routes through `cleanupEntry` → `wc.close()`.
+    const onDestroyed = () =>
+      settle(() =>
+        reject(
+          new AppError({
+            code: "CANCELLED",
+            message: "Project view load cancelled — view was destroyed",
+            context: { phase, projectId },
+          })
+        )
+      );
 
     // Paint the skeleton on `dom-ready`, NOT before `loadURL`. `insertCSS`
     // and `executeJavaScript` are scoped to the live document, and the
@@ -129,7 +262,12 @@ export function loadView(view: WebContentsView, projectId: string): Promise<void
     // is correct because each cold start creates a fresh WebContentsView.
     // Re-read the project inside the handler rather than closing over a value
     // captured now, so the freshest name/emoji/color is painted (#9162).
-    wc.once("dom-ready", () => {
+    // Named (not inline) so `cleanup` can detach it: `webContents.close()`
+    // does not remove JS listeners, so a load that fails before dom-ready
+    // would otherwise leave this bound to a view that is being torn down.
+    // Removing it on settle is safe — on the success path dom-ready always
+    // precedes did-finish-load, so it has already fired and self-removed.
+    const onDomReady = () => {
       if (wc.isDestroyed()) return;
       const project = projectStore.getProjectById(projectId);
       // instantReveal drops index.html's 400ms Doherty entry delay: a cold
@@ -139,7 +277,14 @@ export function loadView(view: WebContentsView, projectId: string): Promise<void
       // for the initial app launch (createWindow.ts), where it belongs.
       injectSkeletonCss(wc, project, { instantReveal: true });
       injectSkeletonProjectIdentity(wc, project);
-    });
+    };
+
+    wc.once("did-finish-load", onFinish);
+    wc.once("did-fail-load", onFail);
+    wc.once("preload-error", onPreloadError);
+    wc.once("render-process-gone", onProcessGone);
+    wc.once("dom-ready", onDomReady);
+    wc.once("destroyed", onDestroyed);
 
     // The document URL is intentionally static (no `?projectId=`): the id
     // travels via additionalArguments so the V8 bytecode cache stays shared

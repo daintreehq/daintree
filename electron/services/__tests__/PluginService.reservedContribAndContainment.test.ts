@@ -303,7 +303,10 @@ describe("reserved contribution point warnings", () => {
       expect.objectContaining({
         id: "acme.views.main",
         extensionId: "acme.views",
-        componentPath: "plugin://acme.views/dist/view.js",
+        // The URL carries a per-load generation namespace (#11301), so assert
+        // the parts that are contractual — host and resolved asset — rather
+        // than a literal that would have to be edited alongside the counter.
+        componentPath: expect.stringMatching(/^plugin:\/\/acme\.views\/__dtv-\d+\/dist\/view\.js$/),
       })
     );
     const viewWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
@@ -658,7 +661,7 @@ describe("reserved contribution point warnings", () => {
     expect(registerPanelKind).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "acme.legacy.viewer",
-        componentPath: "plugin://acme.legacy/v.js",
+        componentPath: expect.stringMatching(/^plugin:\/\/acme\.legacy\/__dtv-\d+\/v\.js$/),
       })
     );
     expect(service.findMcpServerContribution("acme.legacy", "svc")).toBeDefined();

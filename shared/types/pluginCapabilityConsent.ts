@@ -56,10 +56,7 @@ export interface PluginCapabilityConsentRecord {
  * deliberate refusal in the logs.
  */
 export type PluginCapabilityConsentDecision =
-  | "approved-once"
-  | "approved-and-pin"
-  | "rejected"
-  | "timeout";
+  "approved-once" | "approved-and-pin" | "rejected" | "timeout";
 
 /**
  * How long a pushed plugin-capability consent prompt may stay unanswered before

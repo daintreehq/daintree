@@ -33,6 +33,9 @@ const windowRefMock = vi.hoisted(() => ({
   getWindowRegistry: vi.fn(() => null),
   getProjectViewManager: vi.fn(() => null),
 }));
+const webContentsRegistryMock = vi.hoisted(() => ({
+  getWindowForWebContents: vi.fn((_wc: unknown): { id: number } | null => null),
+}));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProject: vi.fn((): { path: string } | null => null),
@@ -58,6 +61,10 @@ vi.mock("../../window/windowRef.js", () => ({
   setMainWindow: vi.fn(),
   getMainWindow: vi.fn(() => null),
   setProjectViewManager: vi.fn(),
+}));
+vi.mock("../../window/webContentsRegistry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../window/webContentsRegistry.js")>()),
+  getWindowForWebContents: webContentsRegistryMock.getWindowForWebContents,
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
@@ -470,6 +477,26 @@ describe("capabilities declaration logging", () => {
 });
 
 describe("Plugin worktree host API", () => {
+  // The host worktree APIs window-scope their snapshot fetch (#11297): they
+  // resolve the renderer the plugin is acting for, map it to a BrowserWindow,
+  // and pass that id to `getAllStatesAsync`. With no resolvable window they
+  // return empty rather than a cross-project aggregate, so these tests must
+  // stand up a resolvable one. `getAllStatesAsync` itself ignores the id, so
+  // the assertions below still exercise the projection, not the routing.
+  const fakeActiveWebContents = { id: 99, isDestroyed: () => false };
+
+  beforeEach(() => {
+    windowRefMock.getProjectViewManager.mockReturnValue({
+      getActiveView: () => ({ webContents: fakeActiveWebContents }),
+    } as never);
+    webContentsRegistryMock.getWindowForWebContents.mockReturnValue({ id: 1 });
+  });
+
+  afterEach(() => {
+    windowRefMock.getProjectViewManager.mockReturnValue(null);
+    webContentsRegistryMock.getWindowForWebContents.mockReturnValue(null);
+  });
+
   type WorktreeSnapshotLike = {
     id: string;
     worktreeId: string;
@@ -502,7 +529,21 @@ describe("Plugin worktree host API", () => {
   function createMockClient(initial: WorktreeSnapshotLike[] = []) {
     const emitter = new EventEmitter();
     let states = initial;
-    const getAllStatesAsync = vi.fn(() => Promise.resolve(states));
+    // Answer ONLY for a resolved window id. An unscoped call yields a distinct
+    // "other project" snapshot so a regression back to the aggregate surfaces
+    // as wrong data rather than silently passing (#11297).
+    const foreign: WorktreeSnapshotLike[] = [
+      {
+        id: "foreign",
+        worktreeId: "foreign",
+        path: "/tmp/foreign",
+        name: "foreign",
+        isCurrent: true,
+      },
+    ];
+    const getAllStatesAsync = vi.fn((windowId?: number) =>
+      Promise.resolve(windowId === undefined ? foreign : states)
+    );
     const client = Object.assign(emitter, {
       getAllStatesAsync,
       setStates: (next: WorktreeSnapshotLike[]) => {
@@ -558,6 +599,97 @@ describe("Plugin worktree host API", () => {
   it("getActiveWorktree returns null when no worktree is current", async () => {
     const { host } = await setup([mkSnap({ id: "a", isCurrent: false })]);
     expect(await host.getActiveWorktree()).toBeNull();
+  });
+
+  // ── #11297: window scoping ──
+
+  it("scopes the snapshot fetch to the resolved window's id", async () => {
+    const { host, client } = await setup([mkSnap({ id: "b", isCurrent: true })]);
+    await host.getActiveWorktree();
+    // Not called bare: an unscoped fetch aggregates every open project and
+    // hands back whichever `isCurrent` snapshot happens to sort first.
+    expect(client.getAllStatesAsync).toHaveBeenCalledWith(1);
+  });
+
+  it("returns empty rather than a cross-project aggregate when no window resolves", async () => {
+    const { host, client } = await setup([mkSnap({ id: "b", isCurrent: true })]);
+    windowRefMock.getProjectViewManager.mockReturnValue(null);
+
+    expect(await host.getWorktrees()).toEqual([]);
+    expect(await host.getActiveWorktree()).toBeNull();
+    // The unscoped call is the bug — it must never be reached.
+    expect(client.getAllStatesAsync).not.toHaveBeenCalled();
+  });
+
+  it("returns empty when the resolved webContents maps to no window", async () => {
+    const { host, client } = await setup([mkSnap({ id: "b", isCurrent: true })]);
+    webContentsRegistryMock.getWindowForWebContents.mockReturnValue(null);
+
+    expect(await host.getWorktrees()).toEqual([]);
+    expect(client.getAllStatesAsync).not.toHaveBeenCalled();
+  });
+
+  // ── #11297: sender-precise lookup backing plugin:invoke's IPC context ──
+
+  type ServiceWithWindowLookup = {
+    getActiveWorktreeIdForWindow: (windowId: number | undefined) => Promise<string | null>;
+  };
+
+  it("getActiveWorktreeIdForWindow resolves the given window's current worktree", async () => {
+    const { service, client } = await setup([
+      mkSnap({ id: "a", isCurrent: false }),
+      mkSnap({ id: "b", isCurrent: true }),
+    ]);
+
+    const id = await (service as unknown as ServiceWithWindowLookup).getActiveWorktreeIdForWindow(
+      7
+    );
+    expect(id).toBe("b");
+    // Uses the id it was handed — the caller's real sender — not the
+    // focused-window heuristic the host APIs fall back to.
+    expect(client.getAllStatesAsync).toHaveBeenCalledWith(7);
+  });
+
+  it("getActiveWorktreeIdForWindow returns null for an unresolved window without querying", async () => {
+    const { service, client } = await setup([mkSnap({ id: "b", isCurrent: true })]);
+
+    expect(
+      await (service as unknown as ServiceWithWindowLookup).getActiveWorktreeIdForWindow(undefined)
+    ).toBeNull();
+    expect(client.getAllStatesAsync).not.toHaveBeenCalled();
+  });
+
+  it("gives worktree-scoped storage no target when no window resolves", async () => {
+    // Storage resolves its backing file from the same snapshot fetch. If an
+    // unresolved window fell back to the aggregate, a plugin's worktree-scoped
+    // data would be read from — and written into — an arbitrary project's file.
+    const { service } = await setup([mkSnap({ id: "b", isCurrent: true })]);
+    const storage = (
+      service as unknown as {
+        storage: {
+          resolveStorageFilePath: (id: string, scope: string) => Promise<string | undefined>;
+        };
+      }
+    ).storage;
+
+    expect(await storage.resolveStorageFilePath("acme.wt-host", "worktree")).toBe(
+      path.join("/tmp/b", ".daintree", "plugin-storage", "acme.wt-host.json")
+    );
+
+    windowRefMock.getProjectViewManager.mockReturnValue(null);
+    // No target at all — `set` throws on undefined rather than picking a file.
+    expect(await storage.resolveStorageFilePath("acme.wt-host", "worktree")).toBeUndefined();
+  });
+
+  it("getActiveWorktreeIdForWindow degrades to null when the workspace host fails", async () => {
+    // This sits on the critical path of every plugin:invoke — a wedged
+    // workspace host must cost the context, not the invocation.
+    const { service, client } = await setup([mkSnap({ id: "b", isCurrent: true })]);
+    client.getAllStatesAsync.mockRejectedValueOnce(new Error("workspace host down"));
+
+    await expect(
+      (service as unknown as ServiceWithWindowLookup).getActiveWorktreeIdForWindow(7)
+    ).resolves.toBeNull();
   });
 
   it("getWorktrees returns frozen snapshots for every worktree", async () => {

@@ -17,6 +17,13 @@ export const config: AgentConfig = {
   iconId: "claude",
   tooltip: "Anthropic's CLI",
   supportsContextInjection: true,
+  // #11282 phase 5: Claude Code stores sessions per-folder under
+  // ~/.claude/projects/<cwd-slug>/ with no cross-path resume and no documented
+  // migration command; Daintree must not touch that private store (#4100).
+  continuity: {
+    tier: "provider-migration",
+    detail: "Claude Code stores this conversation per-folder and can't resume it after the move",
+  },
   supports: {
     mcpInjection: "project-config",
     settingsOverlay: true,

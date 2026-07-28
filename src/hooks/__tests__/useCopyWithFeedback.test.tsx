@@ -80,6 +80,44 @@ describe("useCopyWithFeedback", () => {
     expect(result.current.copied).toBe(false);
   });
 
+  it("names the copied text so callers can tell which value the flag describes", async () => {
+    const { result } = renderHook(() => useCopyWithFeedback());
+    expect(result.current.copiedText).toBeNull();
+
+    await act(async () => {
+      await result.current.copy("/repo/a");
+    });
+    expect(result.current.copiedText).toBe("/repo/a");
+
+    // A second copy re-points it rather than leaving the first value standing.
+    await act(async () => {
+      await result.current.copy("/repo/b");
+    });
+    expect(result.current.copiedText).toBe("/repo/b");
+
+    act(() => {
+      vi.advanceTimersByTime(UI_ACTION_SUCCESS_DWELL_MS);
+    });
+    expect(result.current.copiedText).toBeNull();
+    // The flag and the value it names can never disagree.
+    expect(result.current.copied).toBe(false);
+  });
+
+  it("leaves copiedText untouched when the write fails", async () => {
+    const { result } = renderHook(() => useCopyWithFeedback());
+    await act(async () => {
+      await result.current.copy("/repo/a");
+    });
+
+    writeText.mockRejectedValueOnce(new Error("denied"));
+    await act(async () => {
+      await result.current.copy("/repo/b");
+    });
+
+    // A failed write must not claim the new path was copied.
+    expect(result.current.copiedText).toBe("/repo/a");
+  });
+
   it("returns false and stays silent when clipboard rejects", async () => {
     writeText.mockRejectedValueOnce(new Error("denied"));
     const { result } = renderHook(() => useCopyWithFeedback());

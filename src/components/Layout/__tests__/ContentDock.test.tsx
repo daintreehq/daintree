@@ -19,6 +19,31 @@ describe("ContentDock regression test", () => {
     expect(content).not.toContain("if (groupPanels.length === 0) return null");
   });
 
+  // Issue #11332 — dock membership must follow the registry so plugin panels can
+  // dock. The dock selectors read `getRenderablePanel` (which keeps plugin
+  // kinds), NOT `getNarrowPanel` (which drops them, so plugin panels would never
+  // reach `isDockPanel`). Reverting either call site silently strands every
+  // dockable plugin panel, so pin the selector here.
+  it("reads dock panels through getRenderablePanel so plugin kinds are not dropped", () => {
+    const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+    // Target the call sites (not prose) so a doc mention can't mask a revert.
+    expect(content).toContain("getRenderablePanel(state.panelsById");
+    expect(content).not.toContain("getNarrowPanel(state.panelsById");
+  });
+
+  // Issue #11332 — the single-panel chip renders through the generic
+  // `DockedNonPtyPanelItem` with a kind-aware `dockChipTitle`, replacing the old
+  // three-way ternary whose `else` branch assumed browser and would mislabel a
+  // plugin panel's chip.
+  it("renders non-PTY dock chips through the generic dockChipTitle path", () => {
+    const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+    expect(content).toContain("displayTitle={dockChipTitle(terminal)}");
+    // The removed branch fed browserChipTitle to the ternary's non-file else.
+    expect(content).not.toMatch(/:\s*isFilePanel\(terminal\)\s*\?/);
+  });
+
   it("offscreen dock container closes stale active dock state", () => {
     const content = readFileSync(resolve(__dirname, "../DockPanelOffscreenContainer.tsx"), "utf-8");
 
@@ -56,18 +81,21 @@ describe("ContentDock regression test", () => {
 
   // Issue #8162 — drop the ambient in-flight rail tint; the only drag-state cue
   // is the armed isOver treatment, plus a cursor-no-drop rejection signal.
-  // Issue #11054 — the rejection cue now also fires for a drag whose panel kind
-  // the dock can't render, not just worktree-card sort drags, via the shared
+  // Issue #11054 — the rejection cue also fires for a drag whose panel kind the
+  // dock can't render, not just worktree-card sort drags, via the shared
   // `isDockDropRejected` gate. Both cases suppress the armed isOver treatment.
+  // Issue #11375 — the non-dockable check is now GROUP-AWARE: it reads
+  // `activeDragRejectsDock` off the placeholder context (which resolves every
+  // group member's kind), not the lone representative kind, so the cue matches
+  // what cancelDrop/collisionDetection enforce for a mixed group.
   it("removes ambient panel-drag tint and rejects non-dockable drags with cursor feedback", () => {
     const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
 
     expect(content).not.toContain("useIsDragging");
     expect(content).not.toContain('isPanelDragging && "bg-overlay-subtle"');
     expect(content).toContain('isDockDropRejected && "cursor-no-drop"');
-    // The reject gate folds in a non-dockable-kind check on the active drag.
-    expect(content).toContain("isDraggingNonDockable");
-    expect(content).toMatch(/panelKindIsDockable\(activeTerminal\.kind/);
+    // The reject gate folds in the group-aware dock-reject flag from the context.
+    expect(content).toContain("activeDragRejectsDock");
     expect(content).toMatch(/isDockDropRejected\s*=\s*isWorktreeSortDragging\s*\|\|/);
     expect(content).toMatch(/isOver\s*&&\s*[^]*?cursor-copy/);
   });

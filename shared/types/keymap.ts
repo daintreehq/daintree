@@ -60,6 +60,7 @@ export type BuiltInKeyAction =
   | "worktree.select"
   | "worktree.selectSpace"
   | "worktree.copyTree"
+  | "worktree.openChanges"
   | "worktree.openEditor"
   | "worktree.openPalette"
   | "worktree.createDialog.open"
@@ -186,7 +187,6 @@ export type BuiltInKeyAction =
   // Project actions
   | "project.switcherPalette"
   | "project.mruCycleOlder"
-  | "project.mruCycleNewer"
 
   // Help/Settings
   | "help.shortcuts"
@@ -268,6 +268,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "worktree.select",
   "worktree.selectSpace",
   "worktree.copyTree",
+  "worktree.openChanges",
   "worktree.openEditor",
   "worktree.openPalette",
   "worktree.createDialog.open",
@@ -371,7 +372,6 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "action.repeatLast",
   "project.switcherPalette",
   "project.mruCycleOlder",
-  "project.mruCycleNewer",
   "help.shortcuts",
   "help.shortcutsAlt",
   "help.launchAgent",

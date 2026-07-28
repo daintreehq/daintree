@@ -175,9 +175,12 @@ export function useWorktreeActions({
       confirmLabel: "Terminate all",
       variant: "destructive",
       onConfirm: () => {
+        // `confirmed: true` clears the action's own D1 gate (added in #11345) so
+        // this already-confirmed call site runs immediately instead of routing
+        // through the app-level pending-store dialog a second time.
         void actionService.dispatch(
           "worktree.sessions.endAll",
-          { worktreeId: worktree.id },
+          { worktreeId: worktree.id, confirmed: true },
           { source: "user" }
         );
         closeAndAnnounce(() => setConfirmDialog({ isOpen: false }), "Terminated all sessions");
@@ -191,13 +194,15 @@ export function useWorktreeActions({
       isOpen: true,
       title: `Clear session history for '${label}'?`,
       description:
-        "This permanently deletes this worktree's recorded resumable-session history. Open sessions aren't affected; the records can't be recovered.",
+        "This permanently deletes this worktree's recorded resumable-session history, and those records can't be recovered. Open sessions aren't affected, and bookmarked sessions are kept — deleting a bookmark is the only way to remove one.",
       confirmLabel: "Clear history",
       variant: "destructive",
       onConfirm: () => {
+        // See handleTerminateAll: `confirmed: true` clears the clearHistory D1
+        // gate added in #11345 so this confirmed call site doesn't re-prompt.
         void actionService.dispatch(
           "worktree.sessions.clearHistory",
-          { worktreeId: worktree.id },
+          { worktreeId: worktree.id, confirmed: true },
           { source: "user" }
         );
         closeAndAnnounce(() => setConfirmDialog({ isOpen: false }), "Cleared session history");

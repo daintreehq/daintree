@@ -4,14 +4,18 @@ import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   resilientAtomicWriteFile,
+  resilientRename,
+  resilientRenameSync,
   tightenDirPermissions,
   OWNER_RW_FILE_MODE,
   OWNER_RWX_DIR_MODE,
 } from "../../utils/fs.js";
 import type {
+  AgentSessionBookmarkMetadata,
   AgentSessionRecord,
   AgentSessionRetentionDays,
 } from "../../../shared/types/ipc/agentSessionHistory.js";
+import { rebaseAbsolutePath } from "../../../shared/utils/projectPathRelocation.js";
 
 export type { AgentSessionRecord };
 
@@ -65,27 +69,51 @@ function evictRecords(
   now: number,
   retentionMs: number = SESSION_HISTORY_TTL_MS
 ): AgentSessionRecord[] {
-  // Filter expired records (retentionMs === Infinity ⇒ never age out)
-  const fresh = records.filter((r) => now - r.savedAt < retentionMs);
-
-  // Deduplicate on sessionId, keeping the newest. Multiple close paths can fire
-  // for the same terminal (e.g. a user kill landing mid-shutdown), each writing
-  // a record with the same resumable sessionId — without this the journal would
-  // accumulate stale duplicates. Records arrive newest-first, so the first
-  // occurrence of each sessionId wins.
-  const seen = new Set<string>();
+  // Unified newest-wins dedup by sessionId, run BEFORE partitioning so a session
+  // that appears as both a bookmarked and an ordinary record collapses to ONE
+  // entry (partitioning first could keep two records for the same native
+  // session). Records arrive newest-first (prepended on write), so the first
+  // occurrence of each sessionId wins the position. A newer record that won the
+  // position but lacks a bookmark INHERITS the bookmark from an older duplicate
+  // — otherwise resuming a bookmarked session and re-journaling it as ordinary
+  // history would silently drop the pin (the maintainer-flagged dedup hazard).
+  // An explicit bookmark already on the winner is left untouched, so a
+  // deliberate re-bookmark with a fresh `bookmarkedAt` still wins. Winners are
+  // cloned; input records are never mutated (readers share cached arrays).
+  const winners = new Map<string, AgentSessionRecord>();
   const deduped: AgentSessionRecord[] = [];
-  for (const r of fresh) {
-    if (r.sessionId) {
-      if (seen.has(r.sessionId)) continue;
-      seen.add(r.sessionId);
+  for (const r of records) {
+    if (!r.sessionId) {
+      deduped.push(r);
+      continue;
     }
-    deduped.push(r);
+    const existing = winners.get(r.sessionId);
+    if (!existing) {
+      const clone = { ...r };
+      winners.set(r.sessionId, clone);
+      deduped.push(clone);
+    } else if (!existing.bookmark && r.bookmark && existing.agentId === r.agentId) {
+      // Carry a pin forward only within the same agent — a cross-agent sessionId
+      // collision must never attach one agent's bookmark to another's record.
+      existing.bookmark = r.bookmark;
+    }
   }
 
-  // Enforce per-worktree cap
-  const buckets = new Map<string, AgentSessionRecord[]>();
+  // Partition. Bookmarked records are user-pinned and exempt from BOTH the age
+  // window and the per-worktree cap; only ordinary history is pruned.
+  const bookmarked: AgentSessionRecord[] = [];
+  const ordinary: AgentSessionRecord[] = [];
   for (const r of deduped) {
+    if (r.bookmark) bookmarked.push(r);
+    else ordinary.push(r);
+  }
+
+  // Age filter (ordinary only; retentionMs === Infinity ⇒ never age out)
+  const fresh = ordinary.filter((r) => now - r.savedAt < retentionMs);
+
+  // Per-worktree cap (ordinary only)
+  const buckets = new Map<string, AgentSessionRecord[]>();
+  for (const r of fresh) {
     const key = r.worktreeId ?? "__global__";
     let bucket = buckets.get(key);
     if (!bucket) {
@@ -95,7 +123,7 @@ function evictRecords(
     bucket.push(r);
   }
 
-  const result: AgentSessionRecord[] = [];
+  const result: AgentSessionRecord[] = [...bookmarked];
   for (const bucket of buckets.values()) {
     // Records are ordered newest-first (prepended on write), so slice keeps the most recent
     result.push(...bucket.slice(0, MAX_RECORDS_PER_WORKTREE));
@@ -106,6 +134,47 @@ function evictRecords(
   return result;
 }
 
+/** Records that carry bookmark metadata are the user's durable pins. */
+function isBookmarked(r: AgentSessionRecord): boolean {
+  return r.bookmark !== undefined;
+}
+
+/**
+ * Thrown by {@link normalizeRecords} when a readable, well-formed JSON document
+ * has a root that is not an array (e.g. `{}` or `null`). This is proven content
+ * corruption — bytes that can never yield records — so it routes through the
+ * same quarantine path as a `JSON.parse` `SyntaxError`, and is deliberately
+ * distinct from a transient filesystem error (EACCES/EIO/EMFILE), which must
+ * never trigger quarantine or an overwrite. Mirrors `GlobalFileStore.getRecipes`
+ * throwing on a non-array root rather than silently degrading to `[]`.
+ */
+class InvalidSessionHistoryShapeError extends Error {
+  constructor() {
+    super("session history root is not an array");
+    this.name = "InvalidSessionHistoryShapeError";
+  }
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    error != null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
+/**
+ * Proven corruption: a readable file whose bytes can never be valid journal
+ * content — malformed JSON (`SyntaxError`) or a well-formed non-array root. Only
+ * these are quarantined and treated as a fresh-but-empty journal. Every other
+ * read failure (EACCES/EIO/EMFILE/EBUSY/…) is transient/unknown: the file may be
+ * intact but temporarily unreadable, so it must NOT be quarantined or overwritten.
+ */
+function isCorruptionError(error: unknown): boolean {
+  return error instanceof SyntaxError || error instanceof InvalidSessionHistoryShapeError;
+}
+
 /**
  * Normalize parsed journal JSON into records, dropping the legacy `snapshot`
  * key. The exit-snapshot feature (#10850/#10855) was removed; journals written
@@ -114,16 +183,35 @@ function evictRecords(
  * `agentSessionHistory.list` action, whose raw result is serialized without
  * `resultSchema` parsing — and the next `persistAgentSession`/`pruneAgentSessions`
  * rewrite purges it from disk, so the file self-heals without a versioned migration.
+ *
+ * Throws {@link InvalidSessionHistoryShapeError} on a non-array root so the
+ * caller can quarantine the corrupt file instead of silently overwriting it.
  */
 function normalizeRecords(parsed: unknown): AgentSessionRecord[] {
-  if (!Array.isArray(parsed)) return [];
-  return parsed.map((raw) => {
-    if (raw && typeof raw === "object" && "snapshot" in raw) {
-      const { snapshot: _snapshot, ...rest } = raw as Record<string, unknown>;
-      return rest as unknown as AgentSessionRecord;
+  if (!Array.isArray(parsed)) {
+    throw new InvalidSessionHistoryShapeError();
+  }
+  const records: AgentSessionRecord[] = [];
+  for (const raw of parsed) {
+    // Drop malformed elements (null, non-object, or missing a string sessionId)
+    // rather than passing them to eviction/listing readers that assume a
+    // well-formed record — a valid-JSON but garbage array (corrupt, hand-edited,
+    // or a newer schema) must degrade gracefully, not crash "never errors" reads.
+    if (
+      !raw ||
+      typeof raw !== "object" ||
+      typeof (raw as { sessionId?: unknown }).sessionId !== "string"
+    ) {
+      continue;
     }
-    return raw as AgentSessionRecord;
-  });
+    if ("snapshot" in raw) {
+      const { snapshot: _snapshot, ...rest } = raw as Record<string, unknown>;
+      records.push(rest as unknown as AgentSessionRecord);
+    } else {
+      records.push(raw as AgentSessionRecord);
+    }
+  }
+  return records;
 }
 
 // In-memory cache of the parsed journal, keyed by resolved file path. The resume
@@ -174,54 +262,163 @@ function refreshCacheAfterWrite(filePath: string, records: AgentSessionRecord[])
   }
 }
 
+/**
+ * Tri-state read outcome (per #11348 / lesson #11130 — an ambiguous read must
+ * never be treated as "safe to overwrite"):
+ * - `ok` with `records` — the journal was read (or is genuinely absent, or was
+ *   corrupt-and-successfully-quarantined). Safe to treat as ground truth.
+ * - `unreadable` — the file exists but could not be read (transient fs error,
+ *   or an unrecoverable failed quarantine). A read-modify-write MUST abort on
+ *   this rather than overwrite the still-present on-disk records with `[]`.
+ */
+type SessionHistoryReadResult =
+  { status: "ok"; records: AgentSessionRecord[] } | { status: "unreadable"; error: unknown };
+
+/**
+ * Best-effort archive of a corrupt journal to a timestamped sidecar, matching
+ * the sibling stores (`GlobalFileStore`/`ProjectFileStore`). Returns whether the
+ * rename succeeded: a FAILED quarantine must be surfaced as `unreadable` (never
+ * "empty and safe to overwrite"), so the caller preserves the corrupt bytes for
+ * a later retry instead of clobbering the file we failed to move aside.
+ */
+async function quarantineCorruptJournal(filePath: string, error: unknown): Promise<boolean> {
+  console.error("[agentSessionHistory] Corrupt session journal:", error);
+  try {
+    const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
+    await resilientRename(filePath, quarantinePath);
+    console.warn(`[agentSessionHistory] Corrupted session journal moved to ${quarantinePath}`);
+    return true;
+  } catch (renameError) {
+    if (isMissingPathError(renameError)) {
+      // The corrupt file is already gone — a concurrent read (listAgentSessions
+      // is not queued) quarantined it, or it was removed out-of-band. There's
+      // nothing left to preserve, so report success and let the caller start
+      // from a fresh empty journal rather than spuriously refusing to write.
+      return true;
+    }
+    console.error(
+      "[agentSessionHistory] Failed to quarantine corrupt session journal:",
+      renameError
+    );
+    return false;
+  }
+}
+
+function quarantineCorruptJournalSync(filePath: string, error: unknown): boolean {
+  console.error("[agentSessionHistory] Corrupt session journal:", error);
+  try {
+    const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
+    resilientRenameSync(filePath, quarantinePath);
+    console.warn(`[agentSessionHistory] Corrupted session journal moved to ${quarantinePath}`);
+    return true;
+  } catch (renameError) {
+    if (isMissingPathError(renameError)) {
+      // Already quarantined/removed by a concurrent path — treat as handled.
+      return true;
+    }
+    console.error(
+      "[agentSessionHistory] Failed to quarantine corrupt session journal:",
+      renameError
+    );
+    return false;
+  }
+}
+
+/**
+ * The error a read-modify-write raises when it refuses to overwrite a journal it
+ * could not read. Rejecting (rather than silently resolving) is load-bearing:
+ * `journalAgentSession` treats a resolved `persistAgentSession` as a completed
+ * write — it emits `agent-session:recorded` and consumes the lifecycle ledger's
+ * exactly-once reservation. A silent abort would fire that event and burn the
+ * reservation despite writing nothing, blocking any retry. Rejection instead
+ * rescinds the reservation and suppresses the event, so a later capture retries.
+ */
+function unreadableJournalError(error: unknown): Error {
+  return new Error(
+    "Refusing to overwrite the agent session journal: it exists but could not be read " +
+      "(transient filesystem error or unrecoverable quarantine); preserving on-disk records",
+    { cause: error }
+  );
+}
+
 // NOTE: on a cache hit these readers return the cached array BY REFERENCE (that
 // shared-instance reuse is the whole point — a copy on every read would defeat
 // the cache). Callers MUST treat the result as read-only; never sort/push/splice
 // it in place. The production caller, listAgentSessions(), is safe: evictRecords()
 // only reads the input and returns freshly-built arrays.
-export function readSessionHistorySync(userData?: string): AgentSessionRecord[] {
+function readSessionHistoryResultSync(userData?: string): SessionHistoryReadResult {
   const filePath = getSessionHistoryPath(userData);
-  if (!filePath) return [];
+  if (!filePath) return { status: "ok", records: [] };
   try {
     const s = statSync(filePath);
     const cached = readCache(filePath, s.size, s.mtimeMs);
-    if (cached) return cached;
+    if (cached) return { status: "ok", records: cached };
     const content = readFileSync(filePath, "utf8");
     const records = normalizeRecords(JSON.parse(content));
     writeCache(filePath, records, s.size, s.mtimeMs);
-    return records;
-  } catch {
+    return { status: "ok", records };
+  } catch (error) {
+    // Never let a failed read leave a `[]` cached as if it were the journal.
     historyCache.delete(filePath);
-    return [];
+    if (isMissingPathError(error)) return { status: "ok", records: [] };
+    if (isCorruptionError(error)) {
+      return quarantineCorruptJournalSync(filePath, error)
+        ? { status: "ok", records: [] }
+        : { status: "unreadable", error };
+    }
+    console.warn("[agentSessionHistory] Failed to read session journal:", error);
+    return { status: "unreadable", error };
   }
 }
 
-export async function readSessionHistory(userData?: string): Promise<AgentSessionRecord[]> {
+async function readSessionHistoryResult(userData?: string): Promise<SessionHistoryReadResult> {
   const filePath = getSessionHistoryPath(userData);
-  if (!filePath) return [];
+  if (!filePath) return { status: "ok", records: [] };
   try {
     const s = await stat(filePath);
     const cached = readCache(filePath, s.size, s.mtimeMs);
-    if (cached) return cached;
+    if (cached) return { status: "ok", records: cached };
     const content = await readFile(filePath, "utf8");
     const records = normalizeRecords(JSON.parse(content));
     writeCache(filePath, records, s.size, s.mtimeMs);
-    return records;
-  } catch {
+    return { status: "ok", records };
+  } catch (error) {
     historyCache.delete(filePath);
-    return [];
+    if (isMissingPathError(error)) return { status: "ok", records: [] };
+    if (isCorruptionError(error)) {
+      return (await quarantineCorruptJournal(filePath, error))
+        ? { status: "ok", records: [] }
+        : { status: "unreadable", error };
+    }
+    console.warn("[agentSessionHistory] Failed to read session journal:", error);
+    return { status: "unreadable", error };
   }
+}
+
+// Read-only consumers (listAgentSessions and the MCP list action) collapse an
+// unreadable journal to `[]` — a transient failure degrades the displayed list
+// for one read without touching disk. The `unreadable` outcome is never cached,
+// so the next read re-attempts the file. The read-modify-write paths use
+// readSessionHistoryResult directly and ABORT on `unreadable`.
+export function readSessionHistorySync(userData?: string): AgentSessionRecord[] {
+  const result = readSessionHistoryResultSync(userData);
+  return result.status === "ok" ? result.records : [];
+}
+
+export async function readSessionHistory(userData?: string): Promise<AgentSessionRecord[]> {
+  const result = await readSessionHistoryResult(userData);
+  return result.status === "ok" ? result.records : [];
 }
 
 export async function persistAgentSession(
   record: Omit<AgentSessionRecord, "savedAt">,
   userData?: string,
   retentionDays?: AgentSessionRetentionDays
-): Promise<void> {
+): Promise<AgentSessionRecord | null> {
   const filePath = getSessionHistoryPath(userData);
-  if (!filePath) return;
+  if (!filePath) return null;
 
-  await enqueueWrite(async () => {
+  return enqueueWrite(async () => {
     const dir = path.dirname(filePath);
     await mkdir(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
     await tightenDirPermissions(dir);
@@ -229,13 +426,28 @@ export async function persistAgentSession(
     const now = Date.now();
     const fullRecord: AgentSessionRecord = { ...record, savedAt: now };
 
-    const existing = await readSessionHistory(userData);
-    const updated = evictRecords([fullRecord, ...existing], now, retentionDaysToMs(retentionDays));
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      // The journal exists but couldn't be read — overwriting now would destroy
+      // the on-disk records. Abort so a later capture retries once it's readable.
+      throw unreadableJournalError(existing.error);
+    }
+    // evictRecords carries an existing bookmark forward onto this fresh record
+    // when the session was previously pinned, so re-journaling a resumed
+    // bookmark never drops the pin.
+    const updated = evictRecords(
+      [fullRecord, ...existing.records],
+      now,
+      retentionDaysToMs(retentionDays)
+    );
 
     await resilientAtomicWriteFile(filePath, JSON.stringify(updated, null, 2), "utf-8", {
       mode: OWNER_RW_FILE_MODE,
     });
     refreshCacheAfterWrite(filePath, updated);
+    // Return the record as it actually landed (bookmark possibly carried
+    // forward) so a bookmark capture can echo the durable record to the caller.
+    return updated.find((r) => r.sessionId === fullRecord.sessionId) ?? fullRecord;
   });
 }
 
@@ -267,8 +479,12 @@ export async function pruneAgentSessions(
   if (!filePath) return;
 
   await enqueueWrite(async () => {
-    const existing = await readSessionHistory(userData);
-    const pruned = evictRecords(existing, Date.now(), retentionDaysToMs(retentionDays));
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      // Don't prune to `[]` over a journal we couldn't read; abort and retry later.
+      throw unreadableJournalError(existing.error);
+    }
+    const pruned = evictRecords(existing.records, Date.now(), retentionDaysToMs(retentionDays));
     await resilientAtomicWriteFile(filePath, JSON.stringify(pruned, null, 2), "utf-8", {
       mode: OWNER_RW_FILE_MODE,
     });
@@ -276,25 +492,214 @@ export async function pruneAgentSessions(
   });
 }
 
+/**
+ * Rebase the absolute `worktreeId` and `cwd` of one project's records after a
+ * folder move/rename (#11282, phase 2), so a relocated project's captured agent
+ * sessions stay grouped under the moved worktrees and resume in the right place.
+ * Only records whose non-null `projectId` matches are touched — legacy
+ * `projectId: null` records are left alone rather than guessing their owner.
+ * Shares the write queue so it can't interleave with an in-flight persist, and
+ * skips the disk write entirely when nothing changed.
+ */
+export async function rewriteAgentSessionPathsForProject(
+  projectId: string,
+  oldRoot: string,
+  newRoot: string,
+  userData?: string
+): Promise<void> {
+  const filePath = getSessionHistoryPath(userData);
+  if (!filePath || !projectId || !oldRoot || !newRoot || oldRoot === newRoot) return;
+
+  await enqueueWrite(async () => {
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      // Rebasing an unreadable journal would rewrite it from `[]`; abort instead.
+      throw unreadableJournalError(existing.error);
+    }
+    let changed = false;
+    const rewritten = existing.records.map((r) => {
+      if (r.projectId !== projectId) return r;
+      const nextWorktreeId =
+        r.worktreeId !== null ? rebaseAbsolutePath(r.worktreeId, oldRoot, newRoot) : r.worktreeId;
+      const nextCwd = r.cwd !== undefined ? rebaseAbsolutePath(r.cwd, oldRoot, newRoot) : r.cwd;
+      if (nextWorktreeId === r.worktreeId && nextCwd === r.cwd) return r;
+      changed = true;
+      return { ...r, worktreeId: nextWorktreeId, cwd: nextCwd };
+    });
+    if (!changed) return;
+    await resilientAtomicWriteFile(filePath, JSON.stringify(rewritten, null, 2), "utf-8", {
+      mode: OWNER_RW_FILE_MODE,
+    });
+    refreshCacheAfterWrite(filePath, rewritten);
+  });
+}
+
 export async function clearAgentSessions(worktreeId?: string, userData?: string): Promise<void> {
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return;
 
+  // Guard the destructive scope: ONLY an explicit `undefined` means "clear all".
+  // A provided-but-empty worktreeId is a malformed scope (e.g. from the
+  // unvalidated IPC/MCP boundary) — refuse it rather than let `!worktreeId`
+  // silently escalate a scoped clear into wiping every worktree's history
+  // (the #7880 "no silent fallback default on a destructive submit" rule).
+  if (worktreeId === "") {
+    throw new Error("clearAgentSessions: worktreeId must be a non-empty string or undefined");
+  }
+
   // Share the write queue with persistAgentSession so a clear can't interleave
   // with an in-flight persist's read-modify-write and resurrect a cleared record.
   await enqueueWrite(async () => {
-    if (!worktreeId) {
-      // Clear all
-      await resilientAtomicWriteFile(filePath, "[]", "utf-8", { mode: OWNER_RW_FILE_MODE });
-      refreshCacheAfterWrite(filePath, []);
-      return;
+    // "Clear session history" spares bookmarks (#11288): they are the user's
+    // durable pins and only a deliberate Delete bookmark (or a full app-data
+    // reset) removes them. This applies to both the clear-all and scoped-clear
+    // branches, so even clear-all must read first to discover which records are
+    // bookmarked rather than blindly overwriting with `[]`.
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      // A failed read must not wipe on-disk records (all worktrees for clear-all,
+      // or every other worktree for a scoped clear); abort so the journal survives.
+      throw unreadableJournalError(existing.error);
     }
-
-    const existing = await readSessionHistory(userData);
-    const filtered = existing.filter((r) => r.worktreeId !== worktreeId);
-    await resilientAtomicWriteFile(filePath, JSON.stringify(filtered, null, 2), "utf-8", {
+    const retained =
+      worktreeId === undefined
+        ? existing.records.filter(isBookmarked)
+        : existing.records.filter((r) => r.worktreeId !== worktreeId || isBookmarked(r));
+    await resilientAtomicWriteFile(filePath, JSON.stringify(retained, null, 2), "utf-8", {
       mode: OWNER_RW_FILE_MODE,
     });
-    refreshCacheAfterWrite(filePath, filtered);
+    refreshCacheAfterWrite(filePath, retained);
   });
+}
+
+/**
+ * Pin an existing history record as a bookmark in place, keyed by `sessionId`
+ * (#11288). Preserves the record's full resume data; a bookmarked record is
+ * exempt from age pruning and the per-worktree cap. Re-promoting an already
+ * bookmarked session updates its label but keeps the original `bookmarkedAt`.
+ * Returns the promoted record, or `null` when no record with that session id
+ * exists (the caller maps that to `SESSION_NOT_FOUND`). Shares the write queue.
+ */
+export async function promoteBookmark(
+  sessionId: string,
+  label: string,
+  userData?: string
+): Promise<AgentSessionRecord | null> {
+  const filePath = getSessionHistoryPath(userData);
+  if (!filePath) return null;
+
+  return enqueueWrite(async () => {
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      throw unreadableJournalError(existing.error);
+    }
+    let promoted: AgentSessionRecord | null = null;
+    const next = existing.records.map((r) => {
+      // Records are newest-first and deduped by sessionId, so the first match is
+      // the newest; the guard keeps a pathological duplicate from double-promoting.
+      if (r.sessionId !== sessionId || promoted) return r;
+      const bookmark: AgentSessionBookmarkMetadata = r.bookmark
+        ? { ...r.bookmark, label }
+        : { bookmarkedAt: Date.now(), label };
+      promoted = { ...r, bookmark };
+      return promoted;
+    });
+    if (!promoted) return null;
+    await resilientAtomicWriteFile(filePath, JSON.stringify(next, null, 2), "utf-8", {
+      mode: OWNER_RW_FILE_MODE,
+    });
+    refreshCacheAfterWrite(filePath, next);
+    return promoted;
+  });
+}
+
+/**
+ * Rename a bookmark's label without touching any resume field (#11288). Only a
+ * record that is already bookmarked can be renamed. Returns the renamed record,
+ * or `null` when no bookmarked record with that session id exists. Shares the
+ * write queue.
+ */
+export async function renameBookmark(
+  sessionId: string,
+  label: string,
+  userData?: string
+): Promise<AgentSessionRecord | null> {
+  const filePath = getSessionHistoryPath(userData);
+  if (!filePath) return null;
+
+  return enqueueWrite(async () => {
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      throw unreadableJournalError(existing.error);
+    }
+    let renamed: AgentSessionRecord | null = null;
+    const next = existing.records.map((r) => {
+      if (r.sessionId !== sessionId || !r.bookmark || renamed) return r;
+      renamed = { ...r, bookmark: { ...r.bookmark, label } };
+      return renamed;
+    });
+    if (!renamed) return null;
+    await resilientAtomicWriteFile(filePath, JSON.stringify(next, null, 2), "utf-8", {
+      mode: OWNER_RW_FILE_MODE,
+    });
+    refreshCacheAfterWrite(filePath, next);
+    return renamed;
+  });
+}
+
+/**
+ * Delete one bookmark by stripping its `bookmark` metadata and demoting the
+ * record back to ordinary history (#11288). It does NOT remove the resume
+ * record itself — a record promoted from history returns to history, and a
+ * bookmark-and-closed record stays resumable for the normal retention window.
+ * The demoted record is immediately re-evicted so a record that survived only
+ * because it was pinned ages out or loses its per-worktree cap contest at once.
+ * Never touches the provider transcript. Returns `true` when a bookmark was
+ * removed, `false` when no bookmarked record with that session id exists (the
+ * caller maps that to `SESSION_NOT_FOUND`). Shares the write queue.
+ */
+export async function deleteBookmark(
+  sessionId: string,
+  userData?: string,
+  retentionDays?: AgentSessionRetentionDays
+): Promise<boolean> {
+  const filePath = getSessionHistoryPath(userData);
+  if (!filePath) return false;
+
+  return enqueueWrite(async () => {
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      throw unreadableJournalError(existing.error);
+    }
+    const hasTarget = existing.records.some((r) => r.sessionId === sessionId && r.bookmark);
+    if (!hasTarget) return false;
+
+    const stripped = existing.records.map((r) => {
+      if (r.sessionId !== sessionId || !r.bookmark) return r;
+      const { bookmark: _bookmark, ...rest } = r;
+      return rest;
+    });
+    const now = Date.now();
+    const evicted = evictRecords(stripped, now, retentionDaysToMs(retentionDays));
+    await resilientAtomicWriteFile(filePath, JSON.stringify(evicted, null, 2), "utf-8", {
+      mode: OWNER_RW_FILE_MODE,
+    });
+    refreshCacheAfterWrite(filePath, evicted);
+    return true;
+  });
+}
+
+/**
+ * List the user's bookmarks, newest-first by `bookmarkedAt` (#11288). Read-only
+ * and project-scoped when `projectId` is supplied. Runs eviction so the result
+ * is deduped and any carried-forward bookmark is reflected; bookmarks are exempt
+ * from pruning, so retention has no effect here. Never errors — returns `[]`
+ * when the journal is empty or unreadable.
+ */
+export function listBookmarks(projectId?: string, userData?: string): AgentSessionRecord[] {
+  const records = readSessionHistorySync(userData);
+  const evicted = evictRecords(records, Date.now());
+  const bookmarks = evicted.filter(isBookmarked);
+  const scoped = projectId ? bookmarks.filter((r) => r.projectId === projectId) : bookmarks;
+  return scoped.sort((a, b) => (b.bookmark?.bookmarkedAt ?? 0) - (a.bookmark?.bookmarkedAt ?? 0));
 }

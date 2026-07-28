@@ -312,6 +312,23 @@ describe("notificationStore adversarial", () => {
     expect(n.actions![0]!.label).toBe("Retry");
   });
 
+  it("explicit `actions: undefined` clears the array (stage-regression escape hatch)", () => {
+    const id = addToast({
+      correlationId: "entity-a",
+      message: "m",
+      actions: [{ label: "View release notes", onClick: () => {} }],
+    });
+
+    // Distinct from the empty-array case above: passing the key with an
+    // explicit undefined is the caller saying "wipe what's there", mirroring
+    // the singular `action` slot. Update Ready → Update Available relies on
+    // this so a superseded version's link cannot linger.
+    addToast({ correlationId: "entity-a", message: "m2", actions: undefined });
+
+    const n = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(n.actions).toBeUndefined();
+  });
+
   it("collapse does not re-trigger FIFO even when the cap is at the edge", () => {
     // Fill the cap with three distinct entities
     addToast({ correlationId: "entity-a", message: "a" });

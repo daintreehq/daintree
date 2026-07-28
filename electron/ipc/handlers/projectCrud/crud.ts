@@ -8,13 +8,25 @@ import {
   projectViewManagersFrom,
 } from "../../../window/activeProjectIds.js";
 import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../utils.js";
+import { projectRelocationCoordinator } from "../../../services/ProjectRelocationCoordinator.js";
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
+import { notificationService } from "../../../services/NotificationService.js";
 import type { HandlerDependencies } from "../../types.js";
-import type { Project } from "../../../types/index.js";
+import type { Project, ProjectAddOptions } from "../../../types/index.js";
+import type { ProjectCreationIdentity } from "../../../../shared/types/project.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { pruneWindowStateForPath } from "../../../windowState.js";
+import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
+
+/**
+ * Rejection copy for a destructive teardown (close+kill / remove) the pty-host
+ * couldn't confirm. We deliberately keep the project's restoration state rather
+ * than wipe it out from under still-running agents (#11340).
+ */
+const UNCONFIRMED_TEARDOWN_MESSAGE =
+  "Couldn't confirm the project's terminals stopped, so its state was kept. Try again.";
 
 /**
  * Rejection copy for a close attempt against a project that is on-screen in
@@ -29,20 +41,115 @@ const PROJECT_VISIBLE_MESSAGE =
  * Extracted from `handleProjectAdd` so other handlers (e.g. scratch
  * Save-as-Project) can register a path as a project without going through IPC.
  */
-export async function addProjectByPath(projectPath: string): Promise<Project> {
+export async function addProjectByPath(
+  projectPath: string,
+  options?: ProjectAddOptions
+): Promise<Project> {
   if (typeof projectPath !== "string" || !projectPath) {
     throw new Error("Invalid project path");
   }
   if (!path.isAbsolute(projectPath)) {
     throw new Error("Project path must be absolute");
   }
-  const project = await projectStore.addProject(projectPath);
+  // The two halves are validated independently and stay separate keys.
+  // `normalizeCreationIdentity` drops a malformed identity WHOLE, so folding
+  // `gitBacked` in alongside `name`/`emoji` would make a lightweight-open
+  // payload fail the identity gate and be discarded in silence.
+  const project = await projectStore.addProject(projectPath, {
+    // Narrowed rather than forwarded: a caller may only ever ask to *drop* the
+    // git requirement. Anything else would let it assert a mode the folder
+    // doesn't have, and `addProject` alone decides that a repository was found.
+    ...(options?.gitBacked === false ? { gitBacked: false } : {}),
+    identity: normalizeCreationIdentity(options?.identity),
+  });
   broadcastToRenderer(CHANNELS.PROJECT_UPDATED, project);
   return project;
 }
 
+// Matches the in-repo `.daintree/project.json` cap so an identity chosen at
+// creation can't exceed what enabling in-repo settings would later accept.
+const MAX_CREATION_NAME_LENGTH = 100;
+// Generous next to any real emoji (a flag-with-modifier sequence is ~14 code
+// units) while still bounding what a compromised renderer can store.
+const MAX_CREATION_EMOJI_LENGTH = 32;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\x00-\x1F\x7F]/;
+
+/**
+ * Creation identity arrives from the renderer, so treat it as untrusted: keep
+ * it only when both halves are plain, bounded, control-character-free strings.
+ * A partial or malformed payload is dropped whole rather than half-applied,
+ * leaving `addProject` on its normal basename + default-emoji path.
+ *
+ * Reads own properties only and returns a fresh object, so neither inherited
+ * fields nor extra keys (`id`, `path`) can ride along into the insert.
+ */
+function normalizeCreationIdentity(
+  identity: ProjectCreationIdentity | undefined
+): ProjectCreationIdentity | undefined {
+  if (!identity || typeof identity !== "object" || Array.isArray(identity)) return undefined;
+  if (!Object.hasOwn(identity, "name") || !Object.hasOwn(identity, "emoji")) return undefined;
+
+  const { name, emoji } = identity;
+  if (typeof name !== "string" || typeof emoji !== "string") return undefined;
+
+  const trimmedName = name.trim();
+  const trimmedEmoji = emoji.trim();
+  if (!trimmedName || !trimmedEmoji) return undefined;
+  if (trimmedName.length > MAX_CREATION_NAME_LENGTH) return undefined;
+  if (trimmedEmoji.length > MAX_CREATION_EMOJI_LENGTH) return undefined;
+  if (CONTROL_CHARS.test(trimmedName) || CONTROL_CHARS.test(trimmedEmoji)) return undefined;
+
+  return { name: trimmedName, emoji: trimmedEmoji };
+}
+
+/**
+ * Remove a project row and everything keyed to it. Extracted from
+ * `handleProjectRemove` so non-IPC callers can offer removal too — the native
+ * "Remove from recent" recovery on a dead Recent Projects entry (#11409) — with
+ * the same teardown rather than a bare `removeProject` that would orphan PTYs
+ * and leave stale window state behind.
+ */
+export async function removeProjectWithCleanup(
+  projectId: string,
+  deps: Pick<HandlerDependencies, "ptyClient" | "worktreeService">
+): Promise<void> {
+  // Resolve the path before removeProject() deletes the row — the prune below
+  // keys window-states.json by path, which is unrecoverable once the row is gone.
+  const removedPath = projectStore.getProjectById(projectId)?.path ?? null;
+
+  if (deps.ptyClient) {
+    // Gracefully tear down and journal each agent session before the row (and
+    // its restoration state) is permanently deleted. Fail closed: if the host
+    // can't confirm the kills, keep the project so its still-running agents
+    // aren't orphaned by a deleted row (#11340).
+    const { confirmed } = await gracefulTeardownAndJournalProject(
+      projectId,
+      deps.ptyClient,
+      deps.worktreeService
+    );
+    if (!confirmed) {
+      throw new AppError({
+        code: "INTERNAL",
+        message: UNCONFIRMED_TEARDOWN_MESSAGE,
+        context: { projectId },
+      });
+    }
+  }
+
+  await projectStore.removeProject(projectId);
+  if (removedPath) {
+    pruneWindowStateForPath(removedPath);
+  }
+  broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
+  // The row is gone, so a window still bound to it no longer has a project open.
+  refreshProjectMenuState();
+  notificationService.refreshTitles();
+}
+
 export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () => void {
-  const handleProjectAdd = async (projectPath: string) => addProjectByPath(projectPath);
+  const handleProjectAdd = async (projectPath: string, options?: ProjectAddOptions) =>
+    addProjectByPath(projectPath, options);
 
   const handlers: Array<() => void> = [];
 
@@ -86,23 +193,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       throw new Error("Invalid project ID");
     }
 
-    // Resolve the path before removeProject() deletes the row — the prune below
-    // keys window-states.json by path, which is unrecoverable once the row is gone.
-    const removedPath = projectStore.getProjectById(projectId)?.path ?? null;
-
-    if (deps.ptyClient) {
-      await deps.ptyClient.killByProject(projectId).catch((err: unknown) => {
-        console.error(`[IPC] project:remove: Failed to kill terminals for ${projectId}:`, err);
-      });
-    }
-
-    await projectStore.removeProject(projectId);
-    if (removedPath) {
-      pruneWindowStateForPath(removedPath);
-    }
-    broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
-    // The row is gone, so a window still bound to it no longer has a project open.
-    refreshProjectMenuState();
+    await removeProjectWithCleanup(projectId, deps);
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_REMOVE, handleProjectRemove));
 
@@ -113,20 +204,38 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     if (typeof updates !== "object" || updates === null) {
       throw new Error("Invalid updates object");
     }
+    // `id` and `path` are identity, not metadata: entry-scoped authorization
+    // (fileBrowser's project routing) resolves hosts by the row's path, so a
+    // renderer that could rewrite its own project's path to a sibling's would
+    // point that resolution at the sibling's host. Path changes stay exclusive
+    // to the main-owned relocation flow (#11282).
+    // `gitBacked` joins them: it decides whether the workspace host enumerates
+    // worktrees at all, and only `addProject` — which actually looked for a
+    // repository — may set it (#11405).
     const {
+      id: _id,
+      path: _path,
       inRepoSettings: _inRepo,
       frecencyScore: _fs,
       lastAccessedAt: _lat,
+      gitBacked: _gitBacked,
       ...safeUpdates
     } = updates;
     const updated = projectStore.updateProject(projectId, safeUpdates);
     broadcastToRenderer(CHANNELS.PROJECT_UPDATED, updated);
+    // A rename leaves the File-menu gates alone — the project is still open —
+    // but every window showing it is now titled with a stale name. Status rides
+    // along because a row turned "closed" here stops naming a window too.
+    if (updates.name !== undefined || updates.status !== undefined) {
+      notificationService.refreshTitles();
+    }
     if (
       updated.inRepoSettings &&
       (updates.name !== undefined || updates.emoji !== undefined || "color" in updates)
     ) {
       projectStore
         .writeInRepoProjectIdentity(updated.path, {
+          id: updated.id,
           name: updated.name,
           emoji: updated.emoji,
           color: updated.color,
@@ -146,7 +255,9 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     const senderWindow = getWindowForWebContents(ctx.event.sender);
     const dialogOpts = {
       properties: ["openDirectory" as const, "createDirectory" as const],
-      title: "Open Git Repository",
+      // Not "Open Git Repository": a folder without one is now openable too,
+      // and the picker shouldn't imply a requirement it no longer has (#11405).
+      title: "Open Folder",
     };
     const result = senderWindow
       ? await dialog.showOpenDialog(senderWindow, dialogOpts)
@@ -194,10 +305,23 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     }
 
     try {
-      const ptyStats = await deps.ptyClient!.getProjectStats(projectId);
-
       if (killTerminals) {
-        const terminalsKilled = await deps.ptyClient!.killByProject(projectId);
+        // Gracefully tear down and journal each agent session before wiping the
+        // project's restoration state, so agent conversations stay resumable
+        // from the picker. Fail closed: if the host can't confirm the kills,
+        // keep the state rather than orphan still-running agents (#11340).
+        const { confirmed, terminalsKilled } = await gracefulTeardownAndJournalProject(
+          projectId,
+          deps.ptyClient!,
+          deps.worktreeService
+        );
+        if (!confirmed) {
+          throw new AppError({
+            code: "INTERNAL",
+            message: UNCONFIRMED_TEARDOWN_MESSAGE,
+            context: { projectId },
+          });
+        }
 
         await projectStore.clearProjectState(projectId);
 
@@ -215,6 +339,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
         // closing window's ProjectViewManager still points at this project, so
         // the row's status is what tells the menu resolver it isn't open.
         refreshProjectMenuState();
+        notificationService.refreshTitles();
 
         console.log(
           `[IPC] project:close: Killed ${terminalsKilled} process(es) ` +
@@ -226,6 +351,8 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
           terminalsKilled,
         };
       } else {
+        const ptyStats = await deps.ptyClient!.getProjectStats(projectId);
+
         // Re-check after the awaited stats call: the user can bring the project
         // on-screen in any window while it's in flight, and backgrounding it +
         // pausing its workspace host would then hit a visible project. Thrown as
@@ -301,7 +428,14 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     }
 
     const newPath = result.filePaths[0];
-    return projectStore.relocateProject(projectId, newPath);
+    // Route through the relocation coordinator: it forks internally — an OPEN
+    // project (visible in any window) runs the phase-3 quiesce/rebind pipeline
+    // so the live view/host/PTYs are repointed rather than stranded; a closed
+    // reattach delegates to the phase-1/2 path. It broadcasts PROJECT_UPDATED to
+    // every cached view by immutable id, so the new path reaches windows other
+    // than the one that ran the locate flow (#11282).
+    projectRelocationCoordinator.configure(deps);
+    return projectRelocationCoordinator.relocate({ projectId, mode: "reattach", newPath });
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_LOCATE, handleProjectLocate));
 

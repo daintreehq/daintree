@@ -1,6 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
+import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import type { WorktreeState } from "@/types";
@@ -15,11 +16,26 @@ vi.stubGlobal(
   }
 );
 
-const { startDeleteMock, terminalCountsMock, devPreviewGetByWorktreeMock } = vi.hoisted(() => ({
+const {
+  startDeleteMock,
+  terminalCountsMock,
+  terminalsMock,
+  devPreviewGetByWorktreeMock,
+  buildPreviewMock,
+} = vi.hoisted(() => ({
   startDeleteMock: vi.fn(),
   terminalCountsMock: { total: 0 },
+  terminalsMock: [] as Array<{ running?: boolean }>,
   devPreviewGetByWorktreeMock: vi.fn(),
+  buildPreviewMock: vi.fn(),
 }));
+
+// Mock only the fresh-fetch builder; keep `summarizeWorktreeChanges` real so
+// the prop-seed path (existing render assertions) is exercised unchanged.
+vi.mock("@/components/Worktree/worktreeDeletePreview", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../worktreeDeletePreview")>();
+  return { ...actual, buildWorktreeDeletePreview: buildPreviewMock };
+});
 
 (globalThis as Record<string, unknown>).window = globalThis.window ?? {};
 (window as unknown as Record<string, unknown>).electron = {
@@ -37,7 +53,14 @@ vi.mock("@/store/createWorktreeStore", () => ({
 }));
 
 vi.mock("@/hooks/useWorktreeTerminals", () => ({
-  useWorktreeTerminals: () => ({ counts: terminalCountsMock }),
+  useWorktreeTerminals: () => ({ counts: terminalCountsMock, terminals: terminalsMock }),
+}));
+
+// Agent detection is covered by its own unit suite; here we just steer the
+// running-agent subset directly so the D2 preview breakdown can be asserted.
+vi.mock("@/utils/destructiveSessionConfirm", () => ({
+  collectRunningAgentTerminals: (terminals: Array<{ running?: boolean }>) =>
+    terminals.filter((t) => t.running),
 }));
 
 vi.mock("@/components/ui/AppDialog", () => {
@@ -110,11 +133,36 @@ function makeChanges(files: Array<{ path: string; status: GitStatus }>): Worktre
   };
 }
 
+// A fresh delete preview (what buildWorktreeDeletePreview resolves to) for the
+// on-open / on-submit fetch (#11343).
+function makePreview(files: Array<{ path: string; status: GitStatus }>) {
+  const changes = files.map((f) => ({
+    path: f.path,
+    status: f.status,
+    insertions: null,
+    deletions: null,
+  }));
+  const trackedChangeCount = changes.filter(
+    (c) => c.status !== "untracked" && c.status !== "ignored"
+  ).length;
+  const untrackedFileCount = changes.filter((c) => c.status === "untracked").length;
+  return {
+    trackedChangeCount,
+    untrackedFileCount,
+    hasTrackedChanges: trackedChangeCount > 0,
+    hasUntrackedFiles: untrackedFileCount > 0,
+    changes,
+  };
+}
+
 describe("WorktreeDeleteDialog — warning messages", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
+    // Default: no fresh override → dialog uses the prop seed (existing tests).
+    buildPreviewMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -279,7 +327,10 @@ describe("WorktreeDeleteDialog — body copy", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
+    // Default: no fresh override → dialog uses the prop seed (existing tests).
+    buildPreviewMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -325,6 +376,25 @@ describe("WorktreeDeleteDialog — body copy", () => {
 
     expect(screen.getByText(/1 terminal will be closed/)).toBeDefined();
     expect(screen.queryByText(/1 terminals/)).toBeNull();
+  });
+
+  it("breaks out running agents in the terminals row when any are mid-work (#11344)", () => {
+    terminalCountsMock.total = 3;
+    terminalsMock.push({ running: true }, { running: true }, { running: false });
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    expect(screen.getByText(/3 terminals will be closed \(2 running an agent\)/)).toBeDefined();
+  });
+
+  it("omits the running-agent breakdown when no agent is mid-work", () => {
+    terminalCountsMock.total = 2;
+    terminalsMock.push({ running: false }, { running: false });
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    expect(screen.getByText(/2 terminals will be closed/)).toBeDefined();
+    expect(screen.queryByText(/running an agent/)).toBeNull();
   });
 
   it("renders the terminals row inactive when closeTerminals is unchecked", () => {
@@ -461,7 +531,10 @@ describe("WorktreeDeleteDialog — medium tier (no name confirmation)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
+    // Default: no fresh override → dialog uses the prop seed (existing tests).
+    buildPreviewMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -513,7 +586,10 @@ describe("WorktreeDeleteDialog — high tier (name confirmation)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
+    // Default: no fresh override → dialog uses the prop seed (existing tests).
+    buildPreviewMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -679,7 +755,10 @@ describe("WorktreeDeleteDialog — immediate dismiss", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
+    // Default: no fresh override → dialog uses the prop seed (existing tests).
+    buildPreviewMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -712,7 +791,10 @@ describe("WorktreeDeleteDialog — dev preview disclosure (#9084)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
+    // Default: no fresh override → dialog uses the prop seed (existing tests).
+    buildPreviewMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -783,7 +865,10 @@ describe("WorktreeDeleteDialog — state reset", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
+    // Default: no fresh override → dialog uses the prop seed (existing tests).
+    buildPreviewMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -810,5 +895,172 @@ describe("WorktreeDeleteDialog — state reset", () => {
       name: /close all terminals/i,
     }) as HTMLInputElement;
     expect(reopened.checked).toBe(true);
+  });
+});
+
+describe("WorktreeDeleteDialog — fresh status verification (#11343)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
+    devPreviewGetByWorktreeMock.mockResolvedValue(null);
+    buildPreviewMock.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("fetches fresh worktree changes when the dialog opens", async () => {
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    await waitFor(() => {
+      expect(buildPreviewMock).toHaveBeenCalledWith("wt-1");
+    });
+  });
+
+  it("escalates to the D3 typed-name gate when fresh status reveals tracked changes the prop missed", async () => {
+    // Prop snapshot is stale-empty (the backgrounded-worktree bug); the fresh
+    // fetch reveals an agent's in-progress tracked edits.
+    buildPreviewMock.mockResolvedValue(makePreview([{ path: "src/app.ts", status: "modified" }]));
+    const worktree = makeWorktree(makeChanges([]), { branch: "feature/x", name: "feature/x" });
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("delete-worktree-confirm-input")).toBeDefined();
+    });
+    const button = screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  it("fails closed with an escalation and a warning when the fresh fetch errors", async () => {
+    buildPreviewMock.mockRejectedValue(new Error("refresh timeout"));
+    const worktree = makeWorktree(makeChanges([]), { branch: "feature/x", name: "feature/x" });
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    // The "couldn't verify" banner surfaces regardless of force.
+    await waitFor(() => {
+      expect(screen.getByText(/Couldn't verify this worktree's current changes/)).toBeDefined();
+    });
+
+    // With force on, the fail-closed state demands the typed-name gate.
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    expect(screen.getByTestId("delete-worktree-confirm-input")).toBeDefined();
+    const button = screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  it("blocks a force-delete at submit time when files changed after open", async () => {
+    // Open sees a clean tree (D2, no gate); an agent writes a tracked file
+    // before the user clicks — the submit-time re-check must catch it.
+    buildPreviewMock.mockResolvedValueOnce(makePreview([]));
+    const onClose = vi.fn();
+    const worktree = makeWorktree(makeChanges([]), { branch: "feature/x", name: "feature/x" });
+    render(<WorktreeDeleteDialog isOpen={true} onClose={onClose} worktree={worktree} />);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    await waitFor(() => {
+      expect(buildPreviewMock).toHaveBeenCalledTimes(1);
+    });
+    // Clean at open → no typed-name gate, button enabled.
+    expect(screen.queryByTestId("delete-worktree-confirm-input")).toBeNull();
+    const button = screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+
+    // Now a tracked change appears; submit must revalidate and refuse.
+    buildPreviewMock.mockResolvedValueOnce(
+      makePreview([{ path: "src/app.ts", status: "modified" }])
+    );
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("delete-worktree-confirm-input")).toBeDefined();
+    });
+    expect(startDeleteMock).not.toHaveBeenCalled();
+  });
+
+  it("shows the actual fresh file list a force delete would discard (D2 content preview)", async () => {
+    buildPreviewMock.mockResolvedValue(
+      makePreview([
+        { path: "src/app.ts", status: "modified" },
+        { path: "new.txt", status: "untracked" },
+      ])
+    );
+    const worktree = makeWorktree(makeChanges([]), { branch: "feature/x", name: "feature/x" });
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    // No list until the destructive path is armed.
+    expect(screen.queryByTestId("delete-worktree-file-list")).toBeNull();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+
+    await waitFor(() => {
+      const list = screen.getByTestId("delete-worktree-file-list");
+      expect(list.textContent).toContain("M src/app.ts");
+      expect(list.textContent).toContain("? new.txt");
+    });
+  });
+
+  it("hides the file list and shows the warning when verification fails", async () => {
+    buildPreviewMock.mockRejectedValue(new Error("refresh timeout"));
+    const worktree = makeWorktree(makeChanges([{ path: "src/app.ts", status: "modified" }]), {
+      branch: "feature/x",
+      name: "feature/x",
+    });
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Couldn't verify this worktree's current changes/)).toBeDefined();
+    });
+    expect(screen.queryByTestId("delete-worktree-file-list")).toBeNull();
+  });
+
+  it("dispatches a force-delete after submit re-check confirms it is still safe", async () => {
+    // Untracked-only stays D2 both at open and submit → no gate, delete runs.
+    buildPreviewMock.mockResolvedValue(makePreview([{ path: "new.txt", status: "untracked" }]));
+    const onClose = vi.fn();
+    const worktree = makeWorktree(makeChanges([]), { branch: "feature/x", name: "feature/x" });
+    render(<WorktreeDeleteDialog isOpen={true} onClose={onClose} worktree={worktree} />);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    await waitFor(() => {
+      expect(buildPreviewMock).toHaveBeenCalled();
+    });
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+
+    await waitFor(() => {
+      expect(startDeleteMock).toHaveBeenCalledTimes(1);
+    });
+    expect(startDeleteMock).toHaveBeenCalledWith("wt-1", { force: true, deleteBranch: false });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("still dispatches a force-delete under StrictMode (mountedRef remount guard)", async () => {
+    // StrictMode runs mount effects setup→cleanup→setup; a mounted flag that
+    // only cleared would be false after remount and abort every force-delete.
+    buildPreviewMock.mockResolvedValue(makePreview([{ path: "new.txt", status: "untracked" }]));
+    const onClose = vi.fn();
+    const worktree = makeWorktree(makeChanges([]), { branch: "feature/x", name: "feature/x" });
+    render(
+      <StrictMode>
+        <WorktreeDeleteDialog isOpen={true} onClose={onClose} worktree={worktree} />
+      </StrictMode>
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    await waitFor(() => {
+      expect(buildPreviewMock).toHaveBeenCalled();
+    });
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+
+    await waitFor(() => {
+      expect(startDeleteMock).toHaveBeenCalledTimes(1);
+    });
+    expect(onClose).toHaveBeenCalled();
   });
 });

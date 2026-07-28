@@ -1,7 +1,12 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { StorageValue } from "zustand/middleware";
 import type { VoiceInputError, VoiceInputStatus, VoiceTranscriptPhase } from "@shared/types";
 import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
+import {
+  mergeRecordByWriterDelta,
+  type PersistWriteMergeContext,
+} from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 export interface VoiceRecordingTarget {
@@ -33,6 +38,102 @@ export interface RecentDictationTarget {
 }
 
 const MAX_RECENT_TARGETS = 3;
+
+type VoiceRecordingPersistedState = { recentTargets: RecentDictationTarget[] };
+
+function toRecentTargets(
+  value: StorageValue<VoiceRecordingPersistedState> | null
+): RecentDictationTarget[] {
+  const list = value?.state?.recentTargets;
+  if (!Array.isArray(list)) return [];
+  return list.filter(
+    (entry): entry is RecentDictationTarget =>
+      entry !== null && typeof entry === "object" && typeof entry.lastUsedAt === "number"
+  );
+}
+
+/**
+ * Logical identity of a persisted recent target. Persisted entries have `panelId`
+ * stripped (partialize), so identity is the `(worktreeId, panelTitle)` tuple the
+ * store uses to resolve a rehydrated entry back to a live panel. An entry with
+ * neither has no stable logical key, so it is fingerprinted by its full persisted
+ * content (`lastUsedAt` included): identical copies from two views collapse
+ * instead of duplicating across flushes, while genuinely distinct anonymous
+ * entries stay separate.
+ */
+function recentTargetIdentity(target: RecentDictationTarget): string {
+  // JSON-encode the key fields so a value containing the delimiter can't forge a
+  // collision with a different target.
+  if (target.worktreeId || target.panelTitle) {
+    return `id:${JSON.stringify([target.worktreeId ?? "", target.panelTitle ?? ""])}`;
+  }
+  return `anon:${JSON.stringify([
+    target.projectId ?? "",
+    target.projectName ?? "",
+    target.worktreeLabel ?? "",
+    target.lastUsedAt,
+  ])}`;
+}
+
+/**
+ * Index a recent-targets list by logical identity, keeping the more-recently-used
+ * entry when one list holds two entries with the same identity.
+ */
+function toTargetsByIdentity(
+  value: StorageValue<VoiceRecordingPersistedState> | null
+): Record<string, RecentDictationTarget> {
+  const byIdentity: Record<string, RecentDictationTarget> = {};
+  for (const target of toRecentTargets(value)) {
+    const identity = recentTargetIdentity(target);
+    const existing = byIdentity[identity];
+    if (!existing || target.lastUsedAt > existing.lastUsedAt) byIdentity[identity] = target;
+  }
+  return byIdentity;
+}
+
+/**
+ * Baseline-aware three-way merge for voice-recording writes across project views
+ * (issue #11351). `recentTargets` is one global MRU list (cap 3) that any view
+ * appends to, and the store's high-frequency transient setters (`setAudioLevel`,
+ * `setElapsedSeconds`) trigger debounced persist writes of it — so a stale view's
+ * flush would otherwise drop a sibling's just-recorded target.
+ *
+ * All three inputs are keyed by logical identity and reconciled with the same
+ * writer-delta semantics the other stores use: an entry this writer added or
+ * changed wins, one it left untouched defers to disk, and one that was in its
+ * baseline but is gone from its snapshot is dropped. That last case is what a
+ * plain union gets wrong: `recordRecentTarget` dedupes in memory by `panelId`,
+ * but a persisted entry's identity is `(worktreeId, panelTitle)` — so re-dictating
+ * into a panel whose title changed mid-session supersedes the old entry in memory,
+ * and without the baseline the stale title would linger on disk forever, evicting
+ * genuinely distinct targets through the cap. On a same-identity collision the
+ * more-recently-used copy still wins, so a sibling's fresher timestamp is never
+ * rolled back. The result is re-sorted and capped to the globally three
+ * most-recent — the same recency semantics `recordRecentTarget` applies in a
+ * single view.
+ */
+function mergeVoiceRecordingPersistedWrite({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<VoiceRecordingPersistedState>): StorageValue<VoiceRecordingPersistedState> {
+  // No shared value on disk yet → nothing to reconcile against.
+  if (!onDisk) return incoming;
+  const disk = toTargetsByIdentity(onDisk);
+  const merged = mergeRecordByWriterDelta(
+    toTargetsByIdentity(baseline),
+    toTargetsByIdentity(incoming),
+    disk
+  );
+  const recentTargets = Object.entries(merged)
+    .map(([identity, target]) => {
+      const diskTarget = disk[identity];
+      return diskTarget && diskTarget.lastUsedAt > target.lastUsedAt ? diskTarget : target;
+    })
+    .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+    .slice(0, MAX_RECENT_TARGETS);
+  return { version: incoming.version, state: { recentTargets } };
+}
 
 interface VoiceTranscriptBuffer {
   liveText: string;
@@ -458,16 +559,18 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       // `setElapsedSeconds` per second) trigger persist writes regardless of
       // whether the partialized output changed. Coalescing to a trailing-edge
       // 300ms write avoids burning the localStorage write queue mid-session.
-      storage: createDebouncedSafeJSONStorage(300),
+      storage: createDebouncedSafeJSONStorage<VoiceRecordingPersistedState>(300, {
+        mergeOnWrite: mergeVoiceRecordingPersistedWrite,
+      }),
+      // No `migrate`: at v0 the persisted blob is a forward-compatible subset of
+      // the current shape (only `recentTargets`), and a version-0 store never sees
+      // a version mismatch — so an explicit no-op migration would only muddy the
+      // inferred persisted type.
       version: 0,
-      // No structural migration yet — at v0 the persisted blob is a
-      // forward-compatible subset of the current shape (only `recentTargets`),
-      // so we pass it through unchanged.
-      migrate: (persistedState) => persistedState,
       // Persist only the recent-targets list. Strip the live `panelId` on each
       // entry so a stale id cannot silently re-route dictation after restart —
       // panelIds are ephemeral. Lock state and session state are runtime-only.
-      partialize: (state) => ({
+      partialize: (state): VoiceRecordingPersistedState => ({
         recentTargets: state.recentTargets.map(({ panelId: _panelId, ...rest }) => rest),
       }),
     }

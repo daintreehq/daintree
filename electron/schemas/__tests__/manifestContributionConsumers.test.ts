@@ -15,7 +15,7 @@ import {
   KeybindingContributionSchema,
   McpServerContributionSchema,
   MenuItemContributionSchema,
-  PanelContributionSchema,
+  PanelContributionObjectSchema,
   SettingDefinitionObjectSchema,
   SkillContributionSchema,
   ToolbarButtonContributionSchema,
@@ -87,7 +87,7 @@ const SKILL_REGISTRY = "electron/services/plugin/PluginSkillRegistry.ts";
  * field would otherwise be able to drift silently under a top-level kind).
  */
 const SWEPT_SCHEMAS = {
-  panels: PanelContributionSchema,
+  panels: PanelContributionObjectSchema,
   toolbarButtons: ToolbarButtonContributionSchema,
   menuItems: MenuItemContributionSchema,
   keybindings: KeybindingContributionSchema,
@@ -149,7 +149,7 @@ function shapeKeys(schema: z.ZodType): string[] {
  */
 type ForgeSlots = NonNullable<z.infer<typeof ForgeProviderContributionSchema>["slots"]>;
 type FieldConsumerCoverage = {
-  panels: Record<keyof z.infer<typeof PanelContributionSchema>, ConsumerDescriptor>;
+  panels: Record<keyof z.infer<typeof PanelContributionObjectSchema>, ConsumerDescriptor>;
   toolbarButtons: Record<keyof z.infer<typeof ToolbarButtonContributionSchema>, ConsumerDescriptor>;
   menuItems: Record<keyof z.infer<typeof MenuItemContributionSchema>, ConsumerDescriptor>;
   keybindings: Record<keyof z.infer<typeof KeybindingContributionSchema>, ConsumerDescriptor>;
@@ -215,6 +215,11 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: "shared/config/panelKindRegistry.ts", symbol: "registerPanelKind" }],
       note: "Registered as the panel kind palette visibility.",
     },
+    dockable: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop) → registerPanelKind" }],
+      note: "Registered as the panel kind dock eligibility; undefined defaults to dockable, false opts out (panelKindIsDockable).",
+    },
   },
   toolbarButtons: {
     id: {
@@ -245,8 +250,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     },
     priority: {
       mode: "verbatim",
-      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin (priority ?? 3)" }],
-      note: "Registered as the toolbar button ordering priority (defaulted to 3).",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (priority ?? 3)" },
+        {
+          file: "src/components/Layout/PluginTrayButton.tsx",
+          symbol: "groupPluginToolbarButtons",
+        },
+      ],
+      note: "Registered as the toolbar button ordering priority (defaulted to 3), consumed by the plugin tray's within-group sort (#11304).",
     },
   },
   menuItems: {
@@ -400,6 +411,13 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: PLUGIN_SERVICE, symbol: "validateAndBuildActionDescriptor" }],
       note: "Copied into the action descriptor inputSchema for arg validation.",
+    },
+    requires: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "validateAndBuildActionDescriptor (effectiveDanger)" },
+      ],
+      note: "Per-action capability intent (#11299): validated as a subset of manifest.capabilities, then narrows which capabilities effectiveDanger consults. Grants no access — never a capability check input.",
     },
   },
   views: {

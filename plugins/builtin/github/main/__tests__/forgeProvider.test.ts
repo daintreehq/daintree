@@ -6,9 +6,10 @@ import type { ShouldBlockResult } from "../GitHubRateLimitService.js";
 
 const mockGraphQLClient = vi.fn();
 const mockFetchActivityProbe = vi.fn();
-const mockShouldBlockRequest = vi.fn(
-  (_resource?: string): ShouldBlockResult => ({ blocked: false, reason: null })
-);
+const mockShouldBlockRequest = vi.fn((_resource?: string): ShouldBlockResult => ({
+  blocked: false,
+  reason: null,
+}));
 
 vi.mock("../GitHubAuth.js", () => ({
   GitHubAuth: {

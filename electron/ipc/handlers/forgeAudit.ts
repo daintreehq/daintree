@@ -10,18 +10,16 @@ import type { ForgeAuditRecord, ForgeAuditStats } from "../../../shared/types/ip
 export const forgeAuditNamespace = defineIpcNamespace({
   name: "forgeAudit",
   ops: {
-    getRecords: op(
-      FORGE_AUDIT_METHOD_CHANNELS.getRecords,
-      async (): Promise<ForgeAuditRecord[]> => forgeAuditService.getRecords()
+    getRecords: op(FORGE_AUDIT_METHOD_CHANNELS.getRecords, async (): Promise<ForgeAuditRecord[]> =>
+      forgeAuditService.getRecords()
     ),
     getConfig: op(
       FORGE_AUDIT_METHOD_CHANNELS.getConfig,
       async (): Promise<{ enabled: boolean; maxRecords: number }> =>
         forgeAuditService.getAuditConfig()
     ),
-    getStats: op(
-      FORGE_AUDIT_METHOD_CHANNELS.getStats,
-      async (): Promise<ForgeAuditStats> => forgeAuditService.getAuditStats()
+    getStats: op(FORGE_AUDIT_METHOD_CHANNELS.getStats, async (): Promise<ForgeAuditStats> =>
+      forgeAuditService.getAuditStats()
     ),
     clearLog: op(FORGE_AUDIT_METHOD_CHANNELS.clearLog, async (): Promise<void> => {
       forgeAuditService.clear();

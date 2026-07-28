@@ -26,6 +26,65 @@ describe("appProtocol utilities", () => {
       expect(getMimeType("hero.avif")).toBe("image/avif");
     });
 
+    it("maps APNG to its own image type rather than the octet-stream fallback", () => {
+      // An .apng is a valid PNG, but nosniff on daintree-file:// means the
+      // declared type is final: falling back to application/octet-stream would
+      // stop Chromium decoding it in an <img> even though it can animate it.
+      expect(getMimeType("animation.apng")).toBe("image/apng");
+      expect(getMimeType("ANIMATION.APNG")).toBe("image/apng");
+      expect(getMimeType("PHOTO.AVIF")).toBe("image/avif");
+    });
+
+    it("should return video MIME types for containers Chromium plays natively", () => {
+      // Drives the daintree-file:// handler's video-vs-buffered routing AND the
+      // Content-Type on streamed responses — nosniff makes a wrong type fatal.
+      expect(getMimeType("clip.mp4")).toBe("video/mp4");
+      expect(getMimeType("clip.m4v")).toBe("video/mp4");
+      expect(getMimeType("clip.webm")).toBe("video/webm");
+      expect(getMimeType("clip.ogv")).toBe("video/ogg");
+      expect(getMimeType("CLIP.MP4")).toBe("video/mp4");
+    });
+
+    it("should return audio MIME types Chromium accepts for playable formats", () => {
+      // Same routing + nosniff stakes as video above. `audio/flac` is the
+      // spelling Chromium answers canPlayType for — the `audio/x-flac` alias
+      // returns "" and would leave the file unplayable.
+      expect(getMimeType("track.mp3")).toBe("audio/mpeg");
+      expect(getMimeType("track.wav")).toBe("audio/wav");
+      expect(getMimeType("track.flac")).toBe("audio/flac");
+      expect(getMimeType("track.ogg")).toBe("audio/ogg");
+      expect(getMimeType("track.oga")).toBe("audio/ogg");
+      expect(getMimeType("track.m4a")).toBe("audio/mp4");
+      expect(getMimeType("track.aac")).toBe("audio/aac");
+      expect(getMimeType("TRACK.FLAC")).toBe("audio/flac");
+    });
+
+    it("should declare .opus without a codecs parameter", () => {
+      // The extension names the Ogg container, not what is inside it, so
+      // promising codecs="opus" would misdescribe a mislabelled Vorbis file.
+      expect(getMimeType("track.opus")).toBe("audio/ogg");
+    });
+
+    it("should not map audio Chromium can't decode to an audio MIME", () => {
+      // Mapping these would route them into the streaming path and hand the
+      // pane an <audio> element that can only fail.
+      expect(getMimeType("track.wma")).toBe("application/octet-stream");
+      expect(getMimeType("track.aiff")).toBe("application/octet-stream");
+      expect(getMimeType("track.aif")).toBe("application/octet-stream");
+      expect(getMimeType("track.mid")).toBe("application/octet-stream");
+      expect(getMimeType("track.midi")).toBe("application/octet-stream");
+      expect(getMimeType("track.amr")).toBe("application/octet-stream");
+    });
+
+    it("should not map containers Chromium can't demux to a video MIME", () => {
+      // mov/mkv/avi/wmv are excluded from the playable set — mapping them to
+      // video/* would route them into the streaming path and a broken <video>.
+      expect(getMimeType("clip.mov")).toBe("application/octet-stream");
+      expect(getMimeType("clip.mkv")).toBe("application/octet-stream");
+      expect(getMimeType("clip.avi")).toBe("application/octet-stream");
+      expect(getMimeType("clip.wmv")).toBe("application/octet-stream");
+    });
+
     it("should return default MIME type for unknown extensions", () => {
       expect(getMimeType("file.xyz")).toBe("application/octet-stream");
       expect(getMimeType("noext")).toBe("application/octet-stream");

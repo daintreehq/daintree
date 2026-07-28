@@ -11,7 +11,7 @@ import type {
 } from "../../shared/types/worktree.js";
 import type { CIStatusState } from "../../shared/types/forge.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
-import { invalidateGitStatusCache } from "../utils/git.js";
+import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
 import { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
 import { deriveIssueTitleFromBranch } from "../services/issueExtractor.js";
 import { FetchScheduler, type FetchSchedulerHost } from "./FetchScheduler.js";
@@ -166,6 +166,12 @@ export class WorktreeMonitor {
   private gitWatchBudgetAllowed: boolean = true;
   private gitWatchDebounceMs: number;
   private lastGitStatusCompletedAt: number = 0;
+  // Monotonic timestamp of the last recursive-watcher flush — a raw filesystem
+  // write, independent of whether git status changed. Drives the file browser's
+  // live refresh for writes into gitignored paths (#11330). Excluded from
+  // snapshot dedup and carried through the store's side map like the
+  // git-status-checked timestamp.
+  private _workingTreeChangedAt: number = 0;
   // Stamped by the watcher's onTriggerUpdate hook before a forced refresh
   // fires. The stat pre-check compares against `lastStatBaselineAt` to know
   // whether an event arrived since the baseline was captured — if so, the
@@ -197,8 +203,7 @@ export class WorktreeMonitor {
 
   // Resource state
   private _resourceStatus:
-    | import("../../shared/types/worktree.js").WorktreeResourceStatus
-    | undefined;
+    import("../../shared/types/worktree.js").WorktreeResourceStatus | undefined;
   private _resourceConnectCommand: string | undefined;
   private _resourceProvider: string | undefined;
   private _hasResourceConfig: boolean = false;
@@ -240,6 +245,10 @@ export class WorktreeMonitor {
   // Poll queue concurrency
   private _pendingPollPromise: Promise<void> | null = null;
   private _pollAbortController: AbortController = new AbortController();
+
+  // Tri-state on purpose: undefined means the containment boundary was unknown,
+  // which must stay distinct from a confirmed-internal false.
+  private _isExternal: boolean | undefined;
 
   // WSL routing state (Windows only)
   private _isWslPath: boolean = false;
@@ -287,6 +296,7 @@ export class WorktreeMonitor {
     this._gitDir = worktree.gitDir;
     this._isCurrent = worktree.isCurrent;
     this._isMainWorktree = Boolean(worktree.isMainWorktree);
+    this._isExternal = worktree.isExternal;
     this._isDetached = Boolean(worktree.isDetached);
     this._head = worktree.head;
     this.gitWatchEnabled = config.gitWatchEnabled ?? true;
@@ -399,6 +409,7 @@ export class WorktreeMonitor {
         monitor.callbacks.onEmfileLimitReached?.(worktreeId),
       onWatcherRecovered: () => monitor.callbacks.onWatcherRecovered?.(monitor.id),
       onGitConfigChanged: () => monitor.callbacks.onGitConfigChanged?.(monitor.id),
+      onWorktreeFilesChanged: () => monitor.handleWorktreeFilesChanged(),
     };
     this.watcherController = new WatcherController(watcherHost);
 
@@ -550,6 +561,9 @@ export class WorktreeMonitor {
       get lastGitStatusCheckedAt() {
         return monitor.lastGitStatusCompletedAt;
       },
+      get workingTreeChangedAt() {
+        return monitor._workingTreeChangedAt;
+      },
       get fetchAuthFailed() {
         return monitor._fetchAuthFailed;
       },
@@ -561,6 +575,9 @@ export class WorktreeMonitor {
       },
       get matchedForgeProviderId() {
         return monitor._matchedForgeProviderId;
+      },
+      get isExternal() {
+        return monitor._isExternal;
       },
       get isWslPath() {
         return monitor._isWslPath;
@@ -1019,6 +1036,14 @@ export class WorktreeMonitor {
     this._isMainWorktree = value;
   }
 
+  get isExternal(): boolean | undefined {
+    return this._isExternal;
+  }
+
+  set isExternal(value: boolean | undefined) {
+    this._isExternal = value;
+  }
+
   get isRunning(): boolean {
     return this._isRunning;
   }
@@ -1159,8 +1184,7 @@ export class WorktreeMonitor {
   }
 
   get resourceStatus():
-    | import("../../shared/types/worktree.js").WorktreeResourceStatus
-    | undefined {
+    import("../../shared/types/worktree.js").WorktreeResourceStatus | undefined {
     return this._resourceStatus;
   }
 
@@ -1516,6 +1540,29 @@ export class WorktreeMonitor {
     return this.worktreeChanges;
   }
 
+  /**
+   * Read a GUARANTEED-fresh `git status` for this worktree, bypassing the
+   * single-flight status pass (#11343).
+   *
+   * `refresh()` → `updateGitStatus(true)` → `GitStatusPass.run(true)` early
+   * returns when another pass is already in flight (a background poll, the
+   * dialog-open probe, a watcher-triggered pass), leaving `getWorktreeChanges()`
+   * on a stale snapshot. For the delete-confirm safety gate a stale-empty read
+   * is exactly the data-loss bug being fixed, so this calls the underlying
+   * status function directly with `forceRefresh: true` — which bypasses the TTL
+   * cache AND the in-flight dedup — yielding a value that reflects the tree at
+   * call time regardless of any concurrent pass. Read-only: it does not mutate
+   * monitor state or broadcast; the caller consumes the returned value. Rejects
+   * (rather than returning stale) if the status read fails, so callers fail
+   * closed.
+   */
+  getFreshChanges(): Promise<WorktreeChanges> {
+    return getWorktreeChangesWithStats(this.path, {
+      forceRefresh: true,
+      wsl: this.wslInvocation,
+    });
+  }
+
   triggerRefreshIfUpdating(): void {
     invalidateGitStatusCache(this.path);
     if (this._isUpdating) {
@@ -1795,6 +1842,22 @@ export class WorktreeMonitor {
 
   async updateGitStatus(forceRefresh: boolean = false): Promise<void> {
     return this.gitStatusPass.run(forceRefresh);
+  }
+
+  /**
+   * A recursive-watcher flush: a raw filesystem write happened, whether or not
+   * git status changed. Stamp a monotonic timestamp and emit immediately so the
+   * file browser refreshes off the write itself rather than waiting for the
+   * next git-status pass. Two flushes inside one millisecond (or a backward
+   * clock adjustment) still strictly increase, so each registers downstream.
+   * Before the first status resolves there is no snapshot to emit — the stamp
+   * is retained and the first normal snapshot carries it.
+   */
+  private handleWorktreeFilesChanged(): void {
+    this._workingTreeChangedAt = Math.max(Date.now(), this._workingTreeChangedAt + 1);
+    if (this._hasInitialStatus) {
+      this.emitUpdate();
+    }
   }
 
   emitUpdate(): void {

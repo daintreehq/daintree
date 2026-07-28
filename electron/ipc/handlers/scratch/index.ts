@@ -19,8 +19,11 @@ import { getWindowForWebContents } from "../../../window/webContentsRegistry.js"
 import { distributePortsToView } from "../../../window/portDistribution.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
+import { notificationService } from "../../../services/NotificationService.js";
 import { addProjectByPath } from "../projectCrud/crud.js";
+import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
 import { createHardenedGit } from "../../../utils/hardenedGit.js";
 import { logError } from "../../../utils/logger.js";
 import type { HandlerDependencies } from "../../types.js";
@@ -31,13 +34,11 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
   const namespace = defineIpcNamespace({
     name: "scratch",
     ops: {
-      getAll: op(
-        SCRATCH_METHOD_CHANNELS.getAll,
-        async (): Promise<Scratch[]> => scratchStore.getAllScratches()
+      getAll: op(SCRATCH_METHOD_CHANNELS.getAll, async (): Promise<Scratch[]> =>
+        scratchStore.getAllScratches()
       ),
-      getCurrent: op(
-        SCRATCH_METHOD_CHANNELS.getCurrent,
-        async (): Promise<Scratch | null> => scratchStore.getCurrentScratch()
+      getCurrent: op(SCRATCH_METHOD_CHANNELS.getCurrent, async (): Promise<Scratch | null> =>
+        scratchStore.getCurrentScratch()
       ),
       create: op(SCRATCH_METHOD_CHANNELS.create, async (name?: string): Promise<Scratch> => {
         const scratch = await scratchStore.createScratch(name);
@@ -67,9 +68,20 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
         }
 
         if (deps.ptyClient) {
-          await deps.ptyClient.killByProject(scratchId).catch((err: unknown) => {
-            console.error(`[IPC] scratch:remove: Failed to kill terminals for ${scratchId}:`, err);
-          });
+          // Gracefully tear down and journal each agent session before the
+          // scratch folder is deleted, so agent conversations stay resumable.
+          // Fail closed: if the host can't confirm the kills, keep the scratch
+          // rather than orphan still-running agents (#11340).
+          const { confirmed } = await gracefulTeardownAndJournalProject(
+            scratchId,
+            deps.ptyClient,
+            deps.worktreeService
+          );
+          if (!confirmed) {
+            throw new Error(
+              "Couldn't confirm the scratch's terminals stopped, so it was kept. Try again."
+            );
+          }
         }
 
         await scratchStore.removeScratch(scratchId);
@@ -106,6 +118,17 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
             activeView = result.view;
           }
 
+          // Record the project being left before the pointer is cleared. A
+          // scratch is not a project and can never be a history entry, so this
+          // is the only chance to capture where the window came from — without
+          // it, entering a scratch as the first move of a session leaves
+          // `Cmd+Alt+=` with an empty history and no way back to the project.
+          const departingProjectId = projectStore.getCurrentProjectId();
+          const scratchWindowId = senderWindow?.id ?? deps.mainWindow?.id;
+          if (scratchWindowId !== undefined && departingProjectId) {
+            getProjectHistory(scratchWindowId).record(departingProjectId);
+          }
+
           // Now commit canonical pointers — scratch active, project cleared.
           // Mutually exclusive with project: clear the project pointer so the
           // renderer's `getCurrentProject` does not race-restore the previous project.
@@ -115,6 +138,7 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           // A scratch is not a project: the window's PVM now holds a scratch id
           // with no project row, so the File-menu project gates must drop.
           refreshProjectMenuState();
+          notificationService.refreshTitles();
 
           // Tell the PTY host the active workspace changed. PtyClient treats the ID
           // as an opaque string and the path as a working directory, so passing a

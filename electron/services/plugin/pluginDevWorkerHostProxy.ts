@@ -29,11 +29,15 @@ import type {
   PluginWorktreeSnapshot,
   PluginWorktreeStatus,
   PluginAgentSnapshot,
+  PluginPanelLifecycleEvent,
   PluginFsDirEntry,
   PluginFsStat,
   PluginGitStatus,
   PluginGitCommitResult,
   PluginProcessHandle,
+  PluginPtyProcessHandle,
+  PluginProcessDataChunk,
+  PluginProcessMode,
 } from "../../../shared/types/plugin.js";
 import type {
   FileDecorationProviderDescriptor,
@@ -345,6 +349,7 @@ export class PluginDevWorkerHostProxy {
               danger: descriptor.danger,
               keywords: descriptor.keywords,
               inputSchema: descriptor.inputSchema,
+              requires: descriptor.requires,
             },
           },
           `action:${namespacedId}`
@@ -442,6 +447,21 @@ export class PluginDevWorkerHostProxy {
         // Subscription wired synchronously; only the disposer is async.
         const dispose = this.subscribe("agent-state", (payload) =>
           callback(payload as PluginAgentSnapshot)
+        );
+        return Promise.resolve(dispose);
+      },
+      onDidChangePanelLifecycle: (callback) => {
+        this.assertActivationOpen("onDidChangePanelLifecycle");
+        // Subscription wired synchronously; only the disposer is async. The
+        // host replays live panels on its side, so a plugin activated by a view
+        // opening still receives that panel's phase (#11301).
+        // Re-freeze on arrival: main freezes the event, but the port's
+        // structured clone reconstructs a plain mutable object — frozen
+        // descriptors do not survive the hop. Without this the documented
+        // "events are frozen" contract would hold in-process and silently not
+        // hold for every user-installed plugin, which all run in a worker.
+        const dispose = this.subscribe("panel-lifecycle", (payload) =>
+          callback(Object.freeze(payload as PluginPanelLifecycleEvent))
         );
         return Promise.resolve(dispose);
       },
@@ -612,10 +632,16 @@ export class PluginDevWorkerHostProxy {
         // addresses `kill` / `restart` and the exit/crash subscriptions. `kill`
         // is sync (a fire-and-forget notify); `restart` awaits the host. Late
         // exit/crash events ride the existing subscription-event channel.
-        spawn: async (command, options) => {
-          const { id } = await this.call<{ id: string }>("process.spawn", { command, options });
-          return this.buildProcessHandle(id);
-        },
+        // One implementation behind an overloaded signature: the public `spawn`
+        // narrows its return on the `mode` literal, which a single arrow
+        // function can't express — the cast is the standard overload-impl seam.
+        spawn: (async (command: string, options?: unknown) => {
+          const { id, mode } = await this.call<{ id: string; mode?: PluginProcessMode }>(
+            "process.spawn",
+            { command, options }
+          );
+          return this.buildProcessHandle(id, mode === "pty");
+        }) as PluginHostApi["process"]["spawn"],
       },
       // host.fs request/response methods are fully async, so they relay over the
       // port to the real (contained, capability-gated) host like settings/get.
@@ -671,7 +697,16 @@ export class PluginDevWorkerHostProxy {
       },
       clipboard: {
         writeText: (text) => this.call<void>("clipboard.writeText", { text }),
+        // The typed array survives structured clone, so the bytes reach the
+        // real host unchanged and are validated there — the worker is the
+        // untrusted side, so no size check is worth doing here.
+        writeImage: (pngData) => this.call<void>("clipboard.writeImage", { pngData }),
         readText: () => this.call<string>("clipboard.readText", undefined),
+      },
+      system: {
+        openPath: (targetPath) => this.call<void>("system.openPath", { targetPath }),
+        showItemInFolder: (targetPath) =>
+          this.call<void>("system.showItemInFolder", { targetPath }),
       },
       settings: {
         // Forward an omitted scope as `undefined` (not a defaulted "user") so the
@@ -754,9 +789,13 @@ export class PluginDevWorkerHostProxy {
     };
   }
 
-  /** Build a worker-side {@link PluginProcessHandle} proxy for a process the host
-   * spawned on our behalf, addressing it by the host-assigned `id`. */
-  private buildProcessHandle(id: string): PluginProcessHandle {
+  /**
+   * Build a worker-side {@link PluginProcessHandle} proxy for a process the host
+   * spawned on our behalf, addressing it by the host-assigned `id`. `interactive`
+   * comes from the host's reported mode, so `write`/`resize` exist only when
+   * there is a real PTY behind them.
+   */
+  private buildProcessHandle(id: string, interactive: boolean): PluginProcessHandle {
     const subscribeLifecycle = (
       kind: "process-exit" | "process-crash",
       callback: (info: { exitCode: number | null; signal: string | null }) => void
@@ -765,7 +804,7 @@ export class PluginDevWorkerHostProxy {
         { type: "subscribe", subscriptionId: `s${this.nextId++}`, kind, processId: id },
         (payload) => callback(payload as { exitCode: number | null; signal: string | null })
       );
-    return {
+    const base: PluginProcessHandle = {
       id,
       kill: () => {
         // Sync in the public contract — fire-and-forget over the port.
@@ -774,7 +813,25 @@ export class PluginDevWorkerHostProxy {
       restart: () => this.call<void>("process.restart", { processId: id }),
       onExit: (callback) => subscribeLifecycle("process-exit", callback),
       onCrash: (callback) => subscribeLifecycle("process-crash", callback),
+      onData: (callback) =>
+        this.openSubscription(
+          {
+            type: "subscribe",
+            subscriptionId: `s${this.nextId++}`,
+            kind: "process-data",
+            processId: id,
+          },
+          (payload) => callback(payload as PluginProcessDataChunk)
+        ),
     };
+    if (!interactive) return base;
+    const ptyHandle: PluginPtyProcessHandle = {
+      ...base,
+      // Void in the public contract, like `kill` — fire-and-forget over the port.
+      write: (data) => this.notify("process.write", { processId: id, data }),
+      resize: (cols, rows) => this.notify("process.resize", { processId: id, cols, rows }),
+    };
+    return ptyHandle;
   }
 }
 

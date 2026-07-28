@@ -262,7 +262,7 @@ describe("FileLinksAddon", () => {
   });
 
   describe("exclusions", () => {
-    it("should not match URLs with protocols", () => {
+    it("should not match non-file protocol URLs", () => {
       return new Promise<void>((resolve) => {
         const terminal = createMockTerminal();
         const getCwd = () => "/home/user/project";
@@ -291,6 +291,267 @@ describe("FileLinksAddon", () => {
           expect(links).toBeUndefined();
           resolve();
         });
+      });
+    });
+  });
+
+  describe("file:// URLs (#11419)", () => {
+    const CODEX_URL =
+      "file:///Users/gpriday/.codex/generated_images/019f92d9-d4b8-7de3-b1c3-56ce778ef00b/call_H5WWfuc4aUo8pAYO4a5eYRZ5.png";
+
+    const linksFor = (lineText: string, cwd = "/home/user/project"): Promise<ILink[] | undefined> =>
+      new Promise((resolve) => {
+        const terminal = createMockTerminal();
+        vi.mocked(terminal.buffer.active.getLine).mockReturnValue(createMockLine(lineText));
+        new FileLinksAddon(terminal, () => cwd).provideLinks(1, resolve);
+      });
+
+    /**
+     * Rows as xterm stores them: row 0 plus soft-wrapped continuations. Rows
+     * are given with their real trailing spaces, and `translateToString`
+     * honours `trimRight` the way xterm does — that difference is what decides
+     * whether a rejoin fuses two tokens together.
+     */
+    const linksForWrapped = (rows: string[], hoveredRow: number): Promise<ILink[] | undefined> =>
+      new Promise((resolve) => {
+        const terminal = createMockTerminal();
+        vi.mocked(terminal.buffer.active.getLine).mockImplementation((index: number) => {
+          const text = rows[index];
+          if (text === undefined) return undefined;
+          return {
+            translateToString: (trimRight?: boolean) => (trimRight ? text.trimEnd() : text),
+            isWrapped: index > 0,
+          } as IBufferLine;
+        });
+        new FileLinksAddon(terminal, () => "/home/user/project").provideLinks(
+          hoveredRow + 1,
+          resolve
+        );
+      });
+
+    const readLink = (link: ILink) =>
+      link as unknown as { kind: string; text: string; absolutePath: string };
+
+    it("turns an agent's generated-image URL into a single file link", async () => {
+      const links = await linksFor(`Saved image to ${CODEX_URL}`);
+      expect(links).toHaveLength(1);
+      const link = readLink(links![0]!);
+      expect(link.kind).toBe("file");
+      expect(link.text).toBe(CODEX_URL);
+      expect(link.absolutePath).toBe(
+        "/Users/gpriday/.codex/generated_images/019f92d9-d4b8-7de3-b1c3-56ce778ef00b/call_H5WWfuc4aUo8pAYO4a5eYRZ5.png"
+      );
+    });
+
+    it("spans exactly the URL's columns", async () => {
+      const prefix = "Saved to ";
+      const url = "file:///tmp/a.png";
+      const links = await linksFor(`${prefix}${url}.`);
+      expect(links).toHaveLength(1);
+      // xterm columns are 1-based and the end is inclusive, so the range covers
+      // the URL alone — not the leading space, not the sentence period.
+      expect(links![0]!.range).toEqual({
+        start: { x: prefix.length + 1, y: 1 },
+        end: { x: prefix.length + url.length, y: 1 },
+      });
+      expect(readLink(links![0]!).absolutePath).toBe("/tmp/a.png");
+    });
+
+    it("links a URL that fills the whole line", async () => {
+      const links = await linksFor("file:///tmp/a.png");
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).absolutePath).toBe("/tmp/a.png");
+    });
+
+    it("links a URL delimited by backticks or angle brackets", async () => {
+      for (const line of ["saved to `file:///tmp/a.png`", "saved to <file:///tmp/a.png>"]) {
+        const links = await linksFor(line);
+        expect(links).toHaveLength(1);
+        expect(readLink(links![0]!).text).toBe("file:///tmp/a.png");
+      }
+    });
+
+    it("accepts a mixed-case scheme and a localhost authority", async () => {
+      for (const url of ["FILE:///tmp/a.png", "file://localhost/tmp/a.png"]) {
+        const links = await linksFor(`saved to ${url}`);
+        expect(links).toHaveLength(1);
+        expect(readLink(links![0]!).absolutePath).toBe("/tmp/a.png");
+      }
+    });
+
+    it("rejoins a soft-wrapped URL instead of linking the truncated prefix", async () => {
+      // The motivating URL is 116 chars, so it wraps in any tiled terminal. The
+      // prefix ending at the margin still parses as a valid URL — linking it
+      // would silently open a real-but-wrong path.
+      const rows = ["Saved image to file:///Users/gpriday/.codex/generated_", "images/shot.png"];
+      for (const hoveredRow of [0, 1]) {
+        const links = await linksForWrapped(rows, hoveredRow);
+        expect(links).toHaveLength(1);
+        const link = links![0]!;
+        expect(readLink(link).absolutePath).toBe("/Users/gpriday/.codex/generated_images/shot.png");
+        // One link spanning both rows — 1-based rows, inclusive end column.
+        expect(link.range.start).toEqual({ x: "Saved image to ".length + 1, y: 1 });
+        expect(link.range.end).toEqual({ x: "images/shot.png".length, y: 2 });
+      }
+    });
+
+    it("links a continuation row that carries no separator of its own", async () => {
+      // `shot.png` alone would hit the '/'-or-'\' fast path and never be
+      // scanned, leaving the tail of a wrapped URL dead to the pointer.
+      const links = await linksForWrapped(["file:///tmp/long/", "shot.png"], 1);
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).absolutePath).toBe("/tmp/long/shot.png");
+    });
+
+    it("keeps the spaces that separate a wrapped URL from the next token", async () => {
+      // Row one is full to the margin with real spaces. Trimming them on
+      // rejoin would fuse the two tokens into `/tmp/a.pngsrc/foo.ts`.
+      const links = await linksForWrapped(["file:///tmp/a.png   ", "src/foo.ts"], 0);
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).absolutePath).toBe("/tmp/a.png");
+    });
+
+    it("ignores a URL that lies entirely on a sibling row", async () => {
+      // xterm evicts lower-priority links intersecting a returned range, so a
+      // link the pointer can't reach on this row must not be reported at all.
+      expect(await linksForWrapped(["no separator here", "file:///tmp/a.png"], 0)).toBeUndefined();
+    });
+
+    it("refuses to link a URL clipped by the rejoin budget", async () => {
+      // Past the budget the window's edge is not a token boundary, and a
+      // truncated file URL still parses — the original wrapping bug.
+      const rows: string[] = [];
+      const huge = `file:///tmp/${"a".repeat(2500)}.png`;
+      for (let i = 0; i < huge.length; i += 80) rows.push(huge.slice(i, i + 80));
+      expect(await linksForWrapped(rows, 0)).toBeUndefined();
+      expect(await linksForWrapped(rows, rows.length - 1)).toBeUndefined();
+    });
+
+    it("does not let a literal ( in a URL leak a bare-path link", async () => {
+      // `(` is legal in a file URL and is also FILE_PATH_REGEX's boundary
+      // character, so the tail would otherwise resolve against the cwd.
+      const links = await linksFor("open file:///tmp/(src/foo.ts");
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).absolutePath).toBe("/tmp/(src/foo.ts");
+    });
+
+    it("does not let a rejected remote URL leak a bare-path link", async () => {
+      expect(await linksFor("open file://someserver/(share/x.png")).toBeUndefined();
+    });
+
+    it("keeps query and fragment in the link text but out of the resolved path", async () => {
+      const links = await linksFor("open file:///tmp/a.png?download=1#preview");
+      expect(links).toHaveLength(1);
+      const link = readLink(links![0]!);
+      expect(link.text).toBe("file:///tmp/a.png?download=1#preview");
+      expect(link.absolutePath).toBe("/tmp/a.png");
+    });
+
+    it("decodes the Windows drive spellings a URL can carry", async () => {
+      for (const url of ["file:///C:/Users/me/x.png", "file:///C|/Users/me/x.png"]) {
+        const links = await linksFor(`open ${url}`);
+        expect(links).toHaveLength(1);
+        expect(readLink(links![0]!).absolutePath).toBe("C:/Users/me/x.png");
+      }
+    });
+
+    it("produces no link for a URL that isn't a viewable local file", async () => {
+      const rejected = [
+        "file://someserver/share/x.png",
+        "file:////someserver/share/x.png",
+        "file:///tmp/a%2Fb.png",
+        "file:///tmp/a%zz.png",
+        "file:///",
+        "file:///tmp/renders/",
+      ];
+      for (const url of rejected) {
+        expect(await linksFor(`open ${url}`)).toBeUndefined();
+      }
+    });
+
+    it("links a URL and a bare path on the same line without overlapping", async () => {
+      const links = await linksFor("wrote file:///tmp/a.png from src/App.tsx:10");
+      expect(links).toHaveLength(2);
+      expect(links!.map((link) => readLink(link).absolutePath)).toEqual([
+        "/tmp/a.png",
+        "/home/user/project/src/App.tsx",
+      ]);
+      const [first, second] = links!;
+      expect(first!.range.end.x).toBeLessThan(second!.range.start.x);
+    });
+
+    it("reports hover and leave like any other file link", async () => {
+      const terminal = createMockTerminal();
+      vi.mocked(terminal.buffer.active.getLine).mockReturnValue(
+        createMockLine(`Saved image to ${CODEX_URL}`)
+      );
+      const seen: Array<unknown> = [];
+      const addon = new FileLinksAddon(
+        terminal,
+        () => "/p",
+        (link) => seen.push(link)
+      );
+
+      const link = await new Promise<ILink>((resolve) =>
+        addon.provideLinks(1, (links) => resolve(links![0]!))
+      );
+      const event = new Event("mousemove") as unknown as MouseEvent;
+      link.hover?.(event, link.text);
+      link.leave?.(event, link.text);
+      expect(seen).toEqual([link, null]);
+    });
+
+    describe("activation", () => {
+      const DECODED =
+        "/Users/gpriday/.codex/generated_images/019f92d9-d4b8-7de3-b1c3-56ce778ef00b/call_H5WWfuc4aUo8pAYO4a5eYRZ5.png";
+
+      beforeEach(() => {
+        vi.mocked(actionService.dispatch).mockReset();
+        vi.mocked(systemClient.openPath).mockReset();
+        vi.mocked(systemClient.openInEditor).mockReset();
+        vi.mocked(actionService.dispatch).mockResolvedValue({
+          ok: true,
+          result: { panelId: "p1" },
+        });
+      });
+
+      const activateUrlLink = async (modifiers: MouseEventInit) => {
+        const links = await linksFor(`Saved image to ${CODEX_URL}`);
+        const link = links![0]!;
+        link.activate({ metaKey: false, ctrlKey: false, ...modifiers } as MouseEvent, link.text);
+        await vi.waitFor(() => expect(actionService.dispatch).toHaveBeenCalledTimes(1));
+      };
+
+      it("opens in the in-app viewer rather than the OS default app", async () => {
+        await activateUrlLink({});
+        expect(actionService.dispatch).toHaveBeenCalledWith(
+          "file.view",
+          expect.objectContaining({ path: DECODED, line: undefined, col: undefined }),
+          { source: "user" }
+        );
+        expect(systemClient.openPath).not.toHaveBeenCalled();
+      });
+
+      it("falls back to the OS opener only after the in-app viewer refuses", async () => {
+        // Deliberate: a file:// URL and its bare-path spelling must behave the
+        // same way once file.view has failed. The issue's constraint is about
+        // which linkifier owns the token, not about the recovery path.
+        vi.mocked(actionService.dispatch).mockResolvedValue({
+          ok: false,
+          error: { code: "EXECUTION_ERROR", message: "no panel" },
+        });
+        await activateUrlLink({});
+        await vi.waitFor(() => expect(systemClient.openPath).toHaveBeenCalledWith(DECODED));
+      });
+
+      it("sends the decoded path to the external editor on a modified click", async () => {
+        await activateUrlLink({ metaKey: true });
+        expect(actionService.dispatch).toHaveBeenCalledWith(
+          "file.openInEditor",
+          expect.objectContaining({ path: DECODED, line: undefined, col: undefined }),
+          { source: "user" }
+        );
+        expect(systemClient.openInEditor).not.toHaveBeenCalled();
       });
     });
   });

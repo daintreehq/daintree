@@ -105,9 +105,81 @@ describe("PluginDevWorkerHost", () => {
     expect(options.stdio).toBe("pipe");
     expect(options.cwd).toBe(OPTS.pluginDir);
     expect(options.env.DAINTREE_UTILITY_PROCESS_KIND).toBe("plugin-dev-worker");
-    // env must spread process.env (REPLACES, not merges — #6081).
+    // env REPLACES process.env in a utility process (#6081), so every key the
+    // worker needs must be in this one object.
     expect(options.env.DAINTREE_USER_DATA).toBe("/tmp/userData");
     host.dispose();
+  });
+
+  it("scrubs the worker's inherited environment down to the safe allowlist (#11300)", async () => {
+    const SECRET = "DAINTREE_WORKER_TEST_SECRET";
+    const prevSecret = process.env[SECRET];
+    process.env[SECRET] = "api-token";
+    try {
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      host.waitForReady().catch(() => {});
+      void host.start();
+
+      const [, , options] = forkMock.mock.calls[0];
+      // Plugin code runs inside this worker. Spawned children are scrubbed via
+      // SAFE_ENV_KEYS specifically to keep host secrets away from plugins —
+      // inheriting them one level up made that a formality.
+      expect(options.env[SECRET]).toBeUndefined();
+      // Essentials the worker genuinely needs still survive.
+      expect(options.env.PATH).toBe(process.env.PATH);
+      expect(options.env.DAINTREE_USER_DATA).toBe("/tmp/userData");
+      expect(options.env.DAINTREE_UTILITY_PROCESS_KIND).toBe("plugin-dev-worker");
+      host.dispose();
+    } finally {
+      if (prevSecret === undefined) delete process.env[SECRET];
+      else process.env[SECRET] = prevSecret;
+    }
+  });
+
+  it("keeps proxy and CA settings so plugin HTTPS calls survive the scrub (#11300)", async () => {
+    // Plugins make network calls from inside this worker (the built-in GitHub
+    // forge provider talks to api.github.com). Proxy endpoints and CA bundles
+    // are transport config, not credentials — dropping them fails every HTTPS
+    // call behind a corporate TLS-inspecting proxy, at runtime, silently.
+    const prev = {
+      HTTPS_PROXY: process.env.HTTPS_PROXY,
+      NO_PROXY: process.env.NO_PROXY,
+      NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS,
+      https_proxy: process.env.https_proxy,
+      NODE_USE_SYSTEM_CA: process.env.NODE_USE_SYSTEM_CA,
+    };
+    process.env.https_proxy = "http://lower-proxy:8080";
+    process.env.NODE_USE_SYSTEM_CA = "1";
+    process.env.HTTPS_PROXY = "http://corp-proxy:8080";
+    process.env.NO_PROXY = "localhost";
+    process.env.NODE_EXTRA_CA_CERTS = "/etc/ssl/corp-ca.pem";
+    const expectedHttpsProxy = process.env.HTTPS_PROXY;
+    const expectedLowerHttpsProxy = process.env.https_proxy;
+    try {
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      host.waitForReady().catch(() => {});
+      void host.start();
+
+      const [, , options] = forkMock.mock.calls[0];
+      expect(options.env.HTTPS_PROXY).toBe(expectedHttpsProxy);
+      // POSIX tooling conventionally uses the lowercase names, and env lookup
+      // is case-sensitive there — carrying only one form drops the other user.
+      // Windows aliases environment keys case-insensitively, so both forms
+      // correctly carry the last value assigned by the host environment.
+      expect(options.env.https_proxy).toBe(expectedLowerHttpsProxy);
+      // The other branch of Daintree's own TLS recovery hint.
+      expect(options.env.NODE_USE_SYSTEM_CA).toBe("1");
+      expect(options.env.NO_PROXY).toBe("localhost");
+      expect(options.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/corp-ca.pem");
+      host.dispose();
+    } finally {
+      for (const [key, value] of Object.entries(prev)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it("forks the worker with a V8 heap cap in execArgv", async () => {

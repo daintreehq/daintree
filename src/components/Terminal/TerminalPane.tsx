@@ -4,6 +4,7 @@ import React, {
   useCallback,
   useEffect,
   useEffectEvent,
+  useReducer,
   useRef,
   useState,
 } from "react";
@@ -27,9 +28,8 @@ import { ArtifactOverlay } from "./ArtifactOverlay";
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
 import { useGridScrollRoot } from "./GridScrollRootContext";
-import { isStaleHiddenReading } from "./visibilityReadingGuard";
 import { useUnmountVisibilityCleanup } from "./useUnmountVisibilityCleanup";
-import { COMFORTABLE_PANEL_HEIGHT_PX } from "@/lib/terminalLayout";
+import { useTerminalVisibilityObserver } from "./useTerminalVisibilityObserver";
 import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
 import { InlineStatusBanner } from "./InlineStatusBanner";
@@ -85,6 +85,7 @@ import {
   getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
   resolvePaneFocusAction,
+  shouldRecordXtermFocusPreference,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
 } from "./terminalFocus";
@@ -660,14 +661,7 @@ function TerminalPaneComponent({
     };
   }, [isExited, exitBehavior, exitCode, isTrashedOrRemoved, isRestarting]);
 
-  // Track drag state in a ref to avoid useEffect cleanup timing issues.
-  // If isDragging is in the dependency array, cleanup runs on drag START
-  // with the OLD isDragging=false value, which would set visibility to false!
   const isDragging = useIsDragging();
-  const isDraggingRef = useRef(isDragging);
-  useEffect(() => {
-    isDraggingRef.current = isDragging;
-  }, [isDragging]);
 
   // Root the visibility observer at the panel grid's scroll container when this
   // pane is mounted inside the scrollable grid (#8805). Panes outside the grid
@@ -675,63 +669,22 @@ function TerminalPaneComponent({
   // context value, which is the correct default for those surfaces.
   const gridScrollRoot = useGridScrollRoot();
 
-  // Visibility observation - stable observer, ref-gated callback.
-  // Capture attach generation so stale IntersectionObserver callbacks from a
-  // previous mount site don't hide a terminal that has already been re-attached.
-  useEffect(() => {
-    if (!containerRef.current) return;
+  // Bumped by XtermAdapter the moment its async attach lands, so the observer
+  // re-arms against the generation that attach just produced rather than the
+  // one that happened to be current when this render's effects flushed
+  // (#11445). `useReducer`'s dispatch identity is stable, so handing it
+  // straight to XtermAdapter can't churn its attach effect.
+  const [attachEpoch, bumpAttachEpoch] = useReducer((epoch: number) => epoch + 1, 0);
 
-    const gen = terminalInstanceService.getAttachGeneration(id);
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        // Under load a single callback can batch multiple entries for the same
-        // element; only the most recent reading reflects current geometry.
-        const entry = entries[entries.length - 1];
-
-        // Don't update visibility during drag - CSS transforms cause false negatives
-        if (isDraggingRef.current || !entry) return;
-
-        // Suppress stale `false` readings that would freeze a visible terminal
-        // at the BACKGROUND tier (#9780). Confirm against fresh element and root
-        // geometry, read before any write to avoid a redundant layout reflow.
-        if (
-          isStaleHiddenReading(
-            entry,
-            () => containerRef.current?.getBoundingClientRect(),
-            () =>
-              gridScrollRoot?.getBoundingClientRect() ??
-              new DOMRect(0, 0, window.innerWidth, window.innerHeight)
-          )
-        )
-          return;
-
-        // A callback queued from a previous mount site (warm-swap reattach)
-        // must not write at all. setVisible already drops it via its
-        // generation guard — dropping the store write under the same
-        // condition keeps store and service from diverging permanently
-        // (#10416).
-        if (terminalInstanceService.getAttachGeneration(id) !== gen) return;
-
-        updateVisibility(id, entry.isIntersecting);
-        terminalInstanceService.setVisible(id, entry.isIntersecting, gen);
-      },
-      {
-        // Grid-scoped root: when mounted inside the grid, the pre-warm margin
-        // upgrades panels that are one comfortable row away from the viewport
-        // from BACKGROUND → VISIBLE before they paint. Sized to the comfortable
-        // row height so the pre-warm fires a full row ahead now that rows no
-        // longer shrink to the minimum. Outside the grid we fall back to the
-        // document viewport with no margin.
-        root: gridScrollRoot ?? null,
-        rootMargin: gridScrollRoot ? `${COMFORTABLE_PANEL_HEIGHT_PX}px 0px` : "0px",
-        threshold: 0.1,
-      }
-    );
-
-    observer.observe(containerRef.current);
-    return () => observer.disconnect();
-  }, [id, restartKey, updateVisibility, gridScrollRoot]);
+  useTerminalVisibilityObserver({
+    id,
+    restartKey,
+    attachEpoch,
+    isDragging,
+    gridScrollRoot,
+    containerRef,
+    updateVisibility,
+  });
 
   // Separate unmount cleanup — only update store visibility.
   // The service-level setVisible(false) is handled by XtermAdapter's own
@@ -739,7 +692,9 @@ function TerminalPaneComponent({
   // Calling it here too is redundant and breaks in React StrictMode (dev),
   // where the effect's cleanup captures the same generation as the active
   // mount, bypassing the stale-generation guard and hiding the terminal.
-  useUnmountVisibilityCleanup(id, restartKey, updateVisibility);
+  // The epoch re-captures the generation this mount owns without re-running the
+  // cleanup itself — see the hook for why those two have to stay separate.
+  useUnmountVisibilityCleanup(id, restartKey, updateVisibility, attachEpoch);
 
   const handleReady = useCallback(() => {}, []);
 
@@ -913,14 +868,6 @@ function TerminalPaneComponent({
       e.timeStamp
     );
 
-    // A physical click on xterm is an explicit "I want the terminal" gesture —
-    // record it so subsequent Cmd-Opt-Arrow navigation stays on xterm across
-    // panes. Skip for AT routing so a screen reader reaching terminal output
-    // doesn't silently clobber the user's hybrid-input focus preference.
-    if (!isAtSynthesized) {
-      setPreferredTerminalFocusTarget("xterm");
-    }
-
     const shouldSuppress = shouldSuppressUnfocusedClick({
       location,
       isFocused,
@@ -928,10 +875,20 @@ function TerminalPaneComponent({
       isShiftKey: e.shiftKey,
     });
 
+    // A physical click that reaches xterm is an explicit "I want the terminal"
+    // gesture — record it so subsequent Cmd-Opt-Arrow navigation stays on
+    // xterm across panes. Classify the click first: a suppressed activation
+    // click is swallowed before xterm sees it, and recording there is what
+    // used to destroy the remembered hybrid-input target (#11465).
+    if (shouldRecordXtermFocusPreference({ isAtSynthesized, shouldSuppress })) {
+      setPreferredTerminalFocusTarget("xterm");
+    }
+
     if (!shouldSuppress) {
-      // Already-focused panes: let the click through so xterm selection,
-      // cursor positioning, and mouse reporting work natively. The xterm
-      // focus listener (TerminalInstanceService) records the focus event.
+      // Pass-through cases — already-focused panes, dock panes, link cells,
+      // shift+click. Let the click reach xterm so selection, cursor
+      // positioning, and mouse reporting work natively. The xterm focus
+      // listener (TerminalInstanceService) records the focus event.
       return;
     }
 
@@ -956,8 +913,12 @@ function TerminalPaneComponent({
       // Element was detached (e.g. LRU view eviction). Safe to ignore.
     }
 
+    // Activate the pane only. The `isFocused` effect below owns the resolved
+    // handoff via getTerminalFocusTarget / resolvePaneFocusAction, so forcing
+    // xterm focus here would both duplicate that resolver and defeat it —
+    // landing DOM focus on xterm fires `focusin`, which unconditionally
+    // records "xterm" and overwrites the target we just preserved.
     setFocused(id);
-    requestAnimationFrame(() => terminalInstanceService.focus(id));
   };
 
   const handleXtermPointerNoop = () => {};
@@ -1461,6 +1422,7 @@ function TerminalPaneComponent({
                     onReady={handleReady}
                     onExit={handleExit}
                     onInput={handleInput}
+                    onAttached={bumpAttachEpoch}
                     className="absolute inset-0"
                     getRefreshTier={getRefreshTierCallback}
                     cwd={cwd}

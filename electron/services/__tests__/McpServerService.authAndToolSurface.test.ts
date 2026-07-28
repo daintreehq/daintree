@@ -1037,17 +1037,18 @@ describe("McpServerService", () => {
     );
   });
 
-  it("pinned sessions with confirm-danger tools still trigger elicitation — manifest must not be cache-bypassed away (#7002)", async () => {
-    // Pinned sessions deliberately skip `cachedManifest`. `lookupManifestEntry`
-    // used to call `getCachedManifest()` *after* `await requestManifest()`,
-    // which would always be null for pinned sessions and silently drop the
-    // confirm-elicitation. This test guards that regression.
-    const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
-      if (!payload.confirmed) {
-        return { ok: false, error: { code: "CONFIRMATION_REQUIRED", message: "Need confirm" } };
-      }
-      return { ok: true, result: { deleted: true } };
-    });
+  it("routes a pinned session's confirm-danger tool through the pinned renderer's host confirmation — never client elicitation (#7002, #11342)", async () => {
+    // Pinned sessions deliberately skip `cachedManifest`; `lookupManifestEntry`
+    // resolves the entry from `requestManifest()` directly (#7002). The confirm
+    // is then performed HOST-side by the pinned renderer's native ConfirmDialog,
+    // reached via the UNCONFIRMED dispatch — the client's self-declared
+    // `elicitation.form` capability is never treated as authorization (#11342).
+    // The pinned renderer here plays the approving human: it returns the result
+    // plus an "approved" decision for the unconfirmed dispatch.
+    const dispatchMock = vi.fn(() => ({
+      result: { ok: true, result: { deleted: true } } as ActionDispatchResult,
+      confirmationDecision: "approved" as const,
+    }));
     const onElicit = vi.fn(async (): Promise<ElicitResult> => ({ action: "accept", content: {} }));
 
     const winA = createMockWindow({
@@ -1057,6 +1058,13 @@ describe("McpServerService", () => {
           title: "Delete Worktree",
           description: "Delete a worktree",
           danger: "confirm",
+          // A resolvable outputSchema makes structuredContent a
+          // manifest-dependent observable: it is emitted only when the pinned
+          // manifest ENTRY resolved (`buildStructuredContent(entry, …)`). This
+          // re-arms the original #7002 guard — if `lookupManifestEntry` regressed
+          // to re-reading the deliberately-empty shared cache, the entry would be
+          // undefined and structuredContent would silently drop.
+          outputSchema: { type: "object", properties: { deleted: { type: "boolean" } } },
         }),
       ],
       dispatchAction: dispatchMock,
@@ -1078,18 +1086,22 @@ describe("McpServerService", () => {
     );
     transports.push(transport);
 
-    const result = getTextResult(
-      await client.callTool({
-        name: "worktree.delete",
-        arguments: { worktreeId: "wt-123" },
-      })
-    );
+    const result = (await client.callTool({
+      name: "worktree.delete",
+      arguments: { worktreeId: "wt-123" },
+    })) as TextToolResult & { structuredContent?: Record<string, unknown> };
 
-    expect(onElicit).toHaveBeenCalledTimes(1);
+    // The client's elicitation handler is never consulted; the confirm is
+    // resolved by the pinned renderer, which received an UNCONFIRMED dispatch.
+    expect(onElicit).not.toHaveBeenCalled();
     expect(result.isError).not.toBe(true);
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({ actionId: "worktree.delete", confirmed: true })
+      expect.objectContaining({ actionId: "worktree.delete", confirmed: false })
     );
+    // Proves the pinned manifest entry resolved (#7002) — not just that the
+    // dispatch was unconfirmed (#11342).
+    expect(result.structuredContent).toEqual({ deleted: true });
   });
 
   it("external (api-key) sessions keep most-recently-focused-view fallback even when help routing is wired (#7002)", async () => {
@@ -1223,12 +1235,10 @@ describe("McpServerService", () => {
 
   it("denies dispatch of non-allowlisted tools even with fullToolSurface enabled (#10701)", async () => {
     storeState.mcpServer.fullToolSurface = true;
-    const dispatchMock = vi.fn(
-      (payload: DispatchRequest): ActionDispatchResult => ({
-        ok: true,
-        result: { dispatched: payload.actionId },
-      })
-    );
+    const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+      ok: true,
+      result: { dispatched: payload.actionId },
+    }));
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
@@ -1285,12 +1295,10 @@ describe("McpServerService", () => {
   });
 
   it("denies non-allowlisted actions for the external tier (dispatch never reached)", async () => {
-    const dispatchMock = vi.fn(
-      (payload: DispatchRequest): ActionDispatchResult => ({
-        ok: true,
-        result: { dispatched: payload.actionId },
-      })
-    );
+    const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+      ok: true,
+      result: { dispatched: payload.actionId },
+    }));
 
     const { window } = createMockWindow({
       getManifest: () => [

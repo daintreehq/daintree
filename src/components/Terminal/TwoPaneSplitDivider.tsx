@@ -72,6 +72,10 @@ export function TwoPaneSplitDivider({
         // Only consider it a drag if mouse moved more than 3px
         if (!hasMoved && Math.abs(moveEvent.clientX - startX) > 3) {
           hasMoved = true;
+          // Acquire resize ownership before the ratio write below can reflow
+          // the panes. Waiting for the isDragging effect leaves one commit
+          // where ResizeObserver can publish mid-gesture PTY geometry.
+          onDragStateChange?.(true);
           setIsDragging(true);
           document.body.style.cursor = "col-resize";
           document.body.style.userSelect = "none";
@@ -132,7 +136,7 @@ export function TwoPaneSplitDivider({
       document.addEventListener("mouseup", handleMouseUp);
       window.addEventListener("blur", handleBlur);
     },
-    [containerRef]
+    [containerRef, onDragStateChange]
   );
 
   // Cleanup on unmount

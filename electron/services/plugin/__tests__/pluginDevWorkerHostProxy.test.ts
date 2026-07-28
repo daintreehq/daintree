@@ -281,6 +281,68 @@ describe("PluginDevWorkerHostProxy host.process (#10526)", () => {
     expect(sub).toMatchObject({ processId: "p1" });
   });
 
+  it("builds a pipe handle with no writable input when the host reports pipe mode", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.process.spawn("node");
+    resolveCall(proxy, sent, "process.spawn", { id: "p1", mode: "pipe" });
+    const handle: any = await promise;
+    // The shape is what PluginDevWorkerMainBridge's structural check reads, so a
+    // pipe handle carrying write/resize would let a fabricated write through.
+    expect(handle.write).toBeUndefined();
+    expect(handle.resize).toBeUndefined();
+    expect(typeof handle.onData).toBe("function");
+  });
+
+  it("builds an interactive handle whose write/resize post fire-and-forget notifies", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.process.spawn("flutter", { mode: "pty" });
+    resolveCall(proxy, sent, "process.spawn", { id: "p1", mode: "pty" });
+    const handle: any = await promise;
+
+    handle.write("q\n");
+    handle.resize(120, 40);
+    expect(
+      sent.find((m) => m.type === "host-notify" && m.method === "process.write")
+    ).toMatchObject({ params: { processId: "p1", data: "q\n" } });
+    expect(
+      sent.find((m) => m.type === "host-notify" && m.method === "process.resize")
+    ).toMatchObject({ params: { processId: "p1", cols: 120, rows: 40 } });
+  });
+
+  it("trusts the host's reported mode over what the plugin asked for", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.process.spawn("flutter", { mode: "pty" });
+    // The host says it allocated a pipe. Handing back write() anyway would give
+    // the plugin a method that silently goes nowhere.
+    resolveCall(proxy, sent, "process.spawn", { id: "p1", mode: "pipe" });
+    const handle: any = await promise;
+    expect(handle.write).toBeUndefined();
+  });
+
+  it("onData opens a process-data subscription and delivers chunks", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.process.spawn("node");
+    resolveCall(proxy, sent, "process.spawn", { id: "p1", mode: "pipe" });
+    const handle = await promise;
+
+    const onData = vi.fn();
+    const dispose = handle.onData(onData);
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "process-data");
+    expect(sub).toMatchObject({ processId: "p1" });
+
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { stream: "stdout", chunk: "hello" },
+    });
+    expect(onData).toHaveBeenCalledWith({ stream: "stdout", chunk: "hello" });
+
+    dispose();
+    expect(
+      sent.find((m) => m.type === "unsubscribe" && m.subscriptionId === sub.subscriptionId)
+    ).toBeDefined();
+  });
+
   it("propagates a spawn rejection (e.g. missing shell:exec capability)", async () => {
     const { proxy, sent } = makeProxy();
     const promise = proxy.host.process.spawn("node");
@@ -292,6 +354,73 @@ describe("PluginDevWorkerHostProxy host.process (#10526)", () => {
       error: "PERMISSION_REQUIRED: shell:exec",
     });
     await expect(promise).rejects.toThrow(/PERMISSION_REQUIRED/);
+  });
+});
+
+describe("PluginDevWorkerHostProxy panel lifecycle (#11301)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("opens a panel-lifecycle subscription and routes events to the callback", async () => {
+    const { proxy, sent } = makeProxy();
+    const onEvent = vi.fn();
+    const dispose = await proxy.host.onDidChangePanelLifecycle(onEvent);
+
+    // The kind is the routing key on main — a wrong or missing one would fall
+    // through the bridge's chain and be wired to an unrelated host event.
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "panel-lifecycle");
+    expect(sub).toBeDefined();
+
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: {
+        panelId: "p1",
+        panelKindId: "acme.demo.dash",
+        pluginId: "acme.demo",
+        phase: "removed",
+      },
+    } as any);
+
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ panelId: "p1", phase: "removed" })
+    );
+
+    dispose();
+    expect(
+      sent.find((m) => m.type === "unsubscribe" && m.subscriptionId === sub.subscriptionId)
+    ).toBeDefined();
+  });
+
+  it("freezes the delivered event even though the port hop strips main's freeze", async () => {
+    const { proxy, sent } = makeProxy();
+    const received: any[] = [];
+    await proxy.host.onDidChangePanelLifecycle((e) => received.push(e));
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "panel-lifecycle");
+
+    // A structured-clone payload arrives mutable no matter what main did to it,
+    // so the SDK's "events are frozen" contract has to be re-established here or
+    // it silently holds only for in-process built-ins.
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: {
+        panelId: "p1",
+        panelKindId: "acme.demo.dash",
+        pluginId: "acme.demo",
+        phase: "hidden",
+      },
+    } as any);
+
+    expect(Object.isFrozen(received[0])).toBe(true);
+  });
+
+  it("rejects a subscription opened after the activation window closes", async () => {
+    const { proxy } = makeProxy();
+    proxy.revoke();
+    expect(() => proxy.host.onDidChangePanelLifecycle(vi.fn())).toThrow(
+      /onDidChangePanelLifecycle/
+    );
   });
 });
 
@@ -427,5 +556,81 @@ describe("PluginDevWorkerHostProxy host.postToPanel (#10618)", () => {
 
     expect(() => proxy.host.postToPanel("tick", { n: 1 }, "")).toThrow(/postToPanel: panelId/);
     expect(post).not.toHaveBeenCalled();
+  });
+});
+
+describe("PluginDevWorkerHostProxy host.system / clipboard.writeImage (#11299)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    ["openPath", "system.openPath"],
+    ["showItemInFolder", "system.showItemInFolder"],
+  ])("relays host.system.%s with the path intact", async (method, wireMethod) => {
+    const { proxy, sent } = makeProxy();
+    const promise = (proxy.host.system as any)[method]("/tmp/data/shot.png");
+
+    const call = sent.find((m) => m.type === "host-call" && m.method === wireMethod);
+    expect(call.params).toEqual({ targetPath: "/tmp/data/shot.png" });
+    resolveCall(proxy, sent, wireMethod, undefined);
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it("relays clipboard.writeImage with the typed array's own bytes", async () => {
+    // A subarray is the case that breaks if anything copies `.buffer`
+    // wholesale — the wire payload must carry this view, not its backing
+    // store, or the host decodes the wrong 64 bytes.
+    const backing = new Uint8Array(64).fill(7);
+    const view = backing.subarray(16, 32);
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.clipboard.writeImage(view);
+
+    const call = sent.find((m) => m.type === "host-call" && m.method === "clipboard.writeImage");
+    expect(call.params.pngData.byteLength).toBe(16);
+    resolveCall(proxy, sent, "clipboard.writeImage", undefined);
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it("carries an action's requires across the port, including an empty array", async () => {
+    // The bridge rebuilds the descriptor field by field, so a dropped
+    // `requires` wouldn't fail to compile — it would silently send a dev
+    // plugin's one-click action back to whole-manifest elevation, visible
+    // only in the dev loop.
+    const { proxy, sent } = makeProxy();
+    proxy.host.registerAction(
+      {
+        id: "open-panel",
+        title: "Open Panel",
+        description: "Opens it",
+        category: "Test",
+        kind: "command",
+        danger: "safe",
+        requires: [],
+      } as any,
+      async () => undefined
+    );
+
+    const notify = sent.find((m) => m.type === "host-notify" && m.method === "registerAction");
+    expect(notify.params.descriptor.requires).toEqual([]);
+  });
+
+  it("does not invent a requires array when the action declared none", async () => {
+    // Omitted must stay omitted: `[]` is the meaningful de-escalation, so
+    // manufacturing one here would silently relax every dev-plugin action.
+    const { proxy, sent } = makeProxy();
+    proxy.host.registerAction(
+      {
+        id: "run-build",
+        title: "Run Build",
+        description: "Builds",
+        category: "Test",
+        kind: "command",
+        danger: "safe",
+      } as any,
+      async () => undefined
+    );
+
+    const notify = sent.find((m) => m.type === "host-notify" && m.method === "registerAction");
+    expect(notify.params.descriptor.requires).toBeUndefined();
   });
 });

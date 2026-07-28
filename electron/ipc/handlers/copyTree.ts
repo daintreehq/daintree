@@ -458,7 +458,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
       // Content was written to the temp file; renderer callers read only
       // fileCount/stats/error, so drop it to avoid cloning a second copy.
-      return { content: "", fileCount: result.fileCount, stats: result.stats };
+      return {
+        content: "",
+        fileCount: result.fileCount,
+        stats: result.stats,
+        outputFormatVersion: result.outputFormatVersion,
+      };
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to copy context file");
       console.error(`[${traceId}] Failed to save/copy context file:`, errorMessage);
@@ -466,6 +471,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         content: "",
         fileCount: result.fileCount,
         stats: result.stats,
+        outputFormatVersion: result.outputFormatVersion,
         error: `Failed to copy file to clipboard: ${errorMessage}`,
       };
     }
@@ -579,7 +585,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       // result.content across the whole setImmediate-yielding loop. The
       // remoteComputeBlock — usually empty — is written as trailing chunks.
       const writeChunked = async (source: string): Promise<string | null> => {
-        for (let i = 0; i < source.length; ) {
+        for (let i = 0; i < source.length;) {
           if (contextInjectionTracker.isCancelled(injectionId)) {
             console.log(`[${traceId}] CopyTree inject cancelled by user`);
             return "Injection cancelled";
@@ -612,7 +618,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       console.log(`[${traceId}] CopyTree inject completed successfully`);
       // The renderer reads only fileCount/stats; drop the (possibly multi-MB)
       // content so the contextBridge doesn't clone a second copy into the heap.
-      return { content: "", fileCount: result.fileCount, stats: result.stats };
+      return {
+        content: "",
+        fileCount: result.fileCount,
+        stats: result.stats,
+        outputFormatVersion: result.outputFormatVersion,
+      };
     } finally {
       contextInjectionTracker.finishInjection(validated.terminalId, injectionId);
     }
@@ -653,6 +664,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(typedHandle(CHANNELS.COPYTREE_CANCEL, handleCopyTreeCancel));
 
   const handleCopyTreeGetFileTree = async (
+    ctx: import("../types.js").IpcContext,
     payload: CopyTreeGetFileTreePayload
   ): Promise<FileTreeNode[]> => {
     checkRateLimit(CHANNELS.COPYTREE_GET_FILE_TREE, 5, 10_000);
@@ -668,8 +680,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       if (path.isAbsolute(validated.dirPath)) {
         throw new Error("dirPath must be a relative path");
       }
+      // Segment-aware: a bare `startsWith("..")` also rejects legitimate names
+      // like `..cache`. This is the cheap pre-check — `FileTreeService` still
+      // owns the authoritative containment guard, including realpath escapes.
       const normalized = path.normalize(validated.dirPath);
-      if (normalized.startsWith("..")) {
+      const segments = normalized.split(/[\\/]/);
+      if (segments.includes("..")) {
         throw new Error("dirPath cannot traverse outside worktree root");
       }
     }
@@ -678,15 +694,32 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       throw new Error("Worktree service not available");
     }
 
-    const monitor = await deps.worktreeService.getMonitorAsync(validated.worktreeId);
+    // Capture the sender's project before awaiting: the view can be evicted
+    // while the workspace call is in flight, taking its binding with it.
+    const settingsProjectId = resolveCopyTreeProjectId(ctx, deps);
 
-    if (!monitor) {
+    const states = await deps.worktreeService.getAllStatesAsync(ctx.senderWindow?.id);
+    const worktree = states.find((wt) => wt.id === validated.worktreeId);
+
+    if (!worktree) {
       throw new Error(`Worktree not found: ${validated.worktreeId}`);
     }
 
-    return deps.worktreeService.getFileTree(monitor.path, validated.dirPath);
+    // The same merge generation uses. Without it the listing would answer for
+    // CopyTree's defaults while the bundle is built with the project's
+    // exclusions and budgets — the disagreement this channel exists to end
+    // (#11439).
+    const projectSettings = await loadCopyTreeProjectSettings(settingsProjectId);
+    const mergedOptions = mergeCopyTreeOptions(projectSettings, undefined);
+
+    return deps.worktreeService.getContextFileTree(
+      worktree.path,
+      validated.dirPath,
+      mergedOptions,
+      validated.includeExcluded
+    );
   };
-  handlers.push(typedHandle(CHANNELS.COPYTREE_GET_FILE_TREE, handleCopyTreeGetFileTree));
+  handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_GET_FILE_TREE, handleCopyTreeGetFileTree));
 
   const handleCopyTreeTestConfig = async (
     ctx: import("../types.js").IpcContext,
@@ -706,7 +739,6 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return {
         includedFiles: 0,
         includedSize: 0,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
         error: "Invalid payload",
       };
     }
@@ -717,7 +749,6 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return {
         includedFiles: 0,
         includedSize: 0,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
         error: "Workspace client not initialized",
       };
     }
@@ -734,7 +765,6 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return {
         includedFiles: 0,
         includedSize: 0,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
         error: `Worktree not found: ${validated.worktreeId}`,
       };
     }

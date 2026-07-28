@@ -1,6 +1,18 @@
 import type { PersistStorage, StateStorage, StorageValue } from "zustand/middleware";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import type { PersistWriteMerge } from "./persistWriteMerge";
+
+export interface SafeJSONStorageOptions<T> {
+  /**
+   * Opt-in baseline-aware three-way write merge (issue #11351). When provided,
+   * every write first reads the current shared value and reconciles it against
+   * this writer's baseline and incoming snapshot, so a stale project view can't
+   * clobber a sibling view's concurrent writes. Omit it for view-local stores —
+   * the default full-replacement write is unchanged. See `persistWriteMerge.ts`.
+   */
+  mergeOnWrite?: PersistWriteMerge<T>;
+}
 
 const fallbackStorageData = new Map<string, string>();
 
@@ -303,36 +315,79 @@ function parseBackup<T>(raw: string | null): StorageValue<T> | null {
   }
 }
 
-export function createSafeJSONStorage<T>(): PersistStorage<T> {
+/**
+ * Read and parse the persisted value for `name`, recovering from the sibling
+ * `.__bak` copy when the live blob is present but corrupt (issue #9170/#9916),
+ * and returning `null` when absent or unrecoverable. Shared by hydration reads
+ * and the pre-write disk read that feeds the opt-in write merger, so both paths
+ * get identical corruption/backup handling.
+ */
+function readPersistedValue<T>(raw: ResilientStorage, name: string): StorageValue<T> | null {
+  const value = raw.getItem(name);
+  if (value instanceof Promise) return null;
+  if (value === null) return null;
+  try {
+    return parseJson<StorageValue<T>>(value);
+  } catch (error) {
+    // The live blob is corrupt but present — try the last known-good backup
+    // before discarding the user's config to defaults (issue #9170).
+    const recovered = parseBackup<T>(raw.readBackup(name));
+    if (recovered !== null) {
+      console.warn("[safeStorage] corrupt persisted state, recovered from backup", {
+        key: name,
+        error: formatErrorMessage(error, "Corrupt persisted state"),
+      });
+      return recovered;
+    }
+    console.warn("[safeStorage] corrupt persisted state, resetting to defaults", {
+      key: name,
+      error: formatErrorMessage(error, "Corrupt persisted state"),
+    });
+    return null;
+  }
+}
+
+export function createSafeJSONStorage<T>(options?: SafeJSONStorageOptions<T>): PersistStorage<T> {
   const raw = createResilientStorage(resolveLocalStorage());
   const lastWritten = new Map<string, string>();
+  const mergeOnWrite = options?.mergeOnWrite;
+  // What this writer last knew, per key — its hydration read or last durable
+  // write. Feeds the three-way merge so a stale snapshot can't clobber a
+  // sibling view (issue #11351). Only tracked when a merger is configured.
+  const baselines = new Map<string, StorageValue<T> | null>();
 
   return {
     getItem: (name) => {
-      const value = raw.getItem(name);
-      if (value instanceof Promise) return null;
-      if (value === null) return null;
-      try {
-        return parseJson<StorageValue<T>>(value);
-      } catch (error) {
-        // The live blob is corrupt but present — try the last known-good backup
-        // before discarding the user's config to defaults (issue #9170).
-        const recovered = parseBackup<T>(raw.readBackup(name));
-        if (recovered !== null) {
-          console.warn("[safeStorage] corrupt persisted state, recovered from backup", {
-            key: name,
-            error: formatErrorMessage(error, "Corrupt persisted state"),
-          });
-          return recovered;
-        }
-        console.warn("[safeStorage] corrupt persisted state, resetting to defaults", {
-          key: name,
-          error: formatErrorMessage(error, "Corrupt persisted state"),
-        });
-        return null;
-      }
+      const parsed = readPersistedValue<T>(raw, name);
+      if (mergeOnWrite) baselines.set(name, parsed);
+      return parsed;
     },
     setItem: (name, value) => {
+      if (mergeOnWrite) {
+        // Merge against the freshest disk value every time. We must NOT dedup on
+        // the serialized output here: two writes with identical `value` can merge
+        // to different results as the shared disk changes between them, and — the
+        // inverse — two writes can merge to the SAME bytes against different disk
+        // states, so a merged-output dedup would skip a write that still needs to
+        // land (e.g. re-applying a deletion the disk resurrected). These stores
+        // write infrequently, so an unconditional read-merge-write is cheap.
+        const merged = mergeOnWrite({
+          baseline: baselines.get(name) ?? null,
+          onDisk: readPersistedValue<T>(raw, name),
+          incoming: value,
+        });
+        const serialized = JSON.stringify(merged);
+        const result = raw.setItem(name, serialized);
+        // Only advance the backup when the primary write actually reached durable
+        // storage (see the debounced flush for the full rationale).
+        if (result === "durable") raw.writeBackup(name, serialized);
+        // Advance the baseline to the writer's own snapshot (never the merged
+        // result, which may hold sibling-only keys this view never took into
+        // memory). A transient quota failure keeps the old baseline so the next
+        // retry still merges correctly.
+        if (result !== "quota") baselines.set(name, value);
+        return;
+      }
       const serialized = JSON.stringify(value);
       if (lastWritten.get(name) === serialized) return;
       // Only advance the backup when the primary write actually reached durable
@@ -348,6 +403,7 @@ export function createSafeJSONStorage<T>(): PersistStorage<T> {
     },
     removeItem: (name) => {
       lastWritten.delete(name);
+      baselines.delete(name);
       raw.removeItem(name);
       raw.removeBackup(name);
     },
@@ -361,19 +417,46 @@ export function createSafeJSONStorage<T>(): PersistStorage<T> {
  * `clearAll` followed shortly by a tear-down can't be silently re-populated by
  * a stale write timer.
  */
-export function createDebouncedSafeJSONStorage<T>(delayMs: number): PersistStorage<T> {
+export function createDebouncedSafeJSONStorage<T>(
+  delayMs: number,
+  options?: SafeJSONStorageOptions<T>
+): PersistStorage<T> {
   const raw = createResilientStorage(resolveLocalStorage());
-  const pending = new Map<string, { timer: ReturnType<typeof setTimeout>; value: string }>();
+  // Retain the typed incoming value (not just its serialized form) so a
+  // merge-enabled flush can reconcile it against the freshest disk state read
+  // at flush time. `serialized` is kept purely to coalesce identical enqueues.
+  const pending = new Map<
+    string,
+    { timer: ReturnType<typeof setTimeout>; value: StorageValue<T>; serialized: string }
+  >();
+  const mergeOnWrite = options?.mergeOnWrite;
+  const baselines = new Map<string, StorageValue<T> | null>();
 
   const flush = (name: string): void => {
     const entry = pending.get(name);
     if (!entry) return;
     pending.delete(name);
+    // Merge against disk at flush time — not enqueue time — so a sibling view's
+    // write that landed during the debounce window is preserved (issue #11351).
+    const toWrite = mergeOnWrite
+      ? mergeOnWrite({
+          baseline: baselines.get(name) ?? null,
+          onDisk: readPersistedValue<T>(raw, name),
+          incoming: entry.value,
+        })
+      : entry.value;
+    const serialized = mergeOnWrite ? JSON.stringify(toWrite) : entry.serialized;
     // Only advance the backup when the primary write actually reached durable
     // storage. On a quota failure the primary keeps its old value, so writing
     // a newer backup would leave the two inconsistent and recover stale state.
-    if (raw.setItem(name, entry.value) === "durable") {
-      raw.writeBackup(name, entry.value);
+    const result = raw.setItem(name, serialized);
+    if (result === "durable") {
+      raw.writeBackup(name, serialized);
+    }
+    // Advance to the writer's own snapshot (never the merged result) once the
+    // write landed; a transient quota failure keeps the old baseline.
+    if (mergeOnWrite && result !== "quota") {
+      baselines.set(name, entry.value);
     }
   };
 
@@ -381,36 +464,17 @@ export function createDebouncedSafeJSONStorage<T>(delayMs: number): PersistStora
     getItem: (name) => {
       // Flush any pending write so reads-after-writes are coherent.
       flush(name);
-      const value = raw.getItem(name);
-      if (value instanceof Promise) return null;
-      if (value === null) return null;
-      try {
-        return parseJson<StorageValue<T>>(value);
-      } catch (error) {
-        // The live blob is corrupt but present — try the last known-good backup
-        // before discarding the user's config to defaults (issue #9170/#9916).
-        const recovered = parseBackup<T>(raw.readBackup(name));
-        if (recovered !== null) {
-          console.warn("[safeStorage] corrupt persisted state, recovered from backup", {
-            key: name,
-            error: formatErrorMessage(error, "Corrupt persisted state"),
-          });
-          return recovered;
-        }
-        console.warn("[safeStorage] corrupt persisted state, resetting to defaults", {
-          key: name,
-          error: formatErrorMessage(error, "Corrupt persisted state"),
-        });
-        return null;
-      }
+      const parsed = readPersistedValue<T>(raw, name);
+      if (mergeOnWrite) baselines.set(name, parsed);
+      return parsed;
     },
     setItem: (name, value) => {
       const serialized = JSON.stringify(value);
       const existing = pending.get(name);
-      if (existing?.value === serialized) return;
+      if (existing?.serialized === serialized) return;
       if (existing) clearTimeout(existing.timer);
       const timer = setTimeout(() => flush(name), delayMs);
-      pending.set(name, { timer, value: serialized });
+      pending.set(name, { timer, value, serialized });
     },
     removeItem: (name) => {
       const existing = pending.get(name);
@@ -418,6 +482,7 @@ export function createDebouncedSafeJSONStorage<T>(delayMs: number): PersistStora
         clearTimeout(existing.timer);
         pending.delete(name);
       }
+      baselines.delete(name);
       raw.removeItem(name);
       raw.removeBackup(name);
     },

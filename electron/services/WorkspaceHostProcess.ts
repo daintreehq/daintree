@@ -105,8 +105,7 @@ export class WorkspaceHostProcess extends EventEmitter {
    */
   private pendingChildProcessGoneReason: { reason: string; exitCode: number } | null = null;
   private childProcessGoneHandler:
-    | ((event: Electron.Event, details: Electron.Details) => void)
-    | null = null;
+    ((event: Electron.Event, details: Electron.Details) => void) | null = null;
   private isHealthCheckPaused = false;
   private isWaitingForHandshake = false;
   private handshakeTimeout: NodeJS.Timeout | null = null;

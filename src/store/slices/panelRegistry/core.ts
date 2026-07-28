@@ -4,7 +4,7 @@ import type { PanelInstance, PanelTitleMode } from "@shared/types/panel";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { panelKindHasPty, panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { isDevPreviewPanel } from "@shared/types/panel";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
@@ -24,8 +24,9 @@ import {
   consumeBatch,
 } from "./hydrationBatch";
 import type { HydrationBatchToken } from "./types";
-import { removeFromWorktreeIndex } from "./worktreeIndex";
+import { removeFromWorktreeIndex, transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
+import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { countPanelsTowardLimit } from "./panelCount";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
@@ -126,7 +127,7 @@ export const createCorePanelActions = (
 
   flushSpawnBatch: (token) => applyBatchFlush(set, token),
 
-  removePanel: (id) => {
+  removePanel: (id, options) => {
     clearTrashExpiryTimer(id);
     cancelReconnectErrorDebounce(id);
     const state = get();
@@ -140,9 +141,13 @@ export const createCorePanelActions = (
     // Only call PTY operations for PTY-backed terminals
     if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
       recordLedgerClose(id, "removed");
-      terminalClient.kill(id).catch((error) => {
-        logError("[TerminalStore] Failed to kill terminal", error);
-      });
+      // Bookmark and close already closed the backend via prepareBookmark; a
+      // second kill here is redundant and could hit a same-id successor.
+      if (!options?.backendAlreadyClosed) {
+        terminalClient.kill(id).catch((error) => {
+          logError("[TerminalStore] Failed to kill terminal", error);
+        });
+      }
 
       terminalInstanceService.destroy(id);
     }
@@ -490,6 +495,11 @@ export const createCorePanelActions = (
     // Single ungrouped panel - move just this panel
     const terminal = get().panelsById[id];
 
+    // Direct moves reject a non-dockable kind (#11375): the dock filters it out
+    // via `isDockPanel`, so committing `location:"dock"` would strand it
+    // invisibly. Leave the panel where it is rather than dock it.
+    if (terminal && !panelKindIsDockable(terminal.kind ?? "terminal")) return;
+
     set((state) => {
       if (!terminal || terminal.location === "dock") return state;
 
@@ -538,6 +548,13 @@ export const createCorePanelActions = (
     let moveSucceeded = false;
     let terminal: PanelInstance | undefined;
 
+    // A worktree-less dock panel is visible in every worktree's dock, but the
+    // grid renders only the active worktree's index bucket — landing there
+    // without a worktreeId strands it off-screen (#11290). Promotion adopts
+    // the active worktree; a real existing attribution is never changed.
+    const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
+    let backfilledWorktreeId: string | null = null;
+
     set((state) => {
       terminal = state.panelsById[id];
       if (!terminal || terminal.location === "grid") return state;
@@ -547,14 +564,23 @@ export const createCorePanelActions = (
       moveSucceeded = true;
       const groupPrune = removePanelIdsFromTabGroups(state.tabGroups, new Set([id]));
       const t = terminal!;
+      const adoptedWorktreeId =
+        t.worktreeId == null && activeWorktreeId !== null ? activeWorktreeId : null;
+      backfilledWorktreeId = adoptedWorktreeId;
       const updatedPanel = isPtyPanel(t)
         ? {
             ...t,
+            ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
             location: "grid" as const,
             isVisible: true,
             runtimeStatus: deriveRuntimeStatus(true, t.flowStatus, t.runtimeStatus),
           }
-        : { ...t, location: "grid" as const, isVisible: true };
+        : {
+            ...t,
+            ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
+            location: "grid" as const,
+            isVisible: true,
+          };
       const newById = { ...state.panelsById, [id]: updatedPanel };
       saveNormalized(newById, state.panelIds);
       if (groupPrune.changed) {
@@ -562,9 +588,31 @@ export const createCorePanelActions = (
       }
       return {
         panelsById: newById,
+        ...(adoptedWorktreeId !== null && {
+          panelIdsByWorktreeId: transferBetweenWorktreeIndex(
+            state.panelIdsByWorktreeId,
+            t.worktreeId,
+            adoptedWorktreeId,
+            id
+          ),
+        }),
         ...(groupPrune.changed && { tabGroups: groupPrune.tabGroups }),
       };
     });
+
+    // A user-initiated promotion is explicit worktree attribution — recorded
+    // so later cwd-based inference can never silently re-home the panel.
+    if (backfilledWorktreeId !== null) {
+      const ledgerGeneration = agentLifecycleLedger.currentGeneration(id);
+      if (ledgerGeneration !== undefined) {
+        agentLifecycleLedger.recordWorktreeAttribution(
+          id,
+          ledgerGeneration,
+          backfilledWorktreeId,
+          "explicit"
+        );
+      }
+    }
 
     // Only apply renderer policy for PTY-backed panels if move succeeded
     if (moveSucceeded && terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
@@ -581,6 +629,13 @@ export const createCorePanelActions = (
     const { hardLimit } = usePanelLimitStore.getState();
     let promoted = false;
     let atLimit = false;
+
+    // A dialog panel opened for a path outside every registered worktree has
+    // no worktreeId; promoting it into the grid without one strands it outside
+    // the active worktree's rendered bucket (#11290), same as a dock
+    // promotion. Adopt the active worktree; a real attribution is kept.
+    const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
+    let backfilledWorktreeId: string | null = null;
 
     set((state) => {
       // Re-read inside the updater: the panel may have been closed or already
@@ -600,8 +655,12 @@ export const createCorePanelActions = (
       // Drop `excludeFromPersistence` rather than setting it false: the field is
       // optional, and a lingering `false` would read as a deliberate opt-in.
       const { excludeFromPersistence: _ephemeral, ...persistable } = panel;
+      const adoptedWorktreeId =
+        panel.worktreeId == null && activeWorktreeId !== null ? activeWorktreeId : null;
+      backfilledWorktreeId = adoptedWorktreeId;
       const updatedPanel = {
         ...persistable,
+        ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
         location: "grid" as const,
         isVisible: true,
       } as PanelInstance;
@@ -609,8 +668,32 @@ export const createCorePanelActions = (
       const newById = { ...state.panelsById, [id]: updatedPanel };
       saveNormalized(newById, state.panelIds);
       promoted = true;
-      return { panelsById: newById };
+      return {
+        panelsById: newById,
+        ...(adoptedWorktreeId !== null && {
+          panelIdsByWorktreeId: transferBetweenWorktreeIndex(
+            state.panelIdsByWorktreeId,
+            panel.worktreeId,
+            adoptedWorktreeId,
+            id
+          ),
+        }),
+      };
     });
+
+    // A user-initiated promotion is explicit worktree attribution — recorded
+    // so later cwd-based inference can never silently re-home the panel.
+    if (backfilledWorktreeId !== null) {
+      const ledgerGeneration = agentLifecycleLedger.currentGeneration(id);
+      if (ledgerGeneration !== undefined) {
+        agentLifecycleLedger.recordWorktreeAttribution(
+          id,
+          ledgerGeneration,
+          backfilledWorktreeId,
+          "explicit"
+        );
+      }
+    }
 
     if (atLimit) {
       notify({

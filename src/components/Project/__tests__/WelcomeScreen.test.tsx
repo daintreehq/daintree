@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, act } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 const { dispatchMock } = vi.hoisted(() => ({
   dispatchMock: vi.fn(() => Promise.resolve()),
@@ -144,7 +144,16 @@ vi.mock("@/components/ui/button", () => ({
 }));
 
 // Mock projectStore
-const mockProjects = [
+const mockProjects: Array<{
+  id: string;
+  name: string;
+  path: string;
+  emoji: string;
+  lastOpened: number;
+  frecencyScore: number;
+  lastAccessedAt?: number;
+  color?: string;
+}> = [
   {
     id: "p1",
     name: "Project Alpha",
@@ -196,6 +205,8 @@ Object.defineProperty(window, "electron", {
 import { WelcomeScreen, isAgentWelcomeCardEligible } from "../WelcomeScreen";
 import type { GettingStartedChecklistState } from "@/hooks/app/useGettingStartedChecklist";
 import type { ChecklistState } from "@shared/types/ipc/maps";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { DEFAULT_OTHER_PROJECTS_SORT_MODE, type OtherProjectsSortMode } from "@/lib/projectSort";
 
 const allIncomplete: ChecklistState = {
   dismissed: false,
@@ -299,19 +310,21 @@ describe("WelcomeScreen", () => {
     expect(screen.getByText("A habitat for your AI agents.")).toBeTruthy();
   });
 
-  it("suppresses hero for returning users with recent projects", () => {
+  it("suppresses hero for returning users with projects", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
     expect(screen.queryByText("Welcome to Daintree")).toBeNull();
     expect(screen.queryByText("A habitat for your AI agents.")).toBeNull();
   });
 
-  // --- Recent Projects ---
+  // --- Top projects ---
 
-  it("renders recent projects sorted by frecencyScore descending", () => {
+  it("renders the project list sorted by effective frecency descending", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    expect(screen.getByText("Recent projects")).toBeTruthy();
+    // "Your projects", not "Recent projects" — the list is ranked by decayed
+    // use, so a recency label would misdescribe the order it sits above.
+    expect(screen.getByText("Your projects")).toBeTruthy();
 
     const projectNames = screen
       .getAllByText(/Project (Alpha|Beta|Gamma)/)
@@ -319,11 +332,124 @@ describe("WelcomeScreen", () => {
     expect(projectNames).toEqual(["Project Alpha", "Project Gamma", "Project Beta"]);
   });
 
-  it("does not render recent projects section when no projects exist", () => {
+  it("ranks a fresh score above a stale snapshot that reads higher raw", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    storeState = {
+      ...storeState,
+      projects: [
+        {
+          id: "stale",
+          name: "Project Stale",
+          path: "/stale",
+          emoji: "🌲",
+          lastOpened: now - 30 * DAY,
+          frecencyScore: 20.0,
+          // Frozen a month ago — must decay at read time, not rank raw.
+          lastAccessedAt: now - 30 * DAY,
+        },
+        {
+          id: "fresh",
+          name: "Project Fresh",
+          path: "/fresh",
+          emoji: "🌿",
+          lastOpened: now,
+          frecencyScore: 4.0,
+          lastAccessedAt: now,
+        },
+      ],
+    };
+    render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+    const projectNames = screen.getAllByText(/Project (Stale|Fresh)/).map((el) => el.textContent);
+    expect(projectNames).toEqual(["Project Fresh", "Project Stale"]);
+  });
+
+  // The switcher's Other band and this list carry a standing promise never to
+  // disagree on order, so this list follows the same preference (#11455).
+  describe("follows the project switcher's Other band sort mode — issue #11455", () => {
+    // Alpha is the most used, Beta the most recently opened, Gamma neither —
+    // so the three modes produce three different orders.
+    const conflicting = [
+      { name: "Project Alpha", lastOpened: 3000, frecencyScore: 10.0 },
+      { name: "Project Beta", lastOpened: 9000, frecencyScore: 2.0 },
+      { name: "Project Gamma", lastOpened: 2000, frecencyScore: 5.0 },
+    ];
+
+    function renderWithMode(mode: OtherProjectsSortMode): (string | null)[] {
+      usePreferencesStore.getState().setProjectSwitcherOtherSortMode(mode);
+      storeState = {
+        ...storeState,
+        projects: conflicting.map((p, i) => ({
+          id: `c${i}`,
+          path: `/c${i}`,
+          emoji: "🌲",
+          ...p,
+        })),
+      };
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      return screen.getAllByText(/Project (Alpha|Beta|Gamma)/).map((el) => el.textContent);
+    }
+
+    afterEach(() => {
+      usePreferencesStore
+        .getState()
+        .setProjectSwitcherOtherSortMode(DEFAULT_OTHER_PROJECTS_SORT_MODE);
+    });
+
+    it("ranks by decayed score in most used", () => {
+      expect(renderWithMode("mostUsed")).toEqual([
+        "Project Alpha",
+        "Project Gamma",
+        "Project Beta",
+      ]);
+    });
+
+    it("ranks by last opened in recent", () => {
+      expect(renderWithMode("recent")).toEqual(["Project Beta", "Project Alpha", "Project Gamma"]);
+    });
+
+    it("ranks by name in alphabetical", () => {
+      expect(renderWithMode("alphabetical")).toEqual([
+        "Project Alpha",
+        "Project Beta",
+        "Project Gamma",
+      ]);
+    });
+
+    it("applies the cap after sorting, not before", () => {
+      // Slicing first would cap the frecency order and then re-rank those five,
+      // so the list would show whichever projects frecency happened to surface
+      // rather than the five this mode actually ranks top.
+      usePreferencesStore.getState().setProjectSwitcherOtherSortMode("recent");
+      // The five most recent are 7,6,5,4,3 — all sitting PAST the cap in array
+      // order, and the array is in ascending recency so a cap-then-sort would
+      // return 0..4, the five LEAST recent. Only sorting first can find them.
+      storeState = {
+        ...storeState,
+        projects: Array.from({ length: 8 }, (_, i) => ({
+          id: `p${i}`,
+          name: `Project ${i}`,
+          path: `/path/${i}`,
+          emoji: "🌲",
+          lastOpened: (i + 1) * 1000,
+          // Score runs opposite to recency, so a stray frecency comparison
+          // would also produce a different set.
+          frecencyScore: 8 - i,
+        })),
+      };
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+      const names = screen.getAllByText(/Project \d/).map((el) => el.textContent);
+      expect(names).toEqual(["Project 7", "Project 6", "Project 5", "Project 4", "Project 3"]);
+    });
+  });
+
+  it("does not render the project list section when no projects exist", () => {
     storeState = { ...storeState, projects: [] };
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    expect(screen.queryByText("Recent projects")).toBeNull();
+    expect(screen.queryByText("Your projects")).toBeNull();
   });
 
   it("calls switchProject when a recent project is clicked", () => {
@@ -333,14 +459,14 @@ describe("WelcomeScreen", () => {
     expect(switchProjectMock).toHaveBeenCalledWith("p1");
   });
 
-  it("shows project path and time ago for recent projects", () => {
+  it("shows project path and time ago for listed projects", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
     expect(screen.getByText("/alpha")).toBeTruthy();
     expect(screen.getByText("3000ms ago")).toBeTruthy();
   });
 
-  it("limits recent projects to 5 most recent in descending order", () => {
+  it("limits the project list to the top 5 by effective score", () => {
     const manyProjects = Array.from({ length: 8 }, (_, i) => ({
       id: `p${i}`,
       name: `Project ${i}`,
@@ -787,20 +913,20 @@ describe("WelcomeScreen", () => {
 
   // --- Adaptive Layout ---
 
-  it("shows recent projects before checklist for returning users", () => {
+  it("shows the project list before the checklist for returning users", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
-    const recentProjects = screen.getByText("Recent projects");
+    const projectList = screen.getByText("Your projects");
 
-    // Recent Projects should appear before Getting Started in DOM order
-    const container = recentProjects.closest("[class*='max-w-2xl']")!;
+    // The project list should appear before Getting Started in DOM order
+    const container = projectList.closest("[class*='max-w-2xl']")!;
     const headings = Array.from(container.querySelectorAll("h3"));
-    const recentIdx = headings.findIndex((h) => h.textContent?.includes("Recent projects"));
+    const projectsIdx = headings.findIndex((h) => h.textContent?.includes("Your projects"));
     const checklistIdx = headings.findIndex((h) => h.textContent?.includes("Getting started"));
-    expect(recentIdx).toBeLessThan(checklistIdx);
+    expect(projectsIdx).toBeLessThan(checklistIdx);
   });
 
-  it("shows checklist without recent projects for first-time users", () => {
+  it("shows checklist without a project list for first-time users", () => {
     storeState = { ...storeState, projects: [] };
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 

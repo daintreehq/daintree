@@ -3,6 +3,7 @@ import type { AgentId } from "../agent.js";
 import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
 import type {
   Project,
+  ProjectAddOptions,
   ProjectSettings,
   RecipeNameCollision,
   RunCommand,
@@ -148,10 +149,7 @@ import type {
 } from "./forge.js";
 
 export type ChecklistItemId =
-  | "openedProject"
-  | "launchedAgent"
-  | "createdWorktree"
-  | "ranSecondParallelAgent";
+  "openedProject" | "launchedAgent" | "createdWorktree" | "ranSecondParallelAgent";
 
 export interface ChecklistItems {
   openedProject: boolean;
@@ -593,7 +591,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: Project | null;
   };
   "project:add": {
-    args: [path: string];
+    args: [path: string, options?: ProjectAddOptions];
     result: Project;
   };
   "project:remove": {
@@ -1638,6 +1636,10 @@ export interface IpcEventMap {
   "project:stats-updated": ProjectStatusMap;
   "project:updated": Project;
   "project:removed": string;
+  // Main asks the renderer to open the guided git-init dialog for a folder the
+  // user tried to open that isn't a repository yet (Dock drop, Cmd+O, Recent
+  // Projects). Nothing is written to disk until the user confirms in-dialog.
+  "project:open-git-init-dialog": { directoryPath: string };
 
   // Scratch events
   "scratch:on-switch": ScratchSwitchPayload;
@@ -1646,6 +1648,10 @@ export interface IpcEventMap {
 
   // Agent install progress events
   "setup:agent-install-progress": AgentInstallProgressEvent;
+
+  // Plugin install progress (#11302) — targeted at the window that started the
+  // install, not a global broadcast, so it is NOT an event-bus channel.
+  "plugin:install-progress": import("../plugin.js").PluginInstallProgressEvent;
 
   // System events
   "system:wake": SystemWakePayload;
@@ -1932,6 +1938,13 @@ export interface IpcEventMap {
   // installs through the existing manager flow keeps every security gate intact.
   "plugin:deep-link": import("../plugin.js").PluginDeepLinkIntent;
 
+  // Double-clicked `.dntr` archive awaiting install confirmation (main →
+  // renderer, #11280). Carries the manifest parsed without extracting, so the
+  // renderer can preview real identity/capabilities before anything is written.
+  // One event per archive; the renderer queues them FIFO so each gets its own
+  // decision.
+  "plugin:archive-install-intent": import("../plugin.js").PluginArchiveInstallIntent;
+
   // Resource profile change (main → renderer)
   "resource:profile-changed": import("../resourceProfile.js").ResourceProfilePayload;
 
@@ -2050,6 +2063,8 @@ export type IpcEventBusMap = Pick<
   | "run-history:update"
   // Plugin deep-link intent (targeted at the primary window)
   | "plugin:deep-link"
+  // Double-clicked `.dntr` archive awaiting confirmation (targeted at the primary window)
+  | "plugin:archive-install-intent"
   // Terminal lifecycle (non-data) — exit, spawn-result, backend crash/ready
   | "terminal:exit"
   | "terminal:backend-crashed"

@@ -1,12 +1,13 @@
 import { create } from "zustand";
 
 /**
- * Ephemeral UI state for terminal-surface destructive confirmations
- * (kill/restart at single, bulk, and worktree-scope). Actions dispatched
- * from a keybinding or palette write here instead of running immediately;
- * the app-level confirm-dialog host subscribes and renders a modal that
- * re-dispatches the action with `{ confirmed: true }` (and any scope
- * args) on confirm or clears the store on cancel.
+ * Ephemeral UI state for worktree-session destructive confirmations
+ * (kill/restart at single, bulk, and worktree-scope, plus ending every
+ * session or clearing a worktree's recorded session history). Actions
+ * dispatched from a keybinding or palette write here instead of running
+ * immediately; the app-level confirm-dialog host subscribes and renders a
+ * modal that re-dispatches the action with `{ confirmed: true }` (and any
+ * scope args) on confirm or clears the store on cancel.
  *
  * Context-menu surfaces wire their own local `ConfirmDialog` for
  * single-terminal kill/restart — this store is the fallback for
@@ -19,11 +20,40 @@ export type TerminalPendingDestructiveActionKind =
   | "restartAll"
   | "worktreeRestartAll"
   | "worktreeTrashAll"
+  // Permanently ending every session in a worktree (#11345). Like
+  // `worktreeTrashAll` this executes `worktree.sessions.endAll`, but it
+  // removes the panels outright rather than moving them to trash, so its
+  // copy speaks of a permanent end.
+  | "worktreeEndAll"
+  // Clearing a worktree's recorded resumable-session history (#11345). Unlike
+  // every other kind here it touches no live panels — it clears the historical
+  // journal — so it carries no meaningful `targetCount`/`runningAgentCount`
+  // (both are 0) and its copy ignores them.
+  | "worktreeClearHistory"
   // Closing the terminals held by a deleted worktree's deleted-worktree row (#11232).
   // Executes through `worktree.sessions.trashAll` like `worktreeTrashAll`;
   // it exists as its own kind purely so the copy can speak about a worktree
   // that no longer exists rather than "this worktree".
-  | "deletedWorktreeDismiss";
+  | "deletedWorktreeDismiss"
+  // Clearing every deleted-worktree row at once from the grouped summary
+  // (#11260). Fans the same `worktree.sessions.trashAll` executor over each
+  // member, and carries `preview` because D2 requires the dialog to list the
+  // terminals it is about to trash rather than just count them.
+  | "deletedWorktreeGroupDismiss";
+
+/** One terminal the group-dismiss confirm is about to trash. */
+export interface DeletedWorktreeGroupPreviewTerminal {
+  terminalId: string;
+  terminalTitle: string;
+  hasRunningAgent: boolean;
+}
+
+/** One deleted worktree in the group-dismiss confirm, with its terminals. */
+export interface DeletedWorktreeGroupPreviewWorktree {
+  worktreeId: string;
+  worktreeTitle: string;
+  terminals: DeletedWorktreeGroupPreviewTerminal[];
+}
 
 export interface TerminalPendingDestructiveActionSnapshot {
   kind: TerminalPendingDestructiveActionKind;
@@ -35,6 +65,13 @@ export interface TerminalPendingDestructiveActionSnapshot {
   worktreeId?: string;
   /** Terminal id for single-terminal actions (kill/restart). */
   terminalId?: string;
+  /**
+   * The actual terminals a `deletedWorktreeGroupDismiss` will trash, grouped by
+   * their deleted worktree. Required for that kind — D2 (#7880) wants the
+   * dialog to preview real content, and a bulk clear spanning several worktrees
+   * is the one case where a count tells the user nothing about what they lose.
+   */
+  preview?: DeletedWorktreeGroupPreviewWorktree[];
 }
 
 interface TerminalPendingDestructiveActionState {

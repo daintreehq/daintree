@@ -10,6 +10,9 @@ const waitForRateLimitSlotMock = vi.hoisted(() => vi.fn().mockResolvedValue(unde
 const checkRateLimitMock = vi.hoisted(() => vi.fn());
 
 const getWindowForWebContentsMock = vi.hoisted(() => vi.fn());
+// Mutable holder so a test can vary the sender view's resolved project id,
+// which the context-aware IPC wrapper injects as ctx.projectId (#11387).
+const ctxOverrides = vi.hoisted(() => ({ projectId: null as string | null }));
 const generateWorktreePathMock = vi.hoisted(() => vi.fn());
 const validatePathPatternMock = vi.hoisted(() =>
   vi.fn<(pattern: string) => { valid: boolean; error?: string }>(() => ({ valid: true }))
@@ -29,6 +32,10 @@ const soundMock = vi.hoisted(() => ({ play: vi.fn() }));
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProjectId: vi.fn<() => string | null>(() => "proj-1"),
   getCurrentProject: vi.fn(() => ({ id: "proj-1", path: "/repo" })),
+  getProjectById: vi.fn<(id: string) => { id: string; path: string } | null>(() => ({
+    id: "proj-1",
+    path: "/repo",
+  })),
 }));
 const gitServiceCacheMock = vi.hoisted(() => ({
   getGitService: vi.fn(() => ({
@@ -62,7 +69,7 @@ vi.mock("../../utils.js", () => {
           event: event as unknown,
           webContentsId: event?.sender?.id ?? 0,
           senderWindow: getWindowForWebContentsMock(event?.sender),
-          projectId: null,
+          projectId: ctxOverrides.projectId,
         };
         return (handler as (...a: unknown[]) => unknown)(ctx, ...args);
       }
@@ -175,6 +182,7 @@ describe("worktree IPC adversarial", () => {
   let cleanup: () => void;
   let worktreeService: {
     getAllStatesAsync: ReturnType<typeof vi.fn>;
+    getAllStatesForProjectAsync: ReturnType<typeof vi.fn>;
     createWorktree: ReturnType<typeof vi.fn>;
     deleteWorktree: ReturnType<typeof vi.fn>;
     invalidatePulseCache: ReturnType<typeof vi.fn>;
@@ -189,9 +197,14 @@ describe("worktree IPC adversarial", () => {
     // every WORKTREE_CREATE call sees a passing branch validator unless the
     // specific test overrides it.
     validateBranchNameMock.mockImplementation(() => ({ valid: true }));
+    // Restore the ProjectStore lookup default that clearAllMocks wiped, and
+    // reset the injected sender project id to the unresolved sentinel.
+    projectStoreMock.getProjectById.mockReturnValue({ id: "proj-1", path: "/repo" });
+    ctxOverrides.projectId = null;
 
     worktreeService = {
       getAllStatesAsync: vi.fn().mockResolvedValue([]),
+      getAllStatesForProjectAsync: vi.fn().mockResolvedValue([]),
       createWorktree: vi.fn().mockResolvedValue("wt-new"),
       deleteWorktree: vi.fn().mockResolvedValue(undefined),
       invalidatePulseCache: vi.fn(),
@@ -205,14 +218,51 @@ describe("worktree IPC adversarial", () => {
     cleanup();
   });
 
-  it("WORKTREE_GET_ALL forwards sender window id to getAllStatesAsync", async () => {
-    getWindowForWebContentsMock.mockReturnValue({ id: 42 });
-    worktreeService.getAllStatesAsync.mockResolvedValue([{ id: "wt-1" }]);
+  it("WORKTREE_GET_ALL routes by the sender view's project id, not the window or global current (#11387)", async () => {
+    // A window-scoped read of the hydration prefetch can be answered by a
+    // different project's host after a fast switch; route by the immutable
+    // project id instead so the list is authoritative for the right project.
+    // Use a sender project distinct from the global current-project default
+    // ("proj-1") so a regression that consulted getCurrentProjectId would fail.
+    ctxOverrides.projectId = "proj-sender";
+    projectStoreMock.getProjectById.mockReturnValue({ id: "proj-sender", path: "/sender-repo" });
+    worktreeService.getAllStatesForProjectAsync.mockResolvedValue([{ id: "wt-1" }]);
 
     const result = await getHandler(CHANNELS.WORKTREE_GET_ALL)(fakeEvent());
 
-    expect(worktreeService.getAllStatesAsync).toHaveBeenCalledWith(42);
+    expect(projectStoreMock.getProjectById).toHaveBeenCalledWith("proj-sender");
+    expect(worktreeService.getAllStatesForProjectAsync).toHaveBeenCalledWith(
+      "/sender-repo",
+      "proj-sender"
+    );
+    expect(worktreeService.getAllStatesAsync).not.toHaveBeenCalled();
     expect(result).toEqual([{ id: "wt-1" }]);
+  });
+
+  it("WORKTREE_GET_ALL returns [] without contacting a host when the sender project id is null (#11387)", async () => {
+    // The ~1.35s startup window before view registration completes sends a null
+    // project id; [] is the established "unknown, keep saved state" sentinel
+    // (#11234), never a throw that would spam hydration's fallback path.
+    ctxOverrides.projectId = null;
+
+    const result = await getHandler(CHANNELS.WORKTREE_GET_ALL)(fakeEvent());
+
+    expect(result).toEqual([]);
+    // Neither read path is consulted — not the project-scoped one, and not a
+    // silent fall-back to the window-scoped one.
+    expect(worktreeService.getAllStatesForProjectAsync).not.toHaveBeenCalled();
+    expect(worktreeService.getAllStatesAsync).not.toHaveBeenCalled();
+  });
+
+  it("WORKTREE_GET_ALL returns [] when the sender project id is unknown to the store (#11387)", async () => {
+    ctxOverrides.projectId = "ghost";
+    projectStoreMock.getProjectById.mockReturnValue(null);
+
+    const result = await getHandler(CHANNELS.WORKTREE_GET_ALL)(fakeEvent());
+
+    expect(result).toEqual([]);
+    expect(worktreeService.getAllStatesForProjectAsync).not.toHaveBeenCalled();
+    expect(worktreeService.getAllStatesAsync).not.toHaveBeenCalled();
   });
 
   it("WORKTREE_GET_ALL returns empty array when worktreeService is absent", async () => {

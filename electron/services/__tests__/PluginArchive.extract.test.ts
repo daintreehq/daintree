@@ -5,7 +5,12 @@ import os from "os";
 import zlib from "zlib";
 import { Readable } from "stream";
 import yauzl from "yauzl";
-import { packPluginArchive, extractPluginArchive, MAX_DNTR_ENTRIES } from "../PluginArchive.js";
+import {
+  packPluginArchive,
+  extractPluginArchive,
+  MAX_DNTR_ENTRIES,
+  PluginArchiveDeadlineError,
+} from "../PluginArchive.js";
 
 let tmpDir: string;
 
@@ -43,8 +48,7 @@ async function createFixture(baseDir: string, files: Record<string, string>): Pr
 // built — large uncompressedSize, tiny compressed payload, valid CRC — that
 // yauzl accepts and only the installer's own size guard rejects.
 type RawEntry =
-  | { name: string; content: string }
-  | { name: string; deflateOf: Buffer; declaredSize?: number };
+  { name: string; content: string } | { name: string; deflateOf: Buffer; declaredSize?: number };
 
 function buildRawZip(entries: RawEntry[]): Buffer {
   const chunks: Buffer[] = [];
@@ -391,6 +395,253 @@ describe("extractPluginArchive", () => {
       expect(written.length).toBe(CHUNKS * payload.length);
     } finally {
       openReadStreamSpy.mockRestore();
+    }
+  });
+});
+
+// #11302: the per-entry inactivity watchdog only catches a stream that goes
+// fully silent. A source that trickles a byte just inside the window resets it
+// forever, and before this there was no way for a user to give up on one — the
+// install lock and staging dir stayed held either way. These cover the two new
+// abort sources and the reason each one surfaces.
+describe("extractPluginArchive cancellation and absolute deadline (#11302)", () => {
+  /** A zip whose entries never finish, to keep extraction pinned open. */
+  function stallStreams(): { spy: ReturnType<typeof vi.spyOn>; streams: Readable[] } {
+    const streams: Readable[] = [];
+    const spy = vi
+      .spyOn(yauzl.ZipFile.prototype, "openReadStream")
+      .mockImplementation((_entry, callback) => {
+        const stalled = new Readable({ read() {} });
+        streams.push(stalled);
+        stalled.push(Buffer.from("partial"));
+        callback(null, stalled);
+      });
+    return { spy, streams };
+  }
+
+  async function stallingArchive(name: string): Promise<{ archivePath: string; dest: string }> {
+    const archivePath = path.join(tmpDir, `${name}.dntr`);
+    await fs.writeFile(archivePath, buildRawZip([{ name: "dist/first.js", content: "a" }]));
+    const dest = path.join(tmpDir, `extracted-${name}`);
+    await fs.mkdir(dest, { recursive: true });
+    return { archivePath, dest };
+  }
+
+  it("rejects with the caller's own reason when the external signal aborts", async () => {
+    const { archivePath, dest } = await stallingArchive("cancel");
+    const { spy, streams } = stallStreams();
+    const controller = new AbortController();
+
+    try {
+      const promise = extractPluginArchive(archivePath, dest, {
+        signal: controller.signal,
+        // Long enough that neither built-in guard can be what fires.
+        inactivityTimeoutMs: 60_000,
+        totalDeadlineMs: 60_000,
+      });
+      // Cancel only once a transfer is genuinely in flight, so this exercises
+      // the pipeline-abort path rather than the pre-flight short-circuit.
+      await vi.waitFor(() => expect(streams.length).toBe(1));
+      controller.abort(new Error("user-said-stop"));
+
+      // The caller's reason survives — it is NOT collapsed into a generic
+      // AbortError or the entry-stall message, which is what lets the installer
+      // report "cancelled" rather than "the archive is broken".
+      await expect(promise).rejects.toThrow("user-said-stop");
+      expect(streams[0]!.destroyed).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("rejects with a deadline error when a trickling stream outlives the total budget", async () => {
+    const { archivePath, dest } = await stallingArchive("deadline");
+    // A stream that keeps emitting just often enough to reset the per-entry
+    // watchdog forever — exactly the case the inactivity timer cannot catch.
+    const timers: ReturnType<typeof setInterval>[] = [];
+    let chunksPushed = 0;
+    const spy = vi
+      .spyOn(yauzl.ZipFile.prototype, "openReadStream")
+      .mockImplementation((_entry, callback) => {
+        const trickle = new Readable({ read() {} });
+        timers.push(
+          setInterval(() => {
+            chunksPushed++;
+            trickle.push(Buffer.from("x"));
+          }, 10)
+        );
+        callback(null, trickle);
+      });
+
+    try {
+      await expect(
+        extractPluginArchive(archivePath, dest, {
+          // Deliberately far apart: the inactivity watchdog must never be what
+          // fires, and the budget must be wide enough that the trickle has
+          // demonstrably started before the deadline lands. A budget so tight it
+          // expires before the first chunk would pass without proving anything.
+          inactivityTimeoutMs: 10_000,
+          totalDeadlineMs: 300,
+        })
+      ).rejects.toThrow(PluginArchiveDeadlineError);
+      // Proof the stream was alive throughout — a dead stream would have been
+      // the inactivity watchdog's job, not the deadline's.
+      expect(chunksPushed).toBeGreaterThan(1);
+    } finally {
+      for (const t of timers) clearInterval(t);
+      spy.mockRestore();
+    }
+  });
+
+  it("rejects immediately when the signal is already aborted", async () => {
+    const { archivePath, dest } = await stallingArchive("pre-aborted");
+    const { spy } = stallStreams();
+    try {
+      await expect(
+        extractPluginArchive(archivePath, dest, {
+          signal: AbortSignal.abort(new Error("already-cancelled")),
+        })
+      ).rejects.toThrow("already-cancelled");
+      // Nothing was ever opened — the abort short-circuits the entry pump.
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("still reports a genuine stream failure that beats a real cancel", async () => {
+    // Regression guard for the pre-existing discrimination rule: a real error
+    // must win over an abort reason, or a broken archive would be misreported
+    // as a user cancellation. The cancel is genuinely fired — a test that built
+    // a controller and never aborted it would pass with all of the cancel/error
+    // discrimination deleted.
+    //
+    // Ordering has to be unambiguous or this races on a loaded runner. Hand the
+    // live stream to `pipeline` FIRST, destroy it on the next tick (so the
+    // rejection is a real stream error, not a premature-close from a stream that
+    // was already dead at attach time), and fire the cancel a clear margin
+    // later. The cancel therefore always lands after the extraction has settled
+    // — which is exactly the "a real error wins" claim being asserted.
+    const { archivePath, dest } = await stallingArchive("race");
+    const controller = new AbortController();
+    let aborted = false;
+    const spy = vi
+      .spyOn(yauzl.ZipFile.prototype, "openReadStream")
+      .mockImplementation((_entry, callback) => {
+        const failing = new Readable({ read() {} });
+        callback(null, failing);
+        process.nextTick(() => failing.destroy(new Error("disk-exploded")));
+        setTimeout(() => {
+          aborted = true;
+          controller.abort(new Error("user-said-stop"));
+        }, 250);
+      });
+
+    try {
+      await expect(
+        extractPluginArchive(archivePath, dest, { signal: controller.signal })
+      ).rejects.toThrow("disk-exploded");
+      // The stream error resolved the extraction before the cancel even fired,
+      // so this also proves the failure wasn't a cancel misreported as an error.
+      expect(aborted).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("reports each validated file entry, in archive order, and no directories", async () => {
+    const src = path.join(tmpDir, "src-onentry");
+    await createFixture(src, {
+      "plugin.json": JSON.stringify(validManifest()),
+      "dist/index.js": "console.log(1);",
+      "dist/nested/deep.js": "console.log(2);",
+    });
+    const archivePath = path.join(tmpDir, "onentry.dntr");
+    await packPluginArchive(src, archivePath);
+    const dest = path.join(tmpDir, "extracted-onentry");
+    await fs.mkdir(dest, { recursive: true });
+
+    const seen: string[] = [];
+    await extractPluginArchive(archivePath, dest, { onEntry: (n) => seen.push(n) });
+
+    // plugin.json is the mandated first entry of the format, and a nested file
+    // can't precede its own parent directory's sibling — assert the sequence,
+    // not just membership, so a reordered or duplicated report is caught.
+    expect(seen[0]).toBe("plugin.json");
+    expect(seen.indexOf("dist/index.js")).toBeGreaterThan(0);
+    expect(seen.indexOf("dist/nested/deep.js")).toBeGreaterThan(seen.indexOf("dist/index.js"));
+    expect(new Set(seen).size).toBe(seen.length);
+    // Directory entries are created, not streamed, so they are not progress.
+    expect(seen.some((n) => n.endsWith("/"))).toBe(false);
+  });
+
+  it("does not report entries once the extraction has already been cancelled", async () => {
+    // yauzl's `close()` only flips a flag — a central-directory read in flight
+    // still emits its entry. Without the `settled` guard those late entries
+    // would report progress for a dead install and `mkdir` a staging dir the
+    // caller's cleanup had already removed.
+    const src = path.join(tmpDir, "src-latefire");
+    await createFixture(src, {
+      "plugin.json": JSON.stringify(validManifest()),
+      "dist/a.js": "1",
+      "dist/b.js": "2",
+      "dist/c.js": "3",
+    });
+    const archivePath = path.join(tmpDir, "latefire.dntr");
+    await packPluginArchive(src, archivePath);
+    const dest = path.join(tmpDir, "extracted-latefire");
+    await fs.mkdir(dest, { recursive: true });
+
+    const controller = new AbortController();
+    const seen: string[] = [];
+    await expect(
+      extractPluginArchive(archivePath, dest, {
+        signal: controller.signal,
+        onEntry: (n) => {
+          seen.push(n);
+          // Cancel from inside the very first report.
+          if (seen.length === 1) controller.abort(new Error("stop-now"));
+        },
+      })
+    ).rejects.toThrow("stop-now");
+
+    expect(seen).toEqual(["plugin.json"]);
+  });
+
+  it("clears the deadline timer on a fast, successful extraction", async () => {
+    // The 2-minute default would otherwise hold the event loop open long after a
+    // sub-second install finished. Identify the deadline timer specifically by
+    // its unique delay — the pre-existing per-entry inactivity watchdog also
+    // calls setTimeout/clearTimeout, so a bare "clearTimeout was called" would
+    // pass even if the deadline timer were never cleared at all.
+    const src = path.join(tmpDir, "src-timer");
+    await createFixture(src, { "plugin.json": JSON.stringify(validManifest()) });
+    const archivePath = path.join(tmpDir, "timer.dntr");
+    await packPluginArchive(src, archivePath);
+    const dest = path.join(tmpDir, "extracted-timer");
+    await fs.mkdir(dest, { recursive: true });
+
+    const DEADLINE = 987_654;
+    const realSetTimeout = globalThis.setTimeout;
+    let deadlineHandle: unknown;
+    const setSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      fn: () => void,
+      ms?: number,
+      ...rest: unknown[]
+    ) => {
+      const handle = realSetTimeout(fn, ms, ...rest);
+      if (ms === DEADLINE) deadlineHandle = handle;
+      return handle;
+    }) as unknown as typeof globalThis.setTimeout);
+    const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+
+    try {
+      await extractPluginArchive(archivePath, dest, { totalDeadlineMs: DEADLINE });
+      expect(deadlineHandle).toBeDefined();
+      expect(clearSpy.mock.calls.some(([h]) => h === deadlineHandle)).toBe(true);
+    } finally {
+      setSpy.mockRestore();
+      clearSpy.mockRestore();
     }
   });
 });

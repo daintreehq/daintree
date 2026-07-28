@@ -453,14 +453,24 @@ export class TerminalReconciliationWatchdog {
     // (`terminal.cols/rows`) disagrees with what the container can hold
     // (`fitAddon.proposeDimensions()`) is rendering its buffer at the wrong width
     // — the exact "garbled line flow" users see after a warm switch-back, and the
-    // failure mode the watchdog previously only DIAGNOSED (DEV log) while
-    // excluding agent TUIs entirely. Now repair it for EVERY on-screen terminal,
-    // alt-buffer/DEC-2026 agents included, with the atomic alt-buffer-safe
-    // reconcile (no mid-block reflow). This is the verifier half: the divergence
-    // IS the proof the pane converged wrong, and the watchdog ticks until it
-    // matches. Bounded by the heavy-repair budget (== REVEAL_CONCURRENCY) so a
-    // grid that all diverges at once never lands as a single long task.
-    if (!inSynchronizedBlock && !resizeTransitioning) {
+    // failure mode the watchdog previously only DIAGNOSED (DEV log). This is the
+    // verifier half: the divergence IS the proof the pane converged wrong, and
+    // the watchdog ticks until it matches. Bounded by the heavy-repair budget
+    // (== REVEAL_CONCURRENCY) so a grid that all diverges at once never lands as
+    // a single long task.
+    //
+    // Main buffer only (#11443). `reconcileGeometryFresh` returns early for an
+    // alt-screen pane by design (#10805 — never reflow a live TUI's frame out
+    // from under its own SIGWINCH redraw), so the repair issued here is a
+    // structural no-op for one: the divergence can never close, every tick
+    // burns a heavy-budget slot another pane could use, and after
+    // WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS the breaker latches
+    // `geometryRepairGaveUp` permanently — which then blocks the pane's
+    // legitimate main-buffer repairs once it leaves the alternate screen, since
+    // only genuine convergence or a re-attach re-arms it. An alt pane's geometry
+    // is owned by the ResizeObserver-driven applyResize path and the app's own
+    // redraw; the render-pause and WebGL layers below still cover it.
+    if (!managed.isAltBuffer && !inSynchronizedBlock && !resizeTransitioning) {
       const proposal = managed.fitAddon.proposeDimensions?.();
       if (proposal && proposal.cols > 1 && proposal.rows > 1) {
         const diverged =
@@ -506,7 +516,6 @@ export class TerminalReconciliationWatchdog {
                   xtermRows: managed.terminal.rows,
                   proposedCols: proposal.cols,
                   proposedRows: proposal.rows,
-                  isAltBuffer: managed.isAltBuffer === true,
                 }
               );
             } else {
@@ -525,7 +534,6 @@ export class TerminalReconciliationWatchdog {
                   xtermRows: managed.terminal.rows,
                   proposedCols: proposal.cols,
                   proposedRows: proposal.rows,
-                  isAltBuffer: managed.isAltBuffer === true,
                 }
               );
               if (this.deps.reconcileRevealGeometry(id)) {

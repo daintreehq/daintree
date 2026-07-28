@@ -12,6 +12,12 @@ export const config: AgentConfig = {
   color: "#10a37f",
   iconId: "codex",
   supportsContextInjection: true,
+  // #11282 phase 5: Codex sessions are UUID-keyed rollout files, resumable from
+  // any folder via `codex resume <id>` — a move preserves the conversation.
+  continuity: {
+    tier: "preserved",
+    detail: "Codex can resume this conversation by session ID from any folder",
+  },
   supports: {
     mcpInjection: "cli-flags",
     settingsOverlay: false,

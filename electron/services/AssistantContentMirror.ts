@@ -16,7 +16,8 @@ import { resilientAtomicWriteFile } from "../utils/fs.js";
  *
  * Inside each source the layout is agent-native hidden folders:
  *   .claude/commands/   Claude Code slash commands (*.md)
- *   .claude/skills/     Claude Code skills (<name>/SKILL.md)
+ *   .claude/skills/     Claude-only skills (<name>/SKILL.md)
+ *   .codex/skills/      Codex-only skills (<name>/SKILL.md)
  *   .agents/skills/     Shared skills (Agent Skills convention)
  *
  * Per-agent mapping rationale (verified July 2026):
@@ -27,8 +28,11 @@ import { resilientAtomicWriteFile } from "../utils/fs.js";
  *     explicit .claude/skills entry of the same name winning.
  *   - Codex removed custom prompts entirely in 0.118.0; skills are the only
  *     vehicle. It loads <cwd>/.agents/skills even when cwd is not a git repo,
- *     and skills are exempt from the project-config trust gate. .codex/skills
- *     is NOT mirrored — that path rides the trust-gated project-config layer.
+ *     and skills are exempt from the project-config trust gate. The
+ *     .codex/skills SOURCE folder is a Daintree-owned authoring convention for
+ *     Codex-only skills — it is translated to the session's .agents/skills,
+ *     never mirrored to a .codex destination, because <cwd>/.codex rides
+ *     Codex's trust-gated project-config layer.
  *   - Copilot CLI reads both .claude/skills and .agents/skills from cwd.
  *   - daintree-assistant runs in the project root and reads nothing from cwd,
  *     so it has no mapping here; it will read the source folders natively.
@@ -39,8 +43,9 @@ interface ContentMapping {
   /**
    * `skillDir`: the unit of precedence is the top-level skill directory — a
    * higher-precedence skill of the same name replaces the lower one wholesale
-   * (never a per-file interleave of two different skills). `file`: each file
-   * stands alone (commands).
+   * (never a per-file interleave of two different skills), and a directory is
+   * only eligible when it contains a SKILL.md. `file`: each file stands alone
+   * (commands).
    */
   granularity: "file" | "skillDir";
 }
@@ -53,7 +58,12 @@ const AGENT_CONTENT_MAPPINGS: Record<string, readonly ContentMapping[]> = {
     { sourceDir: ".claude/commands", destDir: ".claude/commands", granularity: "file" },
     { sourceDir: ".claude/skills", destDir: ".claude/skills", granularity: "skillDir" },
   ],
-  codex: [{ sourceDir: ".agents/skills", destDir: ".agents/skills", granularity: "skillDir" }],
+  // Shared tree first so an explicit .codex/skills/<name> overrides
+  // .agents/skills/<name>; both land in the session's .agents/skills.
+  codex: [
+    { sourceDir: ".agents/skills", destDir: ".agents/skills", granularity: "skillDir" },
+    { sourceDir: ".codex/skills", destDir: ".agents/skills", granularity: "skillDir" },
+  ],
   copilot: [
     { sourceDir: ".agents/skills", destDir: ".agents/skills", granularity: "skillDir" },
     { sourceDir: ".claude/skills", destDir: ".claude/skills", granularity: "skillDir" },
@@ -64,8 +74,20 @@ const AGENT_CONTENT_MAPPINGS: Record<string, readonly ContentMapping[]> = {
 // these roots so a corrupt manifest can never reach template files
 // (.mcp.json, .claude/settings.json, CLAUDE.md, ...). Kept as a superset of
 // all agents' mappings on purpose: switching the same project's session from
-// claude to codex must clean up the claude-mirrored files.
+// claude to codex must clean up the claude-mirrored files. `.codex/skills` is
+// deliberately NOT here — it is a source authoring convention, never a
+// session destination, and must never become a permissible deletion root.
 const MIRROR_DEST_ROOTS = [".claude/commands", ".claude/skills", ".agents/skills"] as const;
+
+// Roots scaffolded in the Daintree-owned AUTHORING folders (~/.daintree/
+// assistant and <project>/.daintree/assistant). Includes the .codex/skills
+// source lane; distinct from MIRROR_DEST_ROOTS, which alone bounds deletion.
+const SOURCE_SCAFFOLD_ROOTS = [
+  ".claude/commands",
+  ".claude/skills",
+  ".codex/skills",
+  ".agents/skills",
+] as const;
 
 // Manifest of relpaths written by the previous sync, stored inside the
 // session dir. Deletion is manifest-driven so user files that happen to be in
@@ -100,9 +122,25 @@ export interface AssistantContentSyncInput {
   globalContentDir?: string;
 }
 
+/**
+ * Structured sync outcome. `staleFailures` is the fail-closed signal: managed
+ * destination files that should be gone (or provably refreshed) but are still
+ * present. The caller must not launch a backend from the session dir while it
+ * is non-empty — otherwise deleted or superseded skill instructions would stay
+ * silently active. `omittedSkills` (invalid sources skipped safely) and
+ * `failedCopies` (desired file absent, nothing stale left behind) are
+ * warnings: the assistant is still safe to launch, just without that content.
+ */
 export interface AssistantContentSyncResult {
   copied: number;
   removed: number;
+  truncated: boolean;
+  /** Skill dirs skipped for missing SKILL.md, as `<scope>:<sourceDir>/<name>`. */
+  omittedSkills: string[];
+  /** Desired dest relpaths that could not be written and are absent on disk. */
+  failedCopies: string[];
+  /** Managed dest relpaths that are stale or unverifiable but still present. */
+  staleFailures: string[];
 }
 
 interface ManifestShape {
@@ -128,19 +166,45 @@ function isUnderMirrorRoot(posixRelPath: string): boolean {
   return MIRROR_DEST_ROOTS.some((root) => posixRelPath.startsWith(root + "/"));
 }
 
+/**
+ * Reads the ownership manifest. Only a missing file means "nothing managed
+ * yet" — the manifest is atomically written and Daintree-owned, so an
+ * unreadable, corrupt, or unsupported one means ownership records are gone
+ * while managed files may still be on disk. Treating that as empty would
+ * launch a session with stale unowned skills; throw instead (fail closed).
+ */
 async function readManifest(sessionPath: string): Promise<string[]> {
+  let raw: string;
   try {
-    const raw = await fs.readFile(path.join(sessionPath, MANIFEST_FILE), "utf-8");
-    const parsed = JSON.parse(raw) as ManifestShape;
-    if (!parsed || !Array.isArray(parsed.files)) return [];
-    return parsed.files.filter((entry): entry is string => typeof entry === "string");
-  } catch {
-    return [];
+    raw = await fs.readFile(path.join(sessionPath, MANIFEST_FILE), "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new Error(`Unreadable mirror manifest ${MANIFEST_FILE} — cannot prove mirror ownership`, {
+      cause: err,
+    });
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Corrupt mirror manifest ${MANIFEST_FILE} — cannot prove mirror ownership`, {
+      cause: err,
+    });
+  }
+  const shape = parsed as ManifestShape | null;
+  if (
+    !shape ||
+    shape.version !== 1 ||
+    !Array.isArray(shape.files) ||
+    shape.files.some((entry) => typeof entry !== "string")
+  ) {
+    throw new Error(`Unsupported mirror manifest ${MANIFEST_FILE} — cannot prove mirror ownership`);
+  }
+  return shape.files as string[];
 }
 
 async function writeManifest(sessionPath: string, files: string[]): Promise<void> {
-  const manifest: ManifestShape = { version: 1, files: [...files].sort() };
+  const manifest: ManifestShape = { version: 1, files: [...new Set(files)].sort() };
   await resilientAtomicWriteFile(
     path.join(sessionPath, MANIFEST_FILE),
     JSON.stringify(manifest, null, 2) + "\n",
@@ -153,6 +217,19 @@ interface WalkState {
   files: Map<string, string>;
   visitedDirs: Set<string>;
   truncated: boolean;
+  /**
+   * Directories that exist but could not be read. Distinct from absent
+   * sources: an absent source contributes no skills (and retires previously
+   * mirrored ones), while an unreadable source means the desired state cannot
+   * be proven — the sync must fail rather than silently delete content that
+   * may still be defined.
+   */
+  unreadableDirs: string[];
+}
+
+function isAbsentError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 /**
@@ -162,12 +239,18 @@ interface WalkState {
  * how the CLIs' own scanners treat them.
  */
 async function collectSourceFiles(rootAbs: string): Promise<WalkState> {
-  const state: WalkState = { files: new Map(), visitedDirs: new Set(), truncated: false };
+  const state: WalkState = {
+    files: new Map(),
+    visitedDirs: new Set(),
+    truncated: false,
+    unreadableDirs: [],
+  };
   try {
     const rootReal = await fs.realpath(rootAbs);
     state.visitedDirs.add(rootReal);
-  } catch {
-    return state; // source dir absent — nothing to collect
+  } catch (err) {
+    if (!isAbsentError(err)) state.unreadableDirs.push(rootAbs);
+    return state; // absent source dir — nothing to collect
   }
   await walkDir(rootAbs, "", state, 0);
   return state;
@@ -186,7 +269,8 @@ async function walkDir(
   let entries: Array<import("node:fs").Dirent>;
   try {
     entries = await fs.readdir(dirAbs, { withFileTypes: true });
-  } catch {
+  } catch (err) {
+    if (!isAbsentError(err)) state.unreadableDirs.push(dirAbs);
     return;
   }
   // Alphabetical order keeps traversal — and therefore which files survive
@@ -206,8 +290,12 @@ async function walkDir(
         const stat = await fs.stat(entryAbs);
         isDir = stat.isDirectory();
         isFile = stat.isFile();
-      } catch {
-        continue; // broken symlink
+      } catch (err) {
+        // Dangling symlink (ENOENT) and OS-level link loops are skippable;
+        // anything else (EACCES, EIO) leaves the desired state unprovable.
+        if (isAbsentError(err) || (err as NodeJS.ErrnoException).code === "ELOOP") continue;
+        state.unreadableDirs.push(entryAbs);
+        continue;
       }
     }
 
@@ -216,7 +304,9 @@ async function walkDir(
         const real = await fs.realpath(entryAbs);
         if (state.visitedDirs.has(real)) continue; // symlink cycle
         state.visitedDirs.add(real);
-      } catch {
+      } catch (err) {
+        if (isAbsentError(err) || (err as NodeJS.ErrnoException).code === "ELOOP") continue;
+        state.unreadableDirs.push(entryAbs);
         continue;
       }
       await walkDir(entryAbs, entryRel, state, depth + 1);
@@ -258,10 +348,11 @@ async function verifyRealDirChain(
     try {
       const st = await fs.lstat(current);
       if (st.isSymbolicLink() || !st.isDirectory()) verdict = "unsafe";
-    } catch {
-      // ENOENT (or unreadable): nothing below exists yet, so there is nothing
-      // a symlink could redirect. mkdir will create real dirs from here down.
-      verdict = "ok";
+    } catch (err) {
+      // ENOENT: nothing below exists yet, so there is nothing a symlink could
+      // redirect — mkdir will create real dirs from here down. Any other
+      // failure (EACCES, EIO) leaves the chain unprovable: unsafe.
+      verdict = isAbsentError(err) ? "ok" : "unsafe";
     }
     cache.set(current, verdict);
     if (verdict === "unsafe") return "unsafe";
@@ -269,17 +360,44 @@ async function verifyRealDirChain(
   return "ok";
 }
 
+/** Non-throwing lstat existence probe for the verification pass. */
+async function destFileState(abs: string): Promise<"absent" | "file" | "other"> {
+  try {
+    const st = await fs.lstat(abs);
+    return st.isFile() && !st.isSymbolicLink() ? "file" : "other";
+  } catch (err) {
+    // Only a proven-missing path counts as absent — an unreadable path may
+    // still hold stale content, so it stays unverifiable ("other").
+    return isAbsentError(err) ? "absent" : "other";
+  }
+}
+
+/**
+ * Portable casefold identity for alias detection: the default macOS and
+ * Windows filesystems are case-insensitive (and macOS normalizes Unicode), so
+ * two relpaths differing only by case/normalization address the same file.
+ */
+function foldPath(rel: string): string {
+  return rel.normalize("NFC").toLowerCase();
+}
+
 /**
  * Syncs user assistant content into the session directory for the given
- * agent. Returns null for agents with no cwd-based content mechanism.
+ * agent. Returns null for agents with no cwd-based content mechanism. Throws
+ * when a source directory exists but cannot be read — the desired state is
+ * unprovable, and treating it as empty would wrongly retire mirrored skills.
  *
  * Sync is manifest-driven: files mirrored by the previous sync that are no
- * longer desired are removed (so deleting a command in the source folder
+ * longer desired are removed (so deleting a skill in the source folder
  * actually retires it), then every desired file is copied fresh. The manifest
- * is written after deletions but before copies — a mid-copy crash leaves it
- * as a superset of what's on disk, and superfluous entries delete as harmless
- * no-ops on the next sync. Stale entries whose deletion FAILED stay in the
- * manifest so the next sync retries instead of orphaning the file.
+ * is written twice per sync: first as a superset (desired ∪ stale) after
+ * deletions but before copies — because every copied path is manifested
+ * BEFORE its copy starts, no crash point can produce an on-disk managed file
+ * the manifest doesn't own — then compacted after verification to desired ∪
+ * still-present stale paths, so successfully removed rels are retired and a
+ * future unmanaged file at the same relpath is never claimed. Combined with
+ * the verification pass this gives the same recovery guarantee as a separate
+ * pending-manifest scheme without a second recovery file.
  */
 export async function syncAssistantContent(
   input: AssistantContentSyncInput
@@ -287,9 +405,9 @@ export async function syncAssistantContent(
   const mappings = AGENT_CONTENT_MAPPINGS[input.agentId];
   if (!mappings) return null;
 
-  const sources = [
-    input.globalContentDir ?? getGlobalAssistantContentDir(),
-    getProjectAssistantContentDir(input.projectPath),
+  const sources: Array<{ scope: "global" | "project"; root: string }> = [
+    { scope: "global", root: input.globalContentDir ?? getGlobalAssistantContentDir() },
+    { scope: "project", root: getProjectAssistantContentDir(input.projectPath) },
   ];
 
   // destRel (posix) → source absolute path. Insertion order encodes
@@ -297,28 +415,71 @@ export async function syncAssistantContent(
   // above — later writes overwrite earlier ones. For skillDir mappings the
   // replacement unit is the whole top-level skill directory: all previously
   // collected files under the same dest skill prefix are dropped first, so an
-  // explicit skill never interleaves files with a shadowed shared skill.
+  // explicit skill never interleaves files with a shadowed shared skill. A
+  // skill directory without a SKILL.md is invalid — it contributes nothing
+  // and therefore never shadows a valid lower-precedence skill.
   const desired = new Map<string, string>();
+  const omittedSkills: string[] = [];
   let truncated = false;
-  for (const sourceRoot of sources) {
+  for (const source of sources) {
     for (const mapping of mappings) {
-      const walk = await collectSourceFiles(path.join(sourceRoot, mapping.sourceDir));
+      const walk = await collectSourceFiles(path.join(source.root, mapping.sourceDir));
+      if (walk.unreadableDirs.length > 0) {
+        throw new Error(
+          `Unreadable assistant content directory: ${walk.unreadableDirs[0]} — cannot compute the desired skill state`
+        );
+      }
       truncated ||= walk.truncated;
-      if (mapping.granularity === "skillDir") {
-        const replacedSkills = new Set<string>();
-        for (const rel of walk.files.keys()) {
-          const slash = rel.indexOf("/");
-          if (slash > 0) replacedSkills.add(rel.slice(0, slash));
+      if (mapping.granularity === "file") {
+        for (const [rel, abs] of walk.files) {
+          if (!rel.endsWith(".md")) continue;
+          desired.set(`${mapping.destDir}/${rel}`, abs);
         }
-        for (const skillName of replacedSkills) {
-          const prefix = `${mapping.destDir}/${skillName}/`;
-          for (const key of desired.keys()) {
-            if (key.startsWith(prefix)) desired.delete(key);
+        continue;
+      }
+      const bySkill = new Map<string, Map<string, string>>();
+      for (const [rel, abs] of walk.files) {
+        const slash = rel.indexOf("/");
+        if (slash <= 0) continue; // loose file at the skills root — not a skill bundle
+        const skillName = rel.slice(0, slash);
+        let group = bySkill.get(skillName);
+        if (!group) {
+          group = new Map();
+          bySkill.set(skillName, group);
+        }
+        group.set(rel, abs);
+      }
+      for (const [skillName, group] of bySkill) {
+        // The SKILL.md must exist AND pass the size cap BEFORE this bundle
+        // may shadow a lower-precedence skill — deciding on walk presence
+        // alone would let an oversized manifest knock out the valid skill
+        // underneath and still mirror its own resource files.
+        const skillMdAbs = group.get(`${skillName}/SKILL.md`);
+        let eligible = skillMdAbs !== undefined;
+        if (skillMdAbs) {
+          try {
+            eligible = (await fs.stat(skillMdAbs)).size <= MAX_FILE_BYTES;
+          } catch (err) {
+            if (!isAbsentError(err)) {
+              throw new Error(
+                `Unreadable assistant content directory: ${skillMdAbs} — cannot compute the desired skill state`,
+                { cause: err }
+              );
+            }
+            eligible = false;
           }
         }
-      }
-      for (const [rel, abs] of walk.files) {
-        desired.set(`${mapping.destDir}/${rel}`, abs);
+        if (!eligible) {
+          omittedSkills.push(`${source.scope}:${mapping.sourceDir}/${skillName}`);
+          continue;
+        }
+        const prefix = `${mapping.destDir}/${skillName}/`;
+        for (const key of desired.keys()) {
+          if (key.startsWith(prefix)) desired.delete(key);
+        }
+        for (const [rel, abs] of group) {
+          desired.set(`${mapping.destDir}/${rel}`, abs);
+        }
       }
     }
   }
@@ -328,9 +489,57 @@ export async function syncAssistantContent(
     );
   }
 
+  // A destination relpath the cleanup validator would refuse to own must
+  // never be created: on POSIX, ':' and '\' are legal filename characters,
+  // but isUnderMirrorRoot rejects them (Windows traversal defense) — a
+  // mirrored file with such a name would be stranded outside every future
+  // reconciliation.
+  for (const destRel of [...desired.keys()]) {
+    if (!isUnderMirrorRoot(destRel)) {
+      console.warn("[AssistantContentMirror] Skipping unownable destination path:", destRel);
+      desired.delete(destRel);
+    }
+  }
+
+  // Case-insensitive filesystems (default macOS/Windows) alias skill
+  // directories that differ only by case, which would interleave a shadowed
+  // skill's files with its winner inside one on-disk directory. Collapse
+  // casefold collisions deterministically on every platform: the
+  // last-inserted (highest-precedence) spelling wins, other spellings are
+  // omitted wholesale.
+  const skillPrefixWinners = new Map<string, string>();
+  for (const destRel of desired.keys()) {
+    const segments = destRel.split("/");
+    if (segments.length < 4) continue; // skills sit at <root>/<skill>/<file…>; commands are per-file
+    skillPrefixWinners.set(
+      foldPath(segments.slice(0, 3).join("/")),
+      segments.slice(0, 3).join("/")
+    );
+  }
+  const reportedCollisions = new Set<string>();
+  for (const destRel of [...desired.keys()]) {
+    const segments = destRel.split("/");
+    if (segments.length < 4) continue;
+    const prefix = segments.slice(0, 3).join("/");
+    const winner = skillPrefixWinners.get(foldPath(prefix));
+    if (winner !== undefined && winner !== prefix) {
+      if (!reportedCollisions.has(prefix)) {
+        reportedCollisions.add(prefix);
+        omittedSkills.push(`case-collision:${prefix}`);
+      }
+      desired.delete(destRel);
+    }
+  }
+
+  for (const omitted of omittedSkills) {
+    console.warn(`[AssistantContentMirror] Omitting ineligible skill: ${omitted}`);
+  }
+
   // Eligibility runs BEFORE the manifest write so an ineligible file never
   // holds a manifest entry: a previously mirrored file whose source has since
-  // grown past the cap becomes stale below and its old copy is removed.
+  // grown past the cap becomes stale below and its old copy is removed. Only
+  // a proven-absent source may retire its copy — an unreadable one means the
+  // desired state is unprovable.
   for (const [destRel, sourceAbs] of desired) {
     try {
       const stat = await fs.stat(sourceAbs);
@@ -340,7 +549,13 @@ export async function syncAssistantContent(
         );
         desired.delete(destRel);
       }
-    } catch {
+    } catch (err) {
+      if (!isAbsentError(err)) {
+        throw new Error(
+          `Unreadable assistant content directory: ${sourceAbs} — cannot compute the desired skill state`,
+          { cause: err }
+        );
+      }
       desired.delete(destRel); // vanished between walk and stat
     }
   }
@@ -350,10 +565,11 @@ export async function syncAssistantContent(
   const previous = await readManifest(input.sessionPath);
 
   let removed = 0;
-  const failedRemovals: string[] = [];
+  const staleRels: string[] = [];
   for (const staleRel of previous) {
     if (desired.has(staleRel)) continue;
     if (!isUnderMirrorRoot(staleRel)) continue;
+    staleRels.push(staleRel);
     const segments = staleRel.split("/");
     const staleAbs = path.resolve(sessionBase, ...segments);
     if (!staleAbs.startsWith(sessionBase + path.sep)) continue;
@@ -369,23 +585,29 @@ export async function syncAssistantContent(
       removed += 1;
       await removeEmptyParents(staleAbs, sessionBase);
     } catch (err) {
-      failedRemovals.push(staleRel);
       console.warn("[AssistantContentMirror] Failed to remove stale mirrored file:", staleAbs, err);
     }
   }
 
-  await writeManifest(input.sessionPath, [...desired.keys(), ...failedRemovals]);
+  // Superset manifest: every desired path is owned before its copy starts,
+  // and stale paths stay owned until verification proves them gone.
+  await writeManifest(input.sessionPath, [...desired.keys(), ...staleRels]);
 
   let copied = 0;
+  const copyFailedRels = new Set<string>();
   for (const [destRel, sourceAbs] of desired) {
     const segments = destRel.split("/");
     const destAbs = path.resolve(sessionBase, ...segments);
-    if (!destAbs.startsWith(sessionBase + path.sep)) continue;
+    if (!destAbs.startsWith(sessionBase + path.sep)) {
+      copyFailedRels.add(destRel);
+      continue;
+    }
     if ((await verifyRealDirChain(sessionBase, segments.slice(0, -1), chainCache)) !== "ok") {
       console.warn(
         "[AssistantContentMirror] Skipping copy through a symlinked directory:",
         destRel
       );
+      copyFailedRels.add(destRel);
       continue;
     }
     try {
@@ -402,10 +624,61 @@ export async function syncAssistantContent(
       copied += 1;
     } catch (err) {
       console.warn("[AssistantContentMirror] Failed to mirror file:", sourceAbs, err);
+      copyFailedRels.add(destRel);
     }
   }
 
-  return { copied, removed };
+  // Final verification. Stale paths must be absent; a stale file still on
+  // disk (failed delete, symlinked dir, racing writer) is a fail-closed
+  // signal — the old skill would remain silently active. A desired path whose
+  // copy failed is stale-equivalent when something still exists there (the
+  // previous version's content can't be proven refreshed) and a plain warning
+  // when the slot is simply empty.
+  const staleFailures: string[] = [];
+  const failedCopies: string[] = [];
+  const desiredByFold = new Map<string, string>();
+  for (const rel of desired.keys()) desiredByFold.set(foldPath(rel), rel);
+  for (const staleRel of staleRels) {
+    const staleAbs = path.resolve(sessionBase, ...staleRel.split("/"));
+    const state = await destFileState(staleAbs);
+    if (state === "absent") continue;
+    // On a case-insensitive filesystem a case-only rename leaves the stale
+    // spelling resolving to the freshly copied desired file. Same dev+ino as
+    // the desired path means nothing stale actually remains — without this,
+    // every retry would re-report the alias and permanently block launch.
+    const aliasRel = desiredByFold.get(foldPath(staleRel));
+    if (aliasRel && state === "file" && !copyFailedRels.has(aliasRel)) {
+      try {
+        const [staleSt, aliasSt] = await Promise.all([
+          fs.stat(staleAbs),
+          fs.stat(path.resolve(sessionBase, ...aliasRel.split("/"))),
+        ]);
+        if (staleSt.dev === aliasSt.dev && staleSt.ino === aliasSt.ino) continue;
+      } catch {
+        // fall through — treat as stale
+      }
+    }
+    staleFailures.push(staleRel);
+  }
+  for (const destRel of desired.keys()) {
+    const state = await destFileState(path.resolve(sessionBase, ...destRel.split("/")));
+    if (copyFailedRels.has(destRel)) {
+      if (state === "absent") failedCopies.push(destRel);
+      else staleFailures.push(destRel);
+    } else if (state !== "file") {
+      // Copy reported success but the file is gone or not a regular file —
+      // treat as unverifiable rather than silently trusting the session dir.
+      staleFailures.push(destRel);
+    }
+  }
+
+  // Compact the superset manifest to verified ownership: desired paths plus
+  // stale paths still present. Successfully removed rels are retired so a
+  // future unmanaged user file at the same relpath is never claimed; if this
+  // write fails it propagates (fail closed) while the superset stays valid.
+  await writeManifest(input.sessionPath, [...desired.keys(), ...staleFailures]);
+
+  return { copied, removed, truncated, omittedSkills, failedCopies, staleFailures };
 }
 
 /**
@@ -440,9 +713,15 @@ them up through its own native discovery.
 Layout (agent-native hidden folders):
 
 - .claude/commands/   Claude Code slash commands (*.md with YAML frontmatter)
-- .claude/skills/     Claude Code skills (<name>/SKILL.md)
-- .agents/skills/     Shared skills — loaded by Codex and Copilot, and
-                      translated into .claude/skills for Claude sessions
+- .claude/skills/     Claude-only skills (<name>/SKILL.md)
+- .codex/skills/      Codex-only skills (<name>/SKILL.md) — delivered to
+                      Codex through its .agents/skills discovery path
+- .agents/skills/     Shared skills — loaded by every supported backend
+                      (translated into .claude/skills for Claude sessions)
+
+A backend-specific skill overrides a shared skill of the same name, whole
+directory for whole directory. Every skill directory needs a SKILL.md file
+(conventionally with name and description frontmatter) or it is skipped.
 
 A per-project variant works the same way and takes precedence over this
 folder: <your project>/.daintree/assistant/
@@ -454,13 +733,14 @@ Notes:
 `;
 
 /**
- * Creates the global content folder with a README and the standard layout so
- * the "Open assistant commands folder" affordance always reveals something
- * self-explanatory. Existing files are never overwritten.
+ * Creates the global content folder with a README and the standard authoring
+ * layout (including the .codex/skills source lane) so the "Open assistant
+ * commands folder" affordance always reveals something self-explanatory.
+ * Existing files are never overwritten.
  */
 export async function ensureAssistantContentDir(dir?: string): Promise<string> {
   const target = dir ?? getGlobalAssistantContentDir();
-  for (const root of MIRROR_DEST_ROOTS) {
+  for (const root of SOURCE_SCAFFOLD_ROOTS) {
     await fs.mkdir(path.resolve(target, ...root.split("/")), { recursive: true });
   }
   const readmePath = path.join(target, "README.md");

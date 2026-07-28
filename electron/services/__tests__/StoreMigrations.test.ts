@@ -62,6 +62,7 @@ import { migrations } from "../migrations/index.js";
 import { migration002 } from "../migrations/002-add-terminal-location.js";
 import { migration003 } from "../migrations/003-migrate-recipes-to-project.js";
 import { migration004 } from "../migrations/004-upgrade-correction-model.js";
+import { migration025 } from "../migrations/025-upgrade-voice-correction-model.js";
 import { migration005 } from "../migrations/005-add-getting-started-checklist.js";
 import { migration007 } from "../migrations/007-reduce-default-terminal-scrollback.js";
 import { migration008 } from "../migrations/008-split-notification-sounds.js";
@@ -664,6 +665,65 @@ describe("MigrationRunner", () => {
     });
   });
 
+  describe("migration 025 — upgrade voice correction model to gpt-5.6-luna", () => {
+    it("upgrades gpt-5-mini to gpt-5.6-luna and preserves sibling fields", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { correctionModel: "gpt-5-mini", enabled: true, language: "en" },
+      });
+      migration025.up(store as never);
+      const voiceInput = store.data.voiceInput as Record<string, unknown>;
+      expect(voiceInput.correctionModel).toBe("gpt-5.6-luna");
+      expect(voiceInput.enabled).toBe(true);
+      expect(voiceInput.language).toBe("en");
+    });
+
+    it("upgrades the retired gpt-5-nano tier to gpt-5.6-luna", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { correctionModel: "gpt-5-nano", enabled: true },
+      });
+      migration025.up(store as never);
+      const voiceInput = store.data.voiceInput as { correctionModel: string };
+      expect(voiceInput.correctionModel).toBe("gpt-5.6-luna");
+    });
+
+    it("upgrades missing correctionModel to gpt-5.6-luna", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { enabled: true },
+      });
+      migration025.up(store as never);
+      const voiceInput = store.data.voiceInput as { correctionModel: string };
+      expect(voiceInput.correctionModel).toBe("gpt-5.6-luna");
+    });
+
+    it("upgrades a malformed/unknown correctionModel value to gpt-5.6-luna", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { correctionModel: "some-old-junk", enabled: true },
+      });
+      migration025.up(store as never);
+      const voiceInput = store.data.voiceInput as { correctionModel: string };
+      expect(voiceInput.correctionModel).toBe("gpt-5.6-luna");
+    });
+
+    it("leaves gpt-5.6-luna unchanged without rewriting the store", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { correctionModel: "gpt-5.6-luna", enabled: true },
+      });
+      const before = store.data.voiceInput;
+      migration025.up(store as never);
+      const voiceInput = store.data.voiceInput as { correctionModel: string };
+      expect(voiceInput.correctionModel).toBe("gpt-5.6-luna");
+      // No write on the already-current path: store.set would replace the object
+      // (via spread), so an untouched reference proves the migration no-oped.
+      expect(store.data.voiceInput).toBe(before);
+    });
+
+    it("skips when no voiceInput settings exist", () => {
+      const store = createMockStore(storePath, {});
+      migration025.up(store as never);
+      expect(store.data.voiceInput).toBeUndefined();
+    });
+  });
+
   describe("migration 007 — reduce default terminal scrollback", () => {
     it("migrates scrollbackLines from 2500 to 1000 and preserves sibling fields", () => {
       const store = createMockStore(storePath, {
@@ -895,6 +955,22 @@ describe("MigrationRunner", () => {
   it("LATEST_SCHEMA_VERSION matches the highest version in the migrations barrel", () => {
     const highest = Math.max(...migrations.map((m) => m.version));
     expect(LATEST_SCHEMA_VERSION).toBe(highest);
+  });
+
+  it("runs migration025 from v24 under the full barrel, upgrading the voice correction model (#11365)", async () => {
+    const store = createMockStore(storePath, {
+      _schemaVersion: 24,
+      voiceInput: { correctionModel: "gpt-5-mini", enabled: true, language: "en" },
+    });
+    const runner = new MigrationRunner(store as never);
+
+    await runner.runMigrations(migrations);
+
+    expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+    const voiceInput = store.data.voiceInput as Record<string, unknown>;
+    expect(voiceInput.correctionModel).toBe("gpt-5.6-luna");
+    expect(voiceInput.enabled).toBe(true);
+    expect(voiceInput.language).toBe("en");
   });
 
   it("runs migration021 from v20 under the full barrel, merging disabledBuiltins (#9284)", async () => {
@@ -1590,6 +1666,11 @@ describe("MigrationRunner", () => {
 
       // Verify migrations actually ran
       expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+
+      // Migration 025: the legacy gpt-5-nano correction model migrates to luna.
+      const migratedVoice = store.data.voiceInput as Record<string, unknown>;
+      expect(migratedVoice.correctionModel).toBe("gpt-5.6-luna");
+      expect(migratedVoice.enabled).toBe(true);
 
       // Migration 002: terminals should have location field
       const migratedTerminals = (store.data.appState as Record<string, unknown>).terminals as Array<

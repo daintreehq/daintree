@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import type { WorktreeState, Project } from "@shared/types";
+import type { WorktreeState, Project, ProjectCreationIdentity } from "@shared/types";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import type { UseQuickSwitcherReturn } from "./hooks/useQuickSwitcher";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
@@ -15,6 +15,7 @@ import type { ReEntrySummaryState } from "./hooks/useReEntrySummary";
 import type { UseAgentLauncherReturn } from "./hooks/useAgentLauncher";
 import type { PluginDeepLinkState } from "./hooks/app";
 import type { SettingsTab } from "./components/Settings";
+import type { NonGitFolderStep } from "./components/Project/NonGitFolderDialog";
 import type { BuiltInPanelKind } from "./types";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
@@ -45,6 +46,7 @@ import {
   LazyPluginManagerView,
   LazyMcpConfirmDialog,
   LazyPluginConfirmDialog,
+  LazyPluginArchiveInstallConfirmDialog,
   LazyPluginMcpConfirmDialog,
   LazyPluginQuickPickDialog,
   LazyPluginInputBoxDialog,
@@ -127,6 +129,7 @@ interface ModalHostLayerProps {
   pluginConfirmResetKey: string;
   pluginMcpConfirmResetKey: string;
   pluginCapabilityConfirmResetKey: string;
+  pluginArchiveInstallResetKey: string;
   panelLimitResetKey: number;
   diagnosticsReviewResetKey: number;
   gitPushResetKey: number;
@@ -135,14 +138,17 @@ interface ModalHostLayerProps {
   gitInitDialogOpen: boolean;
   shouldMountGitInitDialog: boolean;
   effectiveGitInitPath: string | null;
-  handleGitInitSuccess: () => Promise<void>;
+  effectiveGitInitIdentity: ProjectCreationIdentity | null;
+  gitInitDialogStep: NonGitFolderStep;
+  handleGitInitSuccess: (identity?: ProjectCreationIdentity) => Promise<void>;
+  openWithoutGit: () => Promise<void>;
   closeGitInitDialog: () => void;
   createFolderDialogOpen: boolean;
   shouldMountCreateFolderDialog: boolean;
   closeCreateFolderDialog: () => void;
   cloneRepoDialogOpen: boolean;
   shouldMountCloneRepoDialog: boolean;
-  handleCloneSuccess: (clonedPath: string) => Promise<void>;
+  handleCloneSuccess: (clonedPath: string, identity?: ProjectCreationIdentity) => Promise<void>;
   closeCloneRepoDialog: () => void;
   reEntrySummary: ReEntrySummaryState;
   gettingStarted: GettingStartedChecklistState;
@@ -217,6 +223,7 @@ export function ModalHostLayer({
   pluginConfirmResetKey,
   pluginMcpConfirmResetKey,
   pluginCapabilityConfirmResetKey,
+  pluginArchiveInstallResetKey,
   panelLimitResetKey,
   diagnosticsReviewResetKey,
   gitPushResetKey,
@@ -225,7 +232,10 @@ export function ModalHostLayer({
   gitInitDialogOpen,
   shouldMountGitInitDialog,
   effectiveGitInitPath,
+  effectiveGitInitIdentity,
+  gitInitDialogStep,
   handleGitInitSuccess,
+  openWithoutGit,
   closeGitInitDialog,
   createFolderDialogOpen,
   shouldMountCreateFolderDialog,
@@ -422,7 +432,7 @@ export function ModalHostLayer({
               onQueryChange={projectSwitcherPalette.setQuery}
               onSelectPrevious={projectSwitcherPalette.selectPrevious}
               onSelectNext={projectSwitcherPalette.selectNext}
-              onSelect={projectSwitcherPalette.selectProject}
+              onSelect={projectSwitcherPalette.selectRow}
               onHoverProject={projectSwitcherPalette.onHoverProject}
               onHoverProjectEnd={projectSwitcherPalette.onHoverProjectEnd}
               onClose={projectSwitcherPalette.close}
@@ -431,7 +441,12 @@ export function ModalHostLayer({
               onFreeMemoryProject={(projectId) =>
                 void projectSwitcherPalette.freeMemoryProject(projectId)
               }
-              onLocateProject={(projectId) => void projectSwitcherPalette.locateProject(projectId)}
+              onLocateProject={(projectId) => {
+                projectSwitcherPalette.locateProject(projectId);
+              }}
+              onMoveOrRenameProject={(projectId) => {
+                projectSwitcherPalette.moveOrRenameProject(projectId);
+              }}
               onTogglePinProject={(projectId) =>
                 void projectSwitcherPalette.togglePinProject(projectId)
               }
@@ -454,6 +469,7 @@ export function ModalHostLayer({
                   { source: "user" }
                 );
               }}
+              rankedSearch={projectSwitcherPalette.isRankedSearch}
               scratchResults={projectSwitcherPalette.scratchResults}
               onCreateScratch={(name) => void projectSwitcherPalette.createScratch(name)}
               onSelectScratch={(scratch) => void projectSwitcherPalette.selectScratch(scratch)}
@@ -699,6 +715,17 @@ export function ModalHostLayer({
         </ErrorBoundary>
       )}
       {isStateLoaded && (
+        <ErrorBoundary
+          variant="component"
+          componentName="PluginArchiveInstallConfirmDialog"
+          resetKeys={[pluginArchiveInstallResetKey]}
+        >
+          <Suspense fallback={null}>
+            <LazyPluginArchiveInstallConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+      {isStateLoaded && (
         <ErrorBoundary variant="component" componentName="PluginQuickPickDialog">
           <Suspense fallback={null}>
             <LazyPluginQuickPickDialog />
@@ -740,7 +767,7 @@ export function ModalHostLayer({
 
       <ErrorBoundary
         variant="component"
-        componentName="GitInitDialog"
+        componentName="NonGitFolderDialog"
         resetKeys={[Number(gitInitDialogOpen)]}
       >
         {shouldMountGitInitDialog && effectiveGitInitPath && (
@@ -748,7 +775,10 @@ export function ModalHostLayer({
             <LazyGitInitDialog
               isOpen={gitInitDialogOpen}
               directoryPath={effectiveGitInitPath}
-              onSuccess={handleGitInitSuccess}
+              initialStep={gitInitDialogStep}
+              initialIdentity={effectiveGitInitIdentity}
+              onOpenWithoutGit={openWithoutGit}
+              onInitSuccess={handleGitInitSuccess}
               onCancel={closeGitInitDialog}
             />
           </Suspense>

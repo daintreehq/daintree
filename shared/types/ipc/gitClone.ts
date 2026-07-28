@@ -14,12 +14,7 @@ export interface CloneRepoOptions {
  * for the known stages while still accepting them.
  */
 export type CloneRepoStage =
-  | "starting"
-  | "complete"
-  | "cancelled"
-  | "error"
-  | "cleanup-failed"
-  | (string & {});
+  "starting" | "complete" | "cancelled" | "error" | "cleanup-failed" | (string & {});
 
 export interface CloneRepoProgressEvent {
   stage: CloneRepoStage;

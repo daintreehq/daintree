@@ -167,19 +167,31 @@ export function useErrors() {
       updateRetryProgress(payload.id, payload.attempt, payload.maxAttempts);
     });
 
-    errorsClient
-      .getPending()
-      .then((pending) => {
-        for (const error of pending) {
-          routeError(error);
+    // The main process registers the error:get-pending handler during boot;
+    // a fast renderer can invoke it first and get "No handler registered".
+    // Persisted errors are delivered ONLY through this pull, so a single
+    // swallowed failure silently drops critical errors from the previous
+    // session — retry with backoff until the handler exists.
+    let cancelled = false;
+    void (async () => {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          const pending = await errorsClient.getPending();
+          if (cancelled) return;
+          for (const error of pending) {
+            routeError(error);
+          }
+          return;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+          if (cancelled) return;
         }
-      })
-      .catch(() => {
-        // Ignore failures fetching pending errors
-      });
+      }
+    })();
 
     return () => {
       if (didAttachListener.current) {
+        cancelled = true;
         unsubscribeError();
         unsubscribeProgress();
         ipcListenerAttached = false;

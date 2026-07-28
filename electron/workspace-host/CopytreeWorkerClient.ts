@@ -5,7 +5,7 @@ import { copyTreeService, type ProgressCallback } from "../services/CopyTreeServ
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { logWarn } from "../utils/logger.js";
 import type { CopyTreeOptions, CopyTreeResult } from "../types/index.js";
-import type { CopyTreeTestConfigResult } from "../../shared/types/index.js";
+import type { CopyTreeTestConfigResult, FileTreeNode } from "../../shared/types/index.js";
 import type { CopytreeWorkerRequest, CopytreeWorkerResponse } from "./copytreeWorkerProtocol.js";
 import type { WorkerResourceSnapshot } from "../../shared/types/workerGovernance.js";
 
@@ -48,6 +48,12 @@ interface PendingTestConfig {
   timer: NodeJS.Timeout;
 }
 
+interface PendingFileTree {
+  resolve: (nodes: FileTreeNode[]) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+}
+
 /**
  * Runs copytree operations on a persistent worker thread so the CPU-heavy
  * walk/format work stays off the workspace-host event loop.
@@ -66,6 +72,7 @@ export class CopytreeWorkerClient {
   private workerFailed = false;
   private readonly pendingGenerate = new Map<string, PendingGenerate>();
   private readonly pendingTestConfig = new Map<string, PendingTestConfig>();
+  private readonly pendingFileTree = new Map<string, PendingFileTree>();
   // Bumped on every worker (re)creation AND on worker death. Messages from a
   // superseded worker instance are dropped at the listener boundary so a
   // late result can never resurrect a settled operation or hand a stale
@@ -146,13 +153,52 @@ export class CopytreeWorkerClient {
     return pending;
   }
 
+  async getFileTree(
+    rootPath: string,
+    dirPath: string | undefined,
+    options: CopyTreeOptions = {},
+    includeExcluded?: boolean,
+    operationId?: string
+  ): Promise<FileTreeNode[]> {
+    const id = operationId || crypto.randomUUID();
+    this.lastActivityAt = Date.now();
+    const worker = this.getWorker();
+    if (!worker) {
+      return copyTreeService.getFileTree(rootPath, dirPath, options, { includeExcluded }, id);
+    }
+    const pending = new Promise<FileTreeNode[]>((resolve, reject) => {
+      this.pendingFileTree.set(id, { resolve, reject, timer: this.armOperationTimeout(id) });
+    });
+    try {
+      worker.postMessage({
+        type: "get-file-tree",
+        id,
+        rootPath,
+        dirPath,
+        options,
+        includeExcluded,
+      } satisfies CopytreeWorkerRequest);
+    } catch (error) {
+      this.takePendingFileTree(id);
+      logWarn("copytree worker postMessage failed; running in-process", {
+        error: formatErrorMessage(error, "postMessage failed"),
+      });
+      return copyTreeService.getFileTree(rootPath, dirPath, options, { includeExcluded }, id);
+    }
+    return pending;
+  }
+
   /**
    * Cancel an operation wherever it runs. Both sides treat an unknown id as a
    * no-op, so forwarding to both is safe and covers the fallback path.
    */
   cancel(operationId: string): void {
     copyTreeService.cancel(operationId);
-    if (this.pendingGenerate.has(operationId) || this.pendingTestConfig.has(operationId)) {
+    if (
+      this.pendingGenerate.has(operationId) ||
+      this.pendingTestConfig.has(operationId) ||
+      this.pendingFileTree.has(operationId)
+    ) {
       this.postCancel(operationId);
     }
   }
@@ -205,7 +251,10 @@ export class CopytreeWorkerClient {
   }
 
   private timeOutOperation(id: string): void {
-    const pending = this.takePendingGenerate(id) ?? this.takePendingTestConfig(id);
+    const pending =
+      this.takePendingGenerate(id) ??
+      this.takePendingTestConfig(id) ??
+      this.takePendingFileTree(id);
     if (!pending) return;
     // Best-effort abort so the worker reclaims the CPU; an already-finished
     // (or unknown) id is a no-op on the worker side.
@@ -239,6 +288,15 @@ export class CopytreeWorkerClient {
     return pending;
   }
 
+  private takePendingFileTree(id: string): PendingFileTree | undefined {
+    const pending = this.pendingFileTree.get(id);
+    if (pending) {
+      this.pendingFileTree.delete(id);
+      clearTimeout(pending.timer);
+    }
+    return pending;
+  }
+
   private handleWorkerDown(error: unknown): void {
     // Persistent-worker policy: no respawn. A crashing worker would otherwise
     // enter the Electron spawn/terminate crash path, so all future requests
@@ -258,6 +316,11 @@ export class CopytreeWorkerClient {
       pending.reject(failure);
     }
     this.pendingTestConfig.clear();
+    for (const pending of this.pendingFileTree.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(failure);
+    }
+    this.pendingFileTree.clear();
     logWarn("copytree worker down; falling back to in-process generation", {
       error: failure.message,
     });
@@ -285,6 +348,13 @@ export class CopytreeWorkerClient {
       case "test-config-error":
         this.takePendingTestConfig(message.id)?.reject(new Error(message.error));
         break;
+      case "get-file-tree-result":
+        this.lastCompletedAt = Date.now();
+        this.takePendingFileTree(message.id)?.resolve(message.nodes);
+        break;
+      case "get-file-tree-error":
+        this.takePendingFileTree(message.id)?.reject(new Error(message.error));
+        break;
     }
   }
 
@@ -302,7 +372,8 @@ export class CopytreeWorkerClient {
       threadId: this.worker?.threadId ?? null,
       alive: this.worker !== null,
       activeSessionCount: 0,
-      queueDepth: this.pendingGenerate.size + this.pendingTestConfig.size,
+      queueDepth:
+        this.pendingGenerate.size + this.pendingTestConfig.size + this.pendingFileTree.size,
       lastActivityAt: this.lastActivityAt,
       memory: null,
       eligibility: { trim: false, dispose: false, restart: false },

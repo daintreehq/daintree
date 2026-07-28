@@ -1,7 +1,13 @@
 import { create, type StateCreator } from "zustand";
 import { persist, subscribeWithSelector } from "zustand/middleware";
-import type { Project, ProjectCloseResult } from "@shared/types";
-import { projectClient } from "@/clients";
+import type {
+  Project,
+  ProjectAddOptions,
+  ProjectCloseResult,
+  ProjectCreationIdentity,
+} from "@shared/types";
+import { projectClient, worktreeClient } from "@/clients";
+import type { NonGitFolderStep } from "@/components/Project/NonGitFolderDialog";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { logErrorWithContext } from "@/utils/errorContext";
@@ -11,10 +17,16 @@ import { useHelpPanelStore } from "./helpPanelStore";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { panelPersistence, panelToSnapshot } from "./persistence/panelPersistence";
+import { draftInputPersistence } from "./persistence/draftInputPersistence";
 import { useTerminalInputStore } from "./terminalInputStore";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { rebaseAbsolutePath } from "@shared/utils/projectPathRelocation";
 import { isClientAppError } from "@/utils/clientAppError";
+import {
+  getProjectOpenFailure,
+  PROJECT_OPEN_RECOVERY_LABELS,
+} from "@shared/utils/projectOpenErrors";
 import { getViewWorkspaceId } from "./viewWorkspaceId";
 import {
   clearPanelStoreForSwitchThroughAccessor,
@@ -44,6 +56,11 @@ function shouldPersistTerminal(t: NonNullable<CarrierPanel>): boolean {
 
 function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   const draftInputs = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
+  // Diff against this window's last-persisted baseline so Main merges drafts by
+  // terminal id rather than full-replacing — otherwise a stale outgoing snapshot
+  // silently drops a sibling window's concurrent drafts (#11352). Same delta
+  // contract as terminals/tab groups.
+  const draftDelta = draftInputPersistence.computeDelta(projectId, draftInputs);
   // Persist the *durable* selection, not whatever is incidentally active. A
   // focus promotion (e.g. a temporary PR worktree spun up by a batch merge)
   // leaves `restoreWorktreeId` pointing at the last deliberate selection, so it
@@ -63,7 +80,7 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   // flushed yet.  Uses the same filter as PanelPersistence.save().
   const terminalState = getPanelStoreSnapshot();
   if (!terminalState) {
-    return { draftInputs, activeWorktreeId };
+    return { draftInputs, draftDelta, activeWorktreeId };
   }
 
   const { panelsById, panelIds, tabGroups } = terminalState;
@@ -82,11 +99,21 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
 
   const tabGroupArray = Array.from(tabGroups.values()).filter((g) => g.panelIds.length > 1);
 
+  // Diff against this window's last-persisted baseline so Main merges these
+  // arrays by id rather than full-replacing — otherwise a stale outgoing
+  // snapshot silently drops a sibling window's concurrent changes to the same
+  // project (#11350). Same delta contract as the debounced autosave path.
+  const terminalDelta = panelPersistence.computeTerminalDelta(projectId, terminals);
+  const tabGroupDelta = panelPersistence.computeTabGroupDelta(projectId, tabGroupArray);
+
   return {
     terminals,
     draftInputs,
     tabGroups: tabGroupArray,
     activeWorktreeId,
+    terminalDelta,
+    tabGroupDelta,
+    draftDelta,
   };
 }
 
@@ -142,6 +169,15 @@ interface ProjectState {
   worktreeLoadError: string | null;
   gitInitDialogOpen: boolean;
   gitInitDirectoryPath: string | null;
+  /**
+   * Identity carried in from the create-project dialog so the git-init step it
+   * always chains into prefills instead of asking a second time. Null when
+   * git-init was reached directly by opening a non-repo folder — that case
+   * derives its own suggestion. Cleared with the path, in the same set().
+   */
+  gitInitIdentity: ProjectCreationIdentity | null;
+  /** Which screen the non-git folder dialog opens on. */
+  gitInitDialogStep: NonGitFolderStep;
   createFolderDialogOpen: boolean;
   cloneRepoDialogOpen: boolean;
 
@@ -150,9 +186,13 @@ interface ProjectState {
   addProject: () => Promise<void>;
   addProjectByPath: (
     path: string,
-    options?: { skipDubiousOwnershipRetry?: boolean }
+    options?: {
+      skipDubiousOwnershipRetry?: boolean;
+      gitBacked?: boolean;
+      identity?: ProjectCreationIdentity;
+    }
   ) => Promise<void>;
-  createProjectFolder: (parentPath: string, folderName: string) => Promise<void>;
+  createProjectFolder: (parentPath: string, folderName: string, emoji?: string) => Promise<void>;
   switchProject: (
     projectId: string,
     options?: { focusIntent?: "focus-next-waiting" }
@@ -171,14 +211,18 @@ interface ProjectState {
   reopenProject: (projectId: string) => Promise<void>;
   checkMissingProjects: () => Promise<void>;
   locateProject: (projectId: string) => Promise<void>;
-  openGitInitDialog: (directoryPath: string) => void;
+  openGitInitDialog: (
+    directoryPath: string,
+    options?: { step?: NonGitFolderStep; identity?: ProjectCreationIdentity }
+  ) => void;
   closeGitInitDialog: () => void;
-  handleGitInitSuccess: () => Promise<void>;
+  handleGitInitSuccess: (identity?: ProjectCreationIdentity) => Promise<void>;
+  openWithoutGit: () => Promise<void>;
   openCreateFolderDialog: () => void;
   closeCreateFolderDialog: () => void;
   openCloneRepoDialog: () => void;
   closeCloneRepoDialog: () => void;
-  handleCloneSuccess: (clonedPath: string) => Promise<void>;
+  handleCloneSuccess: (clonedPath: string, identity?: ProjectCreationIdentity) => Promise<void>;
 }
 
 /**
@@ -197,11 +241,12 @@ interface ProjectStoreListenerState {
   applyUpdated: ((project: Project) => void) | null;
   applyRemoved: ((projectId: string) => void) | null;
   applyWorktreeLoadStatus:
-    | ((payload: { projectId: string; worktreeLoadError: string | null }) => void)
-    | null;
+    ((payload: { projectId: string; worktreeLoadError: string | null }) => void) | null;
+  applyOpenGitInitDialog: ((payload: { directoryPath: string }) => void) | null;
   updatedRegistered: boolean;
   removedRegistered: boolean;
   worktreeLoadStatusRegistered: boolean;
+  openGitInitDialogRegistered: boolean;
 }
 
 const PROJECT_STORE_LISTENER_STATE_KEY = "__daintreeProjectStoreListenerState";
@@ -215,6 +260,57 @@ const PROJECT_VIEW_CURRENT_RETRY_DELAYS_MS = [100, 250, 500, 1000, 2000, 3000];
 function cancelProjectReadRequests(): void {
   projectListRequestId++;
   currentProjectRequestId++;
+}
+
+/**
+ * Moves a hibernated Assistant conversation from one project id to another,
+ * repointing its recorded working directory.
+ *
+ * Only reachable if main breaks the immutable-id invariant (#11282), so it is
+ * strictly a safety net: it must never take the relocation down with it, hence
+ * the swallowed failure. Losing the resume pointer costs one conversation;
+ * throwing here would abort the caller's project-list refresh too.
+ */
+function migrateHibernateSession(fromProjectId: string, toProjectId: string, newCwd: string): void {
+  try {
+    const helpPanel = useHelpPanelStore.getState();
+    const orphaned = helpPanel.hibernateSessions?.[fromProjectId];
+    if (orphaned) {
+      helpPanel.setHibernateSession(toProjectId, { ...orphaned, cwd: newCwd });
+    }
+    helpPanel.clearHibernateSession(fromProjectId);
+  } catch (error) {
+    logErrorWithContext(error, {
+      operation: "migrate_hibernate_session",
+      component: "projectStore",
+      details: { fromProjectId, toProjectId },
+    });
+  }
+}
+
+/**
+ * Repoint a hibernated Assistant conversation's recorded working directory after
+ * its project folder moved (#11282, phase 2). Reattaching keeps the same project
+ * id, so — unlike {@link migrateHibernateSession} — this rewrites the cwd in
+ * place rather than moving between ids. No-op when there is no hibernated session
+ * or its cwd is unaffected by the move. Swallows failure: losing one resume
+ * pointer must never abort the project-list refresh that triggered it.
+ */
+function rebaseHibernateSessionCwd(projectId: string, oldPath: string, newPath: string): void {
+  try {
+    const helpPanel = useHelpPanelStore.getState();
+    const session = helpPanel.hibernateSessions?.[projectId];
+    if (!session) return;
+    const nextCwd = rebaseAbsolutePath(session.cwd, oldPath, newPath);
+    if (nextCwd === session.cwd) return;
+    helpPanel.setHibernateSession(projectId, { ...session, cwd: nextCwd });
+  } catch (error) {
+    logErrorWithContext(error, {
+      operation: "rebase_hibernate_session_cwd",
+      component: "projectStore",
+      details: { projectId },
+    });
+  }
 }
 
 function getLocationProjectId(): string | null {
@@ -271,23 +367,51 @@ function getProjectStoreListenerState(): ProjectStoreListenerState {
     applyUpdated: null,
     applyRemoved: null,
     applyWorktreeLoadStatus: null,
+    applyOpenGitInitDialog: null,
     updatedRegistered: false,
     removedRegistered: false,
     worktreeLoadStatusRegistered: false,
+    openGitInitDialogRegistered: false,
   };
   target[PROJECT_STORE_LISTENER_STATE_KEY] = created;
   return created;
 }
 
+/**
+ * `addProject` classifies this in main and throws `AppError{DUBIOUS_OWNERSHIP}`,
+ * so the code is the primary signal — matching on it is what frees main's copy
+ * to be reworded without silently killing the "Mark as safe" retry (#11409).
+ *
+ * The substring fallback stays for the switch/reopen callers, whose git failures
+ * come from `GitService` rather than the classified open path and so still
+ * arrive as plain errors carrying git's own stderr.
+ */
 function isDubiousOwnershipError(error: unknown): boolean {
+  if (isClientAppError(error) && error.code === "DUBIOUS_OWNERSHIP") return true;
   const message = formatErrorMessage(error, "");
   const lower = message.toLowerCase();
   return lower.includes("dubious ownership") || lower.includes("safe.directory");
 }
 
-function getProjectOpenErrorMessage(error: unknown): string {
-  if (isClientAppError(error) && error.code === "NOT_A_GIT_REPO") {
-    return "The selected directory is not a Git repository.";
+/**
+ * Copy for a failed project open.
+ *
+ * Classified failures come back from the main process as `AppError` codes and
+ * are rendered from the shared table, so this surface and the native menu
+ * dialog can't drift the way three independent message matchers did (#11409).
+ * `directoryPath` must come from the caller's own state: `sanitizeErrorForRenderer`
+ * scrubs absolute paths out of every error message crossing IPC.
+ *
+ * The substring checks below remain for the switch/reopen callers, whose
+ * failures originate outside `addProject`'s classified path.
+ */
+function getProjectOpenErrorMessage(error: unknown, directoryPath?: string): string {
+  if (isClientAppError(error)) {
+    if (error.code === "NOT_A_GIT_REPO") {
+      return "The selected directory is not a Git repository.";
+    }
+    const failure = getProjectOpenFailure(error.code, directoryPath);
+    if (failure) return failure.message;
   }
 
   const message = formatErrorMessage(error, "");
@@ -310,14 +434,6 @@ function getProjectOpenErrorMessage(error: unknown): string {
 
   if (message.includes("Project path must be absolute")) {
     return "Project path must be an absolute path.";
-  }
-
-  if (message.includes("ELOOP")) {
-    return "The selected directory contains a symbolic link loop and cannot be opened.";
-  }
-
-  if (message.includes("ENAMETOOLONG")) {
-    return "The path is too long. Shorten the directory name or move it closer to the filesystem root.";
   }
 
   if (message.includes("ENOENT")) {
@@ -352,6 +468,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   isBootstrapped: false,
   gitInitDialogOpen: false,
   gitInitDirectoryPath: null,
+  gitInitIdentity: null,
+  gitInitDialogStep: "choice",
   createFolderDialogOpen: false,
   cloneRepoDialogOpen: false,
   error: null,
@@ -367,7 +485,18 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         return;
       }
 
-      const newProject = await projectClient.add(resolvedPath);
+      // Built as two independent keys rather than one flattened payload: main
+      // validates the creation identity as a whole and drops it unless both
+      // halves are present, so a lightweight open carrying only `gitBacked`
+      // must not be routed through that gate.
+      const addOptions: ProjectAddOptions = {
+        ...(options?.gitBacked === false ? { gitBacked: false } : {}),
+        ...(options?.identity ? { identity: options.identity } : {}),
+      };
+      const newProject = await projectClient.add(
+        resolvedPath,
+        Object.keys(addOptions).length > 0 ? addOptions : undefined
+      );
 
       await get().loadProjects();
       await get().switchProject(newProject.id);
@@ -392,7 +521,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           resolvedPath || path.trim() || errorMessage.match(/Not a git repository: (.+)/)?.[1];
         if (gitInitPath && isAbsolutePath(gitInitPath)) {
           set({ isLoading: false });
-          get().openGitInitDialog(gitInitPath);
+          get().openGitInitDialog(gitInitPath, { identity: options?.identity });
           return;
         }
       }
@@ -434,6 +563,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
                   // error toast instead of showing the same CTA indefinitely.
                   await get().addProjectByPath(targetPath, {
                     skipDubiousOwnershipRetry: true,
+                    identity: options?.identity,
                   });
                 },
               },
@@ -455,21 +585,32 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         }
       }
 
-      const message = getProjectOpenErrorMessage(error);
       // Capture a frozen snapshot of the actually-resolved path so the retry
       // re-attempts the directory the user picked, not the empty argument
       // value the dialog flow was originally invoked with.
       const retryPath = resolvedPath ?? path.trim();
+      const message = getProjectOpenErrorMessage(error, retryPath || undefined);
+      // A folder that's missing or isn't a folder won't fix itself, so retrying
+      // the same path just reproduces the error — those send the user back to
+      // the picker instead.
+      const classified = isClientAppError(error)
+        ? getProjectOpenFailure(error.code, retryPath || undefined)
+        : null;
+      const pickAnother = classified?.recovery === "choose-folder";
       notify({
         type: "error",
         title: "Couldn't add project",
         message,
         actions: [
           {
-            label: "Try again",
+            label: pickAnother
+              ? PROJECT_OPEN_RECOVERY_LABELS["choose-folder"]
+              : PROJECT_OPEN_RECOVERY_LABELS.retry,
             variant: "primary",
             onClick: () => {
-              void get().addProjectByPath(retryPath);
+              void (pickAnother
+                ? get().addProject()
+                : get().addProjectByPath(retryPath, { identity: options?.identity }));
             },
           },
         ],
@@ -570,6 +711,17 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // A newer transition started while we yielded — let it own the switch so a
     // stale snapshot/IPC can't clobber it.
     if (requestId !== projectTransitionRequestId) return;
+
+    // Settle any pending/in-flight layout autosave for the outgoing project so
+    // buildOutgoingState's delta is computed against the acknowledged baseline.
+    // Otherwise a send still in flight leaves the baseline stale, the delta
+    // comes out empty, and Main's merge resurrects an entry the user just
+    // removed (#11350).
+    if (currentProjectId) {
+      panelPersistence.flush();
+      await panelPersistence.whenIdle().catch(() => {});
+      if (requestId !== projectTransitionRequestId) return;
+    }
 
     // Capture outgoing state just before firing, after the paint. The outgoing
     // view is not detached until the main process handles the IPC, so the panel
@@ -800,6 +952,14 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     await yieldToPaint();
     if (requestId !== projectTransitionRequestId) return;
 
+    // Settle pending/in-flight layout autosave so the outgoing delta is
+    // computed against the acknowledged baseline (#11350; see switchProject).
+    if (currentProjectId) {
+      panelPersistence.flush();
+      await panelPersistence.whenIdle().catch(() => {});
+      if (requestId !== projectTransitionRequestId) return;
+    }
+
     const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
     projectClient.reopen(projectId, outgoingState).catch((error) => {
       if (requestId !== projectTransitionRequestId) {
@@ -854,11 +1014,13 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     try {
       const updated = await projectClient.locate(projectId);
       if (updated) {
-        // Relocation regenerates the project id from its new path (sha256(path)),
-        // so the pre-relocation id is now dead. GC its orphaned hibernate session.
-        // Skip when the id is unchanged (canonicalization produced the same hash).
+        // Reattaching preserves the project id (#11282), so the hibernated
+        // Assistant conversation is still addressable and must be kept — this
+        // used to clear it, which is what made a folder move lose the
+        // conversation. Only a main-process invariant break could change the id
+        // here; carry the entry over rather than silently dropping it.
         if (updated.id !== projectId) {
-          useHelpPanelStore.getState().clearHibernateSession(projectId);
+          migrateHibernateSession(projectId, updated.id, updated.path);
         }
         const projects = await projectClient.getAll();
         set({ projects });
@@ -872,19 +1034,53 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     }
   },
 
-  openGitInitDialog: (directoryPath: string) => {
-    set({ gitInitDialogOpen: true, gitInitDirectoryPath: directoryPath });
+  openGitInitDialog: (
+    directoryPath: string,
+    options?: { step?: NonGitFolderStep; identity?: ProjectCreationIdentity }
+  ) => {
+    set({
+      gitInitDialogOpen: true,
+      gitInitDirectoryPath: directoryPath,
+      gitInitDialogStep: options?.step ?? "choice",
+      gitInitIdentity: options?.identity ?? null,
+    });
   },
 
   closeGitInitDialog: () => {
-    set({ gitInitDialogOpen: false, gitInitDirectoryPath: null });
+    set({ gitInitDialogOpen: false, gitInitDirectoryPath: null, gitInitIdentity: null });
   },
 
-  handleGitInitSuccess: async () => {
+  handleGitInitSuccess: async (identity) => {
+    // Snapshot before closing — closeGitInitDialog() clears path and identity
+    // together, so anything read afterwards is already null.
+    const directoryPath = get().gitInitDirectoryPath;
+    const carried = identity ?? get().gitInitIdentity ?? undefined;
+    get().closeGitInitDialog();
+    if (!directoryPath) return;
+    // The folder is a repository now, so this add resolves a git root and clears
+    // any lightweight flag the row was carrying. A workspace host already loaded
+    // for it enumerated no worktrees, so it needs a reload to pick the new
+    // repository up (#11405).
+    const wasCurrent = get().currentProject?.path === directoryPath;
+    await get().addProjectByPath(directoryPath, { identity: carried });
+    if (wasCurrent) {
+      try {
+        await worktreeClient.retryProjectLoad();
+      } catch (error) {
+        logErrorWithContext(error, {
+          operation: "reload_after_git_init",
+          component: "projectStore",
+          details: { path: directoryPath },
+        });
+      }
+    }
+  },
+
+  openWithoutGit: async () => {
     const directoryPath = get().gitInitDirectoryPath;
     get().closeGitInitDialog();
     if (directoryPath) {
-      await get().addProjectByPath(directoryPath);
+      await get().addProjectByPath(directoryPath, { gitBacked: false });
     }
   },
 
@@ -896,9 +1092,14 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     set({ createFolderDialogOpen: false });
   },
 
-  createProjectFolder: async (parentPath, folderName) => {
+  createProjectFolder: async (parentPath, folderName, emoji) => {
     const newFolderPath = await projectClient.createFolder(parentPath, folderName);
-    await get().addProjectByPath(newFolderPath);
+    // A brand-new folder is never a repo, so this always lands in the
+    // NOT_A_GIT_REPO branch below and re-emerges in the git-init dialog — the
+    // identity rides along so that dialog prefills instead of re-asking.
+    await get().addProjectByPath(newFolderPath, {
+      identity: emoji ? { name: folderName, emoji } : undefined,
+    });
   },
 
   openCloneRepoDialog: () => {
@@ -909,9 +1110,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     set({ cloneRepoDialogOpen: false });
   },
 
-  handleCloneSuccess: async (clonedPath: string) => {
+  handleCloneSuccess: async (clonedPath: string, identity?: ProjectCreationIdentity) => {
     get().closeCloneRepoDialog();
-    await get().addProjectByPath(clonedPath);
+    await get().addProjectByPath(clonedPath, { identity });
   },
 });
 
@@ -966,15 +1167,36 @@ panelPersistence.setProjectIdGetter(() => useProjectStore.getState().currentProj
 if (typeof window !== "undefined" && window.electron?.project) {
   const listenerState = getProjectStoreListenerState();
   listenerState.applyUpdated = (updated) => {
+    let priorPath: string | undefined;
+    let isCurrentView = false;
     useProjectStore.setState((state) => {
-      const exists = state.projects.some((p) => p.id === updated.id);
-      const projects = exists
+      const prior = state.projects.find((p) => p.id === updated.id);
+      priorPath = prior?.path;
+      isCurrentView = state.currentProject?.id === updated.id;
+      const projects = prior
         ? state.projects.map((p) => (p.id === updated.id ? updated : p))
         : [...state.projects, updated];
       const currentProject =
         state.currentProject?.id === updated.id ? updated : state.currentProject;
       return { projects, currentProject };
     });
+    // A folder move/reattach keeps the id but changes the path (#11282); repoint
+    // the hibernated Assistant cwd so a later resume lands in the new folder.
+    if (priorPath && priorPath !== updated.path) {
+      const from = priorPath;
+      const to = updated.path;
+      rebaseHibernateSessionCwd(updated.id, from, to);
+      // Phase 3 relocates an OPEN project without reloading its view, so this
+      // view's LIVE panel/worktree stores still hold old-root paths. Rebase them
+      // in place so panels stay bound to their (renamed) worktrees. Lazily
+      // imported so the panel/worktree stores never enter this module's eval
+      // graph (store-init-order); only run for the view actually showing it.
+      if (isCurrentView) {
+        void import("./rebaseProjectViewRuntimePaths").then((m) =>
+          m.rebaseProjectViewRuntimePaths(from, to)
+        );
+      }
+    }
   };
   listenerState.applyRemoved = (projectId) => {
     useProjectStore.setState((state) => {
@@ -997,6 +1219,20 @@ if (typeof window !== "undefined" && window.electron?.project) {
       }
       return { worktreeLoadError: payload.worktreeLoadError };
     });
+  };
+
+  // Main pushes this when the user tries to open a folder that isn't a repo yet
+  // (Dock drop, Cmd+O, Recent Projects). It reuses the same dialog the renderer
+  // opens for its own add-project flow, so confirm/cancel behave identically.
+  //
+  // Dropping several folders at once fires one event each, and the dialog holds
+  // a single path. Ignore arrivals while one is already open rather than
+  // swapping the path underneath it: mid-initialization, a swap would init the
+  // first folder but hand the second to `handleGitInitSuccess`, leaving the
+  // first initialized-but-not-added and the second added without being touched.
+  listenerState.applyOpenGitInitDialog = ({ directoryPath }) => {
+    if (useProjectStore.getState().gitInitDialogOpen) return;
+    useProjectStore.getState().openGitInitDialog(directoryPath);
   };
 
   const projectApi = window.electron.project;
@@ -1022,6 +1258,18 @@ if (typeof window !== "undefined" && window.electron?.project) {
     listenerState.worktreeLoadStatusRegistered = true;
     projectClient.onWorktreeLoadStatus((payload) => {
       listenerState.applyWorktreeLoadStatus?.(payload);
+    });
+  }
+  // Registered at module scope (not in a React effect) so it is wired before the
+  // renderer finishes loading — main gates its cold-launch send on
+  // `did-finish-load`, which can fire before any component mounts.
+  if (
+    typeof projectApi.onOpenGitInitDialog === "function" &&
+    !listenerState.openGitInitDialogRegistered
+  ) {
+    listenerState.openGitInitDialogRegistered = true;
+    projectApi.onOpenGitInitDialog((payload) => {
+      listenerState.applyOpenGitInitDialog?.(payload);
     });
   }
 }

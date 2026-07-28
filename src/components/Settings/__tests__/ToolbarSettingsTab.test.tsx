@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import type { AgentSettings } from "@shared/types";
 
@@ -7,6 +7,7 @@ const setLeftButtonsMock = vi.fn();
 const setRightButtonsMock = vi.fn();
 const moveButtonMock = vi.fn();
 const toggleButtonVisibilityMock = vi.fn();
+const setPluginButtonPromotedMock = vi.fn();
 const setAlwaysShowDevServerMock = vi.fn();
 const setDefaultSelectionMock = vi.fn();
 const resetMock = vi.fn();
@@ -26,6 +27,7 @@ interface ToolbarState {
   setRightButtons: typeof setRightButtonsMock;
   moveButton: typeof moveButtonMock;
   toggleButtonVisibility: typeof toggleButtonVisibilityMock;
+  setPluginButtonPromoted: typeof setPluginButtonPromotedMock;
   setAlwaysShowDevServer: typeof setAlwaysShowDevServerMock;
   setDefaultSelection: typeof setDefaultSelectionMock;
   reset: typeof resetMock;
@@ -46,6 +48,7 @@ function makeToolbarState(
     setRightButtons: setRightButtonsMock,
     moveButton: moveButtonMock,
     toggleButtonVisibility: toggleButtonVisibilityMock,
+    setPluginButtonPromoted: setPluginButtonPromotedMock,
     setAlwaysShowDevServer: setAlwaysShowDevServerMock,
     setDefaultSelection: setDefaultSelectionMock,
     reset: resetMock,
@@ -60,6 +63,7 @@ function clearStoreMocks() {
   setRightButtonsMock.mockClear();
   moveButtonMock.mockClear();
   toggleButtonVisibilityMock.mockClear();
+  setPluginButtonPromotedMock.mockClear();
   setAlwaysShowDevServerMock.mockClear();
   setDefaultSelectionMock.mockClear();
   resetMock.mockClear();
@@ -107,8 +111,15 @@ vi.mock("@/config/agents", () => ({
   }),
 }));
 
+const pluginButtons = vi.hoisted(() => ({
+  configs: new Map<string, Record<string, unknown>>(),
+}));
+
 vi.mock("@/hooks/usePluginToolbarButtons", () => ({
-  usePluginToolbarButtons: () => ({ buttonIds: [], configs: new Map() }),
+  usePluginToolbarButtons: () => ({
+    buttonIds: Array.from(pluginButtons.configs.keys()),
+    configs: pluginButtons.configs,
+  }),
 }));
 
 // Capture the single DndContext's props so tests can drive the drag handlers
@@ -550,5 +561,78 @@ describe("ToolbarSettingsTab — drag-source vs hidden opacity deconfliction", (
     const { container } = render(<ToolbarSettingsTab />);
     const row = rowFor("Claude agent", container);
     expect(row.style.opacity).toBe("1");
+  });
+});
+
+describe("ToolbarSettingsTab — plugin button promotion (#11304)", () => {
+  beforeEach(() => {
+    clearStoreMocks();
+    mockToolbarState = makeToolbarState();
+    mockAgentSettings = null;
+    pluginButtons.configs = new Map([
+      [
+        "acme.ping",
+        {
+          id: "acme.ping",
+          label: "Hello ping",
+          iconId: "sparkles",
+          actionId: "acme.greet",
+          priority: 3,
+          pluginId: "acme",
+        },
+      ],
+    ]);
+  });
+
+  afterEach(() => {
+    pluginButtons.configs = new Map();
+  });
+
+  it("shows a contribution as un-promoted until pinnedButtons records an explicit true", () => {
+    const first = render(<ToolbarSettingsTab />);
+    expect(first.getByLabelText("Show Hello ping in toolbar").getAttribute("aria-checked")).toBe(
+      "false"
+    );
+    first.unmount();
+
+    mockToolbarState = makeToolbarState({
+      ...mockToolbarState.layout,
+      pinnedButtons: { "acme.ping": true },
+    });
+    const second = render(<ToolbarSettingsTab />);
+    expect(second.getByLabelText("Show Hello ping in toolbar").getAttribute("aria-checked")).toBe(
+      "true"
+    );
+  });
+
+  it("routes the plugin switch to setPluginButtonPromoted, never toggleButtonVisibility", () => {
+    // The generic hide toggle can only write `false`, which under tray-default
+    // semantics would leave the button un-promoted no matter how often it is
+    // clicked.
+    const { getByLabelText } = render(<ToolbarSettingsTab />);
+    fireEvent.click(getByLabelText("Show Hello ping in toolbar"));
+
+    expect(setPluginButtonPromotedMock).toHaveBeenCalledWith("acme.ping", true);
+    expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
+  });
+
+  it("demotes an already-promoted contribution", () => {
+    mockToolbarState = makeToolbarState({
+      ...mockToolbarState.layout,
+      pinnedButtons: { "acme.ping": true },
+    });
+
+    const { getByLabelText } = render(<ToolbarSettingsTab />);
+    fireEvent.click(getByLabelText("Show Hello ping in toolbar"));
+
+    expect(setPluginButtonPromotedMock).toHaveBeenCalledWith("acme.ping", false);
+  });
+
+  it("leaves built-in toggles on toggleButtonVisibility", () => {
+    const { getByLabelText } = render(<ToolbarSettingsTab />);
+    fireEvent.click(getByLabelText("Toggle Terminal visibility"));
+
+    expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("terminal", "left");
+    expect(setPluginButtonPromotedMock).not.toHaveBeenCalled();
   });
 });

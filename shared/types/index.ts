@@ -82,9 +82,12 @@ export type {
 export type { BrowserHistory } from "./browser.js";
 
 // Project types
+export { isGitBackedProject } from "./project.js";
 export type {
   ProjectStatus,
   Project,
+  ProjectAddOptions,
+  ProjectCreationIdentity,
   ProjectRepoStats,
   TerminalSnapshot,
   PanelSnapshot,
@@ -132,6 +135,10 @@ export type {
   CopyTreeTestConfigResult,
   CopyTreeResult,
   CopyTreeProgress,
+  CopyTreeExclusionReason,
+  CopyTreeExclusionSummary,
+  CopyTreeBudgetStats,
+  CopyTreeTruncatedBy,
   FileTreeNode,
   // Worktree IPC types
   WorktreeRemovePayload,

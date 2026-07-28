@@ -79,6 +79,7 @@ const cleanupAvailable = vi.fn();
 const cleanupProgress = vi.fn();
 const cleanupDownloaded = vi.fn();
 const notifyDismissMock = vi.fn().mockResolvedValue(undefined);
+const openExternalMock = vi.fn<(url: string) => Promise<void>>().mockResolvedValue(undefined);
 
 type UpdateStage = { version: string; downloaded: boolean };
 
@@ -148,6 +149,7 @@ describe("useUpdateListener", () => {
       return id;
     });
     notifyDismissMock.mockClear();
+    openExternalMock.mockClear();
     // Nothing pending is the default; the hydration tests opt in.
     getLatestMock.mockReset().mockResolvedValue(null);
 
@@ -169,6 +171,9 @@ describe("useUpdateListener", () => {
         checkForUpdates: vi.fn(),
         notifyDismiss: notifyDismissMock,
         getLatest: getLatestMock,
+      },
+      system: {
+        openExternal: openExternalMock,
       },
     } as unknown as typeof window.electron;
   });
@@ -287,6 +292,64 @@ describe("useUpdateListener", () => {
     expect(window.electron.update.quitAndInstall).toHaveBeenCalledTimes(1);
   });
 
+  it("offers release notes for the downloaded version alongside the restart action", () => {
+    renderHook(() => useUpdateListener());
+
+    act(() => {
+      capturedAvailable!({ version: "2.5.0" });
+    });
+
+    act(() => {
+      capturedDownloaded!({ version: "2.5.0" });
+    });
+
+    const patch = updateNotificationMock.mock.calls[0]![1];
+    // Restart stays the single primary CTA in the singular `action` slot (asserted
+    // by the preceding test); the release-notes link rides `actions[]`, which the
+    // toaster renders to its left as muted secondary text.
+    expect(patch.actions).toHaveLength(1);
+
+    const notes = patch.actions![0]!;
+    expect(notes.label).toBe("View release notes");
+    expect(notes.variant).toBe("secondary");
+    // actionId + actionArgs are what keep the button alive in inbox history —
+    // notify.ts drops actions that carry no actionId.
+    expect(notes.actionId).toBe("system.openExternal");
+    // The updater reports bare semver; the GitHub tag carries a leading `v`.
+    expect(notes.actionArgs).toEqual({
+      url: "https://github.com/daintreehq/daintree/releases/tag/v2.5.0",
+    });
+
+    notes.onClick();
+    expect(openExternalMock).toHaveBeenCalledWith(
+      "https://github.com/daintreehq/daintree/releases/tag/v2.5.0"
+    );
+  });
+
+  it("strips both update controls when progress lands on a ready toast", () => {
+    renderHook(() => useUpdateListener());
+
+    act(() => {
+      capturedAvailable!({ version: "2.5.0" });
+    });
+    act(() => {
+      capturedDownloaded!({ version: "2.5.0" });
+    });
+
+    // A newer build starts downloading. surfaceAvailable() would normally clear
+    // both controls, but notify() drops the payload while suppressed, so the
+    // progress patch is the backstop: a download in flight means there is
+    // nothing ready to install and no notes worth linking.
+    act(() => {
+      capturedProgress!({ percent: 12 });
+    });
+
+    const progressPatch = updateNotificationMock.mock.calls.at(-1)![1];
+    expect(progressPatch.title).toBe("Downloading update");
+    expect(progressPatch).toHaveProperty("action", undefined);
+    expect(progressPatch).toHaveProperty("actions", undefined);
+  });
+
   it("skips progress when toast was not created (quiet period)", () => {
     // Simulate quiet hours — non-urgent notify() calls are suppressed.
     notifyMock.mockImplementation((payload) => {
@@ -349,6 +412,19 @@ describe("useUpdateListener", () => {
         urgent: true,
         duration: 0,
         action: expect.objectContaining({ label: "Restart to update" }),
+        // The fresh-toast branch is the one that writes an inbox entry, so the
+        // release-notes link has to ride this payload too — not just the
+        // in-place update path.
+        actions: [
+          expect.objectContaining({
+            label: "View release notes",
+            variant: "secondary",
+            actionId: "system.openExternal",
+            actionArgs: {
+              url: "https://github.com/daintreehq/daintree/releases/tag/v2.5.0",
+            },
+          }),
+        ],
       })
     );
   });
@@ -492,7 +568,7 @@ describe("useUpdateListener", () => {
     expect(notifyDismissMock).not.toHaveBeenCalled();
   });
 
-  it("clears the restart action when update-available fires after update-ready (stage regression)", () => {
+  it("clears both update controls when update-available fires after update-ready (stage regression)", () => {
     renderHook(() => useUpdateListener());
 
     // Notify calls pass `action: undefined` explicitly so the store's
@@ -503,6 +579,9 @@ describe("useUpdateListener", () => {
       capturedAvailable!({ version: "2.5.0" });
     });
     expect(notifyMock.mock.calls[0]![0]).toHaveProperty("action", undefined);
+    // Same reasoning for the release-notes link: left in place it would point
+    // at the superseded version's tag while a newer build downloads.
+    expect(notifyMock.mock.calls[0]![0]).toHaveProperty("actions", undefined);
   });
 
   it("pending ref upgrades to downloaded but never downgrades back to available", () => {

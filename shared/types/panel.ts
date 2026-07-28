@@ -3,7 +3,11 @@ import type { TerminalCheckResult } from "./checkResult.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { BrowserHistory } from "./browser.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
-import { BUILT_IN_PANEL_KINDS, type BuiltInPanelKind } from "../config/panelKindRegistry.js";
+import {
+  BUILT_IN_PANEL_KINDS,
+  panelKindIsDockable,
+  type BuiltInPanelKind,
+} from "../config/panelKindRegistry.js";
 
 export type { BuiltInPanelKind };
 
@@ -510,7 +514,9 @@ export interface PtyPanelData extends BasePanelData {
   fallbackChainIndex?: number;
   /**
    * Live-only restore signal. True on first mount when the saved agent session
-   * could not be resumed and a fresh session was launched instead. Drives the
+   * could not be safely resumed — unreachable, or resume-latest suppressed
+   * because a sibling pane owns the slot (#11461) — and a fresh session was
+   * launched instead. Drives the
    * "Session no longer reachable" restart banner. Cleared on restart; never
    * serialized — see `serializePtyPanel`.
    */
@@ -600,17 +606,27 @@ export interface ReviewPanelData extends BasePanelData {
 }
 
 /**
- * View mode shared by the file viewer surfaces (panel + dialog). "rendered"
- * only applies to markdown files; every other file renders as source.
+ * The two modes that render the file's own bytes. Separate from `FileViewMode`
+ * so document viewers can't be handed "diff", which they'd silently treat as
+ * "rendered" (every non-"source" value takes their rendered branch).
  */
-export type FileViewMode = "rendered" | "source";
+export type FileRenderMode = "rendered" | "source";
 
 /**
- * File panel — read-only viewer for a repo file in a grid cell. Markdown
- * files additionally get a rendered-document mode. `filePath` is absolute;
- * the effective read root is resolved at render time (the panel's worktree
- * when the file is inside one, else the file's parent directory) so worktree
- * renames don't strand the panel.
+ * View mode shared by the file viewer surfaces (panel + dialog). "rendered"
+ * only applies to markdown and HTML files; "diff" only to files with local
+ * worktree changes. Every other file is source-only. Availability is derived
+ * per file at render time, so a persisted mode whose capability is gone falls
+ * back to "source" rather than being rewritten.
+ */
+export type FileViewMode = FileRenderMode | "diff";
+
+/**
+ * File panel — read-only viewer for a repo file in a grid cell. Markdown and
+ * HTML files additionally get a rendered-document mode, and locally changed
+ * files get a diff mode. `filePath` is absolute; the effective read root is
+ * resolved at render time (the panel's worktree when the file is inside one,
+ * else the file's parent directory) so worktree renames don't strand the panel.
  */
 export interface FilePanelData extends BasePanelData {
   kind: "file";
@@ -688,12 +704,98 @@ export interface DiffPanelData extends BasePanelData {
   viewedKey?: string;
 }
 
+/** One directory entry in a persisted file-browser tree snapshot. */
+export interface FileBrowserSnapshotNode {
+  /** Entry basename. */
+  name: string;
+  /** Worktree-relative path. */
+  path: string;
+  isDirectory: boolean;
+}
+
+/** One directory's listing in a persisted file-browser tree snapshot. */
+export interface FileBrowserTreeSnapshotEntry {
+  /** Worktree-relative directory path; "" = the browse root's own listing. */
+  dirPath: string;
+  nodes: FileBrowserSnapshotNode[];
+}
+
+/**
+ * Structure-only snapshot of a file browser's last-known tree (#11367): entry
+ * names, paths and directory bits — never contents, sizes or timestamps.
+ * Tagged with the identity it was captured under so a worktree switch or
+ * re-root can't seed the wrong tree; a mismatch just cold-starts. Arrays
+ * rather than a Map because it round-trips through JSON persistence.
+ */
+export interface FileBrowserTreeSnapshot {
+  worktreeId: string;
+  /** Worktree-relative browse root at capture time; "" = the worktree root. */
+  rootPath: string;
+  listings: FileBrowserTreeSnapshotEntry[];
+}
+
+/**
+ * File browser panel — a lazily-expanded directory tree over one worktree with
+ * a read-only viewer beside it. Every field is worktree-relative rather than
+ * absolute (the root comes from `worktreeId`, like `DiffPanelData.filePath`),
+ * so moving or renaming the worktree can't strand the panel on a dead path.
+ *
+ * Every field persists: the issue's contract is that a pinned panel keeps its
+ * expansion, selection and layout, and `promoteDialogPanelToGrid` reuses the
+ * same panel record, so anything stored here also survives dialog → grid
+ * promotion without a side channel.
+ */
+export interface FileBrowserPanelData extends BasePanelData {
+  kind: "file-browser";
+  /** Worktree-relative path of the selected file; absent = nothing selected. */
+  browserSelectedPath?: string;
+  /**
+   * Worktree-relative directory paths the user has expanded. A list rather
+   * than a Set because panel data round-trips through JSON persistence.
+   */
+  browserExpandedPaths?: string[];
+  /**
+   * Whether dot-prefixed entries are hidden in this panel. Absent defaults to
+   * false — dotfiles are visible by default; the toolbar toggle hides them
+   * (#11330). Replaces the old `browserShowIgnored` field, which is
+   * intentionally not migrated: its meaning was inverted, so an old panel that
+   * showed gitignored files must not silently start hiding dotfiles.
+   */
+  browserHideDotfiles?: boolean;
+  /**
+   * Worktree-relative directory the tree is rooted at. Absent or "" = the
+   * worktree root itself.
+   */
+  browserRootPath?: string;
+  /**
+   * Whether the tree sidebar is collapsed. Absent or `false` = open (the
+   * default); only `true` is persisted, so an open panel stays sparse.
+   */
+  browserSidebarCollapsed?: boolean;
+  /**
+   * Last-known tree structure, captured when the view goes away and painted
+   * back instantly on restore while a live refresh runs (#11367). Derived
+   * data, unlike every other field here — but it must live on the panel
+   * record because the renderer (and any cache in it) is destroyed on LRU
+   * eviction; only the persisted record survives.
+   */
+  browserTreeSnapshot?: FileBrowserTreeSnapshot;
+  /**
+   * Dragged width of the tree column in px. Absent = the 288px default; only a
+   * non-default, in-range width is persisted, so an unresized panel stays
+   * sparse. Independent of `browserSidebarCollapsed`: collapsing never clears
+   * it, so re-opening restores the last-dragged width (#11331).
+   */
+  browserSidebarWidth?: number;
+}
+
 export type PanelInstance =
   | PtyPanelData
   | BrowserPanelData
   | DevPreviewPanelData
   | ReviewPanelData
   | FilePanelData
+  | FileBrowserPanelData
   | DiffPanelData;
 
 export function isPtyPanel(panel: PanelInstance | TerminalInstance): panel is PtyPanelData {
@@ -728,6 +830,14 @@ export function isFilePanel(panel: PanelInstance | TerminalInstance): panel is F
   return kind === "file";
 }
 
+export function isFileBrowserPanel(
+  panel: PanelInstance | TerminalInstance
+): panel is FileBrowserPanelData {
+  const kind = panel.kind ?? "terminal";
+
+  return kind === "file-browser";
+}
+
 export function isDiffPanel(panel: PanelInstance | TerminalInstance): panel is DiffPanelData {
   const kind = panel.kind ?? "terminal";
 
@@ -735,14 +845,18 @@ export function isDiffPanel(panel: PanelInstance | TerminalInstance): panel is D
 }
 
 /**
- * Panels that can live in the dock. Type-level twin of the registry's
- * `dockable` capability (`panelKindIsDockable`) — extend both together when a
- * new kind gains dock support, along with a chip branch in `ContentDock`.
+ * A panel known to be dockable. Dockability is runtime registry state, not a
+ * fixed kind list: any registered kind is dockable unless it declares
+ * `dockable: false` (see `panelKindIsDockable`), including plugin kinds cast
+ * into `PanelInstance` at creation. So this is `PanelInstance` — the guarantee
+ * lives in `isDockPanel`'s runtime check, and the dock render path narrows per
+ * kind (`isPtyPanel` for the terminal chip, `DockedNonPtyPanelItem` for the
+ * rest) rather than trusting this type to enumerate members.
  */
-export type DockPanelData = PtyPanelData | FilePanelData | BrowserPanelData;
+export type DockPanelData = PanelInstance;
 
 export function isDockPanel(panel: PanelInstance | TerminalInstance): panel is DockPanelData {
-  return isPtyPanel(panel) || isFilePanel(panel) || isBrowserPanel(panel);
+  return panelKindIsDockable(panel.kind ?? "terminal");
 }
 
 /**

@@ -2,6 +2,12 @@ import { app, Notification, webContents as webContentsModule } from "electron";
 import type { WindowRegistry, WindowContext } from "../window/WindowRegistry.js";
 import { sendToRenderer } from "../ipc/utils.js";
 import { getAppWebContents, getWindowForWebContents } from "../window/webContentsRegistry.js";
+import {
+  FALLBACK_WINDOW_TITLE,
+  composeWindowTitle,
+  resolveWindowProjectName,
+  type ProjectTitleLookup,
+} from "../window/windowTitle.js";
 
 export interface NotificationState {
   waitingCount: number;
@@ -41,7 +47,6 @@ export interface NativeNotificationOptions extends WatchNotificationOptions {
 }
 
 const DEBOUNCE_MS = 300;
-const DEFAULT_TITLE = "Daintree";
 
 interface TrackedWindow {
   browserWindow: import("electron").BrowserWindow;
@@ -51,6 +56,7 @@ interface TrackedWindow {
 
 class NotificationService {
   private registry: WindowRegistry | null = null;
+  private projectLookup: ProjectTitleLookup | null = null;
   private debounceTimer: NodeJS.Timeout | null = null;
   private statesByOwner = new Map<NotificationOwnerId, NotificationState>();
   private focusedWindows = new Set<number>();
@@ -131,9 +137,16 @@ class NotificationService {
     });
   }
 
-  initialize(registry: WindowRegistry): void {
+  /**
+   * `projectLookup` resolves a ProjectViewManager id to its project row so each
+   * window's title can name what it is showing. Injected rather than imported
+   * so the service stays free of the SQLite-backed project store — omit it and
+   * every window falls back to the app name.
+   */
+  initialize(registry: WindowRegistry, projectLookup?: ProjectTitleLookup): void {
     this.detachAllWindowListeners();
     this.registry = registry;
+    this.projectLookup = projectLookup ?? null;
 
     for (const ctx of registry.all()) {
       this.attachWindowListeners(ctx);
@@ -166,34 +179,14 @@ class NotificationService {
   private applyNotifications(): void {
     if (!this.registry) return;
 
-    // An owner that no longer resolves to a window is dead or dying: a view's
-    // webContents id is indexed at creation, before its renderer can send any
-    // IPC, and is unindexed only on eviction (which closes it) or window
-    // teardown. Pruning here keeps the badge honest even if a "destroyed"
-    // event is missed.
-    const countsByWindow = new Map<number, number>();
-    for (const [ownerId, state] of [...this.statesByOwner]) {
-      const ctx = this.registry.getByWebContentsId(ownerId);
-      if (!ctx || ctx.browserWindow.isDestroyed()) {
-        this.statesByOwner.delete(ownerId);
-        continue;
-      }
-      countsByWindow.set(
-        ctx.windowId,
-        (countsByWindow.get(ctx.windowId) ?? 0) + state.waitingCount
-      );
-    }
+    this.pruneDeadOwners();
+    const countsByWindow = this.countsByWindow();
 
     let totalWaiting = 0;
     for (const ctx of this.registry.all()) {
       const waitingCount = countsByWindow.get(ctx.windowId) ?? 0;
       totalWaiting += waitingCount;
-
-      if (!ctx.browserWindow.isDestroyed()) {
-        ctx.browserWindow.setTitle(
-          waitingCount > 0 ? `(${waitingCount}) ${DEFAULT_TITLE}` : DEFAULT_TITLE
-        );
-      }
+      this.writeTitle(ctx, waitingCount);
     }
 
     if (process.platform === "darwin") {
@@ -201,11 +194,89 @@ class NotificationService {
     }
   }
 
+  /**
+   * Recompose every live window's title against the project each one is now
+   * showing, without touching the waiting counts or the Dock badge.
+   *
+   * Called after a project switch, rename, close, or removal — the moments the
+   * displayed identity changes but the notification state does not. Refreshing
+   * every window rather than a named one is deliberate: each window answers from
+   * its own ProjectViewManager, so there is no cross-window filter to get wrong
+   * (a cached, non-visible view for the same project must not retitle its host).
+   */
+  refreshTitles(): void {
+    if (!this.registry) return;
+
+    const countsByWindow = this.countsByWindow();
+    for (const ctx of this.registry.all()) {
+      this.writeTitle(ctx, countsByWindow.get(ctx.windowId) ?? 0);
+    }
+  }
+
+  /**
+   * An owner that no longer resolves to a window is dead or dying: a view's
+   * webContents id is indexed at creation, before its renderer can send any
+   * IPC, and is unindexed only on eviction (which closes it) or window
+   * teardown. Pruning keeps the badge honest even if a "destroyed" event is
+   * missed.
+   *
+   * Only `applyNotifications` prunes, because dropping an owner changes the
+   * total the badge is about to be set from. A title-only pass that pruned
+   * would leave the badge stale AND make the later `removeOwner` a no-op, since
+   * its `delete` would find nothing left to remove.
+   */
+  private pruneDeadOwners(): void {
+    if (!this.registry) return;
+
+    for (const ownerId of [...this.statesByOwner.keys()]) {
+      const ctx = this.registry.getByWebContentsId(ownerId);
+      if (!ctx || ctx.browserWindow.isDestroyed()) {
+        this.statesByOwner.delete(ownerId);
+      }
+    }
+  }
+
+  private countsByWindow(): Map<number, number> {
+    const counts = new Map<number, number>();
+    if (!this.registry) return counts;
+
+    for (const [ownerId, state] of this.statesByOwner) {
+      const ctx = this.registry.getByWebContentsId(ownerId);
+      if (!ctx || ctx.browserWindow.isDestroyed()) continue;
+      counts.set(ctx.windowId, (counts.get(ctx.windowId) ?? 0) + state.waitingCount);
+    }
+    return counts;
+  }
+
+  /**
+   * Best-effort by construction: callers invoke this from a `finally` after a
+   * switch or rename has already committed, so a throw here would replace the
+   * original result and mask the real failure.
+   */
+  private writeTitle(ctx: WindowContext, waitingCount: number): void {
+    if (ctx.browserWindow.isDestroyed()) return;
+
+    try {
+      const projectName = resolveWindowProjectName(
+        ctx.services.projectViewManager,
+        this.projectLookup
+      );
+      ctx.browserWindow.setTitle(composeWindowTitle(projectName, waitingCount));
+    } catch (err) {
+      console.warn("[NotificationService] failed to set window title:", err);
+    }
+  }
+
+  /**
+   * Only runs from `dispose()`, so it deliberately drops back to the plain app
+   * name rather than resolving project names: the store is closing on the
+   * shutdown path, and nothing reads these titles again.
+   */
   private clearNotifications(): void {
     if (this.registry) {
       for (const ctx of this.registry.all()) {
         if (!ctx.browserWindow.isDestroyed()) {
-          ctx.browserWindow.setTitle(DEFAULT_TITLE);
+          ctx.browserWindow.setTitle(FALLBACK_WINDOW_TITLE);
         }
       }
     }
@@ -355,6 +426,7 @@ class NotificationService {
     this.activeNotifications.clear();
 
     this.registry = null;
+    this.projectLookup = null;
   }
 }
 

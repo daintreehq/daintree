@@ -27,6 +27,7 @@ import {
 import type { WhySlowResourceReason, WhySlowResourceSnapshot } from "../../shared/types/whySlow.js";
 import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
 import { getSystemMemoryThresholds, readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
+import type { MemoryPressurePolicy } from "../utils/cachedProjectViews.js";
 import { resolveResourceProfileConfig } from "../utils/resourceProfileConfig.js";
 
 /** Map an additive pressure score to a profile. Efficiency latches at ≥ 3; a
@@ -191,6 +192,14 @@ export class ResourceProfileService {
   private readonly memoryThresholdLowMb: number;
   private readonly sysMemThresholdHighMb: number;
   private readonly sysMemThresholdLowMb: number;
+  /**
+   * Cached-view reclaim band, pushed to every PVM. Deliberately NOT part of
+   * RESOURCE_PROFILE_CONFIGS: it is a property of the machine's RAM, not of the
+   * profile, so it stays armed at one value across every transition — including
+   * the interactive efficiency→balanced clamp, which used to loosen the floor
+   * 1024→768 exactly when memory was lowest (#11469).
+   */
+  private readonly memoryPressurePolicy: MemoryPressurePolicy;
   private readonly terminalWorkloadHighMb: number;
   private readonly terminalWorkloadLowMb: number;
   // Latest terminal-workload rollup sample; null until the first successful
@@ -230,6 +239,12 @@ export class ResourceProfileService {
     const systemMemoryThresholds = getSystemMemoryThresholds(totalRamMb);
     this.sysMemThresholdHighMb = systemMemoryThresholds.warningMb;
     this.sysMemThresholdLowMb = systemMemoryThresholds.criticalMb;
+    // Same thresholds that promote the profile on the memory signal, so a
+    // promotion and the reclaim it implies now arm at the same reading.
+    this.memoryPressurePolicy = {
+      criticalMb: systemMemoryThresholds.criticalMb,
+      warningMb: systemMemoryThresholds.warningMb,
+    };
     this.terminalWorkloadHighMb = totalRamMb * TERMINAL_WORKLOAD_HIGH_FRACTION;
     this.terminalWorkloadLowMb = totalRamMb * TERMINAL_WORKLOAD_LOW_FRACTION;
     const totalRamGb = totalRamMb / 1024;
@@ -440,8 +455,8 @@ export class ResourceProfileService {
     if (this.currentProfile === "efficiency") {
       // Efficiency freezes cached views (CPU/timer suppression) but never
       // destroys them. RAM is reclaimed only by evictStaleViews()'s own
-      // lowMemoryFreeThresholdMb floor when free RAM is genuinely low, keeping
-      // the user's working set warm under battery/thermal/CPU-only pressure.
+      // memory-pressure band when free RAM is genuinely low, keeping the
+      // user's working set warm under battery/thermal/CPU-only pressure.
       try {
         pvm.setEfficiencyFreeze(true);
       } catch {
@@ -449,7 +464,7 @@ export class ResourceProfileService {
       }
     }
     try {
-      pvm.setLowMemoryFreeThresholdMb(config.lowMemoryFreeThresholdMb);
+      pvm.setMemoryPressurePolicy(this.memoryPressurePolicy);
     } catch {
       // non-critical
     }
@@ -470,6 +485,16 @@ export class ResourceProfileService {
     }
     try {
       pvm.setWarmPaintGateHardTimeoutMs(config.warmPaintGateHardTimeoutMs);
+    } catch {
+      // non-critical
+    }
+    try {
+      pvm.setViewLoadTimeoutMs(config.viewLoadTimeoutMs);
+    } catch {
+      // non-critical
+    }
+    try {
+      pvm.setViewLoadHardTimeoutMs(config.viewLoadHardTimeoutMs);
     } catch {
       // non-critical
     }
@@ -1139,7 +1164,7 @@ export class ResourceProfileService {
 
     // Freeze cached project views under efficiency to reclaim CPU, but never
     // destroy them to reclaim RAM. Destruction is owned exclusively by
-    // evictStaleViews()'s lowMemoryFreeThresholdMb floor, which clamps to 1
+    // evictStaleViews()'s memory-pressure band, which contracts the cache
     // only when free RAM is genuinely low (independent of profile). This keeps
     // the user's working set warm under battery/thermal/CPU-only pressure,
     // avoiding cold-start storms when switching among many open projects.
@@ -1173,16 +1198,18 @@ export class ResourceProfileService {
           // non-critical
         }
       }
-      // Push the profile's low-memory floor unconditionally on every transition
-      // so an upgrade out of efficiency doesn't leave the stricter threshold
-      // stuck in place. PVM checks this floor inside `evictStaleViews` and
-      // clamps `effectiveMax` to 1 for the pass when available RAM drops below
-      // it, without mutating the user-configured `maxCachedViews`.
-      try {
-        pvm.setLowMemoryFreeThresholdMb(config.lowMemoryFreeThresholdMb);
-      } catch {
-        // non-critical
-      }
+      // The cached-view reclaim band is deliberately NOT pushed here. Every PVM
+      // is armed once — at `start()` for existing windows, at
+      // `applyCurrentProfileTo()` for each window created later — so no
+      // transition can move it, least of all the interactive
+      // efficiency→balanced clamp above, which used to swap the active floor
+      // 1024→768 at the exact moment memory was lowest (#11469).
+      //
+      // Re-pushing here would not make the arming self-healing anyway: a no-op
+      // transition returns above, and a session sitting at a stable profile
+      // never reaches this loop at all. It would, though, silently re-arm the
+      // `setLowMemoryFreeThresholdMb(null)` escape hatch that six E2E specs rely
+      // on to keep their eviction assertions deterministic.
 
       // Push per-profile paint-gate timeouts (cold and warm). Both cold
       // starts and warm wake fan-outs run measurably slower under efficiency
@@ -1206,6 +1233,19 @@ export class ResourceProfileService {
       }
       try {
         pvm.setWarmPaintGateHardTimeoutMs(config.warmPaintGateHardTimeoutMs);
+      } catch {
+        // non-critical
+      }
+      // Same rationale for the cold view-load bounds: the main-process
+      // contention that selects efficiency also slows the `app://` chunks the
+      // incoming renderer is waiting on (#11459).
+      try {
+        pvm.setViewLoadTimeoutMs(config.viewLoadTimeoutMs);
+      } catch {
+        // non-critical
+      }
+      try {
+        pvm.setViewLoadHardTimeoutMs(config.viewLoadHardTimeoutMs);
       } catch {
         // non-critical
       }

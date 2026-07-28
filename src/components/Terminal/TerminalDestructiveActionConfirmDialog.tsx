@@ -4,6 +4,7 @@ import { actionService } from "@/services/ActionService";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import {
   useTerminalPendingDestructiveActionStore,
+  type DeletedWorktreeGroupPreviewWorktree,
   type TerminalPendingDestructiveActionSnapshot,
 } from "@/store/terminalPendingDestructiveActionStore";
 
@@ -82,6 +83,30 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): DialogCop
         confirmLabel: `Trash ${pending.targetCount} ${noun}`,
       };
     }
+    case "worktreeEndAll": {
+      const noun = pending.targetCount === 1 ? "session" : "sessions";
+      const agentNote =
+        pending.runningAgentCount === 0
+          ? ""
+          : pending.runningAgentCount === 1
+            ? " 1 has a running agent."
+            : ` ${pending.runningAgentCount} have running agents.`;
+      return {
+        title: `End ${pending.targetCount} ${noun} in this worktree?`,
+        description: `Permanently ends every session in the worktree. Unlike trashing, ended sessions can't be restored — running processes and unsaved scrollback are lost.${agentNote}`,
+        confirmLabel: `End ${pending.targetCount} ${noun}`,
+      };
+    }
+    case "worktreeClearHistory": {
+      // No live panels are touched, so `targetCount`/`runningAgentCount` are 0
+      // and the copy deliberately says nothing about a session count.
+      return {
+        title: "Clear session history for this worktree?",
+        description:
+          "Permanently deletes this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents, and those records can't be recovered. Open sessions are unaffected, and bookmarked sessions are kept — deleting a bookmark is the only way to remove one.",
+        confirmLabel: "Clear session history",
+      };
+    }
     case "deletedWorktreeDismiss": {
       const noun = pending.targetCount === 1 ? "terminal" : "terminals";
       const agentNote =
@@ -96,7 +121,60 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): DialogCop
         confirmLabel: `Close ${pending.targetCount} ${noun}`,
       };
     }
+    case "deletedWorktreeGroupDismiss": {
+      const worktreeCount = pending.preview?.length ?? 0;
+      // A member whose terminals all left is dropped from the preview, so the
+      // group can be clearing a single worktree even though it holds several.
+      const worktreeNoun = worktreeCount === 1 ? "deleted worktree" : "deleted worktrees";
+      const noun = pending.targetCount === 1 ? "terminal" : "terminals";
+      const agentNote =
+        pending.runningAgentCount === 0
+          ? ""
+          : pending.runningAgentCount === 1
+            ? " 1 still has a running agent."
+            : ` ${pending.runningAgentCount} still have running agents.`;
+      return {
+        title: `Close ${pending.targetCount} ${noun} from ${worktreeCount} ${worktreeNoun}?`,
+        description: `These terminals outlived the worktrees they belonged to. Closing them moves them to trash and ends their running processes; they can be restored from trash before garbage collection. Drag them to another worktree instead to keep them.${agentNote}`,
+        confirmLabel: `Close ${pending.targetCount} ${noun}`,
+      };
+    }
   }
+}
+
+/**
+ * D2 preview: a bulk clear spanning several worktrees is the one case where a
+ * count tells the user nothing about what they're losing, so the dialog lists
+ * the actual terminals it will trash, grouped under the worktree each came
+ * from (#7880).
+ */
+function GroupDismissPreview({ preview }: { preview: DeletedWorktreeGroupPreviewWorktree[] }) {
+  return (
+    <ul className="mt-3 max-h-56 space-y-3 overflow-y-auto rounded border border-border-default bg-overlay-subtle p-3">
+      {preview.map((entry) => (
+        <li key={entry.worktreeId}>
+          <span className="block truncate font-mono text-[11px] font-medium text-text-secondary">
+            {entry.worktreeTitle}
+          </span>
+          <ul className="mt-1 space-y-0.5">
+            {entry.terminals.map((terminal) => (
+              <li
+                key={terminal.terminalId}
+                className="flex items-center gap-1.5 truncate text-xs text-text-muted"
+              >
+                <span className="truncate">{terminal.terminalTitle}</span>
+                {terminal.hasRunningAgent && (
+                  <span className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-[10px] text-text-muted">
+                    Running
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 /**
@@ -170,6 +248,27 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         announcement = `Trashed ${pending.targetCount} ${noun}`;
         break;
       }
+      case "worktreeEndAll": {
+        if (!pending.worktreeId) break;
+        void actionService.dispatch(
+          "worktree.sessions.endAll",
+          { worktreeId: pending.worktreeId, confirmed: true },
+          { source: "user" }
+        );
+        const noun = pending.targetCount === 1 ? "session" : "sessions";
+        announcement = `Ended ${pending.targetCount} ${noun}`;
+        break;
+      }
+      case "worktreeClearHistory": {
+        if (!pending.worktreeId) break;
+        void actionService.dispatch(
+          "worktree.sessions.clearHistory",
+          { worktreeId: pending.worktreeId, confirmed: true },
+          { source: "user" }
+        );
+        announcement = "Cleared session history";
+        break;
+      }
       case "deletedWorktreeDismiss": {
         if (!pending.worktreeId) break;
         // Same executor as `worktreeTrashAll` — the panels still carry the
@@ -181,6 +280,26 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { worktreeId: pending.worktreeId, confirmed: true },
           { source: "user" }
         );
+        const noun = pending.targetCount === 1 ? "terminal" : "terminals";
+        announcement = `Closed ${pending.targetCount} ${noun}`;
+        break;
+      }
+      case "deletedWorktreeGroupDismiss": {
+        if (!pending.preview || pending.preview.length === 0) break;
+        // Fans the single-row executor over each previewed worktree rather than
+        // introducing a multi-worktree one: `worktree.sessions.trashAll`
+        // re-derives its targets, so a terminal rescued while the dialog was
+        // open is simply no longer there. Nothing unpreviewed can appear in the
+        // meantime either — a deleted row never accepts drops (it deliberately
+        // omits `SortableWorktreeCard`), so the live set is always a subset of
+        // what the user just confirmed.
+        for (const entry of pending.preview) {
+          void actionService.dispatch(
+            "worktree.sessions.trashAll",
+            { worktreeId: entry.worktreeId, confirmed: true },
+            { source: "user" }
+          );
+        }
         const noun = pending.targetCount === 1 ? "terminal" : "terminals";
         announcement = `Closed ${pending.targetCount} ${noun}`;
         break;
@@ -205,7 +324,14 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
       description={copy.description}
       confirmLabel={copy.confirmLabel}
       variant="destructive"
+      // The grouped clear renders a scrollable preview list, which AppDialog
+      // must expose as a plain dialog rather than an alertdialog.
+      hasPreview={pending.kind === "deletedWorktreeGroupDismiss"}
       onConfirm={handleConfirm}
-    />
+    >
+      {pending.kind === "deletedWorktreeGroupDismiss" && pending.preview && (
+        <GroupDismissPreview preview={pending.preview} />
+      )}
+    </ConfirmDialog>
   );
 }

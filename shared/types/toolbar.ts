@@ -27,6 +27,7 @@ export type AnyToolbarButtonId = ToolbarButtonId | PluginToolbarButtonId;
 export type ToolbarButtonId =
   | "sidebar-toggle"
   | "agent-tray"
+  | "plugin-tray"
   | BuiltInAgentId
   | "terminal"
   | "browser"
@@ -44,17 +45,23 @@ export type ToolbarButtonId =
 
 /**
  * Sparse pin-state map for toolbar buttons. Mirrors the tri-state semantics
- * used by `agentSettingsStore.agents[id].pinned`:
+ * used by `agentSettingsStore.agents[id].pinned`, but the default the missing
+ * entry falls back to differs by button kind:
  *
+ * Built-in buttons (incl. `agent-tray` / `plugin-tray`) default to visible:
  *   - `false`      → user explicitly hid this button
- *   - `true`       → user explicitly pinned this button (currently unused for
- *                    non-agent buttons since defaults are visible, reserved
- *                    for future "pin-as-universal" extensions)
- *   - `undefined`  → follow default visibility (visible)
+ *   - `true`       → user explicitly pinned this button
+ *   - `undefined`  → visible
+ *
+ * Plugin contributions default to tray-only (#11304) — they always appear in
+ * the plugin tray, and `true` additionally promotes one to its own top-level
+ * button rather than making it merely "visible":
+ *   - `true`             → tray row + top-level button
+ *   - `false`/`undefined` → tray row only
  *
  * Agent-button IDs (entries in `BUILT_IN_AGENT_IDS`) live in
- * `agentSettingsStore`, not here. Only `agent-tray`, the non-agent built-ins,
- * and plugin buttons are governed by this map.
+ * `agentSettingsStore`, not here. Only `agent-tray`, `plugin-tray`, the
+ * non-agent built-ins, and plugin buttons are governed by this map.
  */
 export type ToolbarPinnedState = Partial<Record<AnyToolbarButtonId, boolean>>;
 
@@ -92,6 +99,7 @@ export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPri
   "forge-stats": 1,
   "voice-recording": 1,
   "agent-tray": 2,
+  "plugin-tray": 2,
   ...(Object.fromEntries(
     BUILT_IN_AGENT_IDS.map((id) => [id, 2 as ToolbarButtonPriority])
   ) as Record<BuiltInAgentId, ToolbarButtonPriority>),

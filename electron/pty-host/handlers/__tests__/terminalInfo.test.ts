@@ -13,6 +13,7 @@ function createCtx(overrides: Partial<HostContext> = {}): HostContext {
     ptyManager,
     // The mapper only touches `ptyManager`; the rest of the surface is irrelevant
     // for these tests but must satisfy the structural type.
+    pluginPtyManager: {} as HostContext["pluginPtyManager"],
     processTreeCache: {} as HostContext["processTreeCache"],
     terminalResourceMonitor: {} as HostContext["terminalResourceMonitor"],
     backpressureManager: {} as HostContext["backpressureManager"],

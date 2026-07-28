@@ -301,6 +301,34 @@ describe("PluginService", () => {
     );
   });
 
+  it("forwards an explicit dockable:false from a panel contribution into registerPanelKind (#11332)", async () => {
+    await writePlugin("dock-plugin", {
+      name: "acme.dock-plugin",
+      version: "1.0.0",
+      contributes: {
+        panels: [
+          { id: "compact", name: "Compact", iconId: "eye", color: "#111", dockable: false },
+          { id: "wide", name: "Wide", iconId: "eye", color: "#222" },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    // Explicit opt-out flows through verbatim.
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.dock-plugin.compact", dockable: false })
+    );
+    // Absent flag never stamps a `dockable` key, so the registry default
+    // (dockable) applies — assert the key is not present on that call.
+    const wideCall = vi
+      .mocked(registerPanelKind)
+      .mock.calls.find((call) => call[0]?.id === "acme.dock-plugin.wide");
+    expect(wideCall).toBeDefined();
+    expect(Object.prototype.hasOwnProperty.call(wideCall![0], "dockable")).toBe(false);
+  });
+
   it("skips directories without plugin.json", async () => {
     await fs.mkdir(path.join(tmpDir, "empty-dir"));
 
@@ -793,6 +821,133 @@ describe("PluginService manifest command contributions (#9281)", () => {
       danger: "safe",
       effectiveDanger: "safe",
     });
+  });
+
+  it("honours a manifest command's requires when deriving effectiveDanger", async () => {
+    // The manifest path spreads the command into the same validator the
+    // runtime host.registerAction path uses, so `requires` has to survive that
+    // spread — a declared-in-JSON one-click action is the issue's actual case.
+    await writePluginWithSrc(
+      "cmd-intent",
+      {
+        name: "acme.cmd-intent",
+        version: "1.0.0",
+        capabilities: ["shell:exec", "fs:project-read"],
+        contributes: {
+          commands: [
+            {
+              id: "open-panel",
+              title: "Open Panel",
+              description: "Opens the panel",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+              requires: [],
+            },
+            {
+              id: "run-build",
+              title: "Run Build",
+              description: "Runs the build",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+              requires: ["shell:exec"],
+            },
+          ],
+        },
+      },
+      {
+        "open-panel.ts": `export default () => "ok"`,
+        "run-build.ts": `export default () => "ok"`,
+      }
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const byId = new Map(service.listPluginActions().map((a) => [a.id, a]));
+    expect(byId.get("acme.cmd-intent.open-panel")?.effectiveDanger).toBe("safe");
+    expect(byId.get("acme.cmd-intent.run-build")?.effectiveDanger).toBe("confirm");
+  });
+
+  it("elevates a manifest command that omits requires under a high-risk manifest", async () => {
+    // The backward-compatibility half: a command written before #11299 must
+    // keep the conservative verdict through the manifest path too, not just
+    // the runtime one.
+    await writePluginWithSrc(
+      "cmd-legacy",
+      {
+        name: "acme.cmd-legacy",
+        version: "1.0.0",
+        capabilities: ["shell:exec"],
+        contributes: {
+          commands: [
+            {
+              id: "do-thing",
+              title: "Do Thing",
+              description: "Runs",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      },
+      { "do-thing.ts": `export default () => "ok"` }
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(
+      service.listPluginActions().find((a) => a.id === "acme.cmd-legacy.do-thing")?.effectiveDanger
+    ).toBe("confirm");
+  });
+
+  it("fails a manifest command whose requires names an undeclared capability", async () => {
+    await writePluginWithSrc(
+      "cmd-overclaim",
+      {
+        name: "acme.cmd-overclaim",
+        version: "1.0.0",
+        capabilities: ["fs:project-read"],
+        contributes: {
+          commands: [
+            {
+              id: "fine",
+              title: "Fine",
+              description: "Runs",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+              requires: ["fs:project-read"],
+            },
+            {
+              id: "do-thing",
+              title: "Do Thing",
+              description: "Runs",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+              requires: ["shell:exec"],
+            },
+          ],
+        },
+      },
+      { "fine.ts": `export default () => "ok"`, "do-thing.ts": `export default () => "ok"` }
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    // Fail-closed: the over-claiming action does not register rather than
+    // silently falling back to whole-manifest derivation, so the author's
+    // mistake is visible. The valid sibling pins that this is a targeted
+    // rejection — without it the assertion would also pass if command
+    // loading broke entirely.
+    const ids = service.listPluginActions().map((a) => a.id);
+    expect(ids).toContain("acme.cmd-overclaim.fine");
+    expect(ids).not.toContain("acme.cmd-overclaim.do-thing");
   });
 
   it("lazily imports and invokes the handler on first dispatch", async () => {

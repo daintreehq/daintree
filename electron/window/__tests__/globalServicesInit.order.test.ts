@@ -160,8 +160,18 @@ vi.mock("../../services/IdleTerminalNotificationService.js", () => ({
   getIdleTerminalNotificationService: vi.fn(),
 }));
 
+const evictSessionFilesMock = vi.hoisted(() =>
+  vi.fn<
+    (opts: {
+      ttlMs: number;
+      maxBytes: number;
+      knownIds?: Set<string>;
+    }) => Promise<{ deleted: number; bytesFreed: number }>
+  >(async () => ({ deleted: 0, bytesFreed: 0 }))
+);
+
 vi.mock("../../services/pty/terminalSessionPersistence.js", () => ({
-  evictSessionFiles: vi.fn(async () => ({ deleted: 0, bytesFreed: 0 })),
+  evictSessionFiles: evictSessionFilesMock,
   SESSION_EVICTION_TTL_MS: 0,
   SESSION_EVICTION_MAX_BYTES: 0,
 }));
@@ -235,11 +245,16 @@ vi.mock("../../ipc/handlers/projectCrud/index.js", () => ({
   getProjectStatsService: vi.fn(),
 }));
 
+const projectStoreMock = vi.hoisted(() => ({
+  getAllProjects: vi.fn<() => { id: string }[]>(() => []),
+  getProjectState: vi.fn<(id: string) => Promise<{ terminals?: { id: string }[] } | null>>(
+    async () => null
+  ),
+  wasStateUnreadableThisSession: vi.fn<(id: string) => boolean>(() => false),
+}));
+
 vi.mock("../../services/ProjectStore.js", () => ({
-  projectStore: {
-    getAllProjects: () => [],
-    getProjectState: vi.fn(),
-  },
+  projectStore: projectStoreMock,
 }));
 
 vi.mock("../../setup/environment.js", () => ({
@@ -291,13 +306,90 @@ vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn() },
 }));
 
-import { initGlobalServices } from "../globalServicesInit.js";
+import { initGlobalServices, __test__ } from "../globalServicesInit.js";
 import { getGlobalServicesInitialized, setGlobalServicesInitialized } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
 import { app, ipcMain } from "electron";
 import type { Mock } from "vitest";
 import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
+
+describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
+  function resetSweepMocks() {
+    evictSessionFilesMock.mockReset();
+    evictSessionFilesMock.mockResolvedValue({ deleted: 0, bytesFreed: 0 });
+    projectStoreMock.getAllProjects.mockReset();
+    projectStoreMock.getAllProjects.mockReturnValue([]);
+    projectStoreMock.getProjectState.mockReset();
+    projectStoreMock.getProjectState.mockResolvedValue(null);
+    projectStoreMock.wasStateUnreadableThisSession.mockReset();
+    projectStoreMock.wasStateUnreadableThisSession.mockReturnValue(false);
+  }
+
+  beforeEach(resetSweepMocks);
+  // Restore defaults so a custom implementation set here can't leak into the
+  // sibling "task ordering" describe — these hoisted mocks are shared.
+  afterEach(resetSweepMocks);
+
+  it("passes a populated knownIds set when every project-state read is reliable", async () => {
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }, { id: "proj-b" }]);
+    projectStoreMock.getProjectState.mockImplementation(async (id: string) =>
+      id === "proj-a"
+        ? { terminals: [{ id: "term-a1" }, { id: "term-a2" }] }
+        : // proj-b reads back a benign null (never persisted state) — a null must
+          // NOT, on its own, disable the orphan pass.
+          null
+    );
+
+    await __test__.evictStaleSessionFiles();
+
+    expect(evictSessionFilesMock).toHaveBeenCalledTimes(1);
+    const arg = evictSessionFilesMock.mock.calls[0][0];
+    expect(arg.knownIds).toBeInstanceOf(Set);
+    expect([...(arg.knownIds ?? [])].sort()).toEqual(["term-a1", "term-a2"]);
+  });
+
+  it("passes an empty knownIds set (not undefined) when all reads are benignly empty", async () => {
+    // Guards against a `knownIds.size === 0 ? undefined : knownIds` regression:
+    // emptiness alone must not disable the orphan pass — only an unreadable flag.
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }, { id: "proj-b" }]);
+    projectStoreMock.getProjectState.mockResolvedValue(null);
+
+    await __test__.evictStaleSessionFiles();
+
+    expect(evictSessionFilesMock).toHaveBeenCalledTimes(1);
+    const arg = evictSessionFilesMock.mock.calls[0][0];
+    expect(arg.knownIds).toBeInstanceOf(Set);
+    expect([...(arg.knownIds ?? [])]).toEqual([]);
+  });
+
+  it("passes knownIds undefined when any project state was unreadable this session", async () => {
+    // The flag is populated only as a deferred (microtask) side effect of
+    // getProjectState resolving, so this passes only if the sweep AWAITS every
+    // read before consulting wasStateUnreadableThisSession. A regression that
+    // checked the flag before awaiting the reads would see an empty set and
+    // wrongly build a knownIds Set — catching an inactive project first
+    // discovered by the sweep.
+    const unreadable = new Set<string>();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }, { id: "proj-quarantined" }]);
+    projectStoreMock.getProjectState.mockImplementation(async (id: string) => {
+      await Promise.resolve();
+      if (id === "proj-quarantined") {
+        unreadable.add(id);
+        return null;
+      }
+      return { terminals: [{ id: "term-a1" }] };
+    });
+    projectStoreMock.wasStateUnreadableThisSession.mockImplementation((id: string) =>
+      unreadable.has(id)
+    );
+
+    await __test__.evictStaleSessionFiles();
+
+    expect(evictSessionFilesMock).toHaveBeenCalledTimes(1);
+    expect(evictSessionFilesMock.mock.calls[0][0].knownIds).toBeUndefined();
+  });
+});
 
 describe("initGlobalServices task ordering", () => {
   beforeEach(() => {
@@ -576,7 +668,7 @@ describe("initGlobalServices task ordering", () => {
     expect(pluginGetPluginDir).toHaveBeenCalledWith("acme.tool");
   });
 
-  it("plugin-service task drains queued open-file installs after initialize() (#10322)", async () => {
+  it("plugin-service task drains queued open-file archives after initialize() (#10322)", async () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     await initGlobalServices(fakeRegistry);
 
@@ -586,9 +678,11 @@ describe("initGlobalServices task ordering", () => {
 
     await run!();
 
+    // Activation still happens after initialize(), but the activator no longer
+    // takes the service: a double-clicked archive is queued for confirmation,
+    // never installed here (#11280).
     expect(activateOpenFileInstaller).toHaveBeenCalledTimes(1);
-    // Installer receives the initialized singleton (its PluginInstaller surface).
-    expect(activateOpenFileInstaller.mock.calls[0]![0]).toBeDefined();
+    expect(activateOpenFileInstaller.mock.calls[0]).toEqual([]);
   });
 
   it("plugin-service task still wires resolver + installer when initialize() rejects (#10322)", async () => {

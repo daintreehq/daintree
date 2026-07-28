@@ -182,8 +182,7 @@ export function parsePRNode(node: Record<string, unknown>): GitHubPR {
       : undefined;
 
   const rollupContexts = commitsData?.nodes?.[0]?.commit?.statusCheckRollup?.contexts as
-    | GlobalCIDeriveInput
-    | undefined;
+    GlobalCIDeriveInput | undefined;
   const globalDerived = deriveGlobalCIStatus({
     checkRunCountsByState: rollupContexts?.checkRunCountsByState,
     statusContextCountsByState: rollupContexts?.statusContextCountsByState,

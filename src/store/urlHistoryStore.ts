@@ -1,8 +1,13 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { StorageValue } from "zustand/middleware";
 import type { UrlHistoryEntry } from "@shared/types/browser";
 import { sanitizeUrlForHistory } from "@shared/utils/urlHistory";
 import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
+import {
+  mergeRecordByWriterDelta,
+  type PersistWriteMergeContext,
+} from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 const MAX_ENTRIES_PER_PROJECT = 500;
@@ -58,14 +63,61 @@ interface UrlHistoryState {
   removeProjectHistory: (projectId: string) => void;
 }
 
+type UrlHistoryPersistedState = Pick<UrlHistoryState, "entries">;
+
+function entriesOf(
+  value: StorageValue<UrlHistoryPersistedState> | null
+): Record<string, UrlHistoryEntry[]> {
+  const entries = value?.state?.entries;
+  return entries !== null && typeof entries === "object" ? entries : {};
+}
+
+/**
+ * Baseline-aware three-way merge for URL-history writes across project views
+ * (issue #11351). Each project's entry list is one record value keyed by project
+ * id, so a stale view writing its own project no longer wipes another project's
+ * history a sibling view recorded, and a `removeProjectHistory` isn't
+ * resurrected. Concurrent writes to the *same* project bucket stay
+ * last-writer-wins (the separate same-project multi-window case).
+ *
+ * All three inputs are normalized through `migrateEntries` (the same
+ * canonicalize + prune-expired transform the hydration `merge` applies) against a
+ * single captured `now`, so the writer-delta diff compares like-for-like. Without
+ * it, a raw baseline diffed against a pruned incoming would misread a
+ * hydration-pruned project as a writer deletion (dropping a sibling's re-added
+ * bucket); and a lone-normalized baseline would misread an entry that expired
+ * after hydration (still present in raw incoming) as a writer add (clobbering a
+ * sibling's fresh replacement). Sharing one `now` keeps an entry from being
+ * pruned in one input but kept in another at the retention boundary.
+ */
+function mergeUrlHistoryPersistedWrite({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<UrlHistoryPersistedState>): StorageValue<UrlHistoryPersistedState> {
+  // No shared value on disk yet → nothing to reconcile against.
+  if (!onDisk) return incoming;
+  const now = Date.now();
+  return {
+    version: incoming.version,
+    state: {
+      entries: mergeRecordByWriterDelta(
+        migrateEntries(entriesOf(baseline), now),
+        migrateEntries(entriesOf(incoming), now),
+        migrateEntries(entriesOf(onDisk), now)
+      ),
+    },
+  };
+}
+
 function pruneStaleEntries(entries: UrlHistoryEntry[], now: number): UrlHistoryEntry[] {
   return entries.filter((e) => now - e.lastVisitAt <= HISTORY_RETENTION_MS);
 }
 
 function migrateEntries(
-  rawEntries: Record<string, UrlHistoryEntry[]>
+  rawEntries: Record<string, UrlHistoryEntry[]>,
+  now: number = Date.now()
 ): Record<string, UrlHistoryEntry[]> {
-  const now = Date.now();
   const result: Record<string, UrlHistoryEntry[]> = {};
   for (const [projectId, projectEntries] of Object.entries(rawEntries)) {
     if (!Array.isArray(projectEntries)) continue;
@@ -183,7 +235,9 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
     }),
     {
       name: "daintree-url-history",
-      storage: createDebouncedSafeJSONStorage(300),
+      storage: createDebouncedSafeJSONStorage<UrlHistoryPersistedState>(300, {
+        mergeOnWrite: mergeUrlHistoryPersistedWrite,
+      }),
       version: 1,
       migrate: (persistedState) => persistedState as UrlHistoryState,
       merge: (persistedState, currentState) => {

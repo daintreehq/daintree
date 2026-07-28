@@ -172,6 +172,26 @@ describe("GlobalFileStore adversarial", () => {
     expect(utilsMock.resilientRename).toHaveBeenCalledWith(RECIPES_FILE, expect.any(String));
   });
 
+  it("non-ENOENT read errors throw and are NOT quarantined (transient failure != corruption)", async () => {
+    const eacces = Object.assign(new Error("EACCES"), { code: "EACCES" });
+    fsMock.readFile.mockRejectedValue(eacces);
+
+    await expect(store.getRecipes()).rejects.toThrow("EACCES");
+    // A read I/O error must not move the file aside — the data is still there.
+    expect(utilsMock.resilientRename).not.toHaveBeenCalled();
+  });
+
+  it("addRecipe does not overwrite the store when the read fails with a transient error", async () => {
+    const eio = Object.assign(new Error("EIO"), { code: "EIO" });
+    fsMock.readFile.mockRejectedValue(eio);
+
+    await expect(
+      store.addRecipe({ id: "r1", name: "test", terminals: [], createdAt: 1000 } as never)
+    ).rejects.toThrow("EIO");
+    // The mutator aborts rather than saving [justTheNewRecipe] over the store.
+    expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
+  });
+
   it("addRecipe loads + appends + saves without mutating the loaded array for caller", async () => {
     fsMock.readFile.mockResolvedValue(JSON.stringify([]));
 

@@ -1,4 +1,4 @@
-import type { PanelKind, TerminalInstance } from "../types/panel.js";
+import type { PanelKind, PanelLocation, TerminalInstance } from "../types/panel.js";
 import type { TerminalSnapshot } from "../types/project.js";
 import type { AddPanelOptions } from "../types/addPanelOptions.js";
 import { getAgentConfig } from "./agentRegistry.js";
@@ -15,6 +15,7 @@ export const BUILT_IN_PANEL_KINDS = [
   "dev-preview",
   "review",
   "file",
+  "file-browser",
   "diff",
 ] as const;
 
@@ -104,13 +105,23 @@ export interface PanelKindConfig {
   /** Whether this panel kind can convert to/from other types */
   canConvert: boolean;
   /**
-   * Whether a non-PTY kind can live in the dock. PTY kinds are always
-   * dockable; setting this opts a non-PTY kind into dock membership. The
-   * dock render path must have a chip for the kind (see `ContentDock`) —
-   * `DockPanelData` in shared/types/panel.ts is the type-level twin of this
-   * flag and the two must stay in sync.
+   * Whether a panel kind can live in the dock. Every registered kind is
+   * dockable by default (built-in and plugin alike); set `dockable: false` to
+   * opt a kind out — the explicit escape hatch for kinds with no meaningful
+   * compact chip-row form. The dock render path is generic (`ContentDock`
+   * renders any non-PTY dockable kind through `DockedNonPtyPanelItem`), so
+   * membership follows this flag via `panelKindIsDockable` / `isDockPanel`
+   * rather than a hard-coded kind list.
    */
   dockable?: boolean;
+  /**
+   * Whether the dialog presentation uses a fixed near-full height instead of
+   * sizing to content. For browsing surfaces whose content height varies with
+   * every interaction (expanding a folder, opening a file), a content-sized
+   * dialog visibly grows and shrinks under the user; pinning the surface keeps
+   * it still even when the tree doesn't fill it.
+   */
+  dialogFullHeight?: boolean;
   /** Whether this panel kind uses the standard terminal UI */
   usesTerminalUi?: boolean;
   /** Whether this panel kind should keep its runtime alive across project switches */
@@ -192,7 +203,8 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
-    dockable: true,
+    // Dockable by default (no explicit flag) — a reading surface with a
+    // meaningful compact chip form.
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
     searchAliases: ["web", "chrome", "internet", "www"],
@@ -210,6 +222,9 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
+    // Explicit opt-out: a live dev-server preview has no meaningful compact
+    // chip-row form (like file-browser, diff and review).
+    dockable: false,
     usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
@@ -225,6 +240,9 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
+    // Explicit opt-out: a review surface has no meaningful compact chip-row
+    // form (like file-browser, diff and dev-preview).
+    dockable: false,
     usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
@@ -244,7 +262,8 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
-    dockable: true,
+    // Dockable by default (no explicit flag) — a reading surface with a
+    // meaningful compact chip form.
     usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
@@ -255,6 +274,31 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     // reading when the panel leaves the grid.
     policy: { dockFallbackTarget: "previous-focused" },
   },
+  "file-browser": {
+    id: "file-browser",
+    name: "File Browser",
+    iconId: "folder-tree",
+    color: PANEL_KIND_BRAND_COLORS["file-browser"],
+    hasPty: false,
+    canRestart: false,
+    canConvert: false,
+    // Explicit opt-out: the dock chip row shows one compact title per panel,
+    // and a two-pane browser has no meaningful compact form (review, diff and
+    // dev-preview opt out for the same reason).
+    dockable: false,
+    dialogFullHeight: true,
+    usesTerminalUi: false,
+    keepAliveOnProjectSwitch: true,
+    // Spawnable from a bare palette entry: unlike diff and file, the browser
+    // needs no target beyond the worktree it opens against.
+    showInPalette: true,
+    searchAliases: ["files", "browse", "explorer", "tree", "folder", "finder", "assets"],
+    firstRenderRestore: true,
+    lazyImportPath: "src/panels/file-browser/FileBrowserPane.tsx",
+    // Reading surface like review, file and diff: focus returns to what the
+    // user was last reading when the panel leaves the grid.
+    policy: { dockFallbackTarget: "previous-focused" },
+  },
   diff: {
     id: "diff",
     name: "Diff Viewer",
@@ -263,8 +307,13 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
-    // Not dockable: the dock's chip row has no meaningful compact form for a
-    // diff (review and dev-preview are non-dockable reading surfaces too).
+    // Explicit opt-out: the dock's chip row has no meaningful compact form for
+    // a diff (review and dev-preview opt out for the same reason).
+    dockable: false,
+    // Pin the dialog at the max height rather than sizing to content, so
+    // stepping between files doesn't resize and re-center the whole frame
+    // under the cursor (#11364) — same treatment as the file browser.
+    dialogFullHeight: true,
     usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,
     // Opened against a specific file, so there is nothing sensible to spawn
@@ -349,6 +398,63 @@ function emitUnregistered(kindId: string): void {
 }
 
 /**
+ * Reactive snapshot of the metadata registry for `useSyncExternalStore`.
+ * Replaced (not mutated) on every registry change so React's `Object.is`
+ * identity check schedules a rerender — `ContentDock` /
+ * `DockPanelOffscreenContainer` observe it so a `dockable`-only flip or a
+ * plugin unregister re-evaluates their `isDockPanel` membership without waiting
+ * for an unrelated panel-store mutation (#11375). Mirrors the
+ * `definitionsSnapshot` pattern in `src/panels/registry.tsx`.
+ *
+ * IMPORTANT: `getPanelKindRegistrySnapshot` must return this stable reference,
+ * never a fresh `{ ...PANEL_KIND_REGISTRY }` per call — a new object every call
+ * makes React 19's `Object.is` guard see a perpetual change and loop.
+ */
+let panelKindRegistrySnapshot: Readonly<Record<string, PanelKindConfig>> = {
+  ...PANEL_KIND_REGISTRY,
+};
+const panelKindRegistryListeners = new Set<() => void>();
+
+/**
+ * Replace the snapshot with a fresh copy of the live registry and notify
+ * subscribers. Called once per public mutation (a batch removal emits one
+ * notification, not one per removed kind).
+ */
+function notifyPanelKindRegistry(): void {
+  panelKindRegistrySnapshot = { ...PANEL_KIND_REGISTRY };
+  for (const listener of panelKindRegistryListeners) {
+    try {
+      listener();
+    } catch (err) {
+      console.error("[panelKindRegistry] registry listener threw:", err);
+    }
+  }
+}
+
+/**
+ * Subscribe to any metadata-registry change (register, unregister, flip).
+ * Stable module-scope function so `useSyncExternalStore` never re-subscribes
+ * per render.
+ *
+ * @returns Unsubscribe function. Safe to call multiple times.
+ */
+export function subscribeToPanelKindRegistry(listener: () => void): () => void {
+  panelKindRegistryListeners.add(listener);
+  return () => {
+    panelKindRegistryListeners.delete(listener);
+  };
+}
+
+/**
+ * Snapshot for `useSyncExternalStore`. Returns the same reference until a
+ * registration changes the registry; React uses identity comparison to detect
+ * changes. Also serves as the SSR/getServerSnapshot value (identical set).
+ */
+export function getPanelKindRegistrySnapshot(): Readonly<Record<string, PanelKindConfig>> {
+  return panelKindRegistrySnapshot;
+}
+
+/**
  * Register a new panel kind configuration.
  * Used by extensions to add custom panel types.
  *
@@ -369,6 +475,7 @@ export function registerPanelKind(config: PanelKindConfig): void {
   if (config.extensionId !== undefined) {
     emitRegistered(config);
   }
+  notifyPanelKindRegistry();
 }
 
 /**
@@ -393,6 +500,9 @@ export function unregisterPluginPanelKinds(pluginId: string): void {
   for (const key of removed) {
     emitUnregistered(key);
   }
+  if (removed.length > 0) {
+    notifyPanelKindRegistry();
+  }
 }
 
 /**
@@ -409,6 +519,7 @@ export function unregisterPanelKind(kindId: string): boolean {
   if (!config || config.extensionId === undefined) return false;
   delete PANEL_KIND_REGISTRY[kindId];
   emitUnregistered(kindId);
+  notifyPanelKindRegistry();
   return true;
 }
 
@@ -528,9 +639,12 @@ export function panelKindHasPty(kind: PanelKind): boolean {
 }
 
 /**
- * Check if a panel kind can live in the dock. PTY kinds always can; non-PTY
- * kinds opt in via `dockable` (the dock chip row and offscreen host render
- * them through `isDockPanel`).
+ * Check if a panel kind can live in the dock. Every registered kind is
+ * dockable by default (built-in and plugin alike); a kind opts out with
+ * `dockable: false` (the dock chip row and offscreen host render dockable
+ * kinds through `isDockPanel`). An unregistered kind is never dockable — a
+ * dock request for an unknown kind would strand the panel with no chip to
+ * render it (#11054).
  *
  * @param kind - The panel kind to check
  * @returns True if panels of this kind can be moved to the dock
@@ -538,7 +652,49 @@ export function panelKindHasPty(kind: PanelKind): boolean {
 export function panelKindIsDockable(kind: PanelKind): boolean {
   const config = getPanelKindConfig(kind);
   if (!config) return false;
-  return config.hasPty || config.dockable === true;
+  return config.dockable !== false;
+}
+
+/**
+ * Normalize a requested/restored panel location for a single panel of `kind`.
+ * A non-dockable kind can't live in the dock — `ContentDock` filters it out via
+ * `isDockPanel` while its stored `location:"dock"` keeps the grid from showing
+ * it, so it would strand invisibly (#11054, #11375). Redirect the dock landing
+ * to the grid; every other location passes through unchanged. This is the
+ * single guard the store mutators (move, reorder, undo, trash/background
+ * restore) call so a dockability flip can never leave a panel stranded.
+ *
+ * `kind ?? "terminal"` mirrors the legacy-PTY convention used across the
+ * dockability guards — a panel with no `kind` is a legacy terminal, always
+ * dockable. Sync and side-effect free: safe inside Zustand `set()` updaters.
+ *
+ * @returns The original location, or `"grid"` when a non-dockable kind
+ *   requested the dock.
+ */
+export function normalizeDockLocation<TLocation extends PanelLocation>(
+  kind: PanelKind | undefined,
+  location: TLocation
+): TLocation | "grid" {
+  return location === "dock" && !panelKindIsDockable(kind ?? "terminal") ? "grid" : location;
+}
+
+/**
+ * Normalize a group's target location. A tab group is atomic — every member
+ * shares one location — so a dock move is all-or-nothing: if ANY live member's
+ * kind is non-dockable, the whole group lands in the grid rather than splitting
+ * (a mixed-location group is invisible to `getPanelGroup` and corrupts
+ * persistence). Grid targets pass through unchanged.
+ *
+ * @param memberKinds The kinds of the group's live members (`undefined` → legacy terminal)
+ * @param location The requested group location
+ * @returns `"dock"` only when every member is dockable; otherwise `"grid"`
+ */
+export function normalizeGroupDockLocation(
+  memberKinds: ReadonlyArray<PanelKind | undefined>,
+  location: "grid" | "dock"
+): "grid" | "dock" {
+  if (location !== "dock") return location;
+  return memberKinds.every((kind) => panelKindIsDockable(kind ?? "terminal")) ? "dock" : "grid";
 }
 
 /**
@@ -669,5 +825,8 @@ export function clearPanelKindRegistry(): void {
   }
   for (const key of removed) {
     emitUnregistered(key);
+  }
+  if (removed.length > 0) {
+    notifyPanelKindRegistry();
   }
 }

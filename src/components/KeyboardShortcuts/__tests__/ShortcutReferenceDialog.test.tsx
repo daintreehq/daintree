@@ -17,7 +17,7 @@ const mockBindings: Array<RegisteredKeybindingConfig & { effectiveCombo: string 
   {
     actionId: "terminal.stashInput",
     combo: "Cmd+K Cmd+S",
-    scope: "terminal",
+    scope: "portal",
     priority: 0,
     description: "Stash Current Input",
     category: "Terminal",
@@ -60,7 +60,7 @@ const mockBindings: Array<RegisteredKeybindingConfig & { effectiveCombo: string 
     effectiveCombo: "Cmd+Shift+P",
   },
   {
-    actionId: "project.mruCycleNewer",
+    actionId: "file.open",
     combo: "",
     scope: "global",
     priority: 0,
@@ -76,7 +76,7 @@ const mockDisplayCombos: Record<string, string> = {
   "terminal.new": "⌘T",
   "app.settings": "⌘,",
   "action.palette.open": "⌘⇧P",
-  "project.mruCycleNewer": "",
+  "file.open": "",
 };
 
 vi.mock("@/services/KeybindingService", () => {
@@ -214,13 +214,13 @@ describe("ShortcutReferenceDialog", () => {
   it("displays scope for non-global bindings", () => {
     render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
 
-    expect(screen.getByText("Scope: terminal")).toBeTruthy();
+    expect(screen.getByText("Scope: portal")).toBeTruthy();
   });
 
   it("does not display scope for global bindings", () => {
     render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
 
-    const scopeElements = screen.getAllByText("Scope: terminal");
+    const scopeElements = screen.getAllByText("Scope: portal");
     expect(scopeElements.length).toBe(1);
   });
 

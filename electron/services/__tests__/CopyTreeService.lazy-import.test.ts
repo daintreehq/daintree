@@ -9,7 +9,7 @@ function mockCopytreeModule() {
       output: "<context />",
       stats: { totalFiles: 1, totalSize: 10, duration: 5 },
     }),
-    ConfigManager: { create: vi.fn().mockResolvedValue(undefined) },
+    ConfigManager: { create: vi.fn().mockResolvedValue({ isDefaultsLoaded: true }) },
   };
 }
 
@@ -67,12 +67,13 @@ describe("CopyTreeService lazy copytree import", () => {
 
     expect(result.content).toBe("");
     expect(result.fileCount).toBe(0);
-    expect(result.error).toMatch(/^CopyTree Error: /);
+    expect(result.error).toBe("Failed to generate context");
+    expect(result.error).not.toContain("module load failed");
     expect(copyTreeService.cancel("trace-import-fail")).toBe(false);
 
     const retry = await copyTreeService.generate(tempDir);
 
-    expect(retry.error).toMatch(/^CopyTree Error: /);
+    expect(retry.error).toBe("Failed to generate context");
     expect(factory).toHaveBeenCalledTimes(1);
   });
 
@@ -101,7 +102,7 @@ describe("CopyTreeService lazy copytree import", () => {
       await gate;
       return {
         copy: copyMock,
-        ConfigManager: { create: vi.fn().mockResolvedValue(undefined) },
+        ConfigManager: { create: vi.fn().mockResolvedValue({ isDefaultsLoaded: true }) },
       };
     });
 

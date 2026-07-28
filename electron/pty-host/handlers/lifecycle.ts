@@ -48,14 +48,19 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
       markHostPerformance("agentlaunch.host-spawn:start", { terminalId: msg.id });
       let spawnResult: SpawnResult;
       try {
-        // Remove stale coordinator before spawn (handles ID respawn)
+        ptyManager.spawn(msg.id, msg.options);
+
+        // Spawn succeeded, so any prior incarnation of this id was just
+        // killed/replaced — retire its stale pause coordinator now (handles ID
+        // respawn). A duplicate spawn against a LIVE owner throws above
+        // (TERMINAL_ALREADY_LIVE, #11341) and never reaches here, so the running
+        // terminal keeps its coordinator instead of having it torn down.
         const staleCoord = pauseCoordinators.get(msg.id);
         if (staleCoord) {
           staleCoord.forceReleaseAll();
           pauseCoordinators.delete(msg.id);
         }
 
-        ptyManager.spawn(msg.id, msg.options);
         spawnResult = {
           success: true,
           id: msg.id,
@@ -74,14 +79,37 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
           // event and start monitoring (no node-pty event fires on its own).
           schedulePidRetry(msg.id);
         }
+
+        // Deliver a wrapper-less launch command now that the terminal is
+        // registered, and ONLY on a successful spawn. Binding delivery to
+        // success here (rather than an unconditional write queued from Main)
+        // stops a TERMINAL_ALREADY_LIVE rejection from injecting the command
+        // into the pre-existing live PTY (#11341, #11339).
+        if (msg.options.postSpawnInput) {
+          ptyManager.write(msg.id, msg.options.postSpawnInput);
+        }
       } catch (error) {
         console.error(`[PtyHost] Spawn failed for terminal ${msg.id}:`, error);
+        const parsedError = parseSpawnError(error);
         spawnResult = {
           success: false,
           id: msg.id,
           launchGeneration: msg.options.launchGeneration,
-          error: parseSpawnError(error),
+          error: parsedError,
         };
+
+        // A genuine failed-to-start spawn (ENOENT, ctor throw, …) leaves no live
+        // terminal for this id, so retire any stale coordinator from a dead/
+        // preserved incarnation it was replacing — otherwise it would linger
+        // until a later exit/retry. A TERMINAL_ALREADY_LIVE rejection is the one
+        // failure that DOES leave a live owner, so its coordinator is preserved.
+        if (parsedError.code !== "TERMINAL_ALREADY_LIVE") {
+          const staleCoord = pauseCoordinators.get(msg.id);
+          if (staleCoord) {
+            staleCoord.forceReleaseAll();
+            pauseCoordinators.delete(msg.id);
+          }
+        }
 
         // A failed-to-start spawn never produces a PTY, so no exit event ever
         // fires and the main-side TerminalProcess never emits agent:spawned.
@@ -91,8 +119,12 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
         // so the store records "exited" and consumers see the crash (#10816).
         // Order matters: agent-spawned resets store state to "working" (and
         // clears stale exit metadata) before agent-state writes "exited".
+        //
+        // Skip this for a TERMINAL_ALREADY_LIVE rejection: the pre-existing
+        // agent is still running, so emitting "exited" would falsely mark the
+        // live agent dead and clobber its real state (#11341).
         const launchAgentId = msg.options.launchAgentId;
-        if (launchAgentId) {
+        if (launchAgentId && parsedError.code !== "TERMINAL_ALREADY_LIVE") {
           const timestamp = Date.now();
           sendEvent({
             type: "agent-spawned",
@@ -200,13 +232,7 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
         msg.id,
         msg.event as AgentEvent,
         msg.trigger as
-          | "input"
-          | "output"
-          | "heuristic"
-          | "ai-classification"
-          | "timeout"
-          | "exit"
-          | "title",
+          "input" | "output" | "heuristic" | "ai-classification" | "timeout" | "exit" | "title",
         msg.confidence,
         msg.spawnedAt
       );

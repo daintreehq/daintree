@@ -39,7 +39,10 @@ export function DockPlaceholder({ className }: DockPlaceholderProps) {
 }
 
 export function SortableDockPlaceholder() {
-  const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
+  // Drop target only — no activator attributes/listeners. Dragging the
+  // invisible placeholder itself produced drag data with no `terminal`,
+  // which wedged dnd-kit app-wide via a throwing cancelDrop (#11291).
+  const { setNodeRef, transform, transition } = useSortable({
     id: DOCK_PLACEHOLDER_ID,
     data: { container: "dock", isPlaceholder: true },
     animateLayoutChanges: () => false,
@@ -57,8 +60,6 @@ export function SortableDockPlaceholder() {
       <div
         ref={setNodeRef}
         style={style}
-        {...attributes}
-        {...listeners}
         className="h-full"
         data-placeholder-id={DOCK_PLACEHOLDER_ID}
       >

@@ -6,6 +6,7 @@ import type {
   ViewportPresetId,
   FileViewMode,
   DiffSource,
+  FileBrowserTreeSnapshot,
 } from "./panel.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
@@ -143,8 +144,10 @@ export interface AddPanelOptionsBase {
   fallbackChainIndex?: number;
   /**
    * PTY-only, transient. True when session restore fell through to a fresh
-   * agent launch because no resume command (neither exact-session nor
-   * resume-latest) was available — the prior conversation is unreachable.
+   * agent launch because no resume command was usable — either none was
+   * available (neither exact-session nor resume-latest), or resume-latest was
+   * suppressed because a sibling pane owns this agent+cwd's single slot
+   * (#11461) — so the prior conversation is unreachable for this pane.
    * Drives the "Session no longer reachable" restart banner. Never persisted;
    * cleared on the next restart. See `serializePtyPanel` (intentionally omitted).
    */
@@ -258,6 +261,29 @@ export interface FilePanelOptions extends AddPanelOptionsBase {
 }
 
 /**
+ * Options for creating a file browser panel. Everything is optional — the
+ * browser only needs the `worktreeId` from `AddPanelOptionsBase` to open on a
+ * worktree root, and the rest are seeds for restoring a remembered view.
+ */
+export interface FileBrowserPanelOptions extends AddPanelOptionsBase {
+  kind: "file-browser";
+  /** Worktree-relative path to select on open */
+  browserSelectedPath?: string;
+  /** Worktree-relative directory paths to expand on open */
+  browserExpandedPaths?: string[];
+  /** Whether dot-prefixed entries start hidden; defaults to false (dotfiles visible) */
+  browserHideDotfiles?: boolean;
+  /** Worktree-relative directory to root the tree at; "" or absent = worktree root */
+  browserRootPath?: string;
+  /** Whether the tree sidebar starts collapsed; absent or false = open */
+  browserSidebarCollapsed?: boolean;
+  /** Last-known tree structure to paint before the first live listing (#11367) */
+  browserTreeSnapshot?: FileBrowserTreeSnapshot;
+  /** Tree column width in px to restore; absent or 288 = the default width */
+  browserSidebarWidth?: number;
+}
+
+/**
  * Options for creating a diff panel. `filePath` is worktree-relative (the
  * worktree root comes from `worktreeId`) so a worktree move can't strand the
  * panel on a dead absolute path. The change set is not passed in — the panel
@@ -307,4 +333,5 @@ export type AddPanelOptions =
   | DevPreviewPanelOptions
   | ReviewPanelOptions
   | FilePanelOptions
+  | FileBrowserPanelOptions
   | DiffPanelOptions;

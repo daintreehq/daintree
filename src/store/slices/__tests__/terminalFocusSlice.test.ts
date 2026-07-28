@@ -672,8 +672,7 @@ describe("TerminalFocusSlice - dock focus sync invariant", () => {
     const setState = vi.fn(
       (
         updater:
-          | Partial<TerminalFocusSlice>
-          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+          Partial<TerminalFocusSlice> | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
       ) => {
         const currentState = getState();
         const updates = typeof updater === "function" ? updater(currentState) : updater;
@@ -1007,8 +1006,7 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
     const setState = vi.fn(
       (
         updater:
-          | Partial<TerminalFocusSlice>
-          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+          Partial<TerminalFocusSlice> | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
       ) => {
         const currentState = getState();
         const updates = typeof updater === "function" ? updater(currentState) : updater;
@@ -1192,8 +1190,7 @@ describe("TerminalFocusSlice - cycle from non-matching focus (issue #5834)", () 
     const setState = vi.fn(
       (
         updater:
-          | Partial<TerminalFocusSlice>
-          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+          Partial<TerminalFocusSlice> | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
       ) => {
         const currentState = getState();
         const updates = typeof updater === "function" ? updater(currentState) : updater;
@@ -1480,8 +1477,7 @@ describe("TerminalFocusSlice - focusAlternate (last-pane toggle)", () => {
     const setState = vi.fn(
       (
         updater:
-          | Partial<TerminalFocusSlice>
-          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+          Partial<TerminalFocusSlice> | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
       ) => {
         const currentState = getState();
         const updates = typeof updater === "function" ? updater(currentState) : updater;
@@ -1708,8 +1704,7 @@ describe("TerminalFocusSlice - lastActiveAt stamping (issue #8703)", () => {
     const setState = vi.fn(
       (
         updater:
-          | Partial<TerminalFocusSlice>
-          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+          Partial<TerminalFocusSlice> | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
       ) => {
         const currentState = getState();
         const updates = typeof updater === "function" ? updater(currentState) : updater;
@@ -1801,8 +1796,7 @@ describe("TerminalFocusSlice - boot focus (issue #9933)", () => {
     const setState = vi.fn(
       (
         updater:
-          | Partial<TerminalFocusSlice>
-          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+          Partial<TerminalFocusSlice> | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
       ) => {
         const currentState = getState();
         const updates = typeof updater === "function" ? updater(currentState) : updater;
@@ -1916,8 +1910,7 @@ describe("TerminalFocusSlice - closeDockTerminal focus reconciliation (#11133)",
     const setState = vi.fn(
       (
         updater:
-          | Partial<TerminalFocusSlice>
-          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+          Partial<TerminalFocusSlice> | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
       ) => {
         const currentState = getState();
         const updates = typeof updater === "function" ? updater(currentState) : updater;

@@ -15,6 +15,7 @@ import { logDebug } from "../../utils/logger.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { applyDictationCommands } from "../../services/voiceDictationCommands.js";
+import { VOICE_DICTATION_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
 import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
@@ -51,7 +52,7 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-realtime-whisper",
   correctionEnabled: false,
-  correctionModel: "gpt-5-mini",
+  correctionModel: VOICE_DICTATION_AI_MODEL,
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,
@@ -102,8 +103,17 @@ export function getVoiceSettings(): VoiceInputSettings {
   // The model union is single-valued, so this is a one-shot cleanup of legacy
   // Deepgram model strings ('nova-3' / 'nova-2'), not a user-choice revert —
   // the provider, not the model, is what selects the backend now.
-  const staleModel = merged.transcriptionModel !== "gpt-realtime-whisper";
-  if (staleModel) merged.transcriptionModel = "gpt-realtime-whisper";
+  const staleTranscriptionModel = merged.transcriptionModel !== "gpt-realtime-whisper";
+  if (staleTranscriptionModel) merged.transcriptionModel = "gpt-realtime-whisper";
+
+  // Same one-shot cleanup for the correction model: gpt-5.6-luna replaced the
+  // retired gpt-5-mini/gpt-5-nano tiers, so this union is single-valued too.
+  // migration025 upgrades stores on older schema versions; this read-time net
+  // catches stores already on the current version (never revisited by the
+  // migration), plus post-downgrade or hand-edited values. Not a user-choice
+  // revert — there is no correction-model choice left to preserve.
+  const staleCorrectionModel = merged.correctionModel !== VOICE_DICTATION_AI_MODEL;
+  if (staleCorrectionModel) merged.correctionModel = VOICE_DICTATION_AI_MODEL;
 
   // Normalize malformed recordingMode values in memory only (no write-back).
   if (merged.recordingMode !== "toggle" && merged.recordingMode !== "push-to-talk") {
@@ -117,7 +127,8 @@ export function getVoiceSettings(): VoiceInputSettings {
     apiKey !== undefined ||
     correctionApiKey !== undefined ||
     providerNeedsDefault ||
-    staleModel
+    staleTranscriptionModel ||
+    staleCorrectionModel
   ) {
     store.set("voiceInput", merged);
   }
@@ -161,11 +172,7 @@ function cleanupActiveSubscription(): void {
 }
 
 export type MicPermissionStatus =
-  | "granted"
-  | "denied"
-  | "not-determined"
-  | "restricted"
-  | "unknown";
+  "granted" | "denied" | "not-determined" | "restricted" | "unknown";
 
 function checkMicPermission(): MicPermissionStatus {
   if (process.platform === "darwin" || process.platform === "win32") {
@@ -584,7 +591,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   };
 
   // Whole-passage cleanup pass. The renderer calls this once after recording
-  // stops, with the full dictated text; correction runs as a single gpt-5-mini
+  // stops, with the full dictated text; correction runs as a single gpt-5.6-luna
   // request rather than the old per-segment streaming pipeline.
   const handleCorrect = async (
     request: VoiceInputCorrectPayload

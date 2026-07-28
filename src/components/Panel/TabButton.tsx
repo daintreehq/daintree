@@ -209,6 +209,14 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     e.stopPropagation();
   }, []);
 
+  // The tab-reorder DndContext uses a raw TouchSensor, which activates on
+  // touchstart and deliberately ignores the tab strip's [data-no-dnd]. Without
+  // this, a long-press to select text in the rename field starts a tab drag —
+  // the touch twin of the panel-header bug.
+  const handleInputTouchStart = useCallback((e: React.TouchEvent) => {
+    e.stopPropagation();
+  }, []);
+
   // Handle main click - enter edit mode if not already editing, or trigger standard click
   const handleClick = useCallback(() => {
     if (isEditing) return;
@@ -224,8 +232,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     sortableListeners ?? {};
   const sortableKeyDown = sortableKeyDownListener as ((e: React.KeyboardEvent) => void) | undefined;
   const sortablePointerDown = sortablePointerListeners.onPointerDown as
-    | ((e: React.PointerEvent) => void)
-    | undefined;
+    ((e: React.PointerEvent) => void) | undefined;
 
   // Composes the guard with dnd-kit's sortable activator. Spreading
   // `sortablePointerListeners` would clobber a plain onPointerDown prop, so the
@@ -312,6 +319,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
               onClick={handleInputClick}
               onDoubleClick={handleInputDoubleClick}
               onPointerDown={handleInputPointerDown}
+              onTouchStart={handleInputTouchStart}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ duration: 0.1 }}

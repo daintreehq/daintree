@@ -6,8 +6,12 @@ type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { isDevPreviewPanel, isPtyPanel } from "@shared/types/panel";
+import {
+  panelKindHasPty,
+  normalizeDockLocation,
+  normalizeGroupDockLocation,
+} from "@shared/config/panelKindRegistry";
+import { isDevPreviewPanel, isPtyPanel, type PanelKind } from "@shared/types/panel";
 import { TRASH_TTL_MS } from "@shared/config/trash";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
@@ -19,6 +23,7 @@ import {
 } from "./helpers";
 import { logError } from "@/utils/logger";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
+import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -235,8 +240,15 @@ export const createTrashActions = (
     restoreTerminal: (id, targetWorktreeId) => {
       clearTrashExpiryTimer(id);
       const trashedInfo = get().trashedTerminals.get(id);
-      const restoreLocation = trashedInfo?.originalLocation ?? "grid";
+      const rawRestoreLocation = trashedInfo?.originalLocation ?? "grid";
       const terminal = get().panelsById[id];
+      // Normalize a persisted dock location to grid if the kind is no longer
+      // dockable (#11375) — the dock filters it out, so it would strand while
+      // `location:"dock"` also keeps it out of the grid. `restoreTerminal`'s
+      // wrapper (panelStore.ts) then correctly treats a rescued panel as a
+      // visible grid panel for focus, instead of focusing an invisible one.
+      const restoreLocation = normalizeDockLocation(terminal?.kind, rawRestoreLocation);
+      const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
 
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
         terminalClient.restore(id).catch((error) => {
@@ -247,7 +259,15 @@ export const createTrashActions = (
       set((state) => {
         const t = state.panelsById[id];
         if (!t) return state;
-        const nextWorktreeId = targetWorktreeId !== undefined ? targetWorktreeId : t.worktreeId;
+        // A worktree-less panel rescued dock→grid adopts the active worktree so
+        // it lands in a visible bucket rather than the global-only one (#11290).
+        const rescuedToGrid = restoreLocation === "grid" && rawRestoreLocation === "dock";
+        const nextWorktreeId =
+          targetWorktreeId !== undefined
+            ? targetWorktreeId
+            : rescuedToGrid && t.worktreeId == null && activeWorktreeId !== null
+              ? activeWorktreeId
+              : t.worktreeId;
         const newById = {
           ...state.panelsById,
           [id]: {
@@ -315,12 +335,28 @@ export const createTrashActions = (
         }
       }
 
-      const restoreLocation =
-        anchorPanel?.groupMetadata?.location ?? groupPanels[0]?.trashed?.originalLocation ?? "grid";
+      // A tab group is atomic — normalize a persisted dock location to grid when
+      // ANY live member's kind is no longer dockable (#11375), moving the whole
+      // group rather than splitting it. Adopt the active worktree when a rescued
+      // worktree-less group would otherwise land in the global-only bucket.
+      const rawGroupLocation: "grid" | "dock" =
+        (anchorPanel?.groupMetadata?.location ?? groupPanels[0]?.trashed?.originalLocation) ===
+        "dock"
+          ? "dock"
+          : "grid";
+      const groupMemberKinds: (PanelKind | undefined)[] = [];
+      for (const { id } of groupPanels) {
+        const t = get().panelsById[id];
+        if (t) groupMemberKinds.push(t.kind);
+      }
+      const restoreLocation = normalizeGroupDockLocation(groupMemberKinds, rawGroupLocation);
+      const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
+      const rescuedToGrid = restoreLocation === "grid" && rawGroupLocation === "dock";
       const worktreeId =
         targetWorktreeId !== undefined
           ? targetWorktreeId
-          : (anchorPanel?.groupMetadata?.worktreeId ?? undefined);
+          : (anchorPanel?.groupMetadata?.worktreeId ??
+            (rescuedToGrid && activeWorktreeId !== null ? activeWorktreeId : undefined));
 
       set((state) => {
         const panelIdsInGroup = new Set(groupPanels.map(({ id }) => id));
@@ -434,22 +470,45 @@ export const createTrashActions = (
       const terminal = get().panelsById[id];
 
       const trashedInfo = get().trashedTerminals.get(id);
-      const restoreLocation =
+      const rawRestoreLocation =
         terminal && terminal.location !== "trash"
           ? terminal.location
           : (trashedInfo?.originalLocation ?? "grid");
+      // Final defensive boundary (#11375): normalize a dock location to grid if
+      // the kind is no longer dockable, adopting the active worktree when a
+      // rescued worktree-less panel would otherwise strand in the grid.
+      const restoreLocation = normalizeDockLocation(terminal?.kind, rawRestoreLocation);
+      const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
 
       set((state) => {
         const newTrashed = new Map(state.trashedTerminals);
         newTrashed.delete(id);
         const t = state.panelsById[id];
         if (!t) return { trashedTerminals: newTrashed };
+        const rescuedToGrid = restoreLocation === "grid" && rawRestoreLocation === "dock";
+        const nextWorktreeId =
+          rescuedToGrid && t.worktreeId == null && activeWorktreeId !== null
+            ? activeWorktreeId
+            : t.worktreeId;
         const newById = {
           ...state.panelsById,
-          [id]: { ...t, location: restoreLocation },
+          [id]: { ...t, location: restoreLocation, worktreeId: nextWorktreeId },
         };
+        const newIndex =
+          nextWorktreeId !== t.worktreeId
+            ? transferBetweenWorktreeIndex(
+                state.panelIdsByWorktreeId,
+                t.worktreeId,
+                nextWorktreeId,
+                id
+              )
+            : state.panelIdsByWorktreeId;
         saveNormalized(newById, state.panelIds);
-        return { trashedTerminals: newTrashed, panelsById: newById };
+        return {
+          trashedTerminals: newTrashed,
+          panelsById: newById,
+          panelIdsByWorktreeId: newIndex,
+        };
       });
 
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {

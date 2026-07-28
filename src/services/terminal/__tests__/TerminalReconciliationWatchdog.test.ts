@@ -560,7 +560,7 @@ describe("TerminalReconciliationWatchdog", () => {
 
   describe("geometry convergence (#10632)", () => {
     it("defers geometry diagnosis and repair during a coordinated resize, then repairs once stable", () => {
-      const managed = makeManaged({ isAltBuffer: true });
+      const managed = makeManaged({ isAltBuffer: false });
       setRenderPaused(managed, false);
       (managed.terminal as unknown as { cols: number; rows: number }).cols = 137;
       (managed.terminal as unknown as { cols: number; rows: number }).rows = 40;
@@ -634,12 +634,12 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.forceReflow).toHaveBeenCalledWith(managed.terminal.element);
     });
 
-    it("reconciles an on-screen agent TUI whose grid disagrees with the container (garbled wrapping)", () => {
+    it("reconciles an on-screen terminal whose grid disagrees with the container (garbled wrapping)", () => {
       // The exact switch-back failure: while backgrounded the container narrowed
-      // (137 → 100 cols) but the alt-buffer agent's xterm grid stayed at the old
-      // width, so its buffer wraps at the wrong column. The watchdog now repairs
-      // this for agent TUIs, which it previously only DIAGNOSED while excluding.
-      const managed = makeManaged({ isAltBuffer: true });
+      // (137 → 100 cols) but the xterm grid stayed at the old width, so the
+      // buffer wraps at the wrong column. The watchdog repairs this, which it
+      // previously only DIAGNOSED.
+      const managed = makeManaged({ isAltBuffer: false });
       setRenderPaused(managed, false);
       setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
       instances.set("t1", managed);
@@ -651,8 +651,65 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(managed.lastWatchdogRepairAt).toBeGreaterThan(0);
     });
 
+    it("never spends a geometry repair on an alt-buffer pane, whose repair cannot converge (#11443)", () => {
+      // reconcileGeometryFresh returns before touching geometry for an
+      // alt-screen pane (#10805), so issuing the repair here can never close
+      // the divergence. Left in the loop it burns a heavy-budget slot every
+      // cooldown window and then latches the breaker permanently — which would
+      // bar the pane's legitimate main-buffer repairs after it leaves the
+      // alternate screen. An identical main-buffer pane is the control.
+      const alt = makeManaged({ isAltBuffer: true });
+      setRenderPaused(alt, false);
+      setGrid(alt, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+      instances.set("alt", alt);
+      // Diverged main-buffer controls, iterated after the alt pane. If the alt
+      // pane merely skipped the call while still consuming a heavy-repair slot,
+      // one control would be starved every tick.
+      const controls: ManagedTerminal[] = [];
+      for (let i = 0; i < WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK; i++) {
+        const control = makeManaged({ isAltBuffer: false });
+        setRenderPaused(control, false);
+        setGrid(control, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+        instances.set(`control${i}`, control);
+        controls.push(control);
+      }
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      // Every control was repaired on the first tick — the alt pane took none
+      // of the per-tick allowance.
+      expect(
+        vi
+          .mocked(deps.reconcileRevealGeometry)
+          .mock.calls.map(([id]) => id)
+          .sort()
+      ).toEqual(controls.map((_, i) => `control${i}`));
+
+      // Far more ticks than the breaker needs to trip on a diverged pane.
+      for (let i = 0; i < 12; i++) vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+
+      expect(vi.mocked(deps.reconcileRevealGeometry).mock.calls.some(([id]) => id === "alt")).toBe(
+        false
+      );
+      expect(alt.geometryRepairAttempts ?? 0).toBe(0);
+      expect(alt.geometryRepairGaveUp).toBeFalsy();
+      // The controls prove the breaker still works on panes that CAN be
+      // repaired, so the alt pane's clean counters aren't a dead watchdog.
+      expect(controls.every((control) => control.geometryRepairGaveUp === true)).toBe(true);
+
+      // Leaving the alternate screen restores repair eligibility, proving the
+      // exclusion is keyed on live buffer mode and left no latched state.
+      alt.isAltBuffer = false;
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(vi.mocked(deps.reconcileRevealGeometry).mock.calls.some(([id]) => id === "alt")).toBe(
+        true
+      );
+      expect(alt.geometryRepairAttempts).toBe(1);
+    });
+
     it("does not reconcile geometry while a synchronized-output block is open", () => {
-      const managed = makeManaged({ isAltBuffer: true });
+      const managed = makeManaged({ isAltBuffer: false });
       (
         managed.terminal as unknown as { modes: { synchronizedOutputMode: boolean } }
       ).modes.synchronizedOutputMode = true;
@@ -667,7 +724,7 @@ describe("TerminalReconciliationWatchdog", () => {
 
     it("caps geometry reconciles per tick at the heavy budget (== REVEAL_CONCURRENCY)", () => {
       for (let i = 0; i < WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK + 1; i++) {
-        const managed = makeManaged({ isAltBuffer: true });
+        const managed = makeManaged({ isAltBuffer: false });
         setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
         instances.set(`t${i}`, managed);
       }
@@ -692,7 +749,7 @@ describe("TerminalReconciliationWatchdog", () => {
     // returning true (box measurable) but the grid never actually converges —
     // the exact stable off-by-one that made the watchdog re-wrap forever.
     function makeDivergedTerminal(): ManagedTerminal {
-      const managed = makeManaged({ isAltBuffer: true });
+      const managed = makeManaged({ isAltBuffer: false });
       setRenderPaused(managed, false);
       setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
       return managed;
@@ -775,7 +832,7 @@ describe("TerminalReconciliationWatchdog", () => {
     it("does not count a budget-deferred tick as a repair attempt", () => {
       const panes: ManagedTerminal[] = [];
       for (let i = 0; i < WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK + 1; i++) {
-        const managed = makeManaged({ isAltBuffer: true });
+        const managed = makeManaged({ isAltBuffer: false });
         setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
         instances.set(`t${i}`, managed);
         panes.push(managed);
@@ -857,11 +914,17 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.forceReflow).toHaveBeenCalledWith(managed.terminal.element);
     });
 
-    it("still repairs a streaming ALT-buffer pane (quiescence gate is main-buffer only)", () => {
-      // reconcileGeometryFresh never re-wraps an alt-buffer pane (its guard
-      // returns before the quiescence gate), so deferring alt-buffer repairs
-      // for writes would only starve the reveal repair with no safety gain.
-      const managed = makeDivergedTerminal();
+    it("still issues the reveal-pending repair for a streaming ALT-buffer pane (quiescence gate is main-buffer only)", () => {
+      // The geometry branch excludes alt panes outright (#11443), but the
+      // reveal-pending obligation still belongs to them: its repair also
+      // restores the WebGL atlas and unpauses the renderer, and
+      // reconcileGeometryFresh's quiescence gate sits after the alt early
+      // return, so writes must not defer it.
+      const managed = makeManaged({ isAltBuffer: true });
+      setRenderPaused(managed, false);
+      setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+      managed.revealPendingRepair = true;
+      managed.revealPendingGeneration = managed.attachGeneration;
       instances.set("t1", managed);
       const deps = makeDeps(instances);
       watchdog = new TerminalReconciliationWatchdog(deps);
@@ -869,11 +932,14 @@ describe("TerminalReconciliationWatchdog", () => {
       managed.lastWriteAt = Date.now() + WATCHDOG_INTERVAL_MS;
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
       expect(deps.reconcileRevealGeometry).toHaveBeenCalledTimes(1);
-      expect(managed.geometryRepairAttempts).toBe(1);
+      expect(managed.revealPendingRepair).toBe(false);
+      // The reveal obligation is not a convergence repair — it must not spend a
+      // breaker attempt the alt pane can never win back.
+      expect(managed.geometryRepairAttempts ?? 0).toBe(0);
     });
 
     it("neither advances nor resets the breaker while a synchronized-output block stays open", () => {
-      const managed = makeManaged({ isAltBuffer: true });
+      const managed = makeManaged({ isAltBuffer: false });
       (
         managed.terminal as unknown as { modes: { synchronizedOutputMode: boolean } }
       ).modes.synchronizedOutputMode = true;

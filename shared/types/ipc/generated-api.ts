@@ -154,6 +154,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["event-inspector:get-filtered"]["args"]
     ): Promise<IpcInvokeMap["event-inspector:get-filtered"]["result"]>;
   };
+  fileBrowser: {
+    listDirectory(
+      ...args: IpcInvokeMap["file-browser:list-directory"]["args"]
+    ): Promise<IpcInvokeMap["file-browser:list-directory"]["result"]>;
+    statPaths(
+      ...args: IpcInvokeMap["file-browser:stat-paths"]["args"]
+    ): Promise<IpcInvokeMap["file-browser:stat-paths"]["result"]>;
+  };
   forgeAudit: {
     clearLog(
       ...args: IpcInvokeMap["forge-audit:clear-log"]["args"]
@@ -401,6 +409,9 @@ export interface GeneratedElectronAPI {
     activateForView(
       ...args: IpcInvokeMap["plugin:activate-for-view"]["args"]
     ): Promise<IpcInvokeMap["plugin:activate-for-view"]["result"]>;
+    cancelInstall(
+      ...args: IpcInvokeMap["plugin:cancel-install"]["args"]
+    ): Promise<IpcInvokeMap["plugin:cancel-install"]["result"]>;
     checkForUpdate(
       ...args: IpcInvokeMap["plugin:check-for-update"]["args"]
     ): Promise<IpcInvokeMap["plugin:check-for-update"]["result"]>;
@@ -479,6 +490,9 @@ export interface GeneratedElectronAPI {
     registerAction(
       ...args: IpcInvokeMap["plugin:actions-register"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-register"]["result"]>;
+    reportPanelLifecycle(
+      ...args: IpcInvokeMap["plugin:report-panel-lifecycle"]["args"]
+    ): Promise<IpcInvokeMap["plugin:report-panel-lifecycle"]["result"]>;
     revealSecretSetting(
       ...args: IpcInvokeMap["plugin:settings-reveal-secret"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-reveal-secret"]["result"]>;
@@ -603,6 +617,19 @@ export interface GeneratedElectronAPI {
     setTelemetryLevel(
       ...args: IpcInvokeMap["privacy:set-telemetry-level"]["args"]
     ): Promise<IpcInvokeMap["privacy:set-telemetry-level"]["result"]>;
+  };
+  projectHistory: {
+    peek(
+      ...args: IpcInvokeMap["project-history:peek"]["args"]
+    ): Promise<IpcInvokeMap["project-history:peek"]["result"]>;
+  };
+  projectRelocation: {
+    apply(
+      ...args: IpcInvokeMap["project-relocation:apply"]["args"]
+    ): Promise<IpcInvokeMap["project-relocation:apply"]["result"]>;
+    preview(
+      ...args: IpcInvokeMap["project-relocation:preview"]["args"]
+    ): Promise<IpcInvokeMap["project-relocation:preview"]["result"]>;
   };
   runHistory: {
     append(

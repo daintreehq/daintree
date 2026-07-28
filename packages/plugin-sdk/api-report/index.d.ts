@@ -1245,9 +1245,6 @@ interface FileDecorationProviderDescriptor {
     scopes?: string[];
 }
 
-/** Notification type */
-type NotificationType = "info" | "success" | "error" | "warning";
-
 declare const BUILT_IN_AGENT_IDS: readonly ["claude", "opencode", "aider", "gemini", "antigravity", "codex", "grok", "cursor", "copilot", "goose", "amp", "crush", "qwen", "kimi", "interpreter", "mistral", "kiro", "daintree-assistant"];
 type BuiltInAgentId = (typeof BUILT_IN_AGENT_IDS)[number];
 type AgentKeyAction = `agent.${BuiltInAgentId}`;
@@ -1264,9 +1261,9 @@ type AgentKeyAction = `agent.${BuiltInAgentId}`;
  */
 type WorktreeSwitchIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 type WorktreeSwitchAction = `worktree.switch${WorktreeSwitchIndex}`;
-type BuiltInKeyAction = "nav.up" | "nav.down" | "nav.left" | "nav.right" | "nav.pageUp" | "nav.pageDown" | "nav.home" | "nav.end" | "nav.expand" | "nav.collapse" | "nav.primary" | "nav.toggleSidebar" | "nav.toggleFocusMode" | "nav.quickSwitcher" | "nav.focusRegion.next" | "nav.focusRegion.prev" | "file.open" | "file.copyPath" | "file.copyTree" | "ui.refresh" | "ui.escape" | "git.commit" | "git.push" | "git.stageAll" | "git.toggle" | "worktree.next" | "worktree.previous" | "worktree.panel" | WorktreeSwitchAction | "worktree.up" | "worktree.down" | "worktree.upVim" | "worktree.downVim" | "worktree.home" | "worktree.end" | "worktree.select" | "worktree.selectSpace" | "worktree.copyTree" | "worktree.openEditor" | "worktree.openPalette" | "worktree.createDialog.open" | "worktree.overview" | "worktree.sessions.minimizeAll" | "worktree.sessions.maximizeAll" | "worktree.sessions.restartAll" | "worktree.sessions.endAll" | "worktree.sessions.closeCompleted" | "worktree.sessions.trashAll" | "worktree.sessions.resetRenderers" | "tab.next" | "tab.previous" | "terminal.close" | "terminal.closeAll" | "terminal.killAll" | "terminal.restartAll" | "terminal.toggleDock" | "terminal.toggleDockAll" | "terminal.new" | "terminal.reopenLast" | "terminal.resumeSessions" | "terminal.maximize" | "terminal.inject" | "terminal.focusNext" | "terminal.focusPrevious" | "terminal.focusAlternate" | "terminal.focusUp" | "terminal.focusDown" | "terminal.focusLeft" | "terminal.focusRight" | "terminal.focusDock" | "terminal.focusIndex1" | "terminal.focusIndex2" | "terminal.focusIndex3" | "terminal.focusIndex4" | "terminal.focusIndex5" | "terminal.focusIndex6" | "terminal.focusIndex7" | "terminal.focusIndex8" | "terminal.focusIndex9" | "terminal.moveLeft" | "terminal.moveRight" | "terminal.moveUp" | "terminal.moveDown" | "terminal.moveToDock" | "terminal.moveToGrid" | "terminal.watch" | "terminal.duplicate" | "terminal.background" | "terminal.contextMenu" | "terminal.stashInput" | "terminal.popStash" | "terminal.scrollToLastActivity" | "terminal.sendToAgent" | "terminal.bulkCommand" | "terminal.armDefault" | "terminal.disarmAll" | "terminal.kill" | "terminal.restart" | "terminal.forceResume" | "terminal.redraw" | "terminal.rename" | "fleet.accept" | "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash" | "fleet.armFocused" | "fleet.armAll" | "agent.palette" | AgentKeyAction | "agent.terminal" | "agent.browser" | "agent.focusNextWaiting" | "agent.focusNextWaitingGlobal" | "agent.focusNextWorking" | "agent.focusNextAgent" | "agent.focusPreviousAgent" | "dock.focusNextWaiting" | "find.inFocusedPanel" | "window.zoomIn" | "window.zoomOut" | "window.zoomReset" | "panel.palette" | "panel.toggleDiagnostics" | "panel.togglePortal" | "panel.diagnosticsLogs" | "panel.diagnosticsEvents" | "panel.diagnosticsMessages" | "notifications.toggle" | "portal.newTab" | "portal.closeTab" | "portal.nextTab" | "portal.prevTab" | "devPreview.reloadPreview" | "action.palette" | "action.palette.open" | "action.repeatLast" | "project.switcherPalette" | "project.mruCycleOlder" | "project.mruCycleNewer" | "help.shortcuts" | "help.shortcutsAlt" | "help.launchAgent" | "help.togglePanel" | "app.settings" | "app.theme.toggle" | "app.theme.pick" | "voiceInput.toggle" | "voiceInput.toggleAssistant" | "voiceInput.togglePause" | "voiceInput.lockTarget" | "voiceInput.unlockTarget" | "voiceInput.recallRecentTarget" | "layout.undo" | "layout.redo" | "app.newWindow" | "app.quit" | "app.forceQuit" | "modal.close";
+type BuiltInKeyAction = "nav.up" | "nav.down" | "nav.left" | "nav.right" | "nav.pageUp" | "nav.pageDown" | "nav.home" | "nav.end" | "nav.expand" | "nav.collapse" | "nav.primary" | "nav.toggleSidebar" | "nav.toggleFocusMode" | "nav.quickSwitcher" | "nav.focusRegion.next" | "nav.focusRegion.prev" | "file.open" | "file.copyPath" | "file.copyTree" | "ui.refresh" | "ui.escape" | "git.commit" | "git.push" | "git.stageAll" | "git.toggle" | "worktree.next" | "worktree.previous" | "worktree.panel" | WorktreeSwitchAction | "worktree.up" | "worktree.down" | "worktree.upVim" | "worktree.downVim" | "worktree.home" | "worktree.end" | "worktree.select" | "worktree.selectSpace" | "worktree.copyTree" | "worktree.openChanges" | "worktree.openEditor" | "worktree.openPalette" | "worktree.createDialog.open" | "worktree.overview" | "worktree.sessions.minimizeAll" | "worktree.sessions.maximizeAll" | "worktree.sessions.restartAll" | "worktree.sessions.endAll" | "worktree.sessions.closeCompleted" | "worktree.sessions.trashAll" | "worktree.sessions.resetRenderers" | "tab.next" | "tab.previous" | "terminal.close" | "terminal.closeAll" | "terminal.killAll" | "terminal.restartAll" | "terminal.toggleDock" | "terminal.toggleDockAll" | "terminal.new" | "terminal.reopenLast" | "terminal.resumeSessions" | "terminal.maximize" | "terminal.inject" | "terminal.focusNext" | "terminal.focusPrevious" | "terminal.focusAlternate" | "terminal.focusUp" | "terminal.focusDown" | "terminal.focusLeft" | "terminal.focusRight" | "terminal.focusDock" | "terminal.focusIndex1" | "terminal.focusIndex2" | "terminal.focusIndex3" | "terminal.focusIndex4" | "terminal.focusIndex5" | "terminal.focusIndex6" | "terminal.focusIndex7" | "terminal.focusIndex8" | "terminal.focusIndex9" | "terminal.moveLeft" | "terminal.moveRight" | "terminal.moveUp" | "terminal.moveDown" | "terminal.moveToDock" | "terminal.moveToGrid" | "terminal.watch" | "terminal.duplicate" | "terminal.background" | "terminal.contextMenu" | "terminal.stashInput" | "terminal.popStash" | "terminal.scrollToLastActivity" | "terminal.sendToAgent" | "terminal.bulkCommand" | "terminal.armDefault" | "terminal.disarmAll" | "terminal.kill" | "terminal.restart" | "terminal.forceResume" | "terminal.redraw" | "terminal.rename" | "fleet.accept" | "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash" | "fleet.armFocused" | "fleet.armAll" | "agent.palette" | AgentKeyAction | "agent.terminal" | "agent.browser" | "agent.focusNextWaiting" | "agent.focusNextWaitingGlobal" | "agent.focusNextWorking" | "agent.focusNextAgent" | "agent.focusPreviousAgent" | "dock.focusNextWaiting" | "find.inFocusedPanel" | "window.zoomIn" | "window.zoomOut" | "window.zoomReset" | "panel.palette" | "panel.toggleDiagnostics" | "panel.togglePortal" | "panel.diagnosticsLogs" | "panel.diagnosticsEvents" | "panel.diagnosticsMessages" | "notifications.toggle" | "portal.newTab" | "portal.closeTab" | "portal.nextTab" | "portal.prevTab" | "devPreview.reloadPreview" | "action.palette" | "action.palette.open" | "action.repeatLast" | "project.switcherPalette" | "project.mruCycleOlder" | "help.shortcuts" | "help.shortcutsAlt" | "help.launchAgent" | "help.togglePanel" | "app.settings" | "app.theme.toggle" | "app.theme.pick" | "voiceInput.toggle" | "voiceInput.toggleAssistant" | "voiceInput.togglePause" | "voiceInput.lockTarget" | "voiceInput.unlockTarget" | "voiceInput.recallRecentTarget" | "layout.undo" | "layout.redo" | "app.newWindow" | "app.quit" | "app.forceQuit" | "modal.close";
 
-declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.resumeSessions", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.overview.open", "worktree.overview.close", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "hibernation.getConfig", "hibernation.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.markSafeDirectory", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.getPR", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "project.getAll", "project.getCurrent", "project.add", "project.switch", "project.update", "project.remove", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.getStats", "project.settings.open", "project.cloneRepo", "app.pluginManager", "app.reloadConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "agent.launch", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agentSessionHistory.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "terminal.restart", "terminal.redraw", "terminal.forceResume", "terminal.toggleInputLock", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.trash", "terminal.kill", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.bulkCommand", "terminal.stashInput", "terminal.popStash", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "find.inFocusedPanel", "portal.toggle", "portal.closeTab", "portal.nextTab", "portal.prevTab", "portal.newTab", "portal.closeAllTabs", "portal.activateTab", "portal.openLaunchpad", "portal.openUrl", "portal.goBack", "portal.goForward", "portal.reload", "portal.copyUrl", "portal.openExternal", "portal.duplicateTab", "portal.reloadTab", "portal.copyTabUrl", "portal.openTabExternal", "portal.closeOthers", "portal.closeToRight", "portal.resetWidth", "portal.width.set", "portal.setDefaultNewTab", "portal.links.add", "portal.links.remove", "portal.links.update", "portal.links.toggle", "portal.links.reorder", "portal.tabs.reorder", "portal.listTabs", "portal.toggleDevDashboard", "help.gettingStarted.show", "help.displayImage", "help.openCommandsFolder", "ui.sidebar.resetWidth", "devServer.start", "devPreview.stop", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "devPreview.promoteToPortal", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
+declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.resumeSessions", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.openFileBrowser", "worktree.openChanges", "worktree.overview.open", "worktree.overview.close", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "hibernation.getConfig", "hibernation.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.markSafeDirectory", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.getPR", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "project.getAll", "project.getCurrent", "project.add", "project.switch", "project.update", "project.remove", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.getStats", "project.settings.open", "project.cloneRepo", "app.pluginManager", "app.reloadConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "agent.launch", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agentSessionHistory.list", "session.bookmarkAndClose", "session.bookmark.promote", "session.bookmark.rename", "session.bookmark.delete", "session.bookmarks.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "terminal.restart", "terminal.redraw", "terminal.forceResume", "terminal.toggleInputLock", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.trash", "terminal.kill", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.bulkCommand", "terminal.stashInput", "terminal.popStash", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "find.inFocusedPanel", "portal.toggle", "portal.closeTab", "portal.nextTab", "portal.prevTab", "portal.newTab", "portal.closeAllTabs", "portal.activateTab", "portal.openLaunchpad", "portal.openUrl", "portal.goBack", "portal.goForward", "portal.reload", "portal.copyUrl", "portal.openExternal", "portal.duplicateTab", "portal.reloadTab", "portal.copyTabUrl", "portal.openTabExternal", "portal.closeOthers", "portal.closeToRight", "portal.resetWidth", "portal.width.set", "portal.setDefaultNewTab", "portal.links.add", "portal.links.remove", "portal.links.update", "portal.links.toggle", "portal.links.reorder", "portal.tabs.reorder", "portal.listTabs", "portal.toggleDevDashboard", "help.gettingStarted.show", "help.displayImage", "help.openCommandsFolder", "ui.sidebar.resetWidth", "devServer.start", "devPreview.stop", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "devPreview.promoteToPortal", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
 type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
 
 type ActionKind = "command" | "query";
@@ -1340,6 +1337,11 @@ interface PluginActionManifestEntry {
  *   not exposed to plugins; `dispatch()` would return `RESTRICTED` / `NOT_FOUND`.
  */
 type PluginCanDispatchResult = "ok" | "confirm" | "restricted";
+
+type KeyScope = "global" | "portal" | "worktreeGrid" | "dev-preview";
+
+/** Notification type */
+type NotificationType = "info" | "success" | "error" | "warning";
 
 /** Agent lifecycle state: idle | working | waiting | directing | completed | exited */
 type AgentState = "idle" | "working" | "waiting" | "directing" | "completed" | "exited";
@@ -1450,6 +1452,11 @@ interface PanelContribution {
     canRestart: boolean;
     canConvert: boolean;
     showInPalette: boolean;
+    /**
+     * Whether this panel kind can live in the dock. Dockable by default; set
+     * `false` to opt out (for a kind with no meaningful compact chip-row form).
+     */
+    dockable?: boolean;
 }
 interface ToolbarButtonContribution {
     id: string;
@@ -1483,7 +1490,7 @@ type PluginPanelBadge = {
 };
 type MenuItemLocation = "terminal" | "file" | "view" | "help";
 type ContextMenuLocation = "worktree" | "terminal" | "file";
-declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec"];
+declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
 type PluginCapability = BuiltInPluginCapability;
 interface MenuItemContribution {
@@ -1496,7 +1503,7 @@ interface MenuItemContribution {
 interface KeybindingContribution {
     actionId: ActionId;
     combo: string;
-    scope?: string;
+    scope?: KeyScope;
     description?: string;
     when?: string;
 }
@@ -1539,11 +1546,38 @@ interface ViewContribution {
  *   broadcast fires before the main process tears down plugin IPC handlers,
  *   so signal-driven cleanup (fetch aborts, subscription teardown) runs
  *   while the plugin host APIs are still live.
+ * - `panelRemovedSignal` aborts ONLY when the panel is permanently gone.
  */
 interface PanelViewProps {
     readonly panelId: string;
     readonly pluginId: string;
+    /**
+     * Lifetime of THIS mounted view attempt — not of the panel (#11301).
+     *
+     * Aborts on React unmount, on "Try again", and when a
+     * `plugin:panel-kinds-changed` push drops this kind. Crucially, a temporary
+     * unmount aborts it too: maximizing a sibling pane, switching away from a
+     * dock tab, or caching a background project view all tear the subtree down
+     * while the panel itself lives on. Tie only view-scoped work to it — in-flight
+     * `fetch`es, DOM observers, `postToPanel` subscriptions.
+     *
+     * NEVER tie a durable resource (a spawned process, a long-lived session) to
+     * this signal: it will be killed the first time the user maximizes another
+     * pane. Durable resources belong in the plugin's worker, which observes the
+     * panel across every remount via `host.onDidChangePanelLifecycle`.
+     */
     readonly disposeSignal: AbortSignal;
+    /**
+     * Lifetime of the PANEL RECORD (#11301). The same `AbortSignal` object is
+     * handed to every mount of a given `panelId`, so it survives remounts,
+     * retries, trash-then-restore, and plugin view upgrades.
+     *
+     * Aborts exactly once, when the panel is permanently removed from the panel
+     * store — never for a temporary unmount and never while a trashed panel is
+     * still restorable. This is the signal to use for cleanup that must happen
+     * once and only when the user is genuinely done with the panel.
+     */
+    readonly panelRemovedSignal: AbortSignal;
     /**
      * Opaque argument bag handed to the view when the panel is spawned with one
      * — e.g. `{ path }` from a "open file in plugin panel" intent. Sourced from
@@ -1553,6 +1587,49 @@ interface PanelViewProps {
      * host never mutates it; plugins should treat the contents as read-only.
      */
     readonly initialArgs?: Record<string, unknown>;
+    /**
+     * The worktree the panel instance belongs to, as recorded on the panel at
+     * spawn time. Lets a view reconstruct its own context without dispatching
+     * `worktree.getCurrent` — which resolves the *visible* worktree, not the
+     * one that owns the panel, and so returns the wrong answer for a background
+     * or restored panel. `undefined` for a panel spawned without a worktree.
+     */
+    readonly worktreeId?: string;
+}
+/**
+ * What just happened to one plugin panel instance (#11301). The renderer owns
+ * the transitions; the worker observes them through
+ * `host.onDidChangePanelLifecycle`.
+ *
+ * `mounted` / `hidden` are the two *view* states — a panel whose React subtree
+ * is currently rendered vs. one whose subtree has been torn down while the panel
+ * record lives on (sibling maximize, an inactive dock tab, a cached project
+ * view). `hidden` explicitly does NOT mean the user closed anything.
+ *
+ * `backgrounded` / `trashed` / `restored` / `removed` are *panel record* states
+ * read off `PanelLocation`: `backgrounded` is `location: "background"`,
+ * `trashed` is the recoverable soft close, `restored` is the one-shot edge out
+ * of trash (a transition, never a resting state), and `removed` is the terminal
+ * event — the panel is gone and will never come back under this id.
+ *
+ * `render-failed` means the current view attempt reached the host's error
+ * boundary. It is cleared by a successful retry. The failure detail stays in the
+ * renderer's diagnostics pane; only the fact of failure crosses to the worker.
+ */
+type PluginPanelLifecyclePhase = "mounted" | "hidden" | "backgrounded" | "trashed" | "restored" | "removed" | "render-failed";
+/**
+ * One panel lifecycle transition delivered to a plugin worker (#11301).
+ * Deliberately minimal and frozen before delivery: it carries identity and
+ * phase, never renderer internals, error text, or user paths.
+ */
+interface PluginPanelLifecycleEvent {
+    /** Runtime panel instance id — matches `PanelViewProps.panelId`. */
+    readonly panelId: string;
+    /** Namespaced panel kind, i.e. `${pluginId}.${panel.id}`. */
+    readonly panelKindId: string;
+    /** Owning plugin's manifest `name`. Always this plugin's own id. */
+    readonly pluginId: string;
+    readonly phase: PluginPanelLifecyclePhase;
 }
 /**
  * Lazily-spawned MCP server contribution (#9235). The declared `command` is
@@ -1633,9 +1710,28 @@ interface PluginFsScope {
      */
     allowedPaths: string[];
 }
+/**
+ * Optional path intent for the `socket:connect` capability (#11299). Purely
+ * declarative: unlike {@link PluginFsScope}, nothing enforces it, because a
+ * plugin's `main` reaches `node:net` directly and the host has no interception
+ * point. Its job is disclosure — the Permissions tab renders these entries so
+ * "connects to local sockets" reads as "connects to `/var/run/docker.sock`".
+ *
+ * Entries are validated for shape only (a Unix-domain path or a Windows
+ * `\\.\pipe\…` name, no globs), and validated identically on every platform so
+ * a cross-platform manifest parses on all of them.
+ */
+interface PluginLocalSocketScope {
+    /**
+     * Declared local endpoints the plugin intends to connect to — Unix-domain
+     * socket paths and/or Windows named pipes. Advisory, not enforced.
+     */
+    allowedPaths: string[];
+}
 interface PluginManifestScopes {
     network?: PluginNetworkScope;
     fs?: PluginFsScope;
+    socket?: PluginLocalSocketScope;
 }
 /**
  * A plugin-contributed agent entry (#9560). Lets a plugin teach Daintree about
@@ -2208,19 +2304,71 @@ interface PluginConfirmOptions {
  */
 type ActionHandler = (args: unknown) => unknown | Promise<unknown>;
 /**
- * Options for {@link PluginProcessApi.spawn}. All fields are optional; `command`
- * is the positional first argument. The host anchors a relative spawn against
- * `cwd` (defaulting to the active worktree path, then the process cwd) and
- * merges `env` over the host environment — a plugin cannot blank the inherited
- * env, only add to / override it.
+ * Execution backend for a managed process (#11300).
+ *
+ * - `pipe` (the default): a plain child process with stdin closed and
+ *   stdout/stderr piped. Output arrives split by stream.
+ * - `pty`: the command runs under a real pseudo-terminal, so it sees a TTY,
+ *   accepts input via {@link PluginPtyProcessHandle.write}, and can be resized.
+ *   A PTY merges stdout and stderr into one stream by construction.
+ */
+type PluginProcessMode = "pipe" | "pty";
+/**
+ * One chunk of output from a managed process, delivered to
+ * {@link PluginProcessHandle.onData}.
+ */
+interface PluginProcessDataChunk {
+    /**
+     * `stdout` / `stderr` in pipe mode. `data` in PTY mode — a pseudo-terminal
+     * has a single combined stream, so there is no split to report.
+     */
+    readonly stream: "stdout" | "stderr" | "data";
+    /** The decoded UTF-8 chunk. */
+    readonly chunk: string;
+}
+/**
+ * Options for {@link PluginProcessApi.spawn} in the default pipe mode. All
+ * fields are optional; `command` is the positional first argument. The host
+ * anchors a relative spawn against `cwd` (defaulting to the active worktree
+ * path, then the process cwd).
+ *
+ * The child does NOT inherit the host environment. It is built from a fixed
+ * allowlist of essentials (PATH, HOME, locale, temp dir, and the Windows keys a
+ * child cannot run without) plus whatever this call passes in {@link env} — so
+ * a plugin never receives the main process's tokens, and anything else the
+ * command needs must be handed to it explicitly.
  */
 interface PluginProcessSpawnOptions {
     /** Argument vector. Each entry is passed verbatim — no shell interpolation. */
     args?: string[];
     /** Working directory for the child. Defaults to the active worktree, then the host cwd. */
     cwd?: string;
-    /** Extra environment variables, merged over (not replacing) the host environment. */
+    /**
+     * Environment entries applied over the host's safe-key allowlist. These are
+     * additions to a minimal base, NOT overrides on the full host environment —
+     * a key the plugin does not pass and the allowlist does not cover is absent.
+     */
     env?: Record<string, string>;
+    /** Execution backend. Omit (or pass `"pipe"`) for the default piped child. */
+    mode?: "pipe";
+    /**
+     * Route this process's stream events to a single panel instead of every panel
+     * the plugin owns. `undefined` / `null` broadcast, matching `postToPanel`.
+     */
+    panelId?: string | null;
+}
+/**
+ * Options for an interactive {@link PluginProcessApi.spawn}. Same anchoring and
+ * environment rules as {@link PluginProcessSpawnOptions}, plus the initial
+ * terminal size. Selecting `mode: "pty"` narrows the returned handle to
+ * {@link PluginPtyProcessHandle}.
+ */
+interface PluginPtyProcessSpawnOptions extends Omit<PluginProcessSpawnOptions, "mode"> {
+    mode: "pty";
+    /** Initial column count. Defaults to 80. Must be a positive integer. */
+    cols?: number;
+    /** Initial row count. Defaults to 24. Must be a positive integer. */
+    rows?: number;
 }
 /**
  * Live handle to a process spawned via {@link PluginProcessApi.spawn}. The
@@ -2264,6 +2412,37 @@ interface PluginProcessHandle {
         exitCode: number | null;
         signal: string | null;
     }) => void): () => void;
+    /**
+     * Receive the process's output in the plugin's own code (#11300) — the
+     * counterpart to the panel stream, for a plugin that needs to parse what it
+     * spawned (a `--machine`-mode daemon's line-delimited JSON, say) rather than
+     * just display it. Returns a disposer.
+     *
+     * Output produced before the first subscriber attaches is buffered (bounded)
+     * and replayed on subscription, so a daemon that greets immediately is not
+     * missed by a callback registered on the next tick. Once any subscriber has
+     * attached, delivery is live-only. Panel streaming is unaffected either way.
+     */
+    onData(callback: (chunk: PluginProcessDataChunk) => void): () => void;
+}
+/**
+ * A {@link PluginProcessHandle} for a process spawned with `mode: "pty"`. Adds
+ * the two operations a pseudo-terminal makes possible: writing to the child's
+ * input and telling it the window changed size.
+ *
+ * Both are no-ops once the process has exited, and both are safe to call
+ * immediately after `spawn()` resolves. A `resize()` issued while a `restart()`
+ * is still allocating the replacement PTY is retained (last write wins) and
+ * folded into that PTY's initial size rather than replayed as a late SIGWINCH.
+ */
+interface PluginPtyProcessHandle extends PluginProcessHandle {
+    /**
+     * Write to the child's input. Passed through verbatim — the caller supplies
+     * its own line terminator (`"\n"`) when the command expects one.
+     */
+    write(data: string): void;
+    /** Report a new terminal size to the child. Both values must be positive integers. */
+    resize(cols: number, rows: number): void;
 }
 /**
  * Managed-process surface on {@link PluginHostApi.process}. Gated on the
@@ -2278,11 +2457,21 @@ interface PluginProcessHandle {
  */
 interface PluginProcessApi {
     /**
+     * Spawn the command under a real pseudo-terminal. The returned handle adds
+     * `write()` and `resize()`; output arrives as a single combined stream on
+     * `onData()` and as `{ kind: "data" }` panel events. The PTY is allocated in
+     * the crash-isolated pty-host utility process, so a native failure cannot
+     * take the app down with it.
+     */
+    spawn(command: string, options: PluginPtyProcessSpawnOptions): Promise<PluginPtyProcessHandle>;
+    /**
      * Spawn a child process on the plugin's behalf and return a live handle. The
      * child's stdout/stderr stream to the plugin's panels over
-     * `postToPanel("process", …)` keyed by the handle id. Rejects when the plugin
-     * lacks `shell:exec`, when the per-plugin concurrency cap is reached, or when
-     * the plugin has been unloaded.
+     * `postToPanel("process", …)` keyed by the handle id (targeted at
+     * `options.panelId` when given, broadcast otherwise), and to the plugin's own
+     * code via {@link PluginProcessHandle.onData}. Rejects when the plugin lacks
+     * `shell:exec`, when the per-plugin concurrency cap is reached, or when the
+     * plugin has been unloaded.
      */
     spawn(command: string, options?: PluginProcessSpawnOptions): Promise<PluginProcessHandle>;
 }
@@ -2434,11 +2623,14 @@ interface PluginGitApi {
 }
 /**
  * Host-mediated access to the OS clipboard, backing the `clipboard:read` /
- * `clipboard:write` capability tokens. Text-only — the surface deliberately
- * omits image/HTML/file-list variants so a plugin cannot read or smuggle
- * richer payloads than it declared. Both methods run in the main process
- * (Electron's `clipboard` module is unavailable in the plugin utility worker),
- * so they remain callable from a headless plugin with no mounted panel.
+ * `clipboard:write` capability tokens. The *read* surface is deliberately
+ * text-only — omitting image/HTML/file-list reads is what stops a plugin
+ * smuggling out richer payloads than it declared. Writes carry no such risk
+ * (the plugin already has the bytes), so a bounded {@link writeImage} is
+ * offered alongside {@link writeText}; there is still no HTML or file-list
+ * write. Every method runs in the main process (Electron's `clipboard` module
+ * is unavailable in the plugin utility worker), so they remain callable from a
+ * headless plugin with no mounted panel.
  *
  * Like {@link PluginFsApi} and {@link PluginGitApi} this is NOT revoke-guarded:
  * plugins read/write from post-activation timers and callbacks. Once the plugin
@@ -2452,11 +2644,71 @@ interface PluginClipboardApi {
      */
     writeText(text: string): Promise<void>;
     /**
+     * Replace the clipboard's contents with a PNG image. Gated on the same
+     * `clipboard:write` token as {@link writeText} — putting an image on the
+     * clipboard is no less reversible than putting text there, so it earns no
+     * separate capability and does not elevate action danger.
+     *
+     * `pngData` must be the raw PNG bytes. Rejects with a `PAYLOAD_TOO_LARGE:`
+     * prefix above 20 MiB (matching the renderer IPC clipboard guard) and with a
+     * `VALIDATION:` prefix when the bytes don't decode to a non-empty image —
+     * Electron's `nativeImage.createFromBuffer` reports malformed input by
+     * returning an empty image rather than throwing, so the emptiness check is
+     * the only signal available. Successful writes append an audit record
+     * carrying the byte count only, never the image bytes.
+     *
+     * Decoding happens in the main process by necessity: the renderer's
+     * `navigator.clipboard.write()` path crashes on Linux with binary PNG
+     * payloads (#4900), so this is the only safe route for image writes.
+     */
+    writeImage(pngData: Uint8Array): Promise<void>;
+    /**
      * Read the clipboard's text contents. Gated on `clipboard:read`. Resolves to
      * `""` when the clipboard is empty or holds non-text content (image, file
      * list) — it never rejects on content type.
      */
     readText(): Promise<string>;
+}
+/**
+ * Host-mediated OS "reveal / open with the default app" surface (#11299).
+ *
+ * Exists because the renderer's built-in `system.openPath` action validates
+ * against the *user's* roots — open projects, tracked worktrees, Electron's
+ * `userData` — and carries no caller identity, so a plugin dispatching it
+ * cannot reach the one directory that is unambiguously its own:
+ * `~/.daintree/plugin-data/<plugin-id>/`. A plugin that just wrote a
+ * screenshot there had no sanctioned way to reveal it, and shelled out to
+ * `/usr/bin/open` instead — trading a contained call for arbitrary execution.
+ *
+ * Both methods resolve paths against the calling plugin's *declared* filesystem
+ * scope (`scopes.fs.allowedPaths` plus its implicit plugin-data namespace), and
+ * the plugin id is bound at host construction rather than travelling as an
+ * argument, so one plugin can never name another's namespace. Containment is
+ * realpath-based, so a symlink cannot walk out of scope. Gated on the `fs:*`
+ * capability matching the resolved root's class: revealing something under the
+ * plugin-data namespace needs `fs:user-data-read` or `fs:user-data-write`,
+ * under a project root `fs:project-read` or `fs:project-write` — a plugin that
+ * could legitimately create the file can always reveal it.
+ *
+ * Like {@link PluginFsApi} this is NOT revoke-guarded, and every method rejects
+ * once the plugin is unloaded.
+ */
+interface PluginSystemApi {
+    /**
+     * Open `targetPath` with the OS default application. Rejects paths outside
+     * the plugin's declared scope (`OUTSIDE_ROOT:`), non-absolute or unresolvable
+     * paths (`INVALID_PATH:`), and executable file types (`.app`, `.exe`, `.sh`,
+     * … — checked on both the raw path and its realpath target, so a benignly
+     * named symlink cannot smuggle a launch primitive past the deny-list).
+     */
+    openPath(targetPath: string): Promise<void>;
+    /**
+     * Reveal `targetPath` in the OS file manager, selecting it. Same containment
+     * and capability rules as {@link openPath}, but without the executable
+     * deny-list: revealing a file in Finder/Explorer shows it, it does not run
+     * it. The path must exist.
+     */
+    showItemInFolder(targetPath: string): Promise<void>;
 }
 /**
  * The revoke-guarded slice of {@link PluginHostApi}: the registration methods
@@ -2620,6 +2872,34 @@ interface PluginActivationApi {
      *   out (the host is revoked).
      */
     onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void): Promise<() => void>;
+    /**
+     * Subscribe to panel lifecycle transitions for this plugin's own contributed
+     * panels (#11301). No capability is required — a plugin only ever sees events
+     * for panel instances of kinds it contributed itself.
+     *
+     * This is how a worker learns the difference a view's `disposeSignal` cannot
+     * express: that signal aborts for a temporary unmount (sibling maximize,
+     * inactive dock tab, cached project view) exactly as it does for a permanent
+     * close, so a worker that treats it as deletion tears down durable resources
+     * the user still wants. Keep those resources in the worker and release them on
+     * `"removed"` — the terminal phase — rather than guessing from the view.
+     *
+     * On subscribe the host replays the current phase of every live panel of this
+     * plugin, so a plugin that activated lazily *because* a view opened still sees
+     * that panel's state. One-shot transitions (`"restored"`) are not replayed.
+     *
+     * Callbacks receive a frozen {@link PluginPanelLifecycleEvent}. Resolves to a
+     * disposer; calling it more than once is a no-op, and all subscriptions are
+     * disposed automatically when the plugin is unloaded.
+     *
+     * Subscribing is revoke-guarded — call it during `activate()`. The callback
+     * itself fires for the plugin's whole lifetime; only the act of subscribing
+     * is restricted to the activation window.
+     *
+     * @throws {Error} If called after activation resolves or times out — the host
+     *   is revoked and the subscription is rejected.
+     */
+    onDidChangePanelLifecycle(callback: (event: PluginPanelLifecycleEvent) => void): Promise<() => void>;
 }
 /**
  * The full host surface handed to a plugin's `activate()`. Extends
@@ -2923,12 +3203,24 @@ interface PluginHostApi extends PluginActivationApi {
     readonly git: PluginGitApi;
     /**
      * Host-mediated OS clipboard surface. Reads gated on `clipboard:read`, writes
-     * on `clipboard:write`. Text-only; runs in the main process so it works from a
-     * headless plugin. See {@link PluginClipboardApi}.
+     * on `clipboard:write`. Text reads/writes plus bounded PNG writes; runs in the
+     * main process so it works from a headless plugin. See
+     * {@link PluginClipboardApi}.
      *
      * NOT revoke-guarded — same membership lifetime as {@link fs}.
      */
     readonly clipboard: PluginClipboardApi;
+    /**
+     * Host-mediated "open with the default app" / "reveal in file manager"
+     * surface, scoped to the plugin's own declared filesystem roots — including
+     * its implicit `~/.daintree/plugin-data/<plugin-id>/` namespace, which the
+     * renderer's built-in `system.openPath` action cannot reach. Gated on the
+     * `fs:*` capability matching the resolved root's class. See
+     * {@link PluginSystemApi}.
+     *
+     * NOT revoke-guarded — same membership lifetime as {@link fs}.
+     */
+    readonly system: PluginSystemApi;
 }
 /**
  * Synchronous, fire-and-forget diagnostic logger handed to a plugin via
@@ -2968,6 +3260,30 @@ interface PluginActionContribution {
     danger: "safe" | "confirm";
     keywords?: string[];
     inputSchema?: Record<string, unknown>;
+    /**
+     * Per-action capability intent: the subset of the plugin's declared
+     * `manifest.capabilities` this specific action actually exercises. Mirrors
+     * {@link PluginChannelSchema.requires} in both spelling and enforcement — the
+     * host rejects registration if any entry is missing from the manifest, so an
+     * action can never claim authority the plugin never asked the user for.
+     *
+     * This narrows which capabilities the danger computation consults, so a
+     * no-authority action in a high-authority plugin stays one click:
+     *
+     * - **omitted** — every manifest capability is consulted (today's behavior,
+     *   preserved verbatim so existing plugins need no migration and a plugin
+     *   that never opts in cannot accidentally de-escalate).
+     * - **`[]`** — the action declares no capability intent and may stay `"safe"`
+     *   even when the plugin holds `shell:exec` elsewhere.
+     * - **non-empty** — only the listed capabilities are consulted, both for the
+     *   flat high-risk set and the compound-capability lattice.
+     *
+     * It is a *classification* input only: it never grants access. Host APIs
+     * still gate on `manifest.capabilities` at call time, so listing a capability
+     * here neither adds nor removes runtime authority. Declaring
+     * `danger: "confirm"` still pins the action to confirm regardless.
+     */
+    requires?: readonly BuiltInPluginCapability[];
 }
 
 /**
@@ -3024,6 +3340,17 @@ type PluginProcessStreamEvent = {
     kind: "stderr";
     id: string;
     chunk: string;
+}
+/**
+ * PTY-mode output (#11300). A pseudo-terminal merges stdout and stderr into a
+ * single stream, so an interactive process emits `data` instead of the
+ * `stdout`/`stderr` pair — a panel rendering process output should handle all
+ * three. Pipe-mode processes never emit this kind.
+ */
+ | {
+    kind: "data";
+    id: string;
+    chunk: string;
 } | {
     kind: "exit";
     id: string;
@@ -3036,4 +3363,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginProcessApi, type PluginProcessHandle, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };

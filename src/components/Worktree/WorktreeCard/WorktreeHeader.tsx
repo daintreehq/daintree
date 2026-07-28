@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AgentState, TerminalRecipe, WorktreeState } from "@/types";
+import { useEffect, useMemo, useState } from "react";
+import type { AgentState, WorktreeState } from "@/types";
+import type { WorktreeMenuActions } from "../WorktreeMenuItems";
 import type { GitStateIndicator } from "./hooks/useWorktreeStatus";
 import { cn } from "@/lib/utils";
 import { STATE_LABELS, STATE_PRIORITY } from "../terminalStateConfig";
 import { BranchLabel } from "../BranchLabel";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Sprout, Pin, BellOff, RefreshCw } from "lucide-react";
+import { FolderOutput } from "@/components/icons";
 import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 import { IssueBadge } from "./IssueBadge";
 import { PRBadge } from "./PRBadge";
@@ -13,7 +15,7 @@ import { EnvironmentPopover } from "./EnvironmentPopover";
 import { DevServerIndicator } from "./DevServerIndicator";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { CollapsedAlarmPill } from "./CollapsedAlarmPill";
-import { isLiveDevServerStatus } from "@/lib/worktreeFilters";
+import { isExternalWorktree, isLiveDevServerStatus } from "@/lib/worktreeFilters";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import { WorktreeActionsToolbar } from "./WorktreeActionsToolbar";
 import { MainWorktreeSecondaryRow } from "./MainWorktreeSecondaryRow";
@@ -59,65 +61,7 @@ export interface WorktreeHeaderProps {
 
   gitStateIndicator: GitStateIndicator | null;
 
-  menu: {
-    launchAgents: import("../WorktreeMenuItems").WorktreeLaunchAgentItem[];
-    recipes: TerminalRecipe[];
-    runningRecipeId: string | null;
-    counts: {
-      grid: number;
-      dock: number;
-      active: number;
-      completed: number;
-      all: number;
-      waiting: number;
-      working: number;
-    };
-    onCopyContextFull: () => void;
-    onCopyContextModified: () => void;
-    onCopyPath: () => void;
-    onOpenEditor: () => void;
-    onRevealInFinder: () => void;
-    onOpenIssueExternal?: () => void;
-    onOpenPRExternal?: () => void;
-    onRunRecipe: (recipeId: string) => void;
-    onSaveLayout?: () => void;
-    onTogglePin?: () => void;
-    onToggleCollapse?: () => void;
-    isCollapsed?: boolean;
-    onLaunchAgent?: (agentId: string) => void;
-    onMoveUp?: () => void;
-    onMoveDown?: () => void;
-    canMoveUp?: boolean;
-    canMoveDown?: boolean;
-    onDockAll: () => void;
-    onMaximizeAll: () => void;
-    onCloseAll: () => void;
-    onTerminateAll: () => void;
-    onClearHistory: () => void;
-    onResetRenderers: () => void;
-    onSelectAllAgents: () => void;
-    onSelectWaitingAgents: () => void;
-    onSelectWorkingAgents: () => void;
-    onAttachIssue?: () => void;
-    onViewPlan?: () => void;
-    onOpenReviewHub?: () => void;
-    onCompareDiff?: () => void;
-    onOpenPanelPalette?: () => void;
-    onDeleteWorktree?: () => void;
-    hasResourceConfig?: boolean;
-    worktreeMode?: string;
-    resourceEnvironmentKeys?: string[];
-    onSwitchEnvironment?: (envKey: string) => void;
-    resourceStatus?: string;
-    onResourceProvision?: () => void;
-    onResourceResume?: () => void;
-    onResourcePause?: () => void;
-    onResourceConnect?: () => void;
-    onResourceStatus?: () => void;
-    onResourceTeardown?: () => void;
-    onStopDevServer?: (worktreeId: string) => void;
-    onRestartDevServer?: (worktreeId: string) => void;
-  };
+  menu: WorktreeMenuActions;
 }
 
 function formatGitAge(ageMs: number): string {
@@ -245,18 +189,6 @@ export function WorktreeHeader({
   gitStateIndicator,
   menu,
 }: WorktreeHeaderProps) {
-  const recipeOptions = useMemo(
-    () => menu.recipes.map((r) => ({ id: r.id, name: r.name })),
-    [menu.recipes]
-  );
-
-  const handleLaunchAgent = useCallback(
-    (agentId: string) => {
-      menu.onLaunchAgent?.(agentId);
-    },
-    [menu]
-  );
-
   // PR-originated worktrees (created from the PR dropdown, #8888) invert the
   // default issue-first headline: the PR title leads, with the linked issue
   // shown underneath. `sourcePrNumber` is the in-memory discriminator seeded at
@@ -289,6 +221,7 @@ export function WorktreeHeader({
     (worktree.matchedForgeProviderId != null || worktree.linked?.providerId != null)
   );
   const isMainStandardLayout = !!(isMainOnStandardBranch && !hasDisplayTitle);
+  const isExternal = isExternalWorktree(worktree);
 
   const prState = worktree.linked?.pr?.state;
   const isPrLive = prState !== undefined && prState !== "closed" && prState !== "declined";
@@ -390,6 +323,7 @@ export function WorktreeHeader({
         </div>
 
         {((isPinned && !isMainWorktree) ||
+          isExternal ||
           isProjectNotificationsMuted ||
           (worktree.worktreeMode && worktree.worktreeMode !== "local") ||
           resourceStatusLabel ||
@@ -402,6 +336,28 @@ export function WorktreeHeader({
                 className="w-3.5 h-3.5 text-daintree-text/40 shrink-0 pointer-events-none"
                 aria-label="Pinned"
               />
+            )}
+            {isExternal && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    role="img"
+                    aria-label={`External worktree at ${worktree.path}`}
+                    className="shrink-0 leading-none"
+                  >
+                    <FolderOutput
+                      className="w-3.5 h-3.5 text-daintree-text/40"
+                      aria-hidden="true"
+                    />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-xs">
+                  <span className="block">Outside the project directory</span>
+                  <span className="mt-0.5 block font-mono text-[11px] break-all">
+                    {worktree.path}
+                  </span>
+                </TooltipContent>
+              </Tooltip>
             )}
             {isProjectNotificationsMuted && (
               <BellOff
@@ -447,13 +403,9 @@ export function WorktreeHeader({
           canCollapse={canCollapse ?? false}
           onToggleCollapse={onToggleCollapse}
           contentId={contentId}
-          menu={{
-            ...menu,
-            recipes: recipeOptions,
-          }}
+          menu={menu}
           worktree={worktree}
           isPinned={isPinned}
-          handleLaunchAgent={handleLaunchAgent}
         />
       </div>
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { render, act } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetForTests, registerEscape } from "@/lib/escapeStack";
 import type { PaletteId } from "@/store/paletteStore";
 
@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
     popPendingChord: vi.fn(),
     getEffectiveCombo: vi.fn<(actionId: string) => string | undefined>(() => undefined),
     subscribe: vi.fn(() => () => {}),
+    setWhenContextProvider: vi.fn(),
     // matchesEvent is invoked by the focus-region bypass. Lite mock that maps
     // Cmd→metaKey (mac-style) — sufficient for the tests in this file.
     matchesEvent: vi.fn((event: KeyboardEvent, combo: string) => {
@@ -85,6 +86,12 @@ vi.mock("../../store", () => ({
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
+}));
+
+// The when-context builder reads real Zustand stores; the hook only needs the
+// provider registration to be observable here.
+vi.mock("@/services/keybindingWhenContext", () => ({
+  buildKeybindingWhenContext: vi.fn(() => ({})),
 }));
 
 const { useGlobalKeybindings } = await import("../useGlobalKeybindings");
@@ -988,5 +995,87 @@ describe("useGlobalKeybindings — IME composition guard", () => {
     expect(mocks.keybindingService.clearPendingChord).not.toHaveBeenCalled();
     expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("useGlobalKeybindings — terminal-reserved keys", () => {
+  function setNavigatorPlatform(platform: string) {
+    Object.defineProperty(globalThis, "navigator", {
+      value: { platform },
+      configurable: true,
+      writable: true,
+    });
+  }
+
+  function pressInTerminal(init: KeyboardEventInit) {
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    const inner = document.createElement("div");
+    xterm.appendChild(inner);
+    document.body.appendChild(xterm);
+    act(() => {
+      inner.dispatchEvent(
+        new KeyboardEvent("keydown", { ...init, bubbles: true, cancelable: true })
+      );
+    });
+    xterm.remove();
+  }
+
+  afterEach(() => {
+    setNavigatorPlatform("MacIntel");
+  });
+
+  it("never resolves readline Ctrl keys as shortcuts while a terminal is focused", () => {
+    // On Windows/Linux, Ctrl+W would otherwise resolve as Cmd+W → terminal.close
+    // before xterm's allowlist ever ran — closing the panel instead of
+    // deleting a word.
+    render(<Host />);
+    pressInTerminal({ key: "w", ctrlKey: true });
+    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+  });
+
+  it("reserves the Windows/Linux terminal clipboard keys before global resolution", () => {
+    setNavigatorPlatform("Win32");
+    render(<Host />);
+    pressInTerminal({ key: "C", ctrlKey: true, shiftKey: true });
+    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+  });
+
+  it("still resolves non-reserved modifier shortcuts inside terminals", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+    render(<Host />);
+    pressInTerminal({ key: "P", ctrlKey: true, shiftKey: true });
+    expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a pending chord win over the reservation — the user explicitly opened it", () => {
+    mocks.keybindingService.getPendingChord.mockReturnValue("Cmd+K");
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    pressInTerminal({ key: "w", ctrlKey: true });
+    expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves reserved keys normally outside terminals", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+    render(<Host />);
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "w", ctrlKey: true, bubbles: true, cancelable: true })
+      );
+    });
+    expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
   });
 });

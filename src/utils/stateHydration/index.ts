@@ -19,6 +19,7 @@ import { inferKind } from "./statePatcher";
 import { RECONNECT_TIMEOUT_MS } from "./reconnectManager";
 import type { ActionFrecencyEntry, ActionUsageEntry } from "@shared/types/actions";
 import { panelPersistence } from "@/store/persistence/panelPersistence";
+import { draftInputPersistence } from "@/store/persistence/draftInputPersistence";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
@@ -351,6 +352,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     if (currentProjectId) {
       try {
         const draftInputs = await draftInputsPromise;
+        // Seed the close-flush baseline from the authoritative on-disk record
+        // (even when empty) BEFORE restoring into the store, so a later clear of
+        // a hydrated draft yields a removal tombstone instead of resurrecting on
+        // next load (#11352).
+        draftInputPersistence.primeProject(currentProjectId, draftInputs);
         if (Object.keys(draftInputs).length > 0) {
           useTerminalInputStore.getState().restoreProjectDraftInputs(currentProjectId, draftInputs);
         }
@@ -564,6 +570,17 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
                       : group
                   )
                 : tabGroups;
+            // Seed the tab-group persistence baseline from the on-disk state
+            // (pre-remap ids mirror what's actually persisted) so the first
+            // save can emit correct removals and Main can merge concurrent
+            // writes from sibling windows instead of resurrecting deleted
+            // groups (#11350). Mirrors the terminal `primeProject` above.
+            if (currentProjectId) {
+              panelPersistence.primeTabGroups(
+                currentProjectId,
+                tabGroups.filter((g) => g && Array.isArray(g.panelIds) && g.panelIds.length > 1)
+              );
+            }
             options.hydrateTabGroups(remappedTabGroups);
             markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_TAB_GROUPS_END, {
               tabGroupCount: tabGroupRestoreCount,

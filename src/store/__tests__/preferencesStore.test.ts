@@ -709,4 +709,152 @@ describe("preferencesStore migration", () => {
       });
     });
   });
+
+  describe("fileBrowserAlwaysHiddenPatterns", () => {
+    it("is a non-empty curated default list on a fresh install", async () => {
+      const store = await loadStore();
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns.length).toBeGreaterThan(0);
+    });
+
+    it("setter trims, de-duplicates in order, and drops empty or path-separator entries", async () => {
+      const store = await loadStore();
+
+      store
+        .getState()
+        .setFileBrowserAlwaysHiddenPatterns([
+          "  .DS_Store  ",
+          ".DS_Store",
+          "",
+          "   ",
+          "a/b",
+          "c\\d",
+          "*.log",
+        ]);
+
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns).toEqual([".DS_Store", "*.log"]);
+    });
+
+    it("preserves an explicitly empty list — hide-nothing is a real choice, not corruption", async () => {
+      const store = await loadStore();
+      store.getState().setFileBrowserAlwaysHiddenPatterns([]);
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns).toEqual([]);
+    });
+
+    it("caps the list length and drops an over-long pattern", async () => {
+      const store = await loadStore();
+      const many = Array.from({ length: 250 }, (_, i) => `p${i}`);
+      store.getState().setFileBrowserAlwaysHiddenPatterns([...many, "x".repeat(500)]);
+
+      const result = store.getState().fileBrowserAlwaysHiddenPatterns;
+      expect(result.length).toBeLessThanOrEqual(100);
+      expect(result).not.toContain("x".repeat(500));
+    });
+
+    it("reset restores the fresh-install defaults after edits", async () => {
+      const store = await loadStore();
+      const fresh = [...store.getState().fileBrowserAlwaysHiddenPatterns];
+
+      store.getState().setFileBrowserAlwaysHiddenPatterns(["custom-only"]);
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns).toEqual(["custom-only"]);
+
+      store.getState().resetFileBrowserAlwaysHiddenPatterns();
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns).toEqual(fresh);
+    });
+
+    it("falls back to defaults when the persisted value is not an array", async () => {
+      setStoredState({ fileBrowserAlwaysHiddenPatterns: "nope" }, 13);
+      const store = await loadStore();
+
+      // A corrupt scalar can't survive hydration — same shape as fresh install.
+      expect(Array.isArray(store.getState().fileBrowserAlwaysHiddenPatterns)).toBe(true);
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns.length).toBeGreaterThan(0);
+    });
+
+    it("preserves a valid persisted array across hydration", async () => {
+      setStoredState({ fileBrowserAlwaysHiddenPatterns: ["*.tmp", "cache"] }, 13);
+      const store = await loadStore();
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns).toEqual(["*.tmp", "cache"]);
+    });
+
+    it("sanitizes a partially-corrupt persisted array on hydration", async () => {
+      setStoredState({ fileBrowserAlwaysHiddenPatterns: ["ok", 5, "a/b", "  ok  "] }, 13);
+      const store = await loadStore();
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns).toEqual(["ok"]);
+    });
+  });
+
+  describe("projectSwitcherOtherSortMode (v14 migration)", () => {
+    it("defaults to the band's existing frecency order on a fresh install", async () => {
+      // The default has to reproduce today's behavior exactly, or shipping the
+      // control silently reorders every user's Other band on upgrade.
+      const store = await loadStore();
+      expect(store.getState().projectSwitcherOtherSortMode).toBe("mostUsed");
+    });
+
+    it("round-trips a non-default choice through storage", async () => {
+      const store = await loadStore();
+      store.getState().setProjectSwitcherOtherSortMode("alphabetical");
+
+      const persisted = JSON.parse(storage[STORAGE_KEY]!) as {
+        state: Record<string, unknown>;
+      };
+      expect(persisted.state.projectSwitcherOtherSortMode).toBe("alphabetical");
+    });
+
+    it("survives a reload rather than resetting to the default", async () => {
+      const first = await loadStore();
+      first.getState().setProjectSwitcherOtherSortMode("recent");
+
+      vi.resetModules();
+      _resetPersistedStoreRegistryForTests();
+      const reloaded = await loadStore();
+      expect(reloaded.getState().projectSwitcherOtherSortMode).toBe("recent");
+    });
+
+    it("supplies the field in the migration itself, not only in the sanitizer", async () => {
+      // Hydration sanitizes too, so a blob-in/state-out test passes even with
+      // the migration branch deleted. Drive `migrate` directly to pin it.
+      const store = await loadStore();
+      const options = store.persist.getOptions();
+      const migrated = options.migrate?.({ dockDensity: "compact" }, 13) as Record<string, unknown>;
+
+      expect(migrated.projectSwitcherOtherSortMode).toBe("mostUsed");
+      expect(migrated.dockDensity).toBe("compact");
+    });
+
+    it("leaves an explicit choice alone when migrating", async () => {
+      const store = await loadStore();
+      const migrated = store.persist
+        .getOptions()
+        .migrate?.({ projectSwitcherOtherSortMode: "recent" }, 13) as Record<string, unknown>;
+
+      expect(migrated.projectSwitcherOtherSortMode).toBe("recent");
+    });
+
+    it("defaults a pre-v14 blob that predates the field", async () => {
+      setStoredState({ dockDensity: "compact" }, 13);
+      const store = await loadStore();
+
+      expect(store.getState().projectSwitcherOtherSortMode).toBe("mostUsed");
+      // The migration must not trample the state it is migrating past.
+      expect(store.getState().dockDensity).toBe("compact");
+    });
+
+    it("preserves an explicit choice across the v14 migration", async () => {
+      setStoredState({ projectSwitcherOtherSortMode: "recent" }, 13);
+      const store = await loadStore();
+      expect(store.getState().projectSwitcherOtherSortMode).toBe("recent");
+    });
+
+    it("normalises a value outside the closed set", async () => {
+      // Hand-edited, written by a newer build, or — as here — a mode id this
+      // app renamed. An unknown mode would leave the radio group with no
+      // checked item and fall through every branch of the comparator; letting
+      // it sanitize instead is what lets the rename ship without a migration,
+      // since the retired id resolves to the same mode's new name.
+      setStoredState({ projectSwitcherOtherSortMode: "hottest" }, 14);
+      const store = await loadStore();
+      expect(store.getState().projectSwitcherOtherSortMode).toBe("mostUsed");
+    });
+  });
 });

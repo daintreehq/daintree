@@ -1,13 +1,14 @@
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { panelKindHasPty, normalizeDockLocation } from "@shared/config/panelKindRegistry";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus, removePanelIdsFromTabGroups } from "./helpers";
-import { buildWorktreeIndex } from "./worktreeIndex";
+import { buildWorktreeIndex, panelMatchesWorktreeScope } from "./worktreeIndex";
 import { getNarrowPanel } from "./selectors";
+import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -26,9 +27,11 @@ export const createOrderingActions = (
 
     set((state) => {
       const hasWorktreeFilter = worktreeId !== undefined;
-      const targetWorktreeId = worktreeId ?? null;
+      // Location-aware scope: a worktree's dock renders global (worktree-less)
+      // panels too, so the commit-side list must include them or the indices
+      // diverge from the rendered order (#11289). Grid stays worktree-exact.
       const matchesWorktree = (t: CarrierPanel) =>
-        !hasWorktreeFilter || (t.worktreeId ?? null) === targetWorktreeId;
+        !hasWorktreeFilter || panelMatchesWorktreeScope(t.worktreeId, worktreeId, location);
       const matchesLocation = (t: CarrierPanel) =>
         location === "grid"
           ? t.location === "grid" || t.location === undefined
@@ -78,17 +81,30 @@ export const createOrderingActions = (
   },
 
   moveTerminalToPosition: (id, toIndex, location, worktreeId) => {
+    let backfilledWorktreeId: string | null = null;
+    // Normalize a dock target for a non-dockable kind to the grid (#11375): the
+    // dock filters it out via `isDockPanel`, so `location:"dock"` would strand
+    // it invisibly. Every scope/adoption/visibility/PTY-policy decision below
+    // keys off this effective location, including the post-`set` renderer tier.
+    const movingPanel = get().panelsById[id];
+    if (!movingPanel) return;
+    const effectiveLocation = normalizeDockLocation(movingPanel.kind ?? "terminal", location);
+
     set((state) => {
       const terminal = state.panelsById[id];
       if (!terminal) return state;
 
+      // Adoption target for worktree-less panels promoted to the grid (#11290).
       const targetWorktreeId =
         worktreeId !== undefined ? worktreeId : (terminal.worktreeId ?? null);
       const hasWorktreeFilter = worktreeId !== undefined;
+      // Same location-aware scope as reorderTerminals (#11289): a dock target
+      // must count global panels when computing the insertion slot.
       const matchesWorktree = (t: CarrierPanel) =>
-        !hasWorktreeFilter || (t.worktreeId ?? null) === (targetWorktreeId ?? null);
+        !hasWorktreeFilter ||
+        panelMatchesWorktreeScope(t.worktreeId, worktreeId, effectiveLocation);
       const matchesLocation = (t: CarrierPanel) =>
-        location === "grid"
+        effectiveLocation === "grid"
           ? t.location === "grid" || t.location === undefined
           : t.location === "dock";
 
@@ -116,12 +132,22 @@ export const createOrderingActions = (
               ? scopedIndices[scopedCount - 1]! + 1
               : scopedIndices[clampedIndex]!;
 
-      const isVisible = location === "grid";
+      const isVisible = effectiveLocation === "grid";
       const ptyTerminal = isPtyPanel(terminal) ? terminal : undefined;
+      // A worktree-less dock panel dropped into the grid adopts the drop
+      // target's worktree — the grid renders only that worktree's index
+      // bucket, so an unset worktreeId would strand it off-screen (#11290).
+      // The rebuild below re-buckets the panel; a real attribution is kept.
+      const adoptedWorktreeId =
+        effectiveLocation === "grid" && terminal.worktreeId == null && targetWorktreeId != null
+          ? targetWorktreeId
+          : null;
+      backfilledWorktreeId = adoptedWorktreeId;
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- spread preserves the panel's discriminant; overrides are base-field-compatible
       const updatedTerminal = {
         ...terminal,
-        location,
+        ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
+        location: effectiveLocation,
         isVisible,
         runtimeStatus: deriveRuntimeStatus(
           isVisible,
@@ -141,8 +167,7 @@ export const createOrderingActions = (
         saveTabGroups(groupPrune.tabGroups);
       }
       // Rebuild bucket order so per-worktree selectors observe the new order
-      // (issue #7451). The panel's worktreeId field is unchanged here, but its
-      // position within the bucket may have shifted.
+      // (issue #7451) and any adopted worktreeId lands in the right bucket.
       return {
         panelsById: newById,
         panelIds: newIds,
@@ -151,9 +176,23 @@ export const createOrderingActions = (
       };
     });
 
+    // A user-initiated promotion is explicit worktree attribution — recorded
+    // so later cwd-based inference can never silently re-home the panel.
+    if (backfilledWorktreeId !== null) {
+      const ledgerGeneration = agentLifecycleLedger.currentGeneration(id);
+      if (ledgerGeneration !== undefined) {
+        agentLifecycleLedger.recordWorktreeAttribution(
+          id,
+          ledgerGeneration,
+          backfilledWorktreeId,
+          "explicit"
+        );
+      }
+    }
+
     const terminal = get().panelsById[id];
     if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-      if (location === "dock") {
+      if (effectiveLocation === "dock") {
         optimizeForDock(id);
       } else {
         terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);

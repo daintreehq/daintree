@@ -84,5 +84,12 @@ export const PLUGIN_PROCESS_STREAM_CHANNEL = "process" as const;
 export type PluginProcessStreamEvent =
   | { kind: "stdout"; id: string; chunk: string }
   | { kind: "stderr"; id: string; chunk: string }
+  /**
+   * PTY-mode output (#11300). A pseudo-terminal merges stdout and stderr into a
+   * single stream, so an interactive process emits `data` instead of the
+   * `stdout`/`stderr` pair — a panel rendering process output should handle all
+   * three. Pipe-mode processes never emit this kind.
+   */
+  | { kind: "data"; id: string; chunk: string }
   | { kind: "exit"; id: string; exitCode: number | null; signal: string | null }
   | { kind: "crash"; id: string; exitCode: number | null; signal: string | null };

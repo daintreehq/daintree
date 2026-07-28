@@ -120,8 +120,7 @@ describe("Grid Capacity Enforcement", () => {
       });
 
       const panel = usePanelStore.getState().getTerminal("dev-preview-1") as
-        | DevPreviewPanelData
-        | undefined;
+        DevPreviewPanelData | undefined;
 
       expect(panel?.kind).toBe("dev-preview");
       expect(panel?.devServerStatus).toBe("running");

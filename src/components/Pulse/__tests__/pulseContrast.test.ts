@@ -235,7 +235,12 @@ describe("ProjectPulseCard — accessibility (issue #7229)", () => {
 
   it("refresh spinner respects motion-reduce", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("motion-reduce:animate-none");
+    // The refresh spinner is the shared SpinningIcon (#11323), whose spin is
+    // globally neutralized under reduced-motion by the `@variant reduce-motion`
+    // block in index.css — so the old per-element `motion-reduce:animate-none`
+    // utility is redundant and deliberately dropped. Assert the delegation
+    // instead: SpinningIcon is the reduced-motion-safe primitive.
+    expect(content).toContain("<SpinningIcon icon={RefreshCw} active={isLoading}");
   });
 });
 

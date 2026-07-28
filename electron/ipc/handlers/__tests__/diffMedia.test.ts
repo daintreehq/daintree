@@ -8,6 +8,7 @@ const ipcMainMock = vi.hoisted(() => ({
 }));
 
 const readFileAtHeadMock = vi.hoisted(() => vi.fn());
+const readPreviousFileVersionMock = vi.hoisted(() => vi.fn());
 const getGitServiceMock = vi.hoisted(() => vi.fn());
 
 const fileHandleMock = vi.hoisted(() => ({
@@ -67,8 +68,12 @@ describe("diffMedia readFileVersions", () => {
     vi.clearAllMocks();
     _resetRateLimitQueuesForTest();
 
-    getGitServiceMock.mockReturnValue({ readFileAtHead: readFileAtHeadMock });
+    getGitServiceMock.mockReturnValue({
+      readFileAtHead: readFileAtHeadMock,
+      readPreviousFileVersion: readPreviousFileVersionMock,
+    });
     readFileAtHeadMock.mockResolvedValue({ ok: true, content: HEAD_BUFFER });
+    readPreviousFileVersionMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
 
     fsMock.realpath.mockImplementation(async (p: string) => p);
     fsMock.stat.mockResolvedValue({ size: WORKING_BUFFER.byteLength, isFile: () => true });
@@ -139,6 +144,59 @@ describe("diffMedia readFileVersions", () => {
       dataUrl: `data:image/png;base64,${WORKING_BUFFER.toString("base64")}`,
       byteSize: WORKING_BUFFER.byteLength,
     });
+    // A present working copy means untracked/re-added, not a committed
+    // deletion — no history walk.
+    expect(readPreviousFileVersionMock).not.toHaveBeenCalled();
+  });
+
+  // Committed deletion: nothing at literal HEAD and nothing on disk.
+  function mockCommittedDeletion(): void {
+    readFileAtHeadMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
+    fsMock.realpath.mockImplementation(async (p: string) => {
+      if (p === REPO_ROOT) return REPO_ROOT;
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+  }
+
+  it("falls back to the prior committed version for a committed deletion", async () => {
+    const previousBuffer = Buffer.from("previous-image-bytes");
+    mockCommittedDeletion();
+    readPreviousFileVersionMock.mockResolvedValue({ ok: true, content: previousBuffer });
+
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+
+    expect(result.head).toEqual({
+      ok: true,
+      dataUrl: `data:image/png;base64,${previousBuffer.toString("base64")}`,
+      byteSize: previousBuffer.byteLength,
+    });
+    expect(result.working).toEqual({ ok: false, error: "NOT_FOUND" });
+  });
+
+  it("does not consult history when HEAD has the file", async () => {
+    await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+
+    expect(readPreviousFileVersionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not consult history for a TOO_LARGE HEAD blob", async () => {
+    readFileAtHeadMock.mockResolvedValue({ ok: false, reason: "TOO_LARGE" });
+
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+
+    expect(result.head).toEqual({ ok: false, error: "TOO_LARGE" });
+    expect(readPreviousFileVersionMock).not.toHaveBeenCalled();
+  });
+
+  it("maps a fallback failure to a HEAD-side ERROR instead of rejecting", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mockCommittedDeletion();
+    readPreviousFileVersionMock.mockRejectedValue(new Error("git exploded"));
+
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+
+    expect(result.head).toEqual({ ok: false, error: "ERROR" });
+    expect(result.working).toEqual({ ok: false, error: "NOT_FOUND" });
   });
 
   it("maps a missing working-tree file to NOT_FOUND", async () => {
@@ -179,6 +237,7 @@ describe("diffMedia readFileVersions", () => {
 
     expect(result.head).toEqual({ ok: false, error: "ERROR" });
     expect(result.working.ok).toBe(true);
+    expect(readPreviousFileVersionMock).not.toHaveBeenCalled();
   });
 
   it("returns ERROR for a working-tree file that escapes the root via symlink", async () => {

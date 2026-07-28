@@ -138,6 +138,11 @@ export class LaunchNotifications {
       notifyAssistantServicesUnavailable(kind);
     } else if (kind === "folder-unavailable") {
       notifyInstallCorrupted(agentId);
+    } else if (kind === "skills-sync-failed") {
+      notifyLaunchFailed(
+        agentId,
+        "Daintree couldn't refresh this project's assistant commands and skills. Try again."
+      );
     } else {
       notifyLaunchFailed(agentId, "The agent didn't start. Try again.");
     }

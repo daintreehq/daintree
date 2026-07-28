@@ -5,6 +5,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import type { GitInitProgressEvent } from "@shared/types/ipc/gitInit";
+import {
+  GITIGNORE_TEMPLATE_OPTIONS,
+  DEFAULT_GITIGNORE_TEMPLATE_ID,
+} from "@shared/config/gitignoreTemplates";
+import { suggestProjectEmoji } from "@shared/utils/projectEmoji";
 
 const { initGitGuidedMock, onInitGitProgressMock } = vi.hoisted(() => ({
   initGitGuidedMock: vi.fn(),
@@ -86,11 +91,17 @@ describe("GitInitDialog", () => {
     });
   });
 
-  function renderDialog(overrides: { onSuccess?: () => void; onCancel?: () => void } = {}) {
+  function renderDialog(
+    overrides: {
+      onSuccess?: () => void;
+      onCancel?: () => void;
+      directoryPath?: string;
+    } = {}
+  ) {
     return render(
       <GitInitDialog
         isOpen={true}
-        directoryPath="/tmp/new-repo"
+        directoryPath={overrides.directoryPath ?? "/tmp/new-repo"}
         onSuccess={overrides.onSuccess ?? vi.fn()}
         onCancel={overrides.onCancel ?? vi.fn()}
       />
@@ -120,11 +131,38 @@ describe("GitInitDialog", () => {
           directoryPath: "/tmp/new-repo",
           createInitialCommit: true,
           createGitignore: true,
-          gitignoreTemplate: "node",
+          gitignoreTemplate: DEFAULT_GITIGNORE_TEMPLATE_ID,
           initialCommitMessage: "feat: init",
         })
       );
     });
+  });
+
+  // The caption renders as two spans so a deep path ellipsizes its ancestors
+  // instead of its leaf. Measuring the leaf against a normalized path while
+  // slicing it out of the raw one duplicated characters into the visible text.
+  it.each([
+    ["/tmp/projects/new-repo", "/tmp/projects/new-repo"],
+    ["/tmp/projects/new-repo/", "/tmp/projects/new-repo"],
+    ["/tmp/projects/new-repo/.", "/tmp/projects/new-repo"],
+    ["C:\\projects\\new-repo\\", "C:/projects/new-repo"],
+  ])(
+    "renders %s as the destination path with no dropped or duplicated characters",
+    (directoryPath, expected) => {
+      renderDialog({ directoryPath });
+
+      expect(screen.getByTitle(expected).textContent).toBe(expected);
+    }
+  );
+
+  it("offers every registry template in order and preselects the default", () => {
+    renderDialog();
+
+    const select = screen.getByLabelText(/gitignore template/i) as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(
+      GITIGNORE_TEMPLATE_OPTIONS.map((option) => option.value)
+    );
+    expect(select.value).toBe(DEFAULT_GITIGNORE_TEMPLATE_ID);
   });
 
   it("pre-fills the commit message and submits the default without editing", async () => {
@@ -158,7 +196,7 @@ describe("GitInitDialog", () => {
     expect(initGitGuidedMock).not.toHaveBeenCalled();
   });
 
-  it("resets the commit message to the default when reopened", () => {
+  it("resets the commit message and template to the defaults when reopened", () => {
     const onSuccess = vi.fn();
     const onCancel = vi.fn();
     const dialogProps = {
@@ -171,12 +209,17 @@ describe("GitInitDialog", () => {
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
       target: { value: "feat: custom" },
     });
+    fireEvent.change(screen.getByLabelText(/gitignore template/i), {
+      target: { value: "python" },
+    });
 
     rerender(<GitInitDialog isOpen={false} {...dialogProps} />);
     rerender(<GitInitDialog isOpen={true} {...dialogProps} />);
 
     const input = screen.getByLabelText(/initial commit message/i) as HTMLInputElement;
     expect(input.value).toBe("Initial commit");
+    const select = screen.getByLabelText(/gitignore template/i) as HTMLSelectElement;
+    expect(select.value).toBe(DEFAULT_GITIGNORE_TEMPLATE_ID);
   });
 
   it("clears the missing-status warning when a late success event arrives", async () => {
@@ -521,5 +564,89 @@ describe("GitInitDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /try again/i }));
 
     await waitFor(() => expect(initGitGuidedMock).toHaveBeenCalledTimes(1));
+  });
+
+  describe("project identity row", () => {
+    function nameInput() {
+      return screen.getByLabelText<HTMLInputElement>(/project name/i);
+    }
+
+    it("derives the name from the folder when reached without a carried identity", () => {
+      renderDialog();
+      expect(nameInput().value).toBe("new-repo");
+    });
+
+    it("prefills from the identity chosen one dialog earlier instead of re-deriving", () => {
+      render(
+        <GitInitDialog
+          isOpen={true}
+          directoryPath="/tmp/new-repo"
+          initialIdentity={{ name: "Chosen Name", emoji: "🚀" }}
+          onSuccess={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      );
+      expect(nameInput().value).toBe("Chosen Name");
+      expect(screen.getByRole("button", { name: /choose project emoji/i }).textContent).toBe("🚀");
+    });
+
+    it("blocks initialization while the name is empty", () => {
+      renderDialog();
+      fireEvent.change(nameInput(), { target: { value: "   " } });
+
+      const start = screen.getByRole<HTMLButtonElement>("button", {
+        name: /initialize repository/i,
+      });
+      expect(start.disabled).toBe(true);
+    });
+
+    it("says why the button went dead instead of only painting the field red", () => {
+      renderDialog();
+      // Seeded from the folder, so nothing is wrong until the user clears it.
+      expect(screen.queryByRole("alert")).toBeNull();
+
+      fireEvent.change(nameInput(), { target: { value: "   " } });
+
+      const message = screen.getByRole("alert");
+      expect(nameInput().getAttribute("aria-describedby")).toBe(message.id);
+    });
+
+    it("reports the edited identity on success", async () => {
+      const onSuccess = vi.fn();
+      renderDialog({ onSuccess });
+
+      fireEvent.change(nameInput(), { target: { value: "  Renamed  " } });
+      fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+
+      await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1), { timeout: 3000 });
+      // Emoji is seeded from the folder name, and renaming must not re-derive it.
+      expect(onSuccess).toHaveBeenCalledWith({
+        name: "Renamed",
+        emoji: suggestProjectEmoji("new-repo"),
+      });
+    });
+
+    it("re-seeds when a second request swaps the folder while still open", () => {
+      // Deliberately never closes: a request arriving on top of an open dialog
+      // swaps directoryPath in place. Seeding only on the open transition would
+      // leave folder A's identity attached to folder B's path.
+      const props = { onSuccess: vi.fn(), onCancel: vi.fn() };
+      const { rerender } = render(
+        <GitInitDialog isOpen={true} directoryPath="/tmp/first-folder" {...props} />
+      );
+      expect(nameInput().value).toBe("first-folder");
+
+      rerender(
+        <GitInitDialog
+          isOpen={true}
+          directoryPath="/tmp/second-folder"
+          initialIdentity={{ name: "Second", emoji: "📦" }}
+          {...props}
+        />
+      );
+
+      expect(nameInput().value).toBe("Second");
+      expect(screen.getByRole("button", { name: /choose project emoji/i }).textContent).toBe("📦");
+    });
   });
 });

@@ -6,6 +6,7 @@ import type {
   IssueAssociation,
 } from "@shared/types";
 import type { PRServiceStatus } from "@shared/types/workspace-host";
+import type { WorktreeChanges } from "@shared/types/git";
 
 /**
  * @example
@@ -22,6 +23,20 @@ export const worktreeClient = {
 
   refresh: (worktreeId?: string): Promise<void> => {
     return window.electron.worktree.refresh(worktreeId);
+  },
+
+  /**
+   * Force a fresh `git status` for one worktree and return the change set
+   * directly (#11343). Unlike `refresh` (which resolves `void` and relies on
+   * the follow-up broadcast to update the store), this returns the live
+   * changes in the reply, so a destructive-confirm surface can gate on them
+   * race-free. `null` when the worktree's monitor no longer exists.
+   */
+  getFreshChanges: async (worktreeId: string): Promise<WorktreeChanges | null> => {
+    const { changes } = await window.electron.worktreePort.request("get-worktree-changes", {
+      worktreeId,
+    });
+    return changes;
   },
 
   refreshPullRequests: (): Promise<void> => {

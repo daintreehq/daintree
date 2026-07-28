@@ -168,12 +168,12 @@ describe("runValidate", () => {
       version: "1.0.0",
       engines: { daintree: ">=0.11.0" },
       contributes: {
-        panels: [{ id: "main", name: "Main", iconId: "layout-panel-top", color: "var(--x)" }],
+        panels: [{ id: "main", name: "Main", iconId: "not-a-real-icon", color: "var(--x)" }],
       },
     });
     const result = await runValidate({ dir: tmpDir });
     expect(result.ok).toBe(true);
-    expect(result.warnings.join("\n")).toMatch(/iconId "layout-panel-top".*terminal icon/);
+    expect(result.warnings.join("\n")).toMatch(/iconId "not-a-real-icon".*terminal icon/);
   });
 
   it("does not warn on a recognized panel iconId (#10513)", async () => {
@@ -187,6 +187,89 @@ describe("runValidate", () => {
     });
     const result = await runValidate({ dir: tmpDir });
     expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).not.toMatch(/iconId/);
+  });
+
+  it("warns (non-fatally) on an unrecognized toolbar button iconId (#11298)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        toolbarButtons: [
+          { id: "plan", label: "Plan", iconId: "not-a-real-icon", actionId: "acme.demo.plan" },
+        ],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toMatch(/toolbarButtons\[0\].iconId.*package icon/);
+  });
+
+  it("does not warn on a recognized toolbar button iconId (#11298)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        toolbarButtons: [{ id: "plan", label: "Plan", iconId: "list", actionId: "acme.demo.plan" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    // Stronger than a substring miss: this fixture should be warning-free.
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("warns on a toolbar iconId that is only an agent brand id (#11298)", async () => {
+    // The agent-id exemption is panel-only — toolbar buttons never resolve
+    // brand marks, so `claude` really would render the package fallback there.
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        toolbarButtons: [
+          { id: "plan", label: "Plan", iconId: "claude", actionId: "acme.demo.plan" },
+        ],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toMatch(/toolbarButtons\[0\].iconId "claude"/);
+  });
+
+  it.each(["not-a-real-icon", "puzzle"])(
+    "tells the author a view iconId is ignored, even a recognized one like %s (#11298)",
+    async (iconId) => {
+      // A recognized-but-ignored id is the more misleading case — it looks like
+      // it works — so presence, not membership, drives the warning.
+      await writeManifest({
+        name: "acme.demo",
+        version: "1.0.0",
+        engines: { daintree: ">=0.11.0" },
+        contributes: {
+          panels: [{ id: "main", name: "Main", iconId: "puzzle", color: "var(--x)" }],
+          views: [{ id: "main", componentPath: "./dist/main.js", location: "panel", iconId }],
+        },
+      });
+      const result = await runValidate({ dir: tmpDir });
+      expect(result.ok).toBe(true);
+      expect(result.warnings.join("\n")).toMatch(/views\[0\].iconId.*ignored at runtime/);
+    }
+  );
+
+  it("stays quiet when a view omits iconId (#11298)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "puzzle", color: "var(--x)" }],
+        views: [{ id: "main", componentPath: "./dist/main.js", location: "panel" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
     expect(result.warnings.join("\n")).not.toMatch(/iconId/);
   });
 

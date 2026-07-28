@@ -415,13 +415,22 @@ Tell the user they should set `develop` as the default branch in GitHub repo set
    git branch -r --merged main | grep -v main | grep -v develop | grep -v HEAD
    ```
 
-4. Print a final summary:
+4. **Return to `develop`:** Phase 6 checks out `main` to create the tag and nothing switches back, so the release otherwise ends with you standing on `main`. That's a footgun — the next commit, `/work` run, or branch cut in the repo lands on the release branch instead of `develop`. Switch back before finishing:
+
+   ```bash
+   git checkout develop
+   ```
+
+   Verify the working tree is clean and `develop` is level with `origin/develop`.
+
+5. Print a final summary:
    > ## Release Complete
    >
    > - **Version:** vX.Y.Z
    > - **Tag:** pushed, CI triggered
    > - **Changelog:** updated
    > - **Branches:** main (tagged), develop (created/updated)
+   > - **Current branch:** develop ✅
    > - **CI:** [link or command to check status]
 
 ---

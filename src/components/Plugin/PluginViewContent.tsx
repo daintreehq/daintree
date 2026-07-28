@@ -1,13 +1,23 @@
 import {
   Suspense,
+  createContext,
   lazy,
+  useCallback,
+  useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentType,
   type LazyExoticComponent,
 } from "react";
 import type { PanelViewProps } from "@shared/types/plugin";
+import {
+  clearViewRenderFailure,
+  getPanelRemovedSignal,
+  reportViewMounted,
+  reportViewRenderFailed,
+} from "@/services/plugin/pluginPanelLifecycle";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { ErrorFallbackProps } from "@/components/ErrorBoundary/ErrorFallback";
 import { Skeleton, SkeletonHint } from "@/components/ui/Skeleton";
@@ -38,6 +48,22 @@ export interface PluginViewContentConfig {
 export interface PluginViewContentProps {
   panelId: string;
   initialArgs?: Record<string, unknown>;
+  /**
+   * Close this panel, supplied by whichever host is presenting it (#11301).
+   * The diagnostics fallback surfaces it as "Close panel" — without it a broken
+   * view is a dead end, because `panel.openPluginPanel` defaults to
+   * `reuseExisting: true` and re-running the plugin's own open command just
+   * refocuses the panel that is already failing.
+   *
+   * A prop rather than an `actionService.dispatch` from inside the fallback so
+   * this stays presentation-neutral: the grid host trashes the panel, while a
+   * dialog host dismisses its modal. Omitted means the host offers no close, and
+   * the button is not rendered.
+   */
+  onRequestClose?: () => void;
+  /** The worktree owning the panel instance, forwarded to the view as
+   * `PanelViewProps.worktreeId` so it can reconstruct its own context (#11297). */
+  worktreeId?: string;
 }
 
 /**
@@ -47,6 +73,14 @@ export interface PluginViewContentProps {
  * user on an indefinite skeleton (#10512).
  */
 const PLUGIN_VIEW_IMPORT_TIMEOUT_MS = 10_000;
+
+/**
+ * Carries the host's close callback down to the factory-scoped fallback without
+ * putting it in the fallback's component identity. Default is an empty object so
+ * a content instance mounted without a host (tests, a future embedder) simply
+ * renders no close button.
+ */
+const PluginViewCloseContext = createContext<{ onRequestClose?: () => void }>({});
 
 function isPluginViewModule(mod: unknown): mod is { default: ComponentType<PanelViewProps> } {
   if (mod === null || typeof mod !== "object") return false;
@@ -73,23 +107,29 @@ function isPluginViewModule(mod: unknown): mod is { default: ComponentType<Panel
  * the plugin view (and restart its import) on every parent render. Callers must
  * cache the result per `(kindId, componentPath)`, as `usePluginPanelKinds` does.
  *
- * Lifetime contract:
- *   - On mount the content creates an `AbortController` and passes its signal as
- *     `disposeSignal` to the plugin view.
- *   - The signal aborts when this React subtree unmounts AND when the plugin's
- *     kind disappears from a `plugin:panel-kinds-changed` broadcast (the
- *     broadcast fires before the main process tears down plugin IPC handlers, so
- *     signal-driven cleanup runs while host APIs are still live).
+ * Lifetime contract — two signals, because a panel outlives its views (#11301):
+ *   - `disposeSignal` is per mount attempt. The content creates an
+ *     `AbortController` on mount and aborts it when this subtree unmounts, when
+ *     "Try again" swaps in a fresh attempt, and when the plugin's kind
+ *     disappears from a `plugin:panel-kinds-changed` broadcast (that broadcast
+ *     fires before the main process tears down plugin IPC handlers, so
+ *     signal-driven cleanup runs while host APIs are still live). A temporary
+ *     unmount — maximizing a sibling pane, leaving a dock tab — aborts it too.
+ *   - `panelRemovedSignal` is per panel. It comes from `pluginPanelLifecycle`,
+ *     which keys it by `panelId` so every mount of the same panel receives the
+ *     same object, and aborts it only when the panel is permanently removed.
  *   - On render error the boundary's "Try again" button reloads the module — a
  *     fresh state-held ref produces a new `lazy()` call so `import()` is
  *     re-evaluated rather than returning the cached failed promise.
  *
- * `componentPath` is imported verbatim — there is deliberately no cache-busting
- * query string. V8 caches ESM module records by URL and Chromium has no way to
- * evict an entry (Vite #14438 / Chromium #350426234, unresolved as of 2026), so
- * a per-load version parameter would permanently expand the renderer's module
- * map. If dev-mode hot reload ever needs one, gate it on `import.meta.env.DEV`;
- * it must never ship to production.
+ * `componentPath` is imported verbatim. It already carries a per-load
+ * generation segment minted by `buildPluginViewUrl` in main, which is what makes
+ * an upgraded plugin's view actually load: V8 caches ESM module records by URL
+ * and Chromium has no way to evict an entry (Vite #14438 / Chromium #350426234,
+ * still unresolved), so only a specifier V8 has never seen re-evaluates. Never
+ * add a cache-buster HERE — a per-render or per-retry parameter would grow the
+ * module map without bound, which is exactly what the generation segment avoids
+ * by changing only when main reloads the plugin.
  */
 export function makePluginViewContent(
   config: PluginViewContentConfig
@@ -99,8 +139,11 @@ export function makePluginViewContent(
   // Defined once per content factory, not inline in render: the boundary swaps
   // its fallback subtree whenever this component *type* changes identity, which
   // would remount the diagnostics pane (and drop its copy feedback) on every
-  // render.
+  // render. That stability is also why the per-instance close callback arrives
+  // through context instead of a prop — a closure over `onRequestClose` would
+  // change the component type on every render of the owning panel.
   function PluginViewFallback({ error, errorInfo, resetError, incidentId }: ErrorFallbackProps) {
+    const { onRequestClose } = useContext(PluginViewCloseContext);
     // Two primitive selectors rather than one object selector: the meta record
     // is rebuilt on every provenance pull, so selecting it whole would re-render
     // the pane on pulls that changed nothing about this plugin.
@@ -131,6 +174,7 @@ export function makePluginViewContent(
         panelDisplayName={displayName}
         componentPath={componentPath}
         devMode={devMode}
+        onRequestClose={onRequestClose}
       />
     );
   }
@@ -184,7 +228,27 @@ export function makePluginViewContent(
       return { default: mod.default };
     });
 
-  function PluginViewContent({ panelId, initialArgs }: PluginViewContentProps) {
+  /**
+   * Reports "a view is live for this panel" as a commit-time effect. Rendered as
+   * a sibling of the resolved view inside the same boundary, so if the view
+   * throws during render React unwinds the whole subtree and this effect never
+   * runs — which is what keeps `mounted` honest rather than optimistic.
+   */
+  function PluginViewMountReporter({ panelId }: { panelId: string }) {
+    useEffect(
+      () => reportViewMounted(panelId, { kindId, pluginId }),
+      // `kindId`/`pluginId` are factory-scope constants, not reactive values.
+      [panelId]
+    );
+    return null;
+  }
+
+  function PluginViewContent({
+    panelId,
+    initialArgs,
+    onRequestClose,
+    worktreeId,
+  }: PluginViewContentProps) {
     // Store the lazy component in state so retries can swap in a fresh ref
     // without a useMemo dependency array. Each `lazy()` wrapper caches its
     // import result on its own payload, so a chunk-load failure is sticky for
@@ -246,6 +310,17 @@ export function makePluginViewContent(
       };
     }, []);
 
+    // Stable for this panel across every remount and retry — the identity IS
+    // the contract, so it is read from the lifecycle service rather than held in
+    // component state (which dies with the subtree this signal must outlive).
+    const panelRemovedSignal = getPanelRemovedSignal(panelId);
+
+    const closeContextValue = useMemo(() => ({ onRequestClose }), [onRequestClose]);
+
+    const handleRenderError = useCallback(() => {
+      reportViewRenderFailed(panelId, { kindId, pluginId });
+    }, [panelId]);
+
     const handleReset = (): void => {
       // Abort the outgoing view's signal before swapping in a fresh controller —
       // the prior view instance is being discarded on retry, so any fetches or
@@ -257,40 +332,53 @@ export function makePluginViewContent(
       setController(new AbortController());
       setLazyView(() => createLazyView());
       setRetryCount((c) => c + 1);
+      // The retry is under way, so the panel is no longer failed — it is loading.
+      // Clearing here (rather than waiting for the next commit) keeps a worker
+      // from seeing a stale `render-failed` for as long as the import takes.
+      clearViewRenderFailure(panelId);
     };
 
     return (
-      <ErrorBoundary
-        variant="component"
-        // `kindId` is already `${pluginId}.${panel.id}` (PluginService builds
-        // it that way), so prefixing pluginId again doubled it.
-        componentName={`PluginView:${kindId}`}
-        fallback={PluginViewFallback}
-        onReset={handleReset}
-        resetKeys={[retryCount]}
-      >
-        <Suspense
-          fallback={
-            // Content-only bones: the presentation host already paints the real
-            // header, so a skeleton carrying its own (BrowserPaneSkeleton) would
-            // double it. Mirrors DevPreviewPaneFallback's quiet canvas — a
-            // plugin's content shape is unknowable, so bones must not imply one.
-            <div className="relative h-full">
-              <Skeleton label={`Loading ${displayName}`} className="h-full bg-surface-canvas" />
-              <SkeletonHint className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto" />
-            </div>
-          }
+      // Outside the boundary, not inside: the fallback is rendered BY the
+      // boundary, so a provider nested within it would be unmounted exactly when
+      // the fallback needs the close callback.
+      <PluginViewCloseContext.Provider value={closeContextValue}>
+        <ErrorBoundary
+          variant="component"
+          // `kindId` is already `${pluginId}.${panel.id}` (PluginService builds
+          // it that way), so prefixing pluginId again doubled it.
+          componentName={`PluginView:${kindId}`}
+          fallback={PluginViewFallback}
+          onError={handleRenderError}
+          onReset={handleReset}
+          resetKeys={[retryCount]}
         >
-          <ContentFadeIn className="flex flex-col flex-1 min-h-0 w-full">
-            <LazyView
-              panelId={panelId}
-              pluginId={pluginId}
-              disposeSignal={controller.signal}
-              initialArgs={initialArgs}
-            />
-          </ContentFadeIn>
-        </Suspense>
-      </ErrorBoundary>
+          <Suspense
+            fallback={
+              // Content-only bones: the presentation host already paints the real
+              // header, so a skeleton carrying its own (BrowserPaneSkeleton) would
+              // double it. Mirrors DevPreviewPaneFallback's quiet canvas — a
+              // plugin's content shape is unknowable, so bones must not imply one.
+              <div className="relative h-full">
+                <Skeleton label={`Loading ${displayName}`} className="h-full bg-surface-canvas" />
+                <SkeletonHint className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto" />
+              </div>
+            }
+          >
+            <ContentFadeIn className="flex flex-col flex-1 min-h-0 w-full">
+              <LazyView
+                panelId={panelId}
+                pluginId={pluginId}
+                disposeSignal={controller.signal}
+                panelRemovedSignal={panelRemovedSignal}
+                initialArgs={initialArgs}
+                worktreeId={worktreeId}
+              />
+              <PluginViewMountReporter panelId={panelId} />
+            </ContentFadeIn>
+          </Suspense>
+        </ErrorBoundary>
+      </PluginViewCloseContext.Provider>
     );
   }
 

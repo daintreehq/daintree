@@ -1,19 +1,19 @@
 // eager-import-allow: manages application lifetime hooks and native deep link triggers on startup
 import { app, BrowserWindow } from "electron";
-import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { handleDirectoryOpen } from "../menu.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
-import { broadcastToRenderer } from "../ipc/utils.js";
-import { CHANNELS } from "../ipc/channels.js";
 import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js";
 import { isWindowRecreating } from "./windowRecreationState.js";
 import { SAFETY_BELT_TIMEOUT_MS } from "./shutdownConfig.js";
 import { extractDaintreeUrl, handleDaintreeUrl } from "../setup/deepLinkInstall.js";
+import { queuePendingOpenDirPath } from "../setup/environment.js";
 
 let pendingCliPath: string | null = null;
 
@@ -25,131 +25,247 @@ export function setPendingCliPath(p: string | null): void {
   pendingCliPath = p;
 }
 
-export function extractCliPath(argv: string[]): string | null {
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--cli-path" && argv[i + 1]) {
-      return argv[i + 1];
-    }
-    if (argv[i].startsWith("--cli-path=")) {
-      return argv[i].slice("--cli-path=".length);
+const CLI_PATH_FLAG = "--cli-path";
+const CLI_PATH_PREFIX = `${CLI_PATH_FLAG}=`;
+
+// `\` separates path segments only on Windows; on POSIX it is a legal filename
+// character, so `~\foo` there names a file and must not be home-expanded.
+const TILDE_PREFIX = process.platform === "win32" ? /^~(?=[/\\]|$)/ : /^~(?=\/|$)/;
+
+// A `--`-prefixed token is a switch, never a path. Chromium injects its own
+// switches into the reconstructed `second-instance` command line, so this is
+// the guard that stops one being mistaken for a project directory (#11410).
+// Bare argv tokens only — the value of `--cli-path=<path>` is unambiguous even
+// when the directory is itself named `--something`.
+function isSwitchToken(arg: string | undefined): boolean {
+  return !arg || arg.startsWith("--");
+}
+
+// Decode an argv token to an OS path, without resolving it. Callers that care
+// about the literal filename see it before `path.resolve` collapses a trailing
+// `.`/`..` into an ancestor directory's name.
+function decodeArgPath(arg: string | undefined): string | null {
+  if (!arg) return null;
+
+  // XDG file managers pass `file://` URIs because electron-builder appends
+  // `%U` to the Linux .desktop Exec line, and macOS Shortcuts/Automator produce
+  // them by default.
+  let candidate = arg;
+  if (candidate.startsWith("file://")) {
+    try {
+      candidate = fileURLToPath(candidate);
+    } catch {
+      return null;
     }
   }
+
+  // Only the current user's own `~` — `~other` would need an account lookup.
+  // The function replacer keeps a `$` in the home path from being read as a
+  // replacement pattern.
+  return candidate.replace(TILDE_PREFIX, () => os.homedir());
+}
+
+// Shared normalization for every path-shaped argv token, used by both
+// `extractCliPath` and `extractDntrPaths` so the two can't drift (#11283). The
+// OS may supply a path relative to the launching shell's cwd, so it resolves
+// against the launching instance's `workingDirectory`.
+function normalizeArgPath(arg: string | undefined, workingDirectory: string): string | null {
+  const decoded = decodeArgPath(arg);
+  return decoded === null ? null : path.resolve(workingDirectory, decoded);
+}
+
+// As `normalizeArgPath`, but only returns candidates that are an existing
+// directory. `statSync` follows symlinks (a symlinked project dir is valid) and
+// the try/catch covers absence, permission errors, and anything else stat can
+// throw, all of which mean "not usable as a project path".
+function normalizeArgDirectory(arg: string | undefined, workingDirectory: string): string | null {
+  const resolved = normalizeArgPath(arg, workingDirectory);
+  if (!resolved) return null;
+  try {
+    return fs.statSync(resolved).isDirectory() ? resolved : null;
+  } catch {
+    return null;
+  }
+}
+
+// Single reporting point for a `--cli-path` that was asked for but couldn't be
+// resolved. Error surfacing in the UI is #11409 — this is the hook it replaces.
+function reportUnresolvedCliPath(arg: string | undefined, workingDirectory: string): void {
+  console.error("[MAIN] Failed to resolve --cli-path to an existing directory", {
+    argument: arg ?? null,
+    workingDirectory,
+  });
+}
+
+// The `commandLine` array Electron hands the `second-instance` event is not the
+// literal argv of the second process — it's Chromium's `base::CommandLine`
+// reconstruction, which groups switches ahead of positional arguments and may
+// inject its own switches between them. In the two-token `--cli-path <path>`
+// form the flag parses as a valueless switch and the folder as a positional, so
+// the adjacent token can be an unrelated switch (#11410 saw
+// `--allow-file-access-from-files` land there). Hence: the single-token
+// `--cli-path=<path>` form is authoritative, the adjacent token is only trusted
+// when it resolves to a real directory, and otherwise we search the remaining
+// positionals for the displaced path.
+//
+// Returns an absolute path to an existing directory, or null.
+export function extractCliPath(argv: string[], workingDirectory: string): string | null {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+
+    // Single-token form: unambiguous, so its value is final. Never fall back to
+    // a positional here — that could silently open a directory the user never
+    // named in place of the one they did.
+    if (arg.startsWith(CLI_PATH_PREFIX)) {
+      const raw = arg.slice(CLI_PATH_PREFIX.length);
+      const resolved = normalizeArgDirectory(raw, workingDirectory);
+      if (!resolved) reportUnresolvedCliPath(raw, workingDirectory);
+      return resolved;
+    }
+
+    if (arg !== CLI_PATH_FLAG) continue;
+
+    const adjacent = argv[i + 1];
+    if (adjacent !== undefined && !adjacent.startsWith("--")) {
+      // Nothing displaced the value — this token is what the launcher passed.
+      // If it doesn't name a directory the request has failed; substituting
+      // some other positional would open a project the user never asked for.
+      const adjacentPath = normalizeArgDirectory(adjacent, workingDirectory);
+      if (!adjacentPath) reportUnresolvedCliPath(adjacent, workingDirectory);
+      return adjacentPath;
+    }
+
+    // An injected switch sits where the value should be (#11410). Chromium
+    // orders positionals after the switches, so the displaced path is further
+    // along — never behind the flag. Take the first token past the displaced
+    // slot that names a directory; a `.dntr` archive is a file, so the
+    // directory check keeps it out of the running.
+    for (let j = i + 2; j < argv.length; j++) {
+      if (isSwitchToken(argv[j])) continue;
+      const fallback = normalizeArgDirectory(argv[j], workingDirectory);
+      if (fallback) return fallback;
+    }
+
+    reportUnresolvedCliPath(adjacent, workingDirectory);
+    return null;
+  }
+
+  // No `--cli-path` was asked for. Stay silent — and never treat a bare
+  // positional directory as a project-open request on its own.
   return null;
 }
 
+// True when argv asks for a project directory at all, whether or not it
+// resolves. Lets a caller retire a one-shot `process.argv` read even when the
+// request failed, instead of re-parsing — and re-reporting — it per window.
+export function hasCliPathFlag(argv: string[]): boolean {
+  return argv.some((arg) => arg === CLI_PATH_FLAG || arg.startsWith(CLI_PATH_PREFIX));
+}
+
 // `.dntr` plugin archives double-clicked on Windows/Linux arrive as bare argv
-// entries (no `--flag`) on the `second-instance` event. The OS may supply a
-// relative path resolved against the launching shell's cwd, so the second
-// instance's `workingDirectory` is used to normalize it. Extension matching is
-// case-insensitive for Windows.
+// entries (no `--flag`) on the `second-instance` event. Extension matching is
+// case-insensitive for Windows. No existence check: the archive-preview
+// pipeline owns missing-file failures.
 export function extractDntrPaths(argv: string[], workingDirectory: string): string[] {
   const paths: string[] = [];
-  for (const arg of argv) {
-    if (!arg || arg.startsWith("--")) continue;
-    // XDG file managers pass `file://` URIs because electron-builder appends
-    // `%U` to the Linux .desktop Exec line. Decode to an OS path before the
-    // extension check and resolution.
-    let candidate = arg;
-    if (candidate.startsWith("file://")) {
-      try {
-        candidate = fileURLToPath(candidate);
-      } catch {
-        continue;
-      }
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    // `--cli-path <value>` names a project directory; without skipping the
+    // operand, opening a folder called `foo.dntr` from a Windows context-menu
+    // verb would ALSO queue it as a plugin archive. The joined
+    // `--cli-path=<value>` form needs no skip — it is a switch token.
+    if (arg === CLI_PATH_FLAG) {
+      i++;
+      continue;
     }
-    if (!candidate.toLowerCase().endsWith(".dntr")) continue;
-    paths.push(path.resolve(workingDirectory, candidate));
+    if (isSwitchToken(arg)) continue;
+    const decoded = decodeArgPath(arg);
+    // Match the literal token, before `path.resolve` normalizes it: resolving
+    // first would strip a trailing separator and collapse `.`/`..`, routing
+    // `some.dntr/` or `some.dntr/child/..` — which name a directory — to the
+    // archive-install pipeline.
+    if (!decoded || !decoded.toLowerCase().endsWith(".dntr")) continue;
+    paths.push(path.resolve(workingDirectory, decoded));
   }
   return paths;
 }
 
-// Queue for `.dntr` paths received before a window exists (cold-launched second
-// instance). A `string[]` rather than a scalar because the OS can pass multiple
-// archives in one launch; they are drained sequentially through the installer's
-// lock. Mirrors the `pendingCliPath` pattern.
-let pendingDntrPaths: string[] = [];
-
-export function getPendingDntrPaths(): string[] {
-  return [...pendingDntrPaths];
-}
-
-export function clearPendingDntrPaths(): void {
-  pendingDntrPaths = [];
-}
-
-// Zip local-file-header magic. A `.dntr` archive is a zip; anything else is
-// rejected before the installer (which assumes valid zip input) ever sees it.
-const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
-
-async function isValidDntrArchive(filePath: string): Promise<boolean> {
-  if (!fs.existsSync(filePath)) return false;
-  let handle: fs.promises.FileHandle | undefined;
-  try {
-    handle = await fs.promises.open(filePath, "r");
-    const buf = Buffer.alloc(4);
-    const { bytesRead } = await handle.read(buf, 0, 4, 0);
-    return bytesRead === 4 && buf.equals(ZIP_MAGIC);
-  } catch {
-    return false;
-  } finally {
-    // A close() rejection in finally would supersede the return value and
-    // escape the catch — swallow it so validation can't throw.
-    await handle?.close().catch(() => {});
-  }
-}
-
-// Validate + sideload a single `.dntr` archive. The magic-byte gate lives here
-// (not in the installer); invalid files and install failures surface as error
-// toasts. `PluginService` is imported lazily to preserve the #9285 main-process
-// module-isolation boundary.
-export async function installDntrPath(archivePath: string): Promise<void> {
-  if (!(await isValidDntrArchive(archivePath))) {
-    broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
-      type: "error",
-      title: "Invalid plugin file",
-      message: `"${archivePath}" isn't a valid Daintree plugin archive.`,
-    });
-    return;
-  }
-  try {
-    const { pluginService } = await import("../services/PluginService.js");
-    const result = await pluginService.installPlugin(archivePath, {
-      source: "sideload",
-      originalUrl: undefined,
-    });
-    if (result.status === "installed") {
-      broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
-        type: "success",
-        title: "Plugin installed",
-        message: `Installed "${result.pluginId}".`,
-      });
-    } else if (result.status === "failed") {
-      broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
-        type: "error",
-        title: "Plugin install failed",
-        message: result.errors[0]?.message ?? "Couldn't install the plugin.",
-      });
+// "Open in Daintree" on a Linux folder arrives as a `file://` directory URI:
+// `linux.mimeTypes` claims `inode/directory`, and electron-builder appends `%U`
+// to the .desktop Exec line, so the file manager hands us a URI rather than a
+// path. Only `file://` arguments are considered — matching bare positional
+// paths would also claim Electron's own executable and the dev app path on an
+// ordinary launch. Windows folder verbs pass `--cli-path` instead and never
+// reach here.
+export function extractDirectoryPaths(argv: string[]): string[] {
+  const paths: string[] = [];
+  for (const arg of argv) {
+    if (!arg || !arg.startsWith("file://")) continue;
+    // A bare `file://` carries no path and decodes to the filesystem root,
+    // which stats as a directory and would otherwise be opened as a project.
+    if (arg.length <= "file://".length) continue;
+    let candidate: string;
+    try {
+      // Normalized so this matches what `extractDntrPaths` produces via
+      // `path.resolve` — otherwise `file:///tmp//x.dntr` yields two different
+      // strings and the de-duplication between the two extractors silently
+      // fails.
+      candidate = path.resolve(fileURLToPath(arg));
+    } catch {
+      continue;
     }
-  } catch (err) {
-    console.error("[MAIN] Failed to install .dntr plugin:", err);
-    broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
-      type: "error",
-      title: "Plugin install failed",
-      message: `Couldn't install "${archivePath}".`,
-    });
+    try {
+      if (!fs.statSync(candidate).isDirectory()) continue;
+    } catch {
+      // Missing path or stat failure — not a directory we can open.
+      continue;
+    }
+    if (!paths.includes(candidate)) paths.push(candidate);
+  }
+  return paths;
+}
+
+// Open each folder in its own window when the app can make one, mirroring the
+// `--cli-path` branch. With no live window the folder joins the same pre-window
+// queue the macOS `open-file` drop path uses, so `openDirHandler`'s drain owns
+// the windowless case for every ingress.
+async function openDirectoryPaths(
+  paths: readonly string[],
+  liveWindow: BrowserWindow | null,
+  opts: AppLifecycleOptions
+): Promise<void> {
+  for (const dirPath of paths) {
+    if (!liveWindow) {
+      queuePendingOpenDirPath(dirPath);
+      continue;
+    }
+    // Isolated per folder: one path that vanished between the stat and the
+    // open must not strand the rest of a multi-selection.
+    try {
+      if (opts.onCreateWindowForPath) {
+        await opts.onCreateWindowForPath(dirPath);
+      } else {
+        await handleDirectoryOpen(
+          dirPath,
+          liveWindow,
+          opts.getCliAvailabilityService() ?? undefined
+        );
+      }
+    } catch (err) {
+      console.error("[MAIN] Failed to open folder:", dirPath, err);
+    }
   }
 }
 
-// Drain the pending `.dntr` queue once a window is ready. The snapshot is
-// cleared up front so a `second-instance` event firing mid-drain appends to a
-// fresh queue rather than re-installing in-flight paths. Installs run
-// sequentially through the installer's lock.
-export async function drainPendingDntrPaths(): Promise<void> {
-  const queued = getPendingDntrPaths();
-  clearPendingDntrPaths();
-  for (const archivePath of queued) {
-    await installDntrPath(archivePath);
-  }
+// Queue a `.dntr` archive for install confirmation (#11280). The archive is
+// never installed here: `archiveInstallIntent` reads its manifest without
+// extracting, then prompts the user in the primary window, and only an approved
+// prompt reaches the installer. That module owns the no-window case too — an
+// intent is held until a window paints — so this file no longer keeps its own
+// pending-path queue.
+export async function queueDntrPaths(archivePaths: readonly string[]): Promise<void> {
+  const { enqueueArchiveInstallIntents } = await import("../setup/archiveInstallIntent.js");
+  await enqueueArchiveInstallIntents(archivePaths);
 }
 
 export interface AppLifecycleOptions {
@@ -222,8 +338,20 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
     console.log("[MAIN] Second instance detected");
     const mainWindow = opts.windowRegistry?.getPrimary()?.browserWindow ?? opts.getMainWindow();
     const liveWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
-    const cliPath = extractCliPath(commandLine);
-    const dntrPaths = extractDntrPaths(commandLine, workingDirectory);
+    const cliPath = extractCliPath(commandLine, workingDirectory);
+    // An explicit `--cli-path` already names the folder to open, so the URI
+    // scan is skipped rather than routing the same launch twice. Gated on the
+    // flag, not the resolved path: an unresolvable `--cli-path` is a failed
+    // request, and opening a positional URI instead would substitute a folder
+    // the user never named (#11410).
+    const directoryPaths = hasCliPathFlag(commandLine) ? [] : extractDirectoryPaths(commandLine);
+    // A directory whose name ends in `.dntr` would otherwise be claimed as a
+    // plugin archive as well; the stat-backed directory list wins. Filtering
+    // here keeps `extractDntrPaths` free of filesystem access, so a missing
+    // `.dntr` file still reaches the installer's error reporting.
+    const dntrPaths = extractDntrPaths(commandLine, workingDirectory).filter(
+      (dntrPath) => !directoryPaths.includes(dntrPath)
+    );
     // Windows/Linux: a warm `daintree://` deep link arrives as an argv entry on
     // the relaunched second instance. Route it through the same handler as the
     // macOS `open-url` path — it targets the primary window itself.
@@ -249,24 +377,28 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
       }
     }
 
+    if (directoryPaths.length > 0) {
+      console.log("[MAIN] Opening folder(s) from OS context menu:", directoryPaths);
+      void openDirectoryPaths(directoryPaths, liveWindow, opts).catch((err) =>
+        console.error("[MAIN] Failed to open folder(s):", err)
+      );
+    }
+
     if (dntrPaths.length > 0) {
-      if (liveWindow) {
-        console.log("[MAIN] Installing .dntr paths from second instance:", dntrPaths);
-        void (async () => {
-          for (const archivePath of dntrPaths) {
-            await installDntrPath(archivePath);
-          }
-        })().catch((err) => console.error("[MAIN] Failed to install .dntr plugin(s):", err));
-      } else {
-        pendingDntrPaths.push(...dntrPaths);
-        console.log("[MAIN] Queuing .dntr paths for when window is ready:", dntrPaths);
-      }
+      // Enqueued whether or not a window is live: the intent queue holds each
+      // preview until the primary window paints, so there is no separate
+      // windowless path to keep in sync.
+      console.log("[MAIN] Queuing .dntr paths for install confirmation:", dntrPaths);
+      void queueDntrPaths(dntrPaths).catch((err) =>
+        console.error("[MAIN] Failed to queue .dntr plugin(s):", err)
+      );
     }
 
     // Bring the primary window to the front for `.dntr` installs and for plain
     // re-launches (no path argument). The CLI-path branch manages its own
-    // window via onCreateWindowForPath / handleDirectoryOpen, so it is excluded.
-    if (liveWindow && (dntrPaths.length > 0 || !cliPath)) {
+    // window via onCreateWindowForPath / handleDirectoryOpen, so it is excluded
+    // — and so is a folder open, which raises the window it opens into.
+    if (liveWindow && (dntrPaths.length > 0 || (!cliPath && directoryPaths.length === 0))) {
       if (liveWindow.isMinimized()) liveWindow.restore();
       liveWindow.focus();
     }

@@ -1847,6 +1847,67 @@ describe("recipeStore", () => {
       expect(state.recipes[0]?.terminals[0]?.env).toEqual({ TOKEN: "" });
     });
 
+    it("loadRecipes hydrates in-repo usage metadata into inRepoRecipes so the UI shows persisted frecency (#11354)", async () => {
+      const inRepoRecipe = {
+        id: "recipe-opaque-abc",
+        name: "Team Recipe",
+        scope: "inrepo" as const,
+        terminals: [{ type: "terminal" as const, title: "Shell" }],
+        createdAt: 500,
+      };
+      // The canonical read carries NO usage (stripped from the git-tracked file);
+      // the mirror does.
+      const projectMirror = {
+        ...inRepoRecipe,
+        projectId: "project-1",
+        lastUsedAt: 900,
+        usageHistory: [800, 900],
+      };
+      globalGetRecipesMock.mockResolvedValueOnce([]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [projectMirror], collisions: [] });
+      getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
+
+      await useRecipeStore.getState().loadRecipes("project-1");
+
+      // RecipeManager renders inRepoRecipes directly, so the raw list must carry
+      // the mirror's frecency after reload — otherwise team recipes read "Never
+      // used" even though usage was persisted.
+      const state = useRecipeStore.getState();
+      expect(state.inRepoRecipes[0]?.lastUsedAt).toBe(900);
+      expect(state.inRepoRecipes[0]?.usageHistory).toEqual([800, 900]);
+    });
+
+    it("loadRecipes keeps project and in-repo recipes when the global read fails", async () => {
+      const inRepoRecipe = {
+        id: "recipe-opaque-abc",
+        name: "Team Recipe",
+        scope: "inrepo" as const,
+        terminals: [{ type: "terminal" as const, title: "Shell" }],
+        createdAt: 500,
+      };
+      const projectRecipe = {
+        id: "proj-recipe-1",
+        name: "Proj",
+        projectId: "project-1",
+        terminals: [{ type: "terminal" as const, title: "Shell" }],
+        createdAt: 600,
+      };
+      // GlobalFileStore.getRecipes now rethrows non-ENOENT read errors; a global
+      // read failure must degrade global to [] rather than clearing every store.
+      globalGetRecipesMock.mockRejectedValueOnce(
+        Object.assign(new Error("EACCES"), { code: "EACCES" })
+      );
+      getRecipesMock.mockResolvedValueOnce({ recipes: [projectRecipe], collisions: [] });
+      getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
+
+      await useRecipeStore.getState().loadRecipes("project-1");
+
+      const state = useRecipeStore.getState();
+      expect(state.globalRecipes).toEqual([]);
+      expect(state.projectRecipes).toHaveLength(1);
+      expect(state.inRepoRecipes).toHaveLength(1);
+    });
+
     it("createRecipe assigns an opaque UUID id (not name-derived) and inrepo scope", async () => {
       await useRecipeStore
         .getState()
@@ -2089,7 +2150,7 @@ describe("recipeStore", () => {
       );
     });
 
-    it("updateRecipe skips file write for metadata-only in-repo update", async () => {
+    it("persists a metadata-only in-repo update to the ProjectFileStore mirror, not the canonical file", async () => {
       const inRepoRecipe = {
         id: "inrepo-test",
         name: "Team Recipe",
@@ -2104,10 +2165,81 @@ describe("recipeStore", () => {
         currentProjectId: "project-1",
       });
 
-      await useRecipeStore.getState().updateRecipe("inrepo-test", { lastUsedAt: 999 });
+      await useRecipeStore
+        .getState()
+        .updateRecipe("inrepo-test", { lastUsedAt: 999, usageHistory: [111, 999] });
 
+      // The canonical git-tracked .daintree/recipes/*.json file is never
+      // touched by a frecency stamp (that's what metadataOnlyKeys guards).
       expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+      expect(globalUpdateRecipeMock).not.toHaveBeenCalled();
+      // The ProjectFileStore mirror IS updated so in-repo usage metadata
+      // survives a reload the way project/global recipes already do (#11354).
+      // The patch is exactly the usage fields — no terminals or other keys.
+      expect(updateRecipeMock).toHaveBeenCalledTimes(1);
+      expect(updateRecipeMock).toHaveBeenCalledWith("project-1", "inrepo-test", {
+        lastUsedAt: 999,
+        usageHistory: [111, 999],
+      });
+    });
+
+    it("degrades gracefully when the in-repo mirror entry is not yet reconciled", async () => {
+      const inRepoRecipe = {
+        id: "inrepo-test",
+        name: "Team Recipe",
+        terminals: [{ type: "terminal" as const, title: "Shell", env: {} }],
+        createdAt: 500,
+        lastUsedAt: 100,
+      };
+      useRecipeStore.setState({
+        inRepoRecipes: [inRepoRecipe],
+        globalRecipes: [],
+        projectRecipes: [],
+        recipes: [inRepoRecipe],
+        currentProjectId: "project-1",
+      });
+
+      // Before the first reconcile backfills the mirror, ProjectFileStore
+      // .updateRecipe throws "not found". A low-stakes frecency stamp must not
+      // reject its caller or roll back the optimistic in-memory update.
+      updateRecipeMock.mockRejectedValueOnce(
+        new Error("Recipe inrepo-test not found in project project-1")
+      );
+
+      await expect(
+        useRecipeStore.getState().updateRecipe("inrepo-test", { lastUsedAt: 999 })
+      ).resolves.toBeUndefined();
+
+      // The mirror write WAS attempted (and rejected) — not silently skipped.
+      expect(updateRecipeMock).toHaveBeenCalledTimes(1);
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+      const state = useRecipeStore.getState();
+      expect(state.inRepoRecipes[0]?.lastUsedAt).toBe(999);
+      expect(state.recipes[0]?.lastUsedAt).toBe(999);
+    });
+
+    it("an empty in-repo update is a true no-op (no mirror write, no canonical write)", async () => {
+      const inRepoRecipe = {
+        id: "inrepo-test",
+        name: "Team Recipe",
+        terminals: [{ type: "terminal" as const, title: "Shell", env: {} }],
+        createdAt: 500,
+      };
+      useRecipeStore.setState({
+        inRepoRecipes: [inRepoRecipe],
+        globalRecipes: [],
+        projectRecipes: [],
+        recipes: [inRepoRecipe],
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore.getState().updateRecipe("inrepo-test", {});
+
+      // `[].every(...)` is vacuously true, so an empty patch is metadata-only —
+      // but it must not issue a spurious empty mirror IPC call.
       expect(updateRecipeMock).not.toHaveBeenCalled();
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+      expect(globalUpdateRecipeMock).not.toHaveBeenCalled();
     });
 
     it("deleteRecipe routes in-repo recipe to deleteInRepoRecipe client", async () => {
@@ -2477,7 +2609,7 @@ describe("recipeStore", () => {
       expect(useRecipeStore.getState().inRepoRecipes[0]?.name).toBe("cafe");
     });
 
-    it("in-repo recipe with projectId=undefined does NOT route to global on update", async () => {
+    it("in-repo recipe with projectId=undefined routes metadata to the mirror via currentProjectId, not global", async () => {
       useRecipeStore.setState({
         inRepoRecipes: [
           {
@@ -2502,9 +2634,16 @@ describe("recipeStore", () => {
 
       await useRecipeStore.getState().updateRecipe("inrepo-test", { lastUsedAt: 999 });
 
-      // lastUsedAt is metadata-only, so no IPC write is performed
+      // Canonical in-repo recipes carry no embedded projectId, so the metadata
+      // mirror write must resolve the project from currentProjectId — and must
+      // never fall back to the global store.
       expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
       expect(globalUpdateRecipeMock).not.toHaveBeenCalled();
+      expect(updateRecipeMock).toHaveBeenCalledWith(
+        "project-1",
+        "inrepo-test",
+        expect.objectContaining({ lastUsedAt: 999 })
+      );
     });
   });
 

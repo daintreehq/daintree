@@ -163,6 +163,7 @@ export function ResumeSessionsPalette() {
   };
 
   const selected = selectedIndex >= 0 ? results[selectedIndex] : undefined;
+  const activeDescendant = selected ? `resume-session-option-${selected.id}` : undefined;
 
   return (
     <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="Resume session">
@@ -178,11 +179,15 @@ export function ResumeSessionsPalette() {
           aria-haspopup="listbox"
           aria-label="Search closed sessions"
           aria-controls="resume-session-list"
-          aria-activedescendant={selected ? `resume-session-option-${selected.id}` : undefined}
+          aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>
 
-      <AppPaletteDialog.Body>
+      <AppPaletteDialog.Body
+        ariaLabel="Closed sessions"
+        activeDescendant={activeDescendant}
+        onNavigationKeyDown={handleKeyDown}
+      >
         {results.length === 0 ? (
           isLoading ? null : (
             <AppPaletteDialog.Empty
