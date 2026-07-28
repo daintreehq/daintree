@@ -22,7 +22,13 @@ function resolveElectronPath() {
   return electronPath;
 }
 
-const REPAIR_ATTEMPTS = 3;
+const REPAIR_ATTEMPTS = 5;
+
+// GitHub's release CDN serves transient 500s for the Electron zip — one took
+// out a v0.29.0 Windows release job. The previous 1s/2s backoff spent all three
+// attempts inside four seconds, far too fast to ride a blip out. These delays
+// cover ~110s of outage while staying well inside the job budget.
+const REPAIR_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000];
 
 async function repairElectronInstall(packageRoot) {
   for (let attempt = 1; attempt <= REPAIR_ATTEMPTS; attempt += 1) {
@@ -43,7 +49,9 @@ async function repairElectronInstall(packageRoot) {
       throw new Error(`electron install.js exited with code ${result.status ?? "null"}`);
     }
 
-    await sleep(2 ** (attempt - 1) * 1_000);
+    const backoffMs = REPAIR_BACKOFF_MS[attempt - 1] ?? REPAIR_BACKOFF_MS.at(-1);
+    console.log(`[verify-electron-install] Retrying in ${backoffMs / 1_000}s`);
+    await sleep(backoffMs);
   }
 }
 
