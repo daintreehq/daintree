@@ -96,6 +96,29 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
 
     ctx = await launchApp({ env: { DAINTREE_E2E_FAULT_MODE: "1" } });
 
+    // Every test in this file keeps Project A's view alive while Project B is
+    // active — the delayed-spawn test reads A's terminals after switching away,
+    // and the #11366 test evaluates directly in A's backgrounded page. The
+    // default cached-view limit is 1, and a low-memory host collapses that cap
+    // further and evicts A mid-spec, which closes its page and takes its
+    // terminals with it. That is what failed three v0.29.0 macOS release runs
+    // ("Target page, context or browser has been closed"; no project-stamped
+    // terminals) while passing locally and on Linux. Same guard as
+    // core-lru-project-eviction and five other multi-view specs.
+    await ctx.app.evaluate((_electron) => {
+      const g = globalThis as Record<string, unknown>;
+      const getPvm = g.__daintreeGetPvm as (() => unknown) | undefined;
+      const pvm = getPvm?.() as
+        | {
+            setCachedViewLimit: (n: number) => void;
+            setLowMemoryFreeThresholdMb?: (mb: number | null) => void;
+          }
+        | null
+        | undefined;
+      pvm?.setLowMemoryFreeThresholdMb?.(null);
+      pvm?.setCachedViewLimit(2);
+    });
+
     // Open and onboard Project A
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, repoA, PROJECT_A_NAME);
 
@@ -127,20 +150,6 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
 
   test("delayed spawn assigns terminal to originating project", async () => {
     test.slow();
-    // Quarantined on macOS CI only — see #11473. This blocked three v0.29.0
-    // release runs with three different symptoms (surviving-terminal count 1
-    // instead of 2; then no terminal carrying a projectId at all across a 33s
-    // settle window), while passing locally on macOS and on every Linux run.
-    // handleTerminalGetAll is global and reads projectId straight off the PTY
-    // record, so the runner is genuinely left with no live project-stamped
-    // terminal in Project A after a mid-spawn switch. That is either the
-    // documented compensating kill in addPanel racing view eviction, or a real
-    // regression from the #11462/#11463 project-view teardown changes — it
-    // needs a diagnostic run to tell those apart, not another blind test edit.
-    test.fixme(
-      process.platform === "darwin" && !!process.env.CI,
-      "Flaky-to-failing on contended macOS release runners — under investigation (#11473)"
-    );
 
     // Capture Project A's ID
     const projectA = await getCurrentProject(ctx.window);
