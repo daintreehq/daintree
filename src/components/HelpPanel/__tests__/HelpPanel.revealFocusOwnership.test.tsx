@@ -346,6 +346,11 @@ beforeEach(() => {
   hybridHandle.cancelPendingFocus.mockImplementation(() => {
     hybridHandle.generation += 1;
   });
+  // The real service focuses xterm synchronously. Doing it here too means the
+  // xterm route is proved by where focus actually landed, not just by a spy.
+  focusMock.mockImplementation(() => {
+    document.querySelector<HTMLTextAreaElement>("[data-testid=xterm-textarea]")?.focus();
+  });
 
   globalThis.requestAnimationFrame = ((cb: FrameRequestCallback): number => {
     const id = ++rafIdCounter;
@@ -504,12 +509,18 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
 
       // The user clicks into the other pane in the gap.
       focusForeignEditor();
+      hybridHandle.cancelPendingFocus.mockClear();
 
       // Frame 2: the guard runs ahead of the bar's callback and revokes it.
       act(() => flushFrame());
 
+      // Asserted on where focus ended up, not just on the spy — the bar's
+      // callback runs in this same flush, so the caret moving would show here.
       expect(hybridHandle.cancelPendingFocus).toHaveBeenCalled();
       expect(document.activeElement).toBe(foreignEditor);
+      expect(document.activeElement).not.toBe(
+        document.querySelector("[data-testid=assistant-cm-input]")
+      );
     });
   });
 
