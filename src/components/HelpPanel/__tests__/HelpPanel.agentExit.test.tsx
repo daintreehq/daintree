@@ -100,9 +100,12 @@ vi.mock("@/components/Terminal/XtermAdapter", () => ({
 }));
 vi.mock("@/components/Terminal/HybridInputBar", () => ({ HybridInputBar: () => null }));
 vi.mock("@/components/Terminal/MissingCliGate", () => ({ MissingCliGate: () => null }));
-vi.mock("@/components/Terminal/terminalFocus", () => ({
-  shouldShowHybridInputBar: () => false,
-}));
+vi.mock("@/components/Terminal/terminalFocus", async (importOriginal) => {
+  // Keep the real `getTerminalFocusTarget` — the reveal effect resolves the
+  // remembered target through it, and a hand-stubbed copy would drift.
+  const actual = await importOriginal<typeof import("@/components/Terminal/terminalFocus")>();
+  return { ...actual, shouldShowHybridInputBar: () => false };
+});
 vi.mock("./HelpIntroBanner", () => ({ HelpIntroBanner: () => null }));
 vi.mock("./HelpPanelBanners", () => ({ HelpPanelBanners: () => null }));
 vi.mock("./HelpPanelVersionGate", () => ({ HelpPanelVersionGate: () => null }));

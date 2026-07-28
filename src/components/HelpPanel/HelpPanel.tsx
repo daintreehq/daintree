@@ -14,7 +14,10 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
-import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
+import {
+  getTerminalFocusTarget,
+  shouldShowHybridInputBar,
+} from "@/components/Terminal/terminalFocus";
 import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
@@ -693,13 +696,24 @@ export function HelpPanel({
       lastCompleted.focusRequest !== focusRequest;
 
     if (isOpen && isVisible) {
+      // Only remember a restore target when this run is actually authorized to
+      // move focus. A structural re-run that the ownership gate goes on to
+      // reject must not overwrite it with whatever unrelated pane the user
+      // happens to be typing in.
       const active = document.activeElement;
-      if (active instanceof HTMLElement && !panelRef.current?.contains(active)) {
+      if (
+        hasNewFocusTrigger &&
+        active instanceof HTMLElement &&
+        !panelRef.current?.contains(active)
+      ) {
         previousFocusRef.current = active;
       }
 
       const generation = ++revealFocusGenerationRef.current;
       let hybridCompletionRaf: number | null = null;
+      // The exact bar we handed a focus request to, so cleanup revokes that one
+      // rather than whatever `inputBarRef` happens to point at by then.
+      let pendingFocusBar: HybridInputBarHandle | null = null;
 
       const raf = requestAnimationFrame(() => {
         if (revealFocusGenerationRef.current !== generation) return;
@@ -740,8 +754,22 @@ export function HelpPanel({
         const currentTerminalPty =
           currentTerminal && isPtyPanel(currentTerminal) ? currentTerminal : undefined;
 
-        // When an agent terminal is running, target the HybridInputBar editor
-        // first (when available), then the xterm input as fallback.
+        // Ownership is settled by this point, so now — and only now — the
+        // remembered preference gets to pick which surface receives focus.
+        // Resolving it here rather than letting HybridInputBar's own
+        // `preferredTerminalFocusTarget` check veto the grab matters: that
+        // check aborts silently, which would leave an authorized open request
+        // marked complete with focus still in another pane.
+        const bar = inputBarRef.current;
+        const focusTarget = getTerminalFocusTarget({
+          preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
+          hasHybridInputSurface: showHybridInputBar && bar !== null,
+          isInputDisabled: currentTerminalPty?.isInputLocked === true,
+          hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
+        });
+
+        // When an agent terminal is running, focus the surface the preference
+        // resolved to, falling back to xterm when the editor can't take it.
         //
         // `focusWithCursorAtEnd()` schedules `view.focus()` inside its own
         // requestAnimationFrame, so we cannot synchronously check
@@ -758,16 +786,29 @@ export function HelpPanel({
           currentTerminalPty?.spawnStatus !== "missing-cli" &&
           currentTerminalPty?.spawnStatus !== "failed"
         ) {
-          if (showHybridInputBar && inputBarRef.current?.focusWithCursorAtEnd()) {
-            // The editor takes focus in the bar's own frame. Hold the request
-            // open until then so a cleanup landing in between (which cancels
-            // that inner frame) leaves it outstanding for the next run to
-            // reissue rather than silently dropping it.
+          if (focusTarget === "hybridInput" && bar) {
+            // The bar defers the real `view.focus()` to a frame of its own,
+            // which is the LAST frame in this grab — so the last ownership
+            // check has to run inside it. We can't edit that shared component,
+            // but a frame queued here, before the bar schedules its own, is
+            // dequeued ahead of it: it gets to re-read ownership and revoke the
+            // grab via `cancelPendingFocus()` when the user has moved on in the
+            // gap. Without it a structural retry that was legitimate one frame
+            // ago still lands in the other pane's editor (#11472).
             hybridCompletionRaf = requestAnimationFrame(() => {
               if (revealFocusGenerationRef.current !== generation) return;
+              if (!hasNewFocusTrigger && !isAssistantFocused()) {
+                bar.cancelPendingFocus();
+                return;
+              }
               completeFocusTrigger();
             });
-            return;
+            pendingFocusBar = bar;
+            if (bar.focusWithCursorAtEnd()) return;
+            // No editor was mounted, so nothing is pending to guard.
+            cancelAnimationFrame(hybridCompletionRaf);
+            hybridCompletionRaf = null;
+            pendingFocusBar = null;
           }
           terminalInstanceService.focus(terminalId);
           const after = document.activeElement;
@@ -799,7 +840,7 @@ export function HelpPanel({
         // nested inside HybridInputBar — `cancelAnimationFrame` can't reach
         // that one, and without this it lands after the panel closed (#11472).
         revealFocusGenerationRef.current += 1;
-        inputBarRef.current?.cancelPendingFocus();
+        pendingFocusBar?.cancelPendingFocus();
       };
     }
 
@@ -809,7 +850,22 @@ export function HelpPanel({
 
     const el = previousFocusRef.current;
     previousFocusRef.current = null;
-    if (el && document.contains(el) && !panelRef.current?.contains(el)) {
+    // Hand focus back only if the assistant still had it. Closing a panel the
+    // user already left must not drag them out of wherever they went — that is
+    // the same steal this effect exists to prevent, just on the way out.
+    // `body`/null covers the panel tearing down its focused descendant, which
+    // is the normal close path.
+    const activeOnClose = document.activeElement;
+    const assistantStillOwnedFocus =
+      activeOnClose === null ||
+      activeOnClose === document.body ||
+      panelRef.current?.contains(activeOnClose) === true;
+    if (
+      el &&
+      assistantStillOwnedFocus &&
+      document.contains(el) &&
+      !panelRef.current?.contains(el)
+    ) {
       el.focus();
     }
     return undefined;

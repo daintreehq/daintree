@@ -334,7 +334,11 @@ vi.mock("@/store", () => {
 });
 
 vi.mock("@/store/macroFocusStore", () => {
-  const state = { focusedRegion: null as string | null, setRegionRef: vi.fn(), setVisibility: vi.fn() };
+  const state = {
+    focusedRegion: null as string | null,
+    setRegionRef: vi.fn(),
+    setVisibility: vi.fn(),
+  };
   const store = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state);
   store.getState = () => state;
   store.setState = (

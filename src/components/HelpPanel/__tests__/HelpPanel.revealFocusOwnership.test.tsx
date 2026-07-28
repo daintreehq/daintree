@@ -46,7 +46,11 @@ const { focusMock, helpPanelState, panelStoreState, hybridHandle } = vi.hoisted(
   },
   panelStoreState: {
     panelIds: [] as string[],
-    panelsById: {} as Record<string, { agentState?: string; cwd?: string; spawnStatus?: string }>,
+    panelsById: {} as Record<
+      string,
+      { agentState?: string; cwd?: string; spawnStatus?: string; isInputLocked?: boolean }
+    >,
+    preferredTerminalFocusTarget: "hybridInput" as "hybridInput" | "xterm",
     removePanel: vi.fn(),
     addPanel: vi.fn().mockResolvedValue(""),
   },
@@ -81,7 +85,13 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuContent: ({ children }: { children?: unknown }) => (
     <div data-testid="overflow-menu">{children as never}</div>
   ),
-  DropdownMenuItem: ({ children, onSelect }: { children?: unknown; onSelect?: (e: Event) => void }) => (
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+  }: {
+    children?: unknown;
+    onSelect?: (e: Event) => void;
+  }) => (
     <button type="button" onClick={() => onSelect?.(new Event("select"))}>
       {children as never}
     </button>
@@ -143,9 +153,12 @@ vi.mock("@/components/Terminal/HybridInputBar", () => ({
 }));
 
 vi.mock("@/components/Terminal/MissingCliGate", () => ({ MissingCliGate: () => null }));
-vi.mock("@/components/Terminal/terminalFocus", () => ({
-  shouldShowHybridInputBar: () => hybridBarVisible,
-}));
+vi.mock("@/components/Terminal/terminalFocus", async (importOriginal) => {
+  // Keep the real `getTerminalFocusTarget` so target resolution is exercised
+  // for real; only the visibility predicate is driven per test.
+  const actual = await importOriginal<typeof import("@/components/Terminal/terminalFocus")>();
+  return { ...actual, shouldShowHybridInputBar: () => hybridBarVisible };
+});
 vi.mock("./HelpIntroBanner", () => ({ HelpIntroBanner: () => null }));
 vi.mock("./HelpPanelHeader", () => ({ HelpPanelHeader: () => null }));
 vi.mock("./HelpPanelBanners", () => ({ HelpPanelBanners: () => null }));
@@ -349,6 +362,7 @@ beforeEach(() => {
   helpPanelState.preferredAgentId = null;
   helpPanelState.conversationTouched = false;
   helpPanelState.focusRequest = 0;
+  panelStoreState.preferredTerminalFocusTarget = "hybridInput";
   setPanel("t-1");
 
   foreignEditor = document.createElement("textarea");
@@ -425,12 +439,18 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
     });
 
     // #11465's lesson: gating only the HybridInputBar path leaves the raw xterm
-    // fallback as a silent bypass. Same scenario, hybrid bar hidden.
+    // fallback as a silent bypass. Same structural trigger, hybrid bar hidden,
+    // so the xterm writer is the one under test.
     it("gates the raw xterm fallback too, not just the HybridInputBar path", () => {
       hybridBarVisible = false;
-      const { rerender } = renderSettledWithForeignFocus();
+      setPanel("t-1", "spawning");
+      const { rerender } = render(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      act(() => flushFrame());
+      focusForeignEditor();
+      clearFocusSpies();
 
-      churnPanelIdentity("t-1");
+      setPanel("t-1", "ready");
       rerender(<HelpPanel width={380} />);
       act(() => flushFrame());
       act(() => flushFrame());
@@ -440,20 +460,55 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
     });
 
     it("blocks a structural retry when focus leaves between the effect and its frame", () => {
+      setPanel("t-1", "spawning");
       const { rerender } = render(<HelpPanel width={380} />);
       act(() => flushFrame());
       act(() => flushFrame());
+      act(() => {
+        document.getElementById("daintree-assistant-panel")?.focus();
+      });
       clearFocusSpies();
 
-      // Assistant still owns focus when the structural change is committed...
-      setPanel("t-1", "ready", "working");
+      // The assistant still owns focus when the structural change commits...
+      setPanel("t-1", "ready");
       rerender(<HelpPanel width={380} />);
-      // ...but the user clicks into the other pane before the frame runs.
+      // ...but the user clicks into the other pane before the frame runs, so
+      // the recheck inside the frame — not the effect body — has to catch it.
       focusForeignEditor();
       act(() => flushFrame());
       act(() => flushFrame());
 
       expect(anyFocusWriterCalled()).toBe(false);
+      expect(document.activeElement).toBe(foreignEditor);
+    });
+
+    // The bar defers the real focus to a frame of its own, so ownership can
+    // still change AFTER HelpPanel's frame has already asked for focus. That
+    // last frame is the one the issue calls the "final deferred frame".
+    it("revokes the bar's pending focus when ownership is lost in the final frame", () => {
+      setPanel("t-1", "spawning");
+      const { rerender } = render(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      act(() => flushFrame());
+      act(() => {
+        document.getElementById("daintree-assistant-panel")?.focus();
+      });
+      clearFocusSpies();
+
+      setPanel("t-1", "ready");
+      rerender(<HelpPanel width={380} />);
+      // Frame 1: HelpPanel asks the bar for focus; the bar queues its own frame.
+      act(() => flushFrame());
+      expect(hybridHandle.focusWithCursorAtEnd).toHaveBeenCalled();
+      expect(hybridHandle.scheduled).toBe(1);
+
+      // The user clicks into the other pane in the gap.
+      focusForeignEditor();
+
+      // Frame 2: the guard runs ahead of the bar's callback and revokes it.
+      act(() => flushFrame());
+
+      expect(hybridHandle.cancelPendingFocus).toHaveBeenCalled();
       expect(document.activeElement).toBe(foreignEditor);
     });
   });
@@ -530,26 +585,144 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
       expect(document.activeElement).toBe(foreignEditor);
     });
 
+    // Mounting already-open is what puts the open branch through StrictMode's
+    // setup/cleanup/setup replay. The first setup's frame is cancelled and its
+    // pending bar focus revoked, so only tracking the last *completed* trigger
+    // (rather than the last setup) lets the replay reissue the grab.
     it("still lands focus under StrictMode's mount/cleanup/mount replay", () => {
-      helpPanelState.isOpen = false;
-      const { rerender } = render(
-        <StrictMode>
-          <HelpPanel width={380} />
-        </StrictMode>
-      );
-      focusForeignEditor();
-      clearFocusSpies();
+      foreignEditor.focus();
+      expect(document.activeElement).toBe(foreignEditor);
 
-      helpPanelState.isOpen = true;
-      rerender(
+      render(
         <StrictMode>
           <HelpPanel width={380} />
         </StrictMode>
       );
       act(() => flushFrame());
+      act(() => flushFrame());
 
-      // The replayed setup must reissue the grab the first cleanup cancelled.
       expect(hybridHandle.focusWithCursorAtEnd).toHaveBeenCalled();
+      expect(document.activeElement).toBe(
+        document.querySelector("[data-testid=assistant-cm-input]")
+      );
+    });
+
+    it("actually lands focus in the assistant input, not just dispatches the request", () => {
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      focusForeignEditor();
+      clearFocusSpies();
+
+      helpPanelState.isOpen = true;
+      rerender(<HelpPanel width={380} />);
+      // Frame 1 asks the bar; frame 2 is where the bar actually focuses.
+      act(() => flushFrame());
+      expect(document.activeElement).toBe(foreignEditor);
+      act(() => flushFrame());
+
+      expect(document.activeElement).toBe(
+        document.querySelector("[data-testid=assistant-cm-input]")
+      );
+    });
+  });
+
+  describe("the remembered target picks the surface, and never authorizes", () => {
+    it("focuses xterm instead of the input bar when the preference is xterm", () => {
+      panelStoreState.preferredTerminalFocusTarget = "xterm";
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      focusForeignEditor();
+      clearFocusSpies();
+
+      helpPanelState.isOpen = true;
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      act(() => flushFrame());
+
+      // The bar's own preference check would have aborted silently, leaving an
+      // authorized open request with focus still in the other pane.
+      expect(hybridHandle.focusWithCursorAtEnd).not.toHaveBeenCalled();
+      expect(focusMock).toHaveBeenCalledWith("t-1");
+    });
+
+    it("routes to xterm when the assistant input is locked", () => {
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      focusForeignEditor();
+      clearFocusSpies();
+
+      panelStoreState.panelsById = {
+        "t-1": { agentState: "idle", cwd: "/repo", spawnStatus: "ready", isInputLocked: true },
+      };
+      helpPanelState.isOpen = true;
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      act(() => flushFrame());
+
+      expect(hybridHandle.focusWithCursorAtEnd).not.toHaveBeenCalled();
+      expect(focusMock).toHaveBeenCalledWith("t-1");
+    });
+
+    // The preference must not become a back door around the ownership gate.
+    it("does not let the xterm preference authorize a background structural retry", () => {
+      panelStoreState.preferredTerminalFocusTarget = "xterm";
+      setPanel("t-1", "spawning");
+      const { rerender } = render(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      act(() => flushFrame());
+      focusForeignEditor();
+      clearFocusSpies();
+
+      setPanel("t-1", "ready");
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      act(() => flushFrame());
+
+      expect(anyFocusWriterCalled()).toBe(false);
+      expect(document.activeElement).toBe(foreignEditor);
+    });
+  });
+
+  describe("restoring focus on close", () => {
+    it("returns focus to the opener when the assistant still owns it", () => {
+      const opener = document.createElement("button");
+      document.body.appendChild(opener);
+      opener.focus();
+
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      helpPanelState.isOpen = true;
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      act(() => flushFrame());
+
+      helpPanelState.isOpen = false;
+      rerender(<HelpPanel width={380} />);
+
+      expect(document.activeElement).toBe(opener);
+      opener.remove();
+    });
+
+    it("leaves focus alone when the user has already moved to another pane", () => {
+      const opener = document.createElement("button");
+      document.body.appendChild(opener);
+      opener.focus();
+
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      helpPanelState.isOpen = true;
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      act(() => flushFrame());
+
+      // The user leaves the assistant for another pane, then closes it from a
+      // global shortcut. Restoring the opener here would be the same steal.
+      focusForeignEditor();
+      helpPanelState.isOpen = false;
+      rerender(<HelpPanel width={380} />);
+
+      expect(document.activeElement).toBe(foreignEditor);
+      opener.remove();
     });
   });
 
