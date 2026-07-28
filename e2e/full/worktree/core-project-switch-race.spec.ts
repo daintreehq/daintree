@@ -19,6 +19,9 @@ let fixtureCleanups: Array<() => void> = [];
 const PROJECT_A_NAME = "project-A";
 const PROJECT_B_NAME = "project-B";
 
+/** Injected terminal:spawn delay, wide enough that a project switch lands mid-spawn. */
+const SPAWN_DELAY_MS = 3000;
+
 interface TerminalInfo {
   id: string;
   projectId?: string;
@@ -135,8 +138,8 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
       timeout: T_LONG,
     });
 
-    // Inject 3-second delay on terminal:spawn
-    await injectDelay(ctx.app, "terminal:spawn", 3000);
+    // Inject a delay on terminal:spawn so the switch below lands mid-spawn
+    await injectDelay(ctx.app, "terminal:spawn", SPAWN_DELAY_MS);
 
     // Trigger a second terminal spawn (this one will be delayed)
     await openTerminal(ctx.window);
@@ -159,39 +162,37 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     // Clear the fault before polling
     await clearAllFaults(ctx.app);
 
-    // Poll while Project B is still active until the delayed terminal exists.
-    // The inactive Project A renderer can hydrate project metadata later, so
-    // gate first on terminal creation and then assert any resolved terminals
-    // did not leak to the currently active Project B.
-    await expect
-      .poll(() => getAllTerminals(ctx.window).then((ts) => ts.filter((t) => !t.isTrashed).length), {
-        timeout: T_LONG,
-      })
-      .toBeGreaterThanOrEqual(2);
+    // Whether the delayed terminal SURVIVES the switch is not guaranteed and
+    // must not be asserted: if the switch removes the pane before the spawn IPC
+    // resolves, addPanel issues a compensating kill so the fresh PTY isn't
+    // orphaned (src/store/slices/panelRegistry/addPanel.ts). Which side wins is
+    // decided by how long the real PTY spawn takes on top of the injected
+    // delay, and that is unbounded on a loaded runner — asserting a surviving
+    // count of 2 passed locally and on Linux but failed every attempt on
+    // contended macOS release runners.
+    //
+    // The invariant that must hold either way is ownership: no terminal may
+    // ever be stamped with Project B. Assert that on every sample across the
+    // whole settle window rather than once at the end, so a late Project-B
+    // stamp landing after the delayed spawn resolves cannot slip through.
+    const readActiveTerminals = async () =>
+      (await getAllTerminals(ctx.window)).filter((t: TerminalInfo) => !t.isTrashed);
 
-    // Poll until at least one terminal has resolved its projectId. The key
-    // invariant is no resolved terminal may be stamped with Project B while the
-    // delayed spawn completes.
-    await expect
-      .poll(
-        () =>
-          getAllTerminals(ctx.window).then(
-            (ts) => ts.filter((t) => !t.isTrashed && t.projectId !== undefined).length
-          ),
-        { timeout: T_LONG }
-      )
-      .toBeGreaterThanOrEqual(1);
-
-    // Re-query for assertions after the poll gate has passed.
-    const settled = await getAllTerminals(ctx.window);
-    const activeTerminals = settled.filter((t: TerminalInfo) => !t.isTrashed);
-
-    // Every resolved terminal must belong to Project A — none must have leaked.
-    const withProject = activeTerminals.filter((t: TerminalInfo) => t.projectId !== undefined);
-    expect(withProject.length).toBeGreaterThanOrEqual(1);
-    for (const t of withProject) {
-      expect(t.projectId).toBe(projectA!.id);
+    const settleDeadline = Date.now() + SPAWN_DELAY_MS + T_LONG;
+    let sawResolvedTerminal = false;
+    while (Date.now() < settleDeadline) {
+      const withProject = (await readActiveTerminals()).filter(
+        (t: TerminalInfo) => t.projectId !== undefined
+      );
+      for (const t of withProject) {
+        expect(t.projectId).toBe(projectA!.id);
+      }
+      if (withProject.length > 0) sawResolvedTerminal = true;
+      await ctx.window.waitForTimeout(250);
     }
+
+    // The window must have observed real ownership data, not an empty list.
+    expect(sawResolvedTerminal).toBe(true);
   });
 
   test("panel grid is clean after switching — no cross-project panels", async () => {
