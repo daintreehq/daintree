@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import buildConfig from "../../electron-builder.config.cjs";
+import { APP_ASAR_ROOT_ENTRIES } from "../afterPack.cjs";
 
 const repoFile = (relativePath) =>
   readFile(new URL(`../../${relativePath}`, import.meta.url), "utf8");
@@ -58,6 +59,62 @@ describe("electron-builder config — macOS artifact naming (#10380)", () => {
         allowedKeys,
         `root config key "${key}" is not in the electron-builder schema`
       ).toContain(key);
+    }
+  });
+});
+
+describe("electron-builder config — platform files overrides (#11475)", () => {
+  const PLATFORMS = ["mac", "win", "linux"];
+
+  it("starts every platform override with the whole top-level files list", async () => {
+    const config = await buildConfig();
+    // electron-builder replaces the top-level `files` with a platform-level one
+    // rather than merging them, and an override left with no inclusion pattern
+    // falls back to the default `**/*`. That silently packed the whole source
+    // tree into app.asar (601MB vs 39.8MB) and broke the macOS universal merge
+    // on the per-arch node-gyp metadata it dragged in. Every override has to
+    // spread baseFiles() first; an exact prefix (rather than mere containment)
+    // is what stops a later negation from cancelling one of those patterns.
+    expect(config.files.some((pattern) => !pattern.startsWith("!"))).toBe(true);
+
+    for (const platform of PLATFORMS) {
+      const files = config[platform].files;
+      expect(files.slice(0, config.files.length), `${platform}.files drops base patterns`).toEqual(
+        config.files
+      );
+    }
+  });
+
+  it("limits each platform's own patterns to dropping foreign prebuilds", async () => {
+    const config = await buildConfig();
+    // The only intended per-platform divergence is shedding better-sqlite3's
+    // other-OS prebuilds. Anything else — especially a negation aimed at a
+    // packed root — has to be a deliberate edit here, because afterPack.cjs
+    // only sees the resulting archive and cannot tell why a root vanished.
+    for (const platform of PLATFORMS) {
+      const own = config[platform].files.slice(config.files.length);
+      expect(own.length, `${platform}.files adds no patterns of its own`).toBeGreaterThan(0);
+      for (const pattern of own) {
+        expect(pattern, `${platform}.files pattern "${pattern}"`).toMatch(
+          /^!node_modules\/better-sqlite3\/prebuilds\//
+        );
+      }
+    }
+  });
+
+  it("packs no directory the asar guard would reject", async () => {
+    const config = await buildConfig();
+    // afterPack.cjs asserts app.asar's top-level entries against this contract.
+    // Importing it, rather than restating it, is what makes this a cross-file
+    // check: config and guard cannot drift apart without failing here.
+    for (const platform of PLATFORMS) {
+      const included = config[platform].files.filter((pattern) => !pattern.startsWith("!"));
+      expect(included.length, `${platform}.files includes nothing`).toBeGreaterThan(0);
+      for (const pattern of included) {
+        expect(APP_ASAR_ROOT_ENTRIES, `${platform}.files pattern "${pattern}"`).toContain(
+          pattern.split("/")[0]
+        );
+      }
     }
   });
 });
