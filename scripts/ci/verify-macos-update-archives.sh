@@ -37,11 +37,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ZIPs, so extracting all of them at once would risk filling it.
 WORK_DIR=""
 cleanup() {
-  if [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
-    rm -rf "$WORK_DIR"
+  local dir="$WORK_DIR"
+  # Clear first so a re-entrant call (or a later trap) can't target a path this
+  # invocation is already deleting.
+  WORK_DIR=""
+  if [[ -n "$dir" && -d "$dir" ]]; then
+    rm -rf "$dir"
   fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+# A bash signal trap does not itself terminate the script — without re-raising,
+# a cancelled CI job would run the handler and then carry on verifying.
+# Re-raising with the default disposition exits, which fires the EXIT trap.
+for sig in INT TERM; do
+  # shellcheck disable=SC2064 # expand $sig now, at trap-registration time
+  trap "trap - $sig EXIT; cleanup; kill -s $sig \$\$" "$sig"
+done
 
 failed=0
 verified=0

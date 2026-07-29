@@ -64,19 +64,26 @@ interface AuditLogsStoreSchema {
 }
 
 /**
- * How an update install handoff failed, in descending order of specificity.
- * `handoff-timeout` is the one that fires in practice on macOS: the graceful
+ * How far an update install attempt got, in ASCENDING order of specificity —
+ * a later entry may overwrite an earlier one, never the reverse.
+ *
+ * `attempted` is the floor and the one that matters most: it means we handed
+ * off to the installer and never learned the outcome. Most install paths end
+ * there, because electron-updater's own `autoInstallOnAppQuit` never reaches
+ * our handoff and the process usually dies before any error is reported.
+ * `handoff-timeout` is the macOS "Restart to update" case — the graceful
  * shutdown chain disposes AutoUpdaterService (detaching its `error` listener)
- * before the handoff runs, so a Squirrel rejection that arrives afterwards has
- * nothing left listening — only the force-exit watchdog observes it.
+ * before the handoff runs, so a Squirrel rejection has nothing left listening
+ * and only the force-exit watchdog observes it.
  */
-export type PendingUpdateInstallFailure = "updater-error" | "handoff-threw" | "handoff-timeout";
-
-export const PENDING_UPDATE_INSTALL_FAILURES: readonly PendingUpdateInstallFailure[] = [
+export const PENDING_UPDATE_INSTALL_STAGES = [
+  "attempted",
+  "handoff-timeout",
   "updater-error",
   "handoff-threw",
-  "handoff-timeout",
-];
+] as const;
+
+export type PendingUpdateInstallStage = (typeof PENDING_UPDATE_INSTALL_STAGES)[number];
 
 export interface StoreSchema {
   _schemaVersion: number;
@@ -381,20 +388,21 @@ export interface StoreSchema {
    */
   pendingUpdateVersion?: string;
   /**
-   * Why the last install handoff failed, written just before the process is
-   * force-exited and read alongside `pendingUpdateVersion` on the next boot.
-   * Its presence is what separates "we watched an install attempt fail" from
-   * "a staged update simply never got installed" (an app killed before
-   * `autoInstallOnAppQuit` runs leaves the version marker behind too), so only
-   * a stored reason promotes the boot-time mismatch from telemetry to a
-   * user-facing recovery prompt.
+   * How far the last install attempt got, written before the process hands off
+   * to the installer and read alongside `pendingUpdateVersion` on the next boot.
+   * Its presence is what separates "an install was tried and the version still
+   * didn't move" from "a staged update simply never got installed" — an app
+   * killed before `autoInstallOnAppQuit` runs leaves the version marker behind
+   * too, and there the staged installer is still perfectly good. Only a stored
+   * attempt promotes the boot-time mismatch from telemetry to a user-facing
+   * recovery prompt.
    *
    * A closed enum, never a raw error string: electron-updater and Squirrel
    * embed absolute cache paths in their messages, which would persist the
-   * user's home directory into the config file. Absent means "no failure
-   * observed" — no migration entry required (mirrors `dismissedUpdateVersion`).
+   * user's home directory into the config file. Absent means "no install
+   * attempted" — no migration entry required (mirrors `dismissedUpdateVersion`).
    */
-  pendingUpdateInstallFailure?: PendingUpdateInstallFailure;
+  pendingUpdateInstallStage?: PendingUpdateInstallStage;
   /**
    * Windows Store notifier state. All fields are optional and read with `??`
    * fallbacks at the call site so an absent value behaves like a default —

@@ -50,7 +50,7 @@ export function useMainProcessToastListener(): void {
               } else if (ipcChannel === "system:open-external") {
                 // Main is the trusted sender, but this branch is the boundary
                 // that turns a toast payload into a browser navigation — keep it
-                // fail-closed and pinned to our own origin rather than trusting
+                // fail-closed and pinned to our own domain rather than trusting
                 // whatever string arrived.
                 const url = parseTrustedDaintreeUrl(data);
                 if (!url) {

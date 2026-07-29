@@ -240,14 +240,39 @@ describe("useMainProcessToastListener", () => {
     });
 
     it.each([
+      ["the default https port spelled out", "https://daintree.org:443/download"],
+      ["an uppercase host", "https://DAINTREE.ORG/download"],
+      // Chromium normalizes the backslash to a path separator, so the host is
+      // still ours — opening it is correct, not a bypass.
+      ["a backslash the parser folds into the path", "https://daintree.org\\@evil.test/download"],
+    ])("still opens %s", (_label, data) => {
+      const openExternalMock = mountWithOpenExternal();
+
+      clickActionWith(data);
+
+      expect(openExternalMock).toHaveBeenCalledTimes(1);
+      expect(new URL(openExternalMock.mock.calls[0]![0] as unknown as string).hostname).toBe(
+        "daintree.org"
+      );
+    });
+
+    it.each([
       ["missing data", undefined],
       ["a non-URL string", "not a url"],
+      ["a protocol-relative URL", "//daintree.org/download"],
       ["plain http", "http://daintree.org/download"],
       ["a javascript: payload", "javascript:alert(1)"],
       ["a file: payload", "file:///etc/passwd"],
-      ["embedded credentials", "https://daintree.org@evil.test/download"],
+      // Host is evil.test — the userinfo only LOOKS like our domain.
+      ["a trusted-looking username", "https://daintree.org@evil.test/download"],
+      // Host really is ours, so only the credential guard rejects these two.
+      ["credentials on a trusted host", "https://evil.test@daintree.org/download"],
+      ["a password on a trusted host", "https://u:pw@daintree.org/download"],
       ["a non-default port", "https://daintree.org:8443/download"],
       ["an unrelated host", "https://evil.test/download"],
+      ["our domain only in the query", "https://evil.test/?x=daintree.org"],
+      ["a punycode homograph", "https://xn--dintree-n1a.org/download"],
+      ["a trailing-dot host", "https://daintree.org./download"],
     ])("refuses to open %s", (_label, data) => {
       const openExternalMock = mountWithOpenExternal();
 
