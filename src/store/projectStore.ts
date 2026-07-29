@@ -1156,8 +1156,14 @@ registerPersistedStore({
   persistedStateType: "{ projects: Project[] }",
 });
 
-// Break circular dependency by injecting project ID getter
-panelPersistence.setProjectIdGetter(() => useProjectStore.getState().currentProject?.id);
+// Break circular dependency by injecting project ID getter. Falls back to the
+// view's own workspace id so a scratch view — which has no Project row, and so
+// no `currentProject` — still persists its panel grid instead of silently
+// skipping every save (#11484). Same pattern as the PTY-ownership fix in
+// `panelRegistry/addPanel` and `restart`.
+panelPersistence.setProjectIdGetter(
+  () => useProjectStore.getState().currentProject?.id ?? getViewWorkspaceId() ?? undefined
+);
 
 // Keep this renderer's cached project state in sync when another renderer
 // (e.g., the welcome view where the onboarding wizard ran) adds, updates,

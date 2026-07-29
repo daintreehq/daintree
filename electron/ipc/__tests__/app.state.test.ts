@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
 
@@ -18,10 +18,20 @@ vi.mock("electron", () => ({
   },
 }));
 
+// Mutable so a test can vary the legacy global app state without replacing the
+// `store.get` implementation, which `clearAllMocks` would not restore.
+const { globalAppStateRef } = vi.hoisted(() => ({
+  globalAppStateRef: {
+    current: { terminals: [], sidebarWidth: 350 } as Record<string, unknown>,
+  },
+}));
+
+const DEFAULT_GLOBAL_APP_STATE = { terminals: [], sidebarWidth: 350 };
+
 vi.mock("../../store.js", () => ({
   store: {
     get: vi.fn((key: string) => {
-      if (key === "appState") return { terminals: [], sidebarWidth: 350 };
+      if (key === "appState") return globalAppStateRef.current;
       if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
       if (key === "agentSettings") return {};
       return undefined;
@@ -750,6 +760,78 @@ describe("app:boot handler", () => {
     expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
   });
 
+  describe("scratch views (#11484)", () => {
+    const SCRATCH_ID = "b3d1f2a4-5c6e-4a8b-9d0f-1e2a3b4c5d6e";
+
+    afterEach(() => {
+      globalAppStateRef.current = { ...DEFAULT_GLOBAL_APP_STATE };
+    });
+
+    function scratchDeps() {
+      vi.mocked(getWindowForWebContents).mockReturnValue({
+        id: 7,
+        isDestroyed: () => false,
+      } as unknown as Electron.BrowserWindow);
+      const pvm = { getProjectIdForWebContents: vi.fn().mockReturnValue(SCRATCH_ID) };
+      return {
+        windowRegistry: {
+          getByWindowId: vi.fn().mockReturnValue({ services: { projectViewManager: pvm } }),
+        },
+        projectViewManager: pvm,
+      } as unknown as HandlerDependencies;
+    }
+
+    it("restores the persisted grid for a workspace that has no Project row", async () => {
+      const savedPanel = {
+        id: "panel-1",
+        title: "Agent",
+        location: "grid",
+        cwd: "/scratches/one",
+        kind: "terminal",
+      };
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: {
+          projectId: SCRATCH_ID,
+          sidebarWidth: 350,
+          terminals: [savedPanel],
+        },
+        quarantinedPath: undefined,
+      } as unknown as Awaited<ReturnType<typeof projectStore.getProjectStateWithRecovery>>);
+
+      const result = await invokeBoot({ deps: scratchDeps(), senderId: 42 });
+
+      // No Project row exists, yet the state directory is still read and its
+      // panels returned — this is the whole fix.
+      expect(result.project).toBeNull();
+      expect(result.workspaceId).toBe(SCRATCH_ID);
+      expect(projectStore.getProjectStateWithRecovery).toHaveBeenCalledWith(SCRATCH_ID);
+      expect((result.appState as { terminals: unknown[] }).terminals).toHaveLength(1);
+      expect((result.appState as { terminals: Array<{ id: string }> }).terminals[0].id).toBe(
+        savedPanel.id
+      );
+    });
+
+    it("never inherits the legacy global terminals", async () => {
+      // The global list predates per-workspace state and belongs to whichever
+      // project was open back then. Migrating it into a scratch would hand a
+      // brand-new workspace someone else's panels.
+      globalAppStateRef.current = {
+        sidebarWidth: 350,
+        terminals: [{ id: "legacy-panel", title: "Legacy", location: "grid", cwd: "/old/project" }],
+      };
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: null,
+        quarantinedPath: undefined,
+      });
+
+      const result = await invokeBoot({ deps: scratchDeps(), senderId: 42 });
+
+      expect(result.workspaceId).toBe(SCRATCH_ID);
+      expect((result.appState as { terminals: unknown[] }).terminals).toEqual([]);
+      expect(projectStore.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+    });
+  });
+
   it("hydrates the URL project while a project view binding is still pending", async () => {
     const urlProject = {
       id: "proj-url",
@@ -1055,6 +1137,9 @@ describe("app:boot handler", () => {
     });
 
     expect(result.project).toBeNull();
+    // A closed project keeps its row, so it must not be mistaken for a
+    // row-less scratch and have its state served back (#11484).
+    expect(result.workspaceId).toBeNull();
     expect(projectStore.getProjectStateWithRecovery).not.toHaveBeenCalled();
     expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
   });

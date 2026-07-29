@@ -738,6 +738,29 @@ export class ProjectStore {
     return adopted;
   }
 
+  /**
+   * Delete a workspace's state directory without touching the project table.
+   *
+   * Scratches persist their panel grid under the same `projects/<id>/` layout
+   * (#11484) but are removed through `ScratchStore`, which knows nothing about
+   * project rows. Without this the state directory would outlive every scratch
+   * forever. Best-effort: a failed removal is logged, never thrown, so it can
+   * never block a scratch deletion that has already tombstoned its row.
+   */
+  async removeWorkspaceStateDir(workspaceId: string): Promise<void> {
+    const stateDir = getProjectStateDir(this.projectsConfigDir, workspaceId);
+    if (!stateDir) return;
+
+    if (existsSync(stateDir)) {
+      try {
+        await fs.rm(stateDir, { recursive: true, force: true });
+      } catch (error) {
+        logError(`Failed to remove state directory for ${workspaceId}`, error);
+      }
+    }
+    this.stateManager.invalidateProjectStateCache(workspaceId);
+  }
+
   async removeProject(projectId: string): Promise<void> {
     const stateDir = getProjectStateDir(this.projectsConfigDir, projectId);
     if (!stateDir) {

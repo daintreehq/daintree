@@ -42,6 +42,14 @@ vi.mock("../../utils/logger.js", () => ({
   logError: vi.fn(),
 }));
 
+const { removeWorkspaceStateDirMock } = vi.hoisted(() => ({
+  removeWorkspaceStateDirMock: vi.fn(async (_workspaceId: string) => {}),
+}));
+
+vi.mock("../ProjectStore.js", () => ({
+  projectStore: { removeWorkspaceStateDir: removeWorkspaceStateDirMock },
+}));
+
 import { ScratchStore } from "../ScratchStore.js";
 
 describe("ScratchStore transaction mode", () => {
@@ -77,6 +85,59 @@ describe("ScratchStore transaction mode", () => {
     store.setCurrentScratch(scratchId);
     expect(spy).toHaveBeenCalledWith(expect.any(Function), { behavior: "immediate" });
     spy.mockRestore();
+  });
+});
+
+describe("removeScratch state cleanup (#11484)", () => {
+  let store: ScratchStore;
+  let scratchId: string;
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+
+    const now = Date.now();
+    scratchId = randomUUID();
+    db.insert(schema.scratches)
+      .values({
+        id: scratchId,
+        path: "/tmp/daintree-scratch-test/" + scratchId,
+        name: "Test Scratch",
+        createdAt: now - 86_400_000,
+        lastOpened: now - 3600_000,
+      })
+      .run();
+
+    store = new ScratchStore();
+    removeWorkspaceStateDirMock.mockClear();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    vi.restoreAllMocks();
+  });
+
+  it("drops the persisted panel state along with the scratch directory", async () => {
+    // The grid is persisted under `projects/<scratchId>/`, outside the scratch
+    // folder, so removing the folder alone would leave it orphaned forever.
+    vi.spyOn(fs, "rm").mockResolvedValue(undefined);
+
+    await store.removeScratch(scratchId);
+
+    expect(removeWorkspaceStateDirMock).toHaveBeenCalledWith(scratchId);
+    expect(db.select().from(schema.scratches).all()).toHaveLength(0);
+  });
+
+  it("keeps the row and the state when the directory removal fails", async () => {
+    // Bailing out before the hard delete is what lets a later sweep retry; the
+    // state directory must not be destroyed ahead of the row it belongs to.
+    vi.spyOn(fs, "rm").mockRejectedValue(new Error("EBUSY"));
+
+    await store.removeScratch(scratchId);
+
+    expect(removeWorkspaceStateDirMock).not.toHaveBeenCalled();
+    expect(db.select().from(schema.scratches).all()).toHaveLength(1);
   });
 });
 

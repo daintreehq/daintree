@@ -69,6 +69,14 @@ vi.mock("../persistence/panelPersistence", () => ({
   panelToSnapshot: vi.fn(),
 }));
 
+const { viewWorkspaceIdMock } = vi.hoisted(() => ({
+  viewWorkspaceIdMock: vi.fn<() => string | null>(() => null),
+}));
+
+vi.mock("../viewWorkspaceId", () => ({
+  getViewWorkspaceId: viewWorkspaceIdMock,
+}));
+
 vi.mock("@/lib/notify", () => ({
   notify: vi.fn(),
 }));
@@ -125,10 +133,63 @@ function restoreLocalStorage(): void {
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
+  viewWorkspaceIdMock.mockReturnValue(null);
 });
 
 afterEach(() => {
   restoreLocalStorage();
+});
+
+describe("panel persistence workspace id (#11484)", () => {
+  async function loadPersistenceGetter() {
+    const { panelPersistence } = await import("../persistence/panelPersistence");
+    await import("../projectStore");
+    const getter = vi.mocked(panelPersistence.setProjectIdGetter).mock.calls[0]?.[0];
+    if (!getter) throw new Error("panelPersistence.setProjectIdGetter was never wired");
+    return getter;
+  }
+
+  it("falls back to the view's own workspace id when there is no project", async () => {
+    // A scratch view has no Project row, so `currentProject` is null. Before the
+    // fix the getter returned undefined and every save silently no-opped,
+    // leaving the grid to die with the view.
+    installLocalStorage(createStorageMock());
+    viewWorkspaceIdMock.mockReturnValue("b3d1f2a4-5c6e-4a8b-9d0f-1e2a3b4c5d6e");
+
+    const getter = await loadPersistenceGetter();
+
+    expect(getter()).toBe("b3d1f2a4-5c6e-4a8b-9d0f-1e2a3b4c5d6e");
+  });
+
+  it("prefers the current project over the view id", async () => {
+    installLocalStorage(createStorageMock());
+    viewWorkspaceIdMock.mockReturnValue("b3d1f2a4-5c6e-4a8b-9d0f-1e2a3b4c5d6e");
+
+    const getter = await loadPersistenceGetter();
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({
+      currentProject: {
+        id: "project-1",
+        name: "Project 1",
+        path: "/tmp/project-1",
+        emoji: "folder",
+        lastOpened: Date.now(),
+      } as unknown as NonNullable<ReturnType<typeof useProjectStore.getState>["currentProject"]>,
+    });
+
+    expect(getter()).toBe("project-1");
+  });
+
+  it("stays undefined when the view owns no workspace at all", async () => {
+    // Persistence must still no-op for a view with no identity — a null
+    // workspace is an identity, never a wildcard that writes somewhere else.
+    installLocalStorage(createStorageMock());
+    viewWorkspaceIdMock.mockReturnValue(null);
+
+    const getter = await loadPersistenceGetter();
+
+    expect(getter()).toBeUndefined();
+  });
 });
 
 describe("projectStore persistence boundary hardening", () => {

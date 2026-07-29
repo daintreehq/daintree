@@ -1,6 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
-import { isValidProjectId } from "./projectStorePaths.js";
+import { isValidWorkspaceStateId } from "./projectStorePaths.js";
 import { resilientUnlink } from "../utils/fs.js";
 import { logInfo, logError } from "../utils/logger.js";
 
@@ -75,7 +75,7 @@ export async function cleanupQuarantinedProjectFiles(
 
   let deletedCount = 0;
   for (const entry of entries) {
-    if (!entry.isDirectory() || !isValidProjectId(entry.name)) continue;
+    if (!entry.isDirectory() || !isValidWorkspaceStateId(entry.name)) continue;
 
     const projectDir = path.join(projectsConfigDir, entry.name);
     try {
