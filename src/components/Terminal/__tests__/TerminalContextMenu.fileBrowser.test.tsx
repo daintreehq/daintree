@@ -264,7 +264,33 @@ describe("TerminalContextMenu — open in file browser (#11483)", () => {
     expect(reportFileLinkFailure).toHaveBeenCalledWith(
       expect.any(String),
       "worktree removed",
-      "/repo/src/index.ts"
+      "/repo/src/index.ts",
+      "file"
+    );
+  });
+
+  // The failure copy is subject-aware, so a folder that fails to open must not
+  // be reported as a file the way the default argument would have it.
+  it("reports a failed directory dispatch as a folder", async () => {
+    dispatch.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "gone", details: "worktree removed" },
+    });
+    openMenu({
+      hovered: "/repo/src/components",
+      kind: "directory",
+      worktrees: [worktree("wt-1", "/repo")],
+    });
+
+    await act(async () => {
+      screen.getByText(LABEL).click();
+    });
+
+    expect(reportFileLinkFailure).toHaveBeenCalledWith(
+      expect.any(String),
+      "worktree removed",
+      "/repo/src/components",
+      "folder"
     );
   });
 

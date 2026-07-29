@@ -898,7 +898,8 @@ export function TerminalContextMenu({
                               reportFileLinkFailure(
                                 "Failed to open file browser",
                                 result.error.details,
-                                hoveredFilePath
+                                hoveredFilePath,
+                                hoveredFileKind === "directory" ? "folder" : "file"
                               );
                             }
                           });
