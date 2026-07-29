@@ -17,8 +17,7 @@ import type { FileReadErrorCode } from "@shared/types/ipc/files";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
-import { FolderOpen } from "@/components/icons";
-import { FolderTree } from "lucide-react";
+import { FolderOpen, FolderTree } from "@/components/icons";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
@@ -831,15 +830,16 @@ export function FilePane({
   const externalInFlightRef = useRef<Set<ExternalTarget>>(new Set());
 
   // A result that lands after the pane switched files (or panels) belongs to the
-  // old file: drop it, and clear any banner the old file left behind. The
-  // resolved worktree counts too — a topology change re-aims the file-browser
-  // target, so an in-flight open describes a scope the pane no longer has.
+  // old file: drop it, and clear any banner the old file left behind. Keyed on
+  // the file alone, never the resolved worktree: this resets *every* target at
+  // once, so folding topology churn in here would let a new nested worktree
+  // erase a pending editor launch and its failure banner.
   useEffect(() => {
     externalGenerationRef.current += 1;
     externalInFlightRef.current.clear();
     setExternalError(null);
     setPendingTargets([]);
-  }, [id, filePath, revealWorktreeId]);
+  }, [id, filePath]);
 
   const handleOpenExternal = useCallback(
     async (target: ExternalTarget) => {
@@ -852,7 +852,11 @@ export function FilePane({
         if (!revealWorktreeId) return;
         args = {
           worktreeId: revealWorktreeId,
-          revealPath: relativeFilePath || undefined,
+          // `toWorktreeRelative` hands back its input unchanged for a path that
+          // *is* the root (the only such case here — containment is already
+          // proven by revealWorktreeId), and the action would then trim
+          // "/repo" down to a bogus "repo" child. Undefined opens the root.
+          revealPath: relativeFilePath && relativeFilePath !== filePath ? relativeFilePath : undefined,
           revealKind: "file",
         };
       } else {

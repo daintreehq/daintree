@@ -685,6 +685,14 @@ describe("FilePane show in file browser (#11483)", () => {
     });
   }
 
+  function deferred() {
+    let resolve: (value: unknown) => void = () => {};
+    const promise = new Promise((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
   it("dispatches the containing worktree, relative path and a file reveal kind", async () => {
     worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
     const { container } = renderPane("/repo/src/index.ts");
@@ -773,6 +781,51 @@ describe("FilePane show in file browser (#11483)", () => {
       { source: "user" }
     );
     expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  // toWorktreeRelative hands back its input unchanged for the root itself, so
+  // a naive pass-through would ship revealPath "/repo" — which the action trims
+  // to a bogus "repo" child instead of opening the root.
+  it("omits revealPath when the file resolves to the worktree root", async () => {
+    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
+    const { container } = renderPane("/repo");
+
+    await click(button(container, LABEL)!);
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.openFileBrowser",
+      { worktreeId: "wt-1", revealPath: undefined, revealKind: "file" },
+      { source: "user" }
+    );
+  });
+
+  // Per-target isolation: a worktree appearing or vanishing must not reset the
+  // shared external-action state and free a pending sibling for a second launch.
+  it("leaves a pending sibling target alone when the worktree list changes", async () => {
+    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
+    const gate = deferred();
+    dispatchMock.mockReturnValue(gate.promise);
+    const { container, rerender } = renderPane("/repo/src/index.ts");
+
+    act(() => {
+      button(container, "Open in editor")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+
+    // A nested worktree appears, re-aiming the file-browser target only.
+    worktreeState.worktrees.set("wt-nested", { id: "wt-nested", path: "/repo/src" });
+    rerender(paneElement("/repo/src/index.ts"));
+
+    // The editor is still in flight, so a second click must not launch again.
+    act(() => {
+      button(container, "Open in editor")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      gate.resolve({ ok: true, result: undefined });
+      await gate.promise;
+    });
   });
 
   // The reveal target is path-only; regressing the args builder into a single

@@ -425,6 +425,17 @@ class TerminalInstanceService {
   }
 
   /**
+   * Which of the two on-disk kinds {@link getHoveredFilePath} matched, or null
+   * when no path is hovered. Reveal treats them identically, but the file
+   * browser doesn't: a directory is expanded as well as selected, so the menu
+   * has to pass the kind through rather than guessing (#11483).
+   */
+  getHoveredFileKind(id: string): "file" | "directory" | null {
+    const link = this.instances.get(id)?.hoveredLink;
+    return link?.kind === "file" || link?.kind === "directory" ? link.kind : null;
+  }
+
+  /**
    * Opens the currently-hovered link by delegating to its own activate()
    * method. File links route through the actionService (file.view); URL and
    * OSC 8 links route through TerminalLinkHandler (localhost → browser panel

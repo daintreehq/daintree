@@ -361,19 +361,29 @@ describe("resolveWorktreePathScope", () => {
     expect(scope?.worktreePath).toBe("C:\\repo");
   });
 
-  it("collapses interior . and .. segments before matching", () => {
+  it("collapses interior . segments and duplicate separators before matching", () => {
     expect(resolveWorktreePathScope("/repo/src/./docs/a.ts", [OUTER])?.relativePath).toBe(
       "src/docs/a.ts"
     );
-    expect(resolveWorktreePathScope("/repo/src/../docs/a.ts", [OUTER])?.relativePath).toBe(
-      "docs/a.ts"
-    );
+    expect(resolveWorktreePathScope("/repo//src/a.ts", [OUTER])?.relativePath).toBe("src/a.ts");
   });
 
-  // A traversal that escapes the root is outside it, not a relative path with
-  // a ".." in it — the tree would reject the whole stat batch.
-  it("rejects a path that escapes the root via ..", () => {
+  // Lexical normalization pops `..` before symlinks are resolved, so
+  // /repo/link/../docs would be reported as /repo/docs even when `link` points
+  // outside the worktree and the real target is /outside/docs. Refuse instead
+  // of resolving to a confidently wrong in-worktree path.
+  it("refuses any path containing a .. segment rather than collapsing it", () => {
     expect(resolveWorktreePathScope("/repo/../etc/passwd", [OUTER])).toBeNull();
+    expect(resolveWorktreePathScope("/repo/link/../docs/a.ts", [OUTER])).toBeNull();
+    expect(resolveWorktreePathScope("C:\\repo\\link\\..\\docs", [{ id: "w", path: "C:\\repo" }]))
+      .toBeNull();
+  });
+
+  // "..somefile" and "..." are ordinary names, not traversal.
+  it("does not mistake a leading-dots filename for traversal", () => {
+    expect(resolveWorktreePathScope("/repo/src/..hidden.ts", [OUTER])?.relativePath).toBe(
+      "src/..hidden.ts"
+    );
   });
 
   it("returns null for a path in no known worktree, and for an empty list", () => {

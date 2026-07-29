@@ -40,7 +40,6 @@ import {
   Copy,
   CopyPlus,
   ExternalLink,
-  FolderTree,
   Globe,
   Info,
   Link,
@@ -62,7 +61,7 @@ import {
   Trash2,
   Unlock,
 } from "lucide-react";
-import { FolderGit2, FolderOpen } from "@/components/icons";
+import { FolderGit2, FolderOpen, FolderTree } from "@/components/icons";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -133,6 +132,7 @@ export function TerminalContextMenu({
   const [hasSelection, setHasSelection] = useState(false);
   const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
   const [hoveredFilePath, setHoveredFilePath] = useState<string | null>(null);
+  const [hoveredFileKind, setHoveredFileKind] = useState<"file" | "directory" | null>(null);
   const [selectedText, setSelectedText] = useState<string | null>(null);
   const suppressNextCloseAutoFocusRef = useRef(false);
   // Local confirm dialog for single-terminal kill/restart when an agent
@@ -193,6 +193,7 @@ export function TerminalContextMenu({
         setHasSelection(false);
         setHoveredUrl(null);
         setHoveredFilePath(null);
+        setHoveredFileKind(null);
         setSelectedText(null);
         return;
       }
@@ -203,6 +204,7 @@ export function TerminalContextMenu({
       setSelectedText(selection || null);
       setHoveredUrl(terminalInstanceService.getHoveredLinkText(terminalId));
       setHoveredFilePath(terminalInstanceService.getHoveredFilePath(terminalId));
+      setHoveredFileKind(terminalInstanceService.getHoveredFileKind(terminalId));
     },
     [terminalId, recentVoiceTargets]
   );
@@ -882,12 +884,12 @@ export function TerminalContextMenu({
                             {
                               worktreeId: hoveredFileScope.worktreeId,
                               revealPath: hoveredFileScope.relativePath || undefined,
-                              // The hovered token is a file link; directory
-                              // tokens are their own link kind (DirectoryLink),
-                              // which passes "directory" from its own path. A
-                              // wrong guess is graceful either way — the tree
-                              // still selects the row, it just isn't expanded.
-                              revealKind: "file",
+                              // Carried through rather than assumed: a
+                              // directory is expanded as well as selected, so
+                              // guessing "file" would leave a right-clicked
+                              // folder collapsed while left-clicking the same
+                              // link opens it.
+                              revealKind: hoveredFileKind ?? "file",
                             },
                             { source: sourceRef.current }
                           )

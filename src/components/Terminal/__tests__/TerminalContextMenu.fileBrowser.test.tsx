@@ -39,14 +39,16 @@ vi.mock("@/components/ui/context-menu", () => {
   };
 });
 
-const { dispatch, hoveredFilePath, reportFileLinkFailure, worktreeList } = vi.hoisted(() => ({
-  dispatch: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
-  hoveredFilePath: { current: null as string | null },
-  reportFileLinkFailure: vi.fn(),
-  // `name`/`branch` are carried because the unrelated "Move to worktree"
-  // submenu labels every entry from them and throws on a bare {id, path}.
-  worktreeList: { current: [] as Array<{ id: string; path: string; name: string }> },
-}));
+const { dispatch, hoveredFilePath, hoveredFileKind, reportFileLinkFailure, worktreeList } =
+  vi.hoisted(() => ({
+    dispatch: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+    hoveredFilePath: { current: null as string | null },
+    hoveredFileKind: { current: "file" as "file" | "directory" | null },
+    reportFileLinkFailure: vi.fn(),
+    // `name`/`branch` are carried because the unrelated "Move to worktree"
+    // submenu labels every entry from them and throws on a bare {id, path}.
+    worktreeList: { current: [] as Array<{ id: string; path: string; name: string }> },
+  }));
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch, get: () => undefined, list: () => [] },
@@ -59,6 +61,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     get: () => ({ terminal: { getSelection: () => "" } }),
     getHoveredLinkText: () => null,
     getHoveredFilePath: () => hoveredFilePath.current,
+    getHoveredFileKind: () => (hoveredFilePath.current ? hoveredFileKind.current : null),
     openHoveredLink: vi.fn(),
   },
 }));
@@ -109,10 +112,12 @@ function worktree(id: string, path: string) {
 
 function openMenu(options: {
   hovered: string | null;
+  kind?: "file" | "directory";
   worktrees?: Array<{ id: string; path: string; name: string }>;
   panelWorktreeId?: string;
 }) {
   hoveredFilePath.current = options.hovered;
+  hoveredFileKind.current = options.kind ?? "file";
   worktreeList.current = options.worktrees ?? [];
   panelsById.current = {
     "panel-1": {
@@ -143,6 +148,7 @@ describe("TerminalContextMenu — open in file browser (#11483)", () => {
     dispatch.mockReset();
     reportFileLinkFailure.mockReset();
     hoveredFilePath.current = null;
+    hoveredFileKind.current = "file";
     worktreeList.current = [];
   });
 
@@ -259,10 +265,34 @@ describe("TerminalContextMenu — open in file browser (#11483)", () => {
       screen.getByText(LABEL).click();
     });
 
+    // The reason string is diagnostic copy; what matters is that the failure
+    // reached the channel carrying the real details and the offending path.
     expect(reportFileLinkFailure).toHaveBeenCalledWith(
-      "Failed to open file browser",
+      expect.any(String),
       "worktree removed",
       "/repo/src/index.ts"
+    );
+  });
+
+  // A directory is expanded as well as selected, so the hovered link's kind has
+  // to survive the trip — guessing "file" leaves a right-clicked folder
+  // collapsed while left-clicking the very same link opens it.
+  it("passes a directory reveal kind through for a hovered directory link", async () => {
+    dispatch.mockResolvedValue({ ok: true, result: undefined });
+    openMenu({
+      hovered: "/repo/src/components",
+      kind: "directory",
+      worktrees: [worktree("wt-1", "/repo")],
+    });
+
+    await act(async () => {
+      screen.getByText(LABEL).click();
+    });
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "worktree.openFileBrowser",
+      { worktreeId: "wt-1", revealPath: "src/components", revealKind: "directory" },
+      { source: "user" }
     );
   });
 });

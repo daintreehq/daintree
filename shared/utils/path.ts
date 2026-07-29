@@ -147,6 +147,13 @@ export function resolveWorktreePathScope(
   absolutePath: string,
   worktrees: Iterable<WorktreeScopeCandidate>
 ): WorktreeScope | null {
+  // A `..` is refused rather than collapsed. `normalize` pops it lexically, but
+  // the filesystem resolves symlinks first: with `/repo/link -> /outside`,
+  // `/repo/link/../docs` is really `/outside/docs` while normalization claims
+  // `/repo/docs` — which would hand callers a confidently wrong in-worktree
+  // target. Refusing is the only answer a lexical resolver can defend.
+  if (absolutePath.split(/[\\/]/).includes("..")) return null;
+
   let best: WorktreeScope | null = null;
   let bestLength = -1;
   for (const worktree of worktrees) {
