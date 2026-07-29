@@ -37,6 +37,16 @@ async function openNewTerminalPalette(window: Page): Promise<void> {
   );
 }
 
+async function openPanelPalette(window: Page): Promise<void> {
+  await window.evaluate(() =>
+    (
+      window as unknown as {
+        __daintreeDispatchAction: (actionId: string) => Promise<unknown>;
+      }
+    ).__daintreeDispatchAction("panel.palette")
+  );
+}
+
 /** Close any open palette and return keyboard focus to the main content. */
 async function resetToApp(window: Page): Promise<void> {
   for (let i = 0; i < 3; i++) {
@@ -91,7 +101,7 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
     const { window } = ctx;
     await ensureWindowFocused(ctx.app);
 
-    await window.keyboard.press(`${mod}+N`);
+    await openPanelPalette(window);
     const searchInput = window.locator(SEL.panelPalette.searchInput);
     await expect(window.locator(SEL.panelPalette.dialog)).toBeVisible({ timeout: T_MEDIUM });
 
@@ -111,7 +121,7 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
     const { window } = ctx;
     await ensureWindowFocused(ctx.app);
 
-    await window.keyboard.press(`${mod}+N`);
+    await openPanelPalette(window);
     const searchInput = window.locator(SEL.panelPalette.searchInput);
     await expect(window.locator(SEL.panelPalette.dialog)).toBeVisible({ timeout: T_MEDIUM });
 
@@ -122,7 +132,7 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
     await searchInput.press("Escape");
     await expect(window.locator(SEL.panelPalette.dialog)).not.toBeVisible({ timeout: T_MEDIUM });
 
-    await window.keyboard.press(`${mod}+N`);
+    await openPanelPalette(window);
     await expect(window.locator(SEL.panelPalette.dialog)).toBeVisible({ timeout: T_MEDIUM });
     await expect(window.locator(SEL.panelPalette.searchInput)).toHaveValue("");
   });
@@ -199,6 +209,11 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
   test("theme palette opens via chord and supports keyboard navigation", async () => {
     const { window } = ctx;
     await ensureWindowFocused(ctx.app);
+
+    const shortcutHost = window.locator(SEL.toolbar.toggleSidebar);
+    await expect(shortcutHost).toBeVisible({ timeout: T_MEDIUM });
+    await shortcutHost.focus();
+    await expect(shortcutHost).toBeFocused({ timeout: T_SHORT });
 
     // Two-step chord: leader (Cmd/Ctrl+K) then Cmd/Ctrl+T.
     await window.keyboard.press(`${mod}+K`);

@@ -2,6 +2,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -136,7 +137,7 @@ export function AppPaletteDialog({
     onCloseRef.current = onClose;
   }, [onClose]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!isOpen) return;
     const closeThis = () => onCloseRef.current();
     const unregister = registerDialogEscapeBackstop(closeThis);
