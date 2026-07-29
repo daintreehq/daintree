@@ -949,6 +949,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       agentId: "claude",
       agentSessionId: "abc-123",
       cwd: "/tmp/help/proj-1",
+      claimId: "claim-1",
     });
 
     await act(async () => {
@@ -1033,6 +1034,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       agentId: "claude",
       agentSessionId: "abc-123",
       cwd: "/tmp/help/proj-1",
+      claimId: "claim-1",
     });
 
     let view: ReturnType<typeof render> | undefined;
@@ -1098,6 +1100,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       agentId: "claude",
       agentSessionId: "abc-123",
       cwd: "/tmp/help/proj-1",
+      claimId: "claim-1",
     });
 
     await act(async () => {
@@ -1149,6 +1152,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       agentId: "claude",
       agentSessionId: "abc-123",
       cwd: "/tmp/help/proj-1",
+      claimId: "claim-1",
     });
     // Provisioning fails AFTER the take has already consumed main's entry.
     mockProvisionSession.mockResolvedValue(null);
@@ -1159,7 +1163,14 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     await flushAsyncWork();
 
     expect(mockTakePendingHibernation).toHaveBeenCalledWith("proj-1");
-    expect(mockRestorePendingHibernation).toHaveBeenCalledWith("proj-1");
+    // Quoting the claim main handed out, so the put-back acts on THIS take and
+    // not on whatever the project's slot happens to hold by then.
+    expect(mockRestorePendingHibernation).toHaveBeenCalledWith("proj-1", "claim-1");
+    // The renderer's local mirror goes with it: seedFromMain wrote the taken
+    // entry into hibernateSessions, and leaving that behind while main hands
+    // the entry to another window would let two windows resume one
+    // conversation — the single-winner invariant the atomic take holds.
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
   });
 
   // #11068: the same cold-resume handoff, but the active workspace is a scratch
@@ -1200,6 +1211,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       agentId: "claude",
       agentSessionId: "abc-123",
       cwd: "/scratches/scratch-1",
+      claimId: "claim-1",
     });
 
     await act(async () => {
@@ -1355,6 +1367,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       agentId: "claude",
       agentSessionId: "abc-123",
       cwd: "/tmp/help/proj-1",
+      claimId: "claim-1",
     });
 
     let view: ReturnType<typeof render> | undefined;

@@ -292,12 +292,22 @@ export class HelpSessionService {
   // project, so a taker whose launch aborts can put it back verbatim via
   // `restorePendingHibernation` — original `capturedAt` intact, `panelWasOpen`
   // stripped. Holding it here rather than round-tripping it through the
-  // renderer keeps the put-back IPC to a projectId and leaves no way to write a
-  // fabricated entry into the persistent store. In-memory only and one deep per
-  // project: a take that is never answered is simply dropped, and a later take
-  // overwrites the stash so a stale put-back can't resurrect a superseded
-  // conversation.
-  private readonly lastTakenByProject = new Map<string, PendingHelpHibernation>();
+  // renderer means the put-back carries no entry data at all, so there is no
+  // way to write a fabricated agentId/cwd into the persistent store.
+  //
+  // `claimId` + `ownerWebContentsId` make the put-back a compare-and-swap on
+  // the specific take rather than on the project: only the view that took this
+  // entry, quoting the id it was handed, can put it back. Without that pair a
+  // release is merely project-scoped, so a duplicate or late release could
+  // restore a stash a LATER take had already replaced, and a stash left behind
+  // by a successfully-resumed launch would stay restorable indefinitely.
+  //
+  // In-memory only, one deep per project: a take that is never answered is
+  // dropped, and a later take supersedes the stash outright.
+  private readonly lastTakenByProject = new Map<
+    string,
+    { entry: PendingHelpHibernation; claimId: string; ownerWebContentsId: number | null }
+  >();
   // #10815: per-project assistant-panel visibility, reported by the renderer
   // whenever its `isOpen` changes. Read at capture time to stamp
   // `panelWasOpen` onto the eviction hibernation entry so cold switch-back can
@@ -1133,11 +1143,20 @@ export class HelpSessionService {
    * captured on the prior eviction. The entry is one-shot — once read it's
    * dropped from the persistent store so a future cold launch without
    * intervening capture starts fresh.
+   *
+   * Returns a `claimId` alongside the entry (#11477): a launch that takes but
+   * then aborts quotes it back to `restorePendingHibernation` to put the entry
+   * back. `ownerWebContentsId` is the taking view, supplied by the IPC layer
+   * from its context — never by the renderer.
    */
-  async takePendingHibernation(projectId: string): Promise<{
+  async takePendingHibernation(
+    projectId: string,
+    ownerWebContentsId?: number
+  ): Promise<{
     agentId: string;
     agentSessionId: string;
     cwd: string;
+    claimId: string;
   } | null> {
     if (!this.pendingHibernationStore) return null;
     const entry = this.pendingHibernationStore.get(projectId);
@@ -1152,12 +1171,18 @@ export class HelpSessionService {
     // Overwrites any prior stash: only the most recent take is restorable, and
     // an earlier taker's put-back must not resurrect a superseded entry.
     const { panelWasOpen: _panelWasOpen, ...restorable } = entry;
-    this.lastTakenByProject.set(projectId, restorable);
+    const claimId = randomUUID();
+    this.lastTakenByProject.set(projectId, {
+      entry: restorable,
+      claimId,
+      ownerWebContentsId: ownerWebContentsId ?? null,
+    });
     await this.pendingHibernationStore.clear(projectId);
     return {
       agentId: entry.agentId,
       agentSessionId: entry.agentSessionId,
       cwd: entry.cwd,
+      claimId,
     };
   }
 
@@ -1173,8 +1198,9 @@ export class HelpSessionService {
    * token the user had. The watchdog case is the sharpest: it surfaces a
    * *retryable* launch error while the token that retry needs is already gone.
    *
-   * Refuses whenever anything newer owns the slot — that check IS the
-   * compare-and-swap, which is why no claim token is needed:
+   * The `claimId` from the matching take is required, so a release acts on the
+   * take that produced it rather than on the project at large. On top of that,
+   * it refuses whenever anything newer owns the slot:
    *
    * - A present entry means a fresh capture landed after our take. It is newer
    *   and describes a later conversation; overwriting it would resurrect a
@@ -1194,16 +1220,32 @@ export class HelpSessionService {
    *
    * Returns whether the entry was actually restored.
    */
-  async restorePendingHibernation(projectId: string): Promise<boolean> {
+  async restorePendingHibernation(
+    projectId: string,
+    claimId: string,
+    ownerWebContentsId?: number
+  ): Promise<boolean> {
     if (!this.pendingHibernationStore) return false;
     const stashed = this.lastTakenByProject.get(projectId);
     if (!stashed) return false;
-    // One-shot: a take is answered by at most one restore, so a duplicate or
-    // late release can't re-resurrect an entry a subsequent take consumed.
+    // Compare-and-swap on the specific take. A release quoting a superseded
+    // claim (a later take replaced the stash) or arriving from a view other
+    // than the one that took it is refused WITHOUT consuming the stash, so the
+    // rightful claimant can still put its entry back.
+    if (stashed.claimId !== claimId) return false;
+    if (
+      stashed.ownerWebContentsId !== null &&
+      ownerWebContentsId !== undefined &&
+      stashed.ownerWebContentsId !== ownerWebContentsId
+    ) {
+      return false;
+    }
+    // One-shot from here: the claim is now spent either way, so a duplicate
+    // release can't re-resurrect an entry a subsequent take consumed.
     this.lastTakenByProject.delete(projectId);
     if (this.pendingHibernationStore.get(projectId)) return false;
     if (this.pendingCapturesByProject.has(projectId)) return false;
-    await this.pendingHibernationStore.set(projectId, stashed);
+    await this.pendingHibernationStore.set(projectId, stashed.entry);
     return true;
   }
 
@@ -1325,6 +1367,10 @@ export class HelpSessionService {
     // resume mechanism for clean shutdowns; this is the safety net.
     const targets = [...this.sessionsById.values()];
     await Promise.all(targets.map((record) => this.revokeSession(record.sessionId)));
+    // Take-side stashes are launch-scoped and hold a resume id; nothing can
+    // release one across a restart, so drop them rather than carry them to
+    // shutdown. The persisted entries themselves are untouched (#11477).
+    this.lastTakenByProject.clear();
   }
 
   /**

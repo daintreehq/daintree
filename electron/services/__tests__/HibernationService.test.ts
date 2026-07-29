@@ -655,6 +655,67 @@ describe("HibernationService", () => {
       expect(logInfo).not.toHaveBeenCalledWith("hibernate-skip-live-assistant", expect.anything());
     });
 
+    describe("with the hibernation-removal experiment off", () => {
+      // Every background kill is currently suppressed by
+      // EXPERIMENT_HIBERNATION_DISABLED, so with it on, "no kill happened"
+      // proves nothing about the assistant guard — deleting the guard would
+      // leave those assertions passing. Neutralize the flag so the guard is the
+      // only thing that can decide, then assert both directions. `readonly` is
+      // compile-time only, so the static is writable through a cast.
+      type ExperimentSeam = { EXPERIMENT_HIBERNATION_DISABLED: boolean };
+      let restoreFlag: () => void;
+
+      beforeEach(() => {
+        const seam = HibernationService as unknown as ExperimentSeam;
+        const original = seam.EXPERIMENT_HIBERNATION_DISABLED;
+        seam.EXPERIMENT_HIBERNATION_DISABLED = false;
+        restoreFlag = () => {
+          seam.EXPERIMENT_HIBERNATION_DISABLED = original;
+        };
+      });
+
+      afterEach(() => restoreFlag());
+
+      it("a live assistant backend is what stops the background kill", async () => {
+        ptyManagerMock.gracefulKillByProject.mockResolvedValue([
+          { id: "t1", agentSessionId: null },
+        ]);
+
+        const service = makeService();
+        service.setHasLiveAssistantBackend(() => true);
+        const killed = await service.hibernateProjectOnDemand("proj-1", "Proj One", "scheduled");
+
+        expect(killed).toBe(0);
+        expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
+      });
+
+      it("kills as usual when no assistant is bound", async () => {
+        ptyManagerMock.gracefulKillByProject.mockResolvedValue([
+          { id: "t1", agentSessionId: null },
+        ]);
+
+        const service = makeService();
+        service.setHasLiveAssistantBackend(() => false);
+        const killed = await service.hibernateProjectOnDemand("proj-1", "Proj One", "scheduled");
+
+        expect(killed).toBe(1);
+        expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
+          preserveSession: true,
+        });
+      });
+
+      it("kills as usual when no predicate is wired at all", async () => {
+        ptyManagerMock.gracefulKillByProject.mockResolvedValue([
+          { id: "t1", agentSessionId: null },
+        ]);
+
+        const service = makeService();
+        const killed = await service.hibernateProjectOnDemand("proj-1", "Proj One", "scheduled");
+
+        expect(killed).toBe(1);
+      });
+    });
+
     it("suppresses the scheduled sweep's kill too, not just memory pressure", async () => {
       const service = makeService();
       service.setHasLiveAssistantBackend(() => true);

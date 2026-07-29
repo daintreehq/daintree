@@ -181,6 +181,8 @@ async function handleTakePendingHibernation(
   agentId: string;
   agentSessionId: string;
   cwd: string;
+  // #11477: opaque handle for putting this entry back if the launch aborts.
+  claimId: string;
 } | null> {
   if (typeof projectId !== "string" || !projectId) return null;
   // Derive the calling project from the renderer's webContents binding and
@@ -197,14 +199,18 @@ async function handleTakePendingHibernation(
     return null;
   }
   const { helpSessionService } = await getHelpSessionService();
-  return helpSessionService.takePendingHibernation(projectId);
+  // The owner is the view's own id from context, never renderer-supplied — it
+  // binds the resulting claim to this view so no other can release it (#11477).
+  return helpSessionService.takePendingHibernation(projectId, ctx.webContentsId);
 }
 
 async function handleRestorePendingHibernation(
   ctx: import("../types.js").IpcContext,
-  projectId: string
+  projectId: string,
+  claimId: string
 ): Promise<boolean> {
   if (typeof projectId !== "string" || !projectId) return false;
+  if (typeof claimId !== "string" || !claimId) return false;
   // Same cross-project guard as the peek/take handlers. The entry itself never
   // crosses the bridge — main restores from its own take-side stash — so this
   // only has to establish that the caller is the view that took it.
@@ -216,7 +222,7 @@ async function handleRestorePendingHibernation(
     return false;
   }
   const { helpSessionService } = await getHelpSessionService();
-  return helpSessionService.restorePendingHibernation(projectId);
+  return helpSessionService.restorePendingHibernation(projectId, claimId, ctx.webContentsId);
 }
 
 async function handleReportPanelOpen(

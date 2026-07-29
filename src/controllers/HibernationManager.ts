@@ -320,13 +320,22 @@ export class HibernationManager {
    * owns it (and so must consume or release it), `"released"` when it went
    * back to main, and `"empty"` when there was nothing to take.
    */
-  async seedFromMain(projectId: string, gen: number): Promise<"seeded" | "released" | "empty"> {
+  async seedFromMain(
+    projectId: string,
+    gen: number
+  ): Promise<{ status: "seeded"; claimId: string } | { status: "released" | "empty" }> {
+    // Tracked outside the try so a throw from the store write below still
+    // releases the claim main has already handed us — the take is the point of
+    // no return, and swallowing it in the catch would lose the token exactly
+    // the way this fix exists to prevent.
+    let claimId: string | null = null;
     try {
       const pending = await window.electron.help.takePendingHibernation(projectId);
-      if (!pending) return "empty";
+      if (!pending) return { status: "empty" };
+      claimId = pending.claimId;
       if (!this.host.isLaunchCurrent(gen)) {
-        await this.releaseToMain(projectId, "stale-generation");
-        return "released";
+        await this.releaseToMain(projectId, claimId, "stale-generation");
+        return { status: "released" };
       }
       // `pending.agentSessionId` can be the empty-string sentinel when main's
       // `revokeSession({ captureHibernation: true })` placeholder write raced
@@ -342,10 +351,14 @@ export class HibernationManager {
         cwd: pending.cwd,
         agentId: pending.agentId,
       });
-      return "seeded";
+      return { status: "seeded", claimId: pending.claimId };
     } catch (err) {
       logError("HelpPanel: failed to pull pending hibernation from main", err);
-      return "empty";
+      if (claimId) {
+        await this.releaseToMain(projectId, claimId, "seed-threw");
+        return { status: "released" };
+      }
+      return { status: "empty" };
     }
   }
 
@@ -358,13 +371,22 @@ export class HibernationManager {
    * (one lost resume opportunity), so it is logged and swallowed rather than
    * failing the launch that is already unwinding.
    *
+   * Drops the renderer's local mirror of the entry as part of the release. The
+   * two must move together: `seedFromMain` writes the taken entry into the
+   * durable `hibernateSessions` slot, so releasing main's copy while leaving
+   * the mirror behind would let a later launch resume from the mirror after
+   * main had already handed the entry to a different window — two windows
+   * resuming one conversation, which is exactly the single-winner invariant the
+   * atomic take exists to hold (#10820).
+   *
    * `reason` is carried into the log so a future incident can tell which abort
    * path fired instead of inferring it from an absence, which is what made the
    * original report take log archaeology to diagnose.
    */
-  async releaseToMain(projectId: string, reason: string): Promise<void> {
+  async releaseToMain(projectId: string, claimId: string, reason: string): Promise<void> {
+    useHelpPanelStore.getState().clearHibernateSession(projectId);
     try {
-      const restored = await window.electron.help.restorePendingHibernation(projectId);
+      const restored = await window.electron.help.restorePendingHibernation(projectId, claimId);
       console.info("[HelpPanel] released pending hibernation back to main", {
         projectId,
         reason,

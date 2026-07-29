@@ -1145,14 +1145,15 @@ export class HelpSessionController {
     // see this generation still holding it and silently drop the relaunch
     // (#10703) — leaving `_hasAutoLaunched` stuck and blocking all auto-launch.
     let pendingReEval: HelpSessionInputs | null = null;
-    // Project whose main-captured resume token this launch has taken but not
-    // yet used. `takePendingHibernation` is destructive on main, so every abort
+    // The main-captured resume token this launch has taken but not yet used,
+    // with the claim id that authorizes putting it back.
+    // `takePendingHibernation` is destructive on main, so every abort
     // downstream of a successful take used to destroy the user's only resume
     // token — across five separate early returns plus any provisioning failure
     // or throw (#11477). One variable released from the `finally` covers them
     // all, including early returns added later. Cleared only where the token is
     // genuinely spent: a resumed session that survived its post-spawn checks.
-    let unreleasedHibernationProjectId: string | null = null;
+    let unreleasedHibernation: { projectId: string; claimId: string } | null = null;
     // Clear any prior failure banner up front so a retry immediately drops the
     // stale error while the new attempt is in flight.
     this._patch({ launchError: null });
@@ -1225,7 +1226,12 @@ export class HelpSessionController {
       // entry then drives the normal resume block; `_seedHibernateFromMain` is
       // skipped for this path since the take already happened.
       if (options.resumeOnly && !reservedId && !options.seedPrompt) {
-        let earlyPending: { agentId: string; agentSessionId: string; cwd: string } | null = null;
+        let earlyPending: {
+          agentId: string;
+          agentSessionId: string;
+          cwd: string;
+          claimId: string;
+        } | null = null;
         try {
           earlyPending = await window.electron.help.takePendingHibernation(launchProject.id);
         } catch (err) {
@@ -1233,7 +1239,12 @@ export class HelpSessionController {
         }
         // Main has already cleared its side, so from here on this launch owns
         // the token and the `finally` is what gives it back (#11477).
-        if (earlyPending) unreleasedHibernationProjectId = launchProject.id;
+        if (earlyPending) {
+          unreleasedHibernation = {
+            projectId: launchProject.id,
+            claimId: earlyPending.claimId,
+          };
+        }
         if (gen !== this._launchGen) {
           this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
           return;
@@ -1299,7 +1310,9 @@ export class HelpSessionController {
           const seeded = await this._hibernationManager.seedFromMain(launchProject.id, gen);
           // "released" already handed it back inside seedFromMain (it saw the
           // stale gen first); only a live seed leaves this launch owning it.
-          if (seeded === "seeded") unreleasedHibernationProjectId = launchProject.id;
+          if (seeded.status === "seeded") {
+            unreleasedHibernation = { projectId: launchProject.id, claimId: seeded.claimId };
+          }
           if (gen !== this._launchGen) {
             this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
             return;
@@ -1328,7 +1341,7 @@ export class HelpSessionController {
             // The token is now genuinely spent: the resumed session survived
             // both post-spawn checks and is about to go live. Every other exit
             // from here leaves the marker set so the `finally` gives it back.
-            unreleasedHibernationProjectId = null;
+            unreleasedHibernation = null;
             useHelpPanelStore.getState().clearHibernateSession(launchProject.id);
             useHelpPanelStore
               .getState()
@@ -1512,9 +1525,10 @@ export class HelpSessionController {
       // meanwhile, and a restored entry can only be resumed explicitly.
       // Fire-and-forget: the launch is already unwinding and must not block on
       // an IPC round-trip.
-      if (unreleasedHibernationProjectId) {
+      if (unreleasedHibernation) {
         void this._hibernationManager.releaseToMain(
-          unreleasedHibernationProjectId,
+          unreleasedHibernation.projectId,
+          unreleasedHibernation.claimId,
           reached ? "fresh-launch-unused" : "launch-abandoned"
         );
       }

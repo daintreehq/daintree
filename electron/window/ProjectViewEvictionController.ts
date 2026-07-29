@@ -321,12 +321,20 @@ export function evictStaleViews(
   // rather than the active view alone is now the expected outcome, and it is
   // exactly the case where an unexplained over-cap cache would read as a leak.
   if (host.views.size > effectiveMax && candidates.length === 0 && assistantProtected.length > 0) {
+    // `overflow` counts every view over target, which mid-switch also includes
+    // the paint-gate/cold-switch bridge — excluded from `evictable` above and
+    // temporary. Report the protected share separately so a reader can tell a
+    // pinned assistant (persistent) from a bridge that resolves on its own,
+    // instead of attributing the whole overflow to the floor.
+    const gateExcluded = host.views.size - effectiveMax - assistantProtected.length;
     logInfo("projectview.eviction-skipped", {
       reason: effectiveReason,
       forced: criticalPressure,
       viewCount: host.views.size,
       effectiveMax,
       overflow: host.views.size - effectiveMax,
+      protectedOverflow: assistantProtected.length,
+      transientlyExcluded: Math.max(0, gateExcluded),
       protectedProjectIds: assistantProtected.map(([projectId]) => projectId),
     });
   }

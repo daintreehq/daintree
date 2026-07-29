@@ -309,12 +309,17 @@ vi.mock("electron", () => ({
 }));
 
 import { initGlobalServices, __test__ } from "../globalServicesInit.js";
-import { getGlobalServicesInitialized, setGlobalServicesInitialized } from "../serviceRefs.js";
+import {
+  getGlobalServicesInitialized,
+  setGlobalServicesInitialized,
+  setPtyClientRef,
+} from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
 import { app, ipcMain } from "electron";
 import type { Mock } from "vitest";
 import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
+import { helpSessionService } from "../../services/HelpSessionService.js";
 
 describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
   function resetSweepMocks() {
@@ -548,11 +553,39 @@ describe("initGlobalServices task ordering", () => {
     registeredTaskRuns.get("hibernation-service")!();
 
     expect(hibernationServiceMock.setHasLiveAssistantBackend).toHaveBeenCalledTimes(1);
-    const predicate = hibernationServiceMock.setHasLiveAssistantBackend.mock.calls[0][0];
+    const predicate = hibernationServiceMock.setHasLiveAssistantBackend.mock.calls[0][0] as (
+      projectId: string
+    ) => boolean;
     expect(typeof predicate).toBe("function");
-    // Lazy, like the provider above: no assistant bound in this fixture, and
-    // resolving it must not throw before the PtyClient exists.
+
+    const getAssistantBackend = helpSessionService.getAssistantBackend as unknown as Mock;
+    const hasTerminal = vi.fn<(terminalId: string) => boolean>(() => true);
+
+    // No backend bound: nothing to protect, and resolving it must not throw
+    // before the PtyClient exists (the predicate is wired lazily).
+    getAssistantBackend.mockReturnValue(null);
     expect(predicate("proj-1")).toBe(false);
+
+    // Bound but the PtyClient isn't up yet — still false. Binding alone is NOT
+    // liveness: it outlives an assistant that exited under its own steam
+    // (#11162), so a stale binding must not pin the project forever.
+    getAssistantBackend.mockReturnValue({ terminalId: "t-help", webContentsId: 5 });
+    expect(predicate("proj-1")).toBe(false);
+
+    // Both halves satisfied.
+    setPtyClientRef({ hasTerminal } as unknown as Parameters<typeof setPtyClientRef>[0]);
+    try {
+      expect(predicate("proj-1")).toBe(true);
+      expect(hasTerminal).toHaveBeenCalledWith("t-help");
+
+      // Bound, PtyClient up, but the terminal is gone — the liveness half is
+      // what decides, not the binding.
+      hasTerminal.mockReturnValue(false);
+      expect(predicate("proj-1")).toBe(false);
+    } finally {
+      setPtyClientRef(null);
+      getAssistantBackend.mockReturnValue(null);
+    }
   });
 
   it("wires a lazy ProjectViewManager provider into IdleTerminalNotificationService (#11102)", async () => {

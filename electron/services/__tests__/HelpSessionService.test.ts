@@ -1503,8 +1503,26 @@ describe("HelpSessionService", () => {
         agentId: "claude",
         agentSessionId: "pulled-id",
         cwd: "/help/dir",
+        // Opaque handle for putting the entry back if the launch aborts
+        // (#11477) — generated per take, so only its shape is asserted here.
+        claimId: expect.any(String),
       });
+      expect(taken!.claimId).not.toBe("");
       expect(hibernationStore.clear).toHaveBeenCalledWith("proj-A");
+    });
+
+    it("issues a distinct claim per take, so a stale release can be told apart", async () => {
+      hibernationStore.get.mockReturnValue({
+        agentId: "claude",
+        agentSessionId: "pulled-id",
+        cwd: "/help/dir",
+        capturedAt: Date.now(),
+      });
+
+      const first = await service.takePendingHibernation("proj-A");
+      const second = await service.takePendingHibernation("proj-A");
+
+      expect(first!.claimId).not.toBe(second!.claimId);
     });
 
     it("takePendingHibernation returns null and does not clear when no entry exists", async () => {
@@ -1527,11 +1545,13 @@ describe("HelpSessionService", () => {
 
       it("puts back exactly what was taken, minus panelWasOpen", async () => {
         hibernationStore.get.mockReturnValueOnce(captured);
-        await service.takePendingHibernation("proj-A");
+        const taken = await service.takePendingHibernation("proj-A");
         // The slot is empty again after the take — nothing newer has landed.
         hibernationStore.get.mockReturnValue(null);
 
-        await expect(service.restorePendingHibernation("proj-A")).resolves.toBe(true);
+        await expect(service.restorePendingHibernation("proj-A", taken!.claimId)).resolves.toBe(
+          true
+        );
 
         // capturedAt is preserved, so repeated take/restore cycles cannot
         // refresh an entry past the store's 14-day staleness cutoff. And
@@ -1547,7 +1567,7 @@ describe("HelpSessionService", () => {
 
       it("refuses when a newer capture already occupies the slot", async () => {
         hibernationStore.get.mockReturnValueOnce(captured);
-        await service.takePendingHibernation("proj-A");
+        const taken = await service.takePendingHibernation("proj-A");
         hibernationStore.set.mockClear();
         // A fresh eviction captured a later conversation while we were aborting.
         hibernationStore.get.mockReturnValue({
@@ -1557,7 +1577,9 @@ describe("HelpSessionService", () => {
           capturedAt: Date.now(),
         });
 
-        await expect(service.restorePendingHibernation("proj-A")).resolves.toBe(false);
+        await expect(service.restorePendingHibernation("proj-A", taken!.claimId)).resolves.toBe(
+          false
+        );
         expect(hibernationStore.set).not.toHaveBeenCalled();
       });
 
@@ -1569,7 +1591,7 @@ describe("HelpSessionService", () => {
 
         // A prior taker is holding a stashed entry...
         hibernationStore.get.mockReturnValueOnce(captured);
-        await service.takePendingHibernation("proj-1");
+        const taken = await service.takePendingHibernation("proj-1");
 
         // ...and a capture-revoke starts and parks on gracefulKill, claiming
         // ownership of the slot via its synchronous placeholder write (#9646).
@@ -1578,24 +1600,98 @@ describe("HelpSessionService", () => {
         hibernationStore.set.mockClear();
         hibernationStore.get.mockReturnValue(null);
 
-        await expect(service.restorePendingHibernation("proj-1")).resolves.toBe(false);
+        await expect(service.restorePendingHibernation("proj-1", taken!.claimId)).resolves.toBe(
+          false
+        );
         expect(hibernationStore.set).not.toHaveBeenCalled();
       });
 
       it("answers a take at most once, so a duplicate release cannot resurrect a consumed entry", async () => {
         hibernationStore.get.mockReturnValueOnce(captured);
-        await service.takePendingHibernation("proj-A");
+        const taken = await service.takePendingHibernation("proj-A");
         hibernationStore.get.mockReturnValue(null);
 
-        await expect(service.restorePendingHibernation("proj-A")).resolves.toBe(true);
+        await expect(service.restorePendingHibernation("proj-A", taken!.claimId)).resolves.toBe(
+          true
+        );
         hibernationStore.set.mockClear();
 
-        await expect(service.restorePendingHibernation("proj-A")).resolves.toBe(false);
+        await expect(service.restorePendingHibernation("proj-A", taken!.claimId)).resolves.toBe(
+          false
+        );
         expect(hibernationStore.set).not.toHaveBeenCalled();
       });
 
+      it("refuses a release whose claim a later take superseded, and keeps the newer claim usable", async () => {
+        // The interleaving a project-scoped put-back gets wrong: A takes, A
+        // releases, B takes the restored entry, then a late/duplicate release
+        // from A arrives. Without a per-take claim that second release restores
+        // B's stash out from under B.
+        hibernationStore.get.mockReturnValueOnce(captured);
+        const takenByA = await service.takePendingHibernation("proj-A", 11);
+        hibernationStore.get.mockReturnValue(null);
+        await expect(
+          service.restorePendingHibernation("proj-A", takenByA!.claimId, 11)
+        ).resolves.toBe(true);
+
+        hibernationStore.get.mockReturnValueOnce(captured);
+        const takenByB = await service.takePendingHibernation("proj-A", 22);
+        expect(takenByB!.claimId).not.toBe(takenByA!.claimId);
+        hibernationStore.get.mockReturnValue(null);
+        hibernationStore.set.mockClear();
+
+        // A's stale release is refused...
+        await expect(
+          service.restorePendingHibernation("proj-A", takenByA!.claimId, 11)
+        ).resolves.toBe(false);
+        expect(hibernationStore.set).not.toHaveBeenCalled();
+        // ...and, crucially, did not consume B's claim.
+        await expect(
+          service.restorePendingHibernation("proj-A", takenByB!.claimId, 22)
+        ).resolves.toBe(true);
+      });
+
+      it("refuses a release from a view other than the one that took the entry", async () => {
+        // The owner comes from the IPC context, not the renderer, so a second
+        // window cannot release a claim it does not hold even by guessing.
+        hibernationStore.get.mockReturnValueOnce(captured);
+        const taken = await service.takePendingHibernation("proj-A", 11);
+        hibernationStore.get.mockReturnValue(null);
+        hibernationStore.set.mockClear();
+
+        await expect(service.restorePendingHibernation("proj-A", taken!.claimId, 22)).resolves.toBe(
+          false
+        );
+        expect(hibernationStore.set).not.toHaveBeenCalled();
+
+        // The rightful owner can still put it back.
+        await expect(service.restorePendingHibernation("proj-A", taken!.claimId, 11)).resolves.toBe(
+          true
+        );
+      });
+
+      it("restores the empty-string resume-latest sentinel unchanged (#9639)", async () => {
+        // The sentinel routes the renderer down `buildResumeLatestCommand`; a
+        // put-back that normalized or dropped it would silently downgrade an
+        // in-flight capture's placeholder into "no resume available".
+        hibernationStore.get.mockReturnValueOnce({ ...captured, agentSessionId: "" });
+        const taken = await service.takePendingHibernation("proj-A");
+        expect(taken!.agentSessionId).toBe("");
+        hibernationStore.get.mockReturnValue(null);
+
+        await expect(service.restorePendingHibernation("proj-A", taken!.claimId)).resolves.toBe(
+          true
+        );
+        expect(hibernationStore.set).toHaveBeenCalledWith(
+          "proj-A",
+          expect.objectContaining({ agentSessionId: "" })
+        );
+      });
+
       it("is a no-op for a project that never took anything", async () => {
-        await expect(service.restorePendingHibernation("proj-untouched")).resolves.toBe(false);
+        await expect(service.restorePendingHibernation("proj-untouched", "any")).resolves.toBe(
+          false
+        );
         expect(hibernationStore.set).not.toHaveBeenCalled();
       });
     });
