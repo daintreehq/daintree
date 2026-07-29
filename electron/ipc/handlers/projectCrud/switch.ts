@@ -13,6 +13,7 @@ import { ProjectSwitchService } from "../../../services/ProjectSwitchService.js"
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
 import { broadcastProjectSwitchUpdates } from "../../projectSwitchBroadcast.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
+import { scheduleOpenWindowsSave } from "../../../window/openWindowsTracker.js";
 import { notificationService } from "../../../services/NotificationService.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { logInfo } from "../../../utils/logger.js";
@@ -502,6 +503,13 @@ async function activateProjectView(
   // window open, would background whichever project that window is still
   // displaying while never backgrounding this window's own (#11101).
   await projectStore.setCurrentProject(projectId, outgoingProjectId);
+
+  // Re-persist which project each window is showing (#11492). Placed after the
+  // PVM swap above rather than alongside it because the manifest is built from
+  // `getActiveProjectId()` across every window — it has to read the committed
+  // state, not the switch that is still landing. Debounced, so a burst of
+  // switches collapses to one write.
+  scheduleOpenWindowsSave();
 
   if (options.markActive) {
     projectStore.updateProjectStatus(projectId, "active");

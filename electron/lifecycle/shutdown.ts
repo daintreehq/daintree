@@ -49,6 +49,7 @@ import {
   setWindowsStoreNotifierServiceRef,
 } from "../window/serviceRefs.js";
 import { haltDeferredQueue } from "../window/deferredInitQueue.js";
+import { freezeAndSnapshotOpenWindows } from "../window/openWindowsTracker.js";
 import { closeSharedDb } from "../services/persistence/db.js";
 import { closeTelemetry } from "../services/TelemetryService.js";
 import { isSmokeTest } from "../setup/environment.js";
@@ -168,6 +169,15 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
   // be resumed). Tasks that start during the dialog run against a fully live
   // app and are torn down by the cleanup chain like any other service.
   haltDeferredQueue();
+
+  // Capture the open-window manifest and latch its writes off, for the same
+  // reason and in the same place (#11492). Two hazards this closes: a pending
+  // 500ms debounce owing an unsaved project switch, which the active-shutdown
+  // gate would otherwise refuse and drop; and the updater closing windows one
+  // at a time below, which un-latched would walk the persisted list down to
+  // empty and relaunch into nothing. Synchronous — better-sqlite3 writes
+  // inline, so it adds no await before the chain's own work.
+  freezeAndSnapshotOpenWindows();
 
   // Eager snapshot at quit-intent so the next launch has a post-quit-intent
   // backup regardless of which branch of the cleanup race wins. Without this,

@@ -123,15 +123,28 @@ export interface SetupWindowServicesOptions {
   initialAppView?: import("electron").WebContentsView;
 }
 
+/**
+ * @returns "ok" when the window is fully wired.
+ *
+ *   "exit-requested" when the process is already on its way out — fatally
+ *   failed global init, or a finished smoke run — and `app.exit()` has been
+ *   issued. "not-registered" when the window never reached the registry, so it
+ *   has no services at all.
+ *
+ *   Callers that create more than one window (the startup restore fan-out,
+ *   #11492) must stop on anything but "ok" rather than build windows into a
+ *   dying process — or count a serviceless window as a restored one and persist
+ *   it. Single-window callers can ignore the result.
+ */
 export async function setupWindowServices(
   win: BrowserWindow,
   opts: SetupWindowServicesOptions
-): Promise<void> {
+): Promise<"ok" | "exit-requested" | "not-registered"> {
   const windowRegistry = opts.windowRegistry;
   const ctx = windowRegistry?.getByWindowId(win.id);
   if (!ctx) {
     console.error("[MAIN] Window not registered before setupWindowServices — skipping");
-    return;
+    return "not-registered";
   }
 
   markPerformance(PERF_MARKS.WINDOW_SERVICES_START);
@@ -139,7 +152,7 @@ export async function setupWindowServices(
   // ── One-time global initialization (first window only) ──
   if (!getGlobalServicesInitialized()) {
     const result = await initGlobalServices(windowRegistry);
-    if (result === "exit-requested") return;
+    if (result === "exit-requested") return "exit-requested";
   }
 
   // ── Per-window initialization ──
@@ -714,7 +727,7 @@ export async function setupWindowServices(
       getWorkspaceClientRef()?.dispose();
       getPtyClient()?.dispose();
       app.exit(1);
-      return;
+      return "exit-requested";
     }
 
     const smokeClient = getPtyClient()!;
@@ -736,7 +749,7 @@ export async function setupWindowServices(
       /* ignore */
     }
     app.exit(allPassed ? 0 : 1);
-    return;
+    return "exit-requested";
   }
 
   // CLI path handling — skip if this window was opened with an explicit initialProjectPath
@@ -812,4 +825,6 @@ export async function setupWindowServices(
     }
     resetDeferredQueue();
   });
+
+  return "ok";
 }

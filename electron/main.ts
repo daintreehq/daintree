@@ -32,9 +32,17 @@ import {
 } from "./setup/protocols.js";
 import { activateDeepLinkHandler } from "./setup/deepLinkInstall.js";
 import {
+  extractDirectoryPaths,
+  hasCliPathFlag,
   registerAppLifecycleHandlers,
   registerWindowSessionEndHandler,
 } from "./lifecycle/appLifecycle.js";
+import { resolveLaunchIntent, shouldRestoreWindowFleet } from "./lifecycle/launchIntent.js";
+import {
+  resolvePrimaryRestoreProjectId,
+  restoreWindowFleet,
+  type CreateWindowResult,
+} from "./lifecycle/windowRestore.js";
 import { registerShutdownHandler } from "./lifecycle/shutdown.js";
 import {
   setMainWindow,
@@ -79,7 +87,13 @@ import {
 } from "./window/powerMonitor.js";
 import { getProjectStatsService } from "./ipc/handlers/projectCrud/index.js";
 import { getIdleTerminalNotificationService } from "./services/IdleTerminalNotificationService.js";
-import { isDemoMode, isSmokeTest, kickOffEarlyPathRefresh } from "./setup/environment.js";
+import {
+  getPendingOpenDirPaths,
+  getPendingOpenFilePaths,
+  isDemoMode,
+  isSmokeTest,
+  kickOffEarlyPathRefresh,
+} from "./setup/environment.js";
 import { store } from "./store.js";
 import { initializeLogger, registerLoggerTransport, setLogLevelOverrides } from "./utils/logger.js";
 import { broadcastToVisibleRenderers } from "./ipc/utils.js";
@@ -93,7 +107,17 @@ import { buildSwitchHydrateResult } from "./services/AppHydrationService.js";
 import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
 import { initializePanelSuspectLedger } from "./services/PanelSuspectLedgerService.js";
 import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
-import { readLastActiveProjectIdSync } from "./services/persistence/readLastProjectId.js";
+import {
+  readLastActiveProjectIdSync,
+  readOpenWindowsManifestSync,
+} from "./services/persistence/readLastProjectId.js";
+import {
+  initOpenWindowsTracker,
+  resumeOpenWindowsSaves,
+  saveOpenWindowsNow,
+  scheduleOpenWindowsSave,
+  suppressOpenWindowsSaves,
+} from "./window/openWindowsTracker.js";
 import { emergencyLogMainFatal } from "./utils/emergencyLog.js";
 
 // CRITICAL: Run IPC sender validation before any handlers are registered
@@ -285,6 +309,14 @@ if (!gotTheLock) {
   const windowRegistry = new WindowRegistry();
   setWindowRegistry(windowRegistry);
   windowRegistry.wireFocusTracking(app);
+  // Re-persist the manifest when focus moves: its order IS the focus order, and
+  // that order decides which window gets focus on the next launch and which get
+  // trimmed by the cap. A second listener rather than a hook inside
+  // wireFocusTracking so the registry's focus bookkeeping stays independent of
+  // persistence — and it is registered after, so the registry has already
+  // recorded the focus by the time this reads it. Debounced, so alt-tabbing
+  // collapses to one write.
+  app.on("browser-window-focus", () => scheduleOpenWindowsSave());
 
   // Read last-active projectId synchronously from SQLite BEFORE creating any window.
   // This allows the initial WebContentsView to use the correct session partition,
@@ -295,17 +327,30 @@ if (!gotTheLock) {
 
   async function createWindow(
     initialProjectPath?: string | null,
-    initialProjectId?: string
-  ): Promise<void> {
+    initialProjectId?: string,
+    opts?: { revealMode?: "show" | "showInactive" }
+  ): Promise<CreateWindowResult> {
     const { win, appView, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
       setupBrowserWindow(__dirname, {
-        onRecreateWindow: () => createWindow(initialProjectPath, initialProjectId),
-        onCreateWindow: (projectPath?: string) => createWindow(projectPath),
+        onRecreateWindow: () => createWindow(initialProjectPath, initialProjectId).then(() => {}),
+        onCreateWindow: (projectPath?: string) => createWindow(projectPath).then(() => {}),
         projectPath: initialProjectPath,
         initialProjectId,
+        revealMode: opts?.revealMode,
       });
     setMainWindow(win);
     const ctx = windowRegistry.register(win, { projectPath: initialProjectPath ?? undefined });
+
+    // Keep the persisted window manifest in step with this window (#11492).
+    // The save listens on `closed`, not `close`: WindowRegistry still holds the
+    // window at `close`, so a manifest built there would re-persist the window
+    // the user just closed. Registered after `register()` so it runs after the
+    // registry's own `once("closed")` unregister hook.
+    // `win.id` is unreadable on a destroyed BrowserWindow, so the id is taken
+    // from the registry context captured here rather than read in the handler.
+    const closedWindowId = ctx.windowId;
+    scheduleOpenWindowsSave();
+    win.on("closed", () => saveOpenWindowsNow(closedWindowId));
     windowRegistry.registerAppViewWebContents(ctx.windowId, appView.webContents.id);
     // Paint-fabric surface views load the same preload as project views; the
     // paintSurface IPC namespace builds its per-window manager lazily and
@@ -314,7 +359,7 @@ if (!gotTheLock) {
 
     const pvm = new ProjectViewManager(win, {
       dirname: __dirname,
-      onRecreateWindow: () => createWindow(initialProjectPath, initialProjectId),
+      onRecreateWindow: () => createWindow(initialProjectPath, initialProjectId).then(() => {}),
       windowRegistry,
       // Resolve to the same value the IPC handler returns so the main-process
       // LRU cap and the renderer's Settings view agree on first boot. Invalid
@@ -527,7 +572,7 @@ if (!gotTheLock) {
       })
     );
 
-    await setupWindowServices(win, {
+    const servicesResult = await setupWindowServices(win, {
       loadRenderer,
       smokeTestTimer,
       smokeRendererUnresponsive,
@@ -537,6 +582,11 @@ if (!gotTheLock) {
       projectViewManager: pvm,
       initialAppView: appView,
     });
+
+    // The process is exiting, or the window never reached the registry and has
+    // no services. Either way stop here, so a restore fan-out doesn't keep
+    // building windows into a dying process or count this one as restored.
+    if (servicesResult !== "ok") return servicesResult;
 
     // Seed the eviction guard's agent-state cache from the pty-host registry.
     // hasActiveAgent() is read synchronously during LRU scoring, so it can't
@@ -565,11 +615,13 @@ if (!gotTheLock) {
 
     registerWindowForFocusThrottle(win);
     registerWindowSessionEndHandler(win);
+
+    return "ok";
   }
 
   registerAppLifecycleHandlers({
-    onCreateWindow: () => createWindow(),
-    onCreateWindowForPath: (cliPath) => createWindow(cliPath),
+    onCreateWindow: () => createWindow().then(() => {}),
+    onCreateWindowForPath: (cliPath) => createWindow(cliPath).then(() => {}),
     getMainWindow,
     getCliAvailabilityService: getCliAvailabilityServiceRef,
     windowRegistry,
@@ -633,32 +685,70 @@ if (!gotTheLock) {
       // through the existing confirm/security gates, never silently.
       activateDeepLinkHandler(windowRegistry);
       setupWebviewCSP();
-      // Prime the hydrate prefetch cache for the last-active project so the
-      // renderer's first `app:boot` invoke resolves as a cache hit instead of
-      // doing an inline disk read. Fire-and-forget — overlaps with window
+      const launchIntent = resolveLaunchIntent({
+        argv: process.argv,
+        hasCliPathFlag,
+        extractDirectoryPaths,
+        pendingOpenDirPaths: getPendingOpenDirPaths(),
+        pendingOpenFilePaths: getPendingOpenFilePaths(),
+        isSafeMode: getCrashLoopGuard().isSafeMode(),
+        hasPendingCrash: getCrashRecoveryService().getPendingCrash() !== null,
+      });
+
+      // A recovery launch deliberately opens one window. It must not then
+      // persist that as the window set, or safe mode would overwrite the user's
+      // real fleet with the reduced one it opened to diagnose it (#11492). A
+      // targeted launch is NOT read-only: opening one folder from the CLI or
+      // Finder is a genuine one-window session the user asked for, so the
+      // manifest should describe it.
+      initOpenWindowsTracker({ registry: windowRegistry, readOnly: launchIntent === "recovery" });
+
+      const { hadManifest, records: restoreRecords } = shouldRestoreWindowFleet(launchIntent)
+        ? readOpenWindowsManifestSync()
+        : { hadManifest: false, records: [] };
+
+      // The window that gets focus is the manifest's most-recently-focused
+      // record — not `lastActiveProjectId`, which tracks the last project
+      // *switched to* anywhere and can name a different window entirely.
+      const primaryRestoreProjectId = resolvePrimaryRestoreProjectId(
+        restoreRecords,
+        hadManifest,
+        lastActiveProjectId ?? undefined
+      );
+
+      // Prime the hydrate prefetch cache for the window that will take focus so
+      // the renderer's first `app:boot` invoke resolves as a cache hit instead
+      // of doing an inline disk read. Fire-and-forget — overlaps with window
       // creation. Skipped when:
-      //   - no last-active project (first run / project unset)
-      //   - safe mode (terminals are suppressed; priming would write empty)
-      //   - pending crash recovery (panelFilter path layers extra constraints)
+      //   - no project to restore (first run / project unset / picker window)
+      //   - safe mode or pending crash recovery (terminals are suppressed and
+      //     the panelFilter path layers extra constraints)
       //   - per-project state file doesn't exist yet (migration must run on
       //     the renderer-blocking handler path — `buildSwitchHydrateResult`
       //     intentionally skips the migration write)
-      if (lastActiveProjectId) {
-        const guard = getCrashLoopGuard();
-        const crashService = getCrashRecoveryService();
-        if (!guard.isSafeMode() && !crashService.getPendingCrash()) {
-          void projectStore
-            .getProjectState(lastActiveProjectId)
-            .then((state) => {
-              if (state === null) return;
-              return prefetchHydrateResult(lastActiveProjectId, buildSwitchHydrateResult);
-            })
-            .catch((error) => {
-              console.warn("[MAIN] Boot-prime hydrate prefetch failed:", error);
-            });
-        }
+      if (primaryRestoreProjectId && launchIntent !== "recovery") {
+        void projectStore
+          .getProjectState(primaryRestoreProjectId)
+          .then((state) => {
+            if (state === null) return;
+            return prefetchHydrateResult(primaryRestoreProjectId, buildSwitchHydrateResult);
+          })
+          .catch((error) => {
+            console.warn("[MAIN] Boot-prime hydrate prefetch failed:", error);
+          });
       }
-      await createWindow(undefined, lastActiveProjectId ?? undefined);
+
+      await restoreWindowFleet({
+        records: restoreRecords,
+        hadManifest,
+        fallbackProjectId: lastActiveProjectId ?? undefined,
+        createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
+        suppressSaves: suppressOpenWindowsSaves,
+        resumeSaves: resumeOpenWindowsSaves,
+        onBackgroundWindowFailed: (reason) => {
+          console.error("[MAIN] Restoring a background window failed:", reason);
+        },
+      });
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
       // Startup crashes hard-exit without running before-quit, which means
