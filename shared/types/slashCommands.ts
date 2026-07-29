@@ -175,6 +175,13 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     description: "Summarize history to save tokens",
     supportedAgents: ["claude", "codex"],
   },
+  {
+    id: "goal",
+    label: "/goal",
+    description: "Set a goal that must be met before stopping",
+    descriptions: { codex: "Manage the session goal (edit, pause, resume, clear)" },
+    supportedAgents: ["claude", "codex"],
+  },
 
   // Claude-only
   {
@@ -369,12 +376,6 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     id: "plan",
     label: "/plan",
     description: "Draft a plan before acting",
-    supportedAgents: ["codex"],
-  },
-  {
-    id: "goal",
-    label: "/goal",
-    description: "Set the session goal",
     supportedAgents: ["codex"],
   },
   {
