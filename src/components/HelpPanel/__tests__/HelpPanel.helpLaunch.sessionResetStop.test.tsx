@@ -545,6 +545,7 @@ beforeEach(() => {
           provisionSession: mockProvisionSession,
           revokeSession: mockRevokeSession,
           takePendingHibernation: mockTakePendingHibernation,
+          restorePendingHibernation: vi.fn().mockResolvedValue(false),
           getPinnedActionContext: vi.fn().mockResolvedValue({}),
         },
         helpAssistant: {

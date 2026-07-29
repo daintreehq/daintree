@@ -722,7 +722,13 @@ export class ProjectViewManager {
    * Legacy single-floor setter, retained as the E2E escape hatch (six specs
    * push `null` to neutralize pressure eviction so host memory can't perturb
    * their deterministic assertions). A positive value collapses the band to a
-   * cliff at `mb`, reproducing the pre-#11469 clamp-to-1 exactly.
+   * cliff at `mb`: every reading below it classifies as critical with a
+   * `targetMax` of 1.
+   *
+   * Since #11477 the cliff is a target, not a one-pass collapse. The periodic
+   * sampler converges on it one view per tick like any other band; only the
+   * forced tier-2 reclaim (`reclaimCachedViewsUnderPressure`) still clears the
+   * cache in a single pass.
    */
   setLowMemoryFreeThresholdMb(mb: number | null): void {
     if (mb == null || !Number.isFinite(mb) || mb <= 0) {

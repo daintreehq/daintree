@@ -10,6 +10,7 @@ const {
   mockMarkTerminal,
   mockPeekPendingHibernation,
   mockTakePendingHibernation,
+  mockRestorePendingHibernation,
   mockReportPanelOpen,
   mockProvisionSession,
   mockRevokeSession,
@@ -41,6 +42,7 @@ const {
   mockMarkTerminal: vi.fn().mockResolvedValue(undefined),
   mockPeekPendingHibernation: vi.fn().mockResolvedValue(null),
   mockTakePendingHibernation: vi.fn().mockResolvedValue(null),
+  mockRestorePendingHibernation: vi.fn().mockResolvedValue(false),
   mockReportPanelOpen: vi.fn().mockResolvedValue(undefined),
   mockProvisionSession: vi.fn().mockResolvedValue(null),
   mockRevokeSession: vi.fn().mockResolvedValue(undefined),
@@ -433,6 +435,8 @@ function resetState() {
   mockPeekPendingHibernation.mockResolvedValue(null);
   mockTakePendingHibernation.mockReset();
   mockTakePendingHibernation.mockResolvedValue(null);
+  mockRestorePendingHibernation.mockReset();
+  mockRestorePendingHibernation.mockResolvedValue(false);
   mockReportPanelOpen.mockReset();
   mockReportPanelOpen.mockResolvedValue(undefined);
   mockProvisionSession.mockReset();
@@ -498,6 +502,7 @@ beforeEach(() => {
           markTerminal: mockMarkTerminal,
           peekPendingHibernation: mockPeekPendingHibernation,
           takePendingHibernation: mockTakePendingHibernation,
+          restorePendingHibernation: mockRestorePendingHibernation,
           reportPanelOpen: mockReportPanelOpen,
           provisionSession: mockProvisionSession,
           revokeSession: mockRevokeSession,
@@ -944,6 +949,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       agentId: "claude",
       agentSessionId: "abc-123",
       cwd: "/tmp/help/proj-1",
+      claimId: "claim-1",
     });
 
     await act(async () => {
@@ -965,6 +971,47 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     // Auto-resuming a stranded session is recovery, NOT billed-auto-launch
     // consent — same separation as the manual Resume CTA (#10699).
     expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
+  });
+
+  it("releases a mismatched-agent take without touching the hibernate slot it never wrote (#11477)", async () => {
+    // The resumeOnly take is hoisted above provisioning (#10819), so it lands
+    // BEFORE the agentId check. On a mismatch the launch bails without ever
+    // seeding — meaning the local hibernate slot still holds whatever was
+    // already there. The put-back must return main's copy and leave that slot
+    // alone; clearing it unconditionally would delete an entry this launch
+    // never owned.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    const preExisting = {
+      sessionId: "graceful-close-id",
+      cwd: "/tmp/help/proj-1",
+      agentId: "codex",
+    };
+    helpPanelState.hibernateSessions = { "proj-1": preExisting };
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: true,
+    });
+    // Main's captured entry is for a DIFFERENT agent than the one launching.
+    mockTakePendingHibernation.mockResolvedValue({
+      agentId: "gemini",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      claimId: "claim-mismatch",
+    });
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    expect(mockRestorePendingHibernation).toHaveBeenCalledWith("proj-1", "claim-mismatch");
+    expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.hibernateSessions["proj-1"]).toEqual(preExisting);
   });
 
   it("does NOT launch when a live session already exists (DevTools reload guard)", async () => {
@@ -1028,6 +1075,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       agentId: "claude",
       agentSessionId: "abc-123",
       cwd: "/tmp/help/proj-1",
+      claimId: "claim-1",
     });
 
     let view: ReturnType<typeof render> | undefined;
@@ -1093,6 +1141,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       agentId: "claude",
       agentSessionId: "abc-123",
       cwd: "/tmp/help/proj-1",
+      claimId: "claim-1",
     });
 
     await act(async () => {
@@ -1114,6 +1163,55 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       expect.anything(),
       expect.anything()
     );
+    // The token was genuinely spent, so it is NOT handed back (#11477).
+    expect(mockRestorePendingHibernation).not.toHaveBeenCalled();
+  });
+
+  it("hands the taken resume token back to main when provisioning fails (#11477)", async () => {
+    // `takePendingHibernation` clears main's side, so a launch that takes and
+    // then aborts used to destroy the user's only resume token — here via a
+    // plain provisioning failure, which the original five-site inventory of
+    // take-and-drop paths missed entirely. The put-back is what makes the
+    // resume net survive an abort.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    helpPanelState.hibernateSessions = {};
+    helpPanelState.setHibernateSession = vi.fn(
+      (projectId: string, entry: { sessionId: string; cwd: string; agentId: string }) => {
+        helpPanelState.hibernateSessions[projectId] = entry;
+      }
+    );
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: true,
+    });
+    mockTakePendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      claimId: "claim-1",
+    });
+    // Provisioning fails AFTER the take has already consumed main's entry.
+    mockProvisionSession.mockResolvedValue(null);
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    expect(mockTakePendingHibernation).toHaveBeenCalledWith("proj-1");
+    // Quoting the claim main handed out, so the put-back acts on THIS take and
+    // not on whatever the project's slot happens to hold by then.
+    expect(mockRestorePendingHibernation).toHaveBeenCalledWith("proj-1", "claim-1");
+    // The renderer's local mirror goes with it: seedFromMain wrote the taken
+    // entry into hibernateSessions, and leaving that behind while main hands
+    // the entry to another window would let two windows resume one
+    // conversation — the single-winner invariant the atomic take holds.
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
   });
 
   // #11068: the same cold-resume handoff, but the active workspace is a scratch
@@ -1154,6 +1252,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       agentId: "claude",
       agentSessionId: "abc-123",
       cwd: "/scratches/scratch-1",
+      claimId: "claim-1",
     });
 
     await act(async () => {
@@ -1309,6 +1408,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       agentId: "claude",
       agentSessionId: "abc-123",
       cwd: "/tmp/help/proj-1",
+      claimId: "claim-1",
     });
 
     let view: ReturnType<typeof render> | undefined;

@@ -1145,6 +1145,22 @@ export class HelpSessionController {
     // see this generation still holding it and silently drop the relaunch
     // (#10703) — leaving `_hasAutoLaunched` stuck and blocking all auto-launch.
     let pendingReEval: HelpSessionInputs | null = null;
+    // The main-captured resume token this launch has taken but not yet used,
+    // with the claim id that authorizes putting it back.
+    // `takePendingHibernation` is destructive on main, so every abort
+    // downstream of a successful take used to destroy the user's only resume
+    // token — across five separate early returns plus any provisioning failure
+    // or throw (#11477). One variable released from the `finally` covers them
+    // all, including early returns added later. Cleared only where the token is
+    // genuinely spent: a resumed session that survived its post-spawn checks.
+    // `mirrored` records whether this take also reached the renderer's durable
+    // `hibernateSessions` slot, so the release only drops that mirror when it
+    // is genuinely ours — the bails below fire before it is ever written.
+    let unreleasedHibernation: {
+      projectId: string;
+      claimId: string;
+      mirrored: boolean;
+    } | null = null;
     // Clear any prior failure banner up front so a retry immediately drops the
     // stale error while the new attempt is in flight.
     this._patch({ launchError: null });
@@ -1217,11 +1233,27 @@ export class HelpSessionController {
       // entry then drives the normal resume block; `_seedHibernateFromMain` is
       // skipped for this path since the take already happened.
       if (options.resumeOnly && !reservedId && !options.seedPrompt) {
-        let earlyPending: { agentId: string; agentSessionId: string; cwd: string } | null = null;
+        let earlyPending: {
+          agentId: string;
+          agentSessionId: string;
+          cwd: string;
+          claimId: string;
+        } | null = null;
         try {
           earlyPending = await window.electron.help.takePendingHibernation(launchProject.id);
         } catch (err) {
           logError("HelpPanel: resumeOnly early hibernation take failed", err);
+        }
+        // Main has already cleared its side, so from here on this launch owns
+        // the token and the `finally` is what gives it back (#11477).
+        if (earlyPending) {
+          unreleasedHibernation = {
+            projectId: launchProject.id,
+            claimId: earlyPending.claimId,
+            // Not seeded yet — the two bails below return before the store
+            // write, and a release from there must not touch the slot.
+            mirrored: false,
+          };
         }
         if (gen !== this._launchGen) {
           this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
@@ -1236,6 +1268,7 @@ export class HelpSessionController {
           cwd: earlyPending.cwd,
           agentId: earlyPending.agentId,
         });
+        if (unreleasedHibernation) unreleasedHibernation.mirrored = true;
       }
 
       const outcome = await provisionHelpSession(launchProject, launchAgentId, launchContext);
@@ -1285,7 +1318,17 @@ export class HelpSessionController {
         // return null (the entry is consumed) and clear nothing, but running it
         // is wasteful and misleading.
         if (!options.resumeOnly) {
-          await this._hibernationManager.seedFromMain(launchProject.id, gen);
+          const seeded = await this._hibernationManager.seedFromMain(launchProject.id, gen);
+          // "released" already handed it back inside seedFromMain (it saw the
+          // stale gen first); only a live seed leaves this launch owning it.
+          if (seeded.status === "seeded") {
+            // "seeded" means the entry IS in the store, so the mirror is ours.
+            unreleasedHibernation = {
+              projectId: launchProject.id,
+              claimId: seeded.claimId,
+              mirrored: true,
+            };
+          }
           if (gen !== this._launchGen) {
             this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
             return;
@@ -1311,6 +1354,10 @@ export class HelpSessionController {
               usePanelStore.getState().removePanel(resumed.panelId);
               return;
             }
+            // The token is now genuinely spent: the resumed session survived
+            // both post-spawn checks and is about to go live. Every other exit
+            // from here leaves the marker set so the `finally` gives it back.
+            unreleasedHibernation = null;
             useHelpPanelStore.getState().clearHibernateSession(launchProject.id);
             useHelpPanelStore
               .getState()
@@ -1485,6 +1532,23 @@ export class HelpSessionController {
       }
       if (ownsGen) this._surfaceLaunchError(launchAgentId, "spawn-failed");
     } finally {
+      // Hand back a resume token this launch took but never spent (#11477).
+      // Unconditional on generation: the paths that abandon a launch are
+      // dominated by stall reapers and StrictMode remounts, not by a user
+      // discarding the conversation — and the discard-intent launches
+      // (`newSession` / run-anyway) carry a `reservedId` or `seedPrompt` and so
+      // never take at all. Main refuses the put-back if a newer capture landed
+      // meanwhile, and a restored entry can only be resumed explicitly.
+      // Fire-and-forget: the launch is already unwinding and must not block on
+      // an IPC round-trip.
+      if (unreleasedHibernation) {
+        void this._hibernationManager.releaseToMain(
+          unreleasedHibernation.projectId,
+          unreleasedHibernation.claimId,
+          reached ? "fresh-launch-unused" : "launch-abandoned",
+          { clearMirror: unreleasedHibernation.mirrored }
+        );
+      }
       // Release the re-entrancy guard only if THIS launch() still owns it —
       // clearing it unconditionally let a stale unwind drop a newer launch's
       // guard and admit a concurrent third launch (#10693 review). A

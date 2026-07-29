@@ -281,6 +281,7 @@ beforeEach(() => {
           provisionSession: vi.fn().mockResolvedValue(null),
           revokeSession: vi.fn().mockResolvedValue(undefined),
           takePendingHibernation: vi.fn().mockResolvedValue(null),
+          restorePendingHibernation: vi.fn().mockResolvedValue(false),
         },
         helpAssistant: {
           getSettings: vi.fn().mockResolvedValue({ idleHibernateMinutes: 30 }),

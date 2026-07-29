@@ -16,7 +16,10 @@ import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
 import { ASSISTANT_SCRATCH_ENV_VAR, getScratchDirForSession } from "./AssistantScratchService.js";
 import { syncAssistantContent } from "./AssistantContentMirror.js";
-import type { PendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
+import type {
+  PendingHelpHibernation,
+  PendingHelpHibernationStore,
+} from "./PendingHelpHibernationStore.js";
 
 // Narrow type so the test suite (and any future caller) can satisfy this
 // dependency without instantiating a full PtyClient. `kill` is the original
@@ -285,6 +288,26 @@ export class HelpSessionService {
   // mid-kill displacement can't let a stale resume ID shadow the new session.
   // In-memory only — no in-flight capture is meaningful across an app restart.
   private readonly pendingCapturesByProject = new Map<string, string>();
+  // #11477: the entry most recently handed out by `takePendingHibernation`, per
+  // project, so a taker whose launch aborts can put it back verbatim via
+  // `restorePendingHibernation` — original `capturedAt` intact, `panelWasOpen`
+  // stripped. Holding it here rather than round-tripping it through the
+  // renderer means the put-back carries no entry data at all, so there is no
+  // way to write a fabricated agentId/cwd into the persistent store.
+  //
+  // `claimId` + `ownerWebContentsId` make the put-back a compare-and-swap on
+  // the specific take rather than on the project: only the view that took this
+  // entry, quoting the id it was handed, can put it back. Without that pair a
+  // release is merely project-scoped, so a duplicate or late release could
+  // restore a stash a LATER take had already replaced, and a stash left behind
+  // by a successfully-resumed launch would stay restorable indefinitely.
+  //
+  // In-memory only, one deep per project: a take that is never answered is
+  // dropped, and a later take supersedes the stash outright.
+  private readonly lastTakenByProject = new Map<
+    string,
+    { entry: PendingHelpHibernation; claimId: string; ownerWebContentsId: number | null }
+  >();
   // #10815: per-project assistant-panel visibility, reported by the renderer
   // whenever its `isOpen` changes. Read at capture time to stamp
   // `panelWasOpen` onto the eviction hibernation entry so cold switch-back can
@@ -1120,11 +1143,20 @@ export class HelpSessionService {
    * captured on the prior eviction. The entry is one-shot — once read it's
    * dropped from the persistent store so a future cold launch without
    * intervening capture starts fresh.
+   *
+   * Returns a `claimId` alongside the entry (#11477): a launch that takes but
+   * then aborts quotes it back to `restorePendingHibernation` to put the entry
+   * back. `ownerWebContentsId` is the taking view, supplied by the IPC layer
+   * from its context — never by the renderer.
    */
-  async takePendingHibernation(projectId: string): Promise<{
+  async takePendingHibernation(
+    projectId: string,
+    ownerWebContentsId?: number
+  ): Promise<{
     agentId: string;
     agentSessionId: string;
     cwd: string;
+    claimId: string;
   } | null> {
     if (!this.pendingHibernationStore) return null;
     const entry = this.pendingHibernationStore.get(projectId);
@@ -1134,12 +1166,87 @@ export class HelpSessionService {
     // already-killed agent's (now-stale) resume ID cannot overwrite the
     // placeholder the renderer just claimed. Mirrors displacePriorSessions.
     this.pendingCapturesByProject.delete(projectId);
+    // Stash the exact entry (original `capturedAt` and all) so a taker that
+    // aborts can hand it back via `restorePendingHibernation` (#11477).
+    // Overwrites any prior stash: only the most recent take is restorable, and
+    // an earlier taker's put-back must not resurrect a superseded entry.
+    const { panelWasOpen: _panelWasOpen, ...restorable } = entry;
+    const claimId = randomUUID();
+    this.lastTakenByProject.set(projectId, {
+      entry: restorable,
+      claimId,
+      ownerWebContentsId: ownerWebContentsId ?? null,
+    });
     await this.pendingHibernationStore.clear(projectId);
     return {
       agentId: entry.agentId,
       agentSessionId: entry.agentSessionId,
       cwd: entry.cwd,
+      claimId,
     };
+  }
+
+  /**
+   * Put back an entry a caller took via `takePendingHibernation` but did not
+   * end up using (#11477).
+   *
+   * `takePendingHibernation` is destructive by design — the atomic take is the
+   * single-winner gate that stops two windows from displacing each other's
+   * backend (#10819). But every abort downstream of a successful take dropped
+   * the entry on the floor, so a launch superseded by a StrictMode remount, the
+   * stall watchdog, or a plain provisioning failure destroyed the only resume
+   * token the user had. The watchdog case is the sharpest: it surfaces a
+   * *retryable* launch error while the token that retry needs is already gone.
+   *
+   * The `claimId` from the matching take is required, so a release acts on the
+   * take that produced it rather than on the project at large. On top of that,
+   * it refuses whenever anything newer owns the slot:
+   *
+   * - A present entry means a fresh capture landed after our take. It is newer
+   *   and describes a later conversation; overwriting it would resurrect a
+   *   superseded one.
+   * - An in-flight capture owner means a `revokeSession` is mid-`gracefulKill`
+   *   and will write the real resume id when it resolves (#9646). Restoring
+   *   under it would be clobbered anyway, or would race the placeholder.
+   *
+   * The entry itself comes from main's own take-side stash, not from the
+   * caller: the renderer only reports that it didn't use what it took. That
+   * keeps the original `capturedAt` (so a put-back can't refresh its way past
+   * the 14-day staleness cutoff), keeps `panelWasOpen` stripped — the safe
+   * default, since a put-back entry should be offered for an explicit resume
+   * but never auto-resume on switch-back (#10815) — and leaves no path for a
+   * renderer to write an agentId/cwd of its choosing into main's persistent
+   * store.
+   *
+   * Returns whether the entry was actually restored.
+   */
+  async restorePendingHibernation(
+    projectId: string,
+    claimId: string,
+    ownerWebContentsId?: number
+  ): Promise<boolean> {
+    if (!this.pendingHibernationStore) return false;
+    const stashed = this.lastTakenByProject.get(projectId);
+    if (!stashed) return false;
+    // Compare-and-swap on the specific take. A release quoting a superseded
+    // claim (a later take replaced the stash) or arriving from a view other
+    // than the one that took it is refused WITHOUT consuming the stash, so the
+    // rightful claimant can still put its entry back.
+    if (stashed.claimId !== claimId) return false;
+    if (
+      stashed.ownerWebContentsId !== null &&
+      ownerWebContentsId !== undefined &&
+      stashed.ownerWebContentsId !== ownerWebContentsId
+    ) {
+      return false;
+    }
+    // One-shot from here: the claim is now spent either way, so a duplicate
+    // release can't re-resurrect an entry a subsequent take consumed.
+    this.lastTakenByProject.delete(projectId);
+    if (this.pendingHibernationStore.get(projectId)) return false;
+    if (this.pendingCapturesByProject.has(projectId)) return false;
+    await this.pendingHibernationStore.set(projectId, stashed.entry);
+    return true;
   }
 
   private displacePriorSessions(projectId: string): void {
@@ -1260,6 +1367,10 @@ export class HelpSessionService {
     // resume mechanism for clean shutdowns; this is the safety net.
     const targets = [...this.sessionsById.values()];
     await Promise.all(targets.map((record) => this.revokeSession(record.sessionId)));
+    // Take-side stashes are launch-scoped and hold a resume id; nothing can
+    // release one across a restart, so drop them rather than carry them to
+    // shutdown. The persisted entries themselves are untouched (#11477).
+    this.lastTakenByProject.clear();
   }
 
   /**

@@ -656,13 +656,17 @@ export interface GeneratedIpcInvokeMap {
     args: [projectId: string, isOpen: boolean];
     result: void;
   };
+  "help:restore-pending-hibernation": {
+    args: [projectId: string, claimId: string];
+    result: boolean;
+  };
   "help:revoke-session": {
     args: [sessionId: string];
     result: void;
   };
   "help:take-pending-hibernation": {
     args: [projectId: string];
-    result: { agentId: string; agentSessionId: string; cwd: string } | null;
+    result: { agentId: string; agentSessionId: string; cwd: string; claimId: string } | null;
   };
   "help:unmark-terminal": {
     args: [terminalId: string];

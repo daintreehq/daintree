@@ -285,6 +285,18 @@ export async function initGlobalServices(
             .map((wCtx) => wCtx.services.projectViewManager)
             .filter((pvm): pvm is ProjectViewManager => pvm !== undefined) ?? []
       );
+      // Keep background hibernation off a running Daintree Assistant (#11477).
+      // The same binding + PTY-liveness pair `ProjectViewManager` is wired with
+      // in main.ts: the binding alone survives an assistant that exited under
+      // its own steam, and `hasTerminal` is PtyClient's synchronous main-local
+      // spawn registry, so it is authoritative from the assistant's first
+      // instant. Lazy, like the provider above — the PtyClient is not resolved
+      // yet at wiring time.
+      svc.setHasLiveAssistantBackend((projectId) => {
+        const backend = helpSessionService.getAssistantBackend(projectId);
+        if (!backend) return false;
+        return getPtyClient()?.hasTerminal(backend.terminalId) === true;
+      });
     },
   });
 

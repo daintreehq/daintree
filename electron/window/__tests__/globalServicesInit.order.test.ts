@@ -146,6 +146,7 @@ vi.mock("../../setup/openFileInstall.js", () => ({
 
 const hibernationServiceMock = vi.hoisted(() => ({
   setProjectViewManagersProvider: vi.fn(),
+  setHasLiveAssistantBackend: vi.fn(),
 }));
 
 vi.mock("../../services/HibernationService.js", () => ({
@@ -270,6 +271,7 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     startOrphanSweep: vi.fn(),
     validateToken: vi.fn(),
     gcStaleSessions: vi.fn(async () => {}),
+    getAssistantBackend: vi.fn(() => null),
   },
 }));
 
@@ -307,12 +309,17 @@ vi.mock("electron", () => ({
 }));
 
 import { initGlobalServices, __test__ } from "../globalServicesInit.js";
-import { getGlobalServicesInitialized, setGlobalServicesInitialized } from "../serviceRefs.js";
+import {
+  getGlobalServicesInitialized,
+  setGlobalServicesInitialized,
+  setPtyClientRef,
+} from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
 import { app, ipcMain } from "electron";
 import type { Mock } from "vitest";
 import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
+import { helpSessionService } from "../../services/HelpSessionService.js";
 
 describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
   function resetSweepMocks() {
@@ -533,6 +540,52 @@ describe("initGlobalServices task ordering", () => {
     expect(typeof provider).toBe("function");
     // Lazy: re-reads the registry on each call rather than capturing a snapshot.
     expect(provider()).toEqual([]);
+  });
+
+  it("wires the live-assistant predicate into HibernationService (#11477)", async () => {
+    // Background hibernation reaches the same projects the cached-view reclaim
+    // does, so it needs the same binding + PTY-liveness pair — an unwired
+    // predicate leaves a fourth path that can kill a running assistant.
+    hibernationServiceMock.setHasLiveAssistantBackend.mockClear();
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    registeredTaskRuns.get("hibernation-service")!();
+
+    expect(hibernationServiceMock.setHasLiveAssistantBackend).toHaveBeenCalledTimes(1);
+    const predicate = hibernationServiceMock.setHasLiveAssistantBackend.mock.calls[0][0] as (
+      projectId: string
+    ) => boolean;
+    expect(typeof predicate).toBe("function");
+
+    const getAssistantBackend = helpSessionService.getAssistantBackend as unknown as Mock;
+    const hasTerminal = vi.fn<(terminalId: string) => boolean>(() => true);
+
+    // No backend bound: nothing to protect, and resolving it must not throw
+    // before the PtyClient exists (the predicate is wired lazily).
+    getAssistantBackend.mockReturnValue(null);
+    expect(predicate("proj-1")).toBe(false);
+
+    // Bound but the PtyClient isn't up yet — still false. Binding alone is NOT
+    // liveness: it outlives an assistant that exited under its own steam
+    // (#11162), so a stale binding must not pin the project forever.
+    getAssistantBackend.mockReturnValue({ terminalId: "t-help", webContentsId: 5 });
+    expect(predicate("proj-1")).toBe(false);
+
+    // Both halves satisfied.
+    setPtyClientRef({ hasTerminal } as unknown as Parameters<typeof setPtyClientRef>[0]);
+    try {
+      expect(predicate("proj-1")).toBe(true);
+      expect(hasTerminal).toHaveBeenCalledWith("t-help");
+
+      // Bound, PtyClient up, but the terminal is gone — the liveness half is
+      // what decides, not the binding.
+      hasTerminal.mockReturnValue(false);
+      expect(predicate("proj-1")).toBe(false);
+    } finally {
+      setPtyClientRef(null);
+      getAssistantBackend.mockReturnValue(null);
+    }
   });
 
   it("wires a lazy ProjectViewManager provider into IdleTerminalNotificationService (#11102)", async () => {

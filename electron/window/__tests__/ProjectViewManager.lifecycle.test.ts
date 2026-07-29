@@ -624,7 +624,13 @@ describe("ProjectViewManager — lifecycle invariants", () => {
       // Free RAM collapses below the profile floor while the gate is open.
       manager.setLowMemoryFreeThresholdMb(1024);
       stubSystemMemoryInfo({ free: 100 * 1024, total: 8 * 1024 * 1024 });
-      (manager as unknown as { maybeEvictUnderPressure: () => void }).maybeEvictUnderPressure();
+      // Two ticks, because the sampler sheds one view per pass at every band
+      // since #11477 — what matters here is WHICH views it is willing to take,
+      // not how fast, so drive it to its settled target.
+      const tick = (manager as unknown as { maybeEvictUnderPressure: () => void })
+        .maybeEvictUnderPressure;
+      tick.call(manager);
+      tick.call(manager);
 
       // The bridge (C) and the incoming active view (D) survive; A and B go.
       expect(setup.onViewEvicted).toHaveBeenCalledWith(initialWc.id);
@@ -658,10 +664,14 @@ describe("ProjectViewManager — lifecycle invariants", () => {
       await coldSwitch(setup, "proj-d", "/d");
       expect(manager.getAllViews()).toHaveLength(3);
 
-      // One low-memory pass clamps to 1 without rewriting the preference.
+      // Low-memory passes converge on 1 without rewriting the preference. Two
+      // ticks: the sampler sheds one view per pass at every band (#11477).
       manager.setLowMemoryFreeThresholdMb(1024);
       stubSystemMemoryInfo({ free: 100 * 1024, total: 8 * 1024 * 1024 });
-      (manager as unknown as { maybeEvictUnderPressure: () => void }).maybeEvictUnderPressure();
+      const tick = (manager as unknown as { maybeEvictUnderPressure: () => void })
+        .maybeEvictUnderPressure;
+      tick.call(manager);
+      tick.call(manager);
       expect(manager.getAllViews().map((entry) => entry.projectId)).toEqual(["proj-d"]);
       expect(manager.getCacheConfig().maxCachedViews).toBe(5);
 
