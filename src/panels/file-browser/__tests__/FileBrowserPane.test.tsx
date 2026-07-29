@@ -1158,13 +1158,22 @@ describe("promoted workspace-rooted browser (#11489)", () => {
     expect(screen.getByRole("button", { name: "Copy context" })).toBeTruthy();
   });
 
-  it("follows its own worktree's change ticks when it is not workspace-rooted", () => {
-    worktreeTicks.git = 120;
-    worktreeTicks.fs = 450;
+  it("follows its own worktree's git tick when it is not workspace-rooted", () => {
+    // Asserted per source rather than together: with both set, the larger one
+    // alone satisfies the Math.max and a disconnected sibling selector reads
+    // green.
+    worktreeTicks.git = 450;
+    worktreeTicks.fs = 120;
     renderPane({ worktreeId: "wt-1" });
 
-    // Whichever moved most recently, per the pane's Math.max of the two sources.
     expect(treeArgs.changeTick).toBe(450);
+  });
+
+  it("follows its own worktree's filesystem tick when it is not workspace-rooted", () => {
+    worktreeTicks.fs = 300;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(treeArgs.changeTick).toBe(300);
   });
 
   it("ignores the placement worktree's change ticks once workspace-rooted", () => {
