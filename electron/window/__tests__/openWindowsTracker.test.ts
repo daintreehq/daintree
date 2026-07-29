@@ -208,26 +208,85 @@ describe("scheduleOpenWindowsSave", () => {
     expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
   });
 
-  it("survives a failing write", () => {
+  it("survives a failing write and logs the cause", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cause = new Error("db closed");
     writeOpenWindowsManifest.mockImplementationOnce(() => {
-      throw new Error("db closed");
+      throw cause;
     });
+
     scheduleOpenWindowsSave();
     expect(() => vi.runAllTimers()).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(expect.any(String), cause);
+    warn.mockRestore();
+  });
+
+  it("keeps saving after a write failure", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    writeOpenWindowsManifest.mockImplementationOnce(() => {
+      throw new Error("transient");
+    });
+    scheduleOpenWindowsSave();
+    vi.runAllTimers();
+    writeOpenWindowsManifest.mockClear();
+
+    scheduleOpenWindowsSave();
+    vi.runAllTimers();
+    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });
 
 describe("recovery launches", () => {
-  it("never overwrites the stored fleet with the one window safe mode opened", () => {
+  beforeEach(() => {
     initOpenWindowsTracker({
       registry: makeRegistry([{ windowId: 1, projectId: "only-one" }]),
       readOnly: true,
     });
+  });
 
+  it("never overwrites the stored fleet with the one window safe mode opened", () => {
     scheduleOpenWindowsSave();
     vi.runAllTimers();
     saveOpenWindowsNow();
     freezeAndSnapshotOpenWindows();
+
+    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing across the real recovery startup sequence", () => {
+    // The exact production ordering: read-only tracker, fan-out hold, then a
+    // resume that would normally persist. The fleet on disk must survive it.
+    suppressOpenWindowsSaves();
+    resumeOpenWindowsSaves(true);
+    vi.runAllTimers();
+
+    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+  });
+
+  it("still writes nothing after a window closes", () => {
+    saveOpenWindowsNow(1);
+    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+  });
+});
+
+describe("a shutdown that lands during the startup fan-out", () => {
+  beforeEach(() => {
+    initOpenWindowsTracker({
+      registry: makeRegistry([{ windowId: 1, projectId: "a" }]),
+      readOnly: false,
+    });
+  });
+
+  it("writes nothing, even though the fan-out resume asks it to", () => {
+    // Quitting mid-restore: the freeze latches while suppression is still held,
+    // so the resume that follows must not write a half-restored fleet.
+    scheduleOpenWindowsSave();
+    suppressOpenWindowsSaves();
+    getActiveShutdown.mockReturnValue({ initiator: "app-quit", phase: "cleaning" });
+    freezeAndSnapshotOpenWindows();
+    resumeOpenWindowsSaves(true);
+    vi.runAllTimers();
 
     expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
   });

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   MAX_RESTORED_WINDOWS,
+  OPEN_WINDOWS_MANIFEST_VERSION,
   filterRestorableWindows,
   parseOpenWindowsManifest,
   serializeOpenWindowsManifest,
@@ -8,6 +9,11 @@ import {
 } from "../windowManifest.js";
 
 const record = (projectId: string | null): OpenWindowRecord => ({ projectId });
+
+/** Builds a manifest at the CURRENT version, so a version bump can't turn a
+ *  malformed-shape test into a false positive by being rejected on version. */
+const manifestJson = (windows: unknown[]): string =>
+  JSON.stringify({ version: OPEN_WINDOWS_MANIFEST_VERSION, windows });
 
 describe("parseOpenWindowsManifest", () => {
   it("round-trips what serialize produced", () => {
@@ -43,7 +49,10 @@ describe("parseOpenWindowsManifest", () => {
   });
 
   it("refuses a version it cannot read rather than guessing at fields", () => {
-    const future = JSON.stringify({ version: 99, windows: [{ projectId: "a" }] });
+    const future = JSON.stringify({
+      version: OPEN_WINDOWS_MANIFEST_VERSION + 1,
+      windows: [{ projectId: "a" }],
+    });
     expect(parseOpenWindowsManifest(future)).toEqual([]);
   });
 
@@ -52,23 +61,20 @@ describe("parseOpenWindowsManifest", () => {
   });
 
   it("refuses a manifest whose windows is not an array", () => {
-    expect(parseOpenWindowsManifest(JSON.stringify({ version: 1, windows: {} }))).toEqual([]);
+    expect(parseOpenWindowsManifest(manifestJson([]).replace("[]", "{}"))).toEqual([]);
   });
 
   it("drops malformed entries but keeps the sound ones around them", () => {
-    const raw = JSON.stringify({
-      version: 1,
-      windows: [
-        { projectId: "good" },
-        { projectId: 42 },
-        "not-an-object",
-        null,
-        { projectId: "" },
-        {},
-        { projectId: null },
-        { projectId: "also-good" },
-      ],
-    });
+    const raw = manifestJson([
+      { projectId: "good" },
+      { projectId: 42 },
+      "not-an-object",
+      null,
+      { projectId: "" },
+      {},
+      { projectId: null },
+      { projectId: "also-good" },
+    ]);
     expect(parseOpenWindowsManifest(raw)).toEqual([
       record("good"),
       record(null),
@@ -77,21 +83,16 @@ describe("parseOpenWindowsManifest", () => {
   });
 
   it("caps a manifest that would otherwise launch an unbounded fleet", () => {
-    const raw = JSON.stringify({
-      version: 1,
-      windows: Array.from({ length: 200 }, (_, i) => ({ projectId: `p${i}` })),
-    });
-    const parsed = parseOpenWindowsManifest(raw);
-    expect(parsed).toHaveLength(MAX_RESTORED_WINDOWS);
+    const inputIds = Array.from({ length: 200 }, (_, i) => `p${i}`);
+    const parsed = parseOpenWindowsManifest(
+      manifestJson(inputIds.map((id) => ({ projectId: id })))
+    );
     // Trimmed from the tail, so the most-recently-focused windows survive.
-    expect(parsed[0].projectId).toBe("p0");
+    expect(parsed.map((r) => r.projectId)).toEqual(inputIds.slice(0, MAX_RESTORED_WINDOWS));
   });
 
   it("ignores extra unknown fields on an entry", () => {
-    const raw = JSON.stringify({
-      version: 1,
-      windows: [{ projectId: "a", windowId: 7, bounds: { x: 1 } }],
-    });
+    const raw = manifestJson([{ projectId: "a", windowId: 7, bounds: { x: 1 } }]);
     expect(parseOpenWindowsManifest(raw)).toEqual([record("a")]);
   });
 });
@@ -103,12 +104,12 @@ describe("serializeOpenWindowsManifest", () => {
     expect((parsed as { version: unknown }).version).toEqual(expect.any(Number));
   });
 
-  it("never persists more than the cap", () => {
-    const overflow = Array.from({ length: 50 }, (_, i) => record(`p${i}`));
-    const parsed = JSON.parse(serializeOpenWindowsManifest(overflow)) as {
+  it("never persists more than the cap, trimming from the tail", () => {
+    const inputIds = Array.from({ length: 50 }, (_, i) => `p${i}`);
+    const parsed = JSON.parse(serializeOpenWindowsManifest(inputIds.map(record))) as {
       windows: OpenWindowRecord[];
     };
-    expect(parsed.windows).toHaveLength(MAX_RESTORED_WINDOWS);
+    expect(parsed.windows.map((r) => r.projectId)).toEqual(inputIds.slice(0, MAX_RESTORED_WINDOWS));
   });
 
   it("writes only the projectId, never an ephemeral Electron window id", () => {

@@ -124,21 +124,27 @@ export interface SetupWindowServicesOptions {
 }
 
 /**
- * @returns "exit-requested" when the process is already on its way out —
- *   fatally failed global init, or a finished smoke run — and `app.exit()` has
- *   been issued. Callers that create more than one window (the startup restore
- *   fan-out, #11492) must stop rather than build windows into a dying process;
- *   single-window callers can ignore it.
+ * @returns "ok" when the window is fully wired.
+ *
+ *   "exit-requested" when the process is already on its way out — fatally
+ *   failed global init, or a finished smoke run — and `app.exit()` has been
+ *   issued. "not-registered" when the window never reached the registry, so it
+ *   has no services at all.
+ *
+ *   Callers that create more than one window (the startup restore fan-out,
+ *   #11492) must stop on anything but "ok" rather than build windows into a
+ *   dying process — or count a serviceless window as a restored one and persist
+ *   it. Single-window callers can ignore the result.
  */
 export async function setupWindowServices(
   win: BrowserWindow,
   opts: SetupWindowServicesOptions
-): Promise<"ok" | "exit-requested"> {
+): Promise<"ok" | "exit-requested" | "not-registered"> {
   const windowRegistry = opts.windowRegistry;
   const ctx = windowRegistry?.getByWindowId(win.id);
   if (!ctx) {
     console.error("[MAIN] Window not registered before setupWindowServices — skipping");
-    return "ok";
+    return "not-registered";
   }
 
   markPerformance(PERF_MARKS.WINDOW_SERVICES_START);

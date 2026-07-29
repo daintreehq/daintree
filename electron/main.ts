@@ -38,6 +38,11 @@ import {
   registerWindowSessionEndHandler,
 } from "./lifecycle/appLifecycle.js";
 import { resolveLaunchIntent, shouldRestoreWindowFleet } from "./lifecycle/launchIntent.js";
+import {
+  resolvePrimaryRestoreProjectId,
+  restoreWindowFleet,
+  type CreateWindowResult,
+} from "./lifecycle/windowRestore.js";
 import { registerShutdownHandler } from "./lifecycle/shutdown.js";
 import {
   setMainWindow,
@@ -324,7 +329,7 @@ if (!gotTheLock) {
     initialProjectPath?: string | null,
     initialProjectId?: string,
     opts?: { revealMode?: "show" | "showInactive" }
-  ): Promise<"ok" | "exit-requested"> {
+  ): Promise<CreateWindowResult> {
     const { win, appView, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
       setupBrowserWindow(__dirname, {
         onRecreateWindow: () => createWindow(initialProjectPath, initialProjectId).then(() => {}),
@@ -578,9 +583,10 @@ if (!gotTheLock) {
       initialAppView: appView,
     });
 
-    // Global init failed fatally and app.exit(1) is already issued. Stop here
-    // so a restore fan-out doesn't keep building windows into a dying process.
-    if (servicesResult === "exit-requested") return "exit-requested";
+    // The process is exiting, or the window never reached the registry and has
+    // no services. Either way stop here, so a restore fan-out doesn't keep
+    // building windows into a dying process or count this one as restored.
+    if (servicesResult !== "ok") return servicesResult;
 
     // Seed the eviction guard's agent-state cache from the pty-host registry.
     // hasActiveAgent() is read synchronously during LRU scoring, so it can't
@@ -679,16 +685,6 @@ if (!gotTheLock) {
       // through the existing confirm/security gates, never silently.
       activateDeepLinkHandler(windowRegistry);
       setupWebviewCSP();
-      // Prime the hydrate prefetch cache for the last-active project so the
-      // renderer's first `app:boot` invoke resolves as a cache hit instead of
-      // doing an inline disk read. Fire-and-forget — overlaps with window
-      // creation. Skipped when:
-      //   - no last-active project (first run / project unset)
-      //   - safe mode (terminals are suppressed; priming would write empty)
-      //   - pending crash recovery (panelFilter path layers extra constraints)
-      //   - per-project state file doesn't exist yet (migration must run on
-      //     the renderer-blocking handler path — `buildSwitchHydrateResult`
-      //     intentionally skips the migration write)
       const launchIntent = resolveLaunchIntent({
         argv: process.argv,
         hasCliPathFlag,
@@ -701,21 +697,35 @@ if (!gotTheLock) {
 
       // A recovery launch deliberately opens one window. It must not then
       // persist that as the window set, or safe mode would overwrite the user's
-      // real fleet with the reduced one it opened to diagnose it (#11492).
+      // real fleet with the reduced one it opened to diagnose it (#11492). A
+      // targeted launch is NOT read-only: opening one folder from the CLI or
+      // Finder is a genuine one-window session the user asked for, so the
+      // manifest should describe it.
       initOpenWindowsTracker({ registry: windowRegistry, readOnly: launchIntent === "recovery" });
 
-      const restoreRecords = shouldRestoreWindowFleet(launchIntent)
+      const { hadManifest, records: restoreRecords } = shouldRestoreWindowFleet(launchIntent)
         ? readOpenWindowsManifestSync()
-        : [];
+        : { hadManifest: false, records: [] };
 
       // The window that gets focus is the manifest's most-recently-focused
       // record — not `lastActiveProjectId`, which tracks the last project
       // *switched to* anywhere and can name a different window entirely.
-      const primaryRestoreProjectId =
-        restoreRecords.length > 0
-          ? (restoreRecords[0].projectId ?? undefined)
-          : (lastActiveProjectId ?? undefined);
+      const primaryRestoreProjectId = resolvePrimaryRestoreProjectId(
+        restoreRecords,
+        hadManifest,
+        lastActiveProjectId ?? undefined
+      );
 
+      // Prime the hydrate prefetch cache for the window that will take focus so
+      // the renderer's first `app:boot` invoke resolves as a cache hit instead
+      // of doing an inline disk read. Fire-and-forget — overlaps with window
+      // creation. Skipped when:
+      //   - no project to restore (first run / project unset / picker window)
+      //   - safe mode or pending crash recovery (terminals are suppressed and
+      //     the panelFilter path layers extra constraints)
+      //   - per-project state file doesn't exist yet (migration must run on
+      //     the renderer-blocking handler path — `buildSwitchHydrateResult`
+      //     intentionally skips the migration write)
       if (primaryRestoreProjectId && launchIntent !== "recovery") {
         void projectStore
           .getProjectState(primaryRestoreProjectId)
@@ -728,45 +738,17 @@ if (!gotTheLock) {
           });
       }
 
-      // Hold manifest writes across the whole fan-out. Windows 2..N register
-      // while window 1's debounce is still pending, so an unheld save would
-      // persist a partial fleet — harmless if startup finishes, authoritative
-      // for the next launch if it doesn't.
-      suppressOpenWindowsSaves();
-      let restoredCleanly = false;
-      try {
-        // The first window must complete alone. `initGlobalServices()` flips its
-        // "initialized" guard synchronously at entry, before its own awaits, so
-        // a concurrent second window sails past the guard and races the first
-        // window's migrations and DB open. Once this await returns, global init
-        // has fully settled and the rest are safe to run together.
-        const primaryResult = await createWindow(undefined, primaryRestoreProjectId);
-
-        if (primaryResult === "ok" && restoreRecords.length > 1) {
-          // Background windows reveal with showInactive(): they finish loading
-          // in an unpredictable order, and a plain show() would hand focus to
-          // whichever renderer parsed its skeleton last.
-          const results = await Promise.allSettled(
-            restoreRecords.slice(1).map((record) =>
-              createWindow(undefined, record.projectId ?? undefined, {
-                revealMode: "showInactive",
-              })
-            )
-          );
-          for (const result of results) {
-            if (result.status === "rejected") {
-              console.error("[MAIN] Restoring a background window failed:", result.reason);
-            }
-          }
-        }
-
-        restoredCleanly = primaryResult === "ok";
-      } finally {
-        // Only overwrite the manifest once the fleet is actually up. A failed
-        // fan-out leaves the stored manifest alone — it is still correct, and a
-        // partial rewrite would shrink the set the next launch restores.
-        resumeOpenWindowsSaves(restoredCleanly);
-      }
+      await restoreWindowFleet({
+        records: restoreRecords,
+        hadManifest,
+        fallbackProjectId: lastActiveProjectId ?? undefined,
+        createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
+        suppressSaves: suppressOpenWindowsSaves,
+        resumeSaves: resumeOpenWindowsSaves,
+        onBackgroundWindowFailed: (reason) => {
+          console.error("[MAIN] Restoring a background window failed:", reason);
+        },
+      });
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
       // Startup crashes hard-exit without running before-quit, which means

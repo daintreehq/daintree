@@ -261,7 +261,14 @@ export function setupBrowserWindow(
       console.warn("[MAIN] Failed to load E2E BrowserWindow sentinel:", err);
     });
     if (isE2EDeferRendererLoad && !win.isDestroyed()) {
-      win.show();
+      // Honours revealMode like showOnce() does: this path reveals the shell
+      // before the renderer loads, so a restored background window would
+      // otherwise take focus here and never reach its showInactive().
+      if (revealMode === "showInactive") {
+        win.showInactive();
+      } else {
+        win.show();
+      }
     }
   }
 

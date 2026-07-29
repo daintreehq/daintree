@@ -97,15 +97,31 @@ export function readLastActiveProjectIdentitySync(
  * constructed around it. Records for the project picker (`projectId: null`)
  * always survive.
  *
- * Returns [] on first launch, corrupt DB, corrupt manifest, or any error — the
- * caller falls back to opening a single window.
+ * `hadManifest` is reported separately from `records` on purpose: a readable
+ * manifest whose every project has since been deleted filters down to an empty
+ * list, and that is NOT the same as having no manifest at all. Collapsing the
+ * two would let the caller fall back to the global last-active project — which
+ * is precisely the "silently opened a different project" behaviour the restore
+ * is required to avoid.
+ *
+ * Both fields report nothing on first launch, corrupt DB, corrupt manifest, or
+ * any error, so the caller opens a single window seeded the old way.
  */
-export function readOpenWindowsManifestSync(): OpenWindowRecord[] {
+export interface OpenWindowsManifestRead {
+  /** A structurally valid manifest was stored, whatever survived filtering. */
+  hadManifest: boolean;
+  /** Windows still restorable, most-recently-focused first. */
+  records: OpenWindowRecord[];
+}
+
+const NO_MANIFEST: OpenWindowsManifestRead = { hadManifest: false, records: [] };
+
+export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
   try {
     const dbPath = path.join(app.getPath("userData"), "daintree.db");
 
     if (!fs.existsSync(dbPath)) {
-      return []; // First launch — no database yet
+      return NO_MANIFEST; // First launch — no database yet
     }
 
     const sqlite = new Database(dbPath, { readonly: true });
@@ -115,22 +131,25 @@ export function readOpenWindowsManifestSync(): OpenWindowRecord[] {
         .get(OPEN_WINDOWS_KEY) as { value: string } | undefined;
 
       const records = parseOpenWindowsManifest(row?.value ?? null);
-      if (records.length === 0) return [];
+      if (records.length === 0) return NO_MANIFEST;
 
       const projectIds = [...new Set(records.map((r) => r.projectId).filter((id) => id !== null))];
-      if (projectIds.length === 0) return records;
+      if (projectIds.length === 0) return { hadManifest: true, records };
 
       const placeholders = projectIds.map(() => "?").join(",");
       const rows = sqlite
         .prepare(`SELECT id FROM projects WHERE id IN (${placeholders})`)
         .all(...projectIds) as { id: string }[];
 
-      return filterRestorableWindows(records, new Set(rows.map((r) => r.id)));
+      return {
+        hadManifest: true,
+        records: filterRestorableWindows(records, new Set(rows.map((r) => r.id))),
+      };
     } finally {
       sqlite.close();
     }
   } catch {
     // Any error (corrupt DB, missing table, etc.) — restore a single window.
-    return [];
+    return NO_MANIFEST;
   }
 }
