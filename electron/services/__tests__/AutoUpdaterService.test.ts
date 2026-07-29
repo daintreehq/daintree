@@ -3067,6 +3067,15 @@ describe("AutoUpdaterService", () => {
         );
       });
 
+      // A non-semver running version would throw out of the comparison, and this
+      // runs before the rest of initialize() — a throw here would leave the
+      // session with no feed URL, no listeners and no update checks at all.
+      it("prompts instead of throwing when the running version is unparsable", () => {
+        const toasts = bootWith({ pending: "2.0.0", stage: "attempted", running: "dev-build" });
+
+        expect(toasts).toHaveLength(1);
+      });
+
       it("refuses to prompt on a stage it does not recognize", () => {
         const toasts = bootWith({ pending: "2.0.0", stage: "../../etc/passwd" });
 

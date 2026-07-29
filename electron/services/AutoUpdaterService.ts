@@ -409,8 +409,10 @@ class AutoUpdaterService {
     if (!stage) return;
     // Running something at or past the target means the update landed by some
     // route (a manual reinstall, a newer release), so there is nothing to
-    // recover from. Only telemetry cares about the exact-version mismatch.
-    if (semver.gte(actual, expected)) return;
+    // recover from. Only telemetry cares about the exact-version mismatch. An
+    // unparsable running version can't prove the update landed, so it falls
+    // through to the prompt rather than throwing out of `initialize()`.
+    if (semver.valid(actual) && semver.gte(actual, expected)) return;
     // The Store owns installs on that channel, so a daintree.org download is the
     // wrong recovery. Markers are still consumed above, unconditionally.
     if (isWindowsStoreBuild()) return;
