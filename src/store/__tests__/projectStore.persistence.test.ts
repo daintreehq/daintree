@@ -174,7 +174,7 @@ describe("panel persistence workspace id (#11484)", () => {
         path: "/tmp/project-1",
         emoji: "folder",
         lastOpened: Date.now(),
-      } as unknown as NonNullable<ReturnType<typeof useProjectStore.getState>["currentProject"]>,
+      },
     });
 
     expect(getter()).toBe("project-1");
@@ -207,9 +207,11 @@ describe("panel persistence workspace id (#11484)", () => {
           id: "project-closed",
           name: "Closed",
           path: "/tmp/closed",
+          emoji: "folder",
+          lastOpened: Date.now(),
           status: "closed",
         },
-      ] as unknown as ReturnType<typeof useProjectStore.getState>["projects"],
+      ],
     });
 
     expect(getter()).toBeUndefined();
