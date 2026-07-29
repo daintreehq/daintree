@@ -891,6 +891,10 @@ describe("ProjectViewManager — eviction safety", () => {
           effectiveMax: 1,
           viewCount: 2,
           overflow: 1,
+          // What is holding the overflow: a pinned assistant this pass will
+          // never take, and no transient paint-gate/cold-switch bridge.
+          protectedCount: 1,
+          transientlyExcludedCount: 0,
           protectedProjectIds: ["proj-a"],
         })
       );

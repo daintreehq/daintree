@@ -329,12 +329,16 @@ export class HibernationManager {
     // no return, and swallowing it in the catch would lose the token exactly
     // the way this fix exists to prevent.
     let claimId: string | null = null;
+    // Whether this take reached the store write below, so a release knows if
+    // the mirror is ours to drop.
+    let mirrored = false;
     try {
       const pending = await window.electron.help.takePendingHibernation(projectId);
       if (!pending) return { status: "empty" };
       claimId = pending.claimId;
       if (!this.host.isLaunchCurrent(gen)) {
-        await this.releaseToMain(projectId, claimId, "stale-generation");
+        // Nothing seeded yet — leave whatever the slot holds alone.
+        await this.releaseToMain(projectId, claimId, "stale-generation", { clearMirror: false });
         return { status: "released" };
       }
       // `pending.agentSessionId` can be the empty-string sentinel when main's
@@ -351,11 +355,12 @@ export class HibernationManager {
         cwd: pending.cwd,
         agentId: pending.agentId,
       });
+      mirrored = true;
       return { status: "seeded", claimId: pending.claimId };
     } catch (err) {
       logError("HelpPanel: failed to pull pending hibernation from main", err);
       if (claimId) {
-        await this.releaseToMain(projectId, claimId, "seed-threw");
+        await this.releaseToMain(projectId, claimId, "seed-threw", { clearMirror: mirrored });
         return { status: "released" };
       }
       return { status: "empty" };
@@ -371,20 +376,30 @@ export class HibernationManager {
    * (one lost resume opportunity), so it is logged and swallowed rather than
    * failing the launch that is already unwinding.
    *
-   * Drops the renderer's local mirror of the entry as part of the release. The
-   * two must move together: `seedFromMain` writes the taken entry into the
-   * durable `hibernateSessions` slot, so releasing main's copy while leaving
-   * the mirror behind would let a later launch resume from the mirror after
-   * main had already handed the entry to a different window — two windows
-   * resuming one conversation, which is exactly the single-winner invariant the
-   * atomic take exists to hold (#10820).
+   * Pass `clearMirror` when this take was written into the renderer's durable
+   * `hibernateSessions` slot. The two must then move together: releasing main's
+   * copy while leaving the mirror behind would let a later launch resume from
+   * the mirror after main had already handed the entry to a different window —
+   * two windows resuming one conversation, which is exactly the single-winner
+   * invariant the atomic take exists to hold (#10820).
+   *
+   * It is NOT unconditional, because several release paths abort before
+   * mirroring anything: the stale-generation guard below, and the early
+   * `resumeOnly` take's generation/agent-mismatch bails. Clearing there would
+   * delete whatever the slot already held — a graceful-hibernate entry from a
+   * panel close, or a newer entry — which this launch never owned.
    *
    * `reason` is carried into the log so a future incident can tell which abort
    * path fired instead of inferring it from an absence, which is what made the
    * original report take log archaeology to diagnose.
    */
-  async releaseToMain(projectId: string, claimId: string, reason: string): Promise<void> {
-    useHelpPanelStore.getState().clearHibernateSession(projectId);
+  async releaseToMain(
+    projectId: string,
+    claimId: string,
+    reason: string,
+    opts: { clearMirror: boolean }
+  ): Promise<void> {
+    if (opts.clearMirror) useHelpPanelStore.getState().clearHibernateSession(projectId);
     try {
       const restored = await window.electron.help.restorePendingHibernation(projectId, claimId);
       console.info("[HelpPanel] released pending hibernation back to main", {

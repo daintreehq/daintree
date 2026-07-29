@@ -973,6 +973,47 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
   });
 
+  it("releases a mismatched-agent take without touching the hibernate slot it never wrote (#11477)", async () => {
+    // The resumeOnly take is hoisted above provisioning (#10819), so it lands
+    // BEFORE the agentId check. On a mismatch the launch bails without ever
+    // seeding — meaning the local hibernate slot still holds whatever was
+    // already there. The put-back must return main's copy and leave that slot
+    // alone; clearing it unconditionally would delete an entry this launch
+    // never owned.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    const preExisting = {
+      sessionId: "graceful-close-id",
+      cwd: "/tmp/help/proj-1",
+      agentId: "codex",
+    };
+    helpPanelState.hibernateSessions = { "proj-1": preExisting };
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: true,
+    });
+    // Main's captured entry is for a DIFFERENT agent than the one launching.
+    mockTakePendingHibernation.mockResolvedValue({
+      agentId: "gemini",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      claimId: "claim-mismatch",
+    });
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    expect(mockRestorePendingHibernation).toHaveBeenCalledWith("proj-1", "claim-mismatch");
+    expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.hibernateSessions["proj-1"]).toEqual(preExisting);
+  });
+
   it("does NOT launch when a live session already exists (DevTools reload guard)", async () => {
     // A DevTools reload can mount the panel while the store still reports a live
     // terminal. The `!terminalId` gate must drop the auto-resume so a second

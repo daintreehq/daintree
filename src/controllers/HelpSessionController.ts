@@ -1153,7 +1153,14 @@ export class HelpSessionController {
     // or throw (#11477). One variable released from the `finally` covers them
     // all, including early returns added later. Cleared only where the token is
     // genuinely spent: a resumed session that survived its post-spawn checks.
-    let unreleasedHibernation: { projectId: string; claimId: string } | null = null;
+    // `mirrored` records whether this take also reached the renderer's durable
+    // `hibernateSessions` slot, so the release only drops that mirror when it
+    // is genuinely ours — the bails below fire before it is ever written.
+    let unreleasedHibernation: {
+      projectId: string;
+      claimId: string;
+      mirrored: boolean;
+    } | null = null;
     // Clear any prior failure banner up front so a retry immediately drops the
     // stale error while the new attempt is in flight.
     this._patch({ launchError: null });
@@ -1243,6 +1250,9 @@ export class HelpSessionController {
           unreleasedHibernation = {
             projectId: launchProject.id,
             claimId: earlyPending.claimId,
+            // Not seeded yet — the two bails below return before the store
+            // write, and a release from there must not touch the slot.
+            mirrored: false,
           };
         }
         if (gen !== this._launchGen) {
@@ -1258,6 +1268,7 @@ export class HelpSessionController {
           cwd: earlyPending.cwd,
           agentId: earlyPending.agentId,
         });
+        if (unreleasedHibernation) unreleasedHibernation.mirrored = true;
       }
 
       const outcome = await provisionHelpSession(launchProject, launchAgentId, launchContext);
@@ -1311,7 +1322,12 @@ export class HelpSessionController {
           // "released" already handed it back inside seedFromMain (it saw the
           // stale gen first); only a live seed leaves this launch owning it.
           if (seeded.status === "seeded") {
-            unreleasedHibernation = { projectId: launchProject.id, claimId: seeded.claimId };
+            // "seeded" means the entry IS in the store, so the mirror is ours.
+            unreleasedHibernation = {
+              projectId: launchProject.id,
+              claimId: seeded.claimId,
+              mirrored: true,
+            };
           }
           if (gen !== this._launchGen) {
             this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
@@ -1529,7 +1545,8 @@ export class HelpSessionController {
         void this._hibernationManager.releaseToMain(
           unreleasedHibernation.projectId,
           unreleasedHibernation.claimId,
-          reached ? "fresh-launch-unused" : "launch-abandoned"
+          reached ? "fresh-launch-unused" : "launch-abandoned",
+          { clearMirror: unreleasedHibernation.mirrored }
         );
       }
       // Release the re-entrancy guard only if THIS launch() still owns it —

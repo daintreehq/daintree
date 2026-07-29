@@ -321,20 +321,26 @@ export function evictStaleViews(
   // rather than the active view alone is now the expected outcome, and it is
   // exactly the case where an unexplained over-cap cache would read as a leak.
   if (host.views.size > effectiveMax && candidates.length === 0 && assistantProtected.length > 0) {
-    // `overflow` counts every view over target, which mid-switch also includes
-    // the paint-gate/cold-switch bridge — excluded from `evictable` above and
-    // temporary. Report the protected share separately so a reader can tell a
-    // pinned assistant (persistent) from a bridge that resolves on its own,
-    // instead of attributing the whole overflow to the floor.
-    const gateExcluded = host.views.size - effectiveMax - assistantProtected.length;
+    // `overflow` counts views over target; the two counts beside it say what is
+    // holding them, so a reader can tell a pinned assistant (persistent, this
+    // pass will never take it) from a paint-gate/cold-switch bridge (temporary,
+    // resolves on its own). Deliberately NOT a partition of `overflow` —
+    // counted directly rather than derived by subtraction, because with an
+    // `effectiveMax` above 1 the protected views need not all be over the cap,
+    // and subtracting would report a bigger protected share than the overflow.
+    const transientlyExcludedProjectIds = new Set(
+      [gateOutgoingProjectId, switchOutgoingProjectId].filter(
+        (id): id is string => id !== null && id !== host.activeProjectId
+      )
+    );
     logInfo("projectview.eviction-skipped", {
       reason: effectiveReason,
       forced: criticalPressure,
       viewCount: host.views.size,
       effectiveMax,
       overflow: host.views.size - effectiveMax,
-      protectedOverflow: assistantProtected.length,
-      transientlyExcluded: Math.max(0, gateExcluded),
+      protectedCount: assistantProtected.length,
+      transientlyExcludedCount: transientlyExcludedProjectIds.size,
       protectedProjectIds: assistantProtected.map(([projectId]) => projectId),
     });
   }
