@@ -2764,6 +2764,27 @@ describe("AutoUpdaterService", () => {
         expect(persistedStages()).toEqual([]);
       });
 
+      // A download landing inside the multi-second install window belongs to a
+      // service being torn down around it. Re-arming would flip
+      // autoInstallOnAppQuit back on mid-teardown AND wipe the marker the
+      // pending handoff just wrote, losing the record of a failed install.
+      it("ignores a download that lands mid-install", () => {
+        downloadedHandler({ version: "2.0.0" });
+        quitAndInstallHandler(TRUSTED_SENDER);
+        autoUpdaterMock.autoInstallOnAppQuit = false;
+        storeMock.delete.mockClear();
+        broadcastMock.mockClear();
+
+        downloadedHandler({ version: "3.0.0" });
+
+        expect(storeMock.delete).not.toHaveBeenCalledWith(STAGE_KEY);
+        expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
+        expect(broadcastMock).not.toHaveBeenCalledWith(
+          CHANNELS.UPDATE_DOWNLOADED,
+          expect.anything()
+        );
+      });
+
       it("upgrades the attempt to a timeout when the process outlives the handoff", () => {
         downloadedHandler({ version: "2.0.0" });
         quitAndInstallHandler(TRUSTED_SENDER);
@@ -2912,8 +2933,12 @@ describe("AutoUpdaterService", () => {
       // The handler still authorizes an unusable payload and flips the menu to
       // "ready", so leaving the previous pair intact would attribute the next
       // boot's mismatch to an update that is no longer the staged one.
-      it("drops both markers when the staged version is unusable", () => {
-        downloadedHandler({ version: "not-a-version" });
+      it.each([
+        ["a malformed string", "not-a-version"],
+        ["an empty string", "   "],
+        ["a non-string from a future updater revision", 42],
+      ])("drops both markers when the staged version is %s", (_label, version) => {
+        downloadedHandler({ version });
 
         expect(storeMock.delete).toHaveBeenCalledWith(STAGE_KEY);
         expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateVersion");

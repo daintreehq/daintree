@@ -23,6 +23,9 @@ type ToastCallback = (payload: {
 
 let capturedCallback: ToastCallback | null = null;
 const cleanupFn = vi.fn();
+// Typed rather than `vi.fn()` so reading `mock.calls[0][0]` yields a `string`
+// without an assertion — casts on mock reads regress the lint ratchet.
+const openExternalMock = vi.fn<(url: string) => Promise<void>>(() => Promise.resolve());
 
 describe("useMainProcessToastListener", () => {
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -33,6 +36,7 @@ describe("useMainProcessToastListener", () => {
     capturedCallback = null;
     cleanupFn.mockClear();
     notifyMock.mockClear();
+    openExternalMock.mockClear();
 
     window.electron = {
       notification: {
@@ -41,6 +45,7 @@ describe("useMainProcessToastListener", () => {
           return cleanupFn;
         }),
       },
+      system: { openExternal: openExternalMock },
     } as unknown as typeof window.electron;
   });
 
@@ -190,9 +195,6 @@ describe("useMainProcessToastListener", () => {
   // browser navigation, so it must stay pinned to our own origin.
   describe("system:open-external action", () => {
     function mountWithOpenExternal() {
-      const openExternalMock = vi.fn(() => Promise.resolve());
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (window.electron as any).system = { openExternal: openExternalMock };
       renderHook(() => useMainProcessToastListener());
       return openExternalMock;
     }
@@ -207,27 +209,25 @@ describe("useMainProcessToastListener", () => {
         });
       });
       const call = notifyMock.mock.calls[notifyMock.mock.calls.length - 1]![0];
-      act(() => {
-        call.action!.onClick();
-      });
+      void call.action!.onClick();
     }
 
     it("opens a trusted https daintree.org URL through the system bridge", () => {
-      const openExternalMock = mountWithOpenExternal();
+      mountWithOpenExternal();
 
       clickActionWith("https://daintree.org/download");
 
       expect(openExternalMock).toHaveBeenCalledTimes(1);
       // Asserts the hook forwards the SAME origin+path it was given, without
       // asserting the literal the main process happens to send today.
-      const opened = new URL(openExternalMock.mock.calls[0]![0] as unknown as string);
+      const opened = new URL(openExternalMock.mock.calls[0]![0]);
       expect(opened.protocol).toBe("https:");
       expect(opened.hostname).toBe("daintree.org");
       expect(opened.pathname).toBe("/download");
     });
 
     it("accepts a daintree.org subdomain but not a lookalike suffix", () => {
-      const openExternalMock = mountWithOpenExternal();
+      mountWithOpenExternal();
 
       clickActionWith("https://www.daintree.org/download");
       expect(openExternalMock).toHaveBeenCalledTimes(1);
@@ -246,14 +246,12 @@ describe("useMainProcessToastListener", () => {
       // still ours — opening it is correct, not a bypass.
       ["a backslash the parser folds into the path", "https://daintree.org\\@evil.test/download"],
     ])("still opens %s", (_label, data) => {
-      const openExternalMock = mountWithOpenExternal();
+      mountWithOpenExternal();
 
       clickActionWith(data);
 
       expect(openExternalMock).toHaveBeenCalledTimes(1);
-      expect(new URL(openExternalMock.mock.calls[0]![0] as unknown as string).hostname).toBe(
-        "daintree.org"
-      );
+      expect(new URL(openExternalMock.mock.calls[0]![0]).hostname).toBe("daintree.org");
     });
 
     it.each([
@@ -274,7 +272,7 @@ describe("useMainProcessToastListener", () => {
       ["a punycode homograph", "https://xn--dintree-n1a.org/download"],
       ["a trailing-dot host", "https://daintree.org./download"],
     ])("refuses to open %s", (_label, data) => {
-      const openExternalMock = mountWithOpenExternal();
+      mountWithOpenExternal();
 
       clickActionWith(data);
 
@@ -282,7 +280,7 @@ describe("useMainProcessToastListener", () => {
     });
 
     it("stays inert when the toast names an unknown ipc channel", () => {
-      const openExternalMock = mountWithOpenExternal();
+      mountWithOpenExternal();
 
       act(() => {
         capturedCallback!({
@@ -292,9 +290,7 @@ describe("useMainProcessToastListener", () => {
         });
       });
       const call = notifyMock.mock.calls[notifyMock.mock.calls.length - 1]![0];
-      act(() => {
-        call.action!.onClick();
-      });
+      void call.action!.onClick();
 
       expect(openExternalMock).not.toHaveBeenCalled();
     });

@@ -991,6 +991,12 @@ class AutoUpdaterService {
         this.recordSuccessfulUpdateCheck();
         this.resetRetryState();
         this.clearCheckingMenuTimeout();
+        // A download that lands inside the install window belongs to a service
+        // that is being torn down around it. Re-arming here would flip
+        // `autoInstallOnAppQuit` back on mid-teardown and, worse, wipe the
+        // attempt marker the pending handoff just wrote — leaving a failed
+        // install with no record of having been tried (issue #11481).
+        if (this.installInFlight) return;
         // Stale-download guard: downloadGeneration was captured in
         // update-available, channelGeneration is incremented on channel
         // switch. If they diverged, this download belongs to the prior
@@ -1008,34 +1014,36 @@ class AutoUpdaterService {
         // between event delivery and the IPC frame still leaves the marker on
         // disk. `semver.valid` defends against a malformed payload from a
         // future electron-updater revision.
-        if (typeof info.version === "string") {
-          const trimmed = info.version.trim();
-          // Persist the canonical semver form (no leading `v`, no `=` prefix)
-          // so the boot comparison round-trips cleanly against
-          // `app.getVersion()`, which already emits canonical form.
-          const canonical = trimmed.length > 0 ? semver.valid(trimmed) : null;
-          if (canonical) {
-            try {
-              store.set("pendingUpdateVersion", canonical);
-            } catch (err) {
-              console.error("[MAIN] Failed to persist pendingUpdateVersion:", err);
-            }
-          } else {
-            // The handler still authorizes this payload and flips the menu to
-            // "ready", so leaving the PREVIOUS version marker in place would
-            // pair it with an attempt at a different update. Drop it instead.
-            try {
-              store.delete("pendingUpdateVersion");
-            } catch (err) {
-              console.error("[MAIN] Failed to clear stale pendingUpdateVersion:", err);
-            }
+        // Persist the canonical semver form (no leading `v`, no `=` prefix) so
+        // the boot comparison round-trips cleanly against `app.getVersion()`,
+        // which already emits canonical form.
+        const canonical =
+          typeof info.version === "string" && info.version.trim().length > 0
+            ? semver.valid(info.version.trim())
+            : null;
+        if (canonical) {
+          try {
+            store.set("pendingUpdateVersion", canonical);
+          } catch (err) {
+            console.error("[MAIN] Failed to persist pendingUpdateVersion:", err);
           }
-          // Unconditional: a newly staged payload supersedes whatever the last
-          // attempt was, whether or not we could record a version for it. A
-          // stage left over from an earlier update would otherwise be read back
-          // on the next boot and blamed on this one.
-          this.forgetInstallStage();
+        } else {
+          // The handler still authorizes this payload and flips the menu to
+          // "ready", so leaving the PREVIOUS version marker in place would pair
+          // it with an attempt at a different update. Drop it instead. Covers a
+          // non-string version from a future electron-updater revision as well
+          // as a malformed string.
+          try {
+            store.delete("pendingUpdateVersion");
+          } catch (err) {
+            console.error("[MAIN] Failed to clear stale pendingUpdateVersion:", err);
+          }
         }
+        // Outside the string guard as well as the canonical one: a newly staged
+        // payload supersedes whatever the last attempt was, whatever shape its
+        // version arrived in. A stage left over from an earlier update would
+        // otherwise be read back on the next boot and blamed on this one.
+        this.forgetInstallStage();
         this.setMenuState("ready");
         broadcastToRenderer(CHANNELS.UPDATE_DOWNLOADED, { version: info.version });
       };

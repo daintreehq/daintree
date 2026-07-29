@@ -122,10 +122,7 @@ function createHarness({
       `printf '%s\\n' "$*" >> "${codesignLog}"`,
       'if [[ "$*" == *--verify* ]]; then',
       ...(codesignFails
-        ? [
-            "  echo 'invalid signature (code or signature have been modified)' >&2",
-            "  exit 1",
-          ]
+        ? ["  echo 'invalid signature (code or signature have been modified)' >&2", "  exit 1"]
         : ["  exit 0"]),
       "fi",
       "printf '%s\\n' 'Identifier=org.daintree.app'",
@@ -204,6 +201,13 @@ describe("verify-macos-update-archives.sh", () => {
     expect(verifyCalls).toHaveLength(2);
     for (const call of verifyCalls) {
       for (const flag of DIRECT_VERIFY_FLAGS) expect(call).toContain(flag);
+    }
+    // A count alone would still pass if the gate verified ONE extraction twice
+    // and skipped the other, so bind each call to a distinct destination.
+    const destinations = extractionDestinations(harness);
+    expect(destinations).toHaveLength(2);
+    for (const dest of destinations) {
+      expect(verifyCalls.filter((c) => c.includes(dest))).toHaveLength(1);
     }
   });
 
