@@ -62,6 +62,42 @@ describe("electron-builder config — macOS artifact naming (#10380)", () => {
   });
 });
 
+describe("electron-builder config — platform files overrides (#11475)", () => {
+  it("keeps every top-level files pattern in each platform override", async () => {
+    const config = await buildConfig();
+    // electron-builder replaces the top-level `files` with a platform-level one
+    // rather than merging them, and an override left with no inclusion pattern
+    // falls back to the default `**/*`. That silently packed the whole source
+    // tree into app.asar (601MB vs 39.8MB) and broke the macOS universal merge
+    // on the per-arch node-gyp metadata it dragged in. Every override has to
+    // spread baseFiles(); comparing against the resolved top-level array keeps
+    // this honest as that list grows.
+    expect(config.files.some((pattern) => !pattern.startsWith("!"))).toBe(true);
+
+    for (const platform of ["mac", "win", "linux"]) {
+      const missing = config.files.filter((pattern) => !config[platform].files.includes(pattern));
+      expect(missing, `${platform}.files drops top-level patterns`).toEqual([]);
+    }
+  });
+
+  it("packs no source directory that the asar guard would reject", async () => {
+    const config = await buildConfig();
+    // afterPack.cjs asserts app.asar's top-level entries against this same set.
+    // The two live in different files and would drift apart silently, so pin
+    // the config side here: every inclusion pattern must root in an entry the
+    // guard allows.
+    const guardedRoots = ["dist", "dist-electron", "electron", "node_modules", "package.json"];
+    for (const platform of ["mac", "win", "linux"]) {
+      const included = config[platform].files.filter((pattern) => !pattern.startsWith("!"));
+      for (const pattern of included) {
+        expect(guardedRoots, `${platform}.files pattern "${pattern}"`).toContain(
+          pattern.split("/")[0]
+        );
+      }
+    }
+  });
+});
+
 describe("electron-builder config — OS folder context menus (#11406)", () => {
   const WORKFLOW_DIR = "build/macos/Open in Daintree.workflow";
 

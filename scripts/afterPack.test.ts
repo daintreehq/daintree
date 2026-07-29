@@ -1,14 +1,24 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import path from "path";
 import Module from "module";
+import { Arch } from "builder-util";
 
 const mockExistsSync = vi.fn();
 const mockReaddirSync = vi.fn();
 const mockMkdirSync = vi.fn();
 const mockCopyFileSync = vi.fn();
+const mockStatSync = vi.fn();
 const mockSpawnSync = vi.fn();
+const mockGetRawHeader = vi.fn();
 const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+/** The top-level entries `baseFiles()` in electron-builder.config.cjs produces. */
+const ASAR_ROOTS = ["dist", "dist-electron", "electron", "node_modules", "package.json"];
+
+const asarHeader = (roots: string[] = ASAR_ROOTS) => ({
+  header: { files: Object.fromEntries(roots.map((r) => [r, {}])) },
+});
 
 const originalDlopen = process.dlopen;
 
@@ -43,6 +53,12 @@ describe("afterPack", () => {
       stderr: Buffer.from(""),
     });
 
+    // Default: a well-formed app.asar of a plausible size. The guard reads it
+    // through statSync (never existsSync), so the call-order chains the tests
+    // below drive mockExistsSync with stay aligned.
+    mockStatSync.mockReturnValue({ size: 40 * 1024 * 1024 });
+    mockGetRawHeader.mockReturnValue(asarHeader());
+
     // Both load probes (win-job-object and better-sqlite3's packaged prebuild)
     // are N-API addons — ABI-stable, so a successful dlopen under Node is the
     // passing case. Default: everything loads cleanly.
@@ -57,10 +73,14 @@ describe("afterPack", () => {
           readdirSync: mockReaddirSync,
           mkdirSync: mockMkdirSync,
           copyFileSync: mockCopyFileSync,
+          statSync: mockStatSync,
         };
       }
       if (id === "child_process" || id === "node:child_process") {
         return { spawnSync: mockSpawnSync };
+      }
+      if (id === "@electron/asar") {
+        return { getRawHeader: mockGetRawHeader };
       }
       return originalRequire.apply(this, [id]);
     };
@@ -408,10 +428,15 @@ describe("afterPack", () => {
     });
 
     it("requires both darwin prebuilds for a universal package", async () => {
-      // Arch enum 5 = universal: the merged app carries both slices.
+      // The merged app carries both slices. Arch comes from builder-util rather
+      // than a copied literal: electron-builder hands the hook whatever the real
+      // enum says, so if that value ever moves, the hook's own constant goes
+      // stale and this assertion catches it. It went unnoticed once already —
+      // the hook checked 5 while the enum said 4, silently validating a single
+      // arch on every universal release build.
       mockExistsSync.mockReturnValue(true);
 
-      await afterPack(createContext("darwin", "/build/mac", "Daintree", 5));
+      await afterPack(createContext("darwin", "/build/mac", "Daintree", Arch.universal));
 
       const unpackedBase = "/build/mac/Daintree.app/Contents/Resources/app.asar.unpacked";
       for (const arch of ["x64", "arm64"]) {
@@ -424,9 +449,9 @@ describe("afterPack", () => {
     it("throws when a universal package is missing one darwin prebuild", async () => {
       mockExistsSync.mockImplementation((p) => !String(p).includes("darwin-x64.node"));
 
-      await expect(afterPack(createContext("darwin", "/build/mac", "Daintree", 5))).rejects.toThrow(
-        /better-sqlite3 prebuild not found/
-      );
+      await expect(
+        afterPack(createContext("darwin", "/build/mac", "Daintree", Arch.universal))
+      ).rejects.toThrow(/better-sqlite3 prebuild not found/);
     });
   });
 
@@ -565,6 +590,32 @@ describe("afterPack", () => {
       );
     });
 
+    it("skips the exec probe for the foreign slice of a universal build", async () => {
+      // A universal build packs x64 and arm64 separately before merging, so one
+      // slice is always foreign to the runner. Exec'ing it fails with EBADARCH
+      // on a correctly packaged app and took down the whole macOS universal
+      // target before the merge was even attempted.
+      mockExistsSync.mockReturnValue(true);
+      const foreignArch = process.arch === "arm64" ? Arch.x64 : Arch.arm64;
+
+      await afterPack(createContext("darwin", "/build/mac", "Daintree", foreignArch));
+
+      expect(mockSpawnSync).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Skipping posix-pty-reaper exec check")
+      );
+    });
+
+    it("still execs the merged universal binary", async () => {
+      // The merged binary carries both slices, so it runs on either runner —
+      // skipping it would drop the probe on the artifact that actually ships.
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("darwin", "/build/mac", "Daintree", Arch.universal));
+
+      expect(mockSpawnSync).toHaveBeenCalled();
+    });
+
     it("should not exec the supervisor on Windows", async () => {
       mockExistsSync.mockReturnValue(true);
 
@@ -590,6 +641,104 @@ describe("afterPack", () => {
       await afterPack(createContext("darwin", "/build/mac"));
 
       expect(consoleSpy).toHaveBeenCalledWith("[afterPack] Complete - native modules validated");
+    });
+  });
+
+  describe("app.asar packaging guard (#11475)", () => {
+    it("resolves app.asar beside the unpacked resources on every platform", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      for (const [platform, outDir, expected] of [
+        ["darwin", "/build/mac", "/build/mac/Daintree.app/Contents/Resources/app.asar"],
+        ["win32", "/build/win", "/build/win/resources/app.asar"],
+        ["linux", "/build/linux", "/build/linux/resources/app.asar"],
+      ] as const) {
+        mockStatSync.mockClear();
+        await afterPack(createContext(platform, outDir));
+        expect(mockStatSync).toHaveBeenCalledWith(path.normalize(expected));
+      }
+    });
+
+    it("checks the archive before any native-module probe", async () => {
+      // The native checks all read app.asar.unpacked, which stays correct while
+      // app.asar bloats — so a packaging regression has to fail here or it
+      // reaches signing looking healthy.
+      mockExistsSync.mockReturnValue(true);
+      mockStatSync.mockReturnValue({ size: Number.MAX_SAFE_INTEGER });
+
+      await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(/app.asar/);
+
+      expect(mockExistsSync).not.toHaveBeenCalled();
+    });
+
+    it("rejects an archive over the size ceiling", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockStatSync.mockReturnValue({ size: Number.MAX_SAFE_INTEGER });
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /over the .* MiB ceiling/
+      );
+    });
+
+    it("does not parse the header of an oversized archive", async () => {
+      // A runaway archive has a proportionally runaway header, so the cheap
+      // size gate has to come first.
+      mockExistsSync.mockReturnValue(true);
+      mockStatSync.mockReturnValue({ size: Number.MAX_SAFE_INTEGER });
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow();
+
+      expect(mockGetRawHeader).not.toHaveBeenCalled();
+    });
+
+    it("rejects a top-level entry outside the files allowlist", async () => {
+      // The #11475 shape: the platform override dropped baseFiles(), so
+      // electron-builder fell back to `**/*` and packed the source tree.
+      mockExistsSync.mockReturnValue(true);
+      mockGetRawHeader.mockReturnValue(asarHeader([...ASAR_ROOTS, "src", "e2e"]));
+
+      await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
+        /Unexpected: e2e, src/
+      );
+    });
+
+    it("rejects an archive missing a required top-level entry", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockGetRawHeader.mockReturnValue(asarHeader(ASAR_ROOTS.filter((r) => r !== "dist-electron")));
+
+      await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
+        /Missing: dist-electron/
+      );
+    });
+
+    it("reports an unreadable archive as a packaging failure", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockStatSync.mockImplementation(() => {
+        throw new Error("ENOENT: no such file or directory");
+      });
+
+      await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
+        /app.asar could not be read/
+      );
+    });
+
+    it("reports a corrupt header as a packaging failure", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockGetRawHeader.mockImplementation(() => {
+        throw new Error("Unable to read header size");
+      });
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /header could not be parsed/
+      );
+    });
+
+    it("passes a correctly shaped archive", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("darwin", "/build/mac"));
+
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("app.asar verified"));
     });
   });
 

@@ -1,10 +1,17 @@
 const path = require("path");
 const fs = require("fs");
 const { spawnSync } = require("child_process");
+const { getRawHeader } = require("@electron/asar");
 
 // electron-builder passes `context.arch` as an integer from the `Arch` enum
-// (ia32=0, x64=1, armv7l=2, arm64=3, universal=5).
+// in builder-util (ia32=0, x64=1, armv7l=2, arm64=3, universal=4).
 const ARCH_ENUM_NAMES = { 0: "ia32", 1: "x64", 2: "armv7l", 3: "arm64" };
+
+// Not in ARCH_ENUM_NAMES: universal is a merge of two slices, not a target
+// triple, so it has no prebuild directory name of its own. afterPack.test.ts
+// pins this against the real `Arch` enum so a renumbering upstream fails the
+// suite instead of silently downgrading the checks below to a single arch.
+const UNIVERSAL_ARCH = 4;
 
 /**
  * The prebuild arches a package must carry. A macOS universal package merges
@@ -13,9 +20,111 @@ const ARCH_ENUM_NAMES = { 0: "ia32", 1: "x64", 2: "armv7l", 3: "arm64" };
  * no arch, e.g. in tests).
  */
 function getBetterSqlitePrebuildArches(contextArch) {
-  if (contextArch === 5) return ["x64", "arm64"];
+  if (contextArch === UNIVERSAL_ARCH) return ["x64", "arm64"];
   const name = ARCH_ENUM_NAMES[contextArch];
   return [name || process.arch];
+}
+
+/**
+ * Every top-level entry `app.asar` may contain, derived from `baseFiles()` in
+ * electron-builder.config.cjs: `dist/**` and `dist-electron/**` (the built
+ * renderer and main bundles), `electron/` (only
+ * services/persistence/migrations survives the allowlist), the production
+ * `node_modules` tree, and the `package.json` electron-builder always injects.
+ *
+ * asarUnpack does not change this set — unpacked files stay listed in the asar
+ * header under their normal roots, with the bytes on disk beside the archive.
+ */
+const APP_ASAR_ROOT_ENTRIES = ["dist", "dist-electron", "electron", "node_modules", "package.json"];
+
+/**
+ * ~3x headroom over the ~40MB the allowlist produces today. Native modules are
+ * asarUnpack'd, so this archive is the JS bundles plus a handful of small
+ * runtime packages and does not track native-binary growth. A build that
+ * legitimately crosses this line wants investigating, not a bigger number.
+ */
+const MAX_APP_ASAR_BYTES = 120 * 1024 * 1024;
+
+const asMiB = (bytes) => (bytes / (1024 * 1024)).toFixed(1);
+
+function getAppAsarPath(appOutDir, electronPlatformName, appName) {
+  if (electronPlatformName === "darwin") {
+    return path.join(appOutDir, `${appName}.app`, "Contents/Resources/app.asar");
+  }
+  return path.join(appOutDir, "resources/app.asar");
+}
+
+/**
+ * Validate the packaged archive's size and top-level shape (#11475).
+ *
+ * A platform-level `files` array replaces the top-level one rather than
+ * merging with it, so a platform override that forgets to spread `baseFiles()`
+ * silently drops the whole allowlist and electron-builder falls back to
+ * `**\/*` — packing the entire source tree (601MB vs 39.8MB) and breaking the
+ * macOS universal merge on the per-arch node-gyp metadata it drags in. Nothing
+ * else in this hook notices: every native-module check below reads
+ * app.asar.unpacked, which stays correct while app.asar bloats.
+ *
+ * The two assertions catch different shapes of the same class: the root-entry
+ * set catches "wrong things packed" even when the total stays small, the size
+ * ceiling catches "right things packed" when one of them balloons. Both are
+ * hard failures — a shipped 601MB archive breaks notarization and distribution,
+ * so this must fail the build rather than warn.
+ *
+ * Reads only the asar header, which is O(header) regardless of archive size —
+ * but the size gate still runs first, because a runaway archive's header is
+ * proportionally runaway too.
+ */
+function validateAppAsar(asarPath) {
+  let size;
+  try {
+    size = fs.statSync(asarPath).size;
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    throw new Error(
+      `[afterPack] CRITICAL: app.asar could not be read at ${asarPath}: ${msg}. ` +
+        "The application archive is missing or unreadable — the package is not shippable."
+    );
+  }
+
+  if (size > MAX_APP_ASAR_BYTES) {
+    throw new Error(
+      `[afterPack] CRITICAL: app.asar is ${asMiB(size)} MiB, over the ${asMiB(MAX_APP_ASAR_BYTES)} MiB ceiling. ` +
+        "A platform `files` override that does not spread baseFiles() drops the whole " +
+        "allowlist and packs the entire source tree (#11475). Path: " +
+        asarPath
+    );
+  }
+
+  let header;
+  try {
+    header = getRawHeader(asarPath).header;
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    throw new Error(
+      `[afterPack] CRITICAL: app.asar header could not be parsed at ${asarPath}: ${msg}. ` +
+        "The application archive is corrupt — the package is not shippable."
+    );
+  }
+
+  const roots = Object.keys((header && header.files) || {});
+  const unexpected = roots.filter((entry) => !APP_ASAR_ROOT_ENTRIES.includes(entry));
+  const missing = APP_ASAR_ROOT_ENTRIES.filter((entry) => !roots.includes(entry));
+  if (unexpected.length > 0 || missing.length > 0) {
+    throw new Error(
+      `[afterPack] CRITICAL: app.asar top-level entries do not match the files allowlist. ` +
+        (unexpected.length > 0 ? `Unexpected: ${unexpected.sort().join(", ")}. ` : "") +
+        (missing.length > 0 ? `Missing: ${missing.join(", ")}. ` : "") +
+        "Unexpected entries mean a platform `files` override stopped spreading baseFiles() " +
+        "and electron-builder fell back to packing the source tree (#11475); missing entries " +
+        "mean the allowlist dropped something the app needs at runtime. Path: " +
+        asarPath
+    );
+  }
+
+  console.log(
+    `[afterPack] app.asar verified: ${asMiB(size)} MiB, ${roots.length} top-level entries`
+  );
 }
 
 /**
@@ -109,6 +218,26 @@ function canLoadWindowsPackageNativeAddons(contextArch) {
 }
 
 /**
+ * Whether a packaged binary targets the runner and can therefore be run here.
+ *
+ * A macOS universal build packs each slice separately before merging, so this
+ * hook fires once for the x64 tree and once for the arm64 tree — one of which
+ * is always foreign to the runner. Executing that slice fails with EBADARCH
+ * ("Unknown system error -86") on a perfectly good package, so the exec probe
+ * has to be skipped rather than the build failed. The merged universal binary
+ * carries both slices and runs anywhere, so it is still probed.
+ *
+ * Arch only, not platform: each OS releases from its own runner, so a foreign
+ * `electronPlatformName` never reaches this path, while the foreign arch does
+ * on every universal build. Mirrors validateBetterSqlitePrebuilds' cross-target
+ * skip and canLoadWindowsPackageNativeAddons.
+ */
+function isRunnerExecutableArch(contextArch) {
+  if (contextArch === undefined || contextArch === UNIVERSAL_ARCH) return true;
+  return ARCH_ENUM_NAMES[contextArch] === process.arch;
+}
+
+/**
  * Validate that the posix-pty-reaper supervisor executable can actually exec —
  * catching a missing shared library, wrong arch, or bad interpreter that the
  * executable-bit check alone misses. The binary takes no flags and blocks
@@ -191,6 +320,14 @@ exports.default = async function afterPack(context) {
   console.log(`[afterPack] Platform: ${electronPlatformName}`);
   console.log(`[afterPack] Output directory: ${appOutDir}`);
 
+  // First: every check below reads app.asar.unpacked and stays green on a
+  // bloated archive, so a packaging regression would otherwise surface as a
+  // signing or notarization failure much later. Deliberately not arch-gated —
+  // a mac universal build fires afterPack three times (x64 and arm64
+  // intermediates, then the merged output) and the invariant holds for all of
+  // them.
+  validateAppAsar(getAppAsarPath(appOutDir, electronPlatformName, appName));
+
   const unpackedPath = getUnpackedResourcesPath(appOutDir, electronPlatformName, appName);
   const nodePtyPath = path.join(unpackedPath, "node_modules/node-pty");
 
@@ -204,8 +341,7 @@ exports.default = async function afterPack(context) {
   console.log(`[afterPack] node-pty found at: ${nodePtyPath}`);
 
   if (electronPlatformName === "win32") {
-    // electron-builder passes `context.arch` as an integer from the `Arch` enum
-    // (ia32=0, x64=1, armv7l=2, arm64=3, universal=5). Map to the conpty
+    // Map `context.arch` (the builder-util `Arch` enum) to the conpty
     // distribution folder name used by node-pty's third_party layout.
     const conptyArchFolder = context.arch === 3 ? "win10-arm64" : "win10-x64";
     console.log(`[afterPack] Windows arch: ${context.arch} (conpty folder: ${conptyArchFolder})`);
@@ -330,7 +466,13 @@ exports.default = async function afterPack(context) {
     }
     console.log(`[afterPack] posix-pty-reaper verified: ${posixReaperBinary}`);
 
-    validatePosixReaperExec(posixReaperBinary);
+    if (isRunnerExecutableArch(context.arch)) {
+      validatePosixReaperExec(posixReaperBinary);
+    } else {
+      console.warn(
+        `[afterPack] Skipping posix-pty-reaper exec check for ${ARCH_ENUM_NAMES[context.arch]} slice on ${process.arch} runner`
+      );
+    }
 
     if (electronPlatformName === "darwin") {
       // Inject pre-compiled Assets.car for macOS 26+ Liquid Glass icon.
