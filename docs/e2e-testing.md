@@ -166,7 +166,7 @@ A single reusable workflow runs every E2E suite. Pick one via the `suite` input:
 - **Single-file runs:** pass `test_file: e2e/full/<bucket>/foo.spec.ts` and set `suite` to the bucket that owns that path (workflow_dispatch).
 - **Conditional behaviour by suite:**
   - `full` — expands to all seven `--project=full-*` flags on a single runner. Use this for ad-hoc validation; the release workflows and `stabilize.yml` fan the buckets out across separate runners instead.
-  - `online` — extra `npm install -g opencode-ai`. Caller MUST use `secrets: inherit` so `ANTHROPIC_API_KEY` is reachable.
+  - `online` — extra `node scripts/ci/install-opencode.mjs`, the single source of truth for the pinned OpenCode CLI version every workflow installs (#11476); bumping it is a deliberate edit to that script. Caller MUST use `secrets: inherit` so `ANTHROPIC_API_KEY` is reachable.
   - `nightly` — Playwright is invoked with `--workers=1` (the memory-leak heuristic depends on serialized launches).
   - All others — no extra steps.
 
