@@ -12,12 +12,12 @@ import {
 import type { FileViewMode } from "@shared/types/panel";
 import { isFilePanel } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
-import { isPathInside, normalize, toWorktreeRelative } from "@shared/utils/path";
+import { normalize, resolveWorktreePathScope, toWorktreeRelative } from "@shared/utils/path";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
-import { FolderOpen } from "@/components/icons";
+import { FolderOpen, FolderTree } from "@/components/icons";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
@@ -126,14 +126,16 @@ function isUnderRoot(filePath: string, rootPath: string): boolean {
 type LoadState =
   "idle" | "loading" | "loaded" | "error" | "image" | "svg" | "video" | "audio" | "pdf";
 
-// Which external surface a toolbar action aims the current file at. `reveal` is
-// always offered; `browser`/`editor` is the mode-dependent open button.
-type ExternalTarget = "reveal" | "browser" | "editor";
+// Which surface a toolbar action aims the current file at. `reveal` is always
+// offered; `browser`/`editor` is the mode-dependent open button; `file-browser`
+// is Daintree's own tree, offered only for a file inside a known worktree.
+type ExternalTarget = "reveal" | "browser" | "editor" | "file-browser";
 
 const EXTERNAL_ACTIONS = {
   reveal: "file.showItemInFolder",
   browser: "file.openInBrowser",
   editor: "file.openInEditor",
+  "file-browser": "worktree.openFileBrowser",
 } as const satisfies Record<ExternalTarget, BuiltInRuntimeActionId>;
 
 // Button label comes from `revealCopy()` (platform-named); the failure banner's
@@ -161,6 +163,12 @@ function externalTargetCopy(
         errorTitle: "Couldn't open in editor",
         retryAriaLabel: "Retry opening in editor",
         dismissAriaLabel: "Dismiss editor error",
+      };
+    case "file-browser":
+      return {
+        errorTitle: "Couldn't open file browser",
+        retryAriaLabel: "Retry opening file browser",
+        dismissAriaLabel: "Dismiss file browser error",
       };
   }
 }
@@ -274,19 +282,24 @@ export function FilePane({
   // file is in no known worktree, so there's nothing to diff it against.
   const diffWorktreePath = useWorktreeStore(
     useCallback(
-      (state): string => {
-        if (!filePath) return "";
-        let best = "";
-        let bestLength = -1;
-        for (const worktree of state.worktrees.values()) {
-          if (!isPathInside(filePath, worktree.path)) continue;
-          const length = normalize(worktree.path).length;
-          if (length <= bestLength) continue;
-          best = worktree.path;
-          bestLength = length;
-        }
-        return best;
-      },
+      (state): string =>
+        filePath
+          ? (resolveWorktreePathScope(filePath, state.worktrees.values())?.worktreePath ?? "")
+          : "",
+      [filePath]
+    )
+  );
+
+  // The same containment answer, as an id — what `worktree.openFileBrowser`
+  // needs to scope the tree it opens. A second scalar selector rather than one
+  // object-returning selector: an object is a fresh reference on every store
+  // write, which would re-render this pane on every git-status poll.
+  const revealWorktreeId = useWorktreeStore(
+    useCallback(
+      (state): string =>
+        filePath
+          ? (resolveWorktreePathScope(filePath, state.worktrees.values())?.worktreeId ?? "")
+          : "",
       [filePath]
     )
   );
@@ -817,7 +830,10 @@ export function FilePane({
   const externalInFlightRef = useRef<Set<ExternalTarget>>(new Set());
 
   // A result that lands after the pane switched files (or panels) belongs to the
-  // old file: drop it, and clear any banner the old file left behind.
+  // old file: drop it, and clear any banner the old file left behind. Keyed on
+  // the file alone, never the resolved worktree: this resets *every* target at
+  // once, so folding topology churn in here would let a new nested worktree
+  // erase a pending editor launch and its failure banner.
   useEffect(() => {
     externalGenerationRef.current += 1;
     externalInFlightRef.current.clear();
@@ -828,16 +844,33 @@ export function FilePane({
   const handleOpenExternal = useCallback(
     async (target: ExternalTarget) => {
       if (!filePath) return;
+      // Only the file-browser target carries structured args; the rest are
+      // path-only. Built before the pending flip so a missing scope can't leave
+      // the button spinning on a dispatch that was never going to happen.
+      let args: unknown;
+      if (target === "file-browser") {
+        if (!revealWorktreeId) return;
+        args = {
+          worktreeId: revealWorktreeId,
+          // `toWorktreeRelative` hands back its input unchanged for a path that
+          // *is* the root (the only such case here — containment is already
+          // proven by revealWorktreeId), and the action would then trim
+          // "/repo" down to a bogus "repo" child. Undefined opens the root.
+          revealPath:
+            relativeFilePath && relativeFilePath !== filePath ? relativeFilePath : undefined,
+          revealKind: "file",
+        };
+      } else {
+        args = { path: filePath };
+      }
       if (externalInFlightRef.current.has(target)) return;
       externalInFlightRef.current.add(target);
       const generation = externalGenerationRef.current;
       setPendingTargets((current) => (current.includes(target) ? current : [...current, target]));
       try {
-        const result = await actionService.dispatch(
-          EXTERNAL_ACTIONS[target],
-          { path: filePath },
-          { source: "user" }
-        );
+        const result = await actionService.dispatch(EXTERNAL_ACTIONS[target], args, {
+          source: "user",
+        });
         // The file (or panel) changed while this was in flight: the result
         // describes a file the pane no longer shows.
         if (externalGenerationRef.current !== generation) return;
@@ -858,7 +891,7 @@ export function FilePane({
         }
       }
     },
-    [filePath]
+    [filePath, relativeFilePath, revealWorktreeId]
   );
 
   const isErrorTargetPending =
@@ -910,6 +943,18 @@ export function FilePane({
           {/* Reveal is always offered, even for a file the viewer can't render
               (oversized, unsupported video) — the OS file manager is then the
               only way forward. */}
+          {/* The route back to the tree this file was opened from. Offered only
+              when a live worktree contains the file — the browser is
+              worktree-scoped, so there is nothing to open for a file outside
+              every worktree. */}
+          {revealWorktreeId && (
+            <FileViewerToolbar.IconButton
+              label="Show in file browser"
+              onClick={() => void handleOpenExternal("file-browser")}
+            >
+              <FolderTree className="w-4 h-4" />
+            </FileViewerToolbar.IconButton>
+          )}
           <FileViewerToolbar.IconButton
             label={reveal.label}
             onClick={() => void handleOpenExternal("reveal")}

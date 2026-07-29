@@ -22,6 +22,7 @@ import {
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
 import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
+import { resolveWorktreePathScope } from "@shared/utils/path";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
@@ -60,7 +61,7 @@ import {
   Trash2,
   Unlock,
 } from "lucide-react";
-import { FolderGit2, FolderOpen } from "@/components/icons";
+import { FolderGit2, FolderOpen, FolderTree } from "@/components/icons";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -131,6 +132,7 @@ export function TerminalContextMenu({
   const [hasSelection, setHasSelection] = useState(false);
   const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
   const [hoveredFilePath, setHoveredFilePath] = useState<string | null>(null);
+  const [hoveredFileKind, setHoveredFileKind] = useState<"file" | "directory" | null>(null);
   const [selectedText, setSelectedText] = useState<string | null>(null);
   const suppressNextCloseAutoFocusRef = useRef(false);
   // Local confirm dialog for single-terminal kill/restart when an agent
@@ -191,6 +193,7 @@ export function TerminalContextMenu({
         setHasSelection(false);
         setHoveredUrl(null);
         setHoveredFilePath(null);
+        setHoveredFileKind(null);
         setSelectedText(null);
         return;
       }
@@ -201,6 +204,7 @@ export function TerminalContextMenu({
       setSelectedText(selection || null);
       setHoveredUrl(terminalInstanceService.getHoveredLinkText(terminalId));
       setHoveredFilePath(terminalInstanceService.getHoveredFilePath(terminalId));
+      setHoveredFileKind(terminalInstanceService.getHoveredFileKind(terminalId));
     },
     [terminalId, recentVoiceTargets]
   );
@@ -218,6 +222,16 @@ export function TerminalContextMenu({
         : null,
     [selectedText, terminalPty?.cwd]
   );
+  // Where the hovered path sits in the *live* worktree list — never
+  // `terminal.worktreeId`, which stamps the worktree that was active when the
+  // panel was created and can name one the path isn't in (#11276). null means
+  // no known worktree contains it, and the file browser (worktree-scoped) has
+  // nothing to show, so the item is hidden rather than dispatching a no-op.
+  const hoveredFileScope = useMemo(
+    () => (hoveredFilePath ? resolveWorktreePathScope(hoveredFilePath, worktrees) : null),
+    [hoveredFilePath, worktrees]
+  );
+
   const isPaused =
     terminalPty?.flowStatus === "paused-backpressure" ||
     terminalPty?.flowStatus === "paused-resource-governor";
@@ -861,6 +875,40 @@ export function TerminalContextMenu({
               {hoveredFilePath && (
                 <>
                   <ContextMenuSeparator />
+                  {hoveredFileScope && (
+                    <ContextMenuItem
+                      onSelect={() => {
+                        void actionService
+                          .dispatch(
+                            "worktree.openFileBrowser",
+                            {
+                              worktreeId: hoveredFileScope.worktreeId,
+                              revealPath: hoveredFileScope.relativePath || undefined,
+                              // Carried through rather than assumed: a
+                              // directory is expanded as well as selected, so
+                              // guessing "file" would leave a right-clicked
+                              // folder collapsed while left-clicking the same
+                              // link opens it.
+                              revealKind: hoveredFileKind ?? "file",
+                            },
+                            { source: sourceRef.current }
+                          )
+                          .then((result) => {
+                            if (!result.ok) {
+                              reportFileLinkFailure(
+                                "Failed to open file browser",
+                                result.error.details,
+                                hoveredFilePath,
+                                hoveredFileKind === "directory" ? "folder" : "file"
+                              );
+                            }
+                          });
+                      }}
+                    >
+                      <FolderTree className={ICON_CLASS} aria-hidden="true" />
+                      Open in file browser
+                    </ContextMenuItem>
+                  )}
                   <ContextMenuItem
                     onSelect={() => handleAction(`reveal-in-finder:${hoveredFilePath}`)}
                   >

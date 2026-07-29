@@ -116,6 +116,65 @@ export function toWorktreeRelative(path: string, worktreeRoot: string | undefine
   return normalizedPath.slice(boundary.length);
 }
 
+/** A worktree, reduced to the two fields path scoping needs. */
+export interface WorktreeScopeCandidate {
+  id: string;
+  path: string;
+}
+
+/** Where an absolute path sits within a known worktree. */
+export interface WorktreeScope {
+  worktreeId: string;
+  /** The candidate's `path` verbatim, so callers can feed it back to path helpers. */
+  worktreePath: string;
+  /** Forward-slash relative path, or "" when the target *is* the worktree root. */
+  relativePath: string;
+}
+
+/**
+ * Map an absolute path to the worktree that contains it, deepest root winning so
+ * a nested worktree beats the repo hosting it. Returns null for paths outside
+ * every known worktree — worktree-scoped surfaces (the file browser, directory
+ * links) have nothing to show for those.
+ *
+ * `isPathInside` is what makes this safe: a raw `startsWith` accepts a sibling
+ * whose name merely extends the root (`/repo-other/x.ts` under `/repo`).
+ * Callers must resolve against the *live* worktree list rather than a stamped
+ * `panel.worktreeId`/`terminal.worktreeId`, which name the worktree that was
+ * active at creation and not necessarily the one the path lives in (#11276).
+ */
+export function resolveWorktreePathScope(
+  absolutePath: string,
+  worktrees: Iterable<WorktreeScopeCandidate>
+): WorktreeScope | null {
+  // A `..` is refused rather than collapsed. `normalize` pops it lexically, but
+  // the filesystem resolves symlinks first: with `/repo/link -> /outside`,
+  // `/repo/link/../docs` is really `/outside/docs` while normalization claims
+  // `/repo/docs` — which would hand callers a confidently wrong in-worktree
+  // target. Refusing is the only answer a lexical resolver can defend.
+  if (absolutePath.split(/[\\/]/).includes("..")) return null;
+
+  let best: WorktreeScope | null = null;
+  let bestLength = -1;
+  for (const worktree of worktrees) {
+    if (!worktree.path || !isPathInside(absolutePath, worktree.path)) continue;
+    const normalizedRoot = normalize(worktree.path);
+    if (normalizedRoot.length <= bestLength) continue;
+    bestLength = normalizedRoot.length;
+    best = {
+      worktreeId: worktree.id,
+      worktreePath: worktree.path,
+      // `toWorktreeRelative` hands back the *absolute* path when the target is
+      // the root itself; "" is what root means to every caller here.
+      relativePath:
+        normalize(absolutePath) === normalizedRoot
+          ? ""
+          : toWorktreeRelative(absolutePath, worktree.path),
+    };
+  }
+  return best;
+}
+
 export function basename(input: string): string {
   const normalized = normalize(input);
   if (
