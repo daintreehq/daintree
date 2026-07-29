@@ -34,6 +34,11 @@ function getBetterSqlitePrebuildArches(contextArch) {
  *
  * asarUnpack does not change this set — unpacked files stay listed in the asar
  * header under their normal roots, with the bytes on disk beside the archive.
+ *
+ * This is a root-shape sentinel, not a full manifest: it catches a whole extra
+ * tree being packed, not content broadening inside a root that is already
+ * allowed. Exported so the tests and the config contract suite build their
+ * fixtures from it rather than keeping their own copies.
  */
 const APP_ASAR_ROOT_ENTRIES = ["dist", "dist-electron", "electron", "node_modules", "package.json"];
 
@@ -46,6 +51,9 @@ const APP_ASAR_ROOT_ENTRIES = ["dist", "dist-electron", "electron", "node_module
 const MAX_APP_ASAR_BYTES = 120 * 1024 * 1024;
 
 const asMiB = (bytes) => (bytes / (1024 * 1024)).toFixed(1);
+
+exports.APP_ASAR_ROOT_ENTRIES = APP_ASAR_ROOT_ENTRIES;
+exports.MAX_APP_ASAR_BYTES = MAX_APP_ASAR_BYTES;
 
 function getAppAsarPath(appOutDir, electronPlatformName, appName) {
   if (electronPlatformName === "darwin") {
@@ -89,7 +97,8 @@ function validateAppAsar(asarPath) {
 
   if (size > MAX_APP_ASAR_BYTES) {
     throw new Error(
-      `[afterPack] CRITICAL: app.asar is ${asMiB(size)} MiB, over the ${asMiB(MAX_APP_ASAR_BYTES)} MiB ceiling. ` +
+      `[afterPack] CRITICAL: app.asar is ${asMiB(size)} MiB (${size} bytes), over the ` +
+        `${asMiB(MAX_APP_ASAR_BYTES)} MiB ceiling (${MAX_APP_ASAR_BYTES} bytes). ` +
         "A platform `files` override that does not spread baseFiles() drops the whole " +
         "allowlist and packs the entire source tree (#11475). Path: " +
         asarPath
@@ -117,7 +126,9 @@ function validateAppAsar(asarPath) {
         (missing.length > 0 ? `Missing: ${missing.join(", ")}. ` : "") +
         "Unexpected entries mean a platform `files` override stopped spreading baseFiles() " +
         "and electron-builder fell back to packing the source tree (#11475); missing entries " +
-        "mean the allowlist dropped something the app needs at runtime. Path: " +
+        "mean the allowlist dropped something the app needs at runtime. If the packaged " +
+        "layout changed on purpose, update APP_ASAR_ROOT_ENTRIES here and the matching " +
+        "contract test in scripts/ci/electron-builder-config.test.mjs. Path: " +
         asarPath
     );
   }
@@ -231,10 +242,16 @@ function canLoadWindowsPackageNativeAddons(contextArch) {
  * `electronPlatformName` never reaches this path, while the foreign arch does
  * on every universal build. Mirrors validateBetterSqlitePrebuilds' cross-target
  * skip and canLoadWindowsPackageNativeAddons.
+ *
+ * An arch this file does not recognise probes anyway: skipping is a reduction
+ * in validation, so it has to be a decision made about a known-foreign slice,
+ * never a fallthrough. If builder-util adds an enum value, the probe fails
+ * loudly instead of quietly passing an unvalidated binary.
  */
 function isRunnerExecutableArch(contextArch) {
   if (contextArch === undefined || contextArch === UNIVERSAL_ARCH) return true;
-  return ARCH_ENUM_NAMES[contextArch] === process.arch;
+  const name = ARCH_ENUM_NAMES[contextArch];
+  return name === undefined || name === process.arch;
 }
 
 /**

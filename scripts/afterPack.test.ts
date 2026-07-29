@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import path from "path";
 import Module from "module";
-import { Arch } from "builder-util";
+import { Arch } from "electron-builder";
+import { APP_ASAR_ROOT_ENTRIES, MAX_APP_ASAR_BYTES } from "./afterPack.cjs";
 
 const mockExistsSync = vi.fn();
 const mockReaddirSync = vi.fn();
@@ -13,10 +14,10 @@ const mockGetRawHeader = vi.fn();
 const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-/** The top-level entries `baseFiles()` in electron-builder.config.cjs produces. */
-const ASAR_ROOTS = ["dist", "dist-electron", "electron", "node_modules", "package.json"];
-
-const asarHeader = (roots: string[] = ASAR_ROOTS) => ({
+// Headers are built from the guard's own contract rather than a second copy of
+// it, so a policy change lands in one place. The tests below assert behaviour
+// against that contract, never its literal value.
+const asarHeader = (roots: readonly string[] = APP_ASAR_ROOT_ENTRIES) => ({
   header: { files: Object.fromEntries(roots.map((r) => [r, {}])) },
 });
 
@@ -377,7 +378,7 @@ describe("afterPack", () => {
         : runnerPlatform === "win32"
           ? "/build/win"
           : "/build/linux";
-    const runnerArchEnum = process.arch === "arm64" ? 3 : 1;
+    const runnerArchEnum = process.arch === "arm64" ? Arch.arm64 : Arch.x64;
 
     it("probes the prebuild when it targets the runner platform and arch", async () => {
       mockExistsSync.mockReturnValue(true);
@@ -413,7 +414,7 @@ describe("afterPack", () => {
 
     it("skips the load probe for a cross-arch package", async () => {
       mockExistsSync.mockReturnValue(true);
-      const crossArchEnum = process.arch === "arm64" ? 1 : 3;
+      const crossArchEnum = process.arch === "arm64" ? Arch.x64 : Arch.arm64;
       const dlopenCalls: string[] = [];
       process.dlopen = ((_mod: unknown, filename: string) => {
         dlopenCalls.push(filename);
@@ -499,7 +500,7 @@ describe("afterPack", () => {
 
     it("should skip win-job-object dlopen when packaging a different Windows arch", async () => {
       mockExistsSync.mockReturnValue(true);
-      const crossArch = process.arch === "arm64" ? 1 : 3;
+      const crossArch = process.arch === "arm64" ? Arch.x64 : Arch.arm64;
       const dlopenCalls: string[] = [];
       process.dlopen = ((_mod: unknown, filename: string) => {
         dlopenCalls.push(filename);
@@ -616,6 +617,30 @@ describe("afterPack", () => {
       expect(mockSpawnSync).toHaveBeenCalled();
     });
 
+    it("still execs the runner-native slice of a universal build", async () => {
+      // Without this, an implementation that skips every concrete arch — not
+      // just the foreign one — passes the whole suite while probing nothing.
+      mockExistsSync.mockReturnValue(true);
+      const nativeArch = process.arch === "arm64" ? Arch.arm64 : Arch.x64;
+
+      await afterPack(createContext("darwin", "/build/mac", "Daintree", nativeArch));
+
+      expect(mockSpawnSync).toHaveBeenCalled();
+    });
+
+    it("probes rather than skips an arch it does not recognise", async () => {
+      // Skipping reduces validation, so it has to be a decision about a
+      // known-foreign slice. A future builder-util enum value must not silently
+      // disable the probe.
+      mockExistsSync.mockReturnValue(true);
+      const unknownArch =
+        Math.max(...Object.values(Arch).filter((v): v is number => typeof v === "number")) + 1;
+
+      await afterPack(createContext("linux", "/build/linux", "Daintree", unknownArch));
+
+      expect(mockSpawnSync).toHaveBeenCalled();
+    });
+
     it("should not exec the supervisor on Windows", async () => {
       mockExistsSync.mockReturnValue(true);
 
@@ -645,17 +670,25 @@ describe("afterPack", () => {
   });
 
   describe("app.asar packaging guard (#11475)", () => {
+    const OVER_CEILING = /over the .* MiB ceiling/;
+
     it("resolves app.asar beside the unpacked resources on every platform", async () => {
       mockExistsSync.mockReturnValue(true);
 
-      for (const [platform, outDir, expected] of [
-        ["darwin", "/build/mac", "/build/mac/Daintree.app/Contents/Resources/app.asar"],
-        ["win32", "/build/win", "/build/win/resources/app.asar"],
-        ["linux", "/build/linux", "/build/linux/resources/app.asar"],
+      for (const [platform, outDir, appName, expected] of [
+        ["darwin", "/build/mac", "Daintree", "/build/mac/Daintree.app/Contents/Resources/app.asar"],
+        // A second product name proves the macOS path is derived, not hardcoded.
+        ["darwin", "/build/mac", "MyApp", "/build/mac/MyApp.app/Contents/Resources/app.asar"],
+        ["win32", "/build/win", "Daintree", "/build/win/resources/app.asar"],
+        ["linux", "/build/linux", "Daintree", "/build/linux/resources/app.asar"],
       ] as const) {
         mockStatSync.mockClear();
-        await afterPack(createContext(platform, outDir));
+        mockGetRawHeader.mockClear();
+        await afterPack(createContext(platform, outDir, appName));
+        // Both readers must land on the same archive — statting the right file
+        // while parsing another would otherwise pass.
         expect(mockStatSync).toHaveBeenCalledWith(path.normalize(expected));
+        expect(mockGetRawHeader).toHaveBeenCalledWith(path.normalize(expected));
       }
     });
 
@@ -666,18 +699,31 @@ describe("afterPack", () => {
       mockExistsSync.mockReturnValue(true);
       mockStatSync.mockReturnValue({ size: Number.MAX_SAFE_INTEGER });
 
-      await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(/app.asar/);
+      await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(OVER_CEILING);
 
       expect(mockExistsSync).not.toHaveBeenCalled();
     });
 
-    it("rejects an archive over the size ceiling", async () => {
+    it("rejects an archive at the scale of the #11475 regression", async () => {
+      // The incident shipped a 601MB archive. Pinning a real-world size, not
+      // only an absurd one, keeps the ceiling meaningful: a limit raised to
+      // gigabytes still passes a MAX_SAFE_INTEGER-only test.
       mockExistsSync.mockReturnValue(true);
-      mockStatSync.mockReturnValue({ size: Number.MAX_SAFE_INTEGER });
+      mockStatSync.mockReturnValue({ size: 601 * 1024 * 1024 });
 
-      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
-        /over the .* MiB ceiling/
-      );
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(OVER_CEILING);
+    });
+
+    it("accepts the ceiling exactly and rejects one byte over", async () => {
+      // Derived from the guard's own limit, so this exercises the comparison
+      // rather than restating the number.
+      mockExistsSync.mockReturnValue(true);
+
+      mockStatSync.mockReturnValue({ size: MAX_APP_ASAR_BYTES });
+      await afterPack(createContext("linux", "/build/linux"));
+
+      mockStatSync.mockReturnValue({ size: MAX_APP_ASAR_BYTES + 1 });
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(OVER_CEILING);
     });
 
     it("does not parse the header of an oversized archive", async () => {
@@ -686,7 +732,7 @@ describe("afterPack", () => {
       mockExistsSync.mockReturnValue(true);
       mockStatSync.mockReturnValue({ size: Number.MAX_SAFE_INTEGER });
 
-      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow();
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(OVER_CEILING);
 
       expect(mockGetRawHeader).not.toHaveBeenCalled();
     });
@@ -695,20 +741,36 @@ describe("afterPack", () => {
       // The #11475 shape: the platform override dropped baseFiles(), so
       // electron-builder fell back to `**/*` and packed the source tree.
       mockExistsSync.mockReturnValue(true);
-      mockGetRawHeader.mockReturnValue(asarHeader([...ASAR_ROOTS, "src", "e2e"]));
+      mockGetRawHeader.mockReturnValue(asarHeader([...APP_ASAR_ROOT_ENTRIES, "src", "e2e"]));
 
       await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
         /Unexpected: e2e, src/
       );
     });
 
-    it("rejects an archive missing a required top-level entry", async () => {
+    it.each(APP_ASAR_ROOT_ENTRIES)("rejects an archive missing %s", async (root) => {
+      // Every contract root, not just one — a validator that noticed only a
+      // single missing entry would otherwise pass the suite.
       mockExistsSync.mockReturnValue(true);
-      mockGetRawHeader.mockReturnValue(asarHeader(ASAR_ROOTS.filter((r) => r !== "dist-electron")));
+      mockGetRawHeader.mockReturnValue(asarHeader(APP_ASAR_ROOT_ENTRIES.filter((r) => r !== root)));
 
       await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
-        /Missing: dist-electron/
+        new RegExp(`Missing: ${root.replace(".", "\\.")}`)
       );
+    });
+
+    it("rejects an archive with no entries at all", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockGetRawHeader.mockReturnValue({ header: { files: {} } });
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(/Missing:/);
+    });
+
+    it("rejects a header with no files member", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockGetRawHeader.mockReturnValue({ header: {} });
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(/Missing:/);
     });
 
     it("reports an unreadable archive as a packaging failure", async () => {
