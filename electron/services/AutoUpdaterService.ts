@@ -10,8 +10,9 @@ import { broadcastToRenderer } from "../ipc/utils.js";
 import { requestGracefulShutdownForUpdate } from "../lifecycle/shutdownCoordinator.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { trackEvent } from "./TelemetryService.js";
-import { store } from "../store.js";
-import { PRODUCT_NAME } from "../utils/productBranding.js";
+import { store, PENDING_UPDATE_INSTALL_FAILURES } from "../store.js";
+import type { PendingUpdateInstallFailure } from "../store.js";
+import { PRODUCT_NAME, PRODUCT_WEBSITE } from "../utils/productBranding.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isWindowsStoreBuild } from "../../shared/config/distribution.js";
 
@@ -111,6 +112,13 @@ const QUIT_AND_INSTALL_WATCHDOG_MS = 5_000;
 // round-trip (sub-threshold) never flickers a transient label change.
 const CHECKING_MENU_DELAY_MS = 400;
 
+// Where the boot-time recovery prompt sends a user whose install handoff failed.
+// Squirrel.Mac validates the staged bundle against a code requirement derived
+// from the RUNNING app, so an installation that has been replaced by an ad-hoc
+// or unsigned local build can never accept a Developer ID update no matter how
+// many times it retries — a fresh download is the only way out (issue #11481).
+const MANUAL_DOWNLOAD_URL = `${PRODUCT_WEBSITE}/download`;
+
 export type UpdateMenuState = "idle" | "checking" | "ready";
 
 // Renderer-facing snapshot of the update the user should currently be told
@@ -161,6 +169,45 @@ class AutoUpdaterService {
   private errorHandler: ((err: Error) => void) | null = null;
   private progressHandler: ((progress: ProgressInfo) => void) | null = null;
   private downloadedHandler: ((info: UpdateInfo) => void) | null = null;
+
+  // Persist WHY an install handoff failed, for the next boot to act on.
+  //
+  // Best-effort and total: this runs from an EventEmitter "error" listener and
+  // from inside the force-exit watchdog, so a throw here would either become a
+  // second updater error event or delay the exit. Neither is acceptable — the
+  // watchdog must fire whether or not the marker landed.
+  //
+  // `preferExisting` protects the more specific reasons from the watchdog's
+  // catch-all: the watchdog always runs after a failed handoff, so without it
+  // every failure would be recorded as a timeout.
+  private recordInstallFailure(
+    reason: PendingUpdateInstallFailure,
+    { preferExisting = false }: { preferExisting?: boolean } = {}
+  ): void {
+    try {
+      if (preferExisting) {
+        const existing = store.get("pendingUpdateInstallFailure");
+        if (typeof existing === "string" && PENDING_UPDATE_INSTALL_FAILURES.includes(existing)) {
+          return;
+        }
+      }
+      store.set("pendingUpdateInstallFailure", reason);
+    } catch (err) {
+      console.error("[MAIN] Failed to persist pendingUpdateInstallFailure:", err);
+    }
+  }
+
+  // Drop the failure marker. Callers that also clear `pendingUpdateVersion` must
+  // do so in a SEPARATE try block — a single one would let a throw on the first
+  // delete strand the second key, and a stale failure marker paired with a fresh
+  // version marker is exactly the false positive the boot check must not make.
+  private forgetInstallFailure(): void {
+    try {
+      store.delete("pendingUpdateInstallFailure");
+    } catch (err) {
+      console.error("[MAIN] Failed to clear pendingUpdateInstallFailure:", err);
+    }
+  }
 
   private recordSuccessfulUpdateCheck(): void {
     try {
@@ -247,9 +294,16 @@ class AutoUpdaterService {
       autoUpdater.quitAndInstall();
     } catch (err) {
       console.error("[MAIN] autoUpdater.quitAndInstall() threw:", err);
+      this.recordInstallFailure("handoff-threw");
     }
     this.watchdogTimeout = setTimeout(() => {
       this.watchdogTimeout = null;
+      // Reaching the watchdog IS the failure signal, and on macOS it is the only
+      // one left: the shutdown chain disposes this service before the handoff
+      // runs, detaching the `error` listener that would otherwise have caught
+      // Squirrel's rejection. A successful install never gets here — the process
+      // is already gone (issue #11481).
+      this.recordInstallFailure("handoff-timeout", { preferExisting: true });
       try {
         app.exit(0);
       } catch (err) {
@@ -309,25 +363,59 @@ class AutoUpdaterService {
     // doesn't re-fire on every subsequent boot. Mirrors the crash-counter
     // clear-on-read pattern in CrashRecoveryService.
     const raw = store.get("pendingUpdateVersion");
+    const rawFailure = store.get("pendingUpdateInstallFailure");
     try {
       store.delete("pendingUpdateVersion");
     } catch (err) {
       console.error("[MAIN] Failed to clear pendingUpdateVersion:", err);
     }
+    // Separate try: a throw on the delete above must not strand the failure
+    // marker, or the next boot would pair it with a fresh version marker.
+    this.forgetInstallFailure();
+
     if (typeof raw !== "string") return;
     const expected = raw.trim();
     if (expected.length === 0 || !semver.valid(expected)) return;
     const actual = app.getVersion();
     if (expected === actual) return;
+
+    const failure =
+      typeof rawFailure === "string" &&
+      PENDING_UPDATE_INSTALL_FAILURES.includes(rawFailure as PendingUpdateInstallFailure)
+        ? (rawFailure as PendingUpdateInstallFailure)
+        : null;
+
     try {
       trackEvent("auto_update_install_version_mismatch", {
         expectedVersion: expected,
         actualVersion: actual,
         platform: process.platform,
+        installFailure: failure ?? "none",
       });
     } catch (err) {
       console.error("[MAIN] Failed to track auto_update_install_version_mismatch:", err);
     }
+
+    // Telemetry fires on any mismatch; the user is only prompted when we
+    // actually watched an install attempt fail. A mismatch on its own is
+    // ambiguous — an app killed before `autoInstallOnAppQuit` could run leaves
+    // the version marker behind without anything having gone wrong, and the
+    // staged installer is still perfectly good.
+    if (!failure) return;
+    // The Store owns installs on that channel, so a daintree.org download is the
+    // wrong recovery. Markers are still consumed above, unconditionally.
+    if (isWindowsStoreBuild()) return;
+
+    broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "error",
+      title: "Update didn't install",
+      message: `${PRODUCT_NAME} is still on ${actual} — the ${expected} update was rejected during install. This usually means the installed app was replaced by an unsigned local build, which can only be repaired by reinstalling from a fresh download.`,
+      action: {
+        label: "Download manually",
+        ipcChannel: CHANNELS.SYSTEM_OPEN_EXTERNAL,
+        data: MANUAL_DOWNLOAD_URL,
+      },
+    });
   }
 
   quitAndInstallIfReady(): boolean {
@@ -639,6 +727,9 @@ class AutoUpdaterService {
         } catch (err) {
           console.error("[MAIN] Failed to clear pendingUpdateVersion on channel switch:", err);
         }
+        // Separate try so a throw above still drops the failure marker — the
+        // two keys are only meaningful as a pair.
+        this.forgetInstallFailure();
         // Transition to Idle done; now discard the staged installer on disk
         // and reconfigure the feed. Re-arm happens in the update-downloaded
         // handler when the new channel's download completes.
@@ -832,8 +923,17 @@ class AutoUpdaterService {
         console.error("[MAIN] Auto-updater error:", err);
         // Once the install is underway the service is being torn down around us:
         // scheduling a retry would arm a timer against a disposed service, and a
-        // toast would target a renderer that is going away. Log and stop.
-        if (this.installInFlight) return;
+        // toast would target a renderer that is going away. Record why, so the
+        // next boot can offer recovery, then stop.
+        //
+        // This branch is the narrow one: it only catches an error that lands
+        // between the coordinator accepting and the shutdown chain disposing
+        // this service. Squirrel's own rejection arrives after that, with no
+        // listener left — the watchdog records that case (issue #11481).
+        if (this.installInFlight) {
+          this.recordInstallFailure("updater-error");
+          return;
+        }
         const wasManual = this.isManualCheck;
         this.isManualCheck = false;
         this.clearCheckingMenuTimeout();
@@ -909,6 +1009,11 @@ class AutoUpdaterService {
             } catch (err) {
               console.error("[MAIN] Failed to persist pendingUpdateVersion:", err);
             }
+            // A newly staged payload starts with a clean slate. Without this, a
+            // failure recorded against an earlier version would be read back
+            // alongside THIS version's marker on the next boot and blamed on an
+            // install that was never attempted.
+            this.forgetInstallFailure();
           }
         }
         this.setMenuState("ready");

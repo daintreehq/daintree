@@ -298,6 +298,31 @@ jobs:
           echo "✓ Found $DMG_COUNT DMGs, $ZIP_COUNT ZIPs, and ${UPDATE_METADATA_PREFIX}-mac.yml"
           node scripts/ci/validate-update-metadata.mjs "release/${UPDATE_METADATA_PREFIX}-mac.yml"
 
+      - name: Verify shipped macOS archives (post-extraction signing audit)
+        # The signing audit above inspects release/mac*/Daintree.app — the
+        # directories on disk, not the bytes users download. electron-builder
+        # writes the shipped ZIP through Info-ZIP while notarize-macos.cjs
+        # submits a separate ditto-built archive to Apple, so neither the audit
+        # nor the notarization ticket says anything about the integrity of the
+        # upload. This re-opens each shipped ZIP with the same extractor ShipIt
+        # uses and re-runs the full audit on what comes out (#11481).
+        #
+        # No skip_notarization/dry_run guard: this is a signing-integrity gate,
+        # not a notarization one, and a dry run that skipped it would not be
+        # rehearsing the release.
+        shell: bash
+        env:
+          EXPECTED_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$EXPECTED_TEAM_ID" ]]; then
+            echo "::error::APPLE_TEAM_ID secret is empty — cannot verify shipped archives"
+            exit 1
+          fi
+          # Unquoted glob on purpose: the archive list is positional, and the
+          # script fails closed when it expands to nothing.
+          scripts/ci/verify-macos-update-archives.sh "$EXPECTED_TEAM_ID" release/*.zip
+
       - name: Smoke test (packaged macOS)
         shell: bash
         timeout-minutes: 30

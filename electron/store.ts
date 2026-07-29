@@ -63,6 +63,21 @@ interface AuditLogsStoreSchema {
   pluginMcpAuditLog: PluginMcpAuditRecord[];
 }
 
+/**
+ * How an update install handoff failed, in descending order of specificity.
+ * `handoff-timeout` is the one that fires in practice on macOS: the graceful
+ * shutdown chain disposes AutoUpdaterService (detaching its `error` listener)
+ * before the handoff runs, so a Squirrel rejection that arrives afterwards has
+ * nothing left listening — only the force-exit watchdog observes it.
+ */
+export type PendingUpdateInstallFailure = "updater-error" | "handoff-threw" | "handoff-timeout";
+
+export const PENDING_UPDATE_INSTALL_FAILURES: readonly PendingUpdateInstallFailure[] = [
+  "updater-error",
+  "handoff-threw",
+  "handoff-timeout",
+];
+
 export interface StoreSchema {
   _schemaVersion: number;
   windowState: {
@@ -365,6 +380,21 @@ export interface StoreSchema {
    * pending" — no migration entry required (mirrors `dismissedUpdateVersion`).
    */
   pendingUpdateVersion?: string;
+  /**
+   * Why the last install handoff failed, written just before the process is
+   * force-exited and read alongside `pendingUpdateVersion` on the next boot.
+   * Its presence is what separates "we watched an install attempt fail" from
+   * "a staged update simply never got installed" (an app killed before
+   * `autoInstallOnAppQuit` runs leaves the version marker behind too), so only
+   * a stored reason promotes the boot-time mismatch from telemetry to a
+   * user-facing recovery prompt.
+   *
+   * A closed enum, never a raw error string: electron-updater and Squirrel
+   * embed absolute cache paths in their messages, which would persist the
+   * user's home directory into the config file. Absent means "no failure
+   * observed" — no migration entry required (mirrors `dismissedUpdateVersion`).
+   */
+  pendingUpdateInstallFailure?: PendingUpdateInstallFailure;
   /**
    * Windows Store notifier state. All fields are optional and read with `??`
    * fallbacks at the call site so an absent value behaves like a default —

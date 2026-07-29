@@ -18,7 +18,7 @@ type ToastCallback = (payload: {
   duration?: number;
   rateLimitKey?: string;
   priority?: "high" | "low" | "watch";
-  action?: { label: string; ipcChannel: string };
+  action?: { label: string; ipcChannel: string; data?: string };
 }) => void;
 
 let capturedCallback: ToastCallback | null = null;
@@ -183,6 +183,96 @@ describe("useMainProcessToastListener", () => {
     const call = notifyMock.mock.calls[0]![0];
     call.action!.onClick();
     expect(checkForUpdatesMock).not.toHaveBeenCalled();
+  });
+
+  // The manual-download recovery action on the failed-install toast (#11481).
+  // This branch is the boundary that turns a main-process toast payload into a
+  // browser navigation, so it must stay pinned to our own origin.
+  describe("system:open-external action", () => {
+    function mountWithOpenExternal() {
+      const openExternalMock = vi.fn(() => Promise.resolve());
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window.electron as any).system = { openExternal: openExternalMock };
+      renderHook(() => useMainProcessToastListener());
+      return openExternalMock;
+    }
+
+    function clickActionWith(data: string | undefined) {
+      act(() => {
+        capturedCallback!({
+          type: "error",
+          title: "Update didn't install",
+          message: "Daintree is still on 0.28.1",
+          action: { label: "Download manually", ipcChannel: "system:open-external", data },
+        });
+      });
+      const call = notifyMock.mock.calls[notifyMock.mock.calls.length - 1]![0];
+      act(() => {
+        call.action!.onClick();
+      });
+    }
+
+    it("opens a trusted https daintree.org URL through the system bridge", () => {
+      const openExternalMock = mountWithOpenExternal();
+
+      clickActionWith("https://daintree.org/download");
+
+      expect(openExternalMock).toHaveBeenCalledTimes(1);
+      // Asserts the hook forwards the SAME origin+path it was given, without
+      // asserting the literal the main process happens to send today.
+      const opened = new URL(openExternalMock.mock.calls[0]![0] as unknown as string);
+      expect(opened.protocol).toBe("https:");
+      expect(opened.hostname).toBe("daintree.org");
+      expect(opened.pathname).toBe("/download");
+    });
+
+    it("accepts a daintree.org subdomain but not a lookalike suffix", () => {
+      const openExternalMock = mountWithOpenExternal();
+
+      clickActionWith("https://www.daintree.org/download");
+      expect(openExternalMock).toHaveBeenCalledTimes(1);
+
+      clickActionWith("https://notdaintree.org/download");
+      clickActionWith("https://daintree.org.evil.test/download");
+      // Both lookalikes are refused, so the count is unchanged from the one
+      // legitimate subdomain call above.
+      expect(openExternalMock).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ["missing data", undefined],
+      ["a non-URL string", "not a url"],
+      ["plain http", "http://daintree.org/download"],
+      ["a javascript: payload", "javascript:alert(1)"],
+      ["a file: payload", "file:///etc/passwd"],
+      ["embedded credentials", "https://daintree.org@evil.test/download"],
+      ["a non-default port", "https://daintree.org:8443/download"],
+      ["an unrelated host", "https://evil.test/download"],
+    ])("refuses to open %s", (_label, data) => {
+      const openExternalMock = mountWithOpenExternal();
+
+      clickActionWith(data);
+
+      expect(openExternalMock).not.toHaveBeenCalled();
+    });
+
+    it("stays inert when the toast names an unknown ipc channel", () => {
+      const openExternalMock = mountWithOpenExternal();
+
+      act(() => {
+        capturedCallback!({
+          type: "error",
+          message: "Anything",
+          action: { label: "Go", ipcChannel: "shell:execute", data: "https://daintree.org" },
+        });
+      });
+      const call = notifyMock.mock.calls[notifyMock.mock.calls.length - 1]![0];
+      act(() => {
+        call.action!.onClick();
+      });
+
+      expect(openExternalMock).not.toHaveBeenCalled();
+    });
   });
 
   it("does not crash when window.electron is undefined", () => {

@@ -129,8 +129,12 @@ vi.mock("electron-updater", () => ({
   autoUpdater: autoUpdaterMock,
 }));
 
+// Partial factories shadow every other export of the module, so the failure
+// classification list has to be re-exported here or the service's import of it
+// resolves to undefined and every test in this file throws.
 vi.mock("../../store.js", () => ({
   store: storeMock,
+  PENDING_UPDATE_INSTALL_FAILURES: ["updater-error", "handoff-threw", "handoff-timeout"],
 }));
 
 vi.mock("../../../shared/utils/trustedRenderer.js", () => trustedRendererMock);
@@ -2578,6 +2582,7 @@ describe("AutoUpdaterService", () => {
         expectedVersion: "2.0.0",
         actualVersion: "1.0.0",
         platform: "darwin",
+        installFailure: "none",
       });
     });
 
@@ -2674,6 +2679,312 @@ describe("AutoUpdaterService", () => {
       });
 
       expect(() => autoUpdaterService.initialize()).not.toThrow();
+    });
+  });
+
+  // Issue #11481. Squirrel.Mac validates the staged bundle against a code
+  // requirement derived from the RUNNING app, so an installation replaced by an
+  // ad-hoc local build can never accept a Developer ID update. Before this the
+  // rejection was invisible: the error listener was already detached, the
+  // watchdog force-exited, and the next boot only wrote telemetry — so the user
+  // sat in an unbreakable loop with no idea why.
+  describe("install-failure classification (issue #11481)", () => {
+    const FAILURE_KEY = "pendingUpdateInstallFailure";
+
+    function persistedFailures() {
+      return (storeMock.set as Mock).mock.calls
+        .filter((args) => args[0] === FAILURE_KEY)
+        .map((args) => args[1] as unknown);
+    }
+
+    describe("capture at handoff", () => {
+      let quitAndInstallHandler: (event: unknown) => void;
+      let downloadedHandler: (info: { version: string }) => void;
+
+      beforeEach(() => {
+        autoUpdaterService.initialize();
+        quitAndInstallHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+          (args) => args[0] === CHANNELS.UPDATE_QUIT_AND_INSTALL
+        )![1];
+        downloadedHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+          (args) => args[0] === "update-downloaded"
+        )![1];
+      });
+
+      // The macOS path in practice: the shutdown chain disposes this service
+      // (detaching the error listener) before the handoff, so nothing observes
+      // Squirrel's rejection except the process failing to die.
+      it("records the failure before force-exiting when nothing else reports one", () => {
+        downloadedHandler({ version: "2.0.0" });
+        quitAndInstallHandler(TRUSTED_SENDER);
+        shutdownCoordinatorMock.settleShutdown("clean");
+        storeMock.set.mockClear();
+
+        vi.advanceTimersByTime(5_000);
+
+        expect(persistedFailures()).toEqual(["handoff-timeout"]);
+        // Ordering is the whole point: a marker written after app.exit() would
+        // never reach disk.
+        const writeOrder = (storeMock.set as Mock).mock.invocationCallOrder[0]!;
+        const exitOrder = (appMock.exit as Mock).mock.invocationCallOrder[0]!;
+        expect(writeOrder).toBeLessThan(exitOrder);
+      });
+
+      it("keeps the specific reason when a synchronous throw already classified it", () => {
+        autoUpdaterMock.quitAndInstall.mockImplementationOnce(() => {
+          throw new Error("no staged installer");
+        });
+        storeMock.get.mockImplementation((key: string) =>
+          key === FAILURE_KEY ? "handoff-threw" : undefined
+        );
+        downloadedHandler({ version: "2.0.0" });
+        quitAndInstallHandler(TRUSTED_SENDER);
+        shutdownCoordinatorMock.settleShutdown("clean");
+
+        vi.advanceTimersByTime(5_000);
+
+        // The watchdog always runs after a failed handoff; without the
+        // preferExisting guard it would flatten every reason to a timeout.
+        expect(persistedFailures()).toEqual(["handoff-threw"]);
+      });
+
+      it("records a synchronous handoff throw and still force-exits", () => {
+        autoUpdaterMock.quitAndInstall.mockImplementationOnce(() => {
+          throw new Error("no staged installer");
+        });
+        downloadedHandler({ version: "2.0.0" });
+        quitAndInstallHandler(TRUSTED_SENDER);
+        shutdownCoordinatorMock.settleShutdown("clean");
+
+        expect(persistedFailures()).toContain("handoff-threw");
+        vi.advanceTimersByTime(5_000);
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      it("records an updater error that lands before the service is disposed", () => {
+        downloadedHandler({ version: "2.0.0" });
+        const errorHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+          (args) => args[0] === "error"
+        )![1];
+        quitAndInstallHandler(TRUSTED_SENDER);
+        storeMock.set.mockClear();
+
+        errorHandler(new Error("net::ERR_CONNECTION_RESET"));
+
+        expect(persistedFailures()).toEqual(["updater-error"]);
+      });
+
+      // Persisting runs from an EventEmitter "error" listener and from inside
+      // the watchdog. A throw in either place would become a second error event
+      // or block the exit.
+      it("never lets a failed marker write escape or block the exit", () => {
+        storeMock.set.mockImplementation(() => {
+          throw new Error("disk full");
+        });
+        downloadedHandler({ version: "2.0.0" });
+        quitAndInstallHandler(TRUSTED_SENDER);
+
+        expect(() => shutdownCoordinatorMock.settleShutdown("clean")).not.toThrow();
+        expect(() => vi.advanceTimersByTime(5_000)).not.toThrow();
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      // electron-updater and Squirrel embed absolute cache paths in their
+      // messages; persisting one would write the user's home directory into the
+      // config file.
+      it("persists only closed-enum values, never updater error text", () => {
+        const secret = new Error(
+          "Code signature at URL file:///Users/someone/Library/Caches/daintree-updater/update.zip did not pass validation"
+        );
+        downloadedHandler({ version: "2.0.0" });
+        const errorHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+          (args) => args[0] === "error"
+        )![1];
+        quitAndInstallHandler(TRUSTED_SENDER);
+        errorHandler(secret);
+        shutdownCoordinatorMock.settleShutdown("clean");
+        vi.advanceTimersByTime(5_000);
+
+        const allowed = new Set(["updater-error", "handoff-threw", "handoff-timeout"]);
+        for (const value of persistedFailures()) {
+          expect(allowed.has(value as string)).toBe(true);
+        }
+        const everyWrite = JSON.stringify((storeMock.set as Mock).mock.calls);
+        expect(everyWrite).not.toContain("/Users/someone");
+        expect(everyWrite).not.toContain("did not pass validation");
+      });
+    });
+
+    describe("marker hygiene", () => {
+      it("drops a stale failure when a new payload is staged", () => {
+        autoUpdaterService.initialize();
+        const downloadedHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+          (args) => args[0] === "update-downloaded"
+        )![1];
+
+        downloadedHandler({ version: "2.0.0" });
+
+        // Otherwise a failure recorded against an earlier version is read back
+        // alongside THIS version's marker and blamed on it.
+        expect(storeMock.delete).toHaveBeenCalledWith(FAILURE_KEY);
+      });
+
+      it("does not drop the failure when the staged version is unusable", () => {
+        autoUpdaterService.initialize();
+        const downloadedHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+          (args) => args[0] === "update-downloaded"
+        )![1];
+        storeMock.delete.mockClear();
+
+        downloadedHandler({ version: "not-a-version" });
+
+        // No version marker was written, so there is no new attempt for the old
+        // failure to be confused with — clearing it would lose the signal.
+        expect(storeMock.delete).not.toHaveBeenCalledWith(FAILURE_KEY);
+      });
+
+      it("clears both markers on a channel switch even when the first delete throws", async () => {
+        autoUpdaterService.initialize();
+        const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+          (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+        )![1];
+        storeMock.get.mockImplementation((key: string) =>
+          key === "updateChannel" ? "stable" : undefined
+        );
+        storeMock.delete.mockImplementation((key: string) => {
+          if (key === "pendingUpdateVersion") throw new Error("disk full");
+        });
+
+        await setChannelHandler({}, "nightly");
+
+        // The keys are only meaningful as a pair — a surviving failure marker
+        // would attach itself to the next channel's first staged update.
+        expect(storeMock.delete).toHaveBeenCalledWith(FAILURE_KEY);
+      });
+    });
+
+    describe("boot-time recovery prompt", () => {
+      function bootWith({
+        pending,
+        failure,
+        running = "1.0.0",
+      }: {
+        pending?: unknown;
+        failure?: unknown;
+        running?: string;
+      }) {
+        appMock.getVersion.mockReturnValue(running);
+        storeMock.get.mockImplementation((key: string) => {
+          if (key === "pendingUpdateVersion") return pending;
+          if (key === FAILURE_KEY) return failure;
+          return undefined;
+        });
+        autoUpdaterService.initialize();
+        return (broadcastMock as Mock).mock.calls.filter(
+          (args) => args[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+        );
+      }
+
+      it("prompts once with a single recovery action when a watched attempt failed", () => {
+        const toasts = bootWith({ pending: "2.0.0", failure: "handoff-timeout" });
+
+        expect(toasts).toHaveLength(1);
+        const payload = toasts[0]![1] as {
+          type: string;
+          message: string;
+          action: { label: string; ipcChannel: string; data: string };
+        };
+        expect(payload.type).toBe("error");
+        // One action, and it is a recovery — never a bare dismiss.
+        expect(payload.action.ipcChannel).toBe(CHANNELS.SYSTEM_OPEN_EXTERNAL);
+        const target = new URL(payload.action.data);
+        expect(target.protocol).toBe("https:");
+        expect(target.hostname).toBe("daintree.org");
+        // The body has to name both versions or it can't explain the loop the
+        // user is stuck in.
+        expect(payload.message).toContain("2.0.0");
+        expect(payload.message).toContain("1.0.0");
+      });
+
+      it("clear-on-read means the same failed attempt cannot prompt twice", () => {
+        bootWith({ pending: "2.0.0", failure: "handoff-timeout" });
+        expect(storeMock.delete).toHaveBeenCalledWith(FAILURE_KEY);
+        expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateVersion");
+
+        // Second boot reads what a real store would now return.
+        autoUpdaterService.dispose();
+        broadcastMock.mockClear();
+        const toasts = bootWith({ pending: undefined, failure: undefined });
+        expect(toasts).toHaveLength(0);
+      });
+
+      // An app killed before autoInstallOnAppQuit could run leaves the version
+      // marker behind with nothing having gone wrong — the staged installer is
+      // still good, so claiming it failed would be a lie.
+      it("stays silent on a bare mismatch with no observed failure", () => {
+        const toasts = bootWith({ pending: "2.0.0" });
+
+        expect(toasts).toHaveLength(0);
+        expect(trackEventMock).toHaveBeenCalledWith(
+          "auto_update_install_version_mismatch",
+          expect.objectContaining({ installFailure: "none" })
+        );
+      });
+
+      it("reports the observed failure class in telemetry when there is one", () => {
+        bootWith({ pending: "2.0.0", failure: "handoff-timeout" });
+
+        expect(trackEventMock).toHaveBeenCalledWith(
+          "auto_update_install_version_mismatch",
+          expect.objectContaining({ installFailure: "handoff-timeout" })
+        );
+      });
+
+      it("stays silent when the install actually landed", () => {
+        // A slow-but-successful handoff can trip the watchdog and leave a marker
+        // behind; the version proves it worked.
+        const toasts = bootWith({
+          pending: "2.0.0",
+          failure: "handoff-timeout",
+          running: "2.0.0",
+        });
+
+        expect(toasts).toHaveLength(0);
+        expect(trackEventMock).not.toHaveBeenCalled();
+      });
+
+      it("refuses to prompt on a failure class it does not recognize", () => {
+        const toasts = bootWith({ pending: "2.0.0", failure: "../../etc/passwd" });
+
+        expect(toasts).toHaveLength(0);
+        expect(trackEventMock).toHaveBeenCalledWith(
+          "auto_update_install_version_mismatch",
+          expect.objectContaining({ installFailure: "none" })
+        );
+      });
+
+      it("still prompts when telemetry reporting throws", () => {
+        trackEventMock.mockImplementationOnce(() => {
+          throw new Error("sentry offline");
+        });
+
+        const toasts = bootWith({ pending: "2.0.0", failure: "handoff-timeout" });
+
+        // Recovery must not be hostage to an analytics outage.
+        expect(toasts).toHaveLength(1);
+      });
+
+      it("does not send Windows Store users to a download page the Store owns", () => {
+        Object.defineProperty(process, "windowsStore", { value: true, configurable: true });
+        try {
+          const toasts = bootWith({ pending: "2.0.0", failure: "handoff-timeout" });
+          expect(toasts).toHaveLength(0);
+          // Markers are still consumed, or they would replay forever.
+          expect(storeMock.delete).toHaveBeenCalledWith(FAILURE_KEY);
+        } finally {
+          Object.defineProperty(process, "windowsStore", { value: undefined, configurable: true });
+        }
+      });
     });
   });
 
