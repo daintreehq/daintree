@@ -124,8 +124,9 @@ describe("worktree.openFileBrowser", () => {
     });
 
     it("prefers the project path over a scratch path", async () => {
-      // Both pointers are briefly set while a cached view catches up on a
-      // switch broadcast; project-first mirrors `resolveWorkspaceCwd` (#11076).
+      // The context provider resolves both pointers from one view-scoped lookup,
+      // so this state is unreachable in practice; the tie-break is defensive and
+      // mirrors `resolveWorkspaceCwd` (#11076) so both sides pick one folder.
       await getAction().run(undefined, {
         projectName: "Notes",
         projectPath: "/folders/notes",

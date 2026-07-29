@@ -86,13 +86,17 @@ export function useActionRegistry(options: ActionCallbacks): void {
     }
 
     actionService.setContextProvider((): ActionContext => {
-      const project = useProjectStore.getState().currentProject;
-      // A scratch is the active workspace when no project is (#11076), and an
-      // action that only reads `currentProject` sees nothing at all there.
-      // Resolved through this view's own seeded id, not the broadcast pointer,
-      // so a sibling window switching scratches can't make an action here name
-      // — or refuse — the wrong folder. Shared with the file browser's own root
-      // resolution, which is what keeps the two from disagreeing.
+      // Both halves of the workspace pointer come from one lookup. A scratch is
+      // the active workspace when no project is (#11076), and an action that
+      // only reads `currentProject` sees nothing at all there — but reading
+      // either `current*` pointer directly is just as wrong the other way, since
+      // both are broadcast to every view: a sibling window switching workspaces
+      // would make an action here name — or refuse — the wrong folder. Resolving
+      // through this view's own seeded id also makes the two pointers mutually
+      // exclusive, so a consumer picking project-first can never land on a
+      // leftover project beside this view's scratch. Shared with the file
+      // browser's own root resolution, which is what keeps the two from
+      // disagreeing.
       const projectStoreState = useProjectStore.getState();
       const scratchStoreState = useScratchStore.getState();
       const viewWorkspace = resolveViewWorkspace({
@@ -102,6 +106,7 @@ export function useActionRegistry(options: ActionCallbacks): void {
         scratches: scratchStoreState.scratches,
         currentScratch: scratchStoreState.currentScratch,
       });
+      const project = viewWorkspace?.kind === "project" ? viewWorkspace.project : undefined;
       const scratch = viewWorkspace?.kind === "scratch" ? viewWorkspace.scratch : undefined;
       const terminalState = usePanelStore.getState();
       const focusedId = terminalState.focusedId;

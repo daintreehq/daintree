@@ -461,7 +461,11 @@ export function registerWorktreeContextActions(
 
         // No worktree id at all is the normal state in a scratch or a
         // worktree-less project (#11482) — browse the workspace root instead of
-        // silently doing nothing. Project-first, mirroring `resolveWorkspaceCwd`.
+        // silently doing nothing. The context provider resolves both pointers
+        // from one view-scoped lookup, so only one of them is ever set and this
+        // names the folder `useWorkspaceRootPath` opens; the project-first
+        // tie-break is a defensive echo of `resolveWorkspaceCwd`, not a choice
+        // this action is expected to have to make.
         const workspacePath = ctx.projectPath ?? ctx.scratchPath;
         if (!worktree && !workspacePath) {
           // Thrown, not a bare return: a silent no-op still reports ok from
