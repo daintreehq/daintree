@@ -2,11 +2,13 @@ import { describe, it, expect } from "vitest";
 import {
   DEFAULT_STABILIZATION_POLICY,
   OPENCODE_CRASH_SIGNATURE,
+  STABILIZATION_POLL_MS,
   areOpenCodeOutputsEquivalent,
   classifyOpenCodeOutput,
   formatOpenCodeCrashError,
   formatOpenCodeTimeoutError,
   formatTerminalTail,
+  hasOpenCodeReadyMarkers,
   initialStabilizationState,
   normalizeOpenCodeOutput,
   observeOpenCodeOutput,
@@ -50,11 +52,31 @@ describe("classifyOpenCodeOutput — fatal parser crash", () => {
     expect(result).toEqual({ kind: "crashed", signature: OPENCODE_CRASH_SIGNATURE });
   });
 
-  it("outranks ready text left in the buffer above the crash", () => {
-    const text = ["> Ask anything", "", "error: Invalid key name: key name cannot be empty"].join(
-      "\n"
-    );
-    expect(classifyOpenCodeOutput(text).kind).toBe("crashed");
+  it("outranks every other state the buffer may still be showing", () => {
+    // Whatever the CLI painted before it died is still in the buffer, so the
+    // crash has to win against each of them, not just against ready text.
+    const crash = "error: Invalid key name: key name cannot be empty";
+    const competing = [
+      "> Ask anything",
+      "Update complete. Please restart the application.",
+      "Paste your API key to continue",
+      "Select provider: Anthropic",
+      "1.18.9",
+    ];
+
+    for (const other of competing) {
+      expect(classifyOpenCodeOutput(`${other}\n\n${crash}`).kind, other).toBe("crashed");
+    }
+  });
+
+  it("separates the ready markers from classification so a crash can be re-checked", () => {
+    // The driver confirms a crash by re-reading and asking whether the CLI
+    // painted ready markers anyway; that question cannot be asked through
+    // classifyOpenCodeOutput, because the crash outranks ready there.
+    const survived = "[Keymap] Error: invalid key name: key name cannot be empty\n> Ask anything";
+    expect(classifyOpenCodeOutput(survived).kind).toBe("crashed");
+    expect(hasOpenCodeReadyMarkers(survived)).toBe(true);
+    expect(hasOpenCodeReadyMarkers("Select provider: Anthropic")).toBe(false);
   });
 
   it("does not fire on recoverable keymap errors or on either half alone", () => {
@@ -214,14 +236,70 @@ describe("observeOpenCodeOutput", () => {
     expect(cleared.state).toEqual(initialStabilizationState());
   });
 
-  it("leaves the sample streak reachable under the shipped policy", () => {
-    // If the elapsed cap could expire before requiredSamples polls complete at
-    // the driver's 500ms cadence, the settle path would be dead code and every
-    // prompt would fall through to the fallback.
-    const pollMs = 500;
-    expect((DEFAULT_STABILIZATION_POLICY.requiredSamples - 1) * pollMs).toBeLessThan(
+  it("counts spinner repaints of one prompt as a settled screen", () => {
+    // Guards the comparison being on NORMALIZED text: against raw text an
+    // animated prompt could never build a streak and every prompt would leave
+    // via the max-wait fallback instead.
+    const frames = ["⠋", "⠙", "⠹", "⠸"];
+    let state = initialStabilizationState();
+    let last;
+    frames.forEach((frame, i) => {
+      last = observeOpenCodeOutput(
+        state,
+        { kind: "awaiting-provider", text: `${frame} Select provider`, now: i * 100 },
+        TEST_POLICY
+      );
+      state = last.state;
+    });
+
+    // Reached via the sample streak, well inside TEST_POLICY.maxWaitMs.
+    expect(last.decision).toBe("act");
+    expect(state.sampleCount).toBeGreaterThanOrEqual(TEST_POLICY.requiredSamples);
+  });
+
+  it("settles a still prompt on samples before the elapsed cap could fire", () => {
+    // The real policy at the real cadence must reach `act` via the streak; if
+    // the cap were shorter than the streak takes, the settle path would be
+    // dead code and every prompt would fall through to the fallback.
+    let state = initialStabilizationState();
+    let decision;
+    for (let i = 0; i < DEFAULT_STABILIZATION_POLICY.requiredSamples; i++) {
+      const result = observeOpenCodeOutput(state, {
+        kind: "awaiting-provider",
+        text: "Select provider",
+        now: i * STABILIZATION_POLL_MS,
+      });
+      state = result.state;
+      decision = result.decision;
+    }
+
+    expect(decision).toBe("act");
+    expect((DEFAULT_STABILIZATION_POLICY.requiredSamples - 1) * STABILIZATION_POLL_MS).toBeLessThan(
       DEFAULT_STABILIZATION_POLICY.maxWaitMs
     );
+  });
+
+  it("acts at once on a new prompt of a kind that has already served its tenure", () => {
+    // Documented consequence of preserving firstSeenAt across same-kind text
+    // changes: maxWaitMs is per-KIND tenure, not per-prompt. Safe because the
+    // TUI has been asking for this kind of input for the whole cap, but it is
+    // why the driver re-checks the screen it was authorized against.
+    let state = initialStabilizationState();
+    for (let i = 0; i < 10; i++) {
+      state = observeOpenCodeOutput(
+        state,
+        { kind: "awaiting-provider", text: `frame ${i}`, now: i * 100 },
+        TEST_POLICY
+      ).state;
+    }
+
+    const fresh = observeOpenCodeOutput(
+      state,
+      { kind: "awaiting-provider", text: "a completely different provider prompt", now: 1_100 },
+      TEST_POLICY
+    );
+    expect(fresh.decision).toBe("act");
+    expect(fresh.state.sampleCount).toBe(1);
   });
 });
 

@@ -55,6 +55,10 @@ concurrency:
 
 env:
   NODE_VERSION: "22"
+  # Without this the pinned CLI self-updates on first launch and the run
+  # silently uses whatever version npm published today — see
+  # scripts/ci/install-opencode.mjs.
+  OPENCODE_DISABLE_AUTOUPDATE: "1"
 
 jobs:
   matrix-setup:

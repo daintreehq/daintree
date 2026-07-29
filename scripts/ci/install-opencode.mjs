@@ -19,6 +19,7 @@
 // pin would defeat the point of having one.
 
 import { spawnSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -31,17 +32,28 @@ export function buildInstallArgs() {
   return [path.join(here, "npm-install-retry.mjs"), "-g", OPENCODE_PACKAGE_SPEC];
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+/**
+ * The executable path, with the spawn injected so a test can assert what
+ * actually runs. Asserting `buildInstallArgs()` alone would stay green if this
+ * call site were swapped back to an unpinned invocation.
+ */
+export function runInstall(spawnImpl = spawnSync) {
   // process.execPath + no shell keeps this identical under bash and pwsh.
-  const result = spawnSync(process.execPath, buildInstallArgs(), { stdio: "inherit" });
+  const result = spawnImpl(process.execPath, buildInstallArgs(), { stdio: "inherit" });
 
   if (result.error) {
     console.error(`[install-opencode] failed to start installer: ${result.error.message}`);
-    process.exit(1);
+    return 1;
   }
   if (result.signal) {
+    // Conventional signal-derived status, so a supervisor can still tell a
+    // cancellation apart from an install failure.
     console.error(`[install-opencode] installer exited via signal ${result.signal}`);
-    process.exit(1);
+    return 128 + (os.constants.signals[result.signal] ?? 0);
   }
-  process.exit(result.status ?? 1);
+  return result.status ?? 1;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  process.exit(runInstall());
 }

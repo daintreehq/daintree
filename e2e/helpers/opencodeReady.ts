@@ -45,9 +45,19 @@ export function hasOpenCodeCrashSignature(text: string): boolean {
   return collapseWhitespace(text).includes(CRASH_NEEDLE);
 }
 
+export function hasOpenCodeReadyMarkers(text: string): boolean {
+  return (
+    text.toLowerCase().includes("ask anything") ||
+    /build\s+opencode/i.test(text) ||
+    /\d+\.\d+\.\d+$/.test(text.trim())
+  );
+}
+
 export function classifyOpenCodeOutput(text: string): OpenCodeClassification {
   // Crash outranks everything: a TUI that painted a ready prompt and then died
   // still has the ready text sitting in the buffer above the stack trace.
+  // Because this wins over `ready`, the driver confirms the process really is
+  // gone before failing — see CRASH_CONFIRM_MS.
   if (hasOpenCodeCrashSignature(text)) {
     return { kind: "crashed", signature: OPENCODE_CRASH_SIGNATURE };
   }
@@ -58,11 +68,7 @@ export function classifyOpenCodeOutput(text: string): OpenCodeClassification {
     return { kind: "needs-restart" };
   }
 
-  if (
-    lower.includes("ask anything") ||
-    /build\s+opencode/i.test(text) ||
-    /\d+\.\d+\.\d+$/.test(text.trim())
-  ) {
+  if (hasOpenCodeReadyMarkers(text)) {
     return { kind: "ready" };
   }
 
@@ -116,7 +122,19 @@ export type StabilizationPolicy = {
   maxWaitMs: number;
 };
 
-// Four samples at the driver's 500ms poll gives ~1.5s of settled output before
+/** Driver poll interval while a prompt is settling. Lives here so the policy below stays honest about the cadence it assumes. */
+export const STABILIZATION_POLL_MS = 500;
+
+/**
+ * How long to wait before believing a crash signature. The signature outranks
+ * every other state, so a handled upstream error that printed the same message
+ * would otherwise fail a release the CLI was going to survive. One confirming
+ * re-read costs a second on the genuine-crash path and removes that whole
+ * false-positive class: a live TUI goes on to paint its ready markers.
+ */
+export const CRASH_CONFIRM_MS = 1_000;
+
+// Four samples at STABILIZATION_POLL_MS gives ~1.5s of settled output before
 // the first keystroke. maxWaitMs bounds the case the sample streak can never
 // be met — an unrecognized animation repainting forever — so the gate always
 // terminates instead of burning the ready deadline.
@@ -146,6 +164,16 @@ export function initialStabilizationState(): StabilizationState {
  * the same kind resets only the equivalent-sample streak — deliberately NOT
  * `firstSeenAt`, or an animated prompt would reset its own cap every poll and
  * never reach the fallback.
+ *
+ * That makes the two exits mean different things, and the difference matters:
+ * `requiredSamples` is per-prompt ("this exact screen held still"), while
+ * `maxWaitMs` is per-kind tenure ("input of this kind has been asked for this
+ * long, however much the pixels moved"). So a materially new prompt of an
+ * already-tenured kind can be acted on immediately. That is intentional — by
+ * then the TUI has been asking for input for maxWaitMs, so the startup race
+ * this gate exists to avoid is long over — but it means the driver, not this
+ * reducer, is what guarantees the answer matches the screen it was authorized
+ * against.
  */
 export function observeOpenCodeOutput(
   state: StabilizationState,

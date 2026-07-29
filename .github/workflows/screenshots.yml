@@ -56,6 +56,10 @@ concurrency:
 
 env:
   NODE_VERSION: "22"
+  # Without this the pinned CLI self-updates on first launch and screenshots
+  # capture whatever version npm published today — see
+  # scripts/ci/install-opencode.mjs.
+  OPENCODE_DISABLE_AUTOUPDATE: "1"
   # onnxruntime-node (transitive via avr-vad for CPU-only Silero VAD) tries
   # to download optional CUDA/TensorRT GPU binaries from api.nuget.org on
   # postinstall. Daintree's VAD runs on CPU; the GPU binaries are never

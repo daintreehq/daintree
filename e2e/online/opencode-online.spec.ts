@@ -5,9 +5,13 @@ import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/proje
 import { getTerminalText } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
 import {
+  CRASH_CONFIRM_MS,
+  STABILIZATION_POLL_MS,
+  areOpenCodeOutputsEquivalent,
   classifyOpenCodeOutput,
   formatOpenCodeCrashError,
   formatOpenCodeTimeoutError,
+  hasOpenCodeReadyMarkers,
   initialStabilizationState,
   observeOpenCodeOutput,
   type OpenCodeOutputKind,
@@ -66,9 +70,6 @@ async function launchOpenCodeAgent(): Promise<Locator> {
   return agentPanel;
 }
 
-// Poll cadence while an actionable prompt is settling. Four samples at this
-// interval is the ~1.5s of quiet the stabilization gate wants before we type.
-const STABILIZATION_POLL_MS = 500;
 const IDLE_POLL_MS = 1_000;
 
 async function waitForOpenCodeReady(agentPanel: Locator): Promise<"ready" | "needs-restart"> {
@@ -95,10 +96,16 @@ async function waitForOpenCodeReady(agentPanel: Locator): Promise<"ready" | "nee
     const classification = classifyOpenCodeOutput(lastText);
     lastKind = classification.kind;
 
-    // Fail in one poll interval rather than burning the whole deadline on a
-    // CLI that is already dead — the generic timeout that used to surface here
-    // read as a Daintree ready-state bug and cost a release investigation.
+    // Fail in about a second rather than burning the whole deadline on a CLI
+    // that is already dead — the generic timeout that used to surface here read
+    // as a Daintree ready-state bug and cost a release investigation. The one
+    // confirming re-read guards the other direction: the signature outranks
+    // every other state, so a handled upstream error printing the same message
+    // must not fail a release the CLI was going to survive.
     if (classification.kind === "crashed") {
+      await window.waitForTimeout(CRASH_CONFIRM_MS);
+      lastText = await getTerminalText(agentPanel);
+      if (hasOpenCodeReadyMarkers(lastText)) return "ready";
       throw new Error(formatOpenCodeCrashError(classification.signature, lastText));
     }
     if (classification.kind === "needs-restart") return "needs-restart";
@@ -118,12 +125,15 @@ async function waitForOpenCodeReady(agentPanel: Locator): Promise<"ready" | "nee
       continue;
     }
 
+    const authorizedText = lastText;
     await focusHybridEditor(window, agentPanel);
 
     // Focus retries can take seconds, during which the TUI may have moved on
     // (or died). Re-read before committing a keystroke: sending the previous
     // screen's answer is what feeds the CLI's keymap parser input it cannot
-    // decode.
+    // decode. Compare the text, not just the kind — two different provider
+    // prompts share a kind, and answering the wrong one is exactly the stale
+    // input this guard exists to stop.
     lastText = await getTerminalText(agentPanel);
     const settled = classifyOpenCodeOutput(lastText);
     lastKind = settled.kind;
@@ -131,10 +141,17 @@ async function waitForOpenCodeReady(agentPanel: Locator): Promise<"ready" | "nee
     if (settled.kind === "crashed") {
       throw new Error(formatOpenCodeCrashError(settled.signature, lastText));
     }
-    if (settled.kind !== classification.kind) {
+    if (
+      settled.kind !== classification.kind ||
+      !areOpenCodeOutputsEquivalent(authorizedText, lastText)
+    ) {
       stabilization = initialStabilizationState();
       continue;
     }
+
+    // Focus can burn a large slice of the budget; do not send input we no
+    // longer have time to observe the result of.
+    if (Date.now() >= deadline) break;
 
     if (settled.kind === "awaiting-api-key") {
       await window.keyboard.press("ArrowUp");
@@ -154,9 +171,13 @@ async function launchOpenCodeReady(): Promise<Locator> {
     const agentPanel = await launchOpenCodeAgent();
     const state = await waitForOpenCodeReady(agentPanel);
     if (state === "ready") return agentPanel;
+    // Out of attempts — relaunching here would only risk a launch failure
+    // masking the real diagnostic below.
+    if (attempt === 1) break;
 
     // OpenCode can self-update on first launch and require the embedding app
-    // to restart before the new CLI process will accept input.
+    // to restart before the new CLI process will accept input. CI pins the CLI
+    // and sets OPENCODE_DISABLE_AUTOUPDATE, so this path is for local runs.
     await closeApp(ctx.app);
     ctx = await launchApp();
     await openFixtureProject();
