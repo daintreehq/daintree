@@ -20,8 +20,8 @@ describe("BUILTIN_SLASH_COMMANDS registry", () => {
 });
 
 describe("getBuiltinSlashCommands", () => {
-  it("returns 33 commands for claude", () => {
-    expect(getBuiltinSlashCommands("claude")).toHaveLength(33);
+  it("returns 34 commands for claude", () => {
+    expect(getBuiltinSlashCommands("claude")).toHaveLength(34);
   });
 
   it("returns 27 commands for gemini", () => {
@@ -79,10 +79,25 @@ describe("getBuiltinSlashCommands", () => {
     expect(geminiClear?.description).toBe("Clear the terminal display");
   });
 
+  it("applies per-agent description overrides for /goal", () => {
+    const claudeGoal = getBuiltinSlashCommands("claude").find((c) => c.label === "/goal");
+    const codexGoal = getBuiltinSlashCommands("codex").find((c) => c.label === "/goal");
+
+    expect(claudeGoal?.description).toBeTruthy();
+    expect(codexGoal?.description).toBeTruthy();
+    expect(claudeGoal?.description).not.toBe(codexGoal?.description);
+  });
+
   it("/compact appears for claude and codex but not gemini", () => {
     expect(getBuiltinSlashCommands("claude").some((c) => c.label === "/compact")).toBe(true);
     expect(getBuiltinSlashCommands("codex").some((c) => c.label === "/compact")).toBe(true);
     expect(getBuiltinSlashCommands("gemini").some((c) => c.label === "/compact")).toBe(false);
+  });
+
+  it("/goal appears for claude and codex but not gemini", () => {
+    expect(getBuiltinSlashCommands("claude").some((c) => c.label === "/goal")).toBe(true);
+    expect(getBuiltinSlashCommands("codex").some((c) => c.label === "/goal")).toBe(true);
+    expect(getBuiltinSlashCommands("gemini").some((c) => c.label === "/goal")).toBe(false);
   });
 
   it("/compress appears for gemini only", () => {
