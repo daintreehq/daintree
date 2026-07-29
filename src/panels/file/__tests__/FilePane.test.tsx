@@ -808,7 +808,9 @@ describe("FilePane show in file browser (#11483)", () => {
     const { container, rerender } = renderPane("/repo/src/index.ts");
 
     act(() => {
-      button(container, "Open in editor")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      button(container, "Open in editor")!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true })
+      );
     });
     expect(dispatchMock).toHaveBeenCalledTimes(1);
 
@@ -818,7 +820,9 @@ describe("FilePane show in file browser (#11483)", () => {
 
     // The editor is still in flight, so a second click must not launch again.
     act(() => {
-      button(container, "Open in editor")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      button(container, "Open in editor")!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true })
+      );
     });
     expect(dispatchMock).toHaveBeenCalledTimes(1);
 

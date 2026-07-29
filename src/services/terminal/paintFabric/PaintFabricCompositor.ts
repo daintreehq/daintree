@@ -591,6 +591,11 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     return this.plane(id).getHoveredFilePath(id);
   }
 
+  getHoveredFileKind(id: string): "file" | "directory" | null {
+    if (this.isViewOwned(id)) return null;
+    return this.plane(id).getHoveredFileKind(id);
+  }
+
   openHoveredLink(id: string, event?: MouseEvent): Promise<void> {
     return this.plane(id).openHoveredLink(id, event);
   }

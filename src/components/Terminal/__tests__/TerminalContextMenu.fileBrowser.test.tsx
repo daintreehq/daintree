@@ -173,10 +173,7 @@ describe("TerminalContextMenu — open in file browser (#11483)", () => {
     dispatch.mockResolvedValue({ ok: true, result: undefined });
     openMenu({
       hovered: "/repo/src/index.ts",
-      worktrees: [
-        worktree("wt-stamped", "/other"),
-        worktree("wt-real", "/repo"),
-      ],
+      worktrees: [worktree("wt-stamped", "/other"), worktree("wt-real", "/repo")],
       panelWorktreeId: "wt-stamped",
     });
 
@@ -195,10 +192,7 @@ describe("TerminalContextMenu — open in file browser (#11483)", () => {
     dispatch.mockResolvedValue({ ok: true, result: undefined });
     openMenu({
       hovered: "/repo/nested/src/a.ts",
-      worktrees: [
-        worktree("wt-outer", "/repo"),
-        worktree("wt-inner", "/repo/nested"),
-      ],
+      worktrees: [worktree("wt-outer", "/repo"), worktree("wt-inner", "/repo/nested")],
     });
 
     await act(async () => {

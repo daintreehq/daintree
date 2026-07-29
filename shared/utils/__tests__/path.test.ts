@@ -375,8 +375,9 @@ describe("resolveWorktreePathScope", () => {
   it("refuses any path containing a .. segment rather than collapsing it", () => {
     expect(resolveWorktreePathScope("/repo/../etc/passwd", [OUTER])).toBeNull();
     expect(resolveWorktreePathScope("/repo/link/../docs/a.ts", [OUTER])).toBeNull();
-    expect(resolveWorktreePathScope("C:\\repo\\link\\..\\docs", [{ id: "w", path: "C:\\repo" }]))
-      .toBeNull();
+    expect(
+      resolveWorktreePathScope("C:\\repo\\link\\..\\docs", [{ id: "w", path: "C:\\repo" }])
+    ).toBeNull();
   });
 
   // "..somefile" and "..." are ordinary names, not traversal.

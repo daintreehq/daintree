@@ -856,7 +856,8 @@ export function FilePane({
           // *is* the root (the only such case here — containment is already
           // proven by revealWorktreeId), and the action would then trim
           // "/repo" down to a bogus "repo" child. Undefined opens the root.
-          revealPath: relativeFilePath && relativeFilePath !== filePath ? relativeFilePath : undefined,
+          revealPath:
+            relativeFilePath && relativeFilePath !== filePath ? relativeFilePath : undefined,
           revealKind: "file",
         };
       } else {
