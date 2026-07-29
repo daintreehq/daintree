@@ -92,10 +92,11 @@ beforeEach(() => {
 });
 
 describe("LauncherQuickActions", () => {
-  it("shows the toolbar agents, a new-terminal chip, and the palette search entry", () => {
+  it("shows the toolbar agents, the fixed chips, and the palette search entry", () => {
     render(<LauncherQuickActions />);
     expect(screen.getByRole("button", { name: /Claude/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /New terminal/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Browse files/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Search agents & panels/i })).toBeTruthy();
   });
 
@@ -184,6 +185,16 @@ describe("LauncherQuickActions", () => {
     expect(h.dispatch).toHaveBeenCalledWith("panel.palette", undefined, { source: "user" });
   });
 
+  it("dispatches the file browser with no args so it resolves its own target", () => {
+    // Args-free is the contract: the action picks the focused worktree, or the
+    // workspace root in a scratch or worktree-less project (#11482).
+    render(<LauncherQuickActions />);
+    fireEvent.click(screen.getByRole("button", { name: /Browse files/i }));
+    expect(h.dispatch).toHaveBeenCalledWith("worktree.openFileBrowser", undefined, {
+      source: "user",
+    });
+  });
+
   // Shortcut-hint teardown around the palette open is now global — the
   // palette's own open transition clears it (AppPaletteDialog overlay
   // clearing, issue #11030) — so the palette button dispatches plainly,
@@ -206,6 +217,7 @@ describe("LauncherQuickActions", () => {
     const launcherButtons = () => [
       screen.getByRole("button", { name: /Claude/i }),
       screen.getByRole("button", { name: /New terminal/i }),
+      screen.getByRole("button", { name: /Browse files/i }),
       screen.getByRole("button", { name: /Search agents & panels/i }),
     ];
 

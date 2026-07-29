@@ -124,6 +124,16 @@ vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
   ContextMenuSeparator: () => null,
 }));
 
+// The view's own workspace root, behind a worktree-less browser (#11482). The
+// real hook reads the project/scratch stores against the seeded view identity;
+// this stands in for that resolution so the pane's branching is what's tested.
+const { workspaceRootPathMock } = vi.hoisted(() => ({
+  workspaceRootPathMock: vi.fn<() => string>(() => ""),
+}));
+vi.mock("../useWorkspaceRootPath", () => ({
+  useWorkspaceRootPath: () => workspaceRootPathMock(),
+}));
+
 const { copyContextWithFeedbackMock } = vi.hoisted(() => ({
   copyContextWithFeedbackMock: vi.fn<
     typeof import("@/hooks/useWorktreeActions").copyContextWithFeedback
@@ -174,13 +184,13 @@ import {
 } from "../sidebarWidth";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-function renderPane() {
+function renderPane(props: { worktreeId?: string } = { worktreeId: "wt-1" }) {
   return render(
     <TooltipProvider>
       <FileBrowserPane
         id="fb-1"
         title="Files"
-        worktreeId="wt-1"
+        {...props}
         isFocused
         location="grid"
         onFocus={vi.fn()}
@@ -204,6 +214,8 @@ beforeEach(() => {
   flushPanelPersistenceMock.mockReset();
   notifyMock.mockReset();
   copyContextWithFeedbackMock.mockClear();
+  workspaceRootPathMock.mockReset();
+  workspaceRootPathMock.mockReturnValue("");
   // Module-global and never reset by the store itself, so a message left by an
   // earlier test would satisfy the next one's announcement assertion.
   useAnnouncerStore.setState({ polite: null, assertive: null });
@@ -427,7 +439,9 @@ describe("root error rendering (#11367)", () => {
     treeState.rows = [];
     renderPane();
 
-    expect(screen.getByText("Couldn't read this worktree")).toBeTruthy();
+    // Generic "folder" copy: the same banner now covers a scratch or
+    // worktree-less project root, which is not a worktree (#11482).
+    expect(screen.getByText("Couldn't read this folder")).toBeTruthy();
     expect(screen.queryByTestId("file-tree-view")).toBeNull();
   });
 });
@@ -1018,5 +1032,59 @@ describe("folder context menu", () => {
       "context-menu",
       expect.anything()
     );
+  });
+});
+
+/**
+ * #11482: a scratch or worktree-less project has no worktree, so the pane roots
+ * itself at the view's own workspace folder instead of showing the placeholder.
+ */
+describe("workspace-rooted browser", () => {
+  it("browses the workspace folder when the panel names no worktree", () => {
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    renderPane({});
+
+    expect(screen.getByTestId("file-tree-view")).toBeTruthy();
+    expect(screen.queryByText("Open a folder to browse its files")).toBeNull();
+  });
+
+  it("shows the placeholder only when nothing at all resolves", () => {
+    // No worktree and no workspace — the genuinely unbound case.
+    renderPane({});
+    expect(screen.getByText("Open a folder to browse its files")).toBeTruthy();
+  });
+
+  it("joins copied paths against the workspace root, not the worktree", async () => {
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    renderPane({});
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy full path" }));
+    });
+
+    expect(writeTextMock).toHaveBeenCalledWith(`/scratches/one/${FOLDER_ROW.path}`);
+  });
+
+  it("hides Copy context for a workspace root", () => {
+    // CopyTree is worktree-scoped, so an enabled item here would be a dead
+    // affordance rather than a degraded one.
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    renderPane({});
+
+    expect(screen.queryByRole("button", { name: "Copy context" })).toBeNull();
+  });
+
+  it("keeps Copy context for a worktree", () => {
+    renderPane();
+    expect(screen.getByRole("button", { name: "Copy context" })).toBeTruthy();
+  });
+
+  it("does not fall back to the workspace when a named worktree hasn't resolved", () => {
+    // Opening the project root in place of the requested worktree would be the
+    // wrong folder, not a degraded one.
+    workspaceRootPathMock.mockReturnValue("/projects/a");
+    renderPane({ worktreeId: "wt-missing" });
+
+    expect(screen.getByText("Open a folder to browse its files")).toBeTruthy();
   });
 });

@@ -396,16 +396,30 @@ export function registerWorktreeContextActions(
   actions.set("worktree.openFileBrowser", () =>
     defineAction({
       id: "worktree.openFileBrowser",
-      title: "Browse Files",
-      description: "Open a read-only file browser for a worktree",
+      title: "Browse files",
+      description:
+        "Open a read-only file browser for a worktree, or for the current project or scratch folder when no worktree is selected",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      // A palette gate rather than `isEnabled`, for the same reason
+      // `worktree.openChanges` above spells out: `isEnabled` never sees args,
+      // so on an explicit `worktreeId` it would answer for the focused
+      // worktree instead. Readiness is broader than a worktree now — a scratch
+      // or worktree-less project can open its own root (#11482).
+      palette: {
+        mode: "requireContext",
+        isReady: (ctx: ActionContext) =>
+          Boolean(
+            ctx.focusedWorktreeId ?? ctx.activeWorktreeId ?? ctx.projectPath ?? ctx.scratchPath
+          ),
+        reason: "No folder to browse",
+      },
       argsSchema: z
         .object({
           worktreeId: z.string().optional(),
-          /** Worktree-relative path to select and scroll into view on open. */
+          /** Path relative to the browser root, to select and scroll into view on open. */
           revealPath: z.string().optional(),
           /**
            * What `revealPath` points at. A directory is also expanded so its
@@ -416,12 +430,33 @@ export function registerWorktreeContextActions(
         })
         .optional(),
       run: async (args, ctx: ActionContext) => {
-        const worktreeId = args?.worktreeId;
-        const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
-        if (!targetWorktreeId) return;
+        const explicitWorktreeId = args?.worktreeId;
+        const targetWorktreeId =
+          explicitWorktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        const worktree = targetWorktreeId
+          ? getCurrentViewStore().getState().worktrees.get(targetWorktreeId)
+          : undefined;
 
-        const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
-        if (!worktree) return;
+        // An explicit id that doesn't resolve is a caller error, not a cue to
+        // browse something else: falling through to the workspace root would
+        // open a folder *above* the one asked for.
+        if (explicitWorktreeId && !worktree) {
+          throw new Error(`Worktree not found: ${explicitWorktreeId}`);
+        }
+
+        // No worktree in context is the normal state in a scratch or a
+        // worktree-less project (#11482) — browse the workspace root instead of
+        // silently doing nothing. Project-first, mirroring `resolveWorkspaceCwd`.
+        const workspacePath = ctx.projectPath ?? ctx.scratchPath;
+        if (!worktree && !workspacePath) {
+          // Thrown, not a bare return: a silent no-op still reports ok from
+          // dispatch, so the palette and quick action would look like they
+          // worked.
+          throw new Error("No folder to browse");
+        }
+        const workspaceTitle = worktree
+          ? undefined
+          : `Files — ${ctx.projectName ?? ctx.scratchName ?? (workspacePath ? basename(workspacePath) : "workspace")}`;
 
         // Lazily imported for the same reason as the review hub above: a static
         // import drags panelStore -> panelPersistence in, which reads
@@ -444,10 +479,13 @@ export function registerWorktreeContextActions(
           };
         }
 
+        // No `worktreeId` for a workspace root: its absence is what tells both
+        // the pane and main to resolve the view's own workspace folder, which
+        // neither side ever names explicitly.
         await usePanelDialogStore.getState().openPanelDialog({
           kind: "file-browser",
-          title: `Files — ${worktree.branch ?? worktree.name}`,
-          worktreeId: targetWorktreeId,
+          title: worktree ? `Files — ${worktree.branch ?? worktree.name}` : workspaceTitle,
+          ...(worktree && { worktreeId: targetWorktreeId }),
           ...reveal,
         });
       },

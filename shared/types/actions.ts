@@ -88,6 +88,16 @@ export interface ActionContext {
   focusedTerminalKind?: string;
   focusedTerminalType?: string;
   focusedTerminalTitle?: string;
+  /**
+   * The active workspace is a project OR a scratch — switching to one clears
+   * the other's pointer (#11076). Without these an action dispatched in a
+   * scratch sees no workspace at all, which is what left the file browser
+   * silently no-opping there (#11482). Project fields still win where both are
+   * briefly set, mirroring `resolveWorkspaceCwd`'s precedence.
+   */
+  scratchId?: string;
+  scratchName?: string;
+  scratchPath?: string;
   isSettingsOpen?: boolean;
   /**
    * The dispatch source for the in-flight `run()` call. Set by

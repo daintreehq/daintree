@@ -4,6 +4,7 @@ import { act, render, renderHook, waitFor } from "@testing-library/react";
 import type { FileTreeNode } from "@shared/types";
 import type { FileBrowserListDirectoryPayload } from "@shared/types/ipc/fileBrowser";
 import { useFileBrowserTree } from "../useFileBrowserTree";
+import type { FileBrowserSource } from "../fileBrowserTree";
 
 const listDirectory =
   vi.fn<(payload: FileBrowserListDirectoryPayload) => Promise<FileTreeNode[]>>();
@@ -15,6 +16,14 @@ vi.mock("@/clients/fileBrowserClient", () => ({
 }));
 
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
+
+function wtSource(worktreeId: string): FileBrowserSource {
+  return { kind: "worktree", worktreeId, basePath: `/repo/${worktreeId}` };
+}
+
+function wsSource(basePath = "/scratches/one"): FileBrowserSource {
+  return { kind: "workspace", basePath };
+}
 
 function dir(path: string): FileTreeNode {
   return { name: path.split("/").pop()!, path, isDirectory: true };
@@ -45,7 +54,7 @@ describe("useFileBrowserTree", () => {
 
     const { result } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: [],
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -63,7 +72,7 @@ describe("useFileBrowserTree", () => {
 
     renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: [],
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -78,7 +87,7 @@ describe("useFileBrowserTree", () => {
   it("makes no request at all without a worktree", () => {
     const { result } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: undefined,
+        source: null,
         expandedPaths: [],
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -100,7 +109,7 @@ describe("useFileBrowserTree", () => {
     const { result, rerender } = renderHook(
       (props: { expandedPaths: string[] }) =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: props.expandedPaths,
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -123,7 +132,7 @@ describe("useFileBrowserTree", () => {
 
     renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         // A restored panel remembers `src/lib`, but `src` is not expanded, so
         // no row for `src/lib` can exist yet.
         expandedPaths: ["src/lib"],
@@ -145,7 +154,7 @@ describe("useFileBrowserTree", () => {
     const { result, rerender } = renderHook(
       (props: { changeTick: number | undefined }) =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: ["src"],
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -174,7 +183,7 @@ describe("useFileBrowserTree", () => {
     const { result, rerender } = renderHook(
       (props: { changeTick: number }) =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: [],
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -198,7 +207,7 @@ describe("useFileBrowserTree", () => {
 
     const { result } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: [],
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -226,7 +235,7 @@ describe("useFileBrowserTree", () => {
 
     const { result } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: ["src"],
         // Visibility is on, yet the request must stay raw: filtering is now the
         // client's job, so no listing may carry an includeIgnored-style flag.
@@ -251,7 +260,7 @@ describe("useFileBrowserTree", () => {
     const { result, rerender } = renderHook(
       (props: { hideDotfiles: boolean }) =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: [],
           hideDotfiles: props.hideDotfiles,
           alwaysHiddenPatterns: [],
@@ -275,7 +284,7 @@ describe("useFileBrowserTree", () => {
 
     const { result } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: [],
         hideDotfiles: false,
         alwaysHiddenPatterns: [".DS_Store"],
@@ -295,7 +304,7 @@ describe("useFileBrowserTree", () => {
     const { result, rerender } = renderHook(
       (props: { hideDotfiles: boolean }) =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: [],
           hideDotfiles: props.hideDotfiles,
           alwaysHiddenPatterns: [],
@@ -327,7 +336,7 @@ describe("useFileBrowserTree", () => {
 
     const { result } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: [],
         // Independent of the toggle's own state: even with dotfiles hidden, the
         // affordance needs to know something is there to reveal.
@@ -346,7 +355,7 @@ describe("useFileBrowserTree", () => {
 
     const { result } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: [],
         hideDotfiles: true,
         alwaysHiddenPatterns: [".DS_Store"],
@@ -368,7 +377,7 @@ describe("useFileBrowserTree", () => {
 
     const { result } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: ["src"],
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -390,7 +399,7 @@ describe("useFileBrowserTree", () => {
     const { result, rerender } = renderHook(
       (props: { changeTick: number }) =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: [],
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -422,7 +431,7 @@ describe("useFileBrowserTree", () => {
     const { result, rerender } = renderHook(
       (props: { changeTick: number }) =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: [],
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -469,7 +478,7 @@ describe("useFileBrowserTree", () => {
 
     renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: rootEntries.map((node) => node.path),
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -497,7 +506,7 @@ describe("useFileBrowserTree", () => {
     const { result, rerender } = renderHook(
       (props: { expandedPaths: string[] }) =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: props.expandedPaths,
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -539,7 +548,7 @@ describe("useFileBrowserTree", () => {
 
     const { unmount } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: rootEntries.map((node) => node.path),
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -567,7 +576,7 @@ describe("useFileBrowserTree", () => {
     const { result, rerender } = renderHook(
       (props: { worktreeId: string }) =>
         useFileBrowserTree({
-          worktreeId: props.worktreeId,
+          source: wtSource(props.worktreeId),
           expandedPaths: [],
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -597,7 +606,7 @@ describe("useFileBrowserTree", () => {
 
     const { result } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: [],
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -607,7 +616,10 @@ describe("useFileBrowserTree", () => {
     );
 
     await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
-    expect(listDirectory.mock.calls[0]?.[0]).toEqual({ worktreeId: "wt-1", dirPath: "src/panels" });
+    expect(listDirectory.mock.calls[0]?.[0]).toEqual({
+      worktreeId: "wt-1",
+      dirPath: "src/panels",
+    });
     expect(result.current.rows.map((row) => row.path)).toEqual(["src/panels/registry.tsx"]);
   });
 
@@ -622,7 +634,7 @@ describe("useFileBrowserTree", () => {
     const { result, rerender } = renderHook(
       (props: { rootPath: string }) =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: [],
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -664,7 +676,7 @@ describe("useFileBrowserTree", () => {
 
     const { result } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         // `other` survives in panel data from before the re-root; requesting it
         // would spend the channel budget on rows that can never render.
         expandedPaths: ["other"],
@@ -719,7 +731,7 @@ describe("useFileBrowserTree", () => {
 
       const { result } = renderHook(() =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: [],
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -746,7 +758,7 @@ describe("useFileBrowserTree", () => {
 
       const { result } = renderHook(() =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: [],
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -804,7 +816,7 @@ describe("useFileBrowserTree", () => {
 
       const { result } = renderHook(() =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: [],
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -856,7 +868,7 @@ describe("useFileBrowserTree", () => {
 
       const { unmount } = renderHook(() =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: [],
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -884,7 +896,7 @@ describe("useFileBrowserTree", () => {
 
       const { result } = renderHook(() =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: [],
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -929,7 +941,7 @@ describe("useFileBrowserTree", () => {
       const { result, rerender } = renderHook(
         (props: { worktreeId: string }) =>
           useFileBrowserTree({
-            worktreeId: props.worktreeId,
+            source: wtSource(props.worktreeId),
             expandedPaths: [],
             hideDotfiles: false,
             alwaysHiddenPatterns: [],
@@ -970,7 +982,7 @@ describe("useFileBrowserTree", () => {
 
     const { result } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: [],
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -1001,7 +1013,7 @@ describe("useFileBrowserTree", () => {
     const { result, rerender } = renderHook(
       (props: { changeTick: number }) =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: [],
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -1031,7 +1043,7 @@ describe("useFileBrowserTree", () => {
 
     const { result } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: [],
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -1060,7 +1072,7 @@ describe("useFileBrowserTree", () => {
     const { result, rerender } = renderHook(
       (props: { changeTick: number }) =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: [],
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -1109,7 +1121,7 @@ describe("useFileBrowserTree", () => {
     const { result, rerender } = renderHook(
       (props: { worktreeId: string }) =>
         useFileBrowserTree({
-          worktreeId: props.worktreeId,
+          source: wtSource(props.worktreeId),
           expandedPaths: [],
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -1146,6 +1158,7 @@ describe("stale-while-revalidate seeding (#11367)", () => {
 
   const snapshot = {
     worktreeId: "wt-1",
+    basePath: "/repo/wt-1",
     rootPath: "",
     listings: [
       {
@@ -1171,7 +1184,7 @@ describe("stale-while-revalidate seeding (#11367)", () => {
 
     const { result } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: ["src"],
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -1209,7 +1222,7 @@ describe("stale-while-revalidate seeding (#11367)", () => {
     const renderPasses: string[][] = [];
     function Probe() {
       const { rows } = useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: ["src"],
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -1229,7 +1242,7 @@ describe("stale-while-revalidate seeding (#11367)", () => {
 
     const otherWorktree = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-2",
+        source: wtSource("wt-2"),
         expandedPaths: [],
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -1242,7 +1255,7 @@ describe("stale-while-revalidate seeding (#11367)", () => {
 
     const otherRoot = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: [],
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -1261,7 +1274,7 @@ describe("stale-while-revalidate seeding (#11367)", () => {
 
     const { result } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: "wt-1",
+        source: wtSource("wt-1"),
         expandedPaths: [],
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -1283,6 +1296,7 @@ describe("stale-while-revalidate seeding (#11367)", () => {
     // Size is filesystem metadata, not structure — it must not persist.
     expect(result.current.captureSnapshot()).toEqual({
       worktreeId: "wt-1",
+      basePath: "/repo/wt-1",
       rootPath: "",
       listings: [
         {
@@ -1299,7 +1313,7 @@ describe("stale-while-revalidate seeding (#11367)", () => {
   it("captures nothing without a worktree", () => {
     const { result } = renderHook(() =>
       useFileBrowserTree({
-        worktreeId: undefined,
+        source: null,
         expandedPaths: [],
         hideDotfiles: false,
         alwaysHiddenPatterns: [],
@@ -1331,7 +1345,7 @@ describe("stale-while-revalidate seeding (#11367)", () => {
 
       const { result } = renderHook(() =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: ["src"],
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
@@ -1379,13 +1393,14 @@ describe("stale-while-revalidate seeding (#11367)", () => {
 
       renderHook(() =>
         useFileBrowserTree({
-          worktreeId: "wt-1",
+          source: wtSource("wt-1"),
           expandedPaths: dirNames,
           hideDotfiles: false,
           alwaysHiddenPatterns: [],
           changeTick: undefined,
           treeSnapshot: {
             worktreeId: "wt-1",
+            basePath: "/repo/wt-1",
             rootPath: "",
             listings: [
               {
@@ -1412,5 +1427,117 @@ describe("stale-while-revalidate seeding (#11367)", () => {
       const nextCall = listDirectory.mock.calls[callsBeforeSlotFrees];
       expect(nextCall?.[0].dirPath).toBeUndefined();
     });
+  });
+});
+
+/**
+ * #11482: a workspace source names no root over IPC at all — main derives it
+ * from the sender's own binding, which is what keeps a renderer unable to ask
+ * for a folder its view isn't bound to.
+ */
+describe("workspace source", () => {
+  beforeEach(() => {
+    listDirectory.mockReset();
+  });
+
+  it("sends no worktreeId when listing a workspace root", async () => {
+    listDirectory.mockResolvedValue([file("notes.md")]);
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        source: wsSource(),
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+      })
+    );
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+    expect(listDirectory.mock.calls[0]?.[0]).toEqual({});
+    expect(result.current.rows.map((row) => row.path)).toEqual(["notes.md"]);
+  });
+
+  it("sends only dirPath for a nested workspace directory", async () => {
+    listDirectory.mockResolvedValue([]);
+
+    renderHook(() =>
+      useFileBrowserTree({
+        source: wsSource(),
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        rootPath: "sub",
+        changeTick: undefined,
+      })
+    );
+
+    await waitFor(() => expect(listDirectory).toHaveBeenCalled());
+    expect(listDirectory.mock.calls[0]?.[0]).toEqual({ dirPath: "sub" });
+  });
+
+  it("captures a snapshot tagged with the base and no worktree id", async () => {
+    listDirectory.mockResolvedValue([file("notes.md")]);
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        source: wsSource(),
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+      })
+    );
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+    expect(result.current.captureSnapshot()).toMatchObject({
+      basePath: "/scratches/one",
+      rootPath: "",
+    });
+    expect(result.current.captureSnapshot()?.worktreeId).toBeUndefined();
+  });
+
+  it("re-lists the whole tree when a workspace root moves", async () => {
+    listDirectory.mockResolvedValue([]);
+
+    const { rerender } = renderHook(
+      (props: { basePath: string }) =>
+        useFileBrowserTree({
+          source: wsSource(props.basePath),
+          expandedPaths: [],
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
+          changeTick: undefined,
+        }),
+      { initialProps: { basePath: "/scratches/one" } }
+    );
+
+    await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(1));
+    // The base is the workspace's identity, so a move is a full reset — the
+    // old folder's listings mean nothing to the new one.
+    rerender({ basePath: "/scratches/two" });
+    await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(2));
+  });
+
+  it("does not re-list on a re-render that rebuilds an equivalent source", async () => {
+    listDirectory.mockResolvedValue([]);
+
+    const { rerender } = renderHook(() =>
+      useFileBrowserTree({
+        // A fresh object every render, as the pane produces.
+        source: wsSource(),
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+      })
+    );
+
+    await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(1));
+    rerender();
+    rerender();
+    // Identity is the derived key, not the object reference — otherwise every
+    // render would reset the tree.
+    expect(listDirectory).toHaveBeenCalledTimes(1);
   });
 });

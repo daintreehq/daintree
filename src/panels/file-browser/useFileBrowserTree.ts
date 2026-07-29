@@ -12,6 +12,9 @@ import {
   pruneListings,
   refreshTargets,
   snapshotFromListings,
+  snapshotMatchesSource,
+  sourceIdentityKey,
+  type FileBrowserSource,
   type FlatTreeRow,
 } from "./fileBrowserTree";
 
@@ -45,16 +48,17 @@ const MAX_CONCURRENT_LISTINGS = 6;
 const ROOT_RETRY_DELAYS_MS = [150, 400, 800] as const;
 
 export interface UseFileBrowserTreeArgs {
-  worktreeId: string | undefined;
+  /** What the tree is rooted at; null while nothing resolves (no tree, no fetches). */
+  source: FileBrowserSource | null;
   expandedPaths: readonly string[];
   /** Hide dot-prefixed entries (the per-panel toggle). */
   hideDotfiles: boolean;
   /** App-global always-hidden basename globs (the junk list). */
   alwaysHiddenPatterns: readonly string[];
   /**
-   * Worktree-relative directory to root the tree at; "" = the worktree root.
-   * Changing it is an identity reset, the same as switching worktrees: every
-   * listing outside the new root is meaningless to the new tree.
+   * Directory to root the tree at, relative to the source base; "" = the base
+   * itself. Changing it is an identity reset, the same as switching sources:
+   * every listing outside the new root is meaningless to the new tree.
    */
   rootPath?: string;
   /**
@@ -62,12 +66,18 @@ export interface UseFileBrowserTreeArgs {
    * upstream by the worktree watcher's adaptive burst debounce, so a bulk write
    * (`npm install`, a generated asset batch) arrives as one tick rather than
    * hundreds — the tree does not need its own debounce on top.
+   *
+   * Always undefined for a `workspace` source: both tick sources are keyed by
+   * worktree id in the worktree store, and a scratch or worktree-less project
+   * has no entry there. Those roots are refresh-on-demand by design (#11482) —
+   * wiring a passive tick for them needs a watcher lifecycle of its own, which
+   * is deliberately not in scope here.
    */
   changeTick: number | undefined;
   /**
    * Last-known tree structure from the panel record (#11367). When it matches
    * the current identity, the identity reset seeds the listings from it and
-   * paints instantly while the live refresh runs; a mismatch (other worktree,
+   * paints instantly while the live refresh runs; a mismatch (other source,
    * other root) is ignored and the tree cold-starts as before.
    */
   treeSnapshot?: FileBrowserTreeSnapshot;
@@ -134,7 +144,7 @@ interface RootRetryState {
  * dialog → grid promotion, which remounts this hook under the same panel id.
  */
 export function useFileBrowserTree({
-  worktreeId,
+  source,
   expandedPaths,
   hideDotfiles,
   alwaysHiddenPatterns,
@@ -142,6 +152,14 @@ export function useFileBrowserTree({
   changeTick,
   treeSnapshot,
 }: UseFileBrowserTreeArgs): UseFileBrowserTreeResult {
+  // A primitive standing in for `source` in effect dependency lists: the pane
+  // rebuilds the object every render, so depending on it directly would reset
+  // the tree's identity on each pass.
+  const sourceKey = sourceIdentityKey(source);
+  // The identity effects below run off `sourceKey`; this keeps the object
+  // reachable inside them without widening their dependencies.
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
   // Seeded via lazy initializers, not just the identity effect: passive
   // effects run after paint, so an effect-only seed would commit one loading
   // frame before the last-known tree appears — the exact flash #11367 exists
@@ -149,7 +167,7 @@ export function useFileBrowserTree({
   // StrictMode's double-invoke is harmless; identity *changes* re-seed in the
   // identity-reset effect below.
   const [listings, setListings] = useState<Map<string, readonly FileTreeNode[]>>(
-    () => seedListings(treeSnapshot, worktreeId, rootPath) ?? new Map()
+    () => seedListings(treeSnapshot, source, rootPath) ?? new Map()
   );
   const [loadingPaths, setLoadingPaths] = useState<ReadonlySet<string>>(new Set());
   const [rootError, setRootError] = useState<string | null>(null);
@@ -159,7 +177,7 @@ export function useFileBrowserTree({
   // the *live* root lands: the seeded tree suppresses the skeleton, while
   // change-tick deferral and the expansion effect still wait for real data.
   const [hasSeededRoot, setHasSeededRoot] = useState(
-    () => seedListings(treeSnapshot, worktreeId, rootPath) !== null
+    () => seedListings(treeSnapshot, source, rootPath) !== null
   );
   // True from a manual refresh press until its listings fully drain. A ref
   // mirrors it so the drain check in `pump` (which runs off refs, not state)
@@ -259,7 +277,8 @@ export function useFileBrowserTree({
 
   const fetchDirectory = useCallback(
     async (dirPath: string, generation: number): Promise<void> => {
-      if (!worktreeId || disposedRef.current) return;
+      const activeSource = sourceRef.current;
+      if (!activeSource || disposedRef.current) return;
       inFlightRef.current.set(dirPath, generation);
       physicalInFlightRef.current += 1;
       setLoadingPaths((previous) => {
@@ -269,8 +288,11 @@ export function useFileBrowserTree({
       });
 
       try {
+        // A workspace source names no root at all: main derives it from the
+        // sender's own binding, so omitting the id is what keeps the renderer
+        // unable to ask for a folder its view isn't bound to (#11482).
         const nodes = await fileBrowserClient.listDirectory({
-          worktreeId,
+          ...(activeSource.kind === "worktree" && { worktreeId: activeSource.worktreeId }),
           ...(dirPath !== "" && { dirPath }),
         });
         if (generation !== generationRef.current) return;
@@ -368,7 +390,7 @@ export function useFileBrowserTree({
         pumpRef.current();
       }
     },
-    [worktreeId, rootPath, clearRootRetryTimer, resetRootRetryState]
+    [sourceKey, rootPath, clearRootRetryTimer, resetRootRetryState]
   );
 
   const pump = useCallback((): void => {
@@ -441,7 +463,7 @@ export function useFileBrowserTree({
     return () => {
       clearRootRetryTimer();
     };
-  }, [worktreeId, rootPath, clearRootRetryTimer]);
+  }, [sourceKey, rootPath, clearRootRetryTimer]);
 
   useEffect(() => {
     disposedRef.current = false;
@@ -517,14 +539,14 @@ export function useFileBrowserTree({
     // from the empty map and the skeleton, exactly as before. On mount this
     // re-derives what the lazy initializers already seeded (same content),
     // which keeps a single code path for mount and identity change.
-    const seeded = seedListings(treeSnapshotRef.current, worktreeId, rootPath);
+    const seeded = seedListings(treeSnapshotRef.current, sourceRef.current, rootPath);
     const seededRoot = seeded !== null;
     setListings(seeded ?? new Map());
     setLoadingPaths(new Set());
     setRootError(null);
     setHasLoadedRoot(false);
     setHasSeededRoot(seededRoot);
-    if (!worktreeId) return;
+    if (!sourceRef.current) return;
     if (seeded !== null) {
       // Revalidate everything the seed painted — the root plus every seeded
       // expanded directory — through the shared queue so a wide restored tree
@@ -538,7 +560,7 @@ export function useFileBrowserTree({
     } else {
       void fetchDirectory(rootPath, generationRef.current);
     }
-  }, [worktreeId, rootPath, fetchDirectory, resetRootRetryState, enqueueTargets]);
+  }, [sourceKey, rootPath, fetchDirectory, resetRootRetryState, enqueueTargets]);
 
   // Expanding a directory is what triggers its fetch; a restored panel expands
   // several at once, and each is requested the first time it becomes visible.
@@ -601,15 +623,16 @@ export function useFileBrowserTree({
   }, [listings, rootPath, alwaysHiddenPatterns]);
 
   const captureSnapshot = useCallback((): FileBrowserTreeSnapshot | null => {
-    if (!worktreeId) return null;
-    return snapshotFromListings(listingsRef.current, worktreeId, rootPath);
-  }, [worktreeId, rootPath]);
+    const activeSource = sourceRef.current;
+    if (!activeSource) return null;
+    return snapshotFromListings(listingsRef.current, activeSource, rootPath);
+  }, [rootPath]);
 
   return {
     rows,
     // A seeded tree is content, not loading: the skeleton is reserved for
     // genuinely having nothing to paint (#11367).
-    isInitialLoading: Boolean(worktreeId) && !hasLoadedRoot && !hasSeededRoot,
+    isInitialLoading: source !== null && !hasLoadedRoot && !hasSeededRoot,
     rootError,
     hasHiddenDotfiles,
     ensureLoaded,
@@ -626,15 +649,10 @@ export function useFileBrowserTree({
  */
 function seedListings(
   snapshot: FileBrowserTreeSnapshot | undefined,
-  worktreeId: string | undefined,
+  source: FileBrowserSource | null,
   rootPath: string
 ): Map<string, readonly FileTreeNode[]> | null {
-  if (
-    worktreeId === undefined ||
-    snapshot === undefined ||
-    snapshot.worktreeId !== worktreeId ||
-    snapshot.rootPath !== rootPath
-  ) {
+  if (!source || snapshot === undefined || !snapshotMatchesSource(snapshot, source, rootPath)) {
     return null;
   }
   const seeded = listingsFromSnapshot(snapshot);

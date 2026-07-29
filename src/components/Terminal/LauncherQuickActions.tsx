@@ -1,5 +1,7 @@
 import { useMemo } from "react";
-import { SquareTerminal, Search } from "lucide-react";
+// `FolderTree` is the file browser's own icon, imported from lucide directly
+// the same way `FileBrowserPane` does — it has no alias in the icons index.
+import { SquareTerminal, Search, FolderTree } from "lucide-react";
 import { KbdChord } from "@/components/ui/Kbd";
 import { useEffectiveCombo, useAriaKeyshortcuts } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
@@ -150,6 +152,15 @@ export function LauncherQuickActions() {
           label="New terminal"
           actionId="terminal.new"
           onClick={() => dispatch("terminal.new")}
+        />
+        {/* No args: the action resolves its own target — the focused worktree,
+            or the workspace root in a scratch or worktree-less project
+            (#11482), which is exactly where this launcher is shown. */}
+        <QuickAction
+          icon={<FolderTree className="h-4 w-4" />}
+          label="Browse files"
+          actionId="worktree.openFileBrowser"
+          onClick={() => dispatch("worktree.openFileBrowser")}
         />
       </div>
       <PaletteSearchButton />

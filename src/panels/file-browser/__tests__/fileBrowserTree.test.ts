@@ -15,6 +15,9 @@ import {
   refreshTargets,
   resolveTreeKey,
   snapshotFromListings,
+  snapshotMatchesSource,
+  sourceIdentityKey,
+  type FileBrowserSource,
   type FlatTreeRow,
 } from "../fileBrowserTree";
 
@@ -483,6 +486,9 @@ describe("isRowPathVisible", () => {
   });
 });
 
+const WT_SOURCE = { kind: "worktree", worktreeId: "wt-1", basePath: "/repo" } as const;
+const WS_SOURCE = { kind: "workspace", basePath: "/scratch/abc" } as const;
+
 describe("snapshotFromListings", () => {
   it("captures structure only — size and children never reach the snapshot", () => {
     const listings = listingsOf({
@@ -490,10 +496,11 @@ describe("snapshotFromListings", () => {
       src: [{ name: "app.ts", path: "src/app.ts", isDirectory: false, size: 99, children: [] }],
     });
 
-    const snapshot = snapshotFromListings(listings, "wt-1", "");
+    const snapshot = snapshotFromListings(listings, WT_SOURCE, "");
 
     expect(snapshot).toEqual({
       worktreeId: "wt-1",
+      basePath: "/repo",
       rootPath: "",
       listings: [
         {
@@ -513,14 +520,15 @@ describe("snapshotFromListings", () => {
 
   it("returns null before the root listing has ever arrived", () => {
     // Only a non-root directory somehow present: nothing worth painting from.
-    expect(snapshotFromListings(listingsOf({ src: [file("src/app.ts")] }), "wt-1", "")).toBeNull();
-    expect(snapshotFromListings(new Map(), "wt-1", "")).toBeNull();
+    expect(snapshotFromListings(listingsOf({ src: [file("src/app.ts")] }), WT_SOURCE, "")).toBeNull();
+    expect(snapshotFromListings(new Map(), WT_SOURCE, "")).toBeNull();
   });
 
   it("keeps an empty root listing — an empty worktree is a real last-known state", () => {
-    const snapshot = snapshotFromListings(listingsOf({ "": [] }), "wt-1", "");
+    const snapshot = snapshotFromListings(listingsOf({ "": [] }), WT_SOURCE, "");
     expect(snapshot).toEqual({
       worktreeId: "wt-1",
+      basePath: "/repo",
       rootPath: "",
       listings: [{ dirPath: "", nodes: [] }],
     });
@@ -539,14 +547,14 @@ describe("snapshotFromListings", () => {
     ]);
 
     // The persistence layer's dirty diff depends on this to skip no-op writes.
-    expect(snapshotFromListings(a, "wt-1", "")).toEqual(snapshotFromListings(b, "wt-1", ""));
+    expect(snapshotFromListings(a, WT_SOURCE, "")).toEqual(snapshotFromListings(b, WT_SOURCE, ""));
   });
 
   it("returns null rather than truncating when the tree exceeds the persistence bounds", () => {
     const wideRoot = listingsOf({
       "": Array.from({ length: MAX_SNAPSHOT_NODES + 1 }, (_, i) => file(`f-${i}`)),
     });
-    expect(snapshotFromListings(wideRoot, "wt-1", "")).toBeNull();
+    expect(snapshotFromListings(wideRoot, WT_SOURCE, "")).toBeNull();
 
     const manyListings = new Map([
       ["", [dir("d-0")]],
@@ -555,7 +563,7 @@ describe("snapshotFromListings", () => {
         [],
       ]),
     ]);
-    expect(snapshotFromListings(manyListings, "wt-1", "")).toBeNull();
+    expect(snapshotFromListings(manyListings, WT_SOURCE, "")).toBeNull();
   });
 
   it("returns null when aggregate text exceeds the byte budget, independent of node count", () => {
@@ -565,16 +573,72 @@ describe("snapshotFromListings", () => {
     const listings = listingsOf({
       "": Array.from({ length: 100 }, (_, i) => file(`${longName}-${i}`)),
     });
-    expect(snapshotFromListings(listings, "wt-1", "")).toBeNull();
+    expect(snapshotFromListings(listings, WT_SOURCE, "")).toBeNull();
   });
 
   it("captures relative to a re-rooted browse root", () => {
     const listings = listingsOf({ src: [file("src/app.ts")] });
-    const snapshot = snapshotFromListings(listings, "wt-1", "src");
+    const snapshot = snapshotFromListings(listings, WT_SOURCE, "src");
     expect(snapshot?.rootPath).toBe("src");
     expect(snapshot?.listings).toEqual([
       { dirPath: "src", nodes: [{ name: "app.ts", path: "src/app.ts", isDirectory: false }] },
     ]);
+  });
+
+  it("tags a workspace capture with its base and no worktree id", () => {
+    const snapshot = snapshotFromListings(listingsOf({ "": [file("a.txt")] }), WS_SOURCE, "");
+    // The absent worktree id is the identity, not a missing field: it is what
+    // distinguishes a workspace-rooted snapshot from a worktree one (#11482).
+    expect(snapshot?.worktreeId).toBeUndefined();
+    expect(snapshot?.basePath).toBe("/scratch/abc");
+  });
+});
+
+describe("snapshotMatchesSource", () => {
+  const snapshotOf = (source: FileBrowserSource, rootPath = "") =>
+    snapshotFromListings(listingsOf({ [rootPath]: [file("a.txt")] }), source, rootPath)!;
+
+  it("matches a snapshot against the identity it was captured under", () => {
+    expect(snapshotMatchesSource(snapshotOf(WT_SOURCE), WT_SOURCE, "")).toBe(true);
+    expect(snapshotMatchesSource(snapshotOf(WS_SOURCE), WS_SOURCE, "")).toBe(true);
+  });
+
+  it("refuses to seed a workspace tree from a worktree snapshot and vice versa", () => {
+    // Both live on the same panel record across a re-root, so a cross-kind
+    // seed would paint another folder's entries as this one's.
+    expect(snapshotMatchesSource(snapshotOf(WT_SOURCE), WS_SOURCE, "")).toBe(false);
+    expect(snapshotMatchesSource(snapshotOf(WS_SOURCE), WT_SOURCE, "")).toBe(false);
+  });
+
+  it("refuses a workspace snapshot whose base has moved", () => {
+    // A relocated project keeps its id, so the base is the only thing that
+    // catches it; cold-starting is the correct self-healing outcome.
+    const moved = { kind: "workspace", basePath: "/scratch/moved" } as const;
+    expect(snapshotMatchesSource(snapshotOf(WS_SOURCE), moved, "")).toBe(false);
+  });
+
+  it("accepts a legacy snapshot that predates the base tag", () => {
+    // Written before `basePath` existed; its worktree id already pins identity,
+    // so dropping it would cost every restored panel its instant paint.
+    const { basePath: _dropped, ...legacy } = snapshotOf(WT_SOURCE);
+    expect(snapshotMatchesSource(legacy, WT_SOURCE, "")).toBe(true);
+  });
+
+  it("refuses a snapshot captured at a different browse root", () => {
+    expect(snapshotMatchesSource(snapshotOf(WT_SOURCE, "src"), WT_SOURCE, "")).toBe(false);
+  });
+});
+
+describe("sourceIdentityKey", () => {
+  it("separates a worktree from a workspace sharing the same path", () => {
+    // The kind is part of the key so opening a project root and a worktree
+    // that happens to live at the same path aren't one identity.
+    const key = sourceIdentityKey({ kind: "worktree", worktreeId: "/repo", basePath: "/repo" });
+    expect(key).not.toBe(sourceIdentityKey({ kind: "workspace", basePath: "/repo" }));
+  });
+
+  it("is null with no source, so nothing resets against a stale key", () => {
+    expect(sourceIdentityKey(null)).toBeNull();
   });
 });
 
@@ -585,7 +649,7 @@ describe("listingsFromSnapshot", () => {
       src: [file("src/app.ts")],
     });
 
-    const snapshot = snapshotFromListings(listings, "wt-1", "");
+    const snapshot = snapshotFromListings(listings, WT_SOURCE, "");
     const restored = listingsFromSnapshot(snapshot!);
 
     // The restored map must flatten to the same rows the live tree showed.
