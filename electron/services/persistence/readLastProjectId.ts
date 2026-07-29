@@ -98,18 +98,19 @@ export function readLastActiveProjectIdentitySync(
  * constructed around it. Records for the project picker (`projectId: null`)
  * always survive.
  *
- * `hadManifest` is reported separately from `records` on purpose: a readable
- * manifest whose every project has since been deleted filters down to an empty
- * list, and that is NOT the same as having no manifest at all. Collapsing the
- * two would let the caller fall back to the global last-active project — which
- * is precisely the "silently opened a different project" behaviour the restore
- * is required to avoid.
+ * `hadManifest` is reported separately from `records` on purpose: a manifest
+ * that named windows whose every project has since been deleted filters down to
+ * an empty list, and that is NOT the same as having no manifest at all.
+ * Collapsing the two would let the caller fall back to the global last-active
+ * project — which is precisely the "silently opened a different project"
+ * behaviour the restore is required to avoid.
  *
- * Both fields report nothing on first launch, corrupt DB, corrupt manifest, or
- * any error, so the caller opens a single window seeded the old way.
+ * Both fields report nothing on first launch, corrupt DB, corrupt manifest, a
+ * manifest that named zero windows, or any error, so the caller opens a single
+ * window seeded the old way.
  */
 export interface OpenWindowsManifestRead {
-  /** A structurally valid manifest was stored, whatever survived filtering. */
+  /** A manifest naming at least one window was stored, whatever survived filtering. */
   hadManifest: boolean;
   /** Windows still restorable, most-recently-focused first. */
   records: OpenWindowRecord[];
@@ -131,15 +132,17 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
         .prepare("SELECT value FROM app_state WHERE key = ?")
         .get(OPEN_WINDOWS_KEY) as { value: string } | undefined;
 
-      // Readability is asked separately from the record count: a manifest that
-      // legitimately names zero windows (the user closed them all) must not be
-      // mistaken for having no manifest, or the launch falls back to the global
-      // last-active project.
-      const hadManifest = isReadableOpenWindowsManifest(row?.value ?? null);
-      if (!hadManifest) return NO_MANIFEST;
+      // Two ways to have nothing to restore, both of which fall back to the
+      // global last-active project. Unreadable is corruption. Empty is the
+      // Windows/Linux quit gesture: closing the last window fires its `closed`
+      // save before `window-all-closed` reaches `app.quit()`, so the stored
+      // manifest names zero windows even though the user never asked for a
+      // picker. `hadManifest: true` below therefore means exactly one thing —
+      // the manifest named windows, and project deletion emptied it.
+      if (!isReadableOpenWindowsManifest(row?.value ?? null)) return NO_MANIFEST;
 
       const records = parseOpenWindowsManifest(row?.value ?? null);
-      if (records.length === 0) return { hadManifest: true, records: [] };
+      if (records.length === 0) return NO_MANIFEST;
 
       const projectIds = [...new Set(records.map((r) => r.projectId).filter((id) => id !== null))];
       if (projectIds.length === 0) return { hadManifest: true, records };

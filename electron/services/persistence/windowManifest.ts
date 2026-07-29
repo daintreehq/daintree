@@ -53,14 +53,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Whether `raw` is a manifest this version can read — regardless of how many
  * windows survive entry validation.
  *
- * Separate from the record count because "no manifest" and "a manifest naming
- * zero windows" lead to different launches: the first falls back to the global
- * last-active project, the second must not. Closing every window persists an
- * empty manifest, so this is a state users reach, not a theoretical one.
+ * An empty window list is readable: it is a manifest, just one that named
+ * nothing. What that means for the launch is the reader's call, not this
+ * predicate's — `readOpenWindowsManifestSync` treats it as no manifest, because
+ * closing the last window is the quit gesture on Windows and Linux and persists
+ * exactly this shape.
  *
  * All-malformed entries deliberately read as unreadable rather than empty: that
- * is corrupt data, and the friendlier answer to corruption is the old
- * single-window behaviour, not a bare project picker.
+ * is corrupt data, and keeping it distinguishable from an intentional shape is
+ * what lets the corruption matrix be tested without a DB.
  */
 export function isReadableOpenWindowsManifest(raw: string | null | undefined): boolean {
   if (!raw) return false;

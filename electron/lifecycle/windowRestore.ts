@@ -16,8 +16,10 @@ export interface RestoreWindowFleetDeps {
   /** Windows to restore, most-recently-focused first. Empty means one window. */
   records: OpenWindowRecord[];
   /**
-   * Whether a structurally valid manifest was stored at all — distinct from
-   * whether anything in it survived project-existence filtering.
+   * Whether a stored manifest named at least one window — distinct from whether
+   * any of those windows survived project-existence filtering. A manifest that
+   * was stored naming zero windows reports false; see
+   * `readOpenWindowsManifestSync`.
    */
   hadManifest: boolean;
   /**
@@ -37,11 +39,15 @@ export interface RestoreWindowFleetDeps {
 /**
  * Which project the focused window opens on.
  *
- * A manifest that existed but filtered down to nothing resolves to `undefined`
- * — a project picker — never to `fallbackProjectId`. Falling back there would
- * open a project the user's window set never named, which is the one outcome
- * the issue rules out explicitly: a project that can no longer be restored is
- * skipped, never silently replaced by a different one.
+ * A manifest that named windows but filtered down to nothing resolves to
+ * `undefined` — a project picker — never to `fallbackProjectId`. Falling back
+ * there would open a project the user's window set never named, which is the
+ * one outcome the issue rules out explicitly: a project that can no longer be
+ * restored is skipped, never silently replaced by a different one.
+ *
+ * `hadManifest` is false both when nothing was stored and when what was stored
+ * named zero windows, so closing every window still relaunches into the
+ * last-active project rather than a picker.
  */
 export function resolvePrimaryRestoreProjectId(
   records: OpenWindowRecord[],

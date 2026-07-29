@@ -32,6 +32,7 @@ vi.mock("better-sqlite3", () => ({
   },
 }));
 
+import { resolvePrimaryRestoreProjectId } from "../../../lifecycle/windowRestore.js";
 import { readOpenWindowsManifestSync } from "../readLastProjectId.js";
 
 const manifestJson = (windows: unknown[]): string =>
@@ -128,10 +129,12 @@ describe("readOpenWindowsManifestSync", () => {
     expect(readOpenWindowsManifestSync()).toEqual({ hadManifest: true, records: [] });
   });
 
-  it("reports a manifest existed when it legitimately names zero windows", () => {
-    // Closing every window persists this; it must not read as "no manifest".
+  it("reports no manifest when the stored manifest names zero windows", () => {
+    // Closing the last window is the quit gesture on Windows and Linux, and its
+    // `closed` save persists exactly this before the shutdown freeze latches.
+    // Honouring it would put every relaunch on the project picker.
     withDb({ manifest: manifestJson([]) });
-    expect(readOpenWindowsManifestSync()).toEqual({ hadManifest: true, records: [] });
+    expect(readOpenWindowsManifestSync()).toEqual({ hadManifest: false, records: [] });
   });
 
   it("reports no manifest when every entry is malformed", () => {
@@ -213,5 +216,28 @@ describe("readOpenWindowsManifestSync", () => {
       throw new Error("no such table: projects");
     });
     expect(readOpenWindowsManifestSync()).toEqual({ hadManifest: false, records: [] });
+  });
+});
+
+// The reader's two "nothing to restore" answers look identical in isolation but
+// launch differently, so the pairing is asserted end to end rather than left to
+// the caller's reading of `hadManifest`.
+describe("the launch a stored manifest produces", () => {
+  const primaryProjectFor = (manifest: string): string | undefined => {
+    withDb({ manifest, existingProjectIds: ["a"] });
+    const { hadManifest, records } = readOpenWindowsManifestSync();
+    return resolvePrimaryRestoreProjectId(records, hadManifest, "last-active");
+  };
+
+  it("opens the last-active project when the manifest named zero windows", () => {
+    expect(primaryProjectFor(manifestJson([]))).toBe("last-active");
+  });
+
+  it("opens a picker when the manifest named only projects that are now deleted", () => {
+    expect(primaryProjectFor(manifestJson([{ projectId: "gone" }]))).toBeUndefined();
+  });
+
+  it("opens the manifest's own project when it still exists", () => {
+    expect(primaryProjectFor(manifestJson([{ projectId: "a" }]))).toBe("a");
   });
 });
