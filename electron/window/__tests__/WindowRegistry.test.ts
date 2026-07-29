@@ -688,4 +688,96 @@ describe("WindowRegistry", () => {
       expect(mockRevokeByWindowId).toHaveBeenCalledWith(202);
     });
   });
+
+  describe("focusOrder", () => {
+    const ids = (registry: WindowRegistry) => registry.focusOrder().map((c) => c.windowId);
+
+    it("returns nothing when no windows are registered", () => {
+      expect(new WindowRegistry().focusOrder()).toEqual([]);
+    });
+
+    it("orders focused windows most-recent-first", () => {
+      const registry = new WindowRegistry();
+      const app = makeMockApp();
+      registry.wireFocusTracking(app);
+      const w1 = makeMockWindow(1, 100);
+      const w2 = makeMockWindow(2, 200);
+      const w3 = makeMockWindow(3, 300);
+      registry.register(w1);
+      registry.register(w2);
+      registry.register(w3);
+
+      app.emit("browser-window-focus", {}, w1);
+      app.emit("browser-window-focus", {}, w3);
+      app.emit("browser-window-focus", {}, w2);
+
+      expect(ids(registry)).toEqual([2, 3, 1]);
+    });
+
+    it("moves a re-focused window back to the front without duplicating it", () => {
+      const registry = new WindowRegistry();
+      const app = makeMockApp();
+      registry.wireFocusTracking(app);
+      const w1 = makeMockWindow(1, 100);
+      const w2 = makeMockWindow(2, 200);
+      registry.register(w1);
+      registry.register(w2);
+
+      app.emit("browser-window-focus", {}, w1);
+      app.emit("browser-window-focus", {}, w2);
+      app.emit("browser-window-focus", {}, w1);
+
+      expect(ids(registry)).toEqual([1, 2]);
+    });
+
+    it("keeps never-focused windows rather than dropping them", () => {
+      // The open-window manifest describes every window and trims from the
+      // tail, so a restored background window absent from the focus history
+      // would be the first one silently lost.
+      const registry = new WindowRegistry();
+      const app = makeMockApp();
+      registry.wireFocusTracking(app);
+      const w1 = makeMockWindow(1, 100);
+      const w2 = makeMockWindow(2, 200);
+      const w3 = makeMockWindow(3, 300);
+      registry.register(w1);
+      registry.register(w2);
+      registry.register(w3);
+
+      app.emit("browser-window-focus", {}, w3);
+
+      expect(ids(registry)).toEqual([3, 1, 2]);
+    });
+
+    it("falls back to registration order when nothing has been focused", () => {
+      const registry = new WindowRegistry();
+      registry.register(makeMockWindow(1, 100));
+      registry.register(makeMockWindow(2, 200));
+
+      expect(ids(registry)).toEqual([1, 2]);
+    });
+
+    it("drops an unregistered window from the order", () => {
+      const registry = new WindowRegistry();
+      const app = makeMockApp();
+      registry.wireFocusTracking(app);
+      const w1 = makeMockWindow(1, 100);
+      const w2 = makeMockWindow(2, 200);
+      registry.register(w1);
+      registry.register(w2);
+      app.emit("browser-window-focus", {}, w1);
+      app.emit("browser-window-focus", {}, w2);
+
+      registry.unregister(2);
+
+      expect(ids(registry)).toEqual([1]);
+    });
+
+    it("returns the live context objects, so callers can read per-window services", () => {
+      const registry = new WindowRegistry();
+      const ctx = registry.register(makeMockWindow(1, 100));
+
+      expect(registry.focusOrder()[0]).toBe(ctx);
+    });
+  });
 });
