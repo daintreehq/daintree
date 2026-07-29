@@ -158,6 +158,24 @@ describe("worktree.openFileBrowser", () => {
       ).rejects.toThrow();
       expect(openPanelDialogMock).not.toHaveBeenCalled();
     });
+
+    it("throws for a stale focused worktree instead of widening to the project root", async () => {
+      // A deleted worktree can stay focused after its row is gone; falling
+      // through would silently browse the folder above it.
+      await expect(
+        getAction().run(undefined, {
+          focusedWorktreeId: "wt-deleted",
+          projectPath: "/folders/notes",
+        } as ActionContext)
+      ).rejects.toThrow(/Worktree not found/);
+      expect(openPanelDialogMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects an empty worktreeId rather than treating it as absent", () => {
+      // `""` is falsy, so a truthiness-based presence check would skip the
+      // unknown-worktree guard and open the workspace root instead.
+      expect(() => getAction().argsSchema!.parse({ worktreeId: "" })).toThrow();
+    });
   });
 
   describe("palette gate", () => {
@@ -169,6 +187,7 @@ describe("worktree.openFileBrowser", () => {
     };
 
     it("is ready for a worktree, a project or a scratch", () => {
+      seedWorktree("wt-1");
       expect(isReady({ focusedWorktreeId: "wt-1" } as ActionContext)).toBe(true);
       expect(isReady({ activeWorktreeId: "wt-1" } as ActionContext)).toBe(true);
       expect(isReady({ projectPath: "/folders/notes" } as ActionContext)).toBe(true);
@@ -179,11 +198,22 @@ describe("worktree.openFileBrowser", () => {
       expect(isReady({} as ActionContext)).toBe(false);
     });
 
-    it("gates the palette row rather than dispatch, so an explicit arg still runs", () => {
-      // `isEnabled` never sees args, so it would answer for the focused
-      // worktree instead — the reasoning `worktree.openChanges` spells out.
-      expect(getAction().isEnabled).toBeUndefined();
-      expect(getAction().palette?.mode).toBe("requireContext");
+    it("gates the palette row rather than dispatch, so an explicit arg still runs", async () => {
+      // `isEnabled` would gate dispatch from ActionContext alone and never see
+      // args, refusing an explicit worktree while an empty context held focus.
+      // Asserted behaviorally: empty context is not palette-ready, yet the same
+      // empty context still dispatches an explicit worktree successfully.
+      seedWorktree("wt-1");
+      expect(isReady({} as ActionContext)).toBe(false);
+
+      await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
+      expect(dialogOptions()).toMatchObject({ worktreeId: "wt-1" });
+    });
+
+    it("is not ready for a focused worktree that no longer exists", () => {
+      // A stale id now makes `run` throw, so a readiness check that only tested
+      // for a non-empty string would enable a row that cannot open anything.
+      expect(isReady({ focusedWorktreeId: "wt-gone" } as ActionContext)).toBe(false);
     });
   });
 

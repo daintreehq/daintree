@@ -410,15 +410,24 @@ export function registerWorktreeContextActions(
       // or worktree-less project can open its own root (#11482).
       palette: {
         mode: "requireContext",
-        isReady: (ctx: ActionContext) =>
-          Boolean(
-            ctx.focusedWorktreeId ?? ctx.activeWorktreeId ?? ctx.projectPath ?? ctx.scratchPath
-          ),
+        isReady: (ctx: ActionContext) => {
+          // Resolvability, not mere presence: a stale id whose worktree is gone
+          // now makes `run` throw, so a readiness check that only tested for a
+          // non-empty string would enable a row that cannot open anything.
+          const contextWorktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+          if (contextWorktreeId) {
+            return getCurrentViewStore().getState().worktrees.has(contextWorktreeId);
+          }
+          return Boolean(ctx.projectPath ?? ctx.scratchPath);
+        },
         reason: "No folder to browse",
       },
       argsSchema: z
         .object({
-          worktreeId: z.string().optional(),
+          // `.min(1)`, unlike the siblings above: an empty string here is not a
+          // harmless falsy worktree — it would slip past the unknown-worktree
+          // guard and open the workspace root instead of failing.
+          worktreeId: z.string().min(1).optional(),
           /** Path relative to the browser root, to select and scroll into view on open. */
           revealPath: z.string().optional(),
           /**
@@ -430,21 +439,23 @@ export function registerWorktreeContextActions(
         })
         .optional(),
       run: async (args, ctx: ActionContext) => {
-        const explicitWorktreeId = args?.worktreeId;
         const targetWorktreeId =
-          explicitWorktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+          args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         const worktree = targetWorktreeId
           ? getCurrentViewStore().getState().worktrees.get(targetWorktreeId)
           : undefined;
 
-        // An explicit id that doesn't resolve is a caller error, not a cue to
-        // browse something else: falling through to the workspace root would
-        // open a folder *above* the one asked for.
-        if (explicitWorktreeId && !worktree) {
-          throw new Error(`Worktree not found: ${explicitWorktreeId}`);
+        // One rule for every source of the id, explicit arg or ambient context:
+        // a named worktree that doesn't resolve is an error, never a cue to
+        // browse something else. Falling through to the workspace root would
+        // open the folder *above* the one named — the wrong folder, not a
+        // degraded one — and a stale `focusedWorktreeId` outliving its deleted
+        // worktree is exactly how that would happen unnoticed.
+        if (targetWorktreeId && !worktree) {
+          throw new Error(`Worktree not found: ${targetWorktreeId}`);
         }
 
-        // No worktree in context is the normal state in a scratch or a
+        // No worktree id at all is the normal state in a scratch or a
         // worktree-less project (#11482) — browse the workspace root instead of
         // silently doing nothing. Project-first, mirroring `resolveWorkspaceCwd`.
         const workspacePath = ctx.projectPath ?? ctx.scratchPath;

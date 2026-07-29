@@ -624,6 +624,13 @@ describe("snapshotMatchesSource", () => {
     expect(snapshotMatchesSource(legacy, WT_SOURCE, "")).toBe(true);
   });
 
+  it("refuses an identity-less snapshot rather than matching every workspace", () => {
+    // No worktree id and no base: the legacy tolerance must not extend here, or
+    // a corrupt record would paint its rows in any workspace at all.
+    const { basePath: _dropped, ...untagged } = snapshotOf(WS_SOURCE);
+    expect(snapshotMatchesSource(untagged, WS_SOURCE, "")).toBe(false);
+  });
+
   it("refuses a snapshot captured at a different browse root", () => {
     expect(snapshotMatchesSource(snapshotOf(WT_SOURCE, "src"), WT_SOURCE, "")).toBe(false);
   });

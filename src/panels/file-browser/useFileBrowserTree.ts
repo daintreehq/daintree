@@ -156,10 +156,18 @@ export function useFileBrowserTree({
   // rebuilds the object every render, so depending on it directly would reset
   // the tree's identity on each pass.
   const sourceKey = sourceIdentityKey(source);
-  // The identity effects below run off `sourceKey`; this keeps the object
-  // reachable inside them without widening their dependencies.
+  // Published on commit, never during render. A render that names a new source
+  // can be abandoned (a suspended or superseded transition) without its
+  // identity effect ever running, so a render-time write would leave requests
+  // still queued under the old identity reading the new source: their
+  // generation check would pass and commit another folder's listing into this
+  // tree. Publishing here keeps the ref in step with the generation the
+  // identity effect owns, and the layout phase lands before the passive
+  // effects that read it.
   const sourceRef = useRef(source);
-  sourceRef.current = source;
+  useLayoutEffect(() => {
+    sourceRef.current = source;
+  }, [source]);
   // Seeded via lazy initializers, not just the identity effect: passive
   // effects run after paint, so an effect-only seed would commit one loading
   // frame before the last-known tree appears — the exact flash #11367 exists
@@ -622,11 +630,15 @@ export function useFileBrowserTree({
     return rootNodes.some((node) => node.name.startsWith(".") && notJunk(node.name));
   }, [listings, rootPath, alwaysHiddenPatterns]);
 
+  // `sourceKey` is a dependency even though the body reads the ref: the pane's
+  // going-away capture runs in an effect keyed on this callback, and without it
+  // a source change that left `rootPath` alone would never capture the outgoing
+  // tree.
   const captureSnapshot = useCallback((): FileBrowserTreeSnapshot | null => {
     const activeSource = sourceRef.current;
     if (!activeSource) return null;
     return snapshotFromListings(listingsRef.current, activeSource, rootPath);
-  }, [rootPath]);
+  }, [sourceKey, rootPath]);
 
   return {
     rows,

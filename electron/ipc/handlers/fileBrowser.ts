@@ -99,6 +99,22 @@ function assertRelativeDirPath(dirPath: string | undefined): void {
  */
 type BrowserRoot = { kind: "worktree" | "workspace"; path: string };
 
+/**
+ * A root must be an absolute path before anything joins against it.
+ * `FileTreeService` runs `path.resolve`, so an empty or relative root — which
+ * SQLite's NOT NULL columns still permit from corrupt or legacy state — would
+ * silently resolve against the main process's own cwd and list *that*.
+ */
+function assertAbsoluteRoot(rootPath: string, kind: BrowserRoot["kind"]): void {
+  if (rootPath === "" || !path.isAbsolute(rootPath)) {
+    throw new AppError({
+      code: "INVALID_PATH",
+      message: "Workspace root is not an absolute path",
+      context: { kind },
+    });
+  }
+}
+
 export function buildFileBrowserNamespace(deps: HandlerDependencies) {
   /**
    * Resolve what a file-browser request is rooted at, scoped to the *sender
@@ -167,15 +183,18 @@ export function buildFileBrowserNamespace(deps: HandlerDependencies) {
       if (!worktree) {
         throw new Error(`Worktree not found: ${worktreeId}`);
       }
+      assertAbsoluteRoot(worktree.path, "worktree");
       return { kind: "worktree", path: worktree.path };
     }
 
     if (project) {
+      assertAbsoluteRoot(project.path, "workspace");
       return { kind: "workspace", path: project.path };
     }
 
     const scratch = scratchStore.getScratchById(senderWorkspaceId);
     if (scratch) {
+      assertAbsoluteRoot(scratch.path, "workspace");
       return { kind: "workspace", path: scratch.path };
     }
 

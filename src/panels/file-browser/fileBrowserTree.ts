@@ -406,9 +406,16 @@ export function snapshotMatchesSource(
   const snapshotWorktreeId = snapshot.worktreeId;
   const sourceWorktreeId = source.kind === "worktree" ? source.worktreeId : undefined;
   if (snapshotWorktreeId !== sourceWorktreeId) return false;
-  // Tolerated as a match when absent: snapshots captured before the base tag
-  // existed are worktree-rooted, and their worktree id already pins identity.
-  if (snapshot.basePath !== undefined && snapshot.basePath !== source.basePath) return false;
+  if (snapshotWorktreeId === undefined) {
+    // A workspace snapshot has no worktree id, so the base is its only
+    // identity — an absent one would match every workspace and let a corrupt
+    // record paint fabricated rows in any of them.
+    if (snapshot.basePath !== source.basePath) return false;
+  } else if (snapshot.basePath !== undefined && snapshot.basePath !== source.basePath) {
+    // Absent is tolerated here alone: snapshots written before the base tag
+    // existed are worktree-rooted, and their worktree id already pins identity.
+    return false;
+  }
   return snapshot.rootPath === rootPath;
 }
 

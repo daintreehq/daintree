@@ -9,33 +9,32 @@ import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
  * Absolute path of the workspace *this view* was created for — the project or
  * scratch folder behind a worktree-less browser root (#11482).
  *
- * Matched against `getViewWorkspaceId()` rather than read straight off the
- * current pointers: `currentProject`/`currentScratch` are broadcast to every
- * view including cached ones, so they say what the user is looking at globally,
- * never which workspace this view owns. Main resolves the same binding when it
- * authorizes the listing, so pinning the renderer to it is what keeps the two
- * sides from ever naming different folders.
+ * Resolved by looking this view's own id up in the full collections, not by
+ * reading `currentProject`/`currentScratch`. Those pointers are broadcast to
+ * every view including cached ones, so they say what the user is looking at
+ * globally, never which workspace this view owns: a second window switching to
+ * another scratch repoints them here too, and a hook that merely *filtered* on
+ * the current pointer would blank this view's open browser for as long as the
+ * other window stayed there. Main resolves the same binding when it authorizes
+ * the listing, so keying off the seeded id is also what keeps the two sides
+ * from naming different folders.
  *
- * Falls back to the raw pointers only when the view has no seeded identity at
- * all (a test or shell view) — precisely the case where the global value is the
- * only answer available.
+ * Falls back to the current pointers only when the view has no seeded identity
+ * at all — an unbound shell window, where nothing else can answer and main
+ * refuses the listing anyway.
  */
 export function useWorkspaceRootPath(): string {
   const viewWorkspaceId = getViewWorkspaceId();
   const projectPath = useProjectStore((state) => {
-    const project = state.currentProject;
-    if (!project) return undefined;
-    if (viewWorkspaceId !== null && project.id !== viewWorkspaceId) return undefined;
-    return project.path;
+    if (viewWorkspaceId === null) return state.currentProject?.path;
+    return state.projects.find((project) => project.id === viewWorkspaceId)?.path;
   });
   const scratchPath = useScratchStore((state) => {
-    const scratch = state.currentScratch;
-    if (!scratch) return undefined;
-    if (viewWorkspaceId !== null && scratch.id !== viewWorkspaceId) return undefined;
-    return scratch.path;
+    if (viewWorkspaceId === null) return state.currentScratch?.path;
+    return state.scratches.find((scratch) => scratch.id === viewWorkspaceId)?.path;
   });
 
-  // Project-first, mirroring `resolveWorkspaceCwd` (#11076): both pointers are
-  // briefly set while a cached view catches up on a switch broadcast.
+  // Project-first, mirroring `resolveWorkspaceCwd` (#11076). Ids are disjoint
+  // across the two tables, so at most one side resolves for a seeded view.
   return projectPath ?? scratchPath ?? "";
 }

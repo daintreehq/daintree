@@ -5,6 +5,7 @@ import { SquareTerminal, Search, FolderTree } from "lucide-react";
 import { KbdChord } from "@/components/ui/Kbd";
 import { useEffectiveCombo, useAriaKeyshortcuts } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
 import { getLaunchOptions, type LaunchOption } from "@/components/TerminalPalette/launchOptions";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -130,6 +131,25 @@ export function LauncherQuickActions() {
     void actionService.dispatch(actionId, args, { source: "user" });
   };
 
+  // The only chip whose action can legitimately refuse: it resolves its own
+  // target, and a workspace with nothing to browse makes it throw. `dispatch`
+  // turns that into `ok: false` rather than a rejection, so without this the
+  // press would do nothing at all — the silent failure the throw exists to end.
+  const openFileBrowser = () => {
+    void actionService
+      .dispatch("worktree.openFileBrowser", undefined, { source: "user" })
+      .then((result) => {
+        if (result.ok) return;
+        notify({
+          type: "error",
+          title: "Couldn't open the file browser",
+          message: result.error.message,
+          context: { eventKind: "uiFeedback" },
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        });
+      });
+  };
+
   return (
     <div className="flex w-full max-w-[38rem] flex-col items-center gap-2.5">
       <div className="flex w-full flex-wrap items-center justify-center gap-2">
@@ -160,7 +180,7 @@ export function LauncherQuickActions() {
           icon={<FolderTree className="h-4 w-4" />}
           label="Browse files"
           actionId="worktree.openFileBrowser"
-          onClick={() => dispatch("worktree.openFileBrowser")}
+          onClick={openFileBrowser}
         />
       </div>
       <PaletteSearchButton />

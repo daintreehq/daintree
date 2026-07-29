@@ -166,6 +166,9 @@ function sanitizeTreeSnapshot(value: unknown): FileBrowserTreeSnapshot | undefin
   ) {
     return undefined;
   }
+  // At least one identity tag is mandatory. A snapshot carrying neither would
+  // compare equal to every workspace source and seed its rows there.
+  if (worktreeId === undefined && basePath === undefined) return undefined;
   if (!isSnapshotDirPath(rootPath)) return undefined;
   if (!Array.isArray(listings) || listings.length > MAX_SNAPSHOT_LISTINGS) return undefined;
 

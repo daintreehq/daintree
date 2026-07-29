@@ -7,8 +7,12 @@ import { render, screen, fireEvent } from "@testing-library/react";
 // (layout, which ids are built-in agents, and which buttons are visible) before
 // rendering.
 const h = vi.hoisted(() => ({
-  // dispatch returns a Promise, matching the real signature.
-  dispatch: vi.fn(() => Promise.resolve()),
+  // dispatch resolves to an ActionDispatchResult, matching the real signature:
+  // it reports a thrown `run()` as `ok: false` rather than rejecting.
+  dispatch: vi.fn<(...args: unknown[]) => Promise<{ ok: boolean; error?: Error }>>(() =>
+    Promise.resolve({ ok: true })
+  ),
+  notify: vi.fn(),
   avail: { availability: {} as Record<string, unknown> },
   options: [] as Array<{
     id: string;
@@ -57,6 +61,8 @@ vi.mock("@/hooks/useKeybinding", () => ({
   useAriaKeyshortcuts: (actionId: string) =>
     actionId === "agent.claude" ? "Meta+Alt+C" : undefined,
 }));
+vi.mock("@/lib/notify", () => ({ notify: h.notify }));
+
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: h.dispatch },
 }));
@@ -73,6 +79,8 @@ import {
 
 beforeEach(() => {
   h.dispatch.mockClear();
+  h.dispatch.mockResolvedValue({ ok: true });
+  h.notify.mockClear();
   h.avail.availability = {};
   h.options = [
     { id: "claude", launchAgentId: "claude", label: "Claude", description: "", icon: null },
@@ -193,6 +201,29 @@ describe("LauncherQuickActions", () => {
     expect(h.dispatch).toHaveBeenCalledWith("worktree.openFileBrowser", undefined, {
       source: "user",
     });
+  });
+
+  it("surfaces a refused file-browser dispatch instead of pressing into nothing", async () => {
+    // `dispatch` reports a thrown `run()` as `ok: false` rather than rejecting,
+    // so discarding the result would restore exactly the silent failure the
+    // action's throw exists to end.
+    h.dispatch.mockResolvedValue({ ok: false, error: new Error("No folder to browse") });
+    render(<LauncherQuickActions />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Browse files/i }));
+    await vi.waitFor(() => expect(h.notify).toHaveBeenCalled());
+
+    expect(h.notify.mock.calls[0]?.[0]).toMatchObject({
+      type: "error",
+      message: "No folder to browse",
+    });
+  });
+
+  it("stays quiet when the file browser opens", async () => {
+    render(<LauncherQuickActions />);
+    fireEvent.click(screen.getByRole("button", { name: /Browse files/i }));
+    await Promise.resolve();
+    expect(h.notify).not.toHaveBeenCalled();
   });
 
   // Shortcut-hint teardown around the palette open is now global — the
