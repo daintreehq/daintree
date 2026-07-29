@@ -1817,9 +1817,11 @@ export class HelpSessionService {
           "Bash(tea *)",
         ],
         deny: [
-          "Write(**)",
+          // `Edit(...)` covers every file-editing tool (Write, NotebookEdit,
+          // MultiEdit). Separate `Write(**)`/`NotebookEdit(**)` entries are
+          // never matched by the file permission checks and make Claude Code
+          // print a warning on every session start.
           "Edit(**)",
-          "NotebookEdit(**)",
           "Bash(gh issue create*)",
           "Bash(gh pr create*)",
           "Bash(gh pr merge*)",

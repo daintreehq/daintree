@@ -129,9 +129,7 @@ async function makeBundledHelpFolder(root: string): Promise<string> {
           "Bash(tea *)",
         ],
         deny: [
-          "Write(**)",
           "Edit(**)",
-          "NotebookEdit(**)",
           "Bash(gh issue create*)",
           "Bash(gh pr create*)",
           "Bash(gh pr merge*)",
@@ -369,7 +367,7 @@ describe("HelpSessionService", () => {
     const settings = JSON.parse(settingsRaw);
     expect(settings.permissions.allow).toContain("mcp__daintree__*");
     expect(settings.permissions.allow).toContain("mcp__daintree-docs__*");
-    expect(settings.permissions.deny).toContain("Write(**)");
+    expect(settings.permissions.deny).toContain("Edit(**)");
   });
 
   it("opens the full forge CLI surface without a blanket Bash deny (#8360)", async () => {
@@ -2630,9 +2628,7 @@ describe("HelpSessionService", () => {
               "Bash(tea *)",
             ],
             deny: [
-              "Write(**)",
               "Edit(**)",
-              "NotebookEdit(**)",
               "Bash(gh issue create*)",
               "Bash(gh pr create*)",
               "Bash(gh pr merge*)",
