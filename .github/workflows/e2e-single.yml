@@ -208,7 +208,7 @@ jobs:
 
       - name: Install OpenCode
         if: inputs.suite == 'online'
-        run: node scripts/ci/npm-install-retry.mjs -g opencode-ai
+        run: node scripts/ci/install-opencode.mjs
 
       - name: Configure Claude Code (macOS/Linux)
         if: runner.os != 'Windows'

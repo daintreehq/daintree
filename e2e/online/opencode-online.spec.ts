@@ -4,6 +4,14 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/project";
 import { getTerminalText } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
+import {
+  classifyOpenCodeOutput,
+  formatOpenCodeCrashError,
+  formatOpenCodeTimeoutError,
+  initialStabilizationState,
+  observeOpenCodeOutput,
+  type OpenCodeOutputKind,
+} from "../helpers/opencodeReady";
 
 let ctx: AppContext;
 let fixtureDir: string;
@@ -58,6 +66,11 @@ async function launchOpenCodeAgent(): Promise<Locator> {
   return agentPanel;
 }
 
+// Poll cadence while an actionable prompt is settling. Four samples at this
+// interval is the ~1.5s of quiet the stabilization gate wants before we type.
+const STABILIZATION_POLL_MS = 500;
+const IDLE_POLL_MS = 1_000;
+
 async function waitForOpenCodeReady(agentPanel: Locator): Promise<"ready" | "needs-restart"> {
   const { window } = ctx;
 
@@ -71,37 +84,69 @@ async function waitForOpenCodeReady(agentPanel: Locator): Promise<"ready" | "nee
   const deadline =
     Date.now() + (process.platform === "win32" ? 360_000 : process.env.CI ? 180_000 : 120_000);
 
+  let stabilization = initialStabilizationState();
+  let lastText = "";
+  let lastKind: OpenCodeOutputKind = "pending";
+
   while (Date.now() < deadline) {
     await dismissTelemetryConsent(window);
 
-    const text = await getTerminalText(agentPanel);
-    const lower = text.toLowerCase();
+    lastText = await getTerminalText(agentPanel);
+    const classification = classifyOpenCodeOutput(lastText);
+    lastKind = classification.kind;
 
-    if (lower.includes("update complete") && lower.includes("restart the application")) {
-      return "needs-restart";
+    // Fail in one poll interval rather than burning the whole deadline on a
+    // CLI that is already dead — the generic timeout that used to surface here
+    // read as a Daintree ready-state bug and cost a release investigation.
+    if (classification.kind === "crashed") {
+      throw new Error(formatOpenCodeCrashError(classification.signature, lastText));
+    }
+    if (classification.kind === "needs-restart") return "needs-restart";
+    if (classification.kind === "ready") return "ready";
+
+    const observed = observeOpenCodeOutput(stabilization, {
+      kind: classification.kind,
+      text: lastText,
+      now: Date.now(),
+    });
+    stabilization = observed.state;
+
+    if (observed.decision !== "act") {
+      await window.waitForTimeout(
+        observed.decision === "wait" ? STABILIZATION_POLL_MS : IDLE_POLL_MS
+      );
+      continue;
     }
 
-    if (
-      lower.includes("ask anything") ||
-      /build\s+opencode/i.test(text) ||
-      /\d+\.\d+\.\d+$/.test(text.trim())
-    ) {
-      return "ready";
-    } else if (lower.includes("provider") || lower.includes("/connect")) {
-      await focusHybridEditor(window, agentPanel);
-      await window.keyboard.press("Enter");
-      await window.waitForTimeout(2_000);
-    } else if (lower.includes("api key")) {
-      await focusHybridEditor(window, agentPanel);
+    await focusHybridEditor(window, agentPanel);
+
+    // Focus retries can take seconds, during which the TUI may have moved on
+    // (or died). Re-read before committing a keystroke: sending the previous
+    // screen's answer is what feeds the CLI's keymap parser input it cannot
+    // decode.
+    lastText = await getTerminalText(agentPanel);
+    const settled = classifyOpenCodeOutput(lastText);
+    lastKind = settled.kind;
+
+    if (settled.kind === "crashed") {
+      throw new Error(formatOpenCodeCrashError(settled.signature, lastText));
+    }
+    if (settled.kind !== classification.kind) {
+      stabilization = initialStabilizationState();
+      continue;
+    }
+
+    if (settled.kind === "awaiting-api-key") {
       await window.keyboard.press("ArrowUp");
-      await window.keyboard.press("Enter");
-      await window.waitForTimeout(2_000);
-    } else {
-      await window.waitForTimeout(1_000);
     }
+    await window.keyboard.press("Enter");
+    await window.waitForTimeout(2_000);
+
+    // Make a prompt that survives our input settle again before we retry it.
+    stabilization = initialStabilizationState();
   }
 
-  throw new Error("OpenCode did not reach ready state before timeout");
+  throw new Error(formatOpenCodeTimeoutError(lastKind, lastText));
 }
 
 async function launchOpenCodeReady(): Promise<Locator> {

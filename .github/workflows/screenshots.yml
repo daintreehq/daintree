@@ -108,7 +108,7 @@ jobs:
         run: node scripts/ci/npm-install-retry.mjs -g @anthropic-ai/claude-code
 
       - name: Install OpenCode
-        run: node scripts/ci/npm-install-retry.mjs -g opencode-ai
+        run: node scripts/ci/install-opencode.mjs
 
       - name: Configure Claude Code
         run: |
