@@ -14,6 +14,21 @@ import { logError } from "../utils/logger.js";
 
 const CURRENT_SCRATCH_KEY = "currentScratchId";
 
+/**
+ * Drop the scratch's persisted panel state, which lives under the shared
+ * `projects/<id>/` state layout (#11484). Imported lazily: `ProjectStore` is a
+ * heavyweight singleton that constructs itself at module eval, and statically
+ * importing it here would drag it into every suite that touches a scratch.
+ */
+export async function removeScratchStateDir(scratchId: string): Promise<void> {
+  try {
+    const { projectStore } = await import("./ProjectStore.js");
+    await projectStore.removeWorkspaceStateDir(scratchId);
+  } catch (error) {
+    logError(`[ScratchStore] Failed to remove scratch state directory for ${scratchId}`, error);
+  }
+}
+
 function rowToScratch(row: ScratchRow): Scratch {
   return {
     id: row.id,
@@ -202,6 +217,7 @@ export class ScratchStore {
       }
     }
 
+    await removeScratchStateDir(scratchId);
     this.hardDeleteScratch(scratchId);
   }
 

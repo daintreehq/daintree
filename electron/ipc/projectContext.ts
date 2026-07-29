@@ -5,12 +5,29 @@ import type { HandlerDependencies, IpcContext } from "./types.js";
 
 export interface ScopedProjectResolution {
   project: Project | null;
+  /**
+   * The sender view's workspace id, whether or not it names a Project row. A
+   * scratch is a workspace with no row (#11484), so `project` is null while
+   * this still identifies the sender — anything keyed on durable per-workspace
+   * storage must use this, and anything that genuinely needs a git repository
+   * (in-repo presets, recipes) must keep using `project`.
+   */
+  workspaceId: string | null;
 }
 
-function getOpenProjectById(projectId: string): Project | null {
-  const project = projectStore.getProjectById(projectId);
-  if (project?.status === "closed") return null;
-  return project ?? null;
+/**
+ * Resolve one candidate id into a project and the workspace that owns its
+ * durable state.
+ *
+ * The two can diverge in both directions, and the distinction is load-bearing:
+ * an id with no project row at all is a scratch, whose state must still be
+ * served (#11484), whereas a *closed* project keeps its row and must not be
+ * served — hydrating it would resurrect a workspace the user closed.
+ */
+function resolveWorkspaceById(workspaceId: string): ScopedProjectResolution {
+  const project = projectStore.getProjectById(workspaceId);
+  if (project?.status === "closed") return { project: null, workspaceId: null };
+  return { project: project ?? null, workspaceId };
 }
 
 /**
@@ -48,19 +65,19 @@ export function resolveScopedProjectForIpcContext(
   if (pvm) {
     const viewProjectId = pvm.getProjectIdForWebContents(ctx.webContentsId);
     if (viewProjectId) {
-      return { project: getOpenProjectById(viewProjectId) };
+      return resolveWorkspaceById(viewProjectId);
     }
 
     const urlProjectId = getProjectIdFromSenderUrl(ctx.event.sender);
     if (urlProjectId) {
-      return { project: getOpenProjectById(urlProjectId) };
+      return resolveWorkspaceById(urlProjectId);
     }
 
-    return { project: null };
+    return { project: null, workspaceId: null };
   }
 
   if (ctx.projectId) {
-    return { project: getOpenProjectById(ctx.projectId) };
+    return resolveWorkspaceById(ctx.projectId);
   }
 
   return null;

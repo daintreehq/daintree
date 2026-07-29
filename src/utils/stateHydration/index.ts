@@ -255,6 +255,12 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     // Discover running terminals from the backend
     // Terminals stay running across project switches - we just reconnect to them
     const currentProjectId = currentProject?.id;
+    // Owner of the persisted layout and of every live PTY in this view. In a
+    // scratch view `currentProject` is null, so keying the restore off it left
+    // the grid unrestored and the still-running PTYs orphaned in the pty-host
+    // (#11484). Layout and terminal reconnect use this; anything that genuinely
+    // needs a git repository (in-repo presets, recipes) keeps using the project.
+    const currentWorkspaceId = hydrateResult.workspaceId ?? currentProjectId;
     const projectRoot = currentProject?.path;
 
     const worktreesPromise = worktreeClient.getAll().catch((error) => {
@@ -267,11 +273,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     // when the field is absent (older main process, or the safe-boot
     // {ok:false} payload). Mirrors the systemTmpDir fallback above.
     const tabGroupsPromise =
-      currentProjectId && options.hydrateTabGroups
+      currentWorkspaceId && options.hydrateTabGroups
         ? hydrateResult.tabGroups !== undefined
           ? Promise.resolve(hydrateResult.tabGroups)
           : projectClient
-              .getTabGroups(currentProjectId)
+              .getTabGroups(currentWorkspaceId)
               .then((tabGroups) => tabGroups ?? [])
               .catch((error) => {
                 logWarn("Failed to prefetch tab groups", { error });
@@ -281,11 +287,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
     type TerminalSizeMap = Record<string, { cols: number; rows: number }>;
     const emptyTerminalSizes: TerminalSizeMap = {};
-    const terminalSizesPromise: Promise<TerminalSizeMap> = currentProjectId
+    const terminalSizesPromise: Promise<TerminalSizeMap> = currentWorkspaceId
       ? hydrateResult.terminalSizes !== undefined
         ? Promise.resolve(hydrateResult.terminalSizes)
         : projectClient
-            .getTerminalSizes(currentProjectId)
+            .getTerminalSizes(currentWorkspaceId)
             .then((sizes) => sizes ?? emptyTerminalSizes)
             .catch((error) => {
               logWarn("Failed to prefetch terminal sizes", { error });
@@ -294,11 +300,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       : Promise.resolve(emptyTerminalSizes);
 
     const emptyDraftInputs: Record<string, string> = {};
-    const draftInputsPromise: Promise<Record<string, string>> = currentProjectId
+    const draftInputsPromise: Promise<Record<string, string>> = currentWorkspaceId
       ? hydrateResult.draftInputs !== undefined
         ? Promise.resolve(hydrateResult.draftInputs)
         : projectClient
-            .getDraftInputs(currentProjectId)
+            .getDraftInputs(currentWorkspaceId)
             .then((drafts) => drafts ?? emptyDraftInputs)
             .catch((error) => {
               logWarn("Failed to prefetch draft inputs", { error });
@@ -335,11 +341,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     // Perf span is split into startRendererSpan + manual finishGetForProject so
     // the `:end` mark fires when the awaited result is consumed below, not when
     // the in-flight promise settles in the background.
-    const finishGetForProjectSpan = currentProjectId
+    const finishGetForProjectSpan = currentWorkspaceId
       ? startRendererSpan(PERF_MARKS.HYDRATE_GET_TERMINALS)
       : null;
-    const getForProjectPromise: Promise<BackendTerminalInfo[]> = currentProjectId
-      ? terminalClient.getForProject(currentProjectId).catch((error: unknown) => {
+    const getForProjectPromise: Promise<BackendTerminalInfo[]> = currentWorkspaceId
+      ? terminalClient.getForProject(currentWorkspaceId).catch((error: unknown) => {
           logWarn("Failed to query backend terminals; continuing with saved panel restore", {
             error,
           });
@@ -349,23 +355,25 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
     // Restore hybrid input bar draft inputs BEFORE terminal panels are created,
     // so HybridInputBar components pick up drafts from the store at mount time.
-    if (currentProjectId) {
+    if (currentWorkspaceId) {
       try {
         const draftInputs = await draftInputsPromise;
         // Seed the close-flush baseline from the authoritative on-disk record
         // (even when empty) BEFORE restoring into the store, so a later clear of
         // a hydrated draft yields a removal tombstone instead of resurrecting on
         // next load (#11352).
-        draftInputPersistence.primeProject(currentProjectId, draftInputs);
+        draftInputPersistence.primeProject(currentWorkspaceId, draftInputs);
         if (Object.keys(draftInputs).length > 0) {
-          useTerminalInputStore.getState().restoreProjectDraftInputs(currentProjectId, draftInputs);
+          useTerminalInputStore
+            .getState()
+            .restoreProjectDraftInputs(currentWorkspaceId, draftInputs);
         }
       } catch (error) {
         logWarn("Failed to restore draft inputs", { error });
       }
     }
 
-    if (currentProjectId) {
+    if (currentWorkspaceId) {
       // Saved→restored panel id remap produced by restorePanelsPhase; consumed
       // by the tab-group hydration block below. Declared here (not in the
       // restore try) so it survives into that block even if panel restore
@@ -377,11 +385,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         finishGetForProjectSpan?.();
 
         logHydrationInfo(
-          `Found ${backendTerminals.length} running terminals for project ${currentProjectId}`
+          `Found ${backendTerminals.length} running terminals for project ${currentWorkspaceId}`
         );
 
         if (isDaintreeEnvEnabled("DAINTREE_VERBOSE")) {
-          logDebug(`Project: ${currentProjectId.slice(0, 8)}`);
+          logDebug(`Project: ${currentWorkspaceId.slice(0, 8)}`);
           logDebug("Backend terminals", {
             terminals: backendTerminals.map((t) => ({
               id: t.id.slice(0, 8),
@@ -444,9 +452,9 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         // appState.terminals is TerminalState[] (IPC wire type, more
         // lenient); the on-disk data was written by panelToSnapshot so is
         // structurally PanelSnapshot[].
-        if (currentProjectId && appState.terminals && appState.terminals.length > 0) {
+        if (currentWorkspaceId && appState.terminals && appState.terminals.length > 0) {
           panelPersistence.primeProject(
-            currentProjectId,
+            currentWorkspaceId,
             appState.terminals as unknown as PanelSnapshot[]
           );
         }
@@ -575,9 +583,9 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
             // save can emit correct removals and Main can merge concurrent
             // writes from sibling windows instead of resurrecting deleted
             // groups (#11350). Mirrors the terminal `primeProject` above.
-            if (currentProjectId) {
+            if (currentWorkspaceId) {
               panelPersistence.primeTabGroups(
-                currentProjectId,
+                currentWorkspaceId,
                 tabGroups.filter((g) => g && Array.isArray(g.panelIds) && g.panelIds.length > 1)
               );
             }

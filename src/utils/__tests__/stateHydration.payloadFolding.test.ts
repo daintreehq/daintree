@@ -510,6 +510,88 @@ describe("hydrateAppState", () => {
     });
   });
 
+  describe("scratch workspaces (#11484)", () => {
+    const SCRATCH_ID = "b3d1f2a4-5c6e-4a8b-9d0f-1e2a3b4c5d6e";
+
+    const scratchOptions = () => ({
+      addPanel: vi.fn().mockResolvedValue("panel-1"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    it("reconnects live terminals and restores layout for a workspace with no project", async () => {
+      // A scratch view hydrates with `project: null` — before the fix that
+      // skipped the backend terminal query entirely, so still-running PTYs
+      // stayed orphaned in the pty-host with nothing referencing them.
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project: null,
+        workspaceId: SCRATCH_ID,
+        agentSettings,
+        gpuWebGLHardware: true,
+      });
+
+      await hydrateAppState({ ...scratchOptions(), hydrateTabGroups: vi.fn() });
+
+      expect(terminalClientMock.getForProject).toHaveBeenCalledWith(SCRATCH_ID);
+      expect(projectClientMock.getTabGroups).toHaveBeenCalledWith(SCRATCH_ID);
+      expect(projectClientMock.getTerminalSizes).toHaveBeenCalledWith(SCRATCH_ID);
+      expect(projectClientMock.getDraftInputs).toHaveBeenCalledWith(SCRATCH_ID);
+    });
+
+    it("keeps repository-only work gated on a real project", async () => {
+      // Scratch folders are not git repos, so in-repo presets and recipes must
+      // not be fetched for them even though layout restore now is.
+      const options = scratchOptions();
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project: null,
+        workspaceId: SCRATCH_ID,
+        agentSettings,
+        gpuWebGLHardware: true,
+      });
+
+      await hydrateAppState({ ...options, hydrateTabGroups: vi.fn() });
+
+      expect(projectClientMock.getInRepoPresets).not.toHaveBeenCalled();
+      expect(options.loadRecipes).not.toHaveBeenCalled();
+    });
+
+    it("still does nothing when the view owns no workspace at all", async () => {
+      const options = scratchOptions();
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project: null,
+        workspaceId: null,
+        agentSettings,
+        gpuWebGLHardware: true,
+      });
+
+      await hydrateAppState({ ...options, hydrateTabGroups: vi.fn() });
+
+      expect(terminalClientMock.getForProject).not.toHaveBeenCalled();
+      expect(projectClientMock.getTabGroups).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the project id when an older main process omits workspaceId", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+      });
+
+      await hydrateAppState({ ...scratchOptions(), hydrateTabGroups: vi.fn() });
+
+      expect(terminalClientMock.getForProject).toHaveBeenCalledWith(project.id);
+    });
+  });
+
   describe("system temp dir folding", () => {
     const baseOptions = () => ({
       addPanel: vi.fn().mockResolvedValue("panel-1"),

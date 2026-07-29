@@ -1,10 +1,9 @@
 import path from "path";
 import { app } from "electron";
-
-const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+import { isValidScratchStateId } from "./projectStorePaths.js";
 
 export function isValidScratchId(scratchId: string): boolean {
-  return typeof scratchId === "string" && UUID_V4_REGEX.test(scratchId);
+  return typeof scratchId === "string" && isValidScratchStateId(scratchId);
 }
 
 /**

@@ -11,6 +11,7 @@ vi.mock("../../utils/logger.js", () => ({
 }));
 import path from "path";
 import os from "os";
+import { randomUUID } from "crypto";
 import {
   cleanupQuarantinedProjectFiles,
   cleanupGlobalQuarantineFiles,
@@ -117,6 +118,24 @@ describe("cleanupQuarantinedProjectFiles", () => {
 
     expect(deleted).toBe(0);
     await expect(fs.access(unknownFile)).resolves.toBeUndefined();
+  });
+
+  it("sweeps a scratch's state directory too (#11484)", async () => {
+    // Scratches persist their panel grid under the same `projects/<id>/`
+    // layout, so a corrupted scratch state file must be reaped on the same
+    // schedule rather than sitting there forever.
+    const scratchDir = await createProjectDir(randomUUID());
+    const filePath = await createCorruptedFile(
+      scratchDir,
+      "state.json.corrupted.1234567890",
+      THIRTY_ONE_DAYS_MS,
+      NOW
+    );
+
+    const deleted = await cleanupQuarantinedProjectFiles(tmpDir, NOW);
+
+    expect(deleted).toBe(1);
+    await expect(fs.access(filePath)).rejects.toThrow();
   });
 
   it("skips directories with invalid project IDs", async () => {

@@ -31,6 +31,17 @@ vi.mock("../scratchStorePaths.js", () => ({
   getScratchDir: (root: string, id: string) => root + "/" + id,
 }));
 
+const { removeScratchStateDirMock } = vi.hoisted(() => ({
+  removeScratchStateDirMock: vi.fn(async (_scratchId: string) => {}),
+}));
+
+// The sweep only needs the state-dir hook; the default store export is never
+// used because every test injects its own `ScratchCleanupStore`.
+vi.mock("../ScratchStore.js", () => ({
+  scratchStore: {},
+  removeScratchStateDir: removeScratchStateDirMock,
+}));
+
 // Fully replace hardenedGit so the default classifier's git branch is driven by
 // a mock and no real git process is ever spawned. GIT_BLOCK_TIMEOUT_MS is a
 // plain constant the sweep only feeds to setTimeout, so a fixed stand-in is fine.
@@ -129,6 +140,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "scratch-cleanup-test-"));
   scratchTestRoot.current = tmpDir;
   mockedCreateHardenedGit.mockReset();
+  removeScratchStateDirMock.mockClear();
 });
 
 afterEach(async () => {
@@ -384,6 +396,42 @@ describe("runScratchCleanup — phase 1 (reap after grace)", () => {
     expect(result.directoriesRemoved).toBe(1);
     expect(store.rows).toHaveLength(0);
     await expect(fs.access(dir)).rejects.toBeDefined();
+  });
+
+  it("also drops the reaped scratch's persisted panel state (#11484)", async () => {
+    // The panel grid lives under the shared `projects/<id>/` state layout, not
+    // inside the scratch directory, so reaping the working dir alone leaks it.
+    const dir = path.join(tmpDir, "mature-with-state");
+    await fs.mkdir(dir, { recursive: true });
+    const store = makeStore([
+      row({
+        id: "mature-with-state",
+        path: dir,
+        lastOpened: NOW - 2 * SCRATCH_TTL_MS,
+        deletedAt: NOW - 2 * GRACE_MS,
+      }),
+    ]);
+
+    await runScratchCleanup(NOW, store, ALWAYS_SAFE);
+
+    expect(removeScratchStateDirMock).toHaveBeenCalledWith("mature-with-state");
+  });
+
+  it("leaves persisted state alone for a tombstone still inside the grace window", async () => {
+    const dir = path.join(tmpDir, "young-with-state");
+    await fs.mkdir(dir, { recursive: true });
+    const store = makeStore([
+      row({
+        id: "young-with-state",
+        path: dir,
+        lastOpened: NOW - 2 * SCRATCH_TTL_MS,
+        deletedAt: NOW - GRACE_MS / 2,
+      }),
+    ]);
+
+    await runScratchCleanup(NOW, store, ALWAYS_SAFE);
+
+    expect(removeScratchStateDirMock).not.toHaveBeenCalled();
   });
 
   it("does not reap a tombstone still inside the grace window", async () => {

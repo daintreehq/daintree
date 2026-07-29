@@ -49,8 +49,35 @@ export function isValidProjectId(projectId: string): boolean {
   return /^[0-9a-f]{64}$/.test(projectId);
 }
 
+const SCRATCH_STATE_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/**
+ * Shape of a scratch id. Owned here rather than in `scratchStorePaths` so the
+ * state-directory gate below can accept it without importing that module (which
+ * pulls in `electron`); `isValidScratchId` delegates to this, keeping one
+ * source of truth for the shape.
+ */
+export function isValidScratchStateId(id: string): boolean {
+  return SCRATCH_STATE_ID_PATTERN.test(id);
+}
+
+/**
+ * Ids allowed to own a directory under `userData/projects/`. Scratches have no
+ * Project row but still need durable panel state (#11484), and a scratch UUID
+ * (36 chars, dashed) can never collide with a project id (64 hex, undashed), so
+ * both kinds share one state-directory namespace and all of the atomic-write /
+ * quarantine / recovery machinery built on it.
+ *
+ * Deliberately distinct from {@link isValidProjectId}, which still means "a
+ * project id" for the git-tracked `.daintree/project.json` anchor.
+ */
+export function isValidWorkspaceStateId(id: string): boolean {
+  return isValidProjectId(id) || isValidScratchStateId(id);
+}
+
 export function getProjectStateDir(projectsConfigDir: string, projectId: string): string | null {
-  if (!isValidProjectId(projectId)) {
+  if (!isValidWorkspaceStateId(projectId)) {
     return null;
   }
   const normalizedRoot = path.normalize(projectsConfigDir);

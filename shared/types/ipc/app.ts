@@ -164,6 +164,14 @@ export interface HydrateResult {
   appState: AppState;
   terminalConfig: TerminalConfig;
   project: import("../project.js").Project | null;
+  /**
+   * Workspace that owns the persisted panel grid in this view. Equals
+   * `project.id` for a project; in a scratch view `project` is null (scratches
+   * have no Project row) while this carries the scratch id, which is what the
+   * renderer needs to reconnect live PTYs and restore layout (#11484). Optional
+   * for backward compat with an older main process.
+   */
+  workspaceId?: string | null;
   agentSettings: import("../agentSettings.js").AgentSettings;
   gpuWebGLHardware: boolean;
   gpuHardwareAccelerationDisabled: boolean;
