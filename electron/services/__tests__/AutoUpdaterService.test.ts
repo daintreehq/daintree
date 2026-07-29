@@ -129,13 +129,12 @@ vi.mock("electron-updater", () => ({
   autoUpdater: autoUpdaterMock,
 }));
 
-// Partial factories shadow every other export of the module, so the install
-// stage list has to be re-exported here or the service's import of it resolves
-// to undefined and every test in this file throws. Re-exported from the real
-// module rather than duplicated, so a change to the stage order or membership
-// reaches these tests instead of drifting past them.
-vi.mock("../../store.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../store.js")>()),
+// Plain factory. `importOriginal()` here would load the real store.ts, which
+// eagerly imports `electron` and throws wherever the Electron binary isn't
+// installed (the macOS release workflow's unit-test job). The install stages
+// live in their own side-effect-free module precisely so this mock doesn't
+// need to reproduce them.
+vi.mock("../../store.js", () => ({
   store: storeMock,
 }));
 
@@ -143,7 +142,7 @@ vi.mock("../../../shared/utils/trustedRenderer.js", () => trustedRendererMock);
 
 import { autoUpdaterService } from "../AutoUpdaterService.js";
 import { CHANNELS } from "../../ipc/channels.js";
-import { PENDING_UPDATE_INSTALL_STAGES } from "../../store.js";
+import { PENDING_UPDATE_INSTALL_STAGES } from "../../utils/updateInstallStages.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 const STARTUP_JITTER_MAX_MS = 60_000;

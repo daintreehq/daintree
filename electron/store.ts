@@ -10,6 +10,7 @@ import type {
   AgentUpdateSettings,
   AppAgentConfig,
 } from "../shared/types/index.js";
+import type { PendingUpdateInstallStage } from "./utils/updateInstallStages.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
@@ -62,28 +63,6 @@ interface AuditLogsStoreSchema {
   runHistoryRecords: RunHistoryRecord[];
   pluginMcpAuditLog: PluginMcpAuditRecord[];
 }
-
-/**
- * How far an update install attempt got, in ASCENDING order of specificity —
- * a later entry may overwrite an earlier one, never the reverse.
- *
- * `attempted` is the floor and the one that matters most: it means we handed
- * off to the installer and never learned the outcome. Most install paths end
- * there, because electron-updater's own `autoInstallOnAppQuit` never reaches
- * our handoff and the process usually dies before any error is reported.
- * `handoff-timeout` is the macOS "Restart to update" case — the graceful
- * shutdown chain disposes AutoUpdaterService (detaching its `error` listener)
- * before the handoff runs, so a Squirrel rejection has nothing left listening
- * and only the force-exit watchdog observes it.
- */
-export const PENDING_UPDATE_INSTALL_STAGES = [
-  "attempted",
-  "handoff-timeout",
-  "updater-error",
-  "handoff-threw",
-] as const;
-
-export type PendingUpdateInstallStage = (typeof PENDING_UPDATE_INSTALL_STAGES)[number];
 
 export interface StoreSchema {
   _schemaVersion: number;
