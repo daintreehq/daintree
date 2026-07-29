@@ -38,14 +38,17 @@ import {
   createVisibilityFilter,
   isRowPathVisible,
   parentRootPath,
+  type FileBrowserSource,
   type FlatTreeRow,
 } from "./fileBrowserTree";
+import { useWorkspaceRootPath } from "./useWorkspaceRootPath";
 
 export type FileBrowserPaneProps = BasePanelProps;
 
 /**
- * Read-only file browser: a lazily-expanded tree over one worktree beside a
- * viewer for the selected file.
+ * Read-only file browser: a lazily-expanded tree over one folder beside a
+ * viewer for the selected file. The folder is a worktree when the panel names
+ * one, otherwise the view's own project or scratch root (#11482).
  *
  * Expansion and selection live on the panel record rather than in component
  * state. That is what makes the dialog and the pinned panel the same surface:
@@ -153,6 +156,31 @@ export function FileBrowserPane({
       [worktreeId]
     )
   );
+  // The fallback root for a panel with no worktree: this view's own project or
+  // scratch folder (#11482).
+  const workspaceRootPath = useWorkspaceRootPath();
+
+  // A panel without a worktree is rooted at its view's workspace instead of
+  // being broken — that is the whole of the scratch/worktree-less-project fix.
+  // A worktree id that hasn't resolved yet stays unresolved rather than falling
+  // back: silently browsing the project root in place of the requested worktree
+  // would be the wrong folder, not a degraded one.
+  const source = useMemo((): FileBrowserSource | null => {
+    // Presence, not truthiness: a persisted `worktreeId: ""` names a worktree
+    // that cannot resolve, and treating it as absent would quietly browse the
+    // workspace root instead of refusing it.
+    if (worktreeId !== undefined) {
+      return worktreePath ? { kind: "worktree", worktreeId, basePath: worktreePath } : null;
+    }
+    return workspaceRootPath ? { kind: "workspace", basePath: workspaceRootPath } : null;
+  }, [worktreeId, worktreePath, workspaceRootPath]);
+
+  // Everything path-shaped in the pane joins against this: the tree's rows are
+  // relative to it in both modes.
+  const basePath = source?.basePath ?? "";
+  // A stable primitive for the menu callback's dependencies — the source object
+  // is rebuilt every render.
+  const isWorktreeSource = source?.kind === "worktree";
   // The worktree's git-status change tick — already coalesced by the watcher's
   // adaptive burst debounce, so a bulk write lands as one tick.
   const gitChangeTick = useWorktreeStore(
@@ -174,7 +202,8 @@ export function FileBrowserPane({
   );
   // A single monotonic signal for "re-read the tree/file": whichever moved most
   // recently. `|| undefined` so a never-changed worktree keeps the "no tick"
-  // identity the hook expects.
+  // identity the hook expects. Both sources are worktree-store maps, so a
+  // workspace root has no tick at all and refreshes on demand only (#11482).
   const changeTick = Math.max(gitChangeTick ?? 0, fsChangeTick ?? 0) || undefined;
 
   const stableExpandedPaths = useMemo(() => expandedPaths ?? EMPTY_PATHS, [expandedPaths]);
@@ -189,7 +218,7 @@ export function FileBrowserPane({
     isRefreshing,
     captureSnapshot,
   } = useFileBrowserTree({
-    worktreeId,
+    source,
     expandedPaths: stableExpandedPaths,
     hideDotfiles,
     alwaysHiddenPatterns,
@@ -450,10 +479,10 @@ export function FileBrowserPane({
 
   const handleCopyFullPath = useCallback(
     (path: string) => {
-      if (!worktreePath) return;
-      copyToClipboard(join(worktreePath, path), "Couldn't copy path");
+      if (!basePath) return;
+      copyToClipboard(join(basePath, path), "Couldn't copy path");
     },
-    [worktreePath, copyToClipboard]
+    [basePath, copyToClipboard]
   );
 
   // row.path is already relative to the true worktree root even when the tree
@@ -476,9 +505,8 @@ export function FileBrowserPane({
   // The header label copies the folder the tree is rooted at. Only a re-rooted
   // tree has a path worth copying — at the worktree root the label is a bare
   // basename, so the affordance stays absent rather than disabled.
-  const rootAbsolutePath =
-    rootPath === "" || worktreePath === "" ? "" : join(worktreePath, rootPath);
-  const rootHoverPath = rootPath === "" ? worktreePath : `${basename(worktreePath)}/${rootPath}`;
+  const rootAbsolutePath = rootPath === "" || basePath === "" ? "" : join(basePath, rootPath);
+  const rootHoverPath = rootPath === "" ? basePath : `${basename(basePath)}/${rootPath}`;
 
   const { copiedText: copiedRootPath, copy: copyRootPath } = useCopyWithFeedback({
     announcement: "Path copied",
@@ -516,11 +544,11 @@ export function FileBrowserPane({
   const reveal = useMemo(() => revealCopy(), []);
   const handleReveal = useCallback(
     (path: string) => {
-      if (!worktreePath) return;
+      if (!basePath) return;
       const run = async () => {
         const result = await actionService.dispatch(
           "file.showItemInFolder",
-          { path: join(worktreePath, path) },
+          { path: join(basePath, path) },
           { source: "context-menu" }
         );
         // The menu has already closed by the time this settles, so a failure
@@ -537,7 +565,7 @@ export function FileBrowserPane({
       };
       void run();
     },
-    [worktreePath, reveal]
+    [basePath, reveal]
   );
 
   const rowContextMenu = useCallback(
@@ -549,14 +577,18 @@ export function FileBrowserPane({
               <FolderRoot className="w-3.5 h-3.5 mr-2" />
               Set as root
             </ContextMenuItem>
-            {/* Always enabled: the browser no longer knows a folder's gitignore
-                status, and CopyTree still applies its own .gitignore-aware
-                discovery (reporting when nothing was eligible), so this stays
-                safe for a gitignored folder. */}
-            <ContextMenuItem onSelect={() => handleCopyFolderContext(row.path)}>
-              <Folders className="w-3.5 h-3.5 mr-2" />
-              Copy context
-            </ContextMenuItem>
+            {/* Always enabled for a worktree: the browser no longer knows a
+                folder's gitignore status, and CopyTree still applies its own
+                .gitignore-aware discovery (reporting when nothing was
+                eligible), so this stays safe for a gitignored folder. Absent
+                for a workspace root — CopyTree is worktree-scoped, so leaving
+                it on would be a dead menu item (#11482). */}
+            {isWorktreeSource && (
+              <ContextMenuItem onSelect={() => handleCopyFolderContext(row.path)}>
+                <Folders className="w-3.5 h-3.5 mr-2" />
+                Copy context
+              </ContextMenuItem>
+            )}
             <ContextMenuSeparator />
           </>
         )}
@@ -580,6 +612,7 @@ export function FileBrowserPane({
       </>
     ),
     [
+      isWorktreeSource,
       handleSetRoot,
       handleCopyFolderContext,
       handleCopyFullPath,
@@ -616,8 +649,8 @@ export function FileBrowserPane({
   // parent hides the selected row without clearing the selection, and treating
   // that unknown node as a file makes the viewer try to read a directory.
   const selectedFilePath =
-    selectedPath && worktreePath && selectedNode?.isDirectory === false
-      ? join(worktreePath, selectedPath)
+    selectedPath && basePath && selectedNode?.isDirectory === false
+      ? join(basePath, selectedPath)
       : null;
   const selectedFileName = selectedPath ? (selectedPath.split("/").pop() ?? selectedPath) : "";
 
@@ -715,7 +748,7 @@ export function FileBrowserPane({
                   className="min-w-0 flex-1 truncate font-mono text-[11px] text-daintree-text/40"
                   title={rootHoverPath}
                 >
-                  {rootPath || (worktreePath ? basename(worktreePath) : "")}
+                  {rootPath || (basePath ? basename(basePath) : "")}
                 </span>
               )}
               {rootPath !== "" && (
@@ -772,7 +805,7 @@ export function FileBrowserPane({
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <FileBrowserViewer
             filePath={selectedFilePath}
-            rootPath={worktreePath}
+            rootPath={basePath}
             fileName={selectedFileName}
             relativePath={selectedNode?.isDirectory === false ? (selectedPath ?? null) : null}
             revision={viewerRevision}
@@ -797,7 +830,7 @@ export function FileBrowserPane({
   );
 
   function renderTree() {
-    if (!worktreeId || !worktreePath) {
+    if (!source) {
       return (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4">
           {/* w-full: EmptyState is a CSS container (inline-size containment),
@@ -807,7 +840,7 @@ export function FileBrowserPane({
             variant="zero-data"
             scale="sidebar"
             icon={<FolderTree className="h-5 w-5" />}
-            title="Open a worktree to browse its files"
+            title="Open a folder to browse its files"
             className="w-full"
           />
         </div>
@@ -824,7 +857,7 @@ export function FileBrowserPane({
           <InlineStatusBanner
             severity="error"
             icon={FolderTree}
-            title={rootPath ? "Couldn't read this folder" : "Couldn't read this worktree"}
+            title="Couldn't read this folder"
             description={rootError}
             action={{ id: "retry", label: "Retry", onClick: handleRefresh }}
           />

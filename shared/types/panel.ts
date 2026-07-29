@@ -728,17 +728,31 @@ export interface FileBrowserTreeSnapshotEntry {
  * rather than a Map because it round-trips through JSON persistence.
  */
 export interface FileBrowserTreeSnapshot {
-  worktreeId: string;
-  /** Worktree-relative browse root at capture time; "" = the worktree root. */
+  /** Absent when the browser is rooted at the workspace itself (#11482). */
+  worktreeId?: string;
+  /**
+   * Absolute root the listings were captured under. Identity only — never
+   * joined against, so it can't strand the panel the way a persisted absolute
+   * *root* would; a mismatch (a relocated project) just cold-starts, which is
+   * the same self-healing outcome as a worktree switch.
+   */
+  basePath?: string;
+  /** Browse root relative to the base at capture time; "" = the base itself. */
   rootPath: string;
   listings: FileBrowserTreeSnapshotEntry[];
 }
 
 /**
- * File browser panel — a lazily-expanded directory tree over one worktree with
- * a read-only viewer beside it. Every field is worktree-relative rather than
- * absolute (the root comes from `worktreeId`, like `DiffPanelData.filePath`),
- * so moving or renaming the worktree can't strand the panel on a dead path.
+ * File browser panel — a lazily-expanded directory tree over one folder with a
+ * read-only viewer beside it. Every field is relative rather than absolute (the
+ * root comes from `worktreeId`, like `DiffPanelData.filePath`), so moving or
+ * renaming the folder can't strand the panel on a dead path.
+ *
+ * An absent `worktreeId` roots the tree at the *view's own workspace* — the
+ * project or scratch folder it was created for (#11482). Deliberately no
+ * absolute root is stored for that case either: main derives it from the same
+ * sender binding it authorizes against, so resolving it fresh on both sides is
+ * what keeps them from ever disagreeing.
  *
  * Every field persists: the issue's contract is that a pinned panel keeps its
  * expansion, selection and layout, and `promoteDialogPanelToGrid` reuses the
@@ -763,8 +777,10 @@ export interface FileBrowserPanelData extends BasePanelData {
    */
   browserHideDotfiles?: boolean;
   /**
-   * Worktree-relative directory the tree is rooted at. Absent or "" = the
-   * worktree root itself.
+   * Directory the tree is rooted at, relative to the base. Absent or "" = the
+   * base itself. Always relative, in both modes — `canonicalizeRootPath`
+   * collapses anything traversal-shaped, so it structurally cannot carry an
+   * absolute path.
    */
   browserRootPath?: string;
   /**

@@ -1634,6 +1634,9 @@ export interface GeneratedIpcInvokeMap {
               focusedTerminalType?: string | undefined;
               focusedTerminalTitle?: string | undefined;
               isSettingsOpen?: boolean | undefined;
+              scratchId?: string | undefined;
+              scratchName?: string | undefined;
+              scratchPath?: string | undefined;
               dispatchSource?:
                 "user" | "menu" | "keybinding" | "agent" | "context-menu" | "plugin" | undefined;
             }

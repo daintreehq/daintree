@@ -7,8 +7,12 @@ import { render, screen, fireEvent } from "@testing-library/react";
 // (layout, which ids are built-in agents, and which buttons are visible) before
 // rendering.
 const h = vi.hoisted(() => ({
-  // dispatch returns a Promise, matching the real signature.
-  dispatch: vi.fn(() => Promise.resolve()),
+  // dispatch resolves to an ActionDispatchResult, matching the real signature:
+  // it reports a thrown `run()` as `ok: false` rather than rejecting.
+  dispatch: vi.fn<(...args: unknown[]) => Promise<{ ok: boolean; error?: Error }>>(() =>
+    Promise.resolve({ ok: true })
+  ),
+  notify: vi.fn(),
   avail: { availability: {} as Record<string, unknown> },
   options: [] as Array<{
     id: string;
@@ -57,6 +61,8 @@ vi.mock("@/hooks/useKeybinding", () => ({
   useAriaKeyshortcuts: (actionId: string) =>
     actionId === "agent.claude" ? "Meta+Alt+C" : undefined,
 }));
+vi.mock("@/lib/notify", () => ({ notify: h.notify }));
+
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: h.dispatch },
 }));
@@ -73,6 +79,8 @@ import {
 
 beforeEach(() => {
   h.dispatch.mockClear();
+  h.dispatch.mockResolvedValue({ ok: true });
+  h.notify.mockClear();
   h.avail.availability = {};
   h.options = [
     { id: "claude", launchAgentId: "claude", label: "Claude", description: "", icon: null },
@@ -92,10 +100,11 @@ beforeEach(() => {
 });
 
 describe("LauncherQuickActions", () => {
-  it("shows the toolbar agents, a new-terminal chip, and the palette search entry", () => {
+  it("shows the toolbar agents, the fixed chips, and the palette search entry", () => {
     render(<LauncherQuickActions />);
     expect(screen.getByRole("button", { name: /Claude/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /New terminal/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Browse files/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Search agents & panels/i })).toBeTruthy();
   });
 
@@ -184,6 +193,45 @@ describe("LauncherQuickActions", () => {
     expect(h.dispatch).toHaveBeenCalledWith("panel.palette", undefined, { source: "user" });
   });
 
+  it("dispatches the file browser with no args so it resolves its own target", () => {
+    // Args-free is the contract: the action picks the focused worktree, or the
+    // workspace root in a scratch or worktree-less project (#11482).
+    render(<LauncherQuickActions />);
+    fireEvent.click(screen.getByRole("button", { name: /Browse files/i }));
+    expect(h.dispatch).toHaveBeenCalledWith("worktree.openFileBrowser", undefined, {
+      source: "user",
+    });
+  });
+
+  it("surfaces a refused file-browser dispatch instead of pressing into nothing", async () => {
+    // `dispatch` reports a thrown `run()` as `ok: false` rather than rejecting,
+    // so discarding the result would restore exactly the silent failure the
+    // action's throw exists to end.
+    h.dispatch.mockResolvedValue({ ok: false, error: new Error("No folder to browse") });
+    render(<LauncherQuickActions />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Browse files/i }));
+    await vi.waitFor(() => expect(h.notify).toHaveBeenCalled());
+
+    const toast = h.notify.mock.calls[0]?.[0] as {
+      type: string;
+      action?: { label: string; onClick: () => void };
+    };
+    expect(toast.type).toBe("error");
+    // The recovery action re-runs the same dispatch, so a transient refusal is
+    // recoverable without hunting for the chip again.
+    h.dispatch.mockResolvedValue({ ok: true });
+    toast.action?.onClick();
+    expect(h.dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("stays quiet when the file browser opens", async () => {
+    render(<LauncherQuickActions />);
+    fireEvent.click(screen.getByRole("button", { name: /Browse files/i }));
+    await Promise.resolve();
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
   // Shortcut-hint teardown around the palette open is now global — the
   // palette's own open transition clears it (AppPaletteDialog overlay
   // clearing, issue #11030) — so the palette button dispatches plainly,
@@ -206,6 +254,7 @@ describe("LauncherQuickActions", () => {
     const launcherButtons = () => [
       screen.getByRole("button", { name: /Claude/i }),
       screen.getByRole("button", { name: /New terminal/i }),
+      screen.getByRole("button", { name: /Browse files/i }),
       screen.getByRole("button", { name: /Search agents & panels/i }),
     ];
 

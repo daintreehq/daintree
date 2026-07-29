@@ -5,7 +5,7 @@ import type { ActionContext } from "@shared/types/actions";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import { copyTreeClient, systemClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
-import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { getCurrentViewStore, getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
@@ -396,16 +396,44 @@ export function registerWorktreeContextActions(
   actions.set("worktree.openFileBrowser", () =>
     defineAction({
       id: "worktree.openFileBrowser",
-      title: "Browse Files",
-      description: "Open a read-only file browser for a worktree",
+      title: "Browse files",
+      description:
+        "Open a read-only file browser for a worktree, or for the current project or scratch folder when no worktree is selected",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      // A palette gate rather than `isEnabled`, for the same reason
+      // `worktree.openChanges` above spells out: `isEnabled` never sees args,
+      // so on an explicit `worktreeId` it would answer for the focused
+      // worktree instead. Readiness is broader than a worktree now — a scratch
+      // or worktree-less project can open its own root (#11482).
+      palette: {
+        mode: "requireContext",
+        isReady: (ctx: ActionContext) => {
+          // Resolvability, not mere presence: a stale id whose worktree is gone
+          // now makes `run` throw, so a readiness check that only tested for a
+          // non-empty string would enable a row that cannot open anything.
+          const contextWorktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+          if (contextWorktreeId !== undefined) {
+            // `OrNull`, not `getCurrentViewStore`: that one throws before the
+            // worktree provider mounts, and the action manifest is listed in
+            // exactly that window — the throw would disable the row rather than
+            // answer it.
+            const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
+            return worktrees ? worktrees.has(contextWorktreeId) : false;
+          }
+          return Boolean(ctx.projectPath ?? ctx.scratchPath);
+        },
+        reason: "No folder to browse",
+      },
       argsSchema: z
         .object({
-          worktreeId: z.string().optional(),
-          /** Worktree-relative path to select and scroll into view on open. */
+          // `.min(1)`, unlike the siblings above: an empty string here is not a
+          // harmless falsy worktree — it would slip past the unknown-worktree
+          // guard and open the workspace root instead of failing.
+          worktreeId: z.string().min(1).optional(),
+          /** Path relative to the browser root, to select and scroll into view on open. */
           revealPath: z.string().optional(),
           /**
            * What `revealPath` points at. A directory is also expanded so its
@@ -416,12 +444,38 @@ export function registerWorktreeContextActions(
         })
         .optional(),
       run: async (args, ctx: ActionContext) => {
-        const worktreeId = args?.worktreeId;
-        const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
-        if (!targetWorktreeId) return;
+        const targetWorktreeId = args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        const worktree = targetWorktreeId
+          ? getCurrentViewStore().getState().worktrees.get(targetWorktreeId)
+          : undefined;
 
-        const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
-        if (!worktree) return;
+        // One rule for every source of the id, explicit arg or ambient context:
+        // a named worktree that doesn't resolve is an error, never a cue to
+        // browse something else. Falling through to the workspace root would
+        // open the folder *above* the one named — the wrong folder, not a
+        // degraded one — and a stale `focusedWorktreeId` outliving its deleted
+        // worktree is exactly how that would happen unnoticed.
+        if (targetWorktreeId !== undefined && !worktree) {
+          throw new Error(`Worktree not found: ${targetWorktreeId}`);
+        }
+
+        // No worktree id at all is the normal state in a scratch or a
+        // worktree-less project (#11482) — browse the workspace root instead of
+        // silently doing nothing. The context provider resolves both pointers
+        // from one view-scoped lookup, so only one of them is ever set and this
+        // names the folder `useWorkspaceRootPath` opens; the project-first
+        // tie-break is a defensive echo of `resolveWorkspaceCwd`, not a choice
+        // this action is expected to have to make.
+        const workspacePath = ctx.projectPath ?? ctx.scratchPath;
+        if (!worktree && !workspacePath) {
+          // Thrown, not a bare return: a silent no-op still reports ok from
+          // dispatch, so the palette and quick action would look like they
+          // worked.
+          throw new Error("No folder to browse");
+        }
+        const workspaceTitle = worktree
+          ? undefined
+          : `Files — ${ctx.projectName ?? ctx.scratchName ?? (workspacePath ? basename(workspacePath) : "workspace")}`;
 
         // Lazily imported for the same reason as the review hub above: a static
         // import drags panelStore -> panelPersistence in, which reads
@@ -444,10 +498,13 @@ export function registerWorktreeContextActions(
           };
         }
 
+        // No `worktreeId` for a workspace root: its absence is what tells both
+        // the pane and main to resolve the view's own workspace folder, which
+        // neither side ever names explicitly.
         await usePanelDialogStore.getState().openPanelDialog({
           kind: "file-browser",
-          title: `Files — ${worktree.branch ?? worktree.name}`,
-          worktreeId: targetWorktreeId,
+          title: worktree ? `Files — ${worktree.branch ?? worktree.name}` : workspaceTitle,
+          ...(worktree && { worktreeId: targetWorktreeId }),
           ...reveal,
         });
       },

@@ -2,6 +2,36 @@ import type { FileTreeNode } from "@shared/types";
 import type { FileBrowserTreeSnapshot } from "@shared/types/panel";
 
 /**
+ * What a browser panel is rooted at.
+ *
+ * `worktree` is the original mode: listings route through the worktree's
+ * workspace host and the tree gets git/filesystem change ticks. `workspace` is
+ * the view's own project or scratch folder (#11482) — reachable without a
+ * worktree, but with no host and no tick source, so it refreshes on demand
+ * only.
+ *
+ * `basePath` is resolved fresh from the store on every render rather than
+ * persisted, so a rename, move or relocation is reflected without restarting
+ * the panel — and, for `workspace`, so it can never drift from the root main
+ * independently derives from the same sender binding.
+ */
+export type FileBrowserSource =
+  | { kind: "worktree"; worktreeId: string; basePath: string }
+  | { kind: "workspace"; basePath: string };
+
+/**
+ * Identity of a source for generation resets — changing it invalidates every
+ * in-flight listing. The kind is part of the key so a worktree and a workspace
+ * that happen to share a path are still distinct identities.
+ */
+export function sourceIdentityKey(source: FileBrowserSource | null): string | null {
+  if (!source) return null;
+  return source.kind === "worktree"
+    ? `worktree:${source.worktreeId}`
+    : `workspace:${source.basePath}`;
+}
+
+/**
  * One rendered line of the tree. The tree is rendered as a flat array rather
  * than nested elements because `react-virtuoso` — the virtualizer already used
  * by the sidebar, logs and console lists — windows a linear item list. Nesting
@@ -328,7 +358,7 @@ export const MAX_SNAPSHOT_TEXT_CHARS = 512_000;
  */
 export function snapshotFromListings(
   listings: DirectoryListings,
-  worktreeId: string,
+  source: FileBrowserSource,
   rootPath: string
 ): FileBrowserTreeSnapshot | null {
   if (!listings.has(rootPath)) return null;
@@ -356,7 +386,39 @@ export function snapshotFromListings(
     });
   }
   entries.sort((a, b) => (a.dirPath < b.dirPath ? -1 : a.dirPath > b.dirPath ? 1 : 0));
-  return { worktreeId, rootPath, listings: entries };
+  return {
+    ...(source.kind === "worktree" && { worktreeId: source.worktreeId }),
+    basePath: source.basePath,
+    rootPath,
+    listings: entries,
+  };
+}
+
+/**
+ * Whether a persisted snapshot was captured under the identity now being
+ * rendered. Both tags must agree: the worktree id (absent on both sides for a
+ * workspace-rooted browser) and the absolute base, which catches a relocated
+ * project that kept its id. A mismatch just cold-starts.
+ */
+export function snapshotMatchesSource(
+  snapshot: FileBrowserTreeSnapshot,
+  source: FileBrowserSource,
+  rootPath: string
+): boolean {
+  const snapshotWorktreeId = snapshot.worktreeId;
+  const sourceWorktreeId = source.kind === "worktree" ? source.worktreeId : undefined;
+  if (snapshotWorktreeId !== sourceWorktreeId) return false;
+  if (snapshotWorktreeId === undefined) {
+    // A workspace snapshot has no worktree id, so the base is its only
+    // identity — an absent one would match every workspace and let a corrupt
+    // record paint fabricated rows in any of them.
+    if (snapshot.basePath !== source.basePath) return false;
+  } else if (snapshot.basePath !== undefined && snapshot.basePath !== source.basePath) {
+    // Absent is tolerated here alone: snapshots written before the base tag
+    // existed are worktree-rooted, and their worktree id already pins identity.
+    return false;
+  }
+  return snapshot.rootPath === rootPath;
 }
 
 /**

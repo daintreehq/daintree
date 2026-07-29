@@ -146,14 +146,29 @@ function isSnapshotNodeName(value: unknown): value is string {
  */
 function sanitizeTreeSnapshot(value: unknown): FileBrowserTreeSnapshot | undefined {
   if (!isRecord(value)) return undefined;
-  const { worktreeId, rootPath, listings } = value;
+  const { worktreeId, basePath, rootPath, listings } = value;
+  // Both identity tags are optional — a workspace-rooted browser has no
+  // worktree id (#11482) — but a present one must still be well-formed, since
+  // a malformed tag would compare unequal and silently cold-start forever.
   if (
-    typeof worktreeId !== "string" ||
-    worktreeId.length === 0 ||
-    worktreeId.length > MAX_RESTORED_PATH_LENGTH
+    worktreeId !== undefined &&
+    (typeof worktreeId !== "string" ||
+      worktreeId.length === 0 ||
+      worktreeId.length > MAX_RESTORED_PATH_LENGTH)
   ) {
     return undefined;
   }
+  if (
+    basePath !== undefined &&
+    (typeof basePath !== "string" ||
+      basePath.length === 0 ||
+      basePath.length > MAX_RESTORED_PATH_LENGTH)
+  ) {
+    return undefined;
+  }
+  // At least one identity tag is mandatory. A snapshot carrying neither would
+  // compare equal to every workspace source and seed its rows there.
+  if (worktreeId === undefined && basePath === undefined) return undefined;
   if (!isSnapshotDirPath(rootPath)) return undefined;
   if (!Array.isArray(listings) || listings.length > MAX_SNAPSHOT_LISTINGS) return undefined;
 
@@ -194,7 +209,12 @@ function sanitizeTreeSnapshot(value: unknown): FileBrowserTreeSnapshot | undefin
   // A snapshot without its own root listing has nothing to paint from —
   // seeding it would show an empty tree where a skeleton belongs.
   if (!seenDirs.has(rootPath)) return undefined;
-  return { worktreeId, rootPath, listings: sanitizedListings };
+  return {
+    ...(worktreeId !== undefined && { worktreeId }),
+    ...(basePath !== undefined && { basePath }),
+    rootPath,
+    listings: sanitizedListings,
+  };
 }
 
 /**

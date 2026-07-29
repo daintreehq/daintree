@@ -460,7 +460,11 @@ describe("panelKindSerialisers", () => {
           ],
           ["src", [{ name: "app.ts", path: "src/app.ts", isDirectory: false, size: 99 }]],
         ]);
-        const captured = snapshotFromListings(live, "wt-1", "");
+        const captured = snapshotFromListings(
+          live,
+          { kind: "worktree", worktreeId: "wt-1", basePath: "/repo" },
+          ""
+        );
         expect(captured).not.toBeNull();
 
         const panel: FileBrowserPanelData = {

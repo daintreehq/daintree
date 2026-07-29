@@ -12,6 +12,22 @@ vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 
+const scratchStoreMock = vi.hoisted(() => ({
+  getScratchById: vi.fn(),
+}));
+
+vi.mock("../../../services/ScratchStore.js", () => ({
+  scratchStore: scratchStoreMock,
+}));
+
+const fileTreeServiceMock = vi.hoisted(() => ({
+  getFileTree: vi.fn(),
+}));
+
+vi.mock("../../../services/FileTreeService.js", () => ({
+  fileTreeService: fileTreeServiceMock,
+}));
+
 import { buildFileBrowserNamespace } from "../fileBrowser.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
@@ -25,6 +41,9 @@ import type { HandlerDependencies, IpcContext } from "../../types.js";
 describe("fileBrowser listDirectory project scoping", () => {
   const WT_A = "/projects/a/main";
   const WT_B = "/projects/b/main";
+  // A real UUID-v4 shape: `getScratchById` screens the id before querying, so
+  // a placeholder string would exercise the rejection path, not the lookup.
+  const SCRATCH_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
 
   let getAllStatesForProjectAsync: ReturnType<typeof vi.fn>;
   let getAllStatesAsync: ReturnType<typeof vi.fn>;
@@ -36,7 +55,7 @@ describe("fileBrowser listDirectory project scoping", () => {
     senderWindow: { id: 7 },
   } as unknown as IpcContext;
 
-  function invoke(ctx: IpcContext, payload: { worktreeId: string; dirPath?: string }) {
+  function invoke(ctx: IpcContext, payload: { worktreeId?: string; dirPath?: string }) {
     const spec = buildFileBrowserNamespace(deps).ops.listDirectory;
     return (spec.handler as (c: IpcContext, p: unknown) => Promise<unknown>)(ctx, payload);
   }
@@ -49,8 +68,16 @@ describe("fileBrowser listDirectory project scoping", () => {
         ? { id: "project-a", path: "/projects/a" }
         : id === "project-b"
           ? { id: "project-b", path: "/projects/b" }
-          : undefined
+          : id === "lightweight"
+            ? { id: "lightweight", path: "/folders/notes", gitBacked: false }
+            : undefined
     );
+    scratchStoreMock.getScratchById.mockReset();
+    scratchStoreMock.getScratchById.mockImplementation((id: string) =>
+      id === SCRATCH_ID ? { id: SCRATCH_ID, path: "/scratches/one" } : null
+    );
+    fileTreeServiceMock.getFileTree.mockReset();
+    fileTreeServiceMock.getFileTree.mockResolvedValue([]);
 
     // Project-scoped query answers with the owning project's worktrees;
     // the legacy window-scoped query would answer with the ACTIVE project's
@@ -95,5 +122,105 @@ describe("fileBrowser listDirectory project scoping", () => {
     );
     expect(getAllStatesForProjectAsync).not.toHaveBeenCalled();
     expect(getAllStatesAsync).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * #11482: a scratch or a worktree-less project has no worktree to name, so the
+ * request omits `worktreeId` and main resolves the root from the sender's own
+ * binding. The renderer never names a path — that is what keeps this from
+ * widening what a compromised renderer can reach.
+ */
+describe("fileBrowser listDirectory workspace roots", () => {
+  const SCRATCH_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+  let getAllStatesForProjectAsync: ReturnType<typeof vi.fn>;
+  let getFileTree: ReturnType<typeof vi.fn>;
+  let deps: HandlerDependencies;
+
+  function invoke(ctx: IpcContext, payload: { worktreeId?: string; dirPath?: string }) {
+    const spec = buildFileBrowserNamespace(deps).ops.listDirectory;
+    return (spec.handler as (c: IpcContext, p: unknown) => Promise<unknown>)(ctx, payload);
+  }
+
+  const ctxFor = (projectId: string | null) =>
+    ({ projectId, senderWindow: { id: 3 } }) as unknown as IpcContext;
+
+  beforeEach(() => {
+    _resetRateLimitQueuesForTest();
+    projectStoreMock.getProjectById.mockReset();
+    projectStoreMock.getProjectById.mockImplementation((id: string) =>
+      id === "lightweight" ? { id: "lightweight", path: "/folders/notes" } : undefined
+    );
+    scratchStoreMock.getScratchById.mockReset();
+    scratchStoreMock.getScratchById.mockImplementation((id: string) =>
+      id === SCRATCH_ID ? { id: SCRATCH_ID, path: "/scratches/one" } : null
+    );
+    fileTreeServiceMock.getFileTree.mockReset();
+    fileTreeServiceMock.getFileTree.mockResolvedValue([]);
+
+    getAllStatesForProjectAsync = vi.fn(async () => []);
+    getFileTree = vi.fn(async () => []);
+    deps = {
+      worktreeService: { getAllStatesForProjectAsync, getFileTree },
+    } as unknown as HandlerDependencies;
+  });
+
+  it("lists a scratch's own folder for a scratch-bound sender", async () => {
+    await invoke(ctxFor(SCRATCH_ID), {});
+
+    expect(scratchStoreMock.getScratchById).toHaveBeenCalledWith(SCRATCH_ID);
+    expect(fileTreeServiceMock.getFileTree).toHaveBeenCalledWith("/scratches/one", "");
+    // Never the host route: a scratch has no workspace host, and
+    // `resolveHostForPath`'s single-host fallback would hand the listing to an
+    // unrelated project's host rather than failing.
+    expect(getFileTree).not.toHaveBeenCalled();
+  });
+
+  it("lists a worktree-less project's own folder without enumerating worktrees", async () => {
+    await invoke(ctxFor("lightweight"), { dirPath: "sub" });
+
+    expect(fileTreeServiceMock.getFileTree).toHaveBeenCalledWith("/folders/notes", "sub");
+    expect(getAllStatesForProjectAsync).not.toHaveBeenCalled();
+  });
+
+  it("prefers the project row over a scratch id collision", async () => {
+    await invoke(ctxFor("lightweight"), {});
+    expect(scratchStoreMock.getScratchById).not.toHaveBeenCalled();
+  });
+
+  it("still refuses a sender with no binding when no worktree is named", async () => {
+    // The null-projectId gate is the #11366 boundary; omitting `worktreeId`
+    // must not become a way around it.
+    await expect(invoke(ctxFor(null), {})).rejects.toThrow(/requesting view's project/);
+    expect(fileTreeServiceMock.getFileTree).not.toHaveBeenCalled();
+  });
+
+  it("refuses a sender whose id is in neither store", async () => {
+    await expect(invoke(ctxFor("ghost"), {})).rejects.toThrow(/Unknown project/);
+    expect(fileTreeServiceMock.getFileTree).not.toHaveBeenCalled();
+  });
+
+  it("refuses a worktree id from a scratch sender rather than widening to its folder", async () => {
+    // A supplied worktree id always demands a project row; falling back to the
+    // scratch root here would silently open a different folder than asked for.
+    await expect(invoke(ctxFor(SCRATCH_ID), { worktreeId: "/projects/a/main" })).rejects.toThrow(
+      /Unknown project/
+    );
+    expect(fileTreeServiceMock.getFileTree).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unresolvable worktree id instead of falling back to the project root", async () => {
+    await expect(invoke(ctxFor("lightweight"), { worktreeId: "/folders/notes" })).rejects.toThrow(
+      /Worktree not found/
+    );
+    expect(fileTreeServiceMock.getFileTree).not.toHaveBeenCalled();
+  });
+
+  it("rejects a traversing dirPath before resolving any root", async () => {
+    await expect(invoke(ctxFor(SCRATCH_ID), { dirPath: "../../etc" })).rejects.toThrow(
+      /traverse outside/
+    );
+    expect(scratchStoreMock.getScratchById).not.toHaveBeenCalled();
   });
 });
