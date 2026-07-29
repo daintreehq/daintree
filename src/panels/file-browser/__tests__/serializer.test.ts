@@ -16,10 +16,15 @@ const basePanel: FileBrowserPanelData = {
  * Re-enter the create path with a serialized snapshot fragment. The snapshot is
  * a flat bag shared by every kind, so its `kind` is the open `PanelKind` union
  * — pin the discriminant here rather than spreading it through.
+ *
+ * `worktreeId` rides the base object rather than the per-kind fragment
+ * `serializeFileBrowser` returns, so restore carries it separately; supplying
+ * one here keeps these cases worktree-rooted, which is what their fixtures
+ * describe. The workspace-rooted cases below omit it deliberately.
  */
 function asOptions(snapshot: Partial<PanelSnapshot>): FileBrowserPanelOptions {
   const { kind: _kind, ...rest } = snapshot;
-  return { ...rest, kind: "file-browser" };
+  return { ...rest, kind: "file-browser", worktreeId: "wt-1" };
 }
 
 describe("serializeFileBrowser", () => {
@@ -142,12 +147,66 @@ describe("serializeFileBrowser", () => {
       browserSidebarWidth: 360,
     });
   });
+
+  it("persists workspace rooting so a promoted panel keeps its folder (#11489)", () => {
+    // Promotion into the grid adopts the active worktree as a placement key, so
+    // by save time an absent worktreeId no longer distinguishes the two — the
+    // marker is the only thing that survives to say which folder to browse.
+    const promoted: FileBrowserPanelData = {
+      ...basePanel,
+      worktreeId: "wt-1",
+      browserWorkspaceRooted: true,
+    };
+
+    expect(serializeFileBrowser(promoted)).toEqual({ browserWorkspaceRooted: true });
+
+    const restored = createFileBrowserDefaults({
+      ...asOptions(serializeFileBrowser(promoted)),
+      worktreeId: "wt-1",
+    });
+    expect(restored).toEqual({ browserWorkspaceRooted: true });
+  });
+
+  it("keeps a worktree-rooted panel sparse rather than writing the marker false", () => {
+    const worktreeRooted: FileBrowserPanelData = {
+      ...basePanel,
+      worktreeId: "wt-1",
+      browserWorkspaceRooted: false,
+    };
+
+    expect(serializeFileBrowser(worktreeRooted)).toEqual({});
+  });
 });
 
 describe("createFileBrowserDefaults", () => {
-  it("produces no fields when the opener passes only the kind", () => {
+  it("produces no fields when the opener names a worktree and nothing else", () => {
     // The sidebar entry point opens the browser with nothing but a worktree, so
     // this is the common path — it must not stamp defaults that then persist.
-    expect(createFileBrowserDefaults({ kind: "file-browser" })).toEqual({});
+    expect(createFileBrowserDefaults({ kind: "file-browser", worktreeId: "wt-1" })).toEqual({});
+  });
+
+  it("marks a panel opened without a worktree as workspace-rooted (#11489)", () => {
+    expect(createFileBrowserDefaults({ kind: "file-browser" })).toEqual({
+      browserWorkspaceRooted: true,
+    });
+  });
+
+  it("treats an unresolvable empty worktree id as naming a worktree, not as absent", () => {
+    // Fail closed, matching the pane's presence check: "" names a worktree that
+    // cannot resolve, and browsing the workspace root instead would be the wrong
+    // folder rather than a degraded one.
+    expect(createFileBrowserDefaults({ kind: "file-browser", worktreeId: "" })).toEqual({});
+  });
+
+  it("keeps a restored workspace-rooted panel workspace-rooted despite an adopted worktree", () => {
+    // The shape a promoted panel persists: grid placement stamped a worktreeId
+    // on it (#11290), so only the marker still tells the two apart.
+    expect(
+      createFileBrowserDefaults({
+        kind: "file-browser",
+        worktreeId: "wt-1",
+        browserWorkspaceRooted: true,
+      })
+    ).toEqual({ browserWorkspaceRooted: true });
   });
 });

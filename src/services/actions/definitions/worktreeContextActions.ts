@@ -498,9 +498,11 @@ export function registerWorktreeContextActions(
           };
         }
 
-        // No `worktreeId` for a workspace root: its absence is what tells both
-        // the pane and main to resolve the view's own workspace folder, which
-        // neither side ever names explicitly.
+        // No `worktreeId` for a workspace root: its absence is what tells the
+        // create path to resolve the view's own workspace folder, which nothing
+        // ever names explicitly. `createFileBrowserDefaults` records that as
+        // `browserWorkspaceRooted`, since grid promotion later stamps a
+        // placement worktreeId onto the panel (#11489).
         await usePanelDialogStore.getState().openPanelDialog({
           kind: "file-browser",
           title: worktree ? `Files — ${worktree.branch ?? worktree.name}` : workspaceTitle,

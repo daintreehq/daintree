@@ -286,6 +286,10 @@ const FILE_BROWSER_FIELD_CLASSIFICATION = {
   // eviction.
   browserTreeSnapshot: true,
   browserSidebarWidth: true,
+  // Which folder the panel browses. Derivable from an absent `worktreeId` only
+  // at creation — a promoted panel carries an adopted placement id by save time
+  // (#11489) — so it has to ride the record like any other user intent.
+  browserWorkspaceRooted: true,
   // BasePanelData carrier-bookkeeping timestamps — written by the base
   // serialization layer in panelToSnapshot, not per-kind serializers.
   createdAt: false,
@@ -477,6 +481,7 @@ const fileBrowserFixture: FileBrowserPanelData = {
   // A non-default width (the serializer omits 288), so the coverage spread emits
   // the key instead of dropping it as a default.
   browserSidebarWidth: 360,
+  browserWorkspaceRooted: true,
 };
 
 const savedFileBrowser: SavedTerminalData = {
@@ -489,6 +494,7 @@ const savedFileBrowser: SavedTerminalData = {
   browserSidebarCollapsed: true,
   browserTreeSnapshot: browserTreeSnapshotFixture,
   browserSidebarWidth: 360,
+  browserWorkspaceRooted: true,
 };
 
 const diffFixture: DiffPanelData = {

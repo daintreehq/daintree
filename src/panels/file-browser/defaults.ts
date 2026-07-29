@@ -10,6 +10,16 @@ export function createFileBrowserDefaults(
   options: FileBrowserPanelOptions
 ): Partial<FileBrowserPanelData> {
   const width = normalizeFileBrowserSidebarWidth(options.browserSidebarWidth);
+  // Source identity is settled here, once, rather than at each placement site:
+  // promotion into the grid adopts the active worktree so the panel lands in a
+  // rendered index bucket (#11290), and every later mutation spreads the panel
+  // record — so a marker set at creation survives all of them, while re-reading
+  // `worktreeId` at render time would follow the adopted id and silently re-root
+  // the tree (#11489). `=== undefined`, not truthiness: a `worktreeId: ""` names
+  // a worktree that cannot resolve and must refuse rather than quietly fall back
+  // to the workspace root.
+  const workspaceRooted =
+    options.browserWorkspaceRooted === true || options.worktreeId === undefined;
   return {
     // `!= null` rather than truthiness: an explicit `false` for the dotfile
     // toggle is a deliberate choice, and dropping it here would let a later
@@ -38,5 +48,6 @@ export function createFileBrowserDefaults(
     // so a default-width panel stays sparse just like the collapsed bit.
     ...(width != null &&
       width !== FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH && { browserSidebarWidth: width }),
+    ...(workspaceRooted && { browserWorkspaceRooted: true }),
   };
 }

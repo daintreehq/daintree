@@ -748,11 +748,13 @@ export interface FileBrowserTreeSnapshot {
  * root comes from `worktreeId`, like `DiffPanelData.filePath`), so moving or
  * renaming the folder can't strand the panel on a dead path.
  *
- * An absent `worktreeId` roots the tree at the *view's own workspace* — the
- * project or scratch folder it was created for (#11482). Deliberately no
- * absolute root is stored for that case either: main derives it from the same
- * sender binding it authorizes against, so resolving it fresh on both sides is
- * what keeps them from ever disagreeing.
+ * A panel opened without a worktree is rooted at the *view's own workspace* —
+ * the project or scratch folder it was created for (#11482) — and records that
+ * as `browserWorkspaceRooted`, because grid promotion later stamps a
+ * placement `worktreeId` onto it (#11290) and absence alone would stop
+ * answering (#11489). Deliberately no absolute root is stored for that case
+ * either: main derives it from the same sender binding it authorizes against,
+ * so resolving it fresh on both sides is what keeps them from ever disagreeing.
  *
  * Every field persists: the issue's contract is that a pinned panel keeps its
  * expansion, selection and layout, and `promoteDialogPanelToGrid` reuses the
@@ -803,6 +805,18 @@ export interface FileBrowserPanelData extends BasePanelData {
    * it, so re-opening restores the last-dragged width (#11331).
    */
   browserSidebarWidth?: number;
+  /**
+   * Whether the tree is rooted at the view's workspace folder — a scratch or
+   * worktree-less project root (#11482) — rather than at `worktreeId`.
+   *
+   * Decided once at creation from the absence of a requested worktree, and
+   * never changed by a placement gesture. Promotion into the grid adopts the
+   * active worktree so the panel lands in a rendered index bucket (#11290);
+   * for a workspace-rooted panel that id is placement metadata only, and
+   * re-deriving the browse root from it silently re-roots the tree to a folder
+   * the user never asked for (#11489). Only `true` is persisted.
+   */
+  browserWorkspaceRooted?: boolean;
 }
 
 export type PanelInstance =

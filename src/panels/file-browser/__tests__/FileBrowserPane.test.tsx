@@ -56,6 +56,7 @@ interface MockPanel {
   browserRootPath?: string;
   browserSidebarCollapsed?: boolean;
   browserSidebarWidth?: number;
+  browserWorkspaceRooted?: boolean;
 }
 
 const mockPanel: MockPanel = { id: "fb-1", kind: "file-browser" };
@@ -234,6 +235,7 @@ beforeEach(() => {
   mockPanel.browserRootPath = undefined;
   mockPanel.browserShowIgnored = undefined;
   mockPanel.browserSidebarWidth = undefined;
+  mockPanel.browserWorkspaceRooted = undefined;
   for (const name of ["matchMedia"] as const) {
     if (typeof window[name] !== "function") {
       Object.defineProperty(window, name, {
@@ -1086,5 +1088,50 @@ describe("workspace-rooted browser", () => {
     renderPane({ worktreeId: "wt-missing" });
 
     expect(screen.getByText("Open a folder to browse its files")).toBeTruthy();
+  });
+});
+
+/**
+ * Promotion into the grid stamps the active worktree onto a workspace-rooted
+ * panel so it lands in a rendered index bucket (#11290). That id is placement
+ * only — a resolvable one, so nothing fails loudly; the panel just quietly
+ * showed the wrong folder until #11489.
+ */
+describe("promoted workspace-rooted browser (#11489)", () => {
+  it("keeps browsing the workspace after promotion stamps a placement worktree", async () => {
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    mockPanel.browserWorkspaceRooted = true;
+    renderPane({ worktreeId: "wt-1" });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy full path" }));
+    });
+
+    // wt-1 resolves to "/repo", which is what this joined against before the fix.
+    expect(writeTextMock).toHaveBeenCalledWith(`/scratches/one/${FOLDER_ROW.path}`);
+  });
+
+  it("hides Copy context for a promoted workspace-rooted browser", () => {
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    mockPanel.browserWorkspaceRooted = true;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(screen.queryByRole("button", { name: "Copy context" })).toBeNull();
+  });
+
+  it("still refuses to render when the workspace root is unknown", () => {
+    // The placement worktree resolves, but it is not this panel's folder — so
+    // an unresolved workspace is the unbound case, not a reason to use it.
+    mockPanel.browserWorkspaceRooted = true;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(screen.getByText("Open a folder to browse its files")).toBeTruthy();
+  });
+
+  it("leaves an unmarked worktree panel on its worktree", () => {
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(screen.getByRole("button", { name: "Copy context" })).toBeTruthy();
   });
 });

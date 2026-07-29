@@ -29,5 +29,10 @@ export function serializeFileBrowser(t: FileBrowserPanelData): Partial<PanelSnap
     t.browserSidebarWidth !== FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH
       ? { browserSidebarWidth: t.browserSidebarWidth }
       : {}),
+    // Truthiness, and only `true` is written: a worktree-rooted panel simply
+    // omits the field. It must persist even though it is derivable from an
+    // absent `worktreeId` at creation, because a promoted panel carries an
+    // adopted placement `worktreeId` by the time it is saved (#11489).
+    ...(t.browserWorkspaceRooted ? { browserWorkspaceRooted: true } : {}),
   };
 }
