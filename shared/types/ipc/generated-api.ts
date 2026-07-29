@@ -220,6 +220,9 @@ export interface GeneratedElectronAPI {
     reportPanelOpen(
       ...args: IpcInvokeMap["help:report-panel-open"]["args"]
     ): Promise<IpcInvokeMap["help:report-panel-open"]["result"]>;
+    restorePendingHibernation(
+      ...args: IpcInvokeMap["help:restore-pending-hibernation"]["args"]
+    ): Promise<IpcInvokeMap["help:restore-pending-hibernation"]["result"]>;
     revokeSession(
       ...args: IpcInvokeMap["help:revoke-session"]["args"]
     ): Promise<IpcInvokeMap["help:revoke-session"]["result"]>;

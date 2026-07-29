@@ -656,6 +656,10 @@ export interface GeneratedIpcInvokeMap {
     args: [projectId: string, isOpen: boolean];
     result: void;
   };
+  "help:restore-pending-hibernation": {
+    args: [projectId: string];
+    result: boolean;
+  };
   "help:revoke-session": {
     args: [sessionId: string];
     result: void;

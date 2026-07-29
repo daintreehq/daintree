@@ -16,7 +16,10 @@ import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
 import { ASSISTANT_SCRATCH_ENV_VAR, getScratchDirForSession } from "./AssistantScratchService.js";
 import { syncAssistantContent } from "./AssistantContentMirror.js";
-import type { PendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
+import type {
+  PendingHelpHibernation,
+  PendingHelpHibernationStore,
+} from "./PendingHelpHibernationStore.js";
 
 // Narrow type so the test suite (and any future caller) can satisfy this
 // dependency without instantiating a full PtyClient. `kill` is the original
@@ -285,6 +288,16 @@ export class HelpSessionService {
   // mid-kill displacement can't let a stale resume ID shadow the new session.
   // In-memory only — no in-flight capture is meaningful across an app restart.
   private readonly pendingCapturesByProject = new Map<string, string>();
+  // #11477: the entry most recently handed out by `takePendingHibernation`, per
+  // project, so a taker whose launch aborts can put it back verbatim via
+  // `restorePendingHibernation` — original `capturedAt` intact, `panelWasOpen`
+  // stripped. Holding it here rather than round-tripping it through the
+  // renderer keeps the put-back IPC to a projectId and leaves no way to write a
+  // fabricated entry into the persistent store. In-memory only and one deep per
+  // project: a take that is never answered is simply dropped, and a later take
+  // overwrites the stash so a stale put-back can't resurrect a superseded
+  // conversation.
+  private readonly lastTakenByProject = new Map<string, PendingHelpHibernation>();
   // #10815: per-project assistant-panel visibility, reported by the renderer
   // whenever its `isOpen` changes. Read at capture time to stamp
   // `panelWasOpen` onto the eviction hibernation entry so cold switch-back can
@@ -1134,12 +1147,64 @@ export class HelpSessionService {
     // already-killed agent's (now-stale) resume ID cannot overwrite the
     // placeholder the renderer just claimed. Mirrors displacePriorSessions.
     this.pendingCapturesByProject.delete(projectId);
+    // Stash the exact entry (original `capturedAt` and all) so a taker that
+    // aborts can hand it back via `restorePendingHibernation` (#11477).
+    // Overwrites any prior stash: only the most recent take is restorable, and
+    // an earlier taker's put-back must not resurrect a superseded entry.
+    const { panelWasOpen: _panelWasOpen, ...restorable } = entry;
+    this.lastTakenByProject.set(projectId, restorable);
     await this.pendingHibernationStore.clear(projectId);
     return {
       agentId: entry.agentId,
       agentSessionId: entry.agentSessionId,
       cwd: entry.cwd,
     };
+  }
+
+  /**
+   * Put back an entry a caller took via `takePendingHibernation` but did not
+   * end up using (#11477).
+   *
+   * `takePendingHibernation` is destructive by design — the atomic take is the
+   * single-winner gate that stops two windows from displacing each other's
+   * backend (#10819). But every abort downstream of a successful take dropped
+   * the entry on the floor, so a launch superseded by a StrictMode remount, the
+   * stall watchdog, or a plain provisioning failure destroyed the only resume
+   * token the user had. The watchdog case is the sharpest: it surfaces a
+   * *retryable* launch error while the token that retry needs is already gone.
+   *
+   * Refuses whenever anything newer owns the slot — that check IS the
+   * compare-and-swap, which is why no claim token is needed:
+   *
+   * - A present entry means a fresh capture landed after our take. It is newer
+   *   and describes a later conversation; overwriting it would resurrect a
+   *   superseded one.
+   * - An in-flight capture owner means a `revokeSession` is mid-`gracefulKill`
+   *   and will write the real resume id when it resolves (#9646). Restoring
+   *   under it would be clobbered anyway, or would race the placeholder.
+   *
+   * The entry itself comes from main's own take-side stash, not from the
+   * caller: the renderer only reports that it didn't use what it took. That
+   * keeps the original `capturedAt` (so a put-back can't refresh its way past
+   * the 14-day staleness cutoff), keeps `panelWasOpen` stripped — the safe
+   * default, since a put-back entry should be offered for an explicit resume
+   * but never auto-resume on switch-back (#10815) — and leaves no path for a
+   * renderer to write an agentId/cwd of its choosing into main's persistent
+   * store.
+   *
+   * Returns whether the entry was actually restored.
+   */
+  async restorePendingHibernation(projectId: string): Promise<boolean> {
+    if (!this.pendingHibernationStore) return false;
+    const stashed = this.lastTakenByProject.get(projectId);
+    if (!stashed) return false;
+    // One-shot: a take is answered by at most one restore, so a duplicate or
+    // late release can't re-resurrect an entry a subsequent take consumed.
+    this.lastTakenByProject.delete(projectId);
+    if (this.pendingHibernationStore.get(projectId)) return false;
+    if (this.pendingCapturesByProject.has(projectId)) return false;
+    await this.pendingHibernationStore.set(projectId, stashed);
+    return true;
   }
 
   private displacePriorSessions(projectId: string): void {

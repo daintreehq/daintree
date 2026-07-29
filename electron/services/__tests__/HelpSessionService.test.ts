@@ -1516,6 +1516,90 @@ describe("HelpSessionService", () => {
       expect(hibernationStore.clear).not.toHaveBeenCalled();
     });
 
+    describe("restorePendingHibernation (#11477)", () => {
+      const captured = {
+        agentId: "claude",
+        agentSessionId: "pulled-id",
+        cwd: "/help/dir",
+        capturedAt: 1_700_000_000_000,
+        panelWasOpen: true,
+      };
+
+      it("puts back exactly what was taken, minus panelWasOpen", async () => {
+        hibernationStore.get.mockReturnValueOnce(captured);
+        await service.takePendingHibernation("proj-A");
+        // The slot is empty again after the take — nothing newer has landed.
+        hibernationStore.get.mockReturnValue(null);
+
+        await expect(service.restorePendingHibernation("proj-A")).resolves.toBe(true);
+
+        // capturedAt is preserved, so repeated take/restore cycles cannot
+        // refresh an entry past the store's 14-day staleness cutoff. And
+        // panelWasOpen is dropped, so a put-back entry is offered for an
+        // explicit resume but never auto-resumes on cold switch-back (#10815).
+        expect(hibernationStore.set).toHaveBeenCalledWith("proj-A", {
+          agentId: "claude",
+          agentSessionId: "pulled-id",
+          cwd: "/help/dir",
+          capturedAt: 1_700_000_000_000,
+        });
+      });
+
+      it("refuses when a newer capture already occupies the slot", async () => {
+        hibernationStore.get.mockReturnValueOnce(captured);
+        await service.takePendingHibernation("proj-A");
+        hibernationStore.set.mockClear();
+        // A fresh eviction captured a later conversation while we were aborting.
+        hibernationStore.get.mockReturnValue({
+          agentId: "claude",
+          agentSessionId: "newer-id",
+          cwd: "/help/dir",
+          capturedAt: Date.now(),
+        });
+
+        await expect(service.restorePendingHibernation("proj-A")).resolves.toBe(false);
+        expect(hibernationStore.set).not.toHaveBeenCalled();
+      });
+
+      it("refuses while a capture is mid-gracefulKill, so the put-back can't race the placeholder", async () => {
+        mockPtyGracefulKill.mockImplementation(() => new Promise(() => {}));
+        const result = await service.provisionSession(provisionInput());
+        if (!result) throw new Error("expected provision");
+        expect(service.markTerminalForToken(result.token, "term-inflight")).toBe(true);
+
+        // A prior taker is holding a stashed entry...
+        hibernationStore.get.mockReturnValueOnce(captured);
+        await service.takePendingHibernation("proj-1");
+
+        // ...and a capture-revoke starts and parks on gracefulKill, claiming
+        // ownership of the slot via its synchronous placeholder write (#9646).
+        void service.revokeSession(result.sessionId, { captureHibernation: true });
+        await Promise.resolve();
+        hibernationStore.set.mockClear();
+        hibernationStore.get.mockReturnValue(null);
+
+        await expect(service.restorePendingHibernation("proj-1")).resolves.toBe(false);
+        expect(hibernationStore.set).not.toHaveBeenCalled();
+      });
+
+      it("answers a take at most once, so a duplicate release cannot resurrect a consumed entry", async () => {
+        hibernationStore.get.mockReturnValueOnce(captured);
+        await service.takePendingHibernation("proj-A");
+        hibernationStore.get.mockReturnValue(null);
+
+        await expect(service.restorePendingHibernation("proj-A")).resolves.toBe(true);
+        hibernationStore.set.mockClear();
+
+        await expect(service.restorePendingHibernation("proj-A")).resolves.toBe(false);
+        expect(hibernationStore.set).not.toHaveBeenCalled();
+      });
+
+      it("is a no-op for a project that never took anything", async () => {
+        await expect(service.restorePendingHibernation("proj-untouched")).resolves.toBe(false);
+        expect(hibernationStore.set).not.toHaveBeenCalled();
+      });
+    });
+
     it("peekPendingHibernation reads the entry WITHOUT clearing it", async () => {
       hibernationStore.get.mockReturnValue({
         agentId: "claude",

@@ -10,6 +10,7 @@ const {
   mockMarkTerminal,
   mockPeekPendingHibernation,
   mockTakePendingHibernation,
+  mockRestorePendingHibernation,
   mockReportPanelOpen,
   mockProvisionSession,
   mockRevokeSession,
@@ -41,6 +42,7 @@ const {
   mockMarkTerminal: vi.fn().mockResolvedValue(undefined),
   mockPeekPendingHibernation: vi.fn().mockResolvedValue(null),
   mockTakePendingHibernation: vi.fn().mockResolvedValue(null),
+  mockRestorePendingHibernation: vi.fn().mockResolvedValue(false),
   mockReportPanelOpen: vi.fn().mockResolvedValue(undefined),
   mockProvisionSession: vi.fn().mockResolvedValue(null),
   mockRevokeSession: vi.fn().mockResolvedValue(undefined),
@@ -433,6 +435,8 @@ function resetState() {
   mockPeekPendingHibernation.mockResolvedValue(null);
   mockTakePendingHibernation.mockReset();
   mockTakePendingHibernation.mockResolvedValue(null);
+  mockRestorePendingHibernation.mockReset();
+  mockRestorePendingHibernation.mockResolvedValue(false);
   mockReportPanelOpen.mockReset();
   mockReportPanelOpen.mockResolvedValue(undefined);
   mockProvisionSession.mockReset();
@@ -498,6 +502,7 @@ beforeEach(() => {
           markTerminal: mockMarkTerminal,
           peekPendingHibernation: mockPeekPendingHibernation,
           takePendingHibernation: mockTakePendingHibernation,
+          restorePendingHibernation: mockRestorePendingHibernation,
           reportPanelOpen: mockReportPanelOpen,
           provisionSession: mockProvisionSession,
           revokeSession: mockRevokeSession,
@@ -1114,6 +1119,47 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       expect.anything(),
       expect.anything()
     );
+    // The token was genuinely spent, so it is NOT handed back (#11477).
+    expect(mockRestorePendingHibernation).not.toHaveBeenCalled();
+  });
+
+  it("hands the taken resume token back to main when provisioning fails (#11477)", async () => {
+    // `takePendingHibernation` clears main's side, so a launch that takes and
+    // then aborts used to destroy the user's only resume token — here via a
+    // plain provisioning failure, which the original five-site inventory of
+    // take-and-drop paths missed entirely. The put-back is what makes the
+    // resume net survive an abort.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    helpPanelState.hibernateSessions = {};
+    helpPanelState.setHibernateSession = vi.fn(
+      (projectId: string, entry: { sessionId: string; cwd: string; agentId: string }) => {
+        helpPanelState.hibernateSessions[projectId] = entry;
+      }
+    );
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: true,
+    });
+    mockTakePendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+    });
+    // Provisioning fails AFTER the take has already consumed main's entry.
+    mockProvisionSession.mockResolvedValue(null);
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    expect(mockTakePendingHibernation).toHaveBeenCalledWith("proj-1");
+    expect(mockRestorePendingHibernation).toHaveBeenCalledWith("proj-1");
   });
 
   // #11068: the same cold-resume handoff, but the active workspace is a scratch

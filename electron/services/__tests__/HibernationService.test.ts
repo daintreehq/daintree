@@ -590,6 +590,85 @@ describe("HibernationService", () => {
     });
   });
 
+  describe("live assistant guard (#11477)", () => {
+    const THIRTY_ONE_MINUTES = 31 * 60 * 1000;
+
+    /** An idle project eligible for the memory-pressure sweep. */
+    function seedEligibleProject() {
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        { id: "t1", projectId: "proj-1", agentState: "idle" },
+      ]);
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+      projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
+      projectStoreMock.getAllProjects.mockReturnValue([
+        {
+          id: "proj-1",
+          name: "Old",
+          path: "/projects/proj-1",
+          lastOpened: Date.now() - THIRTY_ONE_MINUTES,
+        },
+      ]);
+    }
+
+    it("suppresses the background PTY kill for a project with a live assistant backend", async () => {
+      // The FSM guard above this can't catch it: the assistant reports "idle"
+      // while a sub-agent or background shell it dispatched runs on, which is
+      // exactly the work #11157 established gets lost. Binding + PTY liveness
+      // is the correct pair, injected the same way ProjectViewManager gets it.
+      seedEligibleProject();
+
+      const service = makeService();
+      service.setHasLiveAssistantBackend((projectId) => projectId === "proj-1");
+      await service.hibernateUnderMemoryPressure();
+
+      expect(logInfo).toHaveBeenCalledWith("hibernate-skip-live-assistant", {
+        project: "Old",
+        projectId: "proj-1",
+        reason: "memory-pressure",
+      });
+      expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
+    });
+
+    it("does not suppress when no assistant is bound to the project", async () => {
+      seedEligibleProject();
+
+      const service = makeService();
+      service.setHasLiveAssistantBackend(() => false);
+      await service.hibernateUnderMemoryPressure();
+
+      expect(logInfo).not.toHaveBeenCalledWith("hibernate-skip-live-assistant", expect.anything());
+    });
+
+    it("leaves the user-initiated close alone — the user asked for exactly this", async () => {
+      // The guard is scoped to the background reasons. A live assistant must
+      // not make "Close Them" silently do nothing.
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
+
+      const service = makeService();
+      service.setHasLiveAssistantBackend(() => true);
+      const killed = await service.hibernateProjectOnDemand("proj-1", "Proj One", "user-initiated");
+
+      expect(killed).toBe(1);
+      expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
+        preserveSession: true,
+      });
+      expect(logInfo).not.toHaveBeenCalledWith("hibernate-skip-live-assistant", expect.anything());
+    });
+
+    it("suppresses the scheduled sweep's kill too, not just memory pressure", async () => {
+      const service = makeService();
+      service.setHasLiveAssistantBackend(() => true);
+      await service.hibernateProjectOnDemand("proj-1", "Proj One", "scheduled");
+
+      expect(logInfo).toHaveBeenCalledWith("hibernate-skip-live-assistant", {
+        project: "Proj One",
+        projectId: "proj-1",
+        reason: "scheduled",
+      });
+      expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
+    });
+  });
+
   describe("checkAndHibernate agent guard", () => {
     const TWENTY_FIVE_HOURS = 25 * 60 * 60 * 1000;
 

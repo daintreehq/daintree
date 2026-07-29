@@ -303,19 +303,31 @@ export class HibernationManager {
    * after the user has explicitly started a new session somewhere along the
    * way.
    *
-   * Stale-gen guard: the caller passes the launch generation it started in.
-   * If anything bumps `_launchGen` during the IPC await (user hits "+ New
-   * session" which clears the project's hibernate slot, panel close, etc.),
-   * we DROP the pulled entry on the floor instead of writing it back. Main
-   * has already cleared the entry on its side (atomic take), so the cost is
-   * losing one resume opportunity — much cheaper than resurrecting a
-   * conversation the user just explicitly discarded.
+   * Stale-gen guard: the caller passes the launch generation it started in. If
+   * anything bumps `_launchGen` during the IPC await, this launch no longer
+   * owns the entry and must not write it into the store. It used to be dropped
+   * on the floor here — main had already cleared its side, so the resume
+   * opportunity was simply destroyed — on the theory that the bump meant the
+   * user had explicitly discarded the conversation. It usually doesn't: the
+   * gen-bump sites are dominated by the stall watchdog, the stranded-launch
+   * reaper, and StrictMode remounts, and the watchdog in particular surfaces a
+   * *retryable* error while silently destroying what the retry needs (#11477).
+   * So hand it back to main instead. `restorePendingHibernation` refuses if a
+   * newer capture has landed, and the put-back entry loses `panelWasOpen`, so
+   * it can only ever be resumed explicitly — never auto-resumed.
+   *
+   * Returns `"seeded"` when the entry is now live in the store and the caller
+   * owns it (and so must consume or release it), `"released"` when it went
+   * back to main, and `"empty"` when there was nothing to take.
    */
-  async seedFromMain(projectId: string, gen: number): Promise<void> {
+  async seedFromMain(projectId: string, gen: number): Promise<"seeded" | "released" | "empty"> {
     try {
       const pending = await window.electron.help.takePendingHibernation(projectId);
-      if (!pending) return;
-      if (!this.host.isLaunchCurrent(gen)) return;
+      if (!pending) return "empty";
+      if (!this.host.isLaunchCurrent(gen)) {
+        await this.releaseToMain(projectId, "stale-generation");
+        return "released";
+      }
       // `pending.agentSessionId` can be the empty-string sentinel when main's
       // `revokeSession({ captureHibernation: true })` placeholder write raced
       // the agent's real session-id echo (LRU eviction of the per-project
@@ -330,8 +342,36 @@ export class HibernationManager {
         cwd: pending.cwd,
         agentId: pending.agentId,
       });
+      return "seeded";
     } catch (err) {
       logError("HelpPanel: failed to pull pending hibernation from main", err);
+      return "empty";
+    }
+  }
+
+  /**
+   * Hand a taken-but-unused pending-hibernation entry back to main (#11477).
+   *
+   * Main restores from its own take-side stash, so this only reports that the
+   * caller isn't going to use what it took — nothing about the entry crosses
+   * the bridge. Best-effort: a failed put-back is exactly the old behaviour
+   * (one lost resume opportunity), so it is logged and swallowed rather than
+   * failing the launch that is already unwinding.
+   *
+   * `reason` is carried into the log so a future incident can tell which abort
+   * path fired instead of inferring it from an absence, which is what made the
+   * original report take log archaeology to diagnose.
+   */
+  async releaseToMain(projectId: string, reason: string): Promise<void> {
+    try {
+      const restored = await window.electron.help.restorePendingHibernation(projectId);
+      console.info("[HelpPanel] released pending hibernation back to main", {
+        projectId,
+        reason,
+        restored,
+      });
+    } catch (err) {
+      logError("HelpPanel: failed to release pending hibernation back to main", err);
     }
   }
 }

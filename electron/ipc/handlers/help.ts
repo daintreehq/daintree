@@ -200,6 +200,25 @@ async function handleTakePendingHibernation(
   return helpSessionService.takePendingHibernation(projectId);
 }
 
+async function handleRestorePendingHibernation(
+  ctx: import("../types.js").IpcContext,
+  projectId: string
+): Promise<boolean> {
+  if (typeof projectId !== "string" || !projectId) return false;
+  // Same cross-project guard as the peek/take handlers. The entry itself never
+  // crosses the bridge — main restores from its own take-side stash — so this
+  // only has to establish that the caller is the view that took it.
+  if (!ctx.projectId || ctx.projectId !== projectId) {
+    console.warn(
+      "[help] restorePendingHibernation: projectId mismatch — refusing cross-project restore",
+      { requested: projectId, fromView: ctx.projectId, webContentsId: ctx.webContentsId }
+    );
+    return false;
+  }
+  const { helpSessionService } = await getHelpSessionService();
+  return helpSessionService.restorePendingHibernation(projectId);
+}
+
 async function handleReportPanelOpen(
   ctx: import("../types.js").IpcContext,
   projectId: string,
@@ -250,6 +269,11 @@ export const helpNamespace = defineIpcNamespace({
     takePendingHibernation: op(
       HELP_METHOD_CHANNELS.takePendingHibernation,
       handleTakePendingHibernation,
+      { withContext: true }
+    ),
+    restorePendingHibernation: op(
+      HELP_METHOD_CHANNELS.restorePendingHibernation,
+      handleRestorePendingHibernation,
       { withContext: true }
     ),
     reportPanelOpen: op(HELP_METHOD_CHANNELS.reportPanelOpen, handleReportPanelOpen, {

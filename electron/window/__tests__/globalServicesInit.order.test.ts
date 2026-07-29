@@ -146,6 +146,7 @@ vi.mock("../../setup/openFileInstall.js", () => ({
 
 const hibernationServiceMock = vi.hoisted(() => ({
   setProjectViewManagersProvider: vi.fn(),
+  setHasLiveAssistantBackend: vi.fn(),
 }));
 
 vi.mock("../../services/HibernationService.js", () => ({
@@ -270,6 +271,7 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     startOrphanSweep: vi.fn(),
     validateToken: vi.fn(),
     gcStaleSessions: vi.fn(async () => {}),
+    getAssistantBackend: vi.fn(() => null),
   },
 }));
 
@@ -533,6 +535,24 @@ describe("initGlobalServices task ordering", () => {
     expect(typeof provider).toBe("function");
     // Lazy: re-reads the registry on each call rather than capturing a snapshot.
     expect(provider()).toEqual([]);
+  });
+
+  it("wires the live-assistant predicate into HibernationService (#11477)", async () => {
+    // Background hibernation reaches the same projects the cached-view reclaim
+    // does, so it needs the same binding + PTY-liveness pair — an unwired
+    // predicate leaves a fourth path that can kill a running assistant.
+    hibernationServiceMock.setHasLiveAssistantBackend.mockClear();
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    registeredTaskRuns.get("hibernation-service")!();
+
+    expect(hibernationServiceMock.setHasLiveAssistantBackend).toHaveBeenCalledTimes(1);
+    const predicate = hibernationServiceMock.setHasLiveAssistantBackend.mock.calls[0][0];
+    expect(typeof predicate).toBe("function");
+    // Lazy, like the provider above: no assistant bound in this fixture, and
+    // resolving it must not throw before the PtyClient exists.
+    expect(predicate("proj-1")).toBe(false);
   });
 
   it("wires a lazy ProjectViewManager provider into IdleTerminalNotificationService (#11102)", async () => {

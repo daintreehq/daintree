@@ -82,6 +82,7 @@ export class HibernationService {
   private memoryPressureInactiveMs = DEFAULT_MEMORY_PRESSURE_INACTIVE_MS;
   private ptyClient: PtyClient | null = null;
   private projectViewManagersProvider: (() => ProjectViewManager[]) | null = null;
+  private hasLiveAssistantBackend: ((projectId: string) => boolean) | null = null;
 
   /**
    * Inject the live PtyClient so hibernation reads the real terminal registry
@@ -91,6 +92,25 @@ export class HibernationService {
    */
   setPtyClient(client: PtyClient | null): void {
     this.ptyClient = client;
+  }
+
+  /**
+   * Inject the same live-assistant predicate `ProjectViewEvictionController`
+   * uses, so background hibernation can't kill a running Daintree Assistant's
+   * PTY process tree either (#11477).
+   *
+   * `hibernateUnderMemoryPressure` reaches this service from the very tier-2
+   * ladder that drives cached-view reclaim, and its own guard is
+   * `ACTIVE_AGENT_STATES` — the wrong signal, and knowingly so (#11157): an
+   * assistant that dispatched a sub-agent or a background shell reads as idle
+   * while that work runs on, which is precisely the case being lost. Binding
+   * plus PTY liveness is the correct pair.
+   *
+   * Lazy closure, not a listener — nothing to dispose. Passing `null` clears it
+   * and restores the unguarded behaviour.
+   */
+  setHasLiveAssistantBackend(predicate: ((projectId: string) => boolean) | null): void {
+    this.hasLiveAssistantBackend = predicate;
   }
 
   /**
@@ -430,6 +450,20 @@ export class HibernationService {
     reason: "scheduled" | "memory-pressure" | "user-initiated",
     ptyClient: PtyClient
   ): Promise<number> {
+    // A running Daintree Assistant outranks background hibernation (#11477).
+    // `hibernateUnderMemoryPressure` is driven by the same tier-2 ladder as
+    // cached-view reclaim, and its own filter is `ACTIVE_AGENT_STATES` — the
+    // signal #11157 established is wrong for this: an assistant that dispatched
+    // a sub-agent or background shell reads as idle while that work runs on.
+    // Killing here takes down its whole PTY process tree. Applied at this
+    // chokepoint so the scheduled sweep is covered too, and scoped to the
+    // background reasons — a user-initiated close asked for exactly this.
+    const assistantProtected =
+      reason !== "user-initiated" && this.hasLiveAssistantBackend?.(projectId) === true;
+    if (assistantProtected) {
+      logInfo("hibernate-skip-live-assistant", { project: projectName, projectId, reason });
+    }
+
     // EXPERIMENT (hibernation removal, step 4): skip the PTY-kill so backgrounded
     // projects' terminals stay fully alive; report 0 killed. Scoped to the
     // background paths only — a user-initiated close (#10831, the idle "Close
@@ -439,7 +473,8 @@ export class HibernationService {
     // scrollback before kill, so `.restore` files survive and terminals come back
     // on next project open.
     const results =
-      HibernationService.EXPERIMENT_HIBERNATION_DISABLED && reason !== "user-initiated"
+      assistantProtected ||
+      (HibernationService.EXPERIMENT_HIBERNATION_DISABLED && reason !== "user-initiated")
         ? []
         : await ptyClient.gracefulKillByProject(projectId, { preserveSession: true });
     const terminalsKilled = results.length;
