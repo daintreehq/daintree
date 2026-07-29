@@ -156,17 +156,22 @@ export function useFileBrowserTree({
   // rebuilds the object every render, so depending on it directly would reset
   // the tree's identity on each pass.
   const sourceKey = sourceIdentityKey(source);
-  // Published on commit, never during render. A render that names a new source
-  // can be abandoned (a suspended or superseded transition) without its
-  // identity effect ever running, so a render-time write would leave requests
-  // still queued under the old identity reading the new source: their
-  // generation check would pass and commit another folder's listing into this
-  // tree. Publishing here keeps the ref in step with the generation the
-  // identity effect owns, and the layout phase lands before the passive
-  // effects that read it.
+  // Never published during render, and never ahead of the generation it belongs
+  // to: the identity-reset effect below is the only writer. A render naming a
+  // new source can be abandoned (a suspended or superseded transition) without
+  // that effect ever running, so a render-time write would leave requests still
+  // queued under the old identity reading the new source — their generation
+  // check would pass and commit another folder's listing into this tree.
+  // Publishing inside the reset also keeps it behind the outgoing cleanups,
+  // which is what lets the pane capture the tree it is leaving rather than
+  // tagging those rows with the source that replaced them.
   const sourceRef = useRef(source);
+  // Staged in the layout phase — which only runs for a render that actually
+  // committed — so the identity effect below publishes the source React kept,
+  // never one an abandoned render wrote. Nothing else reads this.
+  const committedSourceRef = useRef(source);
   useLayoutEffect(() => {
-    sourceRef.current = source;
+    committedSourceRef.current = source;
   }, [source]);
   // Seeded via lazy initializers, not just the identity effect: passive
   // effects run after paint, so an effect-only seed would commit one loading
@@ -398,7 +403,7 @@ export function useFileBrowserTree({
         pumpRef.current();
       }
     },
-    [sourceKey, rootPath, clearRootRetryTimer, resetRootRetryState]
+    [rootPath, clearRootRetryTimer, resetRootRetryState]
   );
 
   const pump = useCallback((): void => {
@@ -529,6 +534,9 @@ export function useFileBrowserTree({
   // change: the listing is the same raw filesystem either way, so the junk
   // list and dotfile toggle filter the cache in place rather than refetching.
   useEffect(() => {
+    // Publish and bump together: anything reading the ref between the two would
+    // issue a request for the incoming source under the outgoing generation.
+    sourceRef.current = committedSourceRef.current;
     generationRef.current += 1;
     // Fresh identity, fresh retry budget — and cancel any retry still pending
     // for the previous one so it can't leak an error into this tree.
@@ -630,13 +638,14 @@ export function useFileBrowserTree({
     return rootNodes.some((node) => node.name.startsWith(".") && notJunk(node.name));
   }, [listings, rootPath, alwaysHiddenPatterns]);
 
-  // `sourceKey` is a dependency even though the body reads the ref: the pane's
-  // going-away capture runs in an effect keyed on this callback, and without it
-  // a source change that left `rootPath` alone would never capture the outgoing
-  // tree.
+  // Keyed on `sourceKey` for two reasons: the pane runs its going-away capture
+  // in an effect keyed on this callback, so without it a source change that
+  // left `rootPath` alone would re-point the tree without ever capturing the
+  // outgoing one — and comparing it against the ref refuses to tag these
+  // listings with a source they did not come from.
   const captureSnapshot = useCallback((): FileBrowserTreeSnapshot | null => {
     const activeSource = sourceRef.current;
-    if (!activeSource) return null;
+    if (!activeSource || sourceIdentityKey(activeSource) !== sourceKey) return null;
     return snapshotFromListings(listingsRef.current, activeSource, rootPath);
   }, [sourceKey, rootPath]);
 

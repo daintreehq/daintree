@@ -213,10 +213,16 @@ describe("LauncherQuickActions", () => {
     fireEvent.click(screen.getByRole("button", { name: /Browse files/i }));
     await vi.waitFor(() => expect(h.notify).toHaveBeenCalled());
 
-    expect(h.notify.mock.calls[0]?.[0]).toMatchObject({
-      type: "error",
-      message: "No folder to browse",
-    });
+    const toast = h.notify.mock.calls[0]?.[0] as {
+      type: string;
+      action?: { label: string; onClick: () => void };
+    };
+    expect(toast.type).toBe("error");
+    // The recovery action re-runs the same dispatch, so a transient refusal is
+    // recoverable without hunting for the chip again.
+    h.dispatch.mockResolvedValue({ ok: true });
+    toast.action?.onClick();
+    expect(h.dispatch).toHaveBeenCalledTimes(2);
   });
 
   it("stays quiet when the file browser opens", async () => {

@@ -4,37 +4,44 @@ import { useProjectStore } from "@/store/projectStore";
 // on an undefined destructure.
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { resolveViewWorkspace } from "@/store/viewWorkspace";
 
 /**
  * Absolute path of the workspace *this view* was created for — the project or
  * scratch folder behind a worktree-less browser root (#11482).
  *
- * Resolved by looking this view's own id up in the full collections, not by
- * reading `currentProject`/`currentScratch`. Those pointers are broadcast to
- * every view including cached ones, so they say what the user is looking at
- * globally, never which workspace this view owns: a second window switching to
- * another scratch repoints them here too, and a hook that merely *filtered* on
- * the current pointer would blank this view's open browser for as long as the
- * other window stayed there. Main resolves the same binding when it authorizes
- * the listing, so keying off the seeded id is also what keeps the two sides
- * from naming different folders.
- *
- * Falls back to the current pointers only when the view has no seeded identity
- * at all — an unbound shell window, where nothing else can answer and main
- * refuses the listing anyway.
+ * Resolution rules live in {@link resolveViewWorkspace}, shared with the action
+ * context so the folder a Browse-files dispatch names is the folder this pane
+ * opens. Each selector returns a string, so Zustand's `Object.is` check keeps an
+ * unrelated collection edit from re-rendering the tree.
  */
 export function useWorkspaceRootPath(): string {
   const viewWorkspaceId = getViewWorkspaceId();
+
   const projectPath = useProjectStore((state) => {
-    if (viewWorkspaceId === null) return state.currentProject?.path;
-    return state.projects.find((project) => project.id === viewWorkspaceId)?.path;
-  });
-  const scratchPath = useScratchStore((state) => {
-    if (viewWorkspaceId === null) return state.currentScratch?.path;
-    return state.scratches.find((scratch) => scratch.id === viewWorkspaceId)?.path;
+    const resolved = resolveViewWorkspace({
+      viewWorkspaceId,
+      projects: state.projects,
+      currentProject: state.currentProject,
+      scratches: [],
+      currentScratch: null,
+    });
+    return resolved?.kind === "project" ? resolved.project.path : undefined;
   });
 
-  // Project-first, mirroring `resolveWorkspaceCwd` (#11076). Ids are disjoint
-  // across the two tables, so at most one side resolves for a seeded view.
+  // Only consulted when the project side didn't answer, so a project-owned view
+  // never pays attention to scratch churn.
+  const scratchPath = useScratchStore((state) => {
+    if (projectPath !== undefined) return undefined;
+    const resolved = resolveViewWorkspace({
+      viewWorkspaceId,
+      projects: [],
+      currentProject: null,
+      scratches: state.scratches,
+      currentScratch: state.currentScratch,
+    });
+    return resolved?.kind === "scratch" ? resolved.scratch.path : undefined;
+  });
+
   return projectPath ?? scratchPath ?? "";
 }

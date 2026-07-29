@@ -5,7 +5,7 @@ import type { ActionContext } from "@shared/types/actions";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import { copyTreeClient, systemClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
-import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { getCurrentViewStore, getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
@@ -415,8 +415,13 @@ export function registerWorktreeContextActions(
           // now makes `run` throw, so a readiness check that only tested for a
           // non-empty string would enable a row that cannot open anything.
           const contextWorktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
-          if (contextWorktreeId) {
-            return getCurrentViewStore().getState().worktrees.has(contextWorktreeId);
+          if (contextWorktreeId !== undefined) {
+            // `OrNull`, not `getCurrentViewStore`: that one throws before the
+            // worktree provider mounts, and the action manifest is listed in
+            // exactly that window — the throw would disable the row rather than
+            // answer it.
+            const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
+            return worktrees ? worktrees.has(contextWorktreeId) : false;
           }
           return Boolean(ctx.projectPath ?? ctx.scratchPath);
         },
@@ -439,8 +444,7 @@ export function registerWorktreeContextActions(
         })
         .optional(),
       run: async (args, ctx: ActionContext) => {
-        const targetWorktreeId =
-          args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        const targetWorktreeId = args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         const worktree = targetWorktreeId
           ? getCurrentViewStore().getState().worktrees.get(targetWorktreeId)
           : undefined;
@@ -451,7 +455,7 @@ export function registerWorktreeContextActions(
         // open the folder *above* the one named — the wrong folder, not a
         // degraded one — and a stale `focusedWorktreeId` outliving its deleted
         // worktree is exactly how that would happen unnoticed.
-        if (targetWorktreeId && !worktree) {
+        if (targetWorktreeId !== undefined && !worktree) {
           throw new Error(`Worktree not found: ${targetWorktreeId}`);
         }
 

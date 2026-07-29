@@ -10,6 +10,8 @@ import { useProjectStore } from "@/store/projectStore";
 // Leaf import, never the `@/store` barrel: many suites mock the barrel without
 // listing this store and would crash on an undefined destructure.
 import { useScratchStore } from "@/store/scratchStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { resolveViewWorkspace } from "@/store/viewWorkspace";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -87,7 +89,20 @@ export function useActionRegistry(options: ActionCallbacks): void {
       const project = useProjectStore.getState().currentProject;
       // A scratch is the active workspace when no project is (#11076), and an
       // action that only reads `currentProject` sees nothing at all there.
-      const scratch = useScratchStore.getState().currentScratch;
+      // Resolved through this view's own seeded id, not the broadcast pointer,
+      // so a sibling window switching scratches can't make an action here name
+      // — or refuse — the wrong folder. Shared with the file browser's own root
+      // resolution, which is what keeps the two from disagreeing.
+      const projectStoreState = useProjectStore.getState();
+      const scratchStoreState = useScratchStore.getState();
+      const viewWorkspace = resolveViewWorkspace({
+        viewWorkspaceId: getViewWorkspaceId(),
+        projects: projectStoreState.projects,
+        currentProject: projectStoreState.currentProject,
+        scratches: scratchStoreState.scratches,
+        currentScratch: scratchStoreState.currentScratch,
+      });
+      const scratch = viewWorkspace?.kind === "scratch" ? viewWorkspace.scratch : undefined;
       const terminalState = usePanelStore.getState();
       const focusedId = terminalState.focusedId;
       const focusedTerminal = focusedId ? terminalState.panelsById[focusedId] : null;

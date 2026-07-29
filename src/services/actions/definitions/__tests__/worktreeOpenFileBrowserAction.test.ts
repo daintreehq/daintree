@@ -16,6 +16,11 @@ vi.mock("@/store/createWorktreeStore", () => ({
   getCurrentViewStore: () => ({
     getState: () => ({ worktrees: worktreesMock.current }),
   }),
+  // The palette gate uses the OrNull variant, which answers before the worktree
+  // provider mounts; an explicit factory must export it or every test throws.
+  getCurrentViewStoreOrNull: () => ({
+    getState: () => ({ worktrees: worktreesMock.current }),
+  }),
 }));
 
 vi.mock("@/clients", () => ({
@@ -33,6 +38,9 @@ import { registerWorktreeContextActions } from "../worktreeContextActions";
 
 function getAction() {
   const actions: ActionRegistry = new Map();
+  // `ActionCallbacks` has ~30 members and this registration only ever reaches
+  // `onInject`; stubbing all of them would be noise, not coverage.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- partial callbacks: only onInject is reachable here
   const callbacks = { onInject: vi.fn() } as unknown as ActionCallbacks;
   registerWorktreeContextActions(actions, callbacks);
   const factory = actions.get("worktree.openFileBrowser");

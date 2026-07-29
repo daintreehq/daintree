@@ -520,7 +520,9 @@ describe("snapshotFromListings", () => {
 
   it("returns null before the root listing has ever arrived", () => {
     // Only a non-root directory somehow present: nothing worth painting from.
-    expect(snapshotFromListings(listingsOf({ src: [file("src/app.ts")] }), WT_SOURCE, "")).toBeNull();
+    expect(
+      snapshotFromListings(listingsOf({ src: [file("src/app.ts")] }), WT_SOURCE, "")
+    ).toBeNull();
     expect(snapshotFromListings(new Map(), WT_SOURCE, "")).toBeNull();
   });
 
@@ -644,8 +646,12 @@ describe("sourceIdentityKey", () => {
     expect(key).not.toBe(sourceIdentityKey({ kind: "workspace", basePath: "/repo" }));
   });
 
-  it("is null with no source, so nothing resets against a stale key", () => {
-    expect(sourceIdentityKey(null)).toBeNull();
+  it("changes whenever the tree must reset, and only then", () => {
+    const a = { kind: "workspace", basePath: "/scratches/one" } as const;
+    // A rebuilt-but-equivalent source keeps the same key, so the pane's
+    // per-render object churn can't reset the tree; a real move changes it.
+    expect(sourceIdentityKey({ ...a })).toBe(sourceIdentityKey(a));
+    expect(sourceIdentityKey({ ...a, basePath: "/scratches/two" })).not.toBe(sourceIdentityKey(a));
   });
 });
 

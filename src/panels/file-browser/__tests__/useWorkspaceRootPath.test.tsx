@@ -6,10 +6,16 @@ import type { Scratch } from "@shared/types";
 
 const { projectState, scratchState } = vi.hoisted(() => ({
   projectState: {
-    current: { projects: [] as Partial<Project>[], currentProject: null as Partial<Project> | null },
+    current: {
+      projects: [] as Partial<Project>[],
+      currentProject: null as Partial<Project> | null,
+    },
   },
   scratchState: {
-    current: { scratches: [] as Partial<Scratch>[], currentScratch: null as Partial<Scratch> | null },
+    current: {
+      scratches: [] as Partial<Scratch>[],
+      currentScratch: null as Partial<Scratch> | null,
+    },
   },
 }));
 
@@ -22,6 +28,7 @@ vi.mock("@/store/scratchStore", () => ({
 }));
 
 import { useWorkspaceRootPath } from "../useWorkspaceRootPath";
+import { resolveViewWorkspace } from "@/store/viewWorkspace";
 
 function seedView(id: string | undefined) {
   if (id === undefined) {
@@ -125,5 +132,40 @@ describe("useWorkspaceRootPath", () => {
   it("is empty when nothing resolves at all", () => {
     seedView("s-1");
     expect(rootPath()).toBe("");
+  });
+});
+
+describe("resolveViewWorkspace", () => {
+  const base = {
+    projects: [{ id: "p-1", path: "/folders/notes" }],
+    currentProject: null,
+    scratches: [{ id: "s-1", path: "/scratches/one" }],
+    currentScratch: null,
+  } as unknown as Parameters<typeof resolveViewWorkspace>[0];
+
+  it("keys off the seeded id, not the broadcast pointers", () => {
+    const resolved = resolveViewWorkspace({
+      ...base,
+      viewWorkspaceId: "s-1",
+      currentProject: { id: "p-1", path: "/folders/notes" },
+    } as Parameters<typeof resolveViewWorkspace>[0]);
+
+    expect(resolved).toEqual({ kind: "scratch", scratch: { id: "s-1", path: "/scratches/one" } });
+  });
+
+  it("returns null for a seeded id in neither collection", () => {
+    // Unresolved beats naming a sibling window's workspace, which copy-path and
+    // reveal would then act on.
+    expect(resolveViewWorkspace({ ...base, viewWorkspaceId: "gone" })).toBeNull();
+  });
+
+  it("uses the current pointers only for an unbound view", () => {
+    const resolved = resolveViewWorkspace({
+      ...base,
+      viewWorkspaceId: null,
+      currentScratch: { id: "s-9", path: "/scratches/nine" },
+    } as Parameters<typeof resolveViewWorkspace>[0]);
+
+    expect(resolved).toEqual({ kind: "scratch", scratch: { id: "s-9", path: "/scratches/nine" } });
   });
 });

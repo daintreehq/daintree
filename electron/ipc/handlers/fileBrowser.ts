@@ -106,7 +106,15 @@ type BrowserRoot = { kind: "worktree" | "workspace"; path: string };
  * silently resolve against the main process's own cwd and list *that*.
  */
 function assertAbsoluteRoot(rootPath: string, kind: BrowserRoot["kind"]): void {
-  if (rootPath === "" || !path.isAbsolute(rootPath)) {
+  // `path.win32.isAbsolute` also accepts rooted-but-not-qualified paths such as
+  // a bare leading separator, which `resolve` then completes with the process's
+  // *current drive* — the same context-dependent root this guard exists to
+  // reject. So on Windows require a drive root or a full UNC share.
+  const isFullyQualified =
+    process.platform === "win32"
+      ? /^(?:[a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/])/.test(rootPath)
+      : path.isAbsolute(rootPath);
+  if (rootPath === "" || !isFullyQualified) {
     throw new AppError({
       code: "INVALID_PATH",
       message: "Workspace root is not an absolute path",

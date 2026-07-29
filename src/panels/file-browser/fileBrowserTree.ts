@@ -26,7 +26,9 @@ export type FileBrowserSource =
  */
 export function sourceIdentityKey(source: FileBrowserSource | null): string | null {
   if (!source) return null;
-  return source.kind === "worktree" ? `worktree:${source.worktreeId}` : `workspace:${source.basePath}`;
+  return source.kind === "worktree"
+    ? `worktree:${source.worktreeId}`
+    : `workspace:${source.basePath}`;
 }
 
 /**

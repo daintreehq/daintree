@@ -135,7 +135,8 @@ export function LauncherQuickActions() {
   // target, and a workspace with nothing to browse makes it throw. `dispatch`
   // turns that into `ok: false` rather than a rejection, so without this the
   // press would do nothing at all — the silent failure the throw exists to end.
-  const openFileBrowser = () => {
+  // A function declaration so the retry action can name it.
+  function openFileBrowser() {
     void actionService
       .dispatch("worktree.openFileBrowser", undefined, { source: "user" })
       .then((result) => {
@@ -143,12 +144,15 @@ export function LauncherQuickActions() {
         notify({
           type: "error",
           title: "Couldn't open the file browser",
-          message: result.error.message,
+          // Purpose-written rather than the raw error: both refusals this can
+          // hit ("No folder to browse", a worktree that no longer exists) come
+          // down to the same thing for the user, and the recovery is the same.
+          message: "No folder resolved for this workspace. Select a worktree and try again.",
           context: { eventKind: "uiFeedback" },
-          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+          action: { label: "Retry", onClick: openFileBrowser },
         });
       });
-  };
+  }
 
   return (
     <div className="flex w-full max-w-[38rem] flex-col items-center gap-2.5">

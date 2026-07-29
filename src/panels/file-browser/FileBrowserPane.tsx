@@ -166,7 +166,10 @@ export function FileBrowserPane({
   // back: silently browsing the project root in place of the requested worktree
   // would be the wrong folder, not a degraded one.
   const source = useMemo((): FileBrowserSource | null => {
-    if (worktreeId) {
+    // Presence, not truthiness: a persisted `worktreeId: ""` names a worktree
+    // that cannot resolve, and treating it as absent would quietly browse the
+    // workspace root instead of refusing it.
+    if (worktreeId !== undefined) {
       return worktreePath ? { kind: "worktree", worktreeId, basePath: worktreePath } : null;
     }
     return workspaceRootPath ? { kind: "workspace", basePath: workspaceRootPath } : null;
@@ -175,6 +178,9 @@ export function FileBrowserPane({
   // Everything path-shaped in the pane joins against this: the tree's rows are
   // relative to it in both modes.
   const basePath = source?.basePath ?? "";
+  // A stable primitive for the menu callback's dependencies — the source object
+  // is rebuilt every render.
+  const isWorktreeSource = source?.kind === "worktree";
   // The worktree's git-status change tick — already coalesced by the watcher's
   // adaptive burst debounce, so a bulk write lands as one tick.
   const gitChangeTick = useWorktreeStore(
@@ -499,8 +505,7 @@ export function FileBrowserPane({
   // The header label copies the folder the tree is rooted at. Only a re-rooted
   // tree has a path worth copying — at the worktree root the label is a bare
   // basename, so the affordance stays absent rather than disabled.
-  const rootAbsolutePath =
-    rootPath === "" || basePath === "" ? "" : join(basePath, rootPath);
+  const rootAbsolutePath = rootPath === "" || basePath === "" ? "" : join(basePath, rootPath);
   const rootHoverPath = rootPath === "" ? basePath : `${basename(basePath)}/${rootPath}`;
 
   const { copiedText: copiedRootPath, copy: copyRootPath } = useCopyWithFeedback({
@@ -578,7 +583,7 @@ export function FileBrowserPane({
                 eligible), so this stays safe for a gitignored folder. Absent
                 for a workspace root — CopyTree is worktree-scoped, so leaving
                 it on would be a dead menu item (#11482). */}
-            {source?.kind === "worktree" && (
+            {isWorktreeSource && (
               <ContextMenuItem onSelect={() => handleCopyFolderContext(row.path)}>
                 <Folders className="w-3.5 h-3.5 mr-2" />
                 Copy context
@@ -607,6 +612,7 @@ export function FileBrowserPane({
       </>
     ),
     [
+      isWorktreeSource,
       handleSetRoot,
       handleCopyFolderContext,
       handleCopyFullPath,
