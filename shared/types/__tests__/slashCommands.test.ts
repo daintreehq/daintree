@@ -80,11 +80,13 @@ describe("getBuiltinSlashCommands", () => {
   });
 
   it("applies per-agent description overrides for /goal", () => {
+    const entry = BUILTIN_SLASH_COMMANDS.find((e) => e.id === "goal");
     const claudeGoal = getBuiltinSlashCommands("claude").find((c) => c.label === "/goal");
     const codexGoal = getBuiltinSlashCommands("codex").find((c) => c.label === "/goal");
 
-    expect(claudeGoal?.description).toBeTruthy();
-    expect(codexGoal?.description).toBeTruthy();
+    expect(entry?.descriptions?.codex).toBeTruthy();
+    expect(claudeGoal?.description).toBe(entry?.description);
+    expect(codexGoal?.description).toBe(entry?.descriptions?.codex);
     expect(claudeGoal?.description).not.toBe(codexGoal?.description);
   });
 
