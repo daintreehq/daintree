@@ -18,11 +18,14 @@ type ToastCallback = (payload: {
   duration?: number;
   rateLimitKey?: string;
   priority?: "high" | "low" | "watch";
-  action?: { label: string; ipcChannel: string };
+  action?: { label: string; ipcChannel: string; data?: string };
 }) => void;
 
 let capturedCallback: ToastCallback | null = null;
 const cleanupFn = vi.fn();
+// Typed rather than `vi.fn()` so reading `mock.calls[0][0]` yields a `string`
+// without an assertion — casts on mock reads regress the lint ratchet.
+const openExternalMock = vi.fn<(url: string) => Promise<void>>(() => Promise.resolve());
 
 describe("useMainProcessToastListener", () => {
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -33,6 +36,7 @@ describe("useMainProcessToastListener", () => {
     capturedCallback = null;
     cleanupFn.mockClear();
     notifyMock.mockClear();
+    openExternalMock.mockClear();
 
     window.electron = {
       notification: {
@@ -41,6 +45,7 @@ describe("useMainProcessToastListener", () => {
           return cleanupFn;
         }),
       },
+      system: { openExternal: openExternalMock },
     } as unknown as typeof window.electron;
   });
 
@@ -183,6 +188,112 @@ describe("useMainProcessToastListener", () => {
     const call = notifyMock.mock.calls[0]![0];
     call.action!.onClick();
     expect(checkForUpdatesMock).not.toHaveBeenCalled();
+  });
+
+  // The manual-download recovery action on the failed-install toast (#11481).
+  // This branch is the boundary that turns a main-process toast payload into a
+  // browser navigation, so it must stay pinned to our own origin.
+  describe("system:open-external action", () => {
+    function mountWithOpenExternal() {
+      renderHook(() => useMainProcessToastListener());
+      return openExternalMock;
+    }
+
+    function clickActionWith(data: string | undefined) {
+      act(() => {
+        capturedCallback!({
+          type: "error",
+          title: "Update didn't install",
+          message: "Daintree is still on 0.28.1",
+          action: { label: "Download manually", ipcChannel: "system:open-external", data },
+        });
+      });
+      const call = notifyMock.mock.calls[notifyMock.mock.calls.length - 1]![0];
+      void call.action!.onClick();
+    }
+
+    it("opens a trusted https daintree.org URL through the system bridge", () => {
+      mountWithOpenExternal();
+
+      clickActionWith("https://daintree.org/download");
+
+      expect(openExternalMock).toHaveBeenCalledTimes(1);
+      // Asserts the hook forwards the SAME origin+path it was given, without
+      // asserting the literal the main process happens to send today.
+      const opened = new URL(openExternalMock.mock.calls[0]![0]);
+      expect(opened.protocol).toBe("https:");
+      expect(opened.hostname).toBe("daintree.org");
+      expect(opened.pathname).toBe("/download");
+    });
+
+    it("accepts a daintree.org subdomain but not a lookalike suffix", () => {
+      mountWithOpenExternal();
+
+      clickActionWith("https://www.daintree.org/download");
+      expect(openExternalMock).toHaveBeenCalledTimes(1);
+
+      clickActionWith("https://notdaintree.org/download");
+      clickActionWith("https://daintree.org.evil.test/download");
+      // Both lookalikes are refused, so the count is unchanged from the one
+      // legitimate subdomain call above.
+      expect(openExternalMock).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ["the default https port spelled out", "https://daintree.org:443/download"],
+      ["an uppercase host", "https://DAINTREE.ORG/download"],
+      // Chromium normalizes the backslash to a path separator, so the host is
+      // still ours — opening it is correct, not a bypass.
+      ["a backslash the parser folds into the path", "https://daintree.org\\@evil.test/download"],
+    ])("still opens %s", (_label, data) => {
+      mountWithOpenExternal();
+
+      clickActionWith(data);
+
+      expect(openExternalMock).toHaveBeenCalledTimes(1);
+      expect(new URL(openExternalMock.mock.calls[0]![0]).hostname).toBe("daintree.org");
+    });
+
+    it.each([
+      ["missing data", undefined],
+      ["a non-URL string", "not a url"],
+      ["a protocol-relative URL", "//daintree.org/download"],
+      ["plain http", "http://daintree.org/download"],
+      ["a javascript: payload", "javascript:alert(1)"],
+      ["a file: payload", "file:///etc/passwd"],
+      // Host is evil.test — the userinfo only LOOKS like our domain.
+      ["a trusted-looking username", "https://daintree.org@evil.test/download"],
+      // Host really is ours, so only the credential guard rejects these two.
+      ["credentials on a trusted host", "https://evil.test@daintree.org/download"],
+      ["a password on a trusted host", "https://u:pw@daintree.org/download"],
+      ["a non-default port", "https://daintree.org:8443/download"],
+      ["an unrelated host", "https://evil.test/download"],
+      ["our domain only in the query", "https://evil.test/?x=daintree.org"],
+      ["a punycode homograph", "https://xn--dintree-n1a.org/download"],
+      ["a trailing-dot host", "https://daintree.org./download"],
+    ])("refuses to open %s", (_label, data) => {
+      mountWithOpenExternal();
+
+      clickActionWith(data);
+
+      expect(openExternalMock).not.toHaveBeenCalled();
+    });
+
+    it("stays inert when the toast names an unknown ipc channel", () => {
+      mountWithOpenExternal();
+
+      act(() => {
+        capturedCallback!({
+          type: "error",
+          message: "Anything",
+          action: { label: "Go", ipcChannel: "shell:execute", data: "https://daintree.org" },
+        });
+      });
+      const call = notifyMock.mock.calls[notifyMock.mock.calls.length - 1]![0];
+      void call.action!.onClick();
+
+      expect(openExternalMock).not.toHaveBeenCalled();
+    });
   });
 
   it("does not crash when window.electron is undefined", () => {
