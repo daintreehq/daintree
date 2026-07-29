@@ -22,6 +22,7 @@ import {
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
 import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
+import { resolveWorktreePathScope } from "@shared/utils/path";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
@@ -39,6 +40,7 @@ import {
   Copy,
   CopyPlus,
   ExternalLink,
+  FolderTree,
   Globe,
   Info,
   Link,
@@ -218,6 +220,16 @@ export function TerminalContextMenu({
         : null,
     [selectedText, terminalPty?.cwd]
   );
+  // Where the hovered path sits in the *live* worktree list — never
+  // `terminal.worktreeId`, which stamps the worktree that was active when the
+  // panel was created and can name one the path isn't in (#11276). null means
+  // no known worktree contains it, and the file browser (worktree-scoped) has
+  // nothing to show, so the item is hidden rather than dispatching a no-op.
+  const hoveredFileScope = useMemo(
+    () => (hoveredFilePath ? resolveWorktreePathScope(hoveredFilePath, worktrees) : null),
+    [hoveredFilePath, worktrees]
+  );
+
   const isPaused =
     terminalPty?.flowStatus === "paused-backpressure" ||
     terminalPty?.flowStatus === "paused-resource-governor";
@@ -861,6 +873,39 @@ export function TerminalContextMenu({
               {hoveredFilePath && (
                 <>
                   <ContextMenuSeparator />
+                  {hoveredFileScope && (
+                    <ContextMenuItem
+                      onSelect={() => {
+                        void actionService
+                          .dispatch(
+                            "worktree.openFileBrowser",
+                            {
+                              worktreeId: hoveredFileScope.worktreeId,
+                              revealPath: hoveredFileScope.relativePath || undefined,
+                              // The hovered token is a file link; directory
+                              // tokens are their own link kind (DirectoryLink),
+                              // which passes "directory" from its own path. A
+                              // wrong guess is graceful either way — the tree
+                              // still selects the row, it just isn't expanded.
+                              revealKind: "file",
+                            },
+                            { source: sourceRef.current }
+                          )
+                          .then((result) => {
+                            if (!result.ok) {
+                              reportFileLinkFailure(
+                                "Failed to open file browser",
+                                result.error.details,
+                                hoveredFilePath
+                              );
+                            }
+                          });
+                      }}
+                    >
+                      <FolderTree className={ICON_CLASS} aria-hidden="true" />
+                      Open in file browser
+                    </ContextMenuItem>
+                  )}
                   <ContextMenuItem
                     onSelect={() => handleAction(`reveal-in-finder:${hoveredFilePath}`)}
                   >

@@ -8,6 +8,7 @@ import {
   resolve,
   join,
   toWorktreeRelative,
+  resolveWorktreePathScope,
 } from "../path.js";
 
 describe("isAbsolute", () => {
@@ -307,5 +308,82 @@ describe("toWorktreeRelative", () => {
   // would silently change behavior for every other consumer of isPathInside.
   it("treats a differently-cased root as outside", () => {
     expect(toWorktreeRelative("/Repo/src/index.ts", "/repo")).toBe("/Repo/src/index.ts");
+  });
+});
+
+describe("resolveWorktreePathScope", () => {
+  const OUTER = { id: "wt-outer", path: "/repo" };
+  const INNER = { id: "wt-inner", path: "/repo/nested" };
+  const SIBLING = { id: "wt-sibling", path: "/repo-other" };
+
+  it("resolves a contained path to its worktree and relative path", () => {
+    expect(resolveWorktreePathScope("/repo/src/index.ts", [OUTER])).toEqual({
+      worktreeId: "wt-outer",
+      worktreePath: "/repo",
+      relativePath: "src/index.ts",
+    });
+  });
+
+  // Deepest root wins so a nested worktree beats the repo hosting it — the
+  // file browser must open the worktree the file actually belongs to.
+  it("prefers the deepest containing worktree regardless of iteration order", () => {
+    expect(resolveWorktreePathScope("/repo/nested/src/a.ts", [OUTER, INNER])?.worktreeId).toBe(
+      "wt-inner"
+    );
+    expect(resolveWorktreePathScope("/repo/nested/src/a.ts", [INNER, OUTER])?.worktreeId).toBe(
+      "wt-inner"
+    );
+  });
+
+  // The trap `isPathInside` exists to close: a raw startsWith would claim this
+  // for /repo and mangle the relative path into "-other/src/a.ts".
+  it("does not claim a sibling root that merely extends the name", () => {
+    expect(resolveWorktreePathScope("/repo-other/src/a.ts", [OUTER])).toBeNull();
+    expect(resolveWorktreePathScope("/repo-other/src/a.ts", [OUTER, SIBLING])?.worktreeId).toBe(
+      "wt-sibling"
+    );
+  });
+
+  // "" is what the root means to callers; toWorktreeRelative alone would hand
+  // back the absolute path here, which expands nothing in the tree.
+  it("returns an empty relative path for the worktree root itself", () => {
+    expect(resolveWorktreePathScope("/repo", [OUTER])?.relativePath).toBe("");
+    expect(resolveWorktreePathScope("/repo/", [OUTER])?.relativePath).toBe("");
+  });
+
+  it("emits forward slashes for a backslashed path and root", () => {
+    const scope = resolveWorktreePathScope("C:\\repo\\src\\index.ts", [
+      { id: "wt-win", path: "C:\\repo" },
+    ]);
+    expect(scope?.relativePath).toBe("src/index.ts");
+    // The root comes back verbatim so callers can feed it to path helpers that
+    // normalize it themselves.
+    expect(scope?.worktreePath).toBe("C:\\repo");
+  });
+
+  it("collapses interior . and .. segments before matching", () => {
+    expect(resolveWorktreePathScope("/repo/src/./docs/a.ts", [OUTER])?.relativePath).toBe(
+      "src/docs/a.ts"
+    );
+    expect(resolveWorktreePathScope("/repo/src/../docs/a.ts", [OUTER])?.relativePath).toBe(
+      "docs/a.ts"
+    );
+  });
+
+  // A traversal that escapes the root is outside it, not a relative path with
+  // a ".." in it — the tree would reject the whole stat batch.
+  it("rejects a path that escapes the root via ..", () => {
+    expect(resolveWorktreePathScope("/repo/../etc/passwd", [OUTER])).toBeNull();
+  });
+
+  it("returns null for a path in no known worktree, and for an empty list", () => {
+    expect(resolveWorktreePathScope("/elsewhere/a.ts", [OUTER, INNER])).toBeNull();
+    expect(resolveWorktreePathScope("/repo/src/a.ts", [])).toBeNull();
+  });
+
+  // A worktree whose path hasn't hydrated yet must not swallow every path:
+  // normalize("") is ".", which would otherwise match unpredictably.
+  it("skips a worktree with an empty path", () => {
+    expect(resolveWorktreePathScope("/repo/src/a.ts", [{ id: "wt-blank", path: "" }])).toBeNull();
   });
 });

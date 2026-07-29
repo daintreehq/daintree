@@ -642,6 +642,155 @@ describe("FilePane reveal in file manager (#11386)", () => {
   });
 });
 
+// #11483: the file viewer's route back to the tree it was opened from. The
+// button is worktree-scoped, so its whole contract is "which worktree is this
+// file actually in" — resolved from the live list, never panel.worktreeId.
+describe("FilePane show in file browser (#11483)", () => {
+  const LABEL = "Show in file browser";
+
+  function paneElement(filePath: string) {
+    return (
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title={filePath.split("/").pop() ?? filePath}
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  function renderPane(filePath: string, panelWorktreeId?: string) {
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath,
+      ...(panelWorktreeId ? { worktreeId: panelWorktreeId } : {}),
+    };
+    return render(paneElement(filePath));
+  }
+
+  function button(container: HTMLElement, label: string): HTMLButtonElement | undefined {
+    return Array.from(container.querySelectorAll("button")).find(
+      (b) => b.getAttribute("aria-label") === label
+    );
+  }
+
+  function click(el: HTMLElement) {
+    return act(async () => {
+      el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+  }
+
+  it("dispatches the containing worktree, relative path and a file reveal kind", async () => {
+    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
+    const { container } = renderPane("/repo/src/index.ts");
+
+    await click(button(container, LABEL)!);
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.openFileBrowser",
+      { worktreeId: "wt-1", revealPath: "src/index.ts", revealKind: "file" },
+      { source: "user" }
+    );
+  });
+
+  // `file.openPanel` resolves an explicit rootPath but still stamps the *active*
+  // worktree id, so the panel can name a worktree the file isn't in (#11276).
+  it("ignores a stale panel worktreeId in favor of the containing worktree", async () => {
+    worktreeState.worktrees.set("wt-active", { id: "wt-active", path: "/other" });
+    worktreeState.worktrees.set("wt-real", { id: "wt-real", path: "/repo" });
+    const { container } = renderPane("/repo/src/index.ts", "wt-active");
+
+    await click(button(container, LABEL)!);
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.openFileBrowser",
+      expect.objectContaining({ worktreeId: "wt-real" }),
+      { source: "user" }
+    );
+  });
+
+  it("opens the deepest worktree when one is nested inside another", async () => {
+    worktreeState.worktrees.set("wt-outer", { id: "wt-outer", path: "/repo" });
+    worktreeState.worktrees.set("wt-inner", { id: "wt-inner", path: "/repo/nested" });
+    const { container } = renderPane("/repo/nested/src/a.ts");
+
+    await click(button(container, LABEL)!);
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.openFileBrowser",
+      { worktreeId: "wt-inner", revealPath: "src/a.ts", revealKind: "file" },
+      { source: "user" }
+    );
+  });
+
+  it("offers no button for a file outside every known worktree", async () => {
+    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
+    const { container } = renderPane("/elsewhere/a.ts");
+    await act(async () => {});
+
+    expect(button(container, LABEL)).toBeUndefined();
+    // The OS reveal still works for it — that's the whole point of that button.
+    expect(button(container, revealCopy().label)).toBeDefined();
+  });
+
+  // A sibling root that merely extends the worktree name is not inside it; a
+  // raw startsWith would open the wrong tree at the mangled path "-other/a.ts".
+  it("offers no button for a sibling directory sharing the root prefix", async () => {
+    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
+    const { container } = renderPane("/repo-other/src/a.ts");
+    await act(async () => {});
+
+    expect(button(container, LABEL)).toBeUndefined();
+  });
+
+  it("surfaces a failure inline and retries with the same structured args", async () => {
+    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "Worktree is gone" },
+    });
+    const { container } = renderPane("/repo/src/index.ts");
+    await click(button(container, LABEL)!);
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("Worktree is gone");
+    // Tier 3 is pane-local — no global toast for a failure the pane already owns.
+    expect(notifyMock).not.toHaveBeenCalled();
+
+    dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+    dispatchMock.mockClear();
+    await click(button(container, "Retry opening file browser")!);
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.openFileBrowser",
+      { worktreeId: "wt-1", revealPath: "src/index.ts", revealKind: "file" },
+      { source: "user" }
+    );
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  // The reveal target is path-only; regressing the args builder into a single
+  // shape would send {path} to the worktree action (or vice versa).
+  it("keeps the path-only args for the sibling reveal target", async () => {
+    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
+    const { container } = renderPane("/repo/src/index.ts");
+
+    await click(button(container, revealCopy().label)!);
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "file.showItemInFolder",
+      { path: "/repo/src/index.ts" },
+      { source: "user" }
+    );
+  });
+});
+
 // #11191: HTML files get the same Source/Rendered toggle as Markdown; rendered
 // HTML routes to the sandboxed-iframe HtmlViewer.
 describe("FilePane HTML Source/Rendered (#11191)", () => {

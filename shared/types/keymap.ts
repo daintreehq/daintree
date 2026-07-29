@@ -62,6 +62,7 @@ export type BuiltInKeyAction =
   | "worktree.copyTree"
   | "worktree.openChanges"
   | "worktree.openEditor"
+  | "worktree.openFileBrowser"
   | "worktree.openPalette"
   | "worktree.createDialog.open"
   | "worktree.overview"
@@ -270,6 +271,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "worktree.copyTree",
   "worktree.openChanges",
   "worktree.openEditor",
+  "worktree.openFileBrowser",
   "worktree.openPalette",
   "worktree.createDialog.open",
   "worktree.overview",
