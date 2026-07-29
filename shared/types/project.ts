@@ -236,6 +236,12 @@ export interface PanelSnapshot {
   browserTreeSnapshot?: FileBrowserTreeSnapshot;
   /** File browser tree column width in px (only a non-default, in-range value persisted) */
   browserSidebarWidth?: number;
+  /**
+   * Whether a file browser panel browses the view's workspace root rather than
+   * its `worktreeId`, which for such a panel is grid placement only (#11489).
+   * Only `true` is persisted.
+   */
+  browserWorkspaceRooted?: boolean;
   /** Legacy pre-file-panel field: absolute path shown in a markdown panel */
   markdownFilePath?: string;
   /** Legacy pre-file-panel field: markdown panel view mode */

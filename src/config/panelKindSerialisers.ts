@@ -275,6 +275,10 @@ const BUILT_IN_DESERIALIZERS = {
     // hand-edited snapshot falls back to the default rather than becoming a
     // broken inline `style.width` (#11331).
     browserSidebarWidth: normalizeFileBrowserSidebarWidth(saved.browserSidebarWidth),
+    // Literal `true` only: anything else leaves the field absent so the create
+    // path re-derives rooting from `worktreeId` instead of trusting a corrupted
+    // value to redirect the browse root (#11489).
+    browserWorkspaceRooted: saved.browserWorkspaceRooted === true ? true : undefined,
   }),
   diff: (saved) => ({
     filePath: saved.filePath,

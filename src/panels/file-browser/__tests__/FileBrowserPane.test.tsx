@@ -9,43 +9,49 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // FileBrowserViewer so the toggle and the shared toolbar `Root` actually render
 // — that's what makes the aria-controls and header-alignment invariants real.
 
-const { setFileBrowserViewMock, readMock, treeState, defaultRows } = vi.hoisted(() => {
-  const defaultRows = [
-    {
-      path: "src",
-      name: "src",
-      isDirectory: true,
-      depth: 0,
-      isExpanded: true,
-      isLoading: false,
-    },
-    // A file row so a selection can resolve a real viewer path.
-    {
-      path: "src/app.ts",
-      name: "app.ts",
-      isDirectory: false,
-      depth: 1,
-      isExpanded: false,
-      isLoading: false,
-    },
-  ];
-  return {
-    setFileBrowserViewMock: vi.fn(),
-    readMock: vi.fn(),
-    defaultRows,
-    // Mutable so individual tests can drive error/loading/capture states.
-    treeState: {
-      rows: defaultRows as typeof defaultRows,
-      isInitialLoading: false,
-      rootError: null as string | null,
-      hasHiddenDotfiles: false,
-      ensureLoaded: vi.fn(),
-      refresh: vi.fn(),
-      isRefreshing: false,
-      captureSnapshot: (() => null) as () => unknown,
-    },
-  };
-});
+const { setFileBrowserViewMock, readMock, treeState, defaultRows, treeArgs, worktreeTicks } =
+  vi.hoisted(() => {
+    const defaultRows = [
+      {
+        path: "src",
+        name: "src",
+        isDirectory: true,
+        depth: 0,
+        isExpanded: true,
+        isLoading: false,
+      },
+      // A file row so a selection can resolve a real viewer path.
+      {
+        path: "src/app.ts",
+        name: "app.ts",
+        isDirectory: false,
+        depth: 1,
+        isExpanded: false,
+        isLoading: false,
+      },
+    ];
+    return {
+      setFileBrowserViewMock: vi.fn(),
+      readMock: vi.fn(),
+      defaultRows,
+      // Mutable so individual tests can drive error/loading/capture states.
+      treeState: {
+        rows: defaultRows as typeof defaultRows,
+        isInitialLoading: false,
+        rootError: null as string | null,
+        hasHiddenDotfiles: false,
+        ensureLoaded: vi.fn(),
+        refresh: vi.fn(),
+        isRefreshing: false,
+        captureSnapshot: (() => null) as () => unknown,
+      },
+      // What the pane last handed the tree hook, so a test can assert the derived
+      // change tick rather than only what renders.
+      treeArgs: { changeTick: undefined as number | undefined },
+      // Ticks the worktree store reports for wt-1; both default to "never moved".
+      worktreeTicks: { git: undefined as number | undefined, fs: undefined as number | undefined },
+    };
+  });
 
 interface MockPanel {
   id: string;
@@ -56,6 +62,7 @@ interface MockPanel {
   browserRootPath?: string;
   browserSidebarCollapsed?: boolean;
   browserSidebarWidth?: number;
+  browserWorkspaceRooted?: boolean;
 }
 
 const mockPanel: MockPanel = { id: "fb-1", kind: "file-browser" };
@@ -71,10 +78,21 @@ vi.mock("@/store/panelStore", () => ({
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: unknown) => unknown) =>
     selector({
-      worktrees: new Map([["wt-1", { path: "/repo", worktreeChanges: undefined }]]),
+      worktrees: new Map([
+        [
+          "wt-1",
+          {
+            path: "/repo",
+            worktreeChanges:
+              worktreeTicks.git === undefined ? undefined : { lastUpdated: worktreeTicks.git },
+          },
+        ],
+      ]),
       // The pane reads the raw filesystem-write side map for its change tick
       // (#11330); an absent map would crash the `.get(worktreeId)` selector.
-      workingTreeChangedAtById: new Map<string, number>(),
+      workingTreeChangedAtById: new Map<string, number>(
+        worktreeTicks.fs === undefined ? [] : [["wt-1", worktreeTicks.fs]]
+      ),
     }),
 }));
 
@@ -82,7 +100,10 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 // state bag so the tree column renders its header (and the FileTreeView stub
 // below) without touching filesClient, and tests can drive error states.
 vi.mock("../useFileBrowserTree", () => ({
-  useFileBrowserTree: () => ({ ...treeState }),
+  useFileBrowserTree: (args: { changeTick?: number }) => {
+    treeArgs.changeTick = args.changeTick;
+    return { ...treeState };
+  },
 }));
 
 // The pane flushes panel persistence when the view hides; the real module
@@ -234,6 +255,10 @@ beforeEach(() => {
   mockPanel.browserRootPath = undefined;
   mockPanel.browserShowIgnored = undefined;
   mockPanel.browserSidebarWidth = undefined;
+  mockPanel.browserWorkspaceRooted = undefined;
+  treeArgs.changeTick = undefined;
+  worktreeTicks.git = undefined;
+  worktreeTicks.fs = undefined;
   for (const name of ["matchMedia"] as const) {
     if (typeof window[name] !== "function") {
       Object.defineProperty(window, name, {
@@ -1086,5 +1111,81 @@ describe("workspace-rooted browser", () => {
     renderPane({ worktreeId: "wt-missing" });
 
     expect(screen.getByText("Open a folder to browse its files")).toBeTruthy();
+  });
+});
+
+/**
+ * Promotion into the grid stamps the active worktree onto a workspace-rooted
+ * panel so it lands in a rendered index bucket (#11290). That id is placement
+ * only — a resolvable one, so nothing fails loudly; the panel just quietly
+ * showed the wrong folder until #11489.
+ */
+describe("promoted workspace-rooted browser (#11489)", () => {
+  it("keeps browsing the workspace after promotion stamps a placement worktree", async () => {
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    mockPanel.browserWorkspaceRooted = true;
+    renderPane({ worktreeId: "wt-1" });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy full path" }));
+    });
+
+    // wt-1 resolves to "/repo", which is what this joined against before the fix.
+    expect(writeTextMock).toHaveBeenCalledWith(`/scratches/one/${FOLDER_ROW.path}`);
+  });
+
+  it("hides Copy context for a promoted workspace-rooted browser", () => {
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    mockPanel.browserWorkspaceRooted = true;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(screen.queryByRole("button", { name: "Copy context" })).toBeNull();
+  });
+
+  it("still refuses to render when the workspace root is unknown", () => {
+    // The placement worktree resolves, but it is not this panel's folder — so
+    // an unresolved workspace is the unbound case, not a reason to use it.
+    mockPanel.browserWorkspaceRooted = true;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(screen.getByText("Open a folder to browse its files")).toBeTruthy();
+  });
+
+  it("leaves an unmarked worktree panel on its worktree", () => {
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(screen.getByRole("button", { name: "Copy context" })).toBeTruthy();
+  });
+
+  it("follows its own worktree's git tick when it is not workspace-rooted", () => {
+    // Asserted per source rather than together: with both set, the larger one
+    // alone satisfies the Math.max and a disconnected sibling selector reads
+    // green.
+    worktreeTicks.git = 450;
+    worktreeTicks.fs = 120;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(treeArgs.changeTick).toBe(450);
+  });
+
+  it("follows its own worktree's filesystem tick when it is not workspace-rooted", () => {
+    worktreeTicks.fs = 300;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(treeArgs.changeTick).toBe(300);
+  });
+
+  it("ignores the placement worktree's change ticks once workspace-rooted", () => {
+    // Both tick maps are keyed by worktree, so a workspace source has no tick at
+    // all — following the placement worktree's would refresh the tree on writes
+    // in a folder this panel isn't showing.
+    worktreeTicks.git = 120;
+    worktreeTicks.fs = 450;
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    mockPanel.browserWorkspaceRooted = true;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(treeArgs.changeTick).toBeUndefined();
   });
 });

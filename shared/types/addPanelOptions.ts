@@ -281,6 +281,12 @@ export interface FileBrowserPanelOptions extends AddPanelOptionsBase {
   browserTreeSnapshot?: FileBrowserTreeSnapshot;
   /** Tree column width in px to restore; absent or 288 = the default width */
   browserSidebarWidth?: number;
+  /**
+   * Restores a workspace-rooted panel whose `worktreeId` is grid placement
+   * only (#11489). On a fresh open it is the absence of `worktreeId` that
+   * decides this, so openers never pass it.
+   */
+  browserWorkspaceRooted?: boolean;
 }
 
 /**

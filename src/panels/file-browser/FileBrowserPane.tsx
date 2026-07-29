@@ -148,12 +148,27 @@ export function FileBrowserPane({
     )
   );
 
+  const workspaceRooted = usePanelStore(
+    useCallback(
+      (state) => {
+        const panel = state.panelsById[id];
+        return panel?.kind === "file-browser" ? panel.browserWorkspaceRooted === true : false;
+      },
+      [id]
+    )
+  );
+  // The worktree this panel *browses*, which is not the one it is placed under:
+  // promotion into the grid stamps the active worktree onto a workspace-rooted
+  // panel so it lands in a rendered index bucket (#11290), and following that
+  // id here would re-root the tree to a folder the user never opened (#11489).
+  const sourceWorktreeId = workspaceRooted ? undefined : worktreeId;
+
   // Resolved fresh from the worktree store rather than persisted, so a rename
   // or move is reflected without restarting the panel.
   const worktreePath = useWorktreeStore(
     useCallback(
-      (state) => (worktreeId ? (state.worktrees.get(worktreeId)?.path ?? "") : ""),
-      [worktreeId]
+      (state) => (sourceWorktreeId ? (state.worktrees.get(sourceWorktreeId)?.path ?? "") : ""),
+      [sourceWorktreeId]
     )
   );
   // The fallback root for a panel with no worktree: this view's own project or
@@ -169,11 +184,13 @@ export function FileBrowserPane({
     // Presence, not truthiness: a persisted `worktreeId: ""` names a worktree
     // that cannot resolve, and treating it as absent would quietly browse the
     // workspace root instead of refusing it.
-    if (worktreeId !== undefined) {
-      return worktreePath ? { kind: "worktree", worktreeId, basePath: worktreePath } : null;
+    if (sourceWorktreeId !== undefined) {
+      return worktreePath
+        ? { kind: "worktree", worktreeId: sourceWorktreeId, basePath: worktreePath }
+        : null;
     }
     return workspaceRootPath ? { kind: "workspace", basePath: workspaceRootPath } : null;
-  }, [worktreeId, worktreePath, workspaceRootPath]);
+  }, [sourceWorktreeId, worktreePath, workspaceRootPath]);
 
   // Everything path-shaped in the pane joins against this: the tree's rows are
   // relative to it in both modes.
@@ -186,8 +203,10 @@ export function FileBrowserPane({
   const gitChangeTick = useWorktreeStore(
     useCallback(
       (state) =>
-        worktreeId ? state.worktrees.get(worktreeId)?.worktreeChanges?.lastUpdated : undefined,
-      [worktreeId]
+        sourceWorktreeId
+          ? state.worktrees.get(sourceWorktreeId)?.worktreeChanges?.lastUpdated
+          : undefined,
+      [sourceWorktreeId]
     )
   );
   // The raw filesystem-write tick, independent of git status. Combining the two
@@ -196,8 +215,9 @@ export function FileBrowserPane({
   // snapshots) never advances (#11330).
   const fsChangeTick = useWorktreeStore(
     useCallback(
-      (state) => (worktreeId ? state.workingTreeChangedAtById.get(worktreeId) : undefined),
-      [worktreeId]
+      (state) =>
+        sourceWorktreeId ? state.workingTreeChangedAtById.get(sourceWorktreeId) : undefined,
+      [sourceWorktreeId]
     )
   );
   // A single monotonic signal for "re-read the tree/file": whichever moved most
@@ -449,14 +469,14 @@ export function FileBrowserPane({
 
   const handleCopyFolderContext = useCallback(
     (path: string) => {
-      if (!worktreeId) return;
+      if (!sourceWorktreeId) return;
       // Literal path, not a pattern: scoping keeps the worktree's ignore rules
       // in play, so the folder yields what a whole-worktree copy would have.
-      void copyContextWithFeedback(worktreeId, "context-menu", {
+      void copyContextWithFeedback(sourceWorktreeId, "context-menu", {
         scopePaths: [path],
       });
     },
-    [worktreeId]
+    [sourceWorktreeId]
   );
 
   const copyToClipboard = useCallback((text: string, errorTitle: string) => {

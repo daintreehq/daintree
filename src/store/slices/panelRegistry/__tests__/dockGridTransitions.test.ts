@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { FilePanelData, PanelInstance, PtyPanelData, TabGroup } from "@shared/types/panel";
+import type {
+  FileBrowserPanelData,
+  FilePanelData,
+  PanelInstance,
+  PtyPanelData,
+  TabGroup,
+} from "@shared/types/panel";
 import { setWorktreeSelectionAccessor } from "@/store/storeAccessors";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { buildWorktreeIndex, NO_WORKTREE } from "../worktreeIndex";
@@ -609,6 +615,121 @@ describe("dock ↔ grid transitions", () => {
       expect(state.panelsById["t1"]!.worktreeId).toBeUndefined();
       expect(state.panelsById["t1"]!.location).toBe("dock");
       expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toEqual(["t1"]);
+    });
+  });
+
+  describe("workspace-rooted file browser survives promotion (#11489)", () => {
+    const activateWorktree = (id: string) => {
+      setWorktreeSelectionAccessor(() => ({ activeWorktreeId: id, restoreWorktreeId: null }));
+    };
+
+    /**
+     * The shape `createFileBrowserDefaults` produces for a browser opened on a
+     * scratch or worktree-less project folder (#11482): no worktreeId, and the
+     * marker that says so. Promotion is expected to adopt a worktreeId for
+     * placement — the marker is what must survive it.
+     */
+    function seedWorkspaceBrowser(id: string, location: "dock" | "dialog" | "grid") {
+      usePanelStore.setState((state) => {
+        const panel: FileBrowserPanelData = {
+          id,
+          kind: "file-browser",
+          title: "Files",
+          location,
+          isVisible: location === "grid",
+          browserWorkspaceRooted: true,
+          ...(location === "dialog" && { excludeFromPersistence: true }),
+        };
+        const panelsById = { ...state.panelsById, [id]: panel };
+        const panelIds = [...state.panelIds, id];
+        return {
+          panelsById,
+          panelIds,
+          panelIdsByWorktreeId: buildWorktreeIndex(panelIds, panelsById),
+        };
+      });
+    }
+
+    const rootingOf = (id: string) => {
+      const panel = usePanelStore.getState().panelsById[id];
+      return panel?.kind === "file-browser" ? panel.browserWorkspaceRooted : undefined;
+    };
+
+    it("keeps the workspace rooting when a dialog browser is promoted to the grid", () => {
+      seedWorkspaceBrowser("fb-dialog", "dialog");
+      activateWorktree("wt-1");
+
+      expect(usePanelStore.getState().promoteDialogPanelToGrid("fb-dialog")).toBe(true);
+
+      // The adoption still happens — that is #11290 — but it is placement only.
+      expect(usePanelStore.getState().panelsById["fb-dialog"]!.worktreeId).toBe("wt-1");
+      expect(usePanelStore.getState().panelIdsByWorktreeId["wt-1"]).toEqual(["fb-dialog"]);
+      expect(rootingOf("fb-dialog")).toBe(true);
+    });
+
+    it("keeps the workspace rooting when a docked browser is promoted to the grid", () => {
+      seedWorkspaceBrowser("fb-dock", "dock");
+      activateWorktree("wt-1");
+
+      expect(usePanelStore.getState().moveTerminalToGrid("fb-dock")).toBe(true);
+
+      expect(usePanelStore.getState().panelsById["fb-dock"]!.worktreeId).toBe("wt-1");
+      expect(rootingOf("fb-dock")).toBe(true);
+    });
+
+    it("keeps the workspace rooting on a drag-style dock-to-grid move", () => {
+      seedWorkspaceBrowser("fb-drag", "dock");
+
+      usePanelStore.getState().moveTerminalToPosition("fb-drag", 0, "grid", "wt-2");
+
+      expect(usePanelStore.getState().panelsById["fb-drag"]!.worktreeId).toBe("wt-2");
+      expect(rootingOf("fb-drag")).toBe(true);
+    });
+
+    it("keeps the workspace rooting when the browser rides a promoted tab group", () => {
+      seedWorkspaceBrowser("fb-group", "dock");
+      usePanelStore.setState((state) => ({
+        tabGroups: new Map(state.tabGroups).set("g1", {
+          id: "g1",
+          panelIds: ["fb-group"],
+          activeTabId: "fb-group",
+          location: "dock",
+          worktreeId: undefined,
+        }),
+      }));
+      activateWorktree("wt-1");
+
+      usePanelStore.getState().moveTabGroupToLocation("g1", "grid");
+
+      expect(usePanelStore.getState().panelsById["fb-group"]!.worktreeId).toBe("wt-1");
+      expect(rootingOf("fb-group")).toBe(true);
+    });
+
+    it("never invents workspace rooting for a worktree-rooted browser", () => {
+      usePanelStore.setState((state) => {
+        const panel: FileBrowserPanelData = {
+          id: "fb-wt",
+          kind: "file-browser",
+          title: "Files",
+          location: "dock",
+          isVisible: false,
+          worktreeId: "wt-3",
+        };
+        const panelsById = { ...state.panelsById, "fb-wt": panel };
+        const panelIds = [...state.panelIds, "fb-wt"];
+        return {
+          panelsById,
+          panelIds,
+          panelIdsByWorktreeId: buildWorktreeIndex(panelIds, panelsById),
+        };
+      });
+      activateWorktree("wt-1");
+
+      usePanelStore.getState().moveTerminalToGrid("fb-wt");
+
+      // A real attribution is never replaced, and nothing marks it workspace-rooted.
+      expect(usePanelStore.getState().panelsById["fb-wt"]!.worktreeId).toBe("wt-3");
+      expect(rootingOf("fb-wt")).toBeUndefined();
     });
   });
 
