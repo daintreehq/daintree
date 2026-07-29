@@ -6,7 +6,7 @@
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
-import { logError } from "@/utils/logger";
+import { logError, logInfo } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 import { buildResumeLatestCommand } from "@shared/types/agentSettings";
@@ -402,7 +402,7 @@ export class HibernationManager {
     if (opts.clearMirror) useHelpPanelStore.getState().clearHibernateSession(projectId);
     try {
       const restored = await window.electron.help.restorePendingHibernation(projectId, claimId);
-      console.info("[HelpPanel] released pending hibernation back to main", {
+      logInfo("HelpPanel: released pending hibernation back to main", {
         projectId,
         reason,
         restored,
