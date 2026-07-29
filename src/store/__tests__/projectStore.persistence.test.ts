@@ -190,6 +190,30 @@ describe("panel persistence workspace id (#11484)", () => {
 
     expect(getter()).toBeUndefined();
   });
+
+  it("refuses to persist into a closed project's state", async () => {
+    // `currentProject` is null for a closed project too. Treating that as a
+    // scratch would let a view that restored nothing overwrite the closed
+    // project's saved grid with an empty one.
+    installLocalStorage(createStorageMock());
+    viewWorkspaceIdMock.mockReturnValue("project-closed");
+
+    const getter = await loadPersistenceGetter();
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({
+      currentProject: null,
+      projects: [
+        {
+          id: "project-closed",
+          name: "Closed",
+          path: "/tmp/closed",
+          status: "closed",
+        },
+      ] as unknown as ReturnType<typeof useProjectStore.getState>["projects"],
+    });
+
+    expect(getter()).toBeUndefined();
+  });
 });
 
 describe("projectStore persistence boundary hardening", () => {

@@ -1161,9 +1161,22 @@ registerPersistedStore({
 // no `currentProject` — still persists its panel grid instead of silently
 // skipping every save (#11484). Same pattern as the PTY-ownership fix in
 // `panelRegistry/addPanel` and `restart`.
-panelPersistence.setProjectIdGetter(
-  () => useProjectStore.getState().currentProject?.id ?? getViewWorkspaceId() ?? undefined
-);
+//
+// The fallback is deliberately narrow. `currentProject` is also null for a
+// *closed* project, and persisting there would let a view that restored nothing
+// overwrite that project's saved grid with an empty one. Only an id that names
+// no project row at all is a scratch, which mirrors how Main resolves a sender's
+// workspace in `resolveScopedProjectForIpcContext`.
+panelPersistence.setProjectIdGetter(() => {
+  const { currentProject, projects } = useProjectStore.getState();
+  if (currentProject?.id) return currentProject.id;
+
+  const viewWorkspaceId = getViewWorkspaceId();
+  if (!viewWorkspaceId) return undefined;
+  return projects.some((candidate) => candidate.id === viewWorkspaceId)
+    ? undefined
+    : viewWorkspaceId;
+});
 
 // Keep this renderer's cached project state in sync when another renderer
 // (e.g., the welcome view where the onboarding wizard ran) adds, updates,
