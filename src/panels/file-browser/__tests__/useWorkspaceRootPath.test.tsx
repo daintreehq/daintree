@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
-import type { Project } from "@shared/types";
-import type { Scratch } from "@shared/types";
+import type { Project, Scratch } from "@shared/types";
 
 const { projectState, scratchState } = vi.hoisted(() => ({
   projectState: {
@@ -136,21 +135,35 @@ describe("useWorkspaceRootPath", () => {
 });
 
 describe("resolveViewWorkspace", () => {
+  const project = (id: string, path: string): Project => ({
+    id,
+    path,
+    name: id,
+    emoji: "🌳",
+    lastOpened: 0,
+  });
+  const scratch = (id: string, path: string): Scratch => ({
+    id,
+    path,
+    name: id,
+    createdAt: 0,
+    lastOpened: 0,
+  });
   const base = {
-    projects: [{ id: "p-1", path: "/folders/notes" }],
+    projects: [project("p-1", "/folders/notes")],
     currentProject: null,
-    scratches: [{ id: "s-1", path: "/scratches/one" }],
+    scratches: [scratch("s-1", "/scratches/one")],
     currentScratch: null,
-  } as unknown as Parameters<typeof resolveViewWorkspace>[0];
+  };
 
   it("keys off the seeded id, not the broadcast pointers", () => {
     const resolved = resolveViewWorkspace({
       ...base,
       viewWorkspaceId: "s-1",
-      currentProject: { id: "p-1", path: "/folders/notes" },
-    } as Parameters<typeof resolveViewWorkspace>[0]);
+      currentProject: project("p-1", "/folders/notes"),
+    });
 
-    expect(resolved).toEqual({ kind: "scratch", scratch: { id: "s-1", path: "/scratches/one" } });
+    expect(resolved).toMatchObject({ kind: "scratch", scratch: { path: "/scratches/one" } });
   });
 
   it("returns null for a seeded id in neither collection", () => {
@@ -163,9 +176,9 @@ describe("resolveViewWorkspace", () => {
     const resolved = resolveViewWorkspace({
       ...base,
       viewWorkspaceId: null,
-      currentScratch: { id: "s-9", path: "/scratches/nine" },
-    } as Parameters<typeof resolveViewWorkspace>[0]);
+      currentScratch: scratch("s-9", "/scratches/nine"),
+    });
 
-    expect(resolved).toEqual({ kind: "scratch", scratch: { id: "s-9", path: "/scratches/nine" } });
+    expect(resolved).toMatchObject({ kind: "scratch", scratch: { path: "/scratches/nine" } });
   });
 });
