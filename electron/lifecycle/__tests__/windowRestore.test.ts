@@ -122,28 +122,51 @@ describe("restoreWindowFleet", () => {
     });
   });
 
-  it("creates the first window alone, before any of the rest start", async () => {
-    // initGlobalServices() flips its guard synchronously at entry, so a second
-    // window overlapping the first races its migrations.
-    const inFlight: number[] = [];
-    let concurrentPeak = 0;
-    let active = 0;
-    h = harness(
-      { records: [record("a"), record("b"), record("c")], hadManifest: true },
-      async () => {
+  describe("fan-out sequencing", () => {
+    /** Records start/end around a tick so overlap is observable. */
+    function traced(records: OpenWindowRecord[]) {
+      const events: string[] = [];
+      let active = 0;
+      let peak = 0;
+      const h = harness({ records, hadManifest: true }, async (projectId) => {
         active++;
-        concurrentPeak = Math.max(concurrentPeak, active);
-        inFlight.push(active);
+        peak = Math.max(peak, active);
+        events.push(`start:${projectId}`);
         await Promise.resolve();
+        await Promise.resolve();
+        events.push(`end:${projectId}`);
         active--;
         return "ok";
-      }
-    );
+      });
+      return { h, events, peakOf: () => peak };
+    }
 
-    await restoreWindowFleet(h.deps);
+    it("finishes the first window before either of the rest starts", async () => {
+      // initGlobalServices() flips its "initialized" guard synchronously at
+      // entry, so a second window overlapping the first sails past the guard and
+      // races its migrations. Completion-before-start is the actual invariant —
+      // merely observing the primary alone at its own first tick proves nothing,
+      // since every call records itself before yielding.
+      const { h, events } = traced([record("a"), record("b"), record("c")]);
+      await restoreWindowFleet(h.deps);
 
-    expect(inFlight[0]).toBe(1);
-    expect(concurrentPeak).toBeGreaterThan(1);
+      expect(events.indexOf("end:a")).toBeLessThan(events.indexOf("start:b"));
+      expect(events.indexOf("end:a")).toBeLessThan(events.indexOf("start:c"));
+    });
+
+    it("runs the background windows together rather than one after another", async () => {
+      const { h, events, peakOf } = traced([record("a"), record("b"), record("c")]);
+      await restoreWindowFleet(h.deps);
+
+      expect(events.indexOf("start:c")).toBeLessThan(events.indexOf("end:b"));
+      expect(peakOf()).toBe(2);
+    });
+
+    it("never overlaps anything with the primary when it is the only window", async () => {
+      const { h, peakOf } = traced([record("a")]);
+      await restoreWindowFleet(h.deps);
+      expect(peakOf()).toBe(1);
+    });
   });
 
   it("restores two windows onto the same project rather than collapsing them", async () => {

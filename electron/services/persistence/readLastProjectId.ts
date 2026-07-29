@@ -18,6 +18,7 @@ import type { Project } from "../../../shared/types/project.js";
 import {
   OPEN_WINDOWS_KEY,
   filterRestorableWindows,
+  isReadableOpenWindowsManifest,
   parseOpenWindowsManifest,
   type OpenWindowRecord,
 } from "./windowManifest.js";
@@ -130,8 +131,15 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
         .prepare("SELECT value FROM app_state WHERE key = ?")
         .get(OPEN_WINDOWS_KEY) as { value: string } | undefined;
 
+      // Readability is asked separately from the record count: a manifest that
+      // legitimately names zero windows (the user closed them all) must not be
+      // mistaken for having no manifest, or the launch falls back to the global
+      // last-active project.
+      const hadManifest = isReadableOpenWindowsManifest(row?.value ?? null);
+      if (!hadManifest) return NO_MANIFEST;
+
       const records = parseOpenWindowsManifest(row?.value ?? null);
-      if (records.length === 0) return NO_MANIFEST;
+      if (records.length === 0) return { hadManifest: true, records: [] };
 
       const projectIds = [...new Set(records.map((r) => r.projectId).filter((id) => id !== null))];
       if (projectIds.length === 0) return { hadManifest: true, records };

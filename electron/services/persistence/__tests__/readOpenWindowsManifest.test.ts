@@ -128,6 +128,17 @@ describe("readOpenWindowsManifestSync", () => {
     expect(readOpenWindowsManifestSync()).toEqual({ hadManifest: true, records: [] });
   });
 
+  it("reports a manifest existed when it legitimately names zero windows", () => {
+    // Closing every window persists this; it must not read as "no manifest".
+    withDb({ manifest: manifestJson([]) });
+    expect(readOpenWindowsManifestSync()).toEqual({ hadManifest: true, records: [] });
+  });
+
+  it("reports no manifest when every entry is malformed", () => {
+    withDb({ manifest: manifestJson([{ projectId: 42 }, "junk"]) });
+    expect(readOpenWindowsManifestSync()).toEqual({ hadManifest: false, records: [] });
+  });
+
   it("skips the project query entirely when every record is a picker window", () => {
     const onProjectQuery = vi.fn();
     withDb({ manifest: manifestJson([{ projectId: null }, { projectId: null }]), onProjectQuery });

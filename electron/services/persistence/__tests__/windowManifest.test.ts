@@ -3,6 +3,7 @@ import {
   MAX_RESTORED_WINDOWS,
   OPEN_WINDOWS_MANIFEST_VERSION,
   filterRestorableWindows,
+  isReadableOpenWindowsManifest,
   parseOpenWindowsManifest,
   serializeOpenWindowsManifest,
   type OpenWindowRecord,
@@ -115,6 +116,58 @@ describe("serializeOpenWindowsManifest", () => {
   it("writes only the projectId, never an ephemeral Electron window id", () => {
     const withExtras = [{ projectId: "a", windowId: 3 } as OpenWindowRecord];
     expect(serializeOpenWindowsManifest(withExtras)).not.toContain("windowId");
+  });
+});
+
+describe("isReadableOpenWindowsManifest", () => {
+  it("accepts a manifest that legitimately names zero windows", () => {
+    // Closing every window persists exactly this. It must stay distinguishable
+    // from having no manifest, or the next launch falls back to the global
+    // last-active project.
+    expect(isReadableOpenWindowsManifest(manifestJson([]))).toBe(true);
+  });
+
+  it("accepts a populated manifest", () => {
+    expect(isReadableOpenWindowsManifest(manifestJson([{ projectId: "a" }]))).toBe(true);
+  });
+
+  it("accepts a manifest of picker windows", () => {
+    expect(isReadableOpenWindowsManifest(manifestJson([{ projectId: null }]))).toBe(true);
+  });
+
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["empty string", ""],
+    ["not JSON", "{not json"],
+    ["a JSON array", "[]"],
+    ["JSON null", "null"],
+  ])("rejects %s", (_label, raw) => {
+    expect(isReadableOpenWindowsManifest(raw)).toBe(false);
+  });
+
+  it("rejects a version it cannot read", () => {
+    const future = JSON.stringify({
+      version: OPEN_WINDOWS_MANIFEST_VERSION + 1,
+      windows: [],
+    });
+    expect(isReadableOpenWindowsManifest(future)).toBe(false);
+  });
+
+  it("rejects a manifest whose windows is not an array", () => {
+    expect(isReadableOpenWindowsManifest(manifestJson([]).replace("[]", "{}"))).toBe(false);
+  });
+
+  it("rejects a non-empty manifest whose every entry is malformed", () => {
+    // Corrupt, not empty — the friendlier answer to corruption is the old
+    // single-window behaviour rather than a bare project picker.
+    expect(isReadableOpenWindowsManifest(manifestJson([{ projectId: 42 }, "junk"]))).toBe(false);
+  });
+
+  it("accepts a manifest where only some entries are malformed", () => {
+    expect(
+      isReadableOpenWindowsManifest(manifestJson([{ projectId: 42 }, { projectId: "a" }]))
+    ).toBe(true);
   });
 });
 

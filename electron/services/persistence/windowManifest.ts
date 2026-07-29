@@ -50,6 +50,38 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Whether `raw` is a manifest this version can read — regardless of how many
+ * windows survive entry validation.
+ *
+ * Separate from the record count because "no manifest" and "a manifest naming
+ * zero windows" lead to different launches: the first falls back to the global
+ * last-active project, the second must not. Closing every window persists an
+ * empty manifest, so this is a state users reach, not a theoretical one.
+ *
+ * All-malformed entries deliberately read as unreadable rather than empty: that
+ * is corrupt data, and the friendlier answer to corruption is the old
+ * single-window behaviour, not a bare project picker.
+ */
+export function isReadableOpenWindowsManifest(raw: string | null | undefined): boolean {
+  if (!raw) return false;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+
+  if (!isRecord(parsed)) return false;
+  if (parsed.version !== OPEN_WINDOWS_MANIFEST_VERSION) return false;
+  if (!Array.isArray(parsed.windows)) return false;
+
+  // An empty list is readable. A non-empty list that yields no usable record is
+  // corrupt.
+  return parsed.windows.length === 0 || parseOpenWindowsManifest(raw).length > 0;
+}
+
+/**
  * Parse and validate a stored manifest. Pure — no IO, no DB — so the corruption
  * matrix is unit-testable.
  *
