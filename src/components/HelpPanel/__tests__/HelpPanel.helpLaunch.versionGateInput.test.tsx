@@ -334,7 +334,11 @@ vi.mock("@/store", () => {
 });
 
 vi.mock("@/store/macroFocusStore", () => {
-  const state = { focusedRegion: null, setRegionRef: vi.fn(), setVisibility: vi.fn() };
+  const state = {
+    focusedRegion: null as string | null,
+    setRegionRef: vi.fn(),
+    setVisibility: vi.fn(),
+  };
   const store = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state);
   store.getState = () => state;
   store.setState = (
@@ -343,7 +347,12 @@ vi.mock("@/store/macroFocusStore", () => {
     const next = typeof partial === "function" ? partial(state) : partial;
     Object.assign(state, next);
   };
-  return { useMacroFocusStore: store };
+  return {
+    useMacroFocusStore: store,
+    // Mirrors the real contract (macroFocusStore.ts:94) closely enough for these
+    // suites: the assistant owns focus when its macro region is selected.
+    isAssistantFocused: () => state.focusedRegion === "assistant",
+  };
 });
 
 vi.mock("@/lib/sidebarToggle", () => ({
