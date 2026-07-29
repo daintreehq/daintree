@@ -129,17 +129,14 @@ describe("OpenCode install pin", () => {
     }
   });
 
-  it("leaves no workflow referencing opencode-ai outside the installer", () => {
-    // Scan whole steps, not just `run`: an install can also hide in an `env`
-    // indirection (`npm i -g "$PKG"`) or a `with:` input to a local action.
-    const offenders = [];
-    for (const file of workflowFiles()) {
-      for (const step of stepsOf(file)) {
-        if (JSON.stringify(step ?? {}).includes("opencode-ai")) {
-          offenders.push(`${file}: ${step?.name ?? "(unnamed)"}`);
-        }
-      }
-    }
+  it("leaves no workflow naming opencode-ai outside the installer", () => {
+    // Raw text, not parsed steps: the package name can reach npm through an
+    // `env:` indirection at workflow or job scope (`npm i -g "$PKG"`) or a
+    // `with:` input to a local action, none of which a step-shaped scan sees.
+    // The installer owns the only mention, so any hit here is a bypass.
+    const offenders = workflowFiles().filter((file) =>
+      readFileSync(path.join(workflowsDir, file), "utf8").includes("opencode-ai")
+    );
     expect(offenders).toEqual([]);
   });
 });

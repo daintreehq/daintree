@@ -45,7 +45,7 @@ export function hasOpenCodeCrashSignature(text: string): boolean {
   return collapseWhitespace(text).includes(CRASH_NEEDLE);
 }
 
-export function hasOpenCodeReadyMarkers(text: string): boolean {
+function hasOpenCodeReadyMarkers(text: string): boolean {
   return (
     text.toLowerCase().includes("ask anything") ||
     /build\s+opencode/i.test(text) ||
@@ -54,10 +54,9 @@ export function hasOpenCodeReadyMarkers(text: string): boolean {
 }
 
 export function classifyOpenCodeOutput(text: string): OpenCodeClassification {
-  // Crash outranks everything: a TUI that painted a ready prompt and then died
-  // still has the ready text sitting in the buffer above the stack trace.
-  // Because this wins over `ready`, the driver confirms the process really is
-  // gone before failing — see CRASH_CONFIRM_MS.
+  // Crash outranks everything, including ready: the CLI runs --mini, so
+  // whatever it painted before dying is still in scrollback, and treating a
+  // stale ready marker as authoritative would report a dead process as ready.
   if (hasOpenCodeCrashSignature(text)) {
     return { kind: "crashed", signature: OPENCODE_CRASH_SIGNATURE };
   }
@@ -124,15 +123,6 @@ export type StabilizationPolicy = {
 
 /** Driver poll interval while a prompt is settling. Lives here so the policy below stays honest about the cadence it assumes. */
 export const STABILIZATION_POLL_MS = 500;
-
-/**
- * How long to wait before believing a crash signature. The signature outranks
- * every other state, so a handled upstream error that printed the same message
- * would otherwise fail a release the CLI was going to survive. One confirming
- * re-read costs a second on the genuine-crash path and removes that whole
- * false-positive class: a live TUI goes on to paint its ready markers.
- */
-export const CRASH_CONFIRM_MS = 1_000;
 
 // Four samples at STABILIZATION_POLL_MS gives ~1.5s of settled output before
 // the first keystroke. maxWaitMs bounds the case the sample streak can never

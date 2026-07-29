@@ -8,7 +8,6 @@ import {
   formatOpenCodeCrashError,
   formatOpenCodeTimeoutError,
   formatTerminalTail,
-  hasOpenCodeReadyMarkers,
   initialStabilizationState,
   normalizeOpenCodeOutput,
   observeOpenCodeOutput,
@@ -69,14 +68,11 @@ describe("classifyOpenCodeOutput — fatal parser crash", () => {
     }
   });
 
-  it("separates the ready markers from classification so a crash can be re-checked", () => {
-    // The driver confirms a crash by re-reading and asking whether the CLI
-    // painted ready markers anyway; that question cannot be asked through
-    // classifyOpenCodeOutput, because the crash outranks ready there.
-    const survived = "[Keymap] Error: invalid key name: key name cannot be empty\n> Ask anything";
-    expect(classifyOpenCodeOutput(survived).kind).toBe("crashed");
-    expect(hasOpenCodeReadyMarkers(survived)).toBe(true);
-    expect(hasOpenCodeReadyMarkers("Select provider: Anthropic")).toBe(false);
+  it("still reports a crash when ready text survives below it in scrollback", () => {
+    // --mini keeps scrollback, so ready markers outlive the process. Preferring
+    // them would report a dead CLI as ready and lose the diagnostic entirely.
+    const text = "error: Invalid key name: key name cannot be empty\n> Ask anything";
+    expect(classifyOpenCodeOutput(text).kind).toBe("crashed");
   });
 
   it("does not fire on recoverable keymap errors or on either half alone", () => {

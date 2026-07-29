@@ -5,13 +5,11 @@ import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/proje
 import { getTerminalText } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
 import {
-  CRASH_CONFIRM_MS,
   STABILIZATION_POLL_MS,
   areOpenCodeOutputsEquivalent,
   classifyOpenCodeOutput,
   formatOpenCodeCrashError,
   formatOpenCodeTimeoutError,
-  hasOpenCodeReadyMarkers,
   initialStabilizationState,
   observeOpenCodeOutput,
   type OpenCodeOutputKind,
@@ -71,6 +69,9 @@ async function launchOpenCodeAgent(): Promise<Locator> {
 }
 
 const IDLE_POLL_MS = 1_000;
+// Re-reads allowed after focus before we answer a prompt whose text keeps
+// moving. Bounded so the settle → focus → mismatch cycle always terminates.
+const MAX_STALE_AUTHORIZATIONS = 2;
 
 async function waitForOpenCodeReady(agentPanel: Locator): Promise<"ready" | "needs-restart"> {
   const { window } = ctx;
@@ -86,6 +87,7 @@ async function waitForOpenCodeReady(agentPanel: Locator): Promise<"ready" | "nee
     Date.now() + (process.platform === "win32" ? 360_000 : process.env.CI ? 180_000 : 120_000);
 
   let stabilization = initialStabilizationState();
+  let staleAuthorizations = 0;
   let lastText = "";
   let lastKind: OpenCodeOutputKind = "pending";
 
@@ -96,16 +98,19 @@ async function waitForOpenCodeReady(agentPanel: Locator): Promise<"ready" | "nee
     const classification = classifyOpenCodeOutput(lastText);
     lastKind = classification.kind;
 
-    // Fail in about a second rather than burning the whole deadline on a CLI
+    // Fail in one poll interval rather than burning the whole deadline on a CLI
     // that is already dead — the generic timeout that used to surface here read
-    // as a Daintree ready-state bug and cost a release investigation. The one
-    // confirming re-read guards the other direction: the signature outranks
-    // every other state, so a handled upstream error printing the same message
-    // must not fail a release the CLI was going to survive.
+    // as a Daintree ready-state bug and cost a release investigation.
+    //
+    // Throwing on first sight is deliberate. Confirming first (re-read, look
+    // for ready markers) was tried and is worse: the CLI runs --mini, so a
+    // ready marker from before the crash is still sitting in scrollback, and a
+    // real crash would be reported as "ready" — destroying the diagnostic this
+    // exists to give. The signature is only printed on the CLI's unwrapped
+    // key-decode throw, and if that ever stops being true the failure is a
+    // clearly labelled upstream-crash message, which still triages faster than
+    // the timeout it replaced.
     if (classification.kind === "crashed") {
-      await window.waitForTimeout(CRASH_CONFIRM_MS);
-      lastText = await getTerminalText(agentPanel);
-      if (hasOpenCodeReadyMarkers(lastText)) return "ready";
       throw new Error(formatOpenCodeCrashError(classification.signature, lastText));
     }
     if (classification.kind === "needs-restart") return "needs-restart";
@@ -141,13 +146,27 @@ async function waitForOpenCodeReady(agentPanel: Locator): Promise<"ready" | "nee
     if (settled.kind === "crashed") {
       throw new Error(formatOpenCodeCrashError(settled.signature, lastText));
     }
+    if (settled.kind !== classification.kind) {
+      stabilization = initialStabilizationState();
+      staleAuthorizations = 0;
+      continue;
+    }
+
+    // Re-authorize a bounded number of times, then send anyway. Requiring the
+    // text to match forever would livelock on a prompt that repaints in a way
+    // normalization does not fold: it would cycle settle → focus → mismatch →
+    // reset until the deadline and never answer a prompt that is genuinely
+    // waiting. The kind staying put across all of it is the property worth
+    // holding out for; the exact frame is not.
     if (
-      settled.kind !== classification.kind ||
-      !areOpenCodeOutputsEquivalent(authorizedText, lastText)
+      !areOpenCodeOutputsEquivalent(authorizedText, lastText) &&
+      staleAuthorizations < MAX_STALE_AUTHORIZATIONS
     ) {
+      staleAuthorizations++;
       stabilization = initialStabilizationState();
       continue;
     }
+    staleAuthorizations = 0;
 
     // Focus can burn a large slice of the budget; do not send input we no
     // longer have time to observe the result of.
