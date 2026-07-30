@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeAll, afterAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { z } from "zod";
 
 const hintMocks = vi.hoisted(() => {
@@ -32,6 +32,7 @@ const notifyMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
 import { ActionService } from "../ActionService";
+import { useUIStore } from "@/store/uiStore";
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
 
 describe("ActionService", () => {
@@ -1820,6 +1821,148 @@ describe("ActionService", () => {
 
       expect(mockShow).not.toHaveBeenCalled();
       expect(mockIncrementCount).not.toHaveBeenCalled();
+    });
+
+    describe("overlay-opening actions", () => {
+      /**
+       * Builds an action whose run() crosses a real macrotask before it
+       * mutates the overlay stack, so the dispatch continuation resumes
+       * *after* the mutation — the ordering a React passive effect produces
+       * in production. A bare `Promise.resolve()` leaves no gap and would
+       * pass whether or not the ordering logic is correct.
+       */
+      const makeOverlayAction = (id: string, mutateOverlays: () => void): ActionDefinition => ({
+        ...makeAction(id),
+        run: async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(() => {
+              mutateOverlays();
+              resolve();
+            }, 0);
+          });
+        },
+      });
+
+      const { addOverlayClaim, removeOverlayClaim } = useUIStore.getState();
+
+      beforeEach(() => {
+        useUIStore.setState({ overlayStack: [] });
+        mockGetEffectiveCombo.mockReturnValue("Cmd+K");
+        mockGetDisplayCombo.mockReturnValue("⌘K");
+        mockShow.mockReturnValue(true);
+      });
+
+      // uiStore is a module-scope singleton — leave it clean so a test added
+      // after this block doesn't inherit claims from here.
+      afterEach(() => {
+        useUIStore.setState({ overlayStack: [] });
+      });
+
+      it("suppresses the hint when the action opens an overlay", async () => {
+        service.register(
+          makeOverlayAction("test.opensDialog", () => addOverlayClaim("dialog-opened"))
+        );
+
+        const result = await service.dispatch("test.opensDialog" as ActionId, undefined, {
+          source: "user",
+        });
+
+        // A rejected dispatch also emits no hint, so pin the success path —
+        // otherwise a broken fixture would satisfy the assertions below.
+        expect(result.ok).toBe(true);
+        expect(mockShow).not.toHaveBeenCalled();
+        expect(mockIncrementCount).not.toHaveBeenCalled();
+      });
+
+      it("suppresses the hint when an overlay opens on top of an existing one", async () => {
+        addOverlayClaim("dialog-base");
+        service.register(
+          makeOverlayAction("test.nestsDialog", () => addOverlayClaim("dialog-nested"))
+        );
+
+        const result = await service.dispatch("test.nestsDialog" as ActionId, undefined, {
+          source: "user",
+        });
+
+        expect(result.ok).toBe(true);
+        expect(mockShow).not.toHaveBeenCalled();
+        expect(mockIncrementCount).not.toHaveBeenCalled();
+      });
+
+      it("still emits the hint when a pre-existing overlay is left untouched", async () => {
+        addOverlayClaim("dialog-already-open");
+        service.register(makeOverlayAction("test.insideDialog", () => {}));
+
+        await service.dispatch("test.insideDialog" as ActionId, undefined, { source: "user" });
+
+        expect(mockIncrementCount).toHaveBeenCalledWith("test.insideDialog");
+        expect(mockShow).toHaveBeenCalledWith("test.insideDialog", "⌘K");
+      });
+
+      it("suppresses the hint when one overlay replaces another at the same depth", async () => {
+        addOverlayClaim("dialog-a");
+        service.register(
+          makeOverlayAction("test.swapsDialog", () => {
+            removeOverlayClaim("dialog-a");
+            addOverlayClaim("dialog-b");
+          })
+        );
+
+        const result = await service.dispatch("test.swapsDialog" as ActionId, undefined, {
+          source: "user",
+        });
+
+        expect(result.ok).toBe(true);
+        expect(mockShow).not.toHaveBeenCalled();
+        expect(mockIncrementCount).not.toHaveBeenCalled();
+      });
+
+      it("still emits the hint when an overlay opened during the run has closed again", async () => {
+        service.register(
+          makeOverlayAction("test.transientDialog", () => {
+            addOverlayClaim("dialog-transient");
+            removeOverlayClaim("dialog-transient");
+          })
+        );
+
+        await service.dispatch("test.transientDialog" as ActionId, undefined, { source: "user" });
+
+        expect(mockIncrementCount).toHaveBeenCalledWith("test.transientDialog");
+        expect(mockShow).toHaveBeenCalledWith("test.transientDialog", "⌘K");
+      });
+
+      it("suppresses the hint when a claim id is released and re-registered", async () => {
+        // A dialog reopening at the same tree position keeps its useId(), so
+        // the stack reads identically before and after — only the epoch shows
+        // that an overlay opened during the dispatch.
+        addOverlayClaim("dialog-reused-id");
+        service.register(
+          makeOverlayAction("test.reopensDialog", () => {
+            removeOverlayClaim("dialog-reused-id");
+            addOverlayClaim("dialog-reused-id");
+          })
+        );
+
+        const result = await service.dispatch("test.reopensDialog" as ActionId, undefined, {
+          source: "user",
+        });
+
+        expect(result.ok).toBe(true);
+        expect(mockShow).not.toHaveBeenCalled();
+        expect(mockIncrementCount).not.toHaveBeenCalled();
+      });
+
+      it("still emits the hint when the action closes the open overlay", async () => {
+        addOverlayClaim("dialog-being-closed");
+        service.register(
+          makeOverlayAction("test.closesDialog", () => removeOverlayClaim("dialog-being-closed"))
+        );
+
+        await service.dispatch("test.closesDialog" as ActionId, undefined, { source: "user" });
+
+        expect(mockIncrementCount).toHaveBeenCalledWith("test.closesDialog");
+        expect(mockShow).toHaveBeenCalledWith("test.closesDialog", "⌘K");
+      });
     });
   });
 

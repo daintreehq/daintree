@@ -18,6 +18,25 @@ describe("useUIStore overlay stack", () => {
     expect(useUIStore.getState().hasOpenOverlays()).toBe(true);
   });
 
+  it("overlayClaimEpoch advances for each new claim but not for duplicates", () => {
+    const start = useUIStore.getState().overlayClaimEpoch;
+    useUIStore.getState().addOverlayClaim("settings");
+    const afterFirst = useUIStore.getState().overlayClaimEpoch;
+    useUIStore.getState().addOverlayClaim("settings");
+
+    expect(afterFirst).toBeGreaterThan(start);
+    expect(useUIStore.getState().overlayClaimEpoch).toBe(afterFirst);
+  });
+
+  it("overlayClaimEpoch keeps advancing when a released ID is registered again", () => {
+    useUIStore.getState().addOverlayClaim("settings");
+    const afterFirst = useUIStore.getState().overlayClaimEpoch;
+    useUIStore.getState().removeOverlayClaim("settings");
+    useUIStore.getState().addOverlayClaim("settings");
+
+    expect(useUIStore.getState().overlayClaimEpoch).toBeGreaterThan(afterFirst);
+  });
+
   it("addOverlayClaim collapses duplicate registrations for the same ID", () => {
     useUIStore.getState().addOverlayClaim("settings");
     useUIStore.getState().addOverlayClaim("settings");

@@ -65,6 +65,9 @@ export function registerTerminalSpawnActions(
     nonRepeatable: true,
     // Opens a modal palette — a post-dispatch hint would land on top of it
     // (ShortcutHint sits at z-toast, above z-modal). Issue #11030.
+    // Not redundant with dispatch()'s overlay-claim check (#11507): this
+    // opener is synchronous, so the continuation can beat the palette's
+    // claim effect. Keep the flag.
     suppressShortcutHint: true,
     run: async () => {
       callbacks.onOpenResumeSessionsPalette();
