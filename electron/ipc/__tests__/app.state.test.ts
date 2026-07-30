@@ -363,6 +363,11 @@ describe("app:boot handler", () => {
     vi.mocked(storeModule.store.get).mockImplementation(
       defaultStoreGet as typeof storeModule.store.get
     );
+    // Same reason: these two are swapped in by individual tests below and would
+    // otherwise stay swapped for every test declared after them.
+    panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set());
+    panelSuspectLedger.getQuarantinedPanels.mockReturnValue([]);
+    vi.mocked(projectStore.readInRepoPresets).mockResolvedValue({});
     crashGuard.isSafeMode.mockReturnValue(false);
     crashGuard.getCrashCount.mockReturnValue(0);
     crashService.getPendingCrash.mockReturnValue(null);
@@ -854,11 +859,27 @@ describe("app:boot handler", () => {
       } as unknown as HandlerDependencies;
     }
 
-    // Both unmigrated branches persist the legacy values to per-project state
-    // but never assign the payload locals, so they depend entirely on the
-    // initial seed. Gating that seed on anything broader than "has a Project
-    // row" would silently drop the user's worktree and MRU on the very boot
-    // that was supposed to carry them forward.
+    /**
+     * Run the updater the handler enqueued against `existing` and return the
+     * record it computes. Asserting on that record rather than on
+     * `expect.any(Function)` is what makes these tests bite: an updater that
+     * returned `existing` unchanged, or wrote the wrong focus state, would
+     * satisfy a callable-shaped assertion.
+     */
+    function runEnqueuedUpdate(existing: unknown = undefined): Record<string, unknown> {
+      const calls = vi.mocked(projectStore.enqueueProjectStateUpdate).mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      const updater = calls[calls.length - 1][1] as (prev: unknown) => Record<string, unknown>;
+      return updater(existing);
+    }
+
+    // Both unmigrated branches persist the legacy focus/worktree values to
+    // per-project state but never assign the payload locals, so the payload
+    // depends entirely on the initial seed. Gating that seed on anything
+    // broader than "has a Project row" would silently drop the user's worktree
+    // on the very boot that was supposed to carry it forward. (The MRU is not
+    // part of these updaters — it stays on the legacy global until the renderer
+    // next writes it — so only the payload half is asserted for `mruList`.)
     it.each([
       [
         "with legacy terminals to migrate",
@@ -884,10 +905,13 @@ describe("app:boot handler", () => {
       expect(appState.focusPanelState).toEqual(LEGACY_WORKSPACE_STATE.focusPanelState);
       expect(appState.activeWorktreeId).toBe(LEGACY_WORKSPACE_STATE.activeWorktreeId);
       expect(appState.mruList).toEqual(LEGACY_WORKSPACE_STATE.mruList);
-      expect(projectStore.enqueueProjectStateUpdate).toHaveBeenCalledWith(
-        REAL_PROJECT.id,
-        expect.any(Function)
-      );
+      // The same values must land in the per-project record, or the next boot
+      // reads an empty one and the migration is lost.
+      const migrated = runEnqueuedUpdate();
+      expect(migrated.projectId).toBe(REAL_PROJECT.id);
+      expect(migrated.activeWorktreeId).toBe(LEGACY_WORKSPACE_STATE.activeWorktreeId);
+      expect(migrated.focusMode).toBe(LEGACY_WORKSPACE_STATE.focusMode);
+      expect(migrated.focusPanelState).toEqual(LEGACY_WORKSPACE_STATE.focusPanelState);
     });
 
     it("migrates the legacy focus mode into a real project that has panels but no saved focus mode", async () => {
@@ -908,10 +932,39 @@ describe("app:boot handler", () => {
 
       expect(appState.focusMode).toBe(LEGACY_WORKSPACE_STATE.focusMode);
       expect(appState.focusPanelState).toEqual(LEGACY_WORKSPACE_STATE.focusPanelState);
-      expect(projectStore.enqueueProjectStateUpdate).toHaveBeenCalledWith(
-        REAL_PROJECT.id,
-        expect.any(Function)
-      );
+      // The saved record has no worktree or MRU of its own, so this branch must
+      // still hand the real project the legacy ones.
+      expect(appState.activeWorktreeId).toBe(LEGACY_WORKSPACE_STATE.activeWorktreeId);
+      expect(appState.mruList).toEqual(LEGACY_WORKSPACE_STATE.mruList);
+      // The migrate-once write must carry the focus state onto the existing
+      // record without discarding what that record already holds.
+      const migrated = runEnqueuedUpdate({ projectId: REAL_PROJECT.id, terminals: [] });
+      expect(migrated.focusMode).toBe(LEGACY_WORKSPACE_STATE.focusMode);
+      expect(migrated.focusPanelState).toEqual(LEGACY_WORKSPACE_STATE.focusPanelState);
+      expect(migrated.terminals).toEqual([]);
+    });
+
+    it("keeps an explicitly empty per-project MRU instead of falling back to the legacy list", async () => {
+      // `[]` means "this project's MRU is genuinely empty", which is a different
+      // statement from `undefined` ("never migrated"). Collapsing the two would
+      // resurrect the legacy list every boot.
+      globalAppStateRef.current = {
+        ...DEFAULT_GLOBAL_APP_STATE,
+        ...LEGACY_WORKSPACE_STATE,
+      };
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: {
+          projectId: REAL_PROJECT.id,
+          sidebarWidth: 350,
+          terminals: [],
+          mruList: [],
+        },
+        quarantinedPath: undefined,
+      } as unknown as Awaited<ReturnType<typeof projectStore.getProjectStateWithRecovery>>);
+
+      const result = await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
+
+      expect((result.appState as Record<string, unknown>).mruList).toEqual([]);
     });
   });
 

@@ -28,6 +28,7 @@ import {
 } from "@/store";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { useCcrPresetsSubscription } from "@/hooks/useCcrPresetsSubscription";
@@ -161,6 +162,7 @@ export function AppLayout({
   // paint (the new width arrives with the class already gone — no animation).
   const [isSidebarWidthHydrating, setIsSidebarWidthHydrating] = useState(true);
   const currentProject = useProjectStore((state) => state.currentProject);
+  const currentScratch = useScratchStore((state) => state.currentScratch);
   const layout = useLayoutState();
   const diagnosticsMounted = useKeepMounted(layout.diagnosticsOpen);
   const isThemeBrowserOpen = useOverlayOpen("theme-browser");
@@ -414,9 +416,14 @@ export function AppLayout({
     const persistedFocusMode = layout.gestureSidebarHidden;
 
     const persistFocusMode = async () => {
-      // Persist focus mode to per-project state if a project is active
-      if (!currentProject?.id) {
-        // No project - fall back to global state for backward compatibility
+      // Per-workspace state is keyed by workspace id, and a scratch owns one
+      // even though it has no Project row. Routing a scratch down the global
+      // fallback would overwrite the legacy global focusMode that unmigrated
+      // real projects still migrate from, destroying it for every project the
+      // user has not opened yet (#11497).
+      const workspaceId = currentProject?.id ?? currentScratch?.id;
+      if (!workspaceId) {
+        // No workspace at all - fall back to global state for backward compatibility
         try {
           await appClient.setState({ focusMode: persistedFocusMode });
         } catch (error) {
@@ -427,7 +434,7 @@ export function AppLayout({
 
       try {
         await window.electron.project.setFocusMode(
-          currentProject.id,
+          workspaceId,
           persistedFocusMode,
           layout.savedPanelState as PanelState | undefined
         );
@@ -438,7 +445,13 @@ export function AppLayout({
 
     const timer = setTimeout(persistFocusMode, 100);
     return () => clearTimeout(timer);
-  }, [layout.gestureSidebarHidden, layout.savedPanelState, currentProject?.id, isHydrated]);
+  }, [
+    layout.gestureSidebarHidden,
+    layout.savedPanelState,
+    currentProject?.id,
+    currentScratch?.id,
+    isHydrated,
+  ]);
 
   const handleToggleFocusMode = async () => {
     // Gesture-active signal is "snapshot present", not the combined

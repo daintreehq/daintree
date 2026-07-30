@@ -38,9 +38,10 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
 
   // Mirrors `handleAppHydrate`'s ownership gate: the legacy global
   // focus/worktree/MRU fields may only be inherited by a workspace with a real
-  // Project row. Both callers currently resolve the id to a row before building,
-  // so this changes nothing today — it keeps the leak from reappearing here the
-  // moment a scratch or an unknown id reaches this builder (#11497).
+  // Project row. The three callers (hover prefetch, project switch, cold-start
+  // cache prime) normally resolve the id to a row first, but none holds that
+  // guarantee across its later awaits, so a row deleted mid-build lands here
+  // with no row — this keeps the leak from reappearing in that window (#11497).
   const canInheritLegacyWorkspaceState = currentProject !== null;
 
   let terminalsToUse: typeof globalAppState.terminals = [];
