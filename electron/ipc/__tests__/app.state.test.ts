@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
 
@@ -20,22 +20,44 @@ vi.mock("electron", () => ({
 
 // Mutable so a test can vary the legacy global app state without replacing the
 // `store.get` implementation, which `clearAllMocks` would not restore.
-const { globalAppStateRef } = vi.hoisted(() => ({
-  globalAppStateRef: {
+const { globalAppStateRef, defaultStoreGet } = vi.hoisted(() => {
+  const globalAppStateRef = {
     current: { terminals: [], sidebarWidth: 350 } as Record<string, unknown>,
-  },
-}));
+  };
+  // Named so `beforeEach` can reinstate it. Several tests below still swap in
+  // their own `store.get` implementation; without a reset every test declared
+  // after them would silently read that hard-coded state instead of the ref,
+  // which is exactly the trap the comment above warns about.
+  const defaultStoreGet = (key: string): unknown => {
+    if (key === "appState") return globalAppStateRef.current;
+    if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+    if (key === "agentSettings") return {};
+    return undefined;
+  };
+  return { globalAppStateRef, defaultStoreGet };
+});
 
 const DEFAULT_GLOBAL_APP_STATE = { terminals: [], sidebarWidth: 350 };
 
+/**
+ * Legacy global app state left behind by whichever real project was open before
+ * per-workspace state existed. Every value here is deliberately distinct from
+ * both the defaults and any saved per-workspace state, so an assertion can tell
+ * "inherited the legacy global" apart from "fell back to a default" (#11497).
+ */
+const LEGACY_WORKSPACE_STATE = {
+  focusMode: true,
+  focusPanelState: { sidebarWidth: 260, diagnosticsOpen: true },
+  activeWorktreeId: "wt-legacy",
+  mruList: ["terminal:legacy-panel", "worktree:wt-legacy"],
+};
+
+/** A genuinely app-global field, used to prove the fix stays narrowly scoped. */
+const GLOBAL_PANEL_GRID_CONFIG = { strategy: "fixed-columns", value: 2 };
+
 vi.mock("../../store.js", () => ({
   store: {
-    get: vi.fn((key: string) => {
-      if (key === "appState") return globalAppStateRef.current;
-      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
-      if (key === "agentSettings") return {};
-      return undefined;
-    }),
+    get: vi.fn(defaultStoreGet),
     set: vi.fn(),
     delete: vi.fn(),
   },
@@ -328,9 +350,19 @@ async function invokeBoot(
 }
 
 describe("app:boot handler", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     ipcHandlers.clear();
+    // Reset here rather than in a nested afterEach so a test that poisons the
+    // legacy globals can never bleed into an unrelated sibling. The `store.get`
+    // implementation is reinstated for the same reason: `clearAllMocks` leaves a
+    // swapped-in implementation in place, so without this every test after the
+    // first swap reads that test's hard-coded app state instead of the ref.
+    globalAppStateRef.current = { ...DEFAULT_GLOBAL_APP_STATE };
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation(
+      defaultStoreGet as typeof storeModule.store.get
+    );
     crashGuard.isSafeMode.mockReturnValue(false);
     crashGuard.getCrashCount.mockReturnValue(0);
     crashService.getPendingCrash.mockReturnValue(null);
@@ -760,12 +792,131 @@ describe("app:boot handler", () => {
     expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
   });
 
+  it("never ships the legacy workspace state to an unresolvable sender", async () => {
+    // A sender the PVM cannot bind owns no workspace, so it owns none of the
+    // legacy focus/worktree/MRU state either — it must boot pristine rather
+    // than adopting whatever project last wrote the global record (#11497).
+    globalAppStateRef.current = {
+      ...DEFAULT_GLOBAL_APP_STATE,
+      ...LEGACY_WORKSPACE_STATE,
+      panelGridConfig: GLOBAL_PANEL_GRID_CONFIG,
+    };
+    vi.mocked(getWindowForWebContents).mockReturnValue({
+      id: 7,
+      isDestroyed: () => false,
+    } as unknown as Electron.BrowserWindow);
+
+    const pvm = { getProjectIdForWebContents: vi.fn().mockReturnValue(null) };
+    const deps = {
+      windowRegistry: {
+        getByWindowId: vi.fn().mockReturnValue({ services: { projectViewManager: pvm } }),
+      },
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+
+    const result = await invokeBoot({ deps, senderId: 42 });
+    const appState = result.appState as Record<string, unknown>;
+
+    expect(result.project).toBeNull();
+    expect(result.workspaceId).toBeNull();
+    expect(appState.focusMode).toBe(false);
+    expect(appState.focusPanelState).toBeUndefined();
+    expect(appState.activeWorktreeId).toBeUndefined();
+    expect(appState.mruList).toBeUndefined();
+    // Genuinely app-global settings still ride along — this fix narrows the
+    // four workspace-owned fields only, it does not stop sharing preferences.
+    expect(appState.panelGridConfig).toEqual(GLOBAL_PANEL_GRID_CONFIG);
+  });
+
+  describe("legacy workspace state migration for real projects (#11497)", () => {
+    const REAL_PROJECT = {
+      id: "proj-real",
+      name: "Real Project",
+      path: "/projects/real",
+    };
+
+    function realProjectDeps() {
+      vi.mocked(getWindowForWebContents).mockReturnValue({
+        id: 7,
+        isDestroyed: () => false,
+      } as unknown as Electron.BrowserWindow);
+      vi.mocked(projectStore.getProjectById).mockImplementation((projectId) =>
+        projectId === REAL_PROJECT.id
+          ? (REAL_PROJECT as unknown as ReturnType<typeof projectStore.getProjectById>)
+          : null
+      );
+      const pvm = { getProjectIdForWebContents: vi.fn().mockReturnValue(REAL_PROJECT.id) };
+      return {
+        windowRegistry: {
+          getByWindowId: vi.fn().mockReturnValue({ services: { projectViewManager: pvm } }),
+        },
+        projectViewManager: pvm,
+      } as unknown as HandlerDependencies;
+    }
+
+    // Both unmigrated branches persist the legacy values to per-project state
+    // but never assign the payload locals, so they depend entirely on the
+    // initial seed. Gating that seed on anything broader than "has a Project
+    // row" would silently drop the user's worktree and MRU on the very boot
+    // that was supposed to carry them forward.
+    it.each([
+      [
+        "with legacy terminals to migrate",
+        [{ id: "legacy-panel", title: "Legacy", location: "grid", cwd: "/old/project" }],
+      ],
+      ["with no legacy terminals", []],
+    ])("still migrates the legacy workspace state %s", async (_label, legacyTerminals) => {
+      globalAppStateRef.current = {
+        ...DEFAULT_GLOBAL_APP_STATE,
+        ...LEGACY_WORKSPACE_STATE,
+        terminals: legacyTerminals,
+      };
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: null,
+        quarantinedPath: undefined,
+      });
+
+      const result = await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
+      const appState = result.appState as Record<string, unknown>;
+
+      expect(result.workspaceId).toBe(REAL_PROJECT.id);
+      expect(appState.focusMode).toBe(LEGACY_WORKSPACE_STATE.focusMode);
+      expect(appState.focusPanelState).toEqual(LEGACY_WORKSPACE_STATE.focusPanelState);
+      expect(appState.activeWorktreeId).toBe(LEGACY_WORKSPACE_STATE.activeWorktreeId);
+      expect(appState.mruList).toEqual(LEGACY_WORKSPACE_STATE.mruList);
+      expect(projectStore.enqueueProjectStateUpdate).toHaveBeenCalledWith(
+        REAL_PROJECT.id,
+        expect.any(Function)
+      );
+    });
+
+    it("migrates the legacy focus mode into a real project that has panels but no saved focus mode", async () => {
+      globalAppStateRef.current = {
+        ...DEFAULT_GLOBAL_APP_STATE,
+        ...LEGACY_WORKSPACE_STATE,
+      };
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: {
+          projectId: REAL_PROJECT.id,
+          sidebarWidth: 350,
+          terminals: [],
+        },
+      } as unknown as Awaited<ReturnType<typeof projectStore.getProjectStateWithRecovery>>);
+
+      const result = await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
+      const appState = result.appState as Record<string, unknown>;
+
+      expect(appState.focusMode).toBe(LEGACY_WORKSPACE_STATE.focusMode);
+      expect(appState.focusPanelState).toEqual(LEGACY_WORKSPACE_STATE.focusPanelState);
+      expect(projectStore.enqueueProjectStateUpdate).toHaveBeenCalledWith(
+        REAL_PROJECT.id,
+        expect.any(Function)
+      );
+    });
+  });
+
   describe("scratch views (#11484)", () => {
     const SCRATCH_ID = "b3d1f2a4-5c6e-4a8b-9d0f-1e2a3b4c5d6e";
-
-    afterEach(() => {
-      globalAppStateRef.current = { ...DEFAULT_GLOBAL_APP_STATE };
-    });
 
     function scratchDeps() {
       vi.mocked(getWindowForWebContents).mockReturnValue({
@@ -789,35 +940,52 @@ describe("app:boot handler", () => {
         cwd: "/scratches/one",
         kind: "terminal",
       };
+      // Poisoned globals that differ from every saved value below, so the
+      // assertions prove the scratch's own state wins rather than coinciding
+      // with the legacy record.
+      globalAppStateRef.current = {
+        ...DEFAULT_GLOBAL_APP_STATE,
+        ...LEGACY_WORKSPACE_STATE,
+      };
       vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
         state: {
           projectId: SCRATCH_ID,
           sidebarWidth: 350,
           terminals: [savedPanel],
+          activeWorktreeId: "wt-scratch",
+          focusMode: false,
+          focusPanelState: { sidebarWidth: 400, diagnosticsOpen: false },
+          mruList: ["terminal:panel-1"],
         },
         quarantinedPath: undefined,
       } as unknown as Awaited<ReturnType<typeof projectStore.getProjectStateWithRecovery>>);
 
       const result = await invokeBoot({ deps: scratchDeps(), senderId: 42 });
+      const appState = result.appState as Record<string, unknown>;
 
       // No Project row exists, yet the state directory is still read and its
       // panels returned — this is the whole fix.
       expect(result.project).toBeNull();
       expect(result.workspaceId).toBe(SCRATCH_ID);
       expect(projectStore.getProjectStateWithRecovery).toHaveBeenCalledWith(SCRATCH_ID);
-      expect((result.appState as { terminals: unknown[] }).terminals).toHaveLength(1);
-      expect((result.appState as { terminals: Array<{ id: string }> }).terminals[0].id).toBe(
-        savedPanel.id
-      );
+      expect(appState.terminals as unknown[]).toHaveLength(1);
+      expect((appState.terminals as Array<{ id: string }>)[0].id).toBe(savedPanel.id);
+      // The scratch's own saved workspace state wins over the legacy globals.
+      expect(appState.activeWorktreeId).toBe("wt-scratch");
+      expect(appState.focusMode).toBe(false);
+      expect(appState.focusPanelState).toEqual({ sidebarWidth: 400, diagnosticsOpen: false });
+      expect(appState.mruList).toEqual(["terminal:panel-1"]);
     });
 
-    it("never inherits the legacy global terminals", async () => {
-      // The global list predates per-workspace state and belongs to whichever
+    it("never inherits the legacy global terminals or workspace state", async () => {
+      // The global record predates per-workspace state and belongs to whichever
       // project was open back then. Migrating it into a scratch would hand a
-      // brand-new workspace someone else's panels.
+      // brand-new workspace someone else's panels, worktree and MRU history.
       globalAppStateRef.current = {
         sidebarWidth: 350,
         terminals: [{ id: "legacy-panel", title: "Legacy", location: "grid", cwd: "/old/project" }],
+        ...LEGACY_WORKSPACE_STATE,
+        panelGridConfig: GLOBAL_PANEL_GRID_CONFIG,
       };
       vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
         state: null,
@@ -825,9 +993,42 @@ describe("app:boot handler", () => {
       });
 
       const result = await invokeBoot({ deps: scratchDeps(), senderId: 42 });
+      const appState = result.appState as Record<string, unknown>;
 
       expect(result.workspaceId).toBe(SCRATCH_ID);
-      expect((result.appState as { terminals: unknown[] }).terminals).toEqual([]);
+      expect(appState.terminals).toEqual([]);
+      expect(appState.focusMode).toBe(false);
+      expect(appState.focusPanelState).toBeUndefined();
+      expect(appState.activeWorktreeId).toBeUndefined();
+      expect(appState.mruList).toBeUndefined();
+      // App-global preferences are still shared with every workspace.
+      expect(appState.panelGridConfig).toEqual(GLOBAL_PANEL_GRID_CONFIG);
+      expect(projectStore.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+    });
+
+    it("neither adopts nor persists the legacy focus mode once the scratch has saved panels", async () => {
+      // A scratch that has saved panels but no saved focus mode reaches the
+      // focus-mode migration branch, which used to copy the legacy global focus
+      // state in AND write it to the scratch's own record (#11497).
+      globalAppStateRef.current = {
+        ...DEFAULT_GLOBAL_APP_STATE,
+        ...LEGACY_WORKSPACE_STATE,
+      };
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: {
+          projectId: SCRATCH_ID,
+          sidebarWidth: 350,
+          terminals: [],
+        },
+        quarantinedPath: undefined,
+      } as unknown as Awaited<ReturnType<typeof projectStore.getProjectStateWithRecovery>>);
+
+      const result = await invokeBoot({ deps: scratchDeps(), senderId: 42 });
+      const appState = result.appState as Record<string, unknown>;
+
+      expect(appState.focusMode).toBe(false);
+      expect(appState.focusPanelState).toBeUndefined();
+      expect(appState.activeWorktreeId).toBeUndefined();
       expect(projectStore.enqueueProjectStateUpdate).not.toHaveBeenCalled();
     });
   });

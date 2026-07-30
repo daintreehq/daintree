@@ -294,8 +294,12 @@ describe("AppHydrationService adversarial", () => {
     const result = await buildSwitchHydrateResult("project-1");
 
     expect(result.appState.terminals).toEqual([]);
+    // A real project row is the legitimate heir of the legacy global record, so
+    // all four workspace fields still migrate through on this path (#11497).
     expect(result.appState.activeWorktreeId).toBe("wt-global");
     expect(result.appState.focusMode).toBe(true);
+    expect(result.appState.focusPanelState).toEqual(mockState.appState.focusPanelState);
+    expect(result.appState.mruList).toEqual(mockState.appState.mruList);
     expect(result.settingsRecovery).toBeNull();
     expect(result.projectStateRecovery).toBeNull();
   });
@@ -463,6 +467,14 @@ describe("AppHydrationService adversarial", () => {
 
     expect(result.project).toBeNull();
     expect(result.appState.terminals).toEqual([]);
+    // No Project row resolved, so this workspace owns none of the legacy
+    // focus/worktree/MRU state and must not inherit it (#11497).
+    expect(result.appState.focusMode).toBe(false);
+    expect(result.appState.focusPanelState).toBeUndefined();
+    expect(result.appState.activeWorktreeId).toBeUndefined();
+    expect(result.appState.mruList).toBeUndefined();
+    // App-global preferences still ride along unchanged.
+    expect(result.appState.sidebarWidth).toBe(mockState.appState.sidebarWidth);
     expect(result.terminalConfig).toBe(mockState.terminalConfig);
     expect(result.agentSettings).toBe(mockState.agentSettings);
     expect(result.gpuWebGLHardware).toBe(true);
