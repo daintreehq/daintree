@@ -3,6 +3,20 @@ import type { TerminalRecipe } from "@/types";
 
 export const CLONE_LAYOUT_ID = "__clone_layout__";
 
+/**
+ * A shadowed recipe never runs its own terminals, so it stays ineligible as an
+ * implicit default even though it is still listed and explicitly selectable.
+ * Mirrors the eligibility rule RecipesTab pins its default against.
+ */
+export function resolveEligibleDefaultRecipeId(
+  recipes: TerminalRecipe[],
+  persistedDefaultRecipeId: string | undefined
+): string | undefined {
+  return recipes.some((r) => r.id === persistedDefaultRecipeId && !r.shadowedBy)
+    ? persistedDefaultRecipeId
+    : undefined;
+}
+
 export interface UseRecipePickerResult {
   selectedRecipeId: string | null;
   setSelectedRecipeId: React.Dispatch<React.SetStateAction<string | null>>;

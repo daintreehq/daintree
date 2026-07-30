@@ -146,8 +146,11 @@ vi.mock("@/store/worktreeStore", () => ({
 const recipePickerCalls = vi.hoisted(() => ({
   last: null as { startingLayoutRecipes: unknown[]; defaultRecipeId: string | undefined } | null,
 }));
-vi.mock("@/components/Worktree/hooks/useRecipePicker", () => ({
-  CLONE_LAYOUT_ID: "__clone_layout__",
+// Only `useRecipePicker` is stubbed — `resolveEligibleDefaultRecipeId` stays
+// real so the default-eligibility tests exercise the shipping logic rather than
+// a copy of it. The module imports nothing but React, so pulling it in is safe.
+vi.mock("@/components/Worktree/hooks/useRecipePicker", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/Worktree/hooks/useRecipePicker")>()),
   useRecipePicker: (args: {
     startingLayoutRecipes: unknown[];
     defaultRecipeId: string | undefined;
@@ -1155,6 +1158,9 @@ describe("NewWorktreeDialog — recipe scope visibility (#11510)", () => {
     renderDialog();
     await advanceTimersGradually(500);
 
+    // Assert the call happened first — a bare optional chain would also pass if
+    // the picker were never invoked at all.
+    expect(recipePickerCalls.last).not.toBeNull();
     expect(recipePickerCalls.last?.defaultRecipeId).toBeUndefined();
   });
 

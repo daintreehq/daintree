@@ -92,7 +92,7 @@ export function RecipeRunnerItem({
                 {recipe.name}
               </span>
               {recipe.shadowedBy && (
-                <span className="text-[11px] text-text-muted shrink-0">Overridden</span>
+                <span className="text-[11px] text-text-muted shrink-0">Overridden by Team</span>
               )}
               {isPinned && <Pin className="h-3 w-3 text-daintree-accent/60 shrink-0" aria-hidden />}
             </div>
@@ -146,7 +146,7 @@ export function RecipeRunnerItem({
           </span>
           <span className="text-[11px] text-text-muted shrink-0">{scopeLabel}</span>
           {recipe.shadowedBy && (
-            <span className="text-[11px] text-text-muted shrink-0">Overridden</span>
+            <span className="text-[11px] text-text-muted shrink-0">Overridden by Team</span>
           )}
           {recipeSummary && recipeSummary !== recipe.name && (
             <span className="text-xs text-text-muted truncate max-w-[30%]">{recipeSummary}</span>

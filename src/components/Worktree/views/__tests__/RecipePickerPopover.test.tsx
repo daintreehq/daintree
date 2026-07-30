@@ -97,7 +97,7 @@ describe("RecipePickerPopover — scope indicator (#11510)", () => {
     );
 
     const row = recipeRows()[0];
-    expect(row?.textContent).toContain("Overridden");
+    expect(row?.textContent).toContain("Overridden by Team");
 
     fireEvent.click(row!);
     expect(onSelectRecipe).toHaveBeenCalledWith("shadowed");

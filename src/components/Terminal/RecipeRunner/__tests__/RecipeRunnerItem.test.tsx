@@ -130,7 +130,7 @@ describe("RecipeRunnerItem — scope indicator", () => {
       });
 
       const option = screen.getByRole("option");
-      expect(option.textContent).toContain("Overridden");
+      expect(option.textContent).toContain("Overridden by Team");
       expect(option.hasAttribute("disabled")).toBe(false);
 
       fireEvent.click(option);

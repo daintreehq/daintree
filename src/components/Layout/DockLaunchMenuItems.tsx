@@ -222,7 +222,7 @@ export function DockLaunchMenuItems({
             <span className="truncate">{recipe.name}</span>
             <span className="ml-auto pl-2 text-[11px] text-text-muted shrink-0">
               {recipe.shadowedBy
-                ? `${getRecipeScope(recipe).label} · Overridden`
+                ? `${getRecipeScope(recipe).label} · Overridden by Team`
                 : getRecipeScope(recipe).label}
             </span>
           </C.Item>

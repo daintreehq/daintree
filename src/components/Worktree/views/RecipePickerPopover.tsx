@@ -162,7 +162,9 @@ export function RecipePickerPopover({
                     {recipe.terminals.length !== 1 ? "s" : ""}
                   </span>
                   {recipe.shadowedBy && (
-                    <span className="text-xs text-daintree-text/50 shrink-0">Overridden</span>
+                    <span className="text-xs text-daintree-text/50 shrink-0">
+                      Overridden by Team
+                    </span>
                   )}
                   {recipe.id === defaultRecipeId && (
                     <span className="text-xs text-daintree-text/50 shrink-0">(default)</span>

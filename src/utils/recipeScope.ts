@@ -13,6 +13,14 @@ export interface RecipeScope {
  */
 export type WorktreeNameResolver = (worktreeId: string) => string | undefined;
 
+/** The label a worktree goes by in recipe scope text. */
+export function worktreeDisplayName(
+  worktree: { name: string; branch?: string; isMainWorktree?: boolean } | undefined
+): string | undefined {
+  if (!worktree) return undefined;
+  return worktree.isMainWorktree ? worktree.name : worktree.branch || worktree.name;
+}
+
 /**
  * Classify which of the three recipe scopes a recipe belongs to, using the
  * vocabulary the Settings recipe list established. In-repo is checked before

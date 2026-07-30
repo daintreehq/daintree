@@ -28,7 +28,11 @@ import { useBranchInput } from "./hooks/useBranchInput";
 import { useBranchValidation } from "./hooks/useBranchValidation";
 import { useBranchPicker } from "./hooks/useBranchPicker";
 import { usePrefixPicker } from "./hooks/usePrefixPicker";
-import { useRecipePicker, CLONE_LAYOUT_ID } from "./hooks/useRecipePicker";
+import {
+  useRecipePicker,
+  resolveEligibleDefaultRecipeId,
+  CLONE_LAYOUT_ID,
+} from "./hooks/useRecipePicker";
 import { useWorktreeFormErrors } from "./hooks/useWorktreeFormErrors";
 import { useWorktreeFormValidation } from "./hooks/useWorktreeFormValidation";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -157,13 +161,8 @@ export function NewWorktreeDialog({
   // Shadowed recipes stay listed (dimmed, marked "Overridden") instead of being
   // hidden — hiding an executable target is the silent failure #11510 is about.
   const startingLayoutRecipes = useMemo(() => recipes.filter((r) => !r.worktreeId), [recipes]);
-  // A shadowed recipe never runs its own terminals, so it stays ineligible as an
-  // implicit default. Mirrors the eligibility rule RecipesTab pins against.
   const defaultRecipeId = useMemo(
-    () =>
-      startingLayoutRecipes.some((r) => r.id === persistedDefaultRecipeId && !r.shadowedBy)
-        ? persistedDefaultRecipeId
-        : undefined,
+    () => resolveEligibleDefaultRecipeId(startingLayoutRecipes, persistedDefaultRecipeId),
     [startingLayoutRecipes, persistedDefaultRecipeId]
   );
 

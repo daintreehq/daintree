@@ -24,7 +24,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { TerminalRecipe, Worktree } from "@/types";
 import { logError } from "@/utils/logger";
-import { getRecipeScope } from "@/utils/recipeScope";
+import { getRecipeScope, worktreeDisplayName } from "@/utils/recipeScope";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface RecipesTabProps {
@@ -182,11 +182,10 @@ export function RecipesTab({
     }
   };
 
-  const resolveWorktreeName = (worktreeId: string): string | undefined => {
-    const worktree = worktreeMap.get(worktreeId);
-    if (!worktree) return undefined;
-    return worktree.isMainWorktree ? worktree.name : worktree.branch || worktree.name;
-  };
+  // Falls back to the raw id so an orphaned worktree's recipe stays
+  // identifiable here, where the row has the width for it.
+  const resolveWorktreeName = (worktreeId: string): string =>
+    worktreeDisplayName(worktreeMap.get(worktreeId)) ?? worktreeId;
 
   return (
     <>

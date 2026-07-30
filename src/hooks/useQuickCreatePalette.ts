@@ -303,6 +303,12 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
     isPending,
     assignToSelf,
     setAssignToSelf,
-    selectedRecipe: selectedRecipe && !isCustomize(selectedRecipe) ? selectedRecipe : null,
+    // Resolved to the winner for the same reason `doConfirm` resolves: a
+    // shadowed row launches the winning recipe, so the auto-assign toggle this
+    // drives has to agree with what submission will actually do.
+    selectedRecipe:
+      selectedRecipe && !isCustomize(selectedRecipe)
+        ? (getRecipeById(selectedRecipe.id) ?? selectedRecipe)
+        : null,
   };
 }

@@ -5,8 +5,9 @@ import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import type { QuickCreateItem, UseQuickCreatePaletteReturn } from "@/hooks/useQuickCreatePalette";
 import { getAutoAssign } from "@shared/types/project";
 import type { TerminalRecipe } from "@/types";
-import { getRecipeScope } from "@/utils/recipeScope";
+import { getRecipeScope, worktreeDisplayName } from "@/utils/recipeScope";
 import { Settings2 } from "lucide-react";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
@@ -29,6 +30,13 @@ function RecipeListItem({
   isSelected: boolean;
   onClick: () => void;
 }) {
+  // The palette lists recipes from every worktree, so two same-named
+  // worktree-scoped recipes need their worktree names to tell them apart.
+  const worktreeId = item._kind === "recipe" ? item.worktreeId : undefined;
+  const worktreeName = useWorktreeStore((s) =>
+    worktreeId ? worktreeDisplayName(s.worktrees.get(worktreeId)) : undefined
+  );
+
   if (item._kind === "customize") {
     return (
       <button
@@ -89,8 +97,8 @@ function RecipeListItem({
         </div>
       </div>
       <div className="flex items-center gap-2 text-[11px] text-daintree-text/50">
-        <span className="truncate">{getRecipeScope(recipe).label}</span>
-        {recipe.shadowedBy && <span className="shrink-0">Overridden</span>}
+        <span className="truncate">{getRecipeScope(recipe, () => worktreeName).label}</span>
+        {recipe.shadowedBy && <span className="shrink-0">Overridden by Team</span>}
         <span className="ml-auto shrink-0">
           {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
         </span>
