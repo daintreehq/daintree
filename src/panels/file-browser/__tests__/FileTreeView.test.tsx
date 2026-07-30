@@ -124,15 +124,47 @@ describe("FileTreeView context-menu interactions", () => {
     expect(contextMenuSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("re-roots on double-clicking a folder but never a file", () => {
+  it("routes double-click by row kind: folders re-root, files activate", () => {
+    // Both callbacks supplied, so the assertion is that each row picks the right
+    // one — not merely that the unwired branch does nothing (#11496).
     const onRootFolder = vi.fn();
-    const { getByRole } = renderTree({ onRootFolder });
+    const onActivate = vi.fn();
+    const { getByRole } = renderTree({ onRootFolder, onActivate });
 
     fireEvent.doubleClick(getByRole("treeitem", { name: "src" }));
-    fireEvent.doubleClick(getByRole("treeitem", { name: "README.md" }));
+    expect(onRootFolder.mock.calls).toEqual([["src"]]);
+    expect(onActivate).not.toHaveBeenCalled();
 
-    expect(onRootFolder).toHaveBeenCalledTimes(1);
-    expect(onRootFolder).toHaveBeenCalledWith("src");
+    fireEvent.doubleClick(getByRole("treeitem", { name: "README.md" }));
+    expect(onActivate.mock.calls).toEqual([["README.md"]]);
+    // The folder gesture never re-fires: a file double-click must not re-root.
+    expect(onRootFolder.mock.calls).toEqual([["src"]]);
+  });
+
+  it("activates the selected row on Enter and consumes the key", () => {
+    const onActivate = vi.fn();
+    const { getByRole } = renderTree({ selectedPath: "README.md", onActivate });
+
+    const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    act(() => {
+      getByRole("tree").dispatchEvent(event);
+    });
+
+    expect(onActivate.mock.calls).toEqual([["README.md"]]);
+    // Handled keys are prevented so Enter doesn't also reach an outer surface.
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("reports Enter on a folder to the same handler, leaving the file check to it", () => {
+    // The key resolver is row-kind agnostic, so a directory reaches onActivate
+    // too. Pinned here because the pane's handler is what filters it — if this
+    // ever stopped firing, that guard would look dead and get removed.
+    const onActivate = vi.fn();
+    const { getByRole } = renderTree({ selectedPath: "src", onActivate });
+
+    fireEvent.keyDown(getByRole("tree"), { key: "Enter" });
+
+    expect(onActivate.mock.calls).toEqual([["src"]]);
   });
 
   it("does not re-root from a double-click on the chevron", () => {

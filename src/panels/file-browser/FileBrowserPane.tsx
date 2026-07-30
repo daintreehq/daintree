@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type React from "react";
-import { Copy, CornerLeftUp, EyeOff, FolderRoot, FolderTree, RefreshCw } from "lucide-react";
+import {
+  Copy,
+  CornerLeftUp,
+  EyeOff,
+  FolderRoot,
+  FolderTree,
+  PanelRightClose,
+  PanelRightOpen,
+  RefreshCw,
+} from "lucide-react";
 import { FolderOpen, Folders } from "@/components/icons";
 import { basename, join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
@@ -118,6 +127,23 @@ export function FileBrowserPane({
       (state) => {
         const panel = state.panelsById[id];
         return panel?.kind === "file-browser" ? panel.browserSidebarCollapsed === true : false;
+      },
+      [id]
+    )
+  );
+  // Resolved against the sidebar flag rather than read raw, mirroring the width
+  // clamp below: a reachable gesture can never set both (each column's toggle
+  // lives in the other column's header, so the one that would hide the last
+  // column isn't mounted), but a hand-edited or corrupted record could — and
+  // "both collapsed" would render an empty panel with no way back. The tree
+  // wins, being the column that is open by default.
+  const viewerCollapsed = usePanelStore(
+    useCallback(
+      (state) => {
+        const panel = state.panelsById[id];
+        return panel?.kind === "file-browser"
+          ? panel.browserViewerCollapsed === true && panel.browserSidebarCollapsed !== true
+          : false;
       },
       [id]
     )
@@ -307,6 +333,42 @@ export function FileBrowserPane({
     [id, setFileBrowserView]
   );
 
+  // Enter and double-click open the row's file as its own panel (#11496), which
+  // is what makes a collapsed viewer usable: the browser stops being a
+  // self-contained reader and feeds the grid instead. The action reuses a panel
+  // already showing the same file, so repeating the gesture activates that panel
+  // rather than piling up duplicates.
+  //
+  // Positively a file, matching the viewer's own check: the key resolver returns
+  // `activate` for whatever row is selected, so directories arrive here too and
+  // must stay a no-op — Enter on a folder expands it, and re-rooting is the
+  // double-click's job.
+  const handleActivate = useCallback(
+    (path: string) => {
+      const row = rows.find((candidate) => candidate.path === path);
+      if (!basePath || row?.isDirectory !== false) return;
+
+      const absolutePath = join(basePath, path);
+      const open = () => {
+        void actionService
+          .dispatch("file.openPanel", { path: absolutePath }, { source: "user" })
+          .then((result) => {
+            if (result.ok) return;
+            // Nothing else reports this: the row stays selected and the grid is
+            // unchanged, so a silent failure reads as the keypress being ignored.
+            notify({
+              type: "error",
+              title: "Couldn't open file",
+              message: result.error.message,
+              action: { label: "Retry", onClick: open },
+            });
+          });
+      };
+      open();
+    },
+    [basePath, rows]
+  );
+
   // Counted separately from the change tick so the toolbar's Refresh also
   // re-reads the open file, not just the tree.
   const [manualRefreshNonce, setManualRefreshNonce] = useState(0);
@@ -335,9 +397,10 @@ export function FileBrowserPane({
     return !isRowPathVisible(selectedPath, rootPath, isVisible);
   }, [selectedPath, hideDotfiles, alwaysHiddenPatterns, rootPath]);
 
-  // Stable id for the tree column so the toggle's `aria-controls` can name the
-  // region it discloses. Only referenced while the column is mounted (open).
+  // Stable ids for the two columns so each toggle's `aria-controls` can name the
+  // region it discloses. Only referenced while that column is mounted (open).
   const treeSidebarId = useId();
+  const viewerColumnId = useId();
   const handleToggleSidebar = useCallback(() => {
     setFileBrowserView(id, { browserSidebarCollapsed: !sidebarCollapsed });
   }, [id, sidebarCollapsed, setFileBrowserView]);
@@ -430,15 +493,17 @@ export function FileBrowserPane({
   );
 
   // The document listeners outlive the grip on two lifecycles the mouseup can't
-  // cover: the pane unmounting mid-drag (project switch), and the tree column
-  // unmounting because the sidebar collapsed mid-drag (the pane stays mounted,
-  // so its unmount effect never fires). Both drop the listeners here.
+  // cover: the pane unmounting mid-drag (project switch), and the grip
+  // unmounting mid-drag while the pane stays mounted (so its unmount effect
+  // never fires). The grip only exists in the split layout, so either collapse
+  // takes it away — collapsing the tree unmounts the column it lives in, and
+  // collapsing the viewer leaves nothing to resize against (#11496).
   useEffect(() => {
     return () => dragCleanupRef.current?.();
   }, []);
   useEffect(() => {
-    if (sidebarCollapsed) dragCleanupRef.current?.();
-  }, [sidebarCollapsed]);
+    if (sidebarCollapsed || viewerCollapsed) dragCleanupRef.current?.();
+  }, [sidebarCollapsed, viewerCollapsed]);
 
   const handleSetRoot = useCallback(
     (path: string) => {
@@ -456,6 +521,21 @@ export function FileBrowserPane({
       treeColumnRef.current?.querySelector<HTMLElement>('[role="tree"]')?.focus();
     });
   }, []);
+
+  // Collapsing the viewer unmounts everything in it, including its own controls.
+  // The containment check is what keeps the common path intact: the toggle lives
+  // in the tree header, so a click leaves focus on a button that survives the
+  // collapse, and redirecting unconditionally would yank it away. It only hands
+  // focus to the tree when the collapse came from elsewhere (a programmatic or
+  // assistive activation) while something inside the viewer held it, which
+  // would otherwise drop focus to the document.
+  const viewerColumnRef = useRef<HTMLDivElement>(null);
+  const handleToggleViewer = useCallback(() => {
+    const focusWasInViewer =
+      !viewerCollapsed && viewerColumnRef.current?.contains(document.activeElement) === true;
+    setFileBrowserView(id, { browserViewerCollapsed: !viewerCollapsed });
+    if (focusWasInViewer) focusTree();
+  }, [id, viewerCollapsed, setFileBrowserView, focusTree]);
 
   const handleResetRoot = useCallback(() => {
     setFileBrowserView(id, { browserRootPath: "" });
@@ -704,8 +784,17 @@ export function FileBrowserPane({
           <div
             id={treeSidebarId}
             ref={treeColumnRef}
-            className="relative flex min-h-0 shrink-0 flex-col self-stretch border-r border-daintree-border bg-daintree-sidebar"
-            style={{ width: sidebarWidth }}
+            // As the sole column the tree fills the panel instead of holding its
+            // dragged width: a 600px-capped tree beside dead space would keep
+            // exactly the imbalance collapsing the viewer is meant to fix
+            // (#11496). The width is remembered, not applied — reopening the
+            // viewer restores the split. The right border goes with the divider,
+            // since there is nothing on the other side of it.
+            className={cn(
+              "relative flex min-h-0 flex-col self-stretch bg-daintree-sidebar",
+              viewerCollapsed ? "min-w-0 flex-1" : "shrink-0 border-r border-daintree-border"
+            )}
+            style={viewerCollapsed ? undefined : { width: sidebarWidth }}
           >
             {/* py-1.5 + border-overlay + 16px icons match FileViewerToolbar.Root
                 so the two header bars share one height and border token, and the
@@ -786,54 +875,90 @@ export function FileBrowserPane({
               <FileViewerToolbar.IconButton label="Refresh" onClick={handleRefresh}>
                 <SpinningIcon icon={RefreshCw} active={isRefreshing} className="h-4 w-4" />
               </FileViewerToolbar.IconButton>
+              {/* The viewer's disclosure, homed here rather than in the viewer —
+                  the mirror of where the tree's toggle lives (#11496). That
+                  placement is also what makes "both collapsed" unreachable:
+                  each toggle only exists while the column it would leave behind
+                  is on screen. Last in the row so it sits against the divider,
+                  the way the tree's toggle sits first in the viewer's toolbar.
+                  A static label per the toggle-label rule; the icon swap and
+                  `aria-expanded` carry the state, and `aria-controls` is dropped
+                  while the named region is unmounted. */}
+              <FileViewerToolbar.IconButton
+                label="Toggle file viewer"
+                expanded={!viewerCollapsed}
+                controls={viewerCollapsed ? undefined : viewerColumnId}
+                sidebarToggle
+                onClick={handleToggleViewer}
+                data-testid="file-browser-viewer-toggle"
+              >
+                {viewerCollapsed ? (
+                  <PanelRightOpen className="h-4 w-4" />
+                ) : (
+                  <PanelRightClose className="h-4 w-4" />
+                )}
+              </FileViewerToolbar.IconButton>
             </div>
             {renderTree()}
             {/* Straddles the right border between the tree and the viewer. Lives
                 inside the collapsible column, so it unmounts with the tree —
-                no grip while collapsed, per #11331. Styling mirrors the
-                worktree Sidebar / PortalDock handle: a thin pill that thickens
-                on hover, an accent focus anchor for keyboard resize. */}
-            <div
-              role="separator"
-              aria-label="Resize file tree"
-              aria-orientation="vertical"
-              aria-controls={treeSidebarId}
-              aria-valuenow={Math.round(sidebarWidth)}
-              aria-valuemin={FILE_BROWSER_SIDEBAR_MIN_WIDTH}
-              aria-valuemax={FILE_BROWSER_SIDEBAR_MAX_WIDTH}
-              tabIndex={0}
-              data-testid="file-browser-sidebar-resize"
-              className={cn(
-                "group absolute -right-1.5 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center",
-                "transition-colors hover:bg-overlay-soft focus:bg-tint/[0.04] focus:outline-hidden focus:ring-1 focus:ring-daintree-accent/50",
-                isResizing && "bg-overlay-medium"
-              )}
-              onMouseDown={handleResizeStart}
-              onDoubleClick={handleResizeDoubleClick}
-              onKeyDown={handleResizeKeyDown}
-            >
+                no grip while collapsed, per #11331 — and is gated on the viewer
+                too, since a sole column has nothing to resize against (#11496).
+                Styling mirrors the worktree Sidebar / PortalDock handle: a thin
+                pill that thickens on hover, an accent focus anchor for keyboard
+                resize. */}
+            {!viewerCollapsed && (
               <div
+                role="separator"
+                aria-label="Resize file tree"
+                aria-orientation="vertical"
+                aria-controls={treeSidebarId}
+                aria-valuenow={Math.round(sidebarWidth)}
+                aria-valuemin={FILE_BROWSER_SIDEBAR_MIN_WIDTH}
+                aria-valuemax={FILE_BROWSER_SIDEBAR_MAX_WIDTH}
+                tabIndex={0}
+                data-testid="file-browser-sidebar-resize"
                 className={cn(
-                  "h-8 w-px rounded-full transition-[width] delay-100 duration-150 group-hover:w-0.5",
-                  "bg-daintree-text/20 group-hover:bg-daintree-text/35 group-focus:bg-daintree-accent",
-                  isResizing && "bg-daintree-text/50"
+                  "group absolute -right-1.5 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center",
+                  "transition-colors hover:bg-overlay-soft focus:bg-tint/[0.04] focus:outline-hidden focus:ring-1 focus:ring-daintree-accent/50",
+                  isResizing && "bg-overlay-medium"
                 )}
-              />
-            </div>
+                onMouseDown={handleResizeStart}
+                onDoubleClick={handleResizeDoubleClick}
+                onKeyDown={handleResizeKeyDown}
+              >
+                <div
+                  className={cn(
+                    "h-8 w-px rounded-full transition-[width] delay-100 duration-150 group-hover:w-0.5",
+                    "bg-daintree-text/20 group-hover:bg-daintree-text/35 group-focus:bg-daintree-accent",
+                    isResizing && "bg-daintree-text/50"
+                  )}
+                />
+              </div>
+            )}
           </div>
         )}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <FileBrowserViewer
-            filePath={selectedFilePath}
-            rootPath={basePath}
-            fileName={selectedFileName}
-            relativePath={selectedNode?.isDirectory === false ? (selectedPath ?? null) : null}
-            revision={viewerRevision}
-            sidebarCollapsed={sidebarCollapsed}
-            onToggleSidebar={handleToggleSidebar}
-            treeSidebarId={treeSidebarId}
-          />
-        </div>
+        {/* Unmounts entirely when collapsed, the mirror of the tree column: the
+            toggle that brings it back lives in the tree's header, so there is no
+            orphaned control (#11496). */}
+        {!viewerCollapsed && (
+          <div
+            id={viewerColumnId}
+            ref={viewerColumnRef}
+            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+          >
+            <FileBrowserViewer
+              filePath={selectedFilePath}
+              rootPath={basePath}
+              fileName={selectedFileName}
+              relativePath={selectedNode?.isDirectory === false ? (selectedPath ?? null) : null}
+              revision={viewerRevision}
+              sidebarCollapsed={sidebarCollapsed}
+              onToggleSidebar={handleToggleSidebar}
+              treeSidebarId={treeSidebarId}
+            />
+          </div>
+        )}
         {isResizing && (
           // Drag shield: while resizing, cover the surface so the HTML-preview
           // iframe (which the divider drags straight over) can't swallow the
@@ -954,6 +1079,7 @@ export function FileBrowserPane({
           selectedPath={selectedPath}
           onSelect={handleSelect}
           onToggleExpanded={handleToggleExpanded}
+          onActivate={handleActivate}
           onRootFolder={handleSetRoot}
           rowContextMenu={rowContextMenu}
           label={`Files in ${title}`}

@@ -66,6 +66,7 @@ export interface AddTerminalArgs extends AddPanelOptionsBase {
   browserHideDotfiles?: boolean;
   browserRootPath?: string;
   browserSidebarCollapsed?: boolean;
+  browserViewerCollapsed?: boolean;
   browserTreeSnapshot?: FileBrowserTreeSnapshot;
   browserSidebarWidth?: number;
   browserWorkspaceRooted?: boolean;
@@ -131,6 +132,7 @@ export interface SavedTerminalData {
   browserHideDotfiles?: unknown;
   browserRootPath?: unknown;
   browserSidebarCollapsed?: unknown;
+  browserViewerCollapsed?: unknown;
   browserTreeSnapshot?: unknown;
   browserSidebarWidth?: unknown;
   browserWorkspaceRooted?: unknown;

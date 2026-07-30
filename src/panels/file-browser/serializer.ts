@@ -22,6 +22,9 @@ export function serializeFileBrowser(t: FileBrowserPanelData): Partial<PanelSnap
     // Truthiness, not `!= null`: `false` is the default open state, the same as
     // the field being absent, so only a collapsed sidebar earns a persisted bit.
     ...(t.browserSidebarCollapsed ? { browserSidebarCollapsed: true } : {}),
+    // Same rule for the viewer column (#11496): only a collapsed viewer earns a
+    // bit, so the common two-column panel persists neither flag.
+    ...(t.browserViewerCollapsed ? { browserViewerCollapsed: true } : {}),
     ...(t.browserTreeSnapshot != null && { browserTreeSnapshot: t.browserTreeSnapshot }),
     // Only a non-default width earns a persisted number: 288 is the default, the
     // same as absent, so an unresized or reset-to-default panel stays sparse.

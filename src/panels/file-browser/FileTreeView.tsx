@@ -15,7 +15,11 @@ export interface FileTreeViewProps {
   selectedPath: string | null;
   onSelect: (path: string) => void;
   onToggleExpanded: (path: string, expand: boolean) => void;
-  /** Fired by Enter on a file row — the viewer already follows selection. */
+  /**
+   * Fired by Enter or a double-click on a file row. Directory rows also reach
+   * this on Enter (the key resolver is row-kind agnostic), so the handler owns
+   * the file check.
+   */
   onActivate?: (path: string) => void;
   /** Fired by double-clicking a directory row: re-root the tree there. */
   onRootFolder?: (path: string) => void;
@@ -157,6 +161,7 @@ export function FileTreeView({
       selectedPath,
       onSelect,
       onToggleExpanded,
+      onActivate,
       onRootFolder,
       rowContextMenu,
       hasDirectories,
@@ -166,6 +171,7 @@ export function FileTreeView({
       selectedPath,
       onSelect,
       onToggleExpanded,
+      onActivate,
       onRootFolder,
       rowContextMenu,
       hasDirectories,
@@ -215,6 +221,7 @@ interface TreeContext {
   selectedPath: string | null;
   onSelect: (path: string) => void;
   onToggleExpanded: (path: string, expand: boolean) => void;
+  onActivate?: ((path: string) => void) | undefined;
   onRootFolder?: ((path: string) => void) | undefined;
   rowContextMenu?: ((row: FlatTreeRow) => React.ReactNode) | undefined;
   hasDirectories: boolean;
@@ -250,7 +257,7 @@ interface FileTreeRowProps {
 }
 
 function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
-  const { onSelect, onToggleExpanded, onRootFolder } = context;
+  const { onSelect, onToggleExpanded, onActivate, onRootFolder } = context;
 
   // Defer the folder-load spinner past the anti-flicker gate so a fast
   // expansion flashes nothing. Drives only the indicator — the tree's content
@@ -264,13 +271,20 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
     if (row.isDirectory) onToggleExpanded(row.path, !row.isExpanded);
   };
 
-  // Double-click re-roots the tree at the folder. The two single clicks it
-  // contains toggle expansion twice — a net no-op — so the only observable
-  // effect is the re-root.
-  const handleDoubleClick =
-    row.isDirectory && onRootFolder
+  // Double-click re-roots a folder and opens a file in its own panel (#11496) —
+  // the gesture keeps its "go deeper into this" meaning either way. On a folder
+  // the two single clicks it contains toggle expansion twice (a net no-op), and
+  // on a file they only re-select the row, so in both cases the double-click's
+  // own effect is the only observable one.
+  const handleDoubleClick = row.isDirectory
+    ? onRootFolder
       ? () => {
           onRootFolder(row.path);
+        }
+      : undefined
+    : onActivate
+      ? () => {
+          onActivate(row.path);
         }
       : undefined;
 

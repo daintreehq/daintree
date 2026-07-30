@@ -50,8 +50,12 @@ async function dispatchAction(
 }
 
 // Scoped to the file browser's own marker rather than a bare `panel-dialog`:
-// that host is shared, so an unrelated dialog must not satisfy this.
-const BROWSER_DIALOG = `${SEL.fileViewer.dialog}:has([data-testid="file-browser-sidebar-toggle"])`;
+// that host is shared, so an unrelated dialog must not satisfy this. Either
+// column toggle identifies it — each one unmounts with the column it lives in,
+// so neither alone survives every layout the panel can take (#11496).
+const BROWSER_DIALOG =
+  `${SEL.fileViewer.dialog}:has([data-testid="file-browser-sidebar-toggle"],` +
+  ` [data-testid="file-browser-viewer-toggle"])`;
 
 /**
  * Opens the browser through the real action rather than driving the

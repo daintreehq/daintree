@@ -148,6 +148,48 @@ describe("serializeFileBrowser", () => {
     });
   });
 
+  it("round-trips a collapsed viewer but keeps the open default sparse (#11496)", () => {
+    const collapsed: FileBrowserPanelData = { ...basePanel, browserViewerCollapsed: true };
+    expect(createFileBrowserDefaults(asOptions(serializeFileBrowser(collapsed)))).toEqual({
+      browserViewerCollapsed: true,
+    });
+
+    const open: FileBrowserPanelData = { ...basePanel, browserViewerCollapsed: false };
+    expect(serializeFileBrowser(open)).toEqual({});
+    expect(serializeFileBrowser(basePanel)).toEqual({});
+  });
+
+  it("keeps the remembered split width across a collapsed viewer (#11496)", () => {
+    // The sole-column tree ignores the width rather than clearing it, so
+    // reopening the viewer has to land back on the last-dragged split.
+    const both: FileBrowserPanelData = {
+      ...basePanel,
+      browserViewerCollapsed: true,
+      browserSidebarWidth: 360,
+    };
+
+    expect(createFileBrowserDefaults(asOptions(serializeFileBrowser(both)))).toEqual({
+      browserViewerCollapsed: true,
+      browserSidebarWidth: 360,
+    });
+  });
+
+  it("carries both collapse bits through persistence without resolving them", () => {
+    // Unreachable through the UI, reachable on disk. The pane resolves the pair
+    // at read time, so persistence must not quietly drop either side — doing so
+    // would rewrite the user's last choice on the way to a corrupt record.
+    const both: FileBrowserPanelData = {
+      ...basePanel,
+      browserSidebarCollapsed: true,
+      browserViewerCollapsed: true,
+    };
+
+    expect(createFileBrowserDefaults(asOptions(serializeFileBrowser(both)))).toEqual({
+      browserSidebarCollapsed: true,
+      browserViewerCollapsed: true,
+    });
+  });
+
   it("persists workspace rooting so a promoted panel keeps its folder (#11489)", () => {
     // Promotion into the grid adopts the active worktree as a placement key, so
     // by save time an absent worktreeId no longer distinguishes the two — the

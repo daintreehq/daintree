@@ -281,6 +281,7 @@ const FILE_BROWSER_FIELD_CLASSIFICATION = {
   browserHideDotfiles: true,
   browserRootPath: true,
   browserSidebarCollapsed: true,
+  browserViewerCollapsed: true,
   // The one derived persisted field: the last-known tree snapshot (#11367)
   // must ride the panel record because nothing renderer-side survives LRU
   // eviction.
@@ -476,7 +477,11 @@ const fileBrowserFixture: FileBrowserPanelData = {
   browserExpandedPaths: ["src"],
   browserHideDotfiles: true,
   browserRootPath: "src",
+  // Both collapse bits, which is not a state the UI can reach but is exactly
+  // what persistence must round-trip unaltered: the two fields are independent
+  // on disk, and the pane resolves the pair at read time (#11496).
   browserSidebarCollapsed: true,
+  browserViewerCollapsed: true,
   browserTreeSnapshot: browserTreeSnapshotFixture,
   // A non-default width (the serializer omits 288), so the coverage spread emits
   // the key instead of dropping it as a default.
@@ -492,6 +497,7 @@ const savedFileBrowser: SavedTerminalData = {
   browserHideDotfiles: true,
   browserRootPath: "src",
   browserSidebarCollapsed: true,
+  browserViewerCollapsed: true,
   browserTreeSnapshot: browserTreeSnapshotFixture,
   browserSidebarWidth: 360,
   browserWorkspaceRooted: true,

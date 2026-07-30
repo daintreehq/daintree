@@ -270,6 +270,10 @@ const BUILT_IN_DESERIALIZERS = {
     // Only a literal `true` restores collapsed: a hand-edited or corrupted
     // snapshot holding a string or object must fall back to the open default.
     browserSidebarCollapsed: saved.browserSidebarCollapsed === true ? true : undefined,
+    // Same literal-`true` rule for the viewer column (#11496). Sanitized
+    // independently: the pane resolves a record holding both flags at read
+    // time, so neither deserializer branch has to know about the other.
+    browserViewerCollapsed: saved.browserViewerCollapsed === true ? true : undefined,
     browserTreeSnapshot: sanitizeTreeSnapshot(saved.browserTreeSnapshot),
     // A finite number is clamped into range; a string/NaN/Infinity from a
     // hand-edited snapshot falls back to the default rather than becoming a

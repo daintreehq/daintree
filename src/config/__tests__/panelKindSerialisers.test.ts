@@ -206,6 +206,37 @@ describe("panelKindSerialisers", () => {
       expect(deserialize()({ id: "fb1" }).browserSidebarCollapsed).toBeUndefined();
     });
 
+    it("restores a collapsed viewer only from a literal true", () => {
+      expect(
+        deserialize()({ id: "fb1", browserViewerCollapsed: true }).browserViewerCollapsed
+      ).toBe(true);
+      expect(
+        deserialize()({ id: "fb1", browserViewerCollapsed: false }).browserViewerCollapsed
+      ).toBeUndefined();
+      expect(
+        deserialize()({ id: "fb1", browserViewerCollapsed: "yes" }).browserViewerCollapsed
+      ).toBeUndefined();
+      expect(
+        deserialize()({ id: "fb1", browserViewerCollapsed: {} }).browserViewerCollapsed
+      ).toBeUndefined();
+      expect(deserialize()({ id: "fb1" }).browserViewerCollapsed).toBeUndefined();
+    });
+
+    it("keeps the two collapse bits independent rather than resolving them here", () => {
+      // "Both collapsed" is unreachable through the UI but reachable on disk, and
+      // the pane is what resolves it at read time. The deserializer must hand
+      // both bits through untouched — silently clearing one here would make the
+      // stored record disagree with what the user last chose (#11496).
+      const restored = deserialize()({
+        id: "fb1",
+        browserSidebarCollapsed: true,
+        browserViewerCollapsed: true,
+      });
+
+      expect(restored.browserSidebarCollapsed).toBe(true);
+      expect(restored.browserViewerCollapsed).toBe(true);
+    });
+
     it("ignores a legacy browserShowIgnored key instead of migrating it", () => {
       // The old field is unknown to the deserializer now; a persisted `true`
       // must not resurface as the inverted new toggle (#10938 / #11330).
