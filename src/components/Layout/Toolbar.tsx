@@ -28,7 +28,7 @@ import {
   X,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { Folders } from "@/components/icons";
+import { FolderTree, Folders } from "@/components/icons";
 import { buildPluginToolbarMeta } from "./pluginToolbarMeta";
 import { TOOLBAR_BUTTON_METADATA, isToolbarButtonVisible } from "./toolbarButtonMetadata";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
@@ -600,12 +600,36 @@ export function Toolbar({
   const problemsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
   const terminalShortcut = useKeybindingDisplay("agent.terminal");
   const browserShortcut = useKeybindingDisplay("agent.browser");
+  const fileBrowserShortcut = useKeybindingDisplay("worktree.openFileBrowser");
   const sidebarAriaShortcut = useAriaKeyshortcuts("nav.toggleSidebar");
   const copyTreeAriaShortcut = useAriaKeyshortcuts("worktree.copyTree");
+  const fileBrowserAriaShortcut = useAriaKeyshortcuts("worktree.openFileBrowser");
 
   const sidebarHintHover = useShortcutHintHover("nav.toggleSidebar");
   const devServerHintHover = useShortcutHintHover("devServer.start");
   const copyTreeHintHover = useShortcutHintHover("worktree.copyTree");
+  const fileBrowserHintHover = useShortcutHintHover("worktree.openFileBrowser");
+
+  // The one launcher button whose action can legitimately refuse: it resolves
+  // its own target (focused worktree, else the project or scratch root), and a
+  // workspace with nothing to browse makes it throw. `dispatch` turns that into
+  // `ok: false` rather than a rejection, so without this the press would do
+  // nothing at all. Mirrors `LauncherQuickActions`, which offers the same action.
+  // A named function expression so the retry action can name itself.
+  const openFileBrowser = useCallback(function openFileBrowser() {
+    void actionService
+      .dispatch("worktree.openFileBrowser", undefined, { source: "user" })
+      .then((result) => {
+        if (result.ok) return;
+        notify({
+          type: "error",
+          title: "Couldn't open the file browser",
+          message: "No folder resolved for this workspace. Select a worktree and try again.",
+          context: { eventKind: "uiFeedback" },
+          action: { label: "Retry", onClick: openFileBrowser },
+        });
+      });
+  }, []);
 
   const handleOpenProjectSettings = useCallback(() => {
     projectSwitcher.close();
@@ -924,6 +948,41 @@ export function Toolbar({
         ),
         isAvailable: true,
       },
+      "file-browser": {
+        // Deliberately not in PROJECT_SCOPED_TOOLBAR_IDS: the action browses the
+        // project or scratch root when no worktree is selected (#11482), so
+        // gating it on `currentProject` would disable it in exactly the
+        // worktree-less workspaces where it still works.
+        render: () => (
+          <ContextMenu>
+            <ContextMenuTrigger asChild>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    {...fileBrowserHintHover}
+                    variant="ghost"
+                    size="icon"
+                    data-toolbar-item=""
+                    onClick={openFileBrowser}
+                    className={toolbarIconButtonClass}
+                    aria-label="Browse files"
+                    aria-keyshortcuts={fileBrowserAriaShortcut}
+                  >
+                    <FolderTree />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {createTooltipContent("Browse files", fileBrowserShortcut)}
+                </TooltipContent>
+              </Tooltip>
+            </ContextMenuTrigger>
+            <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+              <ToolbarContextMenuItems buttonId="file-browser" side="left" />
+            </ContextMenuContent>
+          </ContextMenu>
+        ),
+        isAvailable: true,
+      },
       "dev-server": {
         render: () =>
           currentProject ? (
@@ -1148,6 +1207,10 @@ export function Toolbar({
       pluginConfigs,
       devServerShortcut,
       devServerHintHover,
+      openFileBrowser,
+      fileBrowserShortcut,
+      fileBrowserAriaShortcut,
+      fileBrowserHintHover,
     ]
   );
 
@@ -1363,6 +1426,7 @@ export function Toolbar({
       ...Object.fromEntries(LAUNCHABLE_AGENT_IDS.map((id) => [id, () => onLaunchAgent(id)])),
       terminal: () => onLaunchAgent("terminal"),
       browser: () => onLaunchAgent("browser"),
+      "file-browser": openFileBrowser,
       "dev-server": () => {
         void actionService.dispatch("devServer.start", undefined, { source: "user" });
       },
@@ -1400,6 +1464,7 @@ export function Toolbar({
     }),
     [
       onLaunchAgent,
+      openFileBrowser,
       handleCopyTreeOverflow,
       onSettings,
       onToggleProblems,
@@ -1418,6 +1483,7 @@ export function Toolbar({
     problems: problemsShortcut,
     terminal: terminalShortcut,
     browser: browserShortcut,
+    "file-browser": fileBrowserShortcut,
   };
 
   const renderOverflowMenu = (

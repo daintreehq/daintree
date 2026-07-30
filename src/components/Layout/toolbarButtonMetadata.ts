@@ -11,7 +11,7 @@ import {
   SquareMenu,
   SquareTerminal,
 } from "lucide-react";
-import { Folders, History, Package } from "@/components/icons";
+import { FolderTree, Folders, History, Package } from "@/components/icons";
 import {
   BUILT_IN_AGENT_IDS,
   isBuiltInAgentId,
@@ -73,6 +73,11 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
     label: "Browser",
     icon: Globe,
     description: "Open browser panel",
+  },
+  "file-browser": {
+    label: "Browse files",
+    icon: FolderTree,
+    description: "Open the file browser for the active worktree or workspace",
   },
   "dev-server": {
     label: "Dev preview",
