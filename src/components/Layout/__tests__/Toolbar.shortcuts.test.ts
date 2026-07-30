@@ -82,7 +82,10 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(source).toContain('useAriaKeyshortcuts("worktree.openFileBrowser")');
       expect(source).toContain('useShortcutHintHover("worktree.openFileBrowser")');
       expect(source).toContain("aria-keyshortcuts={fileBrowserAriaShortcut}");
-      expect(source).toContain("{...fileBrowserHintHover}");
+      // Spread conditionally since #11499: with no workspace the action can
+      // resolve no folder, so the button degrades to aria-disabled and the
+      // press-and-hold hint would advertise a shortcut that only errors.
+      expect(source).toContain("hasWorkspace ? fileBrowserHintHover : {}");
     });
 
     it("uses createTooltipContent for the file browser tooltip", () => {

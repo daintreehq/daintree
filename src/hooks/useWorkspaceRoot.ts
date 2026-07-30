@@ -52,7 +52,15 @@ export function useWorkspaceRoot(): WorkspaceRoot | null {
       scratches: [],
       currentScratch: null,
     });
-    return resolved?.kind === "project" ? resolved.project : undefined;
+    if (resolved?.kind !== "project") return undefined;
+    // A closed project stays in `projects` — reopening it from the switcher
+    // depends on the row surviving — while this view keeps its seeded id, so
+    // `resolveViewWorkspace` still finds it after `closeActiveProject`. Mirrors
+    // `getProjectForCurrentLocation`, which drops closed rows for the same
+    // reason: the welcome screen that replaces a closed project must keep its
+    // no-sidebar state (#5023). Literal `=== "closed"` because `status` is
+    // optional and an absent one is not closed.
+    return resolved.project.status === "closed" ? undefined : resolved.project;
   });
 
   // Only consulted when the project side didn't answer, so a project-owned view

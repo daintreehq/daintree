@@ -139,4 +139,37 @@ describe("useWorkspaceRoot", () => {
 
     expect(result.current?.kind).toBe("project");
   });
+
+  it("stops resolving a project once it is closed, so the welcome screen keeps no sidebar (#5023)", () => {
+    // Closing the active project leaves its row in `projects` — the switcher's
+    // reopen entry depends on it — and this view keeps its seeded id, so the
+    // only thing separating "open" from "closed" here is `status`. Asserted as
+    // a before/after on one and the same row: with everything else identical,
+    // flipping the status is what has to change the answer.
+    const project = makeProject({ id: "proj-closed", status: "active" });
+    projectSlice = { projects: [project], currentProject: null };
+    getViewWorkspaceId.mockReturnValue("proj-closed");
+
+    const whileOpen = renderHook(() => useWorkspaceRoot());
+    expect(whileOpen.result.current).not.toBeNull();
+
+    projectSlice = { projects: [{ ...project, status: "closed" }], currentProject: null };
+
+    const afterClose = renderHook(() => useWorkspaceRoot());
+    expect(afterClose.result.current).toBeNull();
+  });
+
+  it("keeps resolving a project whose row carries a non-closed status", () => {
+    // `background` is a live project displayed in another window; only `closed`
+    // unmounts the sidebar, so a blanket status check would blank this view.
+    projectSlice = {
+      projects: [makeProject({ id: "proj-bg", status: "background" })],
+      currentProject: null,
+    };
+    getViewWorkspaceId.mockReturnValue("proj-bg");
+
+    const { result } = renderHook(() => useWorkspaceRoot());
+
+    expect(result.current?.id).toBe("proj-bg");
+  });
 });

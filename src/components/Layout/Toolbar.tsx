@@ -973,19 +973,26 @@ export function Toolbar({
         // Deliberately not in PROJECT_SCOPED_TOOLBAR_IDS: the action browses the
         // project or scratch root when no worktree is selected (#11482), so
         // gating it on `currentProject` would disable it in exactly the
-        // worktree-less workspaces where it still works.
+        // worktree-less workspaces where it still works. `hasWorkspace` is the
+        // gate that does apply — with no workspace of any kind the action
+        // resolves no folder at all and can only answer with an error toast, so
+        // it degrades the same way the sidebar toggle above does (#11499).
         render: () => (
           <ContextMenu>
             <ContextMenuTrigger asChild>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
-                    {...fileBrowserHintHover}
+                    {...(hasWorkspace ? fileBrowserHintHover : {})}
                     variant="ghost"
                     size="icon"
                     data-toolbar-item=""
-                    onClick={openFileBrowser}
-                    className={toolbarIconButtonClass}
+                    onClick={hasWorkspace ? openFileBrowser : undefined}
+                    aria-disabled={!hasWorkspace || undefined}
+                    className={cn(
+                      toolbarIconButtonClass,
+                      "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                    )}
                     aria-label="Browse files"
                     aria-keyshortcuts={fileBrowserAriaShortcut}
                   >
@@ -993,7 +1000,9 @@ export function Toolbar({
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  {createTooltipContent("Browse files", fileBrowserShortcut)}
+                  {hasWorkspace
+                    ? createTooltipContent("Browse files", fileBrowserShortcut)
+                    : "Open a project or scratch to browse files"}
                 </TooltipContent>
               </Tooltip>
             </ContextMenuTrigger>
