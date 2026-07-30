@@ -215,17 +215,6 @@ const { dispatchMock } = vi.hoisted(() => ({
     >(),
 }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
-// Dynamically imported by the pane (a static import would drag panelStore ->
-// panelPersistence -> projectClient in at module scope), so the mock has to be
-// registered even though nothing here imports it directly.
-const { closePanelDialogByIdMock } = vi.hoisted(() => ({
-  closePanelDialogByIdMock: vi.fn<(panelId: string) => void>(),
-}));
-vi.mock("@/store/panelDialogStore", () => ({
-  usePanelDialogStore: {
-    getState: () => ({ closePanelDialogById: closePanelDialogByIdMock }),
-  },
-}));
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({ MarkdownViewer: () => null }));
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
   CodeViewer: () => <div data-testid="code-viewer" />,
@@ -298,7 +287,6 @@ beforeEach(() => {
   mockPanel.browserWorkspaceRooted = undefined;
   treeArgs.changeTick = undefined;
   treeProps.onActivate = undefined;
-  closePanelDialogByIdMock.mockReset();
   dispatchMock.mockReset();
   dispatchMock.mockResolvedValue({ ok: true, result: { panelId: "file-1" } });
   worktreeTicks.git = undefined;
@@ -1355,8 +1343,9 @@ describe("FileBrowserPane collapsible viewer (#11496)", () => {
   });
 
   it("keeps the viewer visible when a corrupted record collapses both columns", () => {
-    // Unreachable by gesture, reachable on disk. Resolved at read time in favour
-    // of the tree, so the panel can never render empty with no way out.
+    // Unreachable by gesture, reachable on disk. The sidebar bit decides, so the
+    // tree stays hidden and the viewer is forced open — whichever column wins,
+    // the point is that the panel can never render empty with no way out.
     mockPanel.browserSidebarCollapsed = true;
     mockPanel.browserViewerCollapsed = true;
     renderPane();
@@ -1602,32 +1591,50 @@ describe("FileBrowserPane row activation (#11496)", () => {
     ]);
   });
 
+  // `onClose` is what the dialog host wires to its own close for this panel, so
+  // asserting on it is asserting the dialog gets dismissed.
+  const renderDialogPane = (onClose: () => void) =>
+    render(
+      <TooltipProvider>
+        <FileBrowserPane
+          id="fb-1"
+          title="Files"
+          worktreeId="wt-1"
+          isFocused
+          location="dialog"
+          onFocus={vi.fn()}
+          onClose={onClose}
+        />
+      </TooltipProvider>
+    );
+
   it("closes the browser dialog so the panel it opened is not stranded behind it", async () => {
     // `worktree.openFileBrowser` opens this pane as a modal, so the grid panel
     // the action just created would sit under a focus-trapping dialog and the
     // gesture would look like it did nothing.
-    render(
-      <TooltipProvider>
-        <FileBrowserPane
-          id="fb-1"
-          title="Files"
-          worktreeId="wt-1"
-          isFocused
-          location="dialog"
-          onFocus={vi.fn()}
-          onClose={vi.fn()}
-        />
-      </TooltipProvider>
-    );
+    const onClose = vi.fn();
+    renderDialogPane(onClose);
 
     await activate("src/app.ts");
 
-    expect(closePanelDialogByIdMock.mock.calls).toEqual([["fb-1"]]);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves the dialog alone when the open failed", async () => {
+  it("leaves the dialog open when the open failed", async () => {
     // Closing on failure would dismiss the browser and show nothing in its place.
     dispatchMock.mockResolvedValue({ ok: false, error: { message: "panel limit reached" } });
+    const onClose = vi.fn();
+    renderDialogPane(onClose);
+
+    await activate("src/app.ts");
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("never closes a grid-hosted browser, where onClose would destroy the panel", async () => {
+    // Same prop, very different meaning outside a dialog: in the grid it closes
+    // the browser itself, so the location guard is load-bearing.
+    const onClose = vi.fn();
     render(
       <TooltipProvider>
         <FileBrowserPane
@@ -1635,24 +1642,17 @@ describe("FileBrowserPane row activation (#11496)", () => {
           title="Files"
           worktreeId="wt-1"
           isFocused
-          location="dialog"
+          location="grid"
           onFocus={vi.fn()}
-          onClose={vi.fn()}
+          onClose={onClose}
         />
       </TooltipProvider>
     );
 
     await activate("src/app.ts");
 
-    expect(closePanelDialogByIdMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps a grid-hosted browser open, having no dialog to dismiss", async () => {
-    renderPane();
-
-    await activate("src/app.ts");
-
-    expect(closePanelDialogByIdMock).not.toHaveBeenCalled();
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("reports a failed open without raising a second toast over addPanel's own", async () => {

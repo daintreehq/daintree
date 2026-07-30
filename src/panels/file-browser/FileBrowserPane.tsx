@@ -370,15 +370,13 @@ export function FileBrowserPane({
           return;
         }
         // As a dialog this browser is modal, so the panel just opened sits behind
-        // it and the gesture would look like it did nothing. Closing hands the
-        // grid the file the user asked for, which is the point of activating it.
-        if (location === "dialog") {
-          const { usePanelDialogStore } = await import("@/store/panelDialogStore");
-          usePanelDialogStore.getState().closePanelDialogById(id);
-        }
+        // it and the gesture would look like it did nothing. `onClose` is the
+        // dialog host's own close for this panel, so this is the same teardown
+        // the close button runs — nothing extra to unwind.
+        if (location === "dialog") onClose?.();
       })();
     },
-    [id, location, basePath, rows]
+    [location, onClose, basePath, rows]
   );
 
   // Counted separately from the change tick so the toolbar's Refresh also
