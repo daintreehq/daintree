@@ -26,6 +26,7 @@ import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { notify } from "@/lib/notify";
+import { logError } from "@/utils/logger";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -135,8 +136,11 @@ export function FileBrowserPane({
   // clamp below: a reachable gesture can never set both (each column's toggle
   // lives in the other column's header, so the one that would hide the last
   // column isn't mounted), but a hand-edited or corrupted record could — and
-  // "both collapsed" would render an empty panel with no way back. The tree
-  // wins, being the column that is open by default.
+  // "both collapsed" would render an empty panel with no way back. The older
+  // sidebar bit is the one that decides: with both set the tree stays hidden and
+  // the viewer is forced open, so the panel always has a visible column and the
+  // toggle inside it. Neither stored bit is rewritten — one toggle from here
+  // reaches a consistent layout again.
   const viewerCollapsed = usePanelStore(
     useCallback(
       (state) => {
@@ -341,32 +345,40 @@ export function FileBrowserPane({
   //
   // Positively a file, matching the viewer's own check: the key resolver returns
   // `activate` for whatever row is selected, so directories arrive here too and
-  // must stay a no-op — Enter on a folder expands it, and re-rooting is the
-  // double-click's job.
+  // are deliberately dropped — a folder's Enter does nothing, and re-rooting is
+  // the double-click's job.
   const handleActivate = useCallback(
     (path: string) => {
       const row = rows.find((candidate) => candidate.path === path);
+      // The base-path half is defensive rather than reachable: an unresolved
+      // source renders no tree at all, so nothing can activate a row. It stays
+      // because joining against "" would silently produce a wrong absolute path.
       if (!basePath || row?.isDirectory !== false) return;
 
       const absolutePath = join(basePath, path);
-      const open = () => {
-        void actionService
-          .dispatch("file.openPanel", { path: absolutePath }, { source: "user" })
-          .then((result) => {
-            if (result.ok) return;
-            // Nothing else reports this: the row stays selected and the grid is
-            // unchanged, so a silent failure reads as the keypress being ignored.
-            notify({
-              type: "error",
-              title: "Couldn't open file",
-              message: result.error.message,
-              action: { label: "Retry", onClick: open },
-            });
-          });
-      };
-      open();
+      void (async () => {
+        const result = await actionService.dispatch(
+          "file.openPanel",
+          { path: absolutePath },
+          { source: "user" }
+        );
+        if (!result.ok) {
+          // No toast: the realistic failure is the panel ceiling, and `addPanel`
+          // already raises that warning itself — a second one would report the
+          // same gesture twice.
+          logError("[fileBrowser] failed to open file panel", result.error);
+          return;
+        }
+        // As a dialog this browser is modal, so the panel just opened sits behind
+        // it and the gesture would look like it did nothing. Closing hands the
+        // grid the file the user asked for, which is the point of activating it.
+        if (location === "dialog") {
+          const { usePanelDialogStore } = await import("@/store/panelDialogStore");
+          usePanelDialogStore.getState().closePanelDialogById(id);
+        }
+      })();
     },
-    [basePath, rows]
+    [id, location, basePath, rows]
   );
 
   // Counted separately from the change tick so the toolbar's Refresh also
@@ -518,7 +530,16 @@ export function FileBrowserPane({
   const treeColumnRef = useRef<HTMLDivElement>(null);
   const focusTree = useCallback(() => {
     requestAnimationFrame(() => {
-      treeColumnRef.current?.querySelector<HTMLElement>('[role="tree"]')?.focus();
+      const column = treeColumnRef.current;
+      if (!column) return;
+      // The tree when there are rows to land on, otherwise the first control the
+      // column still has: the loading, error and empty branches render no tree at
+      // all, and querying only for it would drop focus to the document in exactly
+      // the cases this exists to cover.
+      const target =
+        column.querySelector<HTMLElement>('[role="tree"]') ??
+        column.querySelector<HTMLElement>("button");
+      target?.focus();
     });
   }, []);
 
