@@ -3,6 +3,12 @@ import { render, screen, act, fireEvent, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { AppDialog } from "../AppDialog";
 import { _resetForTests } from "@/lib/escapeStack";
+import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
+import { handleDockEscapeKeyDown } from "@/components/Layout/dockPopoverGuard";
+import {
+  setDockPopoverOpen,
+  _resetForTests as _resetDockPopoverForTests,
+} from "@/lib/dockPopoverLayer";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
 
 vi.mock("zustand/react/shallow", () => ({
@@ -1060,5 +1066,214 @@ describe("AppDialog header composition", () => {
 
     await waitFor(() => expect(onBeforeClose).toHaveBeenCalledTimes(1));
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A dock popover deliberately survives the dialog it spawns, so it is always
+ * "the open Radix layer" the capture probe records — and the backstop's gate
+ * would hand it every Escape, dismissing the panel underneath instead of the
+ * dialog on top of it (#11505). The popover declines the keypress; this is the
+ * receiving half.
+ */
+describe("AppDialog Escape yielded by the layer underneath", () => {
+  let dockGuard: ((e: KeyboardEvent) => void) | null = null;
+
+  beforeEach(() => {
+    mockPrevOpen = false;
+    _resetForTests();
+    _resetBackstopForTests();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    if (dockGuard) {
+      document.removeEventListener("keydown", dockGuard, true);
+      dockGuard = null;
+    }
+    _resetForTests();
+    _resetBackstopForTests();
+    document.querySelectorAll("[data-open-radix-layer]").forEach((el) => el.remove());
+  });
+
+  /** Stands in for the still-open dock popover behind the dialog. */
+  function openRadixLayerBehind() {
+    const layer = document.createElement("div");
+    layer.setAttribute("role", "dialog");
+    layer.setAttribute("data-state", "open");
+    layer.setAttribute("data-open-radix-layer", "");
+    document.body.appendChild(layer);
+  }
+
+  /**
+   * Radix's DismissableLayer listens on document *capture*, which is what puts
+   * the popover's `onEscapeKeyDown` between the window-capture probe and the
+   * dialog's document-bubble backstop. Registering on bubble instead would let
+   * the backstop run first and never see the yield.
+   */
+  function armDockGuard(portalContainer: HTMLElement | null) {
+    dockGuard = (e) => handleDockEscapeKeyDown(e, portalContainer);
+    document.addEventListener("keydown", dockGuard, true);
+  }
+
+  /** From the focused element, so document sees a real capture-then-bubble pass. */
+  function pressEscape() {
+    act(() => {
+      (document.activeElement ?? document.body).dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
+      );
+    });
+  }
+
+  it("closes the dialog when the popover underneath declines the keypress", () => {
+    const onClose = vi.fn();
+    render(
+      <AppDialog isOpen onClose={onClose}>
+        <button>Confirm</button>
+      </AppDialog>
+    );
+    openRadixLayerBehind();
+    // Focus lives in the dialog, not the dock's portal — the case the guard's
+    // containment check cannot see.
+    screen.getByText("Confirm").focus();
+    armDockGuard(document.createElement("div"));
+
+    pressEscape();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the dock popover to handle Escape while focus is still in the terminal", () => {
+    const onClose = vi.fn();
+    const dockPortal = document.createElement("div");
+    const terminalInput = document.createElement("input");
+    dockPortal.appendChild(terminalInput);
+    document.body.appendChild(dockPortal);
+    render(
+      <AppDialog isOpen onClose={onClose}>
+        <button>Confirm</button>
+      </AppDialog>
+    );
+    openRadixLayerBehind();
+    terminalInput.focus();
+    armDockGuard(dockPortal);
+
+    pressEscape();
+
+    // The popover owns this one: typing in a docked terminal must keep closing
+    // the popover rather than a dialog the user isn't focused on.
+    expect(onClose).not.toHaveBeenCalled();
+    dockPortal.remove();
+  });
+
+  it("stands down for an open layer that never yielded", () => {
+    const onClose = vi.fn();
+    render(
+      <AppDialog isOpen onClose={onClose}>
+        <button>Confirm</button>
+      </AppDialog>
+    );
+    openRadixLayerBehind();
+    screen.getByText("Confirm").focus();
+    // No dock guard: a Select or DropdownMenu opened inside the dialog owns its
+    // own Escape, and the dialog underneath must not close with it.
+
+    pressEscape();
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A dock popover renders above the standard modal tier, so any dialog opened
+ * while one is up paints underneath it while still trapping focus (#11505).
+ *
+ * Resolved here rather than per call site, which is what makes this one suite
+ * cover every dialog in the app — including the destructive confirms reachable
+ * from a docked terminal, where an unreadable prompt is the real hazard.
+ */
+describe("AppDialog layering over a dock popover", () => {
+  beforeEach(() => {
+    mockPrevOpen = false;
+    _resetDockPopoverForTests();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    _resetDockPopoverForTests();
+  });
+
+  /**
+   * The z-tier a surface resolved to, read off the rendered element rather than
+   * compared against a hard-coded token so the tier's value stays free to change.
+   */
+  function tierOf(el: Element): string | undefined {
+    return Array.from(el.classList).find((c) => c.startsWith("z-["));
+  }
+
+  function renderDialogAt(zIndex?: "modal" | "nested") {
+    const { unmount } = render(
+      <AppDialog isOpen onClose={() => {}} {...(zIndex ? { zIndex } : {})}>
+        <span>body</span>
+      </AppDialog>
+    );
+    const tier = tierOf(screen.getByRole("dialog"));
+    unmount();
+    return tier;
+  }
+
+  it("distinguishes the two tiers at all", () => {
+    // Guards every assertion below: if both options rendered the same token
+    // they would all pass while the bug was fully present.
+    expect(renderDialogAt("modal")).not.toBe(renderDialogAt("nested"));
+  });
+
+  it("keeps the standard tier while no dock popover is on screen", () => {
+    expect(renderDialogAt()).toBe(renderDialogAt("modal"));
+  });
+
+  it("clears the popover for a dialog that asked for no particular tier", () => {
+    act(() => setDockPopoverOpen(true));
+
+    expect(renderDialogAt()).toBe(renderDialogAt("nested"));
+  });
+
+  it("promotes a destructive confirm, the case that must never be unreadable", () => {
+    act(() => setDockPopoverOpen(true));
+    const { unmount } = render(
+      <AppDialog isOpen onClose={() => {}} variant="destructive">
+        <span>body</span>
+      </AppDialog>
+    );
+
+    expect(tierOf(screen.getByRole("alertdialog"))).toBe(renderDialogAt("nested"));
+    unmount();
+  });
+
+  it("re-layers an already-open dialog when the popover appears underneath it", () => {
+    const { rerender } = render(
+      <AppDialog isOpen onClose={() => {}}>
+        <span>body</span>
+      </AppDialog>
+    );
+    const before = tierOf(screen.getByRole("dialog"));
+
+    act(() => setDockPopoverOpen(true));
+    rerender(
+      <AppDialog isOpen onClose={() => {}}>
+        <span>body</span>
+      </AppDialog>
+    );
+
+    expect(tierOf(screen.getByRole("dialog"))).not.toBe(before);
+  });
+
+  it("drops back once the popover closes", () => {
+    act(() => setDockPopoverOpen(true));
+    const promoted = renderDialogAt();
+
+    act(() => setDockPopoverOpen(false));
+
+    expect(renderDialogAt()).not.toBe(promoted);
   });
 });

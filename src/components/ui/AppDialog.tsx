@@ -18,8 +18,11 @@ import {
   registerDialogEscapeBackstop,
   isTopmostDialogBackstop,
   radixLayerWasOpenWhenEscapePressed,
+  escapeWasYieldedToDialog,
   markBackstopConsumedEscape,
+  ESCAPE_BACKSTOP_DIALOG_ATTR,
 } from "@/lib/dialogEscapeBackstop";
+import { useDockPopoverOpen } from "@/lib/dockPopoverLayer";
 import { usePortalStore } from "@/store";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
@@ -128,6 +131,14 @@ export function AppDialog({
   restoreFocusTo,
   "data-testid": dataTestId,
 }: AppDialogProps) {
+  // A dock popover renders above the standard modal tier, so a dialog opened
+  // while one is up — from a docked terminal or anywhere else — would paint
+  // underneath it while still trapping focus (#11505). Resolved here rather
+  // than at each call site: the set of dialogs reachable from a docked panel is
+  // large, indirect, and grows, and every one of them wants the same answer.
+  const dockPopoverOpen = useDockPopoverOpen();
+  const effectiveZIndex: DialogZIndex = dockPopoverOpen ? "nested" : zIndex;
+
   const effectiveInitialFocus: DialogInitialFocus =
     initialFocus ?? (variant === "destructive" ? "cancel" : "first");
   const previousActiveElement = useRef<HTMLElement | null>(null);
@@ -290,7 +301,10 @@ export function AppDialog({
       // dialog underneath stays open. The backstop exists only for the
       // mid-exit case where Radix's stale `preventDefault` would otherwise
       // leave the dialog stuck.
-      if (radixLayerWasOpenWhenEscapePressed()) return;
+      // …unless that layer explicitly declined this keypress because focus sits
+      // in a dialog above it — a dock popover deliberately stays open behind the
+      // dialog it spawned, so it is always "the open layer" (#11505).
+      if (radixLayerWasOpenWhenEscapePressed() && !escapeWasYieldedToDialog(e)) return;
       // We deliberately do NOT bail on `e.defaultPrevented`: Radix Select /
       // Combobox triggers call `preventDefault` on Escape even when their
       // popup is closed, which would leave the dialog stuck open if we
@@ -376,7 +390,7 @@ export function AppDialog({
       <div
         className={cn(
           "fixed inset-0 flex items-center justify-center bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur)] backdrop-saturate-[var(--theme-material-saturation)]",
-          zIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
+          effectiveZIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
           // Opacity-only, so reduced motion leaves it alone: a scrim fade is not
           // spatial motion. WCAG 2.3.3.
           "transition-opacity",
@@ -394,6 +408,11 @@ export function AppDialog({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
+        // Marks the surface as one a Radix layer underneath can hand Escape to
+        // — see `ESCAPE_BACKSTOP_DIALOG_ATTR`. Tracks the backstop registration
+        // (`isOpen && dismissible`), not merely being mounted: a dialog mid-exit
+        // has already unregistered and could not take the keypress.
+        {...(isOpen && dismissible ? { [ESCAPE_BACKSTOP_DIALOG_ATTR]: "" } : {})}
         data-testid={dataTestId}
       >
         <div
