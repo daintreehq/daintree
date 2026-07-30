@@ -27,6 +27,13 @@ vi.mock("@/store/panelStore", () => ({
     selector({ panelsById: mockPanelsById }),
 }));
 
+// This suite is about the dialog's content, not its layer. The real hook reads
+// three stores this suite's partial `panelStore` mock doesn't provide; the
+// promotion itself is covered in dockPanelVisibility and PanelDialogHost.stack.
+vi.mock("@/components/Layout/useOpenDockPopoverId", () => ({
+  useOpenDockPopoverId: () => null,
+}));
+
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
 }));

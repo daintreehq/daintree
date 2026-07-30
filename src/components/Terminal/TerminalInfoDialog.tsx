@@ -11,6 +11,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
+import { useOpenDockPopoverId } from "@/components/Layout/useOpenDockPopoverId";
 
 const SYNC_MODE_POLL_MS = 250;
 
@@ -133,6 +134,9 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [syncMode, setSyncMode] = useState<boolean | null>(null);
+  // Opened from a docked terminal's context menu, this would otherwise paint
+  // under the dock popover it was launched from (#11505).
+  const openDockPopoverId = useOpenDockPopoverId();
   const panelRaw = usePanelStore((state) => state.panelsById[terminalId]);
   const panel = panelRaw && isPtyPanel(panelRaw) ? panelRaw : undefined;
 
@@ -324,7 +328,12 @@ Performance & Diagnostics:
   };
 
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="lg">
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="lg"
+      zIndex={openDockPopoverId === null ? "modal" : "nested"}
+    >
       <AppDialog.Header>
         <AppDialog.Title icon={<Info className="h-5 w-5" />}>Terminal Information</AppDialog.Title>
         <AppDialog.CloseButton />

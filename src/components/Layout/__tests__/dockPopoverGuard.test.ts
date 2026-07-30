@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   handleDockInteractOutside,
   handleDockEscapeKeyDown,
   handleDockFocusOutside,
   shouldSuppressDockClose,
 } from "../dockPopoverGuard";
+import { escapeWasYieldedToDialog, _resetForTests } from "@/lib/dialogEscapeBackstop";
 
 function makeEvent(target: EventTarget | null): Event & { preventDefault: () => void } {
   const preventDefault = vi.fn();
@@ -200,6 +201,105 @@ describe("handleDockEscapeKeyDown", () => {
 
     expect(event.preventDefault).not.toHaveBeenCalled();
     container.remove();
+  });
+});
+
+/**
+ * A dialog opened from inside a dock popover portals to the body, so the
+ * containment check above misses it — Radix would dismiss the popover out from
+ * under a dialog the user is reading, and `AppDialog`'s own backstop stands
+ * down because it sees this popover open (#11505). The popover has to decline
+ * the keypress and hand it upward.
+ */
+describe("handleDockEscapeKeyDown — yielding to a dialog above the popover", () => {
+  function mountModalDialog(): { dialog: HTMLElement; focusable: HTMLElement } {
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    const focusable = document.createElement("button");
+    dialog.appendChild(focusable);
+    document.body.appendChild(dialog);
+    return { dialog, focusable };
+  }
+
+  afterEach(() => {
+    _resetForTests();
+    document.body.innerHTML = "";
+  });
+
+  it("blocks the dock dismissal when focus is inside a modal dialog", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const { focusable } = mountModalDialog();
+    focusable.focus();
+
+    const event = makeEscapeEvent();
+    handleDockEscapeKeyDown(event, container);
+
+    expect(event.preventDefault).toHaveBeenCalled();
+  });
+
+  it("marks that keypress as yielded so the dialog's backstop takes it", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const { focusable } = mountModalDialog();
+    focusable.focus();
+
+    const event = makeEscapeEvent();
+    handleDockEscapeKeyDown(event, container);
+
+    expect(escapeWasYieldedToDialog(event)).toBe(true);
+  });
+
+  it("does not yield a keypress it never saw", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const { focusable } = mountModalDialog();
+    focusable.focus();
+
+    const seen = makeEscapeEvent();
+    handleDockEscapeKeyDown(seen, container);
+
+    // The mark is scoped to one event object: a later Escape pressed while a
+    // Select is legitimately open inside the dialog must not inherit it and
+    // close the dialog underneath.
+    const later = makeEscapeEvent();
+    expect(escapeWasYieldedToDialog(later)).toBe(false);
+  });
+
+  it("still dismisses the dock when focus sits on a non-modal overlay", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    // A Radix popover/menu marks itself `role="dialog"` but never `aria-modal`.
+    const layer = document.createElement("div");
+    layer.setAttribute("role", "dialog");
+    const focusable = document.createElement("button");
+    layer.appendChild(focusable);
+    document.body.appendChild(layer);
+    focusable.focus();
+
+    const event = makeEscapeEvent();
+    handleDockEscapeKeyDown(event, container);
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(escapeWasYieldedToDialog(event)).toBe(false);
+  });
+
+  it("prefers the portal-containment guard when focus is in the terminal", () => {
+    const container = document.createElement("div");
+    const input = document.createElement("input");
+    container.appendChild(input);
+    document.body.appendChild(container);
+    mountModalDialog();
+    input.focus();
+
+    const event = makeEscapeEvent();
+    handleDockEscapeKeyDown(event, container);
+
+    // Typing in the docked terminal must keep behaving as before: the popover
+    // holds Escape itself rather than handing it to a dialog it isn't in.
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(escapeWasYieldedToDialog(event)).toBe(false);
   });
 });
 

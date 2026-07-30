@@ -18,6 +18,7 @@ import {
   registerDialogEscapeBackstop,
   isTopmostDialogBackstop,
   radixLayerWasOpenWhenEscapePressed,
+  escapeWasYieldedToDialog,
   markBackstopConsumedEscape,
 } from "@/lib/dialogEscapeBackstop";
 import { usePortalStore } from "@/store";
@@ -290,7 +291,10 @@ export function AppDialog({
       // dialog underneath stays open. The backstop exists only for the
       // mid-exit case where Radix's stale `preventDefault` would otherwise
       // leave the dialog stuck.
-      if (radixLayerWasOpenWhenEscapePressed()) return;
+      // …unless that layer explicitly declined this keypress because focus sits
+      // in a dialog above it — a dock popover deliberately stays open behind the
+      // dialog it spawned, so it is always "the open layer" (#11505).
+      if (radixLayerWasOpenWhenEscapePressed() && !escapeWasYieldedToDialog(e)) return;
       // We deliberately do NOT bail on `e.defaultPrevented`: Radix Select /
       // Combobox triggers call `preventDefault` on Escape even when their
       // popup is closed, which would leave the dialog stuck open if we

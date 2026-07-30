@@ -29,6 +29,7 @@ import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
 import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useOpenDockPopoverId } from "@/components/Layout/useOpenDockPopoverId";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import { KILL_RUNNING_AGENT_DIALOG_COPY } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
@@ -514,13 +515,11 @@ export function TerminalContextMenu({
   }, []);
 
   const destructiveConfirmDialog = destructiveConfirm ? (
-    <ConfirmDialog
-      isOpen
-      onClose={closeDestructiveConfirm}
+    <DockAwareDestructiveConfirm
       title={destructiveConfirm.title}
       description={destructiveConfirm.description}
       confirmLabel={destructiveConfirm.confirmLabel}
-      variant="destructive"
+      onClose={closeDestructiveConfirm}
       onConfirm={handleDestructiveConfirm}
     />
   ) : null;
@@ -1052,5 +1051,42 @@ export function TerminalContextMenu({
         </ContextMenuContent>
       </ContextMenu>
     </>
+  );
+}
+
+/**
+ * The local kill/restart confirmation, split out so the dock-visibility
+ * subscription only lives while a confirmation is actually open.
+ * `TerminalContextMenu` wraps every panel, so subscribing there would put three
+ * store subscriptions on each one to answer a question that only matters for
+ * the fraction of a second a confirm is on screen.
+ */
+function DockAwareDestructiveConfirm({
+  title,
+  description,
+  confirmLabel,
+  onClose,
+  onConfirm,
+}: {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  // Reachable from a docked terminal, whose popover outranks the standard modal
+  // tier (#11505).
+  const openDockPopoverId = useOpenDockPopoverId();
+  return (
+    <ConfirmDialog
+      isOpen
+      onClose={onClose}
+      title={title}
+      description={description}
+      confirmLabel={confirmLabel}
+      variant="destructive"
+      zIndex={openDockPopoverId === null ? "modal" : "nested"}
+      onConfirm={onConfirm}
+    />
   );
 }

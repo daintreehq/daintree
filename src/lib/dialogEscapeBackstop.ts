@@ -44,6 +44,18 @@ let radixLayerOpenAtCapture = false;
 // focus-restoration paths skip when the event was preventDefault'd.
 let backstopConsumedEscape = false;
 
+// The Escape event a Radix layer has explicitly declined to handle, so the
+// dialog above it can take over. A dock popover stays open behind the dialog it
+// spawned (its dismissal guards are deliberate), which makes it the "open Radix
+// layer" the capture probe sees — even though the focused AppDialog on top is
+// what the keypress is aimed at, so Escape would otherwise dismiss the panel
+// underneath and leave the dialog up (#11505).
+//
+// Scoped to one event object rather than a boolean: a stale flag would let the
+// *next* Escape bypass the radix-open gate, closing a dialog underneath a
+// legitimately-open Select or DropdownMenu.
+let yieldedEscapeEvent: KeyboardEvent | null = null;
+
 if (typeof window !== "undefined") {
   window.addEventListener(
     "keydown",
@@ -51,6 +63,7 @@ if (typeof window !== "undefined") {
       if (e.key !== "Escape") return;
       radixLayerOpenAtCapture = isAnyRadixLayerOpen();
       backstopConsumedEscape = false;
+      yieldedEscapeEvent = null;
     },
     true
   );
@@ -76,6 +89,19 @@ export function radixLayerWasOpenWhenEscapePressed(): boolean {
   return radixLayerOpenAtCapture;
 }
 
+/**
+ * Called by a Radix layer that saw this Escape but declined it because a modal
+ * dialog above it owns the keypress. Releases the backstop's radix-open gate
+ * for this event only.
+ */
+export function markEscapeYieldedToDialog(event: KeyboardEvent): void {
+  yieldedEscapeEvent = event;
+}
+
+export function escapeWasYieldedToDialog(event: KeyboardEvent): boolean {
+  return yieldedEscapeEvent === event;
+}
+
 export function markBackstopConsumedEscape(): void {
   backstopConsumedEscape = true;
 }
@@ -88,4 +114,5 @@ export function _resetForTests(): void {
   stack.length = 0;
   radixLayerOpenAtCapture = false;
   backstopConsumedEscape = false;
+  yieldedEscapeEvent = null;
 }
