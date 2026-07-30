@@ -30,6 +30,14 @@ vi.mock("@/components/Project", () => ({
   QuickRun: () => null,
 }));
 
+// Sidebar takes one constant from AppLayout, and importing it for real drags in
+// AppLayout's whole graph — including its module-eval `void preloadHelpPanel()`,
+// a fire-and-forget dynamic import whose chunks land after this file's
+// environment tears down and fail the shard with EnvironmentTeardownError even
+// though every assertion passed. Stubbing the module keeps the graph out. (The
+// value is a stand-in; nothing here exercises the double-click width reset.)
+vi.mock("../AppLayout", () => ({ DEFAULT_SIDEBAR_WIDTH: 350 }));
+
 // Records the actionId of every menu entry that actually renders, so a test can
 // assert on absence rather than on a disabled attribute. Partial (spreading
 // `importOriginal`) rather than a full replacement: `ContextMenuActionItem`
