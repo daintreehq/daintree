@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
+import type { ActionSource } from "@shared/types/actions";
 
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const projectStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
@@ -38,11 +39,11 @@ function setupActions(activeWorktreeId?: string) {
   const actions: ActionRegistry = new Map();
   const callbacks = { getActiveWorktreeId: () => activeWorktreeId } as ActionCallbacks;
   registerFileActions(actions, callbacks);
-  return async (id: string, args?: unknown): Promise<unknown> => {
+  return async (id: string, args?: unknown, dispatchSource?: ActionSource): Promise<unknown> => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
     const def = factory() as AnyActionDefinition;
-    return def.run(args, {} as never);
+    return def.run(args, (dispatchSource ? { dispatchSource } : {}) as never);
   };
 }
 
@@ -181,6 +182,41 @@ describe("file.openPanel", () => {
 
     expect(addPanelSpy).toHaveBeenCalled();
     expect(activateTerminalSpy).not.toHaveBeenCalled();
+  });
+
+  // #11506 — the store forces `preserve` (skipping both focus AND the exit from
+  // fullscreen) whenever an MCP suppression lease is live or the assistant owns
+  // focus. Those guards are about background spawns; a person asking for a file
+  // has to see it, so a foreground dispatch overrides them with `take`.
+  it.each<ActionSource>(["user", "keybinding", "menu", "context-menu"])(
+    "takes focus for a %s dispatch so the panel can't land behind fullscreen",
+    async (source) => {
+      const run = setupActions();
+      await run("file.openPanel", { path: "/repo/docs/spec.md" }, source);
+
+      expect(addPanelSpy).toHaveBeenCalledWith(expect.objectContaining({ focusPolicy: "take" }));
+    }
+  );
+
+  // The allowlist has to stay an allowlist: a background source must fall
+  // through to the store's own resolution rather than being read as foreground.
+  it.each<ActionSource>(["agent", "plugin"])(
+    "leaves focus policy to the store for a %s dispatch",
+    async (source) => {
+      const run = setupActions();
+      await run("file.openPanel", { path: "/repo/docs/spec.md" }, source);
+
+      const options = addPanelSpy.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(options.focusPolicy).toBeUndefined();
+    }
+  );
+
+  it("leaves focus policy to the store when the dispatch carries no source", async () => {
+    const run = setupActions();
+    await run("file.openPanel", { path: "/repo/docs/spec.md" });
+
+    const options = addPanelSpy.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(options.focusPolicy).toBeUndefined();
   });
 
   it("throws for a relative path with no project open and no rootPath", async () => {

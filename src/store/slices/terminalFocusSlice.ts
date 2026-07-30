@@ -666,6 +666,46 @@ export const createTerminalFocusSlice =
         // this non-dock location as grid and hand it the grid focus pointer.
         if (terminal.location === "dialog") return;
 
+        // Activation means "show me this panel", so a fullscreen cell rendering
+        // over the grid has to go — otherwise the panel lands focused and
+        // invisible, and every keystroke flows into a pane the user can't see
+        // (#11506). `addPanel` already enforces this for freshly created panels
+        // (#11060); doing it here covers every reuse/activation path instead of
+        // one call site at a time.
+        //
+        // Only a grid panel of the ACTIVE worktree qualifies. A dock pane's
+        // popover renders alongside fullscreen by design (see
+        // `pickDockCloseFocusId`), and a cross-worktree activation must leave
+        // the outgoing maximize alone so the worktree switch can stash it —
+        // `prepareWorktreeMaximizeSwap` then decides whether the incoming
+        // worktree's own maximize still shows the panel being focused.
+        if (isVisibleGridPanel(terminal, getActiveWorktreeId())) {
+          const { maximizedId, maximizeTarget } = get();
+          // Fullscreen is live only when BOTH halves are set — that is the
+          // branch `ContentGrid` actually takes. A half-populated pair (layout
+          // undo restores `maximizedId` alone) renders the normal grid, so
+          // there is nothing to leave.
+          if (maximizedId && maximizeTarget) {
+            // Branch the way `ContentGrid` does, because the two halves name the
+            // cell differently and can drift apart (layout undo restores
+            // `maximizedId` alone): a group target renders the group named by
+            // `maximizeTarget.id` and ignores `maximizedId` entirely, while a
+            // panel target renders the pane named by `maximizedId`. Testing
+            // both with an `or` would call a panel "on screen" whenever
+            // `maximizedId` still pointed at it, even though a drifted group
+            // target means something else is being rendered.
+            const targetIsMaximizedCell =
+              maximizeTarget.type === "group"
+                ? getPanelGroupInfo(id)?.groupId === maximizeTarget.id
+                : maximizedId === id;
+            if (!targetIsMaximizedCell) {
+              // `exitMaximize`, never `toggleMaximize` — the conditional
+              // toggle can re-maximize a stale target instead of leaving.
+              get().exitMaximize();
+            }
+          }
+        }
+
         // Wake-on-focus: recover this pane's renderer when activated. A first
         // reveal of a parked dock pane takes the full wake; a grid pane and an
         // already-open dock pane (activeDockTerminalId === id) are live, so they
