@@ -1396,8 +1396,8 @@ describe("FileBrowserPane collapsible viewer (#11496)", () => {
     // Sole column: no inline width, nothing to resize against, and it takes the
     // same fill token the viewer used — so a 600px-capped tree can't strand
     // dead space beside it.
-    const soleColumn = screen.getByTestId("file-tree-view").closest("[id]")!;
-    expect((soleColumn as HTMLElement).style.width).toBe("");
+    const soleColumn = screen.getByTestId("file-tree-view").closest<HTMLElement>("[id]")!;
+    expect(soleColumn.style.width).toBe("");
     expect(screen.queryByTestId("file-browser-sidebar-resize")).toBeNull();
     expect(classToken(soleColumn, (c) => /^flex-1$/.test(c))).toBe(fillToken);
   });
