@@ -304,10 +304,10 @@ function AppInner() {
   const handleLaunchAgent = useCallback(
     async (type: string) => {
       // launchAgent throws on an unresolvable worktreeId (#10812) or an agent id
-      // that resolves to no agent (#11498). UI surfaces pass no explicit
-      // worktreeId (they fall back to the active one) and launch ids sourced from
-      // the live registry, so both are only reachable via a stale-state race —
-      // keep it a quiet no-op rather than an unhandled rejection.
+      // that resolves to no agent (#11498). This callback passes no explicit
+      // worktreeId (falling back to the active one) and its callers supply
+      // built-in or synthetic ids, so both are only reachable via a stale-state
+      // race — keep it a quiet no-op rather than an unhandled rejection.
       try {
         await launchAgent(type);
       } catch (error) {

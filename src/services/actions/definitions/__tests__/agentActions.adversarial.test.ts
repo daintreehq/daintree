@@ -695,7 +695,7 @@ describe("agent.launch dispatch integration", () => {
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
   });
 
-  it("accepts an unknown (plugin-contributed) agentId through the schema so plugin agents launch (#10560)", async () => {
+  it("accepts a non-built-in agentId through the schema and forwards it for downstream resolution (#10560)", async () => {
     const { ActionService } = await import("../../../ActionService");
     const service = new ActionService();
 

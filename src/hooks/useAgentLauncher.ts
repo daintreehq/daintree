@@ -94,24 +94,36 @@ export function resolveLaunchWorktree<T>(
 }
 
 /**
- * Reject a launch whose agent id resolves to nothing. Without this, an
- * unregistered id left `isAgent` false and fell through to the generic terminal
- * branch, spawning a plain shell and reporting success — a typo'd id from MCP
- * looked identical to a launched agent (#11498). Throwing (rather than
+ * Classify a launch id, rejecting one that resolves to no agent. Without this,
+ * an unregistered id left `isAgent` false and fell through to the generic
+ * terminal branch, spawning a plain shell and reporting success — a typo'd id
+ * from MCP looked identical to a launched agent (#11498). Throwing (rather than
  * returning null) is what makes it visible: `ActionService` serializes a
- * rejection as `ok:false`/`EXECUTION_ERROR`, while a null resolves as a
+ * rejection as `ok:false`/`EXECUTION_ERROR`, while a resolved null reads as a
  * terminal-less success.
  *
- * `"terminal"` is the one legitimately unregistered id — it is the deliberate
- * plain-shell launch. `"browser"` and `"dev-preview"` return earlier from their
- * own panel branches and never reach here, so they are not allowed through:
- * this stays correct standalone, and fails closed if either branch is ever
- * bypassed.
+ * Returns the kind rather than just asserting so the call site stays
+ * load-bearing: deleting it breaks `isAgent` instead of quietly restoring the
+ * fallback this fixes.
+ *
+ * `"terminal"` is the deliberate plain-shell launch, accepted unregistered
+ * because no built-in agent claims that id. A plugin or user agent may still
+ * register it, in which case it resolves as an agent — unchanged from before.
+ * `"browser"` and `"dev-preview"` return from their own panel branches earlier
+ * and never reach here, so they are not accepted: this stays correct standalone
+ * and fails closed if either branch is ever bypassed.
  */
-export function assertKnownAgentId(agentId: string, isRegistered: boolean): void {
-  if (isRegistered || agentId === "terminal") return;
+export function resolveAgentLaunchKind(
+  agentId: string,
+  isRegistered: boolean
+): "agent" | "terminal" {
+  if (isRegistered) return "agent";
+  if (agentId === "terminal") return "terminal";
+  // The id can arrive from an LLM via MCP, so keep it printable and bounded —
+  // otherwise it can forge log lines or bloat the error crossing the boundary.
+  const safeId = sanitizeTerminalName(agentId).slice(0, 80);
   throw new Error(
-    `Unknown agent ID '${agentId}'. Call agent.listAvailable for registered agent IDs, ` +
+    `Unknown agent ID '${safeId}'. Call agent.listAvailable for registered agent IDs, ` +
       `then retry, or use terminal.new to open a plain terminal.`
   );
 }
@@ -289,9 +301,11 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       // useRef avoids the react batching window that useState would have.
       if (launchingAgentsRef.current.has(agentId)) return null;
       launchingAgentsRef.current.add(agentId);
-      markRendererPerformance("agentlaunch.begin", { agentId });
 
       try {
+        // Inside the try: a throw between the add above and the `finally` would
+        // strand the entry and leave this agentId unlaunchable for the session.
+        markRendererPerformance("agentlaunch.begin", { agentId });
         const targetWorktreeId = launchOptions?.worktreeId ?? activeWorktreeId;
         const targetWorktree = resolveLaunchWorktree(targetWorktreeId, worktreeMap, isInitialized);
 
@@ -347,12 +361,12 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           }
         }
 
-        // Get agent config from registry, fall back for "terminal" type
+        // Get agent config from registry, fall back for "terminal" type.
+        // Rejects an id that resolves to no agent before any settings init,
+        // command generation, or panel creation — inside the try so the
+        // `finally` always releases the reentrancy entry.
         const agentConfig = getAgentConfig(agentId);
-        const isAgent = isRegisteredAgent(agentId);
-        // Fail before any settings init, command generation, or panel creation.
-        // Inside the try so the `finally` always releases the reentrancy entry.
-        assertKnownAgentId(agentId, isAgent);
+        const isAgent = resolveAgentLaunchKind(agentId, isRegisteredAgent(agentId)) === "agent";
 
         let command: string | undefined;
         let launchFlags: string[] | undefined;
