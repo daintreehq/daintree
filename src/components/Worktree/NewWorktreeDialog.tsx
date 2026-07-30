@@ -153,10 +153,18 @@ export function NewWorktreeDialog({
   const resourceEnvironments = projectSettings?.resourceEnvironments;
   const hasAnyEnvironments = Object.keys(resourceEnvironments ?? {}).length > 0;
 
-  const defaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
-  const globalRecipes = useMemo(
-    () => recipes.filter((r) => !r.worktreeId && !r.shadowedBy),
-    [recipes]
+  const persistedDefaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
+  // Shadowed recipes stay listed (dimmed, marked "Overridden") instead of being
+  // hidden — hiding an executable target is the silent failure #11510 is about.
+  const startingLayoutRecipes = useMemo(() => recipes.filter((r) => !r.worktreeId), [recipes]);
+  // A shadowed recipe never runs its own terminals, so it stays ineligible as an
+  // implicit default. Mirrors the eligibility rule RecipesTab pins against.
+  const defaultRecipeId = useMemo(
+    () =>
+      startingLayoutRecipes.some((r) => r.id === persistedDefaultRecipeId && !r.shadowedBy)
+        ? persistedDefaultRecipeId
+        : undefined,
+    [startingLayoutRecipes, persistedDefaultRecipeId]
   );
 
   const {
@@ -304,7 +312,7 @@ export function NewWorktreeDialog({
   } = useRecipePicker({
     isOpen,
     defaultRecipeId,
-    globalRecipes,
+    startingLayoutRecipes,
     lastSelectedWorktreeRecipeId,
     projectId,
     initialRecipeId,
@@ -1037,9 +1045,9 @@ export function NewWorktreeDialog({
               hasAnyEnvironments={hasAnyEnvironments}
             />
 
-            {globalRecipes.length > 0 && (
+            {startingLayoutRecipes.length > 0 && (
               <RecipePickerPopover
-                recipes={globalRecipes}
+                recipes={startingLayoutRecipes}
                 selectedRecipeId={selectedRecipeId}
                 selectedRecipe={selectedRecipe}
                 defaultRecipeId={defaultRecipeId}

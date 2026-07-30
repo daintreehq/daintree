@@ -5,6 +5,7 @@ import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import type { QuickCreateItem, UseQuickCreatePaletteReturn } from "@/hooks/useQuickCreatePalette";
 import { getAutoAssign } from "@shared/types/project";
 import type { TerminalRecipe } from "@/types";
+import { getRecipeScope } from "@/utils/recipeScope";
 import { Settings2 } from "lucide-react";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { actionService } from "@/services/ActionService";
@@ -68,14 +69,15 @@ function RecipeListItem({
         "border-daintree-border/40 hover:border-daintree-border/60",
         "bg-daintree-bg hover:bg-surface transition-colors",
         isSelected &&
-          "border-overlay bg-overlay-raised text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
+          "border-overlay bg-overlay-raised text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']",
+        recipe.shadowedBy && "opacity-60"
       )}
       aria-selected={isSelected}
       role="option"
     >
-      <div className="flex items-center justify-between text-sm">
-        <span className="font-medium text-daintree-text">{recipe.name}</span>
-        <div className="flex items-center gap-1">
+      <div className="flex items-center justify-between gap-2 text-sm">
+        <span className="font-medium text-daintree-text truncate">{recipe.name}</span>
+        <div className="flex items-center gap-1 shrink-0">
           {uniqueTypes.map((type) => (
             <span
               key={type}
@@ -86,8 +88,12 @@ function RecipeListItem({
           ))}
         </div>
       </div>
-      <div className="text-[11px] text-daintree-text/50">
-        {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
+      <div className="flex items-center gap-2 text-[11px] text-daintree-text/50">
+        <span className="truncate">{getRecipeScope(recipe).label}</span>
+        {recipe.shadowedBy && <span className="shrink-0">Overridden</span>}
+        <span className="ml-auto shrink-0">
+          {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
+        </span>
       </div>
     </button>
   );

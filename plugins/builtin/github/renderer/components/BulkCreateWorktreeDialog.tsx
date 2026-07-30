@@ -126,7 +126,7 @@ export function BulkCreateWorktreeDialog({
 
   const { projectSettings } = useNewWorktreeProjectSettings({ isOpen });
   const defaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
-  const globalRecipes = useMemo(() => recipes.filter((r) => !r.worktreeId), [recipes]);
+  const startingLayoutRecipes = useMemo(() => recipes.filter((r) => !r.worktreeId), [recipes]);
 
   // Recipe picker (shared preferences with single create)
   const {
@@ -139,7 +139,7 @@ export function BulkCreateWorktreeDialog({
   } = useRecipePicker({
     isOpen,
     defaultRecipeId,
-    globalRecipes,
+    startingLayoutRecipes,
     lastSelectedWorktreeRecipeId,
     projectId,
     setLastSelectedWorktreeRecipeIdByProject,
@@ -1046,7 +1046,7 @@ export function BulkCreateWorktreeDialog({
             )}
 
             <RecipePickerPopover
-              recipes={globalRecipes}
+              recipes={startingLayoutRecipes}
               selectedRecipeId={selectedRecipeId}
               selectedRecipe={selectedRecipe}
               defaultRecipeId={defaultRecipeId}

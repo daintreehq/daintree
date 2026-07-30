@@ -6,6 +6,7 @@ import { useRecipeStore } from "@/store/recipeStore";
 import { useActionMruStore } from "@/store/actionMruStore";
 import type { RecipeContext } from "@/utils/recipeVariables";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
+import { getRecipeScope } from "@/utils/recipeScope";
 import { logError } from "@/utils/logger";
 import { actionService } from "@/services/ActionService";
 import type { ActionSource, AgentAvailabilityState } from "@shared/types";
@@ -71,10 +72,11 @@ export function DockLaunchMenuItems({
 }: DockLaunchMenuItemsProps) {
   // Subscribe inside the menu so the listener only runs while open.
   const recipes = useRecipeStore((s) => s.recipes);
+  // Shadowed recipes stay listed (dimmed, marked "Overridden") rather than
+  // vanishing — running one resolves to the winner, so hiding it only hides
+  // that the collision exists (#11510).
   const visibleRecipes = recipes.filter(
-    (r) =>
-      !r.shadowedBy &&
-      (r.worktreeId === undefined || r.worktreeId === (activeWorktreeId ?? undefined))
+    (r) => r.worktreeId === undefined || r.worktreeId === (activeWorktreeId ?? undefined)
   );
 
   // Subscribe to the stable getter (not its result) so the selector returns a
@@ -204,6 +206,7 @@ export function DockLaunchMenuItems({
         visibleRecipes.map((recipe) => (
           <C.Item
             key={recipe.id}
+            className={recipe.shadowedBy ? "opacity-70" : undefined}
             onSelect={() =>
               // Fire-and-forget, but surface spawn failures — the menu closes
               // on select, so a toast/inbox entry is the only signal the user
@@ -215,8 +218,13 @@ export function DockLaunchMenuItems({
                 .catch((error) => logError("Recipe launch from dock failed", error))
             }
           >
-            <Workflow className="w-3.5 h-3.5 mr-2" />
-            {recipe.name}
+            <Workflow className="w-3.5 h-3.5 mr-2 shrink-0" />
+            <span className="truncate">{recipe.name}</span>
+            <span className="ml-auto pl-2 text-[11px] text-text-muted shrink-0">
+              {recipe.shadowedBy
+                ? `${getRecipeScope(recipe).label} · Overridden`
+                : getRecipeScope(recipe).label}
+            </span>
           </C.Item>
         ))
       ) : (

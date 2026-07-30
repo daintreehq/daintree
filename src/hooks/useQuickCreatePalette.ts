@@ -32,6 +32,7 @@ export type UseQuickCreatePaletteReturn = UseSearchablePaletteReturn<QuickCreate
 
 export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
   const recipes = useRecipeStore((s) => s.recipes);
+  const getRecipeById = useRecipeStore((s) => s.getRecipeById);
   const { quickCreate, openCreateDialog, closeQuickCreate } = useWorktreeSelectionStore(
     useShallow((s) => ({
       quickCreate: s.quickCreate,
@@ -43,11 +44,12 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
   const [assignToSelf, setAssignToSelf] = useState(true);
   const comboCountRef = useRef(0);
 
-  const visibleRecipes = recipes.filter((r) => !r.shadowedBy);
-  const hasRecipes = visibleRecipes.length > 0;
+  // Shadowed recipes stay listed (dimmed, marked "Overridden") rather than
+  // vanishing — the row still launches, resolved to the winner (#11510).
+  const hasRecipes = recipes.length > 0;
   const items: QuickCreateItem[] = hasRecipes
     ? [
-        ...visibleRecipes.map((r): QuickCreateItem => ({ ...r, _kind: "recipe" })),
+        ...recipes.map((r): QuickCreateItem => ({ ...r, _kind: "recipe" })),
         { _kind: "customize", id: "__customize__", name: "Customize…" },
       ]
     : [];
@@ -134,7 +136,9 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
       const issuePrefix = issueNumber ? `issue-${issueNumber}-` : "";
       const branchName = buildBranchName(prefix, `${issuePrefix}${slug}`);
 
-      const autoAssign = getAutoAssign(recipe);
+      // A shadowed row launches the winning recipe, so its auto-assign
+      // preference has to come from that winner, not the losing row.
+      const autoAssign = getAutoAssign(getRecipeById(recipe.id) ?? recipe);
       const shouldAssign = autoAssign === "always" || (autoAssign === "prompt" && assignToSelf);
 
       startTransition(async () => {
@@ -278,7 +282,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
         }
       });
     },
-    [isPending, closeQuickCreate, openCreateDialog, issue, pr, assignToSelf, palette]
+    [isPending, closeQuickCreate, openCreateDialog, issue, pr, assignToSelf, palette, getRecipeById]
   );
 
   const confirmSelection = useCallback(() => {
