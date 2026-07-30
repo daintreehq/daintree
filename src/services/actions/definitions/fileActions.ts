@@ -9,6 +9,8 @@ import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { isAbsolute, isPathInside, join, normalize, toWorktreeRelative } from "@shared/utils/path";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import type { ActionContext } from "@shared/types/actions";
+import { isForegroundDispatch } from "./dispatchSource";
 
 const viewArgsSchema = z.object({
   path: z.string().describe("Absolute or repo-relative file path to open."),
@@ -215,7 +217,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
         description: "Pin any repo file into the grid as a source view",
       },
     ],
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx?: ActionContext) => {
       const { path, rootPath, viewMode } = openPanelArgsSchema.parse(args);
       const absolutePath = resolveFilePanelPath(path, rootPath);
       // "rendered" applies only to Markdown and HTML — clamp so a stray request
@@ -250,14 +252,19 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
         return { panelId: existing.id };
       }
 
-      // Omit focusPolicy so the store resolves "auto" vs "preserve" via its
-      // MCP focus-suppression guard — never steal focus from a typing user.
+      // A person asking for a file expects to see it, so a foreground dispatch
+      // takes focus outright — that policy is also the one that leaves
+      // fullscreen, so the panel can't land buried behind a maximized cell
+      // (#11506). Agent/plugin dispatches omit focusPolicy entirely and keep
+      // the store's "auto" vs "preserve" resolution, so a background open still
+      // never steals focus from a typing user.
       const panelId = await store.addPanel({
         kind: "file",
         filePath: absolutePath,
         fileViewMode: effectiveViewMode,
         worktreeId: callbacks.getActiveWorktreeId(),
         location: "grid",
+        ...(isForegroundDispatch(ctx?.dispatchSource) && { focusPolicy: "take" as const }),
       });
       if (!panelId) {
         throw new Error("Could not open file panel: panel limit reached");

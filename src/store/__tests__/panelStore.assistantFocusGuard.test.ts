@@ -99,6 +99,8 @@ function resetState() {
     focusedId: null,
     previousFocusedId: null,
     maximizedId: null,
+    maximizeTarget: null,
+    preMaximizeLayout: null,
     activeDockTerminalId: null,
     pingedId: null,
     commandQueue: [],
@@ -235,6 +237,80 @@ describe("panelStore.addPanel focus guard (#6959)", () => {
     });
 
     expect(usePanelStore.getState().focusedId).toBe(newId);
+  });
+
+  // #11506 — the suppression guards gate the exit from fullscreen as well as
+  // the focus grab, so a panel opened under either one lands buried behind the
+  // maximized cell. `take` is how a foreground action says the user asked for
+  // this, and it has to clear both gates.
+  describe("explicit take policy vs. a live maximize (#11506)", () => {
+    const snapshot = { gridCols: 2, gridItemCount: 4, worktreeId: "worktree-1" };
+
+    function maximizeIncumbent() {
+      usePanelStore.setState({
+        maximizedId: "incumbent-1",
+        maximizeTarget: { type: "panel", id: "incumbent-1" },
+        preMaximizeLayout: snapshot,
+      });
+    }
+
+    it("leaves fullscreen and takes focus even while the assistant owns focus", async () => {
+      useMacroFocusStore.setState({ focusedRegion: "assistant" });
+      maximizeIncumbent();
+
+      const newId = await usePanelStore.getState().addPanel({
+        kind: "terminal",
+        cwd: "/test",
+        location: "grid",
+        focusPolicy: "take",
+      });
+
+      const state = usePanelStore.getState();
+      expect(state.focusedId).toBe(newId);
+      expect(state.maximizedId).toBeNull();
+      expect(state.maximizeTarget).toBeNull();
+      // The grid still restores its column count — this is exitMaximize, not
+      // clearMaximize.
+      expect(state.preMaximizeLayout).toBe(snapshot);
+    });
+
+    it("leaves fullscreen and takes focus even under a live MCP suppression lease", async () => {
+      maximizeIncumbent();
+
+      const newId = await runWithMcpSpawnFocusSuppressed(() =>
+        usePanelStore.getState().addPanel({
+          kind: "terminal",
+          cwd: "/test",
+          location: "grid",
+          focusPolicy: "take",
+        })
+      );
+
+      const state = usePanelStore.getState();
+      expect(state.focusedId).toBe(newId);
+      expect(state.maximizedId).toBeNull();
+      expect(state.maximizeTarget).toBeNull();
+    });
+
+    it("stays fullscreen for a suppressed spawn, which is the half of this that is deliberate", async () => {
+      // A background spawn must not yank the layout out from under the user —
+      // that is why the exit is gated at all. Pinned so a future widening of the
+      // #11506 fix can't quietly take this with it.
+      maximizeIncumbent();
+
+      await runWithMcpSpawnFocusSuppressed(() =>
+        usePanelStore.getState().addPanel({
+          kind: "terminal",
+          cwd: "/test",
+          location: "grid",
+        })
+      );
+
+      const state = usePanelStore.getState();
+      expect(state.focusedId).toBe("incumbent-1");
+      expect(state.maximizedId).toBe("incumbent-1");
+      expect(state.maximizeTarget).toEqual({ type: "panel", id: "incumbent-1" });
+    });
   });
 
   describe("dock activation path", () => {

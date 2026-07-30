@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
 import { createTerminalFocusSlice, type TerminalFocusSlice } from "../terminalFocusSlice";
 import type { GetPanelGroupInfo } from "@/store/panelFocusFallback";
-import type { PtyPanelData } from "@shared/types/panel";
+import type { PanelLocation, PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
@@ -2011,6 +2011,211 @@ describe("TerminalFocusSlice - closeDockTerminal focus reconciliation (#11133)",
     state.closeDockTerminal("dock-1");
 
     // grid-1 comes first in panel order but is a background tab of the group.
+    expect(state.focusedId).toBe("grid-2");
+  });
+});
+
+describe("TerminalFocusSlice - activation leaves fullscreen (#11506)", () => {
+  // `location` is deliberately widened with `undefined`: legacy persisted rows
+  // predate the field and are grid panels by omission, which is one of the
+  // cases the reveal guard has to handle.
+  const makePanel = (
+    id: string,
+    location: PanelLocation | undefined,
+    worktreeId: string | undefined = "worktree-1"
+  ): PtyPanelData =>
+    ({
+      id,
+      title: id,
+      kind: "terminal",
+      type: "terminal",
+      cwd: "/test",
+      location,
+      agentState: "idle",
+      isVisible: true,
+      cols: 80,
+      rows: 24,
+      worktreeId,
+    }) as PtyPanelData;
+
+  const snapshot = { gridCols: 2, gridItemCount: 4, worktreeId: "worktree-1" };
+
+  let panels: PtyPanelData[];
+  let state: TerminalFocusSlice;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    panelGroupInfoImpl = () => undefined;
+    panels = [
+      makePanel("grid-1", "grid"),
+      makePanel("grid-2", "grid"),
+      makePanel("legacy-1", undefined),
+      makePanel("dock-1", "dock"),
+      makePanel("trash-1", "trash"),
+      makePanel("other-wt-1", "grid", "worktree-2"),
+    ];
+    const getTerminals = vi.fn(() => panels);
+    const getState = vi.fn((): TerminalFocusSlice => state);
+    const setState = vi.fn(
+      (
+        updater:
+          Partial<TerminalFocusSlice> | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+      ) => {
+        const currentState = getState();
+        const updates = typeof updater === "function" ? updater(currentState) : updater;
+        state = { ...currentState, ...updates };
+      }
+    );
+    state = createTerminalFocusSlice(
+      getTerminals,
+      mockGetActiveWorktreeId,
+      mockStampLastActive,
+      mockGetPanelGroupInfo
+    )(setState as never, getState as never, {} as never);
+  });
+
+  /** Put grid-1 on screen as a fullscreen panel. */
+  function maximizeGrid1() {
+    state.maximizedId = "grid-1";
+    state.maximizeTarget = { type: "panel", id: "grid-1" };
+    state.preMaximizeLayout = snapshot;
+  }
+
+  it("leaves fullscreen before focusing a different grid pane", () => {
+    maximizeGrid1();
+
+    state.activateTerminal("grid-2");
+
+    expect(state.maximizedId).toBeNull();
+    expect(state.maximizeTarget).toBeNull();
+    expect(state.focusedId).toBe("grid-2");
+    // Identity, not equality: only exitMaximize keeps the snapshot object, so
+    // this also pins that the exit didn't route through clearMaximize.
+    expect(state.preMaximizeLayout).toBe(snapshot);
+  });
+
+  it("treats a legacy panel with no location as a grid pane", () => {
+    maximizeGrid1();
+
+    state.activateTerminal("legacy-1");
+
+    expect(state.maximizedId).toBeNull();
+    expect(state.focusedId).toBe("legacy-1");
+  });
+
+  it("stays fullscreen when the activated pane is the one already on screen", () => {
+    maximizeGrid1();
+    state.focusedId = "grid-2";
+
+    state.activateTerminal("grid-1");
+
+    expect(state.maximizedId).toBe("grid-1");
+    expect(state.maximizeTarget).toEqual({ type: "panel", id: "grid-1" });
+    expect(state.focusedId).toBe("grid-1");
+  });
+
+  it("stays fullscreen when activating another tab of the maximized group", () => {
+    panelGroupInfoImpl = (panelId) =>
+      panelId === "grid-1" || panelId === "grid-2"
+        ? { groupId: "group-1", activeTabId: "grid-1" }
+        : undefined;
+    state.maximizedId = "grid-1";
+    state.maximizeTarget = { type: "group", id: "group-1" };
+
+    state.activateTerminal("grid-2");
+
+    // The whole group is the cell on screen, so its sibling tab is already
+    // reachable — leaving fullscreen would throw the user out of it instead.
+    expect(state.maximizedId).toBe("grid-1");
+    expect(state.maximizeTarget).toEqual({ type: "group", id: "group-1" });
+    expect(state.focusedId).toBe("grid-2");
+  });
+
+  it("leaves fullscreen for a pane outside the maximized group", () => {
+    panelGroupInfoImpl = (panelId) =>
+      panelId === "grid-1" ? { groupId: "group-1", activeTabId: "grid-1" } : undefined;
+    state.maximizedId = "grid-1";
+    state.maximizeTarget = { type: "group", id: "group-1" };
+
+    state.activateTerminal("grid-2");
+
+    expect(state.maximizedId).toBeNull();
+    expect(state.focusedId).toBe("grid-2");
+  });
+
+  it("anchors on maximizedId, not maximizeTarget, when the two have drifted", () => {
+    // Layout undo can restore maximizedId alone, leaving the target naming a
+    // different pane. ContentGrid renders the maximizedId one, so that is the
+    // pane an activation must compare against.
+    state.maximizedId = "grid-1";
+    state.maximizeTarget = { type: "panel", id: "grid-2" };
+
+    state.activateTerminal("grid-2");
+
+    expect(state.maximizedId).toBeNull();
+    expect(state.focusedId).toBe("grid-2");
+  });
+
+  it("ignores a half-populated maximize pair", () => {
+    // ContentGrid only takes its fullscreen branch when both halves are set —
+    // with one half missing the grid is already rendering normally.
+    state.maximizedId = "grid-1";
+    state.maximizeTarget = null;
+
+    state.activateTerminal("grid-2");
+
+    expect(state.maximizedId).toBe("grid-1");
+    expect(state.focusedId).toBe("grid-2");
+  });
+
+  it("stays fullscreen when a dock pane is activated", () => {
+    // The dock popover renders alongside the maximized cell by design, so
+    // opening one must not tear the user out of fullscreen.
+    maximizeGrid1();
+
+    state.activateTerminal("dock-1");
+
+    expect(state.maximizedId).toBe("grid-1");
+    expect(state.activeDockTerminalId).toBe("dock-1");
+  });
+
+  it("stays fullscreen when a trashed pane is activated", () => {
+    maximizeGrid1();
+
+    state.activateTerminal("trash-1");
+
+    expect(state.maximizedId).toBe("grid-1");
+  });
+
+  it("stays fullscreen when the pane belongs to another worktree", () => {
+    // The outgoing worktree's maximize is owed back to the user on return, and
+    // the worktree switch is what stashes it — clearing it here would destroy
+    // it before prepareWorktreeMaximizeSwap ever sees it.
+    maximizeGrid1();
+
+    state.activateTerminal("other-wt-1");
+
+    expect(state.maximizedId).toBe("grid-1");
+    expect(state.focusedId).toBe("other-wt-1");
+  });
+
+  it("leaves fullscreen when a keyboard cycle lands on another pane", () => {
+    // focusNext routes through activateTerminal, so the invariant covers every
+    // cycler rather than each one re-deriving it.
+    maximizeGrid1();
+    state.focusedId = "grid-1";
+
+    state.focusNext();
+
+    expect(state.focusedId).toBe("grid-2");
+    expect(state.maximizedId).toBeNull();
+  });
+
+  it("does nothing to a maximize when nothing is fullscreen", () => {
+    state.activateTerminal("grid-2");
+
+    expect(state.maximizedId).toBeNull();
+    expect(state.maximizeTarget).toBeNull();
     expect(state.focusedId).toBe("grid-2");
   });
 });
