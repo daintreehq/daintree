@@ -6,6 +6,26 @@
 // — preserving LIFO semantics even when Radix DismissableLayers preempt
 // the regular escape-stack dispatcher in capture phase.
 
+/**
+ * Marks a surface that a Radix layer underneath may hand Escape to, by calling
+ * `markEscapeYieldedToDialog` instead of dismissing itself.
+ *
+ * Two rules for anything stamped with this:
+ *
+ * 1. Stamp it only while the surface is actually registered here — a dialog
+ *    mid-exit has already unregistered and could not act on the keypress.
+ * 2. Its backstop handler MUST consult `escapeWasYieldedToDialog`, or the
+ *    handoff dead-ends: the layer has prevented its own dismissal, and
+ *    `useGlobalEscapeDispatcher` bails on the default-prevented event, so
+ *    nothing closes at all.
+ *
+ * Deliberately narrower than `[aria-modal="true"]` — `ThemeBrowser`,
+ * `WebviewDialog`, `WorktreeOverviewModal` and a fullscreen `ErrorFallback`
+ * all carry that attribute without registering here, and some rely on
+ * `useEscapeStack`, which a yield would disable.
+ */
+export const ESCAPE_BACKSTOP_DIALOG_ATTR = "data-escape-backstop-dialog";
+
 const stack: Array<() => void> = [];
 
 export function registerDialogEscapeBackstop(handler: () => void): () => void {

@@ -2,6 +2,7 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalInfoDialog } from "../TerminalInfoDialog";
+import { AppDialog } from "@/components/ui/AppDialog";
 import type { TerminalInfoPayload } from "@/types/electron";
 
 vi.stubGlobal(
@@ -15,6 +16,7 @@ vi.stubGlobal(
 
 const dispatchMock = vi.fn();
 let mockPanelsById: Record<string, unknown> = {};
+const openDockPopoverId = { current: null as string | null };
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
@@ -27,11 +29,11 @@ vi.mock("@/store/panelStore", () => ({
     selector({ panelsById: mockPanelsById }),
 }));
 
-// This suite is about the dialog's content, not its layer. The real hook reads
-// three stores this suite's partial `panelStore` mock doesn't provide; the
-// promotion itself is covered in dockPanelVisibility and PanelDialogHost.stack.
+// The derivation behind this is exercised against the real store shape in
+// dockPanelVisibility.test.ts; here it is the input to the tier choice, and the
+// real hook would want stores this suite's partial `panelStore` mock omits.
 vi.mock("@/components/Layout/useOpenDockPopoverId", () => ({
-  useOpenDockPopoverId: () => null,
+  useOpenDockPopoverId: () => openDockPopoverId.current,
 }));
 
 vi.mock("@/lib/utils", () => ({
@@ -89,6 +91,7 @@ describe("TerminalInfoDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPanelsById = {};
+    openDockPopoverId.current = null;
   });
 
   it("renders PTY Diagnostics section with all fields", async () => {
@@ -478,5 +481,58 @@ describe("TerminalInfoDialog", () => {
     expect(clipboardText).not.toContain("Agent — Launch Context:");
     expect(clipboardText).not.toContain("Agent — Live State:");
     expect(clipboardText).not.toContain("Launch Flags:");
+  });
+});
+
+/**
+ * Reachable from a docked terminal's context menu, where the dock popover
+ * paints above the standard modal tier and buried this dialog under the panel
+ * it describes (#11505).
+ */
+describe("TerminalInfoDialog — layering over a dock popover", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPanelsById = {};
+    openDockPopoverId.current = null;
+    dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+  });
+
+  /**
+   * The z-tier a surface resolved to, read off the rendered element rather than
+   * compared against a hard-coded token so the tier's value stays free to change.
+   */
+  function tierClassOf(el: Element): string | undefined {
+    return Array.from(el.classList).find((c) => c.startsWith("z-["));
+  }
+
+  /** What each `zIndex` option actually renders, for comparison. */
+  function referenceTier(zIndex: "modal" | "nested"): string | undefined {
+    const { unmount } = render(
+      <AppDialog isOpen onClose={() => {}} zIndex={zIndex}>
+        <span>reference</span>
+      </AppDialog>
+    );
+    const tier = tierClassOf(screen.getAllByRole("dialog").at(-1)!);
+    unmount();
+    return tier;
+  }
+
+  it("keeps the standard tier when no dock popover is on screen", () => {
+    render(<TerminalInfoDialog isOpen onClose={vi.fn()} terminalId="test-id" />);
+
+    expect(tierClassOf(screen.getByRole("dialog"))).toBe(referenceTier("modal"));
+  });
+
+  it("clears a dock popover that is on screen", () => {
+    openDockPopoverId.current = "dock-1";
+    render(<TerminalInfoDialog isOpen onClose={vi.fn()} terminalId="test-id" />);
+
+    expect(tierClassOf(screen.getByRole("dialog"))).toBe(referenceTier("nested"));
+  });
+
+  it("distinguishes the two tiers at all", () => {
+    // Guards the two assertions above: if both options ever rendered the same
+    // token they would pass while the bug was fully present.
+    expect(referenceTier("modal")).not.toBe(referenceTier("nested"));
   });
 });

@@ -6,7 +6,11 @@ import {
   handleDockFocusOutside,
   shouldSuppressDockClose,
 } from "../dockPopoverGuard";
-import { escapeWasYieldedToDialog, _resetForTests } from "@/lib/dialogEscapeBackstop";
+import {
+  escapeWasYieldedToDialog,
+  ESCAPE_BACKSTOP_DIALOG_ATTR,
+  _resetForTests,
+} from "@/lib/dialogEscapeBackstop";
 
 function makeEvent(target: EventTarget | null): Event & { preventDefault: () => void } {
   const preventDefault = vi.fn();
@@ -216,6 +220,7 @@ describe("handleDockEscapeKeyDown — yielding to a dialog above the popover", (
     const dialog = document.createElement("div");
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute(ESCAPE_BACKSTOP_DIALOG_ATTR, "");
     const focusable = document.createElement("button");
     dialog.appendChild(focusable);
     document.body.appendChild(dialog);
@@ -276,6 +281,27 @@ describe("handleDockEscapeKeyDown — yielding to a dialog above the popover", (
     const focusable = document.createElement("button");
     layer.appendChild(focusable);
     document.body.appendChild(layer);
+    focusable.focus();
+
+    const event = makeEscapeEvent();
+    handleDockEscapeKeyDown(event, container);
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(escapeWasYieldedToDialog(event)).toBe(false);
+  });
+
+  it("still dismisses the dock for a modal that the backstop does not handle", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    // WorktreeOverviewModal, ThemeBrowser and WebviewDialog are aria-modal but
+    // register no backstop handler. Yielding to one would block the dock's
+    // dismissal with nothing left to act on the keypress.
+    const modal = document.createElement("div");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    const focusable = document.createElement("button");
+    modal.appendChild(focusable);
+    document.body.appendChild(modal);
     focusable.focus();
 
     const event = makeEscapeEvent();

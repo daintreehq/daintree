@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { useOpenDockPopoverId } from "@/components/Layout/useOpenDockPopoverId";
 import { Button } from "@/components/ui/button";
 import type {
   CommandManifestEntry,
@@ -330,6 +331,9 @@ export function CommandBuilder({
   const [formData, setFormData] = useState<Record<string, unknown>>({});
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [executionResult, setExecutionResult] = useState<CommandResult | null>(null);
+  // Commands are launched from a terminal's input bar, docked ones included
+  // (#11505).
+  const openDockPopoverId = useOpenDockPopoverId();
 
   const currentStep = steps[currentStepIndex];
   const isFirstStep = currentStepIndex === 0;
@@ -433,7 +437,13 @@ export function CommandBuilder({
   const showSuccessState = executionResult?.success;
 
   return (
-    <AppDialog isOpen={true} onClose={handleClose} size="md" dismissible={!isExecuting}>
+    <AppDialog
+      isOpen={true}
+      onClose={handleClose}
+      size="md"
+      dismissible={!isExecuting}
+      zIndex={openDockPopoverId === null ? "modal" : "nested"}
+    >
       <AppDialog.Header>
         <div className="flex items-center gap-3">
           <AppDialog.Title>{command.label}</AppDialog.Title>

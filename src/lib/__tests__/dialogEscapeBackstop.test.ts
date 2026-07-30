@@ -147,23 +147,35 @@ describe("dialogEscapeBackstop — gating real vs spurious Radix preventDefault"
  * keypress and marks it, which releases the gate for that event alone.
  */
 describe("dialogEscapeBackstop — a layer yielding Escape to the dialog above it", () => {
-  let bubbleHandler: ((e: KeyboardEvent) => void) | null = null;
+  // Tracked rather than removed inline: a failing assertion between add and
+  // remove would otherwise leak the listener into the rest of the file.
+  const listeners: Array<(e: KeyboardEvent) => void> = [];
+
+  function addListener(handler: (e: KeyboardEvent) => void) {
+    listeners.push(handler);
+    document.addEventListener("keydown", handler);
+    return handler;
+  }
+
+  function removeListener(handler: (e: KeyboardEvent) => void) {
+    document.removeEventListener("keydown", handler);
+    const idx = listeners.indexOf(handler);
+    if (idx !== -1) listeners.splice(idx, 1);
+  }
 
   afterEach(() => {
-    if (bubbleHandler) {
-      document.removeEventListener("keydown", bubbleHandler);
-      bubbleHandler = null;
+    for (const handler of listeners.splice(0)) {
+      document.removeEventListener("keydown", handler);
     }
   });
 
   function armBackstop(onFire: () => void) {
-    bubbleHandler = (e) => {
+    addListener((e) => {
       if (e.key !== "Escape") return;
       if (radixLayerWasOpenWhenEscapePressed() && !escapeWasYieldedToDialog(e)) return;
       onFire();
       markBackstopConsumedEscape();
-    };
-    document.addEventListener("keydown", bubbleHandler);
+    });
   }
 
   it("fires the backstop for an Escape the open layer yielded", () => {
@@ -172,14 +184,12 @@ describe("dialogEscapeBackstop — a layer yielding Escape to the dialog above i
 
     // Stand in for the dock guard, which runs between the capture probe and
     // the bubble backstop.
-    const yieldingLayer = (e: KeyboardEvent) => {
+    addListener((e) => {
       if (e.key === "Escape") markEscapeYieldedToDialog(e);
-    };
-    document.addEventListener("keydown", yieldingLayer);
+    });
     armBackstop(backstopFire);
 
     fireEscape();
-    document.removeEventListener("keydown", yieldingLayer);
 
     expect(backstopFire).toHaveBeenCalledOnce();
   });
@@ -198,10 +208,9 @@ describe("dialogEscapeBackstop — a layer yielding Escape to the dialog above i
     addRadixLayer("dialog");
     const backstopFire = vi.fn();
 
-    const yieldOnce = (e: KeyboardEvent) => {
+    const yieldOnce = addListener((e) => {
       if (e.key === "Escape") markEscapeYieldedToDialog(e);
-    };
-    document.addEventListener("keydown", yieldOnce);
+    });
     armBackstop(backstopFire);
 
     fireEscape();
@@ -209,7 +218,7 @@ describe("dialogEscapeBackstop — a layer yielding Escape to the dialog above i
 
     // Second press with no yield — e.g. a Select legitimately open inside the
     // dialog. A sticky flag here would close the dialog underneath it.
-    document.removeEventListener("keydown", yieldOnce);
+    removeListener(yieldOnce);
     fireEscape();
 
     expect(backstopFire).toHaveBeenCalledOnce();

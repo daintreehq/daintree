@@ -1,4 +1,4 @@
-import { markEscapeYieldedToDialog } from "@/lib/dialogEscapeBackstop";
+import { markEscapeYieldedToDialog, ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 
 type RadixOutsideEvent = Event & {
   preventDefault: () => void;
@@ -78,20 +78,20 @@ export function handleDockEscapeKeyDown(
   // user is looking at. The focused dialog owns Escape: block the dock's
   // dismissal and hand the keypress to `AppDialog`'s backstop, which otherwise
   // stands down on seeing this popover open (#11505).
-  if (isFocusInsideModalDialog()) {
+  if (isFocusInsideBackstopDialog()) {
     event.preventDefault();
     markEscapeYieldedToDialog(event);
   }
 }
 
 /**
- * Whether focus currently sits inside a modal dialog surface. Matches
- * `AppDialog`/`AppPaletteDialog`, which mark their portal root `aria-modal`;
- * Radix's own non-modal layers (including this dock popover) never do.
+ * Whether focus sits inside a dialog whose Escape the shared backstop handles.
+ * Scoped to that contract rather than `aria-modal`, so the popover only steps
+ * aside for a surface that will actually take the keypress.
  */
-function isFocusInsideModalDialog(): boolean {
+function isFocusInsideBackstopDialog(): boolean {
   const active = document.activeElement;
-  return active instanceof Element && active.closest('[aria-modal="true"]') !== null;
+  return active instanceof Element && active.closest(`[${ESCAPE_BACKSTOP_DIALOG_ATTR}]`) !== null;
 }
 
 /**

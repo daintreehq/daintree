@@ -27,12 +27,22 @@ vi.mock("@/lib/accessibility", () => ({
   closeAndAnnounce: (clear: () => void) => clear(),
 }));
 
+const openDockPopoverId = vi.hoisted(() => ({ current: null as string | null }));
+
+// The derivation behind this is exercised against the real store shape in
+// dockPanelVisibility.test.ts; here it is the input to the tier choice.
+vi.mock("@/components/Layout/useOpenDockPopoverId", () => ({
+  useOpenDockPopoverId: () => openDockPopoverId.current,
+}));
+
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
 import { TerminalDestructiveActionConfirmDialog } from "../TerminalDestructiveActionConfirmDialog";
+import { AppDialog } from "@/components/ui/AppDialog";
 
 beforeEach(() => {
   cleanup();
   dispatch.mockClear();
+  openDockPopoverId.current = null;
   useTerminalPendingDestructiveActionStore.getState().clear();
 });
 
@@ -188,5 +198,53 @@ describe("TerminalDestructiveActionConfirmDialog — grouped deleted-worktree cl
     render(<TerminalDestructiveActionConfirmDialog />);
 
     expect(screen.getByText(/Drag them to another worktree instead/)).toBeTruthy();
+  });
+});
+
+/**
+ * A dock popover paints above the standard modal tier, so this confirm was
+ * drawn underneath the docked terminal it was about while still holding focus
+ * — a destructive prompt the user agrees to without reading (#11505).
+ */
+describe("TerminalDestructiveActionConfirmDialog — layering over a dock popover", () => {
+  /**
+   * The z-tier a surface resolved to, read off the rendered element rather than
+   * compared against a hard-coded token so the tier's value stays free to change.
+   */
+  function tierClassOf(el: Element): string | undefined {
+    return Array.from(el.classList).find((c) => c.startsWith("z-["));
+  }
+
+  /** What each `zIndex` option actually renders, for comparison. */
+  function referenceTier(zIndex: "modal" | "nested"): string | undefined {
+    const { unmount } = render(
+      <AppDialog isOpen onClose={() => {}} zIndex={zIndex}>
+        <span>reference</span>
+      </AppDialog>
+    );
+    const tier = tierClassOf(screen.getByRole("dialog"));
+    unmount();
+    return tier;
+  }
+
+  it("keeps the standard tier when no dock popover is on screen", () => {
+    stage(1);
+    render(<TerminalDestructiveActionConfirmDialog />);
+
+    expect(tierClassOf(screen.getByRole("alertdialog"))).toBe(referenceTier("modal"));
+  });
+
+  it("clears a dock popover that is on screen", () => {
+    openDockPopoverId.current = "dock-1";
+    stage(1);
+    render(<TerminalDestructiveActionConfirmDialog />);
+
+    expect(tierClassOf(screen.getByRole("alertdialog"))).toBe(referenceTier("nested"));
+  });
+
+  it("distinguishes the two tiers at all", () => {
+    // Guards the two assertions above: if both options ever rendered the same
+    // token they would pass while the bug was fully present.
+    expect(referenceTier("modal")).not.toBe(referenceTier("nested"));
   });
 });

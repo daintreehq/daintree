@@ -20,6 +20,7 @@ import {
   radixLayerWasOpenWhenEscapePressed,
   escapeWasYieldedToDialog,
   markBackstopConsumedEscape,
+  ESCAPE_BACKSTOP_DIALOG_ATTR,
 } from "@/lib/dialogEscapeBackstop";
 import { usePortalStore } from "@/store";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
@@ -398,6 +399,11 @@ export function AppDialog({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
+        // Marks the surface as one a Radix layer underneath can hand Escape to
+        // — see `ESCAPE_BACKSTOP_DIALOG_ATTR`. Tracks the backstop registration
+        // (`isOpen && dismissible`), not merely being mounted: a dialog mid-exit
+        // has already unregistered and could not take the keypress.
+        {...(isOpen && dismissible ? { [ESCAPE_BACKSTOP_DIALOG_ATTR]: "" } : {})}
         data-testid={dataTestId}
       >
         <div
