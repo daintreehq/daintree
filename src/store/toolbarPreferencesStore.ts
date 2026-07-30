@@ -660,15 +660,25 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           // did when it shipped. Pointing it at the live constant would make the
           // next ships-hidden button silently re-stamp itself here, overwriting a
           // choice its own migration step should own.
-          const layout = state.layout as { pinnedButtons?: Record<string, boolean> } | undefined;
-          if (layout) {
-            layout.pinnedButtons = { ...(layout.pinnedButtons ?? {}), "file-browser": false };
-          } else {
-            state.layout = { pinnedButtons: { "file-browser": false } } as unknown as Record<
-              string,
-              unknown
-            >;
-          }
+          //
+          // Narrowed rather than asserted, unlike the older steps above: `state`
+          // is already `Record<string, unknown>`, so `in`/`typeof` guards reach
+          // the same place without a type assertion — and the lint ratchet scores
+          // `no-unsafe-type-assertion` per rule, so a new one costs a baseline
+          // bump the ratchet exists to prevent.
+          const layout = state.layout;
+          const hasLayout = typeof layout === "object" && layout !== null && !Array.isArray(layout);
+          const existingPins = hasLayout && "pinnedButtons" in layout ? layout.pinnedButtons : null;
+          const carriedPins =
+            typeof existingPins === "object" &&
+            existingPins !== null &&
+            !Array.isArray(existingPins)
+              ? existingPins
+              : {};
+          state.layout = {
+            ...(hasLayout ? layout : {}),
+            pinnedButtons: { ...carriedPins, "file-browser": false },
+          };
         }
         return state as unknown as ToolbarPreferencesState;
       },
