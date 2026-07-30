@@ -2016,19 +2016,23 @@ describe("TerminalFocusSlice - closeDockTerminal focus reconciliation (#11133)",
 });
 
 describe("TerminalFocusSlice - activation leaves fullscreen (#11506)", () => {
+  type SliceCreator = ReturnType<typeof createTerminalFocusSlice>;
+
   // `location` is deliberately widened with `undefined`: legacy persisted rows
   // predate the field and are grid panels by omission, which is one of the
-  // cases the reveal guard has to handle.
+  // cases the reveal guard has to handle. `kind` is a parameter because the
+  // reported bug is about file panels, which have no PTY.
   const makePanel = (
     id: string,
     location: PanelLocation | undefined,
-    worktreeId: string | undefined = "worktree-1"
+    worktreeId: string | undefined = "worktree-1",
+    kind = "terminal"
   ): PtyPanelData =>
     ({
       id,
       title: id,
-      kind: "terminal",
-      type: "terminal",
+      kind,
+      type: kind,
       cwd: "/test",
       location,
       agentState: "idle",
@@ -2053,25 +2057,21 @@ describe("TerminalFocusSlice - activation leaves fullscreen (#11506)", () => {
       makePanel("dock-1", "dock"),
       makePanel("trash-1", "trash"),
       makePanel("other-wt-1", "grid", "worktree-2"),
+      makePanel("file-1", "grid", "worktree-1", "file"),
     ];
-    const getTerminals = vi.fn(() => panels);
-    const getState = vi.fn((): TerminalFocusSlice => state);
-    const setState = vi.fn(
-      (
-        updater:
-          Partial<TerminalFocusSlice> | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
-      ) => {
-        const currentState = getState();
-        const updates = typeof updater === "function" ? updater(currentState) : updater;
-        state = { ...currentState, ...updates };
-      }
-    );
+    const getTerminals = () => panels;
+    const getState: Parameters<SliceCreator>[1] = () => state;
+    const setState: Parameters<SliceCreator>[0] = (updater) => {
+      const currentState = getState();
+      const updates = typeof updater === "function" ? updater(currentState) : updater;
+      state = { ...currentState, ...updates };
+    };
     state = createTerminalFocusSlice(
       getTerminals,
       mockGetActiveWorktreeId,
       mockStampLastActive,
       mockGetPanelGroupInfo
-    )(setState as never, getState as never, {} as never);
+    )(setState, getState, {} as Parameters<SliceCreator>[2]);
   });
 
   /** Put grid-1 on screen as a fullscreen panel. */
@@ -2083,15 +2083,32 @@ describe("TerminalFocusSlice - activation leaves fullscreen (#11506)", () => {
 
   it("leaves fullscreen before focusing a different grid pane", () => {
     maximizeGrid1();
+    state.focusedId = "grid-1";
 
     state.activateTerminal("grid-2");
 
     expect(state.maximizedId).toBeNull();
     expect(state.maximizeTarget).toBeNull();
     expect(state.focusedId).toBe("grid-2");
+    // The rest of activateTerminal still runs — leaving fullscreen is an extra
+    // step, not a replacement for the focus move it guards.
+    expect(state.previousFocusedId).toBe("grid-1");
     // Identity, not equality: only exitMaximize keeps the snapshot object, so
     // this also pins that the exit didn't route through clearMaximize.
     expect(state.preMaximizeLayout).toBe(snapshot);
+  });
+
+  it("leaves fullscreen for a non-PTY pane, the kind that reported this", () => {
+    // #11506 is a file-viewer bug. File panels have no PTY, so they skip the
+    // wake branch entirely — the reveal must not be wired to that path.
+    maximizeGrid1();
+
+    state.activateTerminal("file-1");
+
+    expect(state.maximizedId).toBeNull();
+    expect(state.focusedId).toBe("file-1");
+    expect(terminalInstanceService.wakeForFocus).not.toHaveBeenCalled();
+    expect(terminalInstanceService.wake).not.toHaveBeenCalled();
   });
 
   it("treats a legacy panel with no location as a grid pane", () => {
@@ -2114,7 +2131,7 @@ describe("TerminalFocusSlice - activation leaves fullscreen (#11506)", () => {
     expect(state.focusedId).toBe("grid-1");
   });
 
-  it("stays fullscreen when activating another tab of the maximized group", () => {
+  it("stays fullscreen when activating a member of the maximized group", () => {
     panelGroupInfoImpl = (panelId) =>
       panelId === "grid-1" || panelId === "grid-2"
         ? { groupId: "group-1", activeTabId: "grid-1" }
@@ -2124,14 +2141,15 @@ describe("TerminalFocusSlice - activation leaves fullscreen (#11506)", () => {
 
     state.activateTerminal("grid-2");
 
-    // The whole group is the cell on screen, so its sibling tab is already
-    // reachable — leaving fullscreen would throw the user out of it instead.
+    // The group IS the cell on screen, so leaving fullscreen would take the
+    // user out of it and still not show grid-2 — an inactive tab is hidden in
+    // the ordinary grid too. Whoever surfaces a background tab has to select
+    // it; that is a tab-selection concern, not a maximize one.
     expect(state.maximizedId).toBe("grid-1");
     expect(state.maximizeTarget).toEqual({ type: "group", id: "group-1" });
-    expect(state.focusedId).toBe("grid-2");
   });
 
-  it("leaves fullscreen for a pane outside the maximized group", () => {
+  it("leaves fullscreen for an ungrouped pane while a group is maximized", () => {
     panelGroupInfoImpl = (panelId) =>
       panelId === "grid-1" ? { groupId: "group-1", activeTabId: "grid-1" } : undefined;
     state.maximizedId = "grid-1";
@@ -2143,10 +2161,40 @@ describe("TerminalFocusSlice - activation leaves fullscreen (#11506)", () => {
     expect(state.focusedId).toBe("grid-2");
   });
 
-  it("anchors on maximizedId, not maximizeTarget, when the two have drifted", () => {
-    // Layout undo can restore maximizedId alone, leaving the target naming a
-    // different pane. ContentGrid renders the maximizedId one, so that is the
-    // pane an activation must compare against.
+  it("leaves fullscreen for a pane in a different group than the maximized one", () => {
+    // Belonging to *a* group is not the test — belonging to the maximized one
+    // is. Without the id comparison any grouped pane would read as on screen.
+    panelGroupInfoImpl = (panelId) =>
+      panelId === "grid-1"
+        ? { groupId: "group-1", activeTabId: "grid-1" }
+        : { groupId: "group-2", activeTabId: panelId };
+    state.maximizedId = "grid-1";
+    state.maximizeTarget = { type: "group", id: "group-1" };
+
+    state.activateTerminal("grid-2");
+
+    expect(state.maximizedId).toBeNull();
+    expect(state.focusedId).toBe("grid-2");
+  });
+
+  it("follows the group target, not maximizedId, when the two have drifted", () => {
+    // Layout undo can restore maximizedId alone. For a group target ContentGrid
+    // renders the group and ignores maximizedId entirely, so a pane maximizedId
+    // still happens to name is NOT the pane on screen.
+    panelGroupInfoImpl = (panelId) =>
+      panelId === "grid-2" ? { groupId: "group-1", activeTabId: "grid-2" } : undefined;
+    state.maximizedId = "grid-1";
+    state.maximizeTarget = { type: "group", id: "group-1" };
+
+    state.activateTerminal("grid-1");
+
+    expect(state.maximizedId).toBeNull();
+    expect(state.focusedId).toBe("grid-1");
+  });
+
+  it("follows maximizedId for a panel target when the two have drifted", () => {
+    // The mirror case: a panel target renders the pane named by maximizedId, so
+    // the pane the target names is the hidden one.
     state.maximizedId = "grid-1";
     state.maximizeTarget = { type: "panel", id: "grid-2" };
 
@@ -2156,15 +2204,20 @@ describe("TerminalFocusSlice - activation leaves fullscreen (#11506)", () => {
     expect(state.focusedId).toBe("grid-2");
   });
 
-  it("ignores a half-populated maximize pair", () => {
-    // ContentGrid only takes its fullscreen branch when both halves are set —
-    // with one half missing the grid is already rendering normally.
-    state.maximizedId = "grid-1";
-    state.maximizeTarget = null;
+  // ContentGrid only takes its fullscreen branch when both halves are set —
+  // with either one missing the grid is already rendering normally, so there is
+  // nothing to leave and no half-written trio to repair from here.
+  it.each([
+    ["only maximizedId is set", "grid-1", null],
+    ["only maximizeTarget is set", null, { type: "panel" as const, id: "grid-1" }],
+  ])("ignores a maximize pair where %s", (_label, maximizedId, maximizeTarget) => {
+    state.maximizedId = maximizedId;
+    state.maximizeTarget = maximizeTarget;
 
     state.activateTerminal("grid-2");
 
-    expect(state.maximizedId).toBe("grid-1");
+    expect(state.maximizedId).toBe(maximizedId);
+    expect(state.maximizeTarget).toEqual(maximizeTarget);
     expect(state.focusedId).toBe("grid-2");
   });
 
@@ -2180,11 +2233,16 @@ describe("TerminalFocusSlice - activation leaves fullscreen (#11506)", () => {
   });
 
   it("stays fullscreen when a trashed pane is activated", () => {
+    // A trashed pane isn't laid out anywhere, so there is no grid cell to
+    // reveal and no reason to spend the user's layout on it. That activating a
+    // trashed pane still moves `focusedId` at all is a separate, pre-existing
+    // gap — callers filter trash themselves (see `focusAlternate`).
     maximizeGrid1();
 
     state.activateTerminal("trash-1");
 
     expect(state.maximizedId).toBe("grid-1");
+    expect(state.maximizeTarget).toEqual({ type: "panel", id: "grid-1" });
   });
 
   it("stays fullscreen when the pane belongs to another worktree", () => {
@@ -2211,11 +2269,4 @@ describe("TerminalFocusSlice - activation leaves fullscreen (#11506)", () => {
     expect(state.maximizedId).toBeNull();
   });
 
-  it("does nothing to a maximize when nothing is fullscreen", () => {
-    state.activateTerminal("grid-2");
-
-    expect(state.maximizedId).toBeNull();
-    expect(state.maximizeTarget).toBeNull();
-    expect(state.focusedId).toBe("grid-2");
-  });
 });
