@@ -2796,4 +2796,426 @@ describe("PullRequestService", () => {
       });
     });
   });
+
+  describe("terminal CI re-enrichment (#11513)", () => {
+    const MINUTE = 60 * 1000;
+
+    // Two resolved worktrees on distinct branches → PRs 1 and 2, with a
+    // caller-controlled CI state per PR number so a test can simulate a re-run
+    // landing between polls. probeOpenPRList always reports "unchanged", which
+    // is the steady state this issue is about: metadata revalidation is skipped,
+    // so CI selection is the only thing that can trigger a re-fetch.
+    function makeUnchangedProbeHarness(ciByNumber: Map<number, CIStatus | null>) {
+      const numberByBranch = new Map([
+        ["feature/a", 1],
+        ["feature/b", 2],
+      ]);
+      const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+        const map = new Map<string, ForgePR | null>();
+        for (const branch of branches) {
+          const number = numberByBranch.get(branch);
+          map.set(branch, number ? makeMockForgePR({ number, headRef: branch }) : null);
+        }
+        return map;
+      });
+      const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+
+      const getCIStatuses = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+        const map = new Map<number, CIStatus | null>();
+        for (const n of prNumbers) map.set(n, ciByNumber.get(n) ?? null);
+        return map;
+      });
+      const findPRsByNumbers = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+        const map = new Map<number, ForgePR | null>();
+        for (const n of prNumbers) map.set(n, makeMockForgePR({ number: n }));
+        return map;
+      });
+      const probeOpenPRList = vi.fn(async () => ({ kind: "unchanged" as const }));
+      mockImpl.batchLookups = { findPRsByNumbers, getCIStatuses, probeOpenPRList };
+
+      return { getCIStatuses, findPRsByNumbers, probeOpenPRList };
+    }
+
+    function ciState(state: "success" | "failure" | "pending"): CIStatus {
+      return {
+        state,
+        total: 1,
+        passed: state === "success" ? 1 : 0,
+        failed: state === "failure" ? 1 : 0,
+        pending: state === "pending" ? 1 : 0,
+        rawData: null,
+      };
+    }
+
+    // Resolve `branches` into detected PRs and let the first CI enrichment land,
+    // so every PR carries a status and a fresh attempt timestamp. Returns with
+    // the CI spy cleared, ready for the assertions under test.
+    async function detectAndSettle(branches: string[]) {
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      pullRequestService.initialize("/repo", "test-project-id");
+      branches.forEach((branch, index) => {
+        events.emit(
+          "sys:worktree:update",
+          makeWorktreeSnapshot({ worktreeId: `wt-${index + 1}`, branch })
+        );
+      });
+
+      await pullRequestService.refresh();
+      await flushLoaders();
+
+      // start() is what normally arms this; the focus paths under test gate on
+      // it, and calling start() here would schedule jittered startup timers.
+      (pullRequestService as unknown as { isPolling: boolean }).isPolling = true;
+
+      return { pullRequestService, events };
+    }
+
+    async function revalidate(service: unknown): Promise<void> {
+      await (
+        service as unknown as { revalidateResolvedPRs: () => Promise<void> }
+      ).revalidateResolvedPRs();
+      await flushLoaders();
+    }
+
+    // Jump the clock without firing timers — advancing time normally would run
+    // the self-rescheduling revalidation chain and add calls the assertions
+    // aren't about.
+    function jump(ms: number): void {
+      vi.setSystemTime(Date.now() + ms);
+    }
+
+    it("does not re-check a terminal PR before its interval elapses", async () => {
+      const { getCIStatuses } = makeUnchangedProbeHarness(
+        new Map([
+          [1, ciState("failure")],
+          [2, ciState("success")],
+        ])
+      );
+
+      const { pullRequestService } = await detectAndSettle(["feature/a", "feature/b"]);
+      getCIStatuses.mockClear();
+
+      // Back-to-back tick: both PRs were just enriched, so neither is due.
+      await revalidate(pullRequestService);
+      expect(getCIStatuses).not.toHaveBeenCalled();
+
+      // Still short of the shorter (failure) interval.
+      jump(2 * MINUTE);
+      await revalidate(pullRequestService);
+      expect(getCIStatuses).not.toHaveBeenCalled();
+
+      pullRequestService.destroy();
+    });
+
+    it("re-checks a failed PR before a successful one", async () => {
+      const { getCIStatuses } = makeUnchangedProbeHarness(
+        new Map([
+          [1, ciState("failure")],
+          [2, ciState("success")],
+        ])
+      );
+
+      const { pullRequestService } = await detectAndSettle(["feature/a", "feature/b"]);
+      getCIStatuses.mockClear();
+
+      // Failure weighting is the point: at some elapsed time the failed PR is
+      // due and the successful one is not. Walk forward a minute at a time
+      // until the first re-check fires and assert what it contained.
+      let firstBatch: number[] | null = null;
+      for (let elapsed = 0; elapsed < 60 && firstBatch === null; elapsed++) {
+        jump(MINUTE);
+        await revalidate(pullRequestService);
+        if (getCIStatuses.mock.calls.length > 0) {
+          firstBatch = getCIStatuses.mock.calls[0]?.[1] ?? null;
+        }
+      }
+
+      // The failed PR re-checks strictly sooner — the success PR is absent from
+      // the first batch entirely.
+      expect(firstBatch).toEqual([1]);
+
+      pullRequestService.destroy();
+    });
+
+    it("eventually re-checks a successful PR too", async () => {
+      const { getCIStatuses } = makeUnchangedProbeHarness(
+        new Map([
+          [1, ciState("failure")],
+          [2, ciState("success")],
+        ])
+      );
+
+      const { pullRequestService } = await detectAndSettle(["feature/a", "feature/b"]);
+      getCIStatuses.mockClear();
+
+      const seen = new Set<number>();
+      for (let elapsed = 0; elapsed < 60 && !seen.has(2); elapsed++) {
+        jump(MINUTE);
+        await revalidate(pullRequestService);
+        for (const call of getCIStatuses.mock.calls) {
+          for (const n of call[1]) seen.add(n);
+        }
+      }
+
+      // A green badge is not a fixed point — it re-checks on its own cadence, so
+      // a re-run that turns it red still surfaces (#6149).
+      expect(seen.has(2)).toBe(true);
+
+      pullRequestService.destroy();
+    });
+
+    it("surfaces a re-run that flips a failed PR back to pending", async () => {
+      const ciByNumber = new Map([[1, ciState("failure")]]);
+      const { getCIStatuses } = makeUnchangedProbeHarness(ciByNumber);
+
+      const { pullRequestService, events } = await detectAndSettle(["feature/a"]);
+      const svc = pullRequestService as unknown as {
+        detectedPRs: Map<string, { ciStatus?: string; stagnantPollCount: number }>;
+        boostExpiresAt: number | null;
+      };
+      expect(svc.detectedPRs.get("wt-1")?.ciStatus).toBe("failure");
+      getCIStatuses.mockClear();
+
+      const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+      const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+      // The user re-runs the failed job: no push, so updated_at never moves and
+      // the probe still reports the PR unchanged.
+      ciByNumber.set(1, ciState("pending"));
+
+      for (let elapsed = 0; elapsed < 60 && getCIStatuses.mock.calls.length === 0; elapsed++) {
+        jump(MINUTE);
+        await revalidate(pullRequestService);
+      }
+
+      expect(svc.detectedPRs.get("wt-1")?.ciStatus).toBe("pending");
+      expect(detected.at(-1)?.prCiStatus).toBe("pending");
+      // The cross→pending transition now arms the boost, which it never could
+      // while terminal states were excluded from re-enrichment.
+      expect(svc.boostExpiresAt).not.toBeNull();
+      // A stale terminal stagnation count must not land the re-run straight in
+      // the slowest decay band.
+      expect(svc.detectedPRs.get("wt-1")?.stagnantPollCount).toBe(0);
+
+      unsubscribe();
+      pullRequestService.destroy();
+    });
+
+    it("paces the next attempt off the request, not the response", async () => {
+      const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, ciState("failure")]]));
+
+      const { pullRequestService } = await detectAndSettle(["feature/a"]);
+      getCIStatuses.mockClear();
+      // Every re-check from here on fails at the provider.
+      getCIStatuses.mockRejectedValue(new Error("transient GraphQL failure"));
+
+      for (let elapsed = 0; elapsed < 60 && getCIStatuses.mock.calls.length === 0; elapsed++) {
+        jump(MINUTE);
+        await revalidate(pullRequestService);
+      }
+      expect(getCIStatuses).toHaveBeenCalledTimes(1);
+
+      // The attempt is stamped on enqueue, so a rejected batch waits out the
+      // interval instead of re-firing on every tick.
+      await revalidate(pullRequestService);
+      await revalidate(pullRequestService);
+      expect(getCIStatuses).toHaveBeenCalledTimes(1);
+
+      pullRequestService.destroy();
+    });
+
+    it("re-checks a terminal PR when the system clock jumps backwards", async () => {
+      const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, ciState("success")]]));
+
+      const { pullRequestService } = await detectAndSettle(["feature/a"]);
+      getCIStatuses.mockClear();
+
+      // A clock correction leaves the last-attempt stamp in the future. Elapsed
+      // time can never reach the interval again, so without a rebase the PR
+      // would be wedged out of re-checks for the length of the jump.
+      jump(-2 * 60 * MINUTE);
+      await revalidate(pullRequestService);
+
+      expect(getCIStatuses).toHaveBeenCalledWith(expect.anything(), [1]);
+
+      pullRequestService.destroy();
+    });
+
+    it("leaves the pending cadence untouched", async () => {
+      const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, ciState("pending")]]));
+
+      const { pullRequestService } = await detectAndSettle(["feature/a"]);
+      getCIStatuses.mockClear();
+
+      // Pending re-polls every tick. The attempt timestamp the terminal pass
+      // introduced must not throttle it — that cadence is deliberately tuned
+      // and re-tuning it is an explicit non-goal of this issue.
+      await revalidate(pullRequestService);
+      await revalidate(pullRequestService);
+
+      expect(getCIStatuses).toHaveBeenCalledTimes(2);
+
+      pullRequestService.destroy();
+    });
+
+    it("never re-checks a PR with no CI checks", async () => {
+      // `null` from the provider is a confirmed "no CI configured" → undefined
+      // status. There is nothing to re-poll for, so it must not burn quota.
+      const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, null]]));
+
+      const { pullRequestService } = await detectAndSettle(["feature/a"]);
+      const svc = pullRequestService as unknown as {
+        detectedPRs: Map<string, { ciStatus?: string }>;
+      };
+      expect(svc.detectedPRs.get("wt-1")?.ciStatus).toBeUndefined();
+      getCIStatuses.mockClear();
+
+      for (let elapsed = 0; elapsed < 60; elapsed++) {
+        jump(MINUTE);
+        await revalidate(pullRequestService);
+      }
+
+      expect(getCIStatuses).not.toHaveBeenCalled();
+
+      pullRequestService.destroy();
+    });
+
+    it("backfills a CI status swept to unknown on blur once focus returns", async () => {
+      const ciByNumber = new Map([[1, ciState("pending")]]);
+      const { getCIStatuses } = makeUnchangedProbeHarness(ciByNumber);
+
+      const { pullRequestService, events } = await detectAndSettle(["feature/a"]);
+      const svc = pullRequestService as unknown as {
+        detectedPRs: Map<string, { ciStatus?: string }>;
+        hasUnresolvedCandidates: () => boolean;
+      };
+
+      // Blur sweeps the in-flight badge to unknown.
+      pullRequestService.setCIEnrichmentEnabled(false);
+      expect(svc.detectedPRs.get("wt-1")?.ciStatus).toBeUndefined();
+
+      // CI finished while the window was blurred.
+      ciByNumber.set(1, ciState("success"));
+      getCIStatuses.mockClear();
+
+      const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+      const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+      pullRequestService.setCIEnrichmentEnabled(true);
+      pullRequestService.setFocusCadence(true);
+      await flushLoaders();
+
+      // The swept entry is neither pending nor probe-flagged, so only the focus
+      // pass can reach it — and it must, because every candidate is already
+      // resolved, which is what made the old catch-up skip this entirely.
+      expect(svc.hasUnresolvedCandidates()).toBe(false);
+      expect(getCIStatuses).toHaveBeenCalledWith(expect.anything(), [1]);
+      expect(svc.detectedPRs.get("wt-1")?.ciStatus).toBe("success");
+      expect(detected.at(-1)?.prCiStatus).toBe("success");
+
+      unsubscribe();
+      pullRequestService.destroy();
+    });
+
+    it("runs the focus catch-up even when enrichment was already enabled", async () => {
+      const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, ciState("failure")]]));
+
+      const { pullRequestService } = await detectAndSettle(["feature/a"]);
+      getCIStatuses.mockClear();
+
+      // A workspace-host restarted while the app was blurred keeps the attended
+      // `true` default (its focus cadence is never replayed), so focus regain
+      // brings no flag transition. Hooking the catch-up off the enrichment
+      // setter would silently skip that host.
+      pullRequestService.setFocusCadence(true);
+      await flushLoaders();
+
+      expect(getCIStatuses).toHaveBeenCalledWith(expect.anything(), [1]);
+
+      pullRequestService.destroy();
+    });
+
+    it("throttles repeated focus catch-ups", async () => {
+      const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, ciState("failure")]]));
+
+      const { pullRequestService } = await detectAndSettle(["feature/a"]);
+      getCIStatuses.mockClear();
+
+      pullRequestService.setFocusCadence(true);
+      await flushLoaders();
+      const afterFirst = getCIStatuses.mock.calls.length;
+
+      // Rapid alt-tabbing must not burst the CI fan-out.
+      pullRequestService.setFocusCadence(true);
+      await flushLoaders();
+
+      expect(afterFirst).toBe(1);
+      expect(getCIStatuses).toHaveBeenCalledTimes(afterFirst);
+
+      pullRequestService.destroy();
+    });
+
+    it("stamps the focus catch-up so the next tick does not duplicate it", async () => {
+      const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, ciState("failure")]]));
+
+      const { pullRequestService } = await detectAndSettle(["feature/a"]);
+      getCIStatuses.mockClear();
+
+      pullRequestService.setFocusCadence(true);
+      await flushLoaders();
+      expect(getCIStatuses).toHaveBeenCalledTimes(1);
+
+      // The focus pass goes through the same enrichment entry point, so it
+      // re-paces the terminal interval rather than stacking on top of it.
+      await revalidate(pullRequestService);
+      expect(getCIStatuses).toHaveBeenCalledTimes(1);
+
+      pullRequestService.destroy();
+    });
+
+    it("keeps both paths inert while CI enrichment is disabled", async () => {
+      const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, ciState("failure")]]));
+
+      const { pullRequestService } = await detectAndSettle(["feature/a"]);
+      pullRequestService.setCIEnrichmentEnabled(false);
+      getCIStatuses.mockClear();
+
+      // Well past both terminal intervals.
+      jump(60 * MINUTE);
+      await revalidate(pullRequestService);
+      pullRequestService.setFocusCadence(true);
+      await flushLoaders();
+
+      expect(getCIStatuses).not.toHaveBeenCalled();
+
+      pullRequestService.destroy();
+    });
+
+    it("keeps both paths inert on worker instances", async () => {
+      const prev = process.env.DAINTREE_INSTANCE_ROLE;
+      process.env.DAINTREE_INSTANCE_ROLE = "worker";
+      try {
+        const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, ciState("failure")]]));
+
+        const { pullRequestService } = await detectAndSettle(["feature/a"]);
+        const svc = pullRequestService as unknown as { ciEnrichmentEnabled: boolean };
+
+        jump(60 * MINUTE);
+        await revalidate(pullRequestService);
+        // A stray focus signal must not enable enrichment as a side effect.
+        pullRequestService.setFocusCadence(true);
+        await flushLoaders();
+
+        expect(svc.ciEnrichmentEnabled).toBe(false);
+        expect(getCIStatuses).not.toHaveBeenCalled();
+
+        pullRequestService.destroy();
+      } finally {
+        if (prev === undefined) delete process.env.DAINTREE_INSTANCE_ROLE;
+        else process.env.DAINTREE_INSTANCE_ROLE = prev;
+      }
+    });
+  });
 });
