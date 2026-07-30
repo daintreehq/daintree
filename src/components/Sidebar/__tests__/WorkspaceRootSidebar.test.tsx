@@ -40,7 +40,11 @@ vi.mock("@/services/ActionService", () => ({
 // Radix keeps the row's context menu closed, so its items never reach the DOM
 // and an "absent, not disabled" assertion over the real menu would pass
 // vacuously. Rendering the content inline is what makes that contract testable.
-vi.mock("@/components/ui/context-menu", () => ({
+// Partial, for the same reason as Sidebar.contextMenu.test.tsx: this module's
+// components render each other, so a full replacement throws on whichever
+// export the graph reaches that the factory didn't list.
+vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/context-menu")>()),
   ContextMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
   ContextMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
   ContextMenuContent: ({ children }: { children: ReactNode }) => (

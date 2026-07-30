@@ -31,8 +31,13 @@ vi.mock("@/components/Project", () => ({
 }));
 
 // Records the actionId of every menu entry that actually renders, so a test can
-// assert on absence rather than on a disabled attribute.
-vi.mock("@/components/ui/context-menu", () => ({
+// assert on absence rather than on a disabled attribute. Partial (spreading
+// `importOriginal`) rather than a full replacement: `ContextMenuActionItem`
+// renders `ContextMenuItem` from this same module, so a factory listing only
+// the components Sidebar names directly makes vitest throw on the exports
+// reached through the module's own graph.
+vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/context-menu")>()),
   ContextMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
   ContextMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
   ContextMenuContent: ({ children }: { children: ReactNode }) => (
