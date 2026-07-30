@@ -73,8 +73,14 @@ vi.mock("@/store/panelStore", () => ({
 }));
 
 const mockGenerateRecipeFromActiveTerminals = vi.fn().mockReturnValue([]);
+const recipeFixtures = vi.hoisted(() => ({ recipes: [] as unknown[] }));
 vi.mock("@/store/recipeStore", () => {
-  const recipeState = { recipes: [], runRecipeWithResults: vi.fn() };
+  const recipeState = {
+    get recipes() {
+      return recipeFixtures.recipes;
+    },
+    runRecipeWithResults: vi.fn(),
+  };
   return {
     useRecipeStore: Object.assign(
       (selector?: (s: typeof recipeState) => unknown) =>
@@ -137,21 +143,36 @@ vi.mock("@/store/worktreeStore", () => ({
   },
 }));
 
-vi.mock("@/components/Worktree/hooks/useRecipePicker", () => ({
-  CLONE_LAYOUT_ID: "__clone_layout__",
-  useRecipePicker: () => ({
-    selectedRecipeId: null,
-    setSelectedRecipeId: vi.fn(),
-    recipePickerOpen: false,
-    setRecipePickerOpen: vi.fn(),
-    recipeSelectionTouchedRef: { current: false },
-    selectedRecipe: null,
-  }),
+const recipePickerCalls = vi.hoisted(() => ({
+  last: null as { startingLayoutRecipes: unknown[]; defaultRecipeId: string | undefined } | null,
+}));
+// Only `useRecipePicker` is stubbed — `resolveEligibleDefaultRecipeId` stays
+// real so the default-eligibility tests exercise the shipping logic rather than
+// a copy of it. The module imports nothing but React, so pulling it in is safe.
+vi.mock("@/components/Worktree/hooks/useRecipePicker", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/Worktree/hooks/useRecipePicker")>()),
+  useRecipePicker: (args: {
+    startingLayoutRecipes: unknown[];
+    defaultRecipeId: string | undefined;
+  }) => {
+    recipePickerCalls.last = args;
+    return {
+      selectedRecipeId: null,
+      setSelectedRecipeId: vi.fn(),
+      recipePickerOpen: false,
+      setRecipePickerOpen: vi.fn(),
+      recipeSelectionTouchedRef: { current: false },
+      selectedRecipe: null,
+    };
+  },
 }));
 
+const projectSettingsFixture = vi.hoisted(() => ({
+  value: null as { defaultWorktreeRecipeId?: string } | null,
+}));
 vi.mock("@/components/Worktree/hooks/useNewWorktreeProjectSettings", () => ({
   useNewWorktreeProjectSettings: () => ({
-    projectSettings: null,
+    projectSettings: projectSettingsFixture.value,
     configuredBranchPrefix: "",
   }),
 }));
@@ -1073,5 +1094,83 @@ describe("NewWorktreeDialog — self-assign cache mutation", () => {
 
     expect(mockAssignIssue).not.toHaveBeenCalled();
     expect(getGeneration(ISSUE_CACHE_KEY)).toBe(0);
+  });
+});
+
+describe("NewWorktreeDialog — recipe scope visibility (#11510)", () => {
+  const GLOBAL_WORK = { id: "global-work", name: "Work", terminals: [], createdAt: 0 };
+  const SHADOWED_WORK = {
+    id: "project-work",
+    name: "Work",
+    projectId: "project-1",
+    shadowedBy: "Work",
+    terminals: [],
+    createdAt: 0,
+  };
+  const WORKTREE_ONLY = {
+    id: "wt-scoped",
+    name: "Scoped",
+    projectId: "project-1",
+    worktreeId: "wt-1",
+    terminals: [],
+    createdAt: 0,
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+    recipePickerCalls.last = null;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+    recipeFixtures.recipes = [];
+    projectSettingsFixture.value = null;
+  });
+
+  it("keeps a shadowed recipe in the picker list instead of hiding it", async () => {
+    recipeFixtures.recipes = [GLOBAL_WORK, SHADOWED_WORK, WORKTREE_ONLY];
+
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const listed = (recipePickerCalls.last?.startingLayoutRecipes ?? []) as { id: string }[];
+    expect(listed.map((r) => r.id)).toEqual(["global-work", "project-work"]);
+  });
+
+  it("does not promote a shadowed recipe to the implicit default", async () => {
+    // A shadowed recipe never runs its own terminals, so RecipesTab reports the
+    // pinned default as unavailable. The picker has to agree rather than
+    // silently marking the losing row "(default)".
+    recipeFixtures.recipes = [SHADOWED_WORK];
+    projectSettingsFixture.value = { defaultWorktreeRecipeId: "project-work" };
+
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    // Assert the call happened first — a bare optional chain would also pass if
+    // the picker were never invoked at all.
+    expect(recipePickerCalls.last).not.toBeNull();
+    expect(recipePickerCalls.last?.defaultRecipeId).toBeUndefined();
+  });
+
+  it("still forwards an unshadowed pinned default", async () => {
+    recipeFixtures.recipes = [GLOBAL_WORK];
+    projectSettingsFixture.value = { defaultWorktreeRecipeId: "global-work" };
+
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    expect(recipePickerCalls.last?.defaultRecipeId).toBe("global-work");
   });
 });

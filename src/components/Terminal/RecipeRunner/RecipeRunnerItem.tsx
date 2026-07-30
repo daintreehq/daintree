@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import { getRecipeTerminalSummary } from "../utils/recipeUtils";
+import { getRecipeScope } from "@/utils/recipeScope";
 import type { TerminalRecipe } from "@/types";
 
 interface RecipeRunnerItemProps {
@@ -47,6 +48,7 @@ export function RecipeRunnerItem({
 }: RecipeRunnerItemProps) {
   const recipeSummary = getRecipeTerminalSummary(recipe.terminals);
   const isPinned = recipe.showInEmptyState === true;
+  const scopeLabel = getRecipeScope(recipe).label;
 
   if (mode === "grid") {
     return (
@@ -90,15 +92,16 @@ export function RecipeRunnerItem({
                 {recipe.name}
               </span>
               {recipe.shadowedBy && (
-                <span className="text-[11px] text-text-muted shrink-0">Overridden</span>
+                <span className="text-[11px] text-text-muted shrink-0">Overridden by Team</span>
               )}
               {isPinned && <Pin className="h-3 w-3 text-daintree-accent/60 shrink-0" aria-hidden />}
             </div>
-            {recipeSummary && recipeSummary !== recipe.name && (
-              <span className="text-xs text-text-muted truncate w-full pl-5.5">
-                {recipeSummary}
-              </span>
-            )}
+            <span className="flex items-center gap-2 w-full pl-5.5 text-xs text-text-muted">
+              <span className="shrink-0">{scopeLabel}</span>
+              {recipeSummary && recipeSummary !== recipe.name && (
+                <span className="truncate">{recipeSummary}</span>
+              )}
+            </span>
           </button>
         </ContextMenuTrigger>
         <RecipeContextMenu
@@ -141,8 +144,9 @@ export function RecipeRunnerItem({
           <span className="flex-1 text-sm font-medium text-daintree-text truncate">
             {recipe.name}
           </span>
+          <span className="text-[11px] text-text-muted shrink-0">{scopeLabel}</span>
           {recipe.shadowedBy && (
-            <span className="text-[11px] text-text-muted shrink-0">Overridden</span>
+            <span className="text-[11px] text-text-muted shrink-0">Overridden by Team</span>
           )}
           {recipeSummary && recipeSummary !== recipe.name && (
             <span className="text-xs text-text-muted truncate max-w-[30%]">{recipeSummary}</span>

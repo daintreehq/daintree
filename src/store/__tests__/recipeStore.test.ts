@@ -1847,6 +1847,104 @@ describe("recipeStore", () => {
       expect(state.recipes[0]?.terminals[0]?.env).toEqual({ TOKEN: "" });
     });
 
+    it("resolves a shadowed recipe to the hydrated mirror, not the redacted canonical copy", async () => {
+      // The git-tracked in-repo file has every env value blanked; the
+      // ProjectFileStore mirror carries the real ones. Launching a shadowed row
+      // has to land on the same hydrated recipe the Team row itself runs.
+      const inRepoRecipe = {
+        id: "recipe-team",
+        name: "Work",
+        scope: "inrepo" as const,
+        terminals: [{ type: "terminal" as const, title: "Shell", env: { TOKEN: "" } }],
+        createdAt: 500,
+      };
+      const mirror = {
+        ...inRepoRecipe,
+        projectId: "project-1",
+        terminals: [{ type: "terminal" as const, title: "Shell", env: { TOKEN: "secret" } }],
+      };
+      const shadowedLocal = {
+        id: "recipe-local",
+        name: "Work",
+        projectId: "project-1",
+        terminals: [{ type: "terminal" as const, title: "Stale" }],
+        createdAt: 100,
+      };
+      globalGetRecipesMock.mockResolvedValueOnce([]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [mirror, shadowedLocal], collisions: [] });
+      getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
+
+      await useRecipeStore.getState().loadRecipes("project-1");
+
+      const resolved = useRecipeStore.getState().getRecipeById("recipe-local");
+      expect(resolved?.id).toBe("recipe-team");
+      expect(resolved?.terminals[0]?.env).toEqual({ TOKEN: "secret" });
+    });
+
+    it("does not resolve a shadowed recipe to a same-named global recipe", async () => {
+      // `recipes` is ordered global-first, so a name-only lookup over the merged
+      // list would hand back the global recipe instead of the Team winner.
+      const inRepoRecipe = {
+        id: "recipe-team",
+        name: "Work",
+        scope: "inrepo" as const,
+        terminals: [{ type: "terminal" as const, title: "Team shell" }],
+        createdAt: 500,
+      };
+      const globalRecipe = {
+        id: "recipe-global",
+        name: "Work",
+        terminals: [{ type: "terminal" as const, title: "Global shell" }],
+        createdAt: 50,
+      };
+      const shadowedLocal = {
+        id: "recipe-local",
+        name: "Work",
+        projectId: "project-1",
+        terminals: [{ type: "terminal" as const, title: "Stale" }],
+        createdAt: 100,
+      };
+      globalGetRecipesMock.mockResolvedValueOnce([globalRecipe]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [shadowedLocal], collisions: [] });
+      getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
+
+      await useRecipeStore.getState().loadRecipes("project-1");
+
+      expect(useRecipeStore.getState().getRecipeById("recipe-local")?.id).toBe("recipe-team");
+    });
+
+    it("leaves a global recipe unshadowed when a project recipe shares its name (#11510)", async () => {
+      // Global and project-local recipes with the same name are two independent
+      // executable targets — neither overrides the other, so neither may be
+      // marked shadowed. `getRecipeById` resolves `shadowedBy` by searching only
+      // `inRepoRecipes`, so a shadow marker here would resolve to the wrong
+      // recipe (or silently to itself). The scope label is what disambiguates.
+      const globalRecipe = {
+        id: "global-work",
+        name: "Work",
+        terminals: [{ type: "terminal" as const, title: "Global shell" }],
+        createdAt: 100,
+      };
+      const projectRecipe = {
+        id: "project-work",
+        name: "Work",
+        projectId: "project-1",
+        terminals: [{ type: "terminal" as const, title: "Project shell" }],
+        createdAt: 200,
+      };
+      globalGetRecipesMock.mockResolvedValueOnce([globalRecipe]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [projectRecipe], collisions: [] });
+      getInRepoRecipesMock.mockResolvedValueOnce([]);
+
+      await useRecipeStore.getState().loadRecipes("project-1");
+
+      const state = useRecipeStore.getState();
+      expect(state.recipes.map((r) => r.shadowedBy)).toEqual([undefined, undefined]);
+      // Each id still resolves to its own recipe, so picking either row runs it.
+      expect(state.getRecipeById("global-work")?.terminals[0]?.title).toBe("Global shell");
+      expect(state.getRecipeById("project-work")?.terminals[0]?.title).toBe("Project shell");
+    });
+
     it("loadRecipes hydrates in-repo usage metadata into inRepoRecipes so the UI shows persisted frecency (#11354)", async () => {
       const inRepoRecipe = {
         id: "recipe-opaque-abc",

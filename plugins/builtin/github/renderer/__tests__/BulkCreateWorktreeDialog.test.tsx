@@ -174,6 +174,15 @@ vi.mock("@/store/panelStore", () => ({
 let mockSelectedRecipeId: string | null = null;
 vi.mock("@/components/Worktree/hooks/useRecipePicker", () => ({
   CLONE_LAYOUT_ID: "__clone_layout__",
+  resolveEligibleDefaultRecipeId: (
+    recipes: unknown[],
+    persistedDefaultRecipeId: string | undefined
+  ) => {
+    // Mirror the real implementation: return the persisted ID only if it exists in recipes and is not shadowed
+    return recipes.some((r: any) => r.id === persistedDefaultRecipeId && !r.shadowedBy)
+      ? persistedDefaultRecipeId
+      : undefined;
+  },
   useRecipePicker: () => ({
     selectedRecipeId: mockSelectedRecipeId,
     setSelectedRecipeId: vi.fn(),

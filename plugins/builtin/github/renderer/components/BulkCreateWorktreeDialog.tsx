@@ -27,7 +27,11 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
-import { useRecipePicker, CLONE_LAYOUT_ID } from "@/components/Worktree/hooks/useRecipePicker";
+import {
+  useRecipePicker,
+  resolveEligibleDefaultRecipeId,
+  CLONE_LAYOUT_ID,
+} from "@/components/Worktree/hooks/useRecipePicker";
 import { RecipePickerPopover } from "@/components/Worktree/views/RecipePickerPopover";
 import { useNewWorktreeProjectSettings } from "@/components/Worktree/hooks/useNewWorktreeProjectSettings";
 import { spawnPanelsFromRecipe } from "@/components/Worktree/panelSpawning";
@@ -125,8 +129,12 @@ export function BulkCreateWorktreeDialog({
   const currentUserAvatar = viewer?.avatarUrl;
 
   const { projectSettings } = useNewWorktreeProjectSettings({ isOpen });
-  const defaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
-  const globalRecipes = useMemo(() => recipes.filter((r) => !r.worktreeId), [recipes]);
+  const persistedDefaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
+  const startingLayoutRecipes = useMemo(() => recipes.filter((r) => !r.worktreeId), [recipes]);
+  const defaultRecipeId = useMemo(
+    () => resolveEligibleDefaultRecipeId(startingLayoutRecipes, persistedDefaultRecipeId),
+    [startingLayoutRecipes, persistedDefaultRecipeId]
+  );
 
   // Recipe picker (shared preferences with single create)
   const {
@@ -139,7 +147,7 @@ export function BulkCreateWorktreeDialog({
   } = useRecipePicker({
     isOpen,
     defaultRecipeId,
-    globalRecipes,
+    startingLayoutRecipes,
     lastSelectedWorktreeRecipeId,
     projectId,
     setLastSelectedWorktreeRecipeIdByProject,
@@ -274,8 +282,15 @@ export function BulkCreateWorktreeDialog({
       });
       queueRef.current = queue;
       const currentRunItems = new Set(toCreate.map((p) => p.item.number));
+      // Size the admission batch off the recipe that will actually spawn: the
+      // run path resolves a shadowed id to its winner, so planning from the
+      // displayed row would budget for the wrong terminal count.
+      const effectiveRecipe = selectedRecipe
+        ? (useRecipeStore.getState().getRecipeById(selectedRecipe.id) ?? selectedRecipe)
+        : undefined;
       const ptyTerminalsPerRecipe =
-        selectedRecipe?.terminals.filter((terminal) => terminal.type !== "dev-preview").length ?? 0;
+        effectiveRecipe?.terminals.filter((terminal) => terminal.type !== "dev-preview").length ??
+        0;
       const recipeSpawnBatches = planBulkRecipeSpawnBatches(
         [...currentRunItems],
         ptyTerminalsPerRecipe,
@@ -1046,7 +1061,7 @@ export function BulkCreateWorktreeDialog({
             )}
 
             <RecipePickerPopover
-              recipes={globalRecipes}
+              recipes={startingLayoutRecipes}
               selectedRecipeId={selectedRecipeId}
               selectedRecipe={selectedRecipe}
               defaultRecipeId={defaultRecipeId}

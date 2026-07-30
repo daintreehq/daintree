@@ -7,6 +7,9 @@ let mockRecipes: Array<{
   id: string;
   name: string;
   worktreeId?: string;
+  projectId?: string;
+  scope?: string;
+  shadowedBy?: string;
 }> = [];
 let mockMruEntries: Array<{ id: string; score: number; lastAccessedAt: number }> = [];
 const runRecipeWithResultsMock = vi.fn();
@@ -440,6 +443,63 @@ describe("DockLaunchButton", () => {
     expect(getByText("Project recipe")).toBeTruthy();
     expect(getByText("Worktree recipe")).toBeTruthy();
     expect(queryByText("Other worktree recipe")).toBeNull();
+  });
+
+  it("distinguishes same-named recipes by scope (#11510)", () => {
+    mockRecipes = [
+      { id: "r-global", name: "Work", worktreeId: undefined, projectId: undefined },
+      { id: "r-local", name: "Work", worktreeId: undefined, projectId: "proj-1" },
+    ];
+
+    const { getByText } = render(
+      <DockLaunchButton
+        agents={AGENTS}
+        hasDevPreview={false}
+        onLaunchAgent={vi.fn()}
+        activeWorktreeId="wt-1"
+        cwd="/tmp"
+      />
+    );
+
+    expect(getByText("Global")).toBeTruthy();
+    expect(getByText("Project-wide")).toBeTruthy();
+  });
+
+  it("keeps a shadowed recipe listed, marked, and launchable (#11510)", async () => {
+    mockRecipes = [
+      {
+        id: "r-shadowed",
+        name: "Work",
+        worktreeId: undefined,
+        projectId: "proj-1",
+        shadowedBy: "Work",
+      },
+    ];
+    runRecipeWithResultsMock.mockResolvedValue({});
+
+    const { getByText } = render(
+      <DockLaunchButton
+        agents={AGENTS}
+        hasDevPreview={false}
+        onLaunchAgent={vi.fn()}
+        activeWorktreeId="wt-1"
+        cwd="/tmp"
+      />
+    );
+
+    expect(getByText(/Overridden by Team/)).toBeTruthy();
+
+    fireEvent.click(getByText("Work"));
+
+    // The raw id goes through; the store resolves it to the winning recipe.
+    await waitFor(() => {
+      expect(runRecipeWithResultsMock).toHaveBeenCalledWith(
+        "r-shadowed",
+        "/tmp",
+        "wt-1",
+        undefined
+      );
+    });
   });
 
   it("calls preventDefault on pointer close so the trigger does not keep its focus ring (issue #6119)", () => {

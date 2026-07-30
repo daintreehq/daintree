@@ -3,6 +3,20 @@ import type { TerminalRecipe } from "@/types";
 
 export const CLONE_LAYOUT_ID = "__clone_layout__";
 
+/**
+ * A shadowed recipe never runs its own terminals, so it stays ineligible as an
+ * implicit default even though it is still listed and explicitly selectable.
+ * Mirrors the eligibility rule RecipesTab pins its default against.
+ */
+export function resolveEligibleDefaultRecipeId(
+  recipes: TerminalRecipe[],
+  persistedDefaultRecipeId: string | undefined
+): string | undefined {
+  return recipes.some((r) => r.id === persistedDefaultRecipeId && !r.shadowedBy)
+    ? persistedDefaultRecipeId
+    : undefined;
+}
+
 export interface UseRecipePickerResult {
   selectedRecipeId: string | null;
   setSelectedRecipeId: React.Dispatch<React.SetStateAction<string | null>>;
@@ -15,7 +29,7 @@ export interface UseRecipePickerResult {
 export function useRecipePicker({
   isOpen,
   defaultRecipeId,
-  globalRecipes,
+  startingLayoutRecipes,
   lastSelectedWorktreeRecipeId,
   projectId,
   initialRecipeId,
@@ -23,7 +37,7 @@ export function useRecipePicker({
 }: {
   isOpen: boolean;
   defaultRecipeId: string | undefined;
-  globalRecipes: TerminalRecipe[];
+  startingLayoutRecipes: TerminalRecipe[];
   lastSelectedWorktreeRecipeId: string | null | undefined;
   projectId: string;
   initialRecipeId?: string | null;
@@ -48,31 +62,31 @@ export function useRecipePicker({
     if (!projectId) return;
     if (recipeSelectionTouchedRef.current) return;
 
-    if (initialRecipeId && globalRecipes.some((r) => r.id === initialRecipeId)) {
+    if (initialRecipeId && startingLayoutRecipes.some((r) => r.id === initialRecipeId)) {
       setSelectedRecipeId(initialRecipeId);
     } else if (lastSelectedWorktreeRecipeId !== undefined) {
       if (lastSelectedWorktreeRecipeId === null) {
         setSelectedRecipeId(null);
       } else if (lastSelectedWorktreeRecipeId === CLONE_LAYOUT_ID) {
         setSelectedRecipeId(CLONE_LAYOUT_ID);
-      } else if (globalRecipes.some((r) => r.id === lastSelectedWorktreeRecipeId)) {
+      } else if (startingLayoutRecipes.some((r) => r.id === lastSelectedWorktreeRecipeId)) {
         setSelectedRecipeId(lastSelectedWorktreeRecipeId);
       } else {
         if (projectId) setLastSelectedWorktreeRecipeIdByProject(projectId, undefined);
-        if (defaultRecipeId && globalRecipes.some((r) => r.id === defaultRecipeId)) {
+        if (defaultRecipeId && startingLayoutRecipes.some((r) => r.id === defaultRecipeId)) {
           setSelectedRecipeId(defaultRecipeId);
         } else {
           setSelectedRecipeId(CLONE_LAYOUT_ID);
         }
       }
-    } else if (defaultRecipeId && globalRecipes.some((r) => r.id === defaultRecipeId)) {
+    } else if (defaultRecipeId && startingLayoutRecipes.some((r) => r.id === defaultRecipeId)) {
       setSelectedRecipeId(defaultRecipeId);
     } else {
       setSelectedRecipeId(CLONE_LAYOUT_ID);
     }
   }, [
     isOpen,
-    globalRecipes,
+    startingLayoutRecipes,
     lastSelectedWorktreeRecipeId,
     defaultRecipeId,
     projectId,
@@ -84,14 +98,20 @@ export function useRecipePicker({
   useEffect(() => {
     if (!selectedRecipeId) return;
     if (selectedRecipeId === CLONE_LAYOUT_ID) return;
-    if (globalRecipes.some((recipe) => recipe.id === selectedRecipeId)) return;
+    if (startingLayoutRecipes.some((recipe) => recipe.id === selectedRecipeId)) return;
     setSelectedRecipeId(null);
     if (projectId) setLastSelectedWorktreeRecipeIdByProject(projectId, undefined);
-  }, [globalRecipes, selectedRecipeId, projectId, setLastSelectedWorktreeRecipeIdByProject]);
+  }, [
+    startingLayoutRecipes,
+    selectedRecipeId,
+    projectId,
+    setLastSelectedWorktreeRecipeIdByProject,
+  ]);
 
   const selectedRecipe = useMemo(
-    () => (selectedRecipeId ? globalRecipes.find((r) => r.id === selectedRecipeId) : undefined),
-    [selectedRecipeId, globalRecipes]
+    () =>
+      selectedRecipeId ? startingLayoutRecipes.find((r) => r.id === selectedRecipeId) : undefined,
+    [selectedRecipeId, startingLayoutRecipes]
   );
 
   return {
