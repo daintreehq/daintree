@@ -17,6 +17,8 @@ export interface FileBrowserViewPatch {
   browserRootPath?: string;
   /** `true` collapses the tree sidebar; `false` and absent both mean open. */
   browserSidebarCollapsed?: boolean;
+  /** `true` collapses the viewer column; `false` and absent both mean open. */
+  browserViewerCollapsed?: boolean;
   /** Last-known tree structure, captured as the view goes away (#11367). */
   browserTreeSnapshot?: FileBrowserTreeSnapshot;
   /** Tree column width in px; clamped into range before it lands. */
@@ -69,9 +71,15 @@ export const createFileBrowserPanelActions = (
       // `false` and absent are the same open state, so patching `false` onto a
       // never-collapsed panel must not count as a change. Compared as
       // normalized booleans rather than raw optionals for that reason.
-      const collapsedUnchanged =
+      const sidebarCollapsedUnchanged =
         patch.browserSidebarCollapsed === undefined ||
         (patch.browserSidebarCollapsed === true) === (panel.browserSidebarCollapsed === true);
+      // The viewer flag gets its own comparison rather than riding the sidebar's:
+      // folding them together would make a viewer-only patch look unchanged and
+      // bail out below, so every viewer toggle would be a silent no-op (#11496).
+      const viewerCollapsedUnchanged =
+        patch.browserViewerCollapsed === undefined ||
+        (patch.browserViewerCollapsed === true) === (panel.browserViewerCollapsed === true);
       // Deep rather than reference equality: capture builds a fresh snapshot
       // object on every hide, and most hides change nothing — a reference
       // check would dirty the panel entry (and the persisted layout) each time.
@@ -94,7 +102,8 @@ export const createFileBrowserPanelActions = (
         expandedUnchanged &&
         hideDotfilesUnchanged &&
         rootUnchanged &&
-        collapsedUnchanged &&
+        sidebarCollapsedUnchanged &&
+        viewerCollapsedUnchanged &&
         treeSnapshotUnchanged &&
         widthUnchanged
       )
@@ -116,6 +125,9 @@ export const createFileBrowserPanelActions = (
         }),
         ...(patch.browserSidebarCollapsed !== undefined && {
           browserSidebarCollapsed: patch.browserSidebarCollapsed,
+        }),
+        ...(patch.browserViewerCollapsed !== undefined && {
+          browserViewerCollapsed: patch.browserViewerCollapsed,
         }),
         ...(patch.browserTreeSnapshot !== undefined && {
           browserTreeSnapshot: patch.browserTreeSnapshot,

@@ -1739,6 +1739,29 @@ describe("buildArgsForNonPtyRecreation", () => {
     expect(result.devCommand).toBe("npm start");
   });
 
+  it("carries file-browser layout state through recreation (#11496)", () => {
+    // The hop the per-kind serializer tests can't see: a field can round-trip
+    // through serialize/deserialize and still be dropped here, which is how a
+    // restored panel silently loses the layout the user last chose.
+    const result = buildArgsForNonPtyRecreation(
+      {
+        id: "fb1",
+        kind: "file-browser",
+        title: "Files",
+        browserViewerCollapsed: true,
+        browserSelectedPath: "src/app.ts",
+        browserSidebarWidth: 360,
+        location: "grid",
+      },
+      "file-browser",
+      "/project"
+    );
+
+    expect(result.browserViewerCollapsed).toBe(true);
+    expect(result.browserSelectedPath).toBe("src/app.ts");
+    expect(result.browserSidebarWidth).toBe(360);
+  });
+
   it("falls back to projectRoot when a non-PTY saved cwd is relative", () => {
     const result = buildArgsForNonPtyRecreation(
       {

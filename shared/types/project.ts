@@ -232,6 +232,8 @@ export interface PanelSnapshot {
   browserRootPath?: string;
   /** Whether a file browser panel's tree sidebar is collapsed (only `true` persisted) */
   browserSidebarCollapsed?: boolean;
+  /** Whether a file browser panel's viewer column is collapsed (only `true` persisted) */
+  browserViewerCollapsed?: boolean;
   /** Last-known tree structure of a file browser panel (#11367) */
   browserTreeSnapshot?: FileBrowserTreeSnapshot;
   /** File browser tree column width in px (only a non-default, in-range value persisted) */

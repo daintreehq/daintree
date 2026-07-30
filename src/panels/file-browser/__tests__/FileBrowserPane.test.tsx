@@ -61,6 +61,7 @@ interface MockPanel {
   browserShowIgnored?: boolean;
   browserRootPath?: string;
   browserSidebarCollapsed?: boolean;
+  browserViewerCollapsed?: boolean;
   browserSidebarWidth?: number;
   browserWorkspaceRooted?: boolean;
 }
@@ -125,12 +126,27 @@ const FOLDER_ROW = {
   depth: 0,
   isExpanded: false,
 };
+// `onActivate` is captured rather than driven through a real row: Enter and
+// double-click both land on it, and the pane's own file-vs-directory guard is
+// what these tests are after.
+const { treeProps } = vi.hoisted(() => ({
+  treeProps: { onActivate: undefined as ((path: string) => void) | undefined },
+}));
 vi.mock("../FileTreeView", () => ({
-  FileTreeView: ({ rowContextMenu }: { rowContextMenu?: (row: unknown) => React.ReactNode }) => (
-    <div data-testid="file-tree-view" role="tree" tabIndex={-1}>
-      {rowContextMenu?.(FOLDER_ROW)}
-    </div>
-  ),
+  FileTreeView: ({
+    rowContextMenu,
+    onActivate,
+  }: {
+    rowContextMenu?: (row: unknown) => React.ReactNode;
+    onActivate?: (path: string) => void;
+  }) => {
+    treeProps.onActivate = onActivate;
+    return (
+      <div data-testid="file-tree-view" role="tree" tabIndex={-1}>
+        {rowContextMenu?.(FOLDER_ROW)}
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
@@ -186,7 +202,19 @@ vi.mock("@/components/Panel/ContentPanel", () => ({
 // renderers stay out of the suite; CodeViewer surfaces a marker so a selected
 // file's viewer is observable across a collapse.
 vi.mock("@/clients/filesClient", () => ({ filesClient: { read: readMock } }));
-vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
+// Row activation dispatches `file.openPanel` through here; the default is the
+// success shape so tests that don't care about failure don't have to arrange it.
+const { dispatchMock } = vi.hoisted(() => ({
+  dispatchMock:
+    vi.fn<
+      (
+        id: string,
+        args?: unknown,
+        opts?: unknown
+      ) => Promise<{ ok: true; result: unknown } | { ok: false; error: { message: string } }>
+    >(),
+}));
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({ MarkdownViewer: () => null }));
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
   CodeViewer: () => <div data-testid="code-viewer" />,
@@ -251,12 +279,16 @@ beforeEach(() => {
   treeState.isInitialLoading = false;
   treeState.captureSnapshot = () => null;
   mockPanel.browserSidebarCollapsed = undefined;
+  mockPanel.browserViewerCollapsed = undefined;
   mockPanel.browserSelectedPath = undefined;
   mockPanel.browserRootPath = undefined;
   mockPanel.browserShowIgnored = undefined;
   mockPanel.browserSidebarWidth = undefined;
   mockPanel.browserWorkspaceRooted = undefined;
   treeArgs.changeTick = undefined;
+  treeProps.onActivate = undefined;
+  dispatchMock.mockReset();
+  dispatchMock.mockResolvedValue({ ok: true, result: { panelId: "file-1" } });
   worktreeTicks.git = undefined;
   worktreeTicks.fs = undefined;
   for (const name of ["matchMedia"] as const) {
@@ -1187,5 +1219,450 @@ describe("promoted workspace-rooted browser (#11489)", () => {
     renderPane({ worktreeId: "wt-1" });
 
     expect(treeArgs.changeTick).toBeUndefined();
+  });
+});
+
+describe("FileBrowserPane collapsible viewer (#11496)", () => {
+  const paneJsx = () => (
+    <TooltipProvider>
+      <FileBrowserPane
+        id="fb-1"
+        title="Files"
+        worktreeId="wt-1"
+        isFocused
+        location="grid"
+        onFocus={vi.fn()}
+        onClose={vi.fn()}
+      />
+    </TooltipProvider>
+  );
+
+  // Both toggles write through the store, so a click has to be reflected back
+  // before the next assertion — otherwise every test would only ever see the
+  // pane's initial layout.
+  function makeStoreStateful() {
+    setFileBrowserViewMock.mockImplementation((_id: string, patch: Partial<MockPanel>) => {
+      Object.assign(mockPanel, patch);
+    });
+  }
+
+  const viewerToggle = () => screen.getByTestId("file-browser-viewer-toggle");
+  const treeColumn = () =>
+    document.getElementById(
+      screen.getByTestId("file-browser-sidebar-toggle").getAttribute("aria-controls")!
+    )!;
+
+  it("homes the viewer's toggle in the tree header and names the region it discloses", () => {
+    renderPane();
+
+    const toggle = viewerToggle();
+    // The toggle for each column lives in the other column's header: this one
+    // has to be inside the tree, which is what makes "both collapsed"
+    // unreachable rather than merely discouraged.
+    expect(treeColumn().contains(toggle)).toBe(true);
+    const controlsId = toggle.getAttribute("aria-controls");
+    expect(controlsId).toBeTruthy();
+    expect(document.getElementById(controlsId!)).not.toBeNull();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("sits last in the tree header, against the divider", () => {
+    renderPane();
+
+    // The header located from the column rather than from the toggle itself:
+    // asking the toggle for its own parent would keep passing if a wrapper
+    // moved the control into the middle of the row.
+    const header = treeColumn().querySelector<HTMLElement>(":scope > div")!;
+    expect(header.contains(viewerToggle())).toBe(true);
+    // Mirrors where the tree's toggle sits in the viewer's toolbar (first, also
+    // against the divider), so the two disclosures frame the split.
+    expect(header.lastElementChild).toBe(viewerToggle());
+  });
+
+  it("carries disclosure semantics rather than a pressed toggle", () => {
+    renderPane();
+
+    const toggle = viewerToggle();
+    // A disclosure, like the tree's: it hides a region, so `aria-expanded` is
+    // the state — not `aria-pressed`, which would describe a mode switch.
+    expect(toggle.hasAttribute("aria-expanded")).toBe(true);
+    expect(toggle.hasAttribute("aria-pressed")).toBe(false);
+  });
+
+  it("keeps one static label across both states", () => {
+    makeStoreStateful();
+    const { rerender } = renderPane();
+    const labelWhenOpen = viewerToggle().getAttribute("aria-label");
+
+    fireEvent.click(viewerToggle());
+    rerender(paneJsx());
+
+    expect(viewerToggle().getAttribute("aria-label")).toBe(labelWhenOpen);
+    expect(labelWhenOpen).toBeTruthy();
+  });
+
+  it("unmounts the viewer column and drops the dangling aria-controls", async () => {
+    mockPanel.browserSelectedPath = "src/app.ts";
+    const { rerender } = renderPane();
+    const controlsId = viewerToggle().getAttribute("aria-controls");
+    expect(document.getElementById(controlsId!)).not.toBeNull();
+    // Established BEFORE collapsing: without this the "code viewer is gone"
+    // assertion below would also pass if the selected file never rendered.
+    await waitFor(() => expect(screen.getByTestId("code-viewer")).toBeTruthy());
+
+    mockPanel.browserViewerCollapsed = true;
+    rerender(paneJsx());
+
+    // The whole viewer goes, including the file body and the tree's own toggle
+    // that lived in it — the tree header's control is the only way back.
+    expect(screen.queryByTestId("code-viewer")).toBeNull();
+    expect(screen.queryByTestId("file-browser-sidebar-toggle")).toBeNull();
+    expect(screen.getByTestId("file-tree-view")).toBeTruthy();
+    expect(viewerToggle().getAttribute("aria-expanded")).toBe("false");
+    expect(viewerToggle().hasAttribute("aria-controls")).toBe(false);
+    expect(document.getElementById(controlsId!)).toBeNull();
+  });
+
+  it("leaves exactly one collapse control mounted in either collapsed layout", () => {
+    // The structural invariant behind "both collapsed is impossible": whichever
+    // column is hidden takes its sibling's toggle with it, so the only control
+    // on screen is the one that reopens what's missing.
+    mockPanel.browserViewerCollapsed = true;
+    const { unmount } = renderPane();
+    expect(screen.queryByTestId("file-browser-sidebar-toggle")).toBeNull();
+    expect(screen.getByTestId("file-browser-viewer-toggle")).toBeTruthy();
+    unmount();
+
+    // A fresh root rather than a rerender: the mirror layout is a different
+    // mount, and rerendering an unmounted one asserts nothing.
+    mockPanel.browserViewerCollapsed = undefined;
+    mockPanel.browserSidebarCollapsed = true;
+    renderPane();
+    expect(screen.queryByTestId("file-browser-viewer-toggle")).toBeNull();
+    expect(screen.getByTestId("file-browser-sidebar-toggle")).toBeTruthy();
+  });
+
+  it("keeps the viewer visible when a corrupted record collapses both columns", () => {
+    // Unreachable by gesture, reachable on disk. The sidebar bit decides, so the
+    // tree stays hidden and the viewer is forced open — whichever column wins,
+    // the point is that the panel can never render empty with no way out.
+    mockPanel.browserSidebarCollapsed = true;
+    mockPanel.browserViewerCollapsed = true;
+    renderPane();
+
+    expect(screen.queryByTestId("file-tree-view")).toBeNull();
+    expect(screen.getByTestId("file-browser-sidebar-toggle")).toBeTruthy();
+  });
+
+  it("toggles the persisted flag on click, inverting the current value", () => {
+    renderPane();
+
+    fireEvent.click(viewerToggle());
+
+    expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-1", {
+      browserViewerCollapsed: true,
+    });
+  });
+
+  it("re-opens from the collapsed state rather than always collapsing", () => {
+    mockPanel.browserViewerCollapsed = true;
+    renderPane();
+
+    fireEvent.click(viewerToggle());
+
+    expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-1", {
+      browserViewerCollapsed: false,
+    });
+  });
+
+  it("hands the tree the whole panel, dropping the split width and the grip", () => {
+    mockPanel.browserSidebarWidth = 420;
+    makeStoreStateful();
+    const { rerender } = renderPane();
+
+    // Split layout: a fixed column with a grip against the viewer.
+    const splitColumn = treeColumn();
+    expect(splitColumn.style.width).toBe("420px");
+    expect(screen.getByTestId("file-browser-sidebar-resize")).toBeTruthy();
+    const fillToken = classToken(splitColumn.parentElement!.lastElementChild!, (c) =>
+      /^flex-1$/.test(c)
+    );
+    // Guard against a vacuous undefined === undefined pass below.
+    expect(fillToken).toBeDefined();
+
+    fireEvent.click(viewerToggle());
+    rerender(paneJsx());
+
+    // Sole column: no inline width, nothing to resize against, and it takes the
+    // same fill token the viewer used — so a 600px-capped tree can't strand
+    // dead space beside it.
+    const soleColumn = screen.getByTestId("file-tree-view").closest<HTMLElement>("[id]")!;
+    expect(soleColumn.style.width).toBe("");
+    expect(screen.queryByTestId("file-browser-sidebar-resize")).toBeNull();
+    expect(classToken(soleColumn, (c) => /^flex-1$/.test(c))).toBe(fillToken);
+  });
+
+  it("restores the remembered split and the selected file when the viewer reopens", async () => {
+    mockPanel.browserSidebarWidth = 420;
+    mockPanel.browserSelectedPath = "src/app.ts";
+    makeStoreStateful();
+    const { rerender } = renderPane();
+    await waitFor(() => expect(screen.getByTestId("code-viewer")).toBeTruthy());
+
+    fireEvent.click(viewerToggle());
+    rerender(paneJsx());
+    // Collapsing must not clear the width, only stop applying it.
+    expect(mockPanel.browserSidebarWidth).toBe(420);
+
+    fireEvent.click(viewerToggle());
+    rerender(paneJsx());
+
+    expect(treeColumn().style.width).toBe("420px");
+    expect(screen.getByTestId("file-browser-sidebar-resize")).toBeTruthy();
+    // The selection outlived the unmount, so reopening reads the same file back
+    // rather than returning to the empty state.
+    await waitFor(() => expect(screen.getByTestId("code-viewer")).toBeTruthy());
+  });
+
+  it("drops the document listeners when the viewer collapses mid-drag", () => {
+    const { rerender } = renderPane();
+
+    fireEvent.mouseDown(screen.getByTestId("file-browser-sidebar-resize"), { clientX: 100 });
+    // Collapsing the viewer takes the grip away without unmounting the pane, so
+    // the same cleanup the tree-collapse path uses has to fire here too.
+    mockPanel.browserViewerCollapsed = true;
+    rerender(paneJsx());
+    setFileBrowserViewMock.mockClear();
+    fireEvent.mouseMove(document, { clientX: 400, buttons: 1 });
+
+    expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+  });
+
+  // The redirect runs inside a requestAnimationFrame, so a synchronous assertion
+  // would pass whether or not a frame was ever queued — which is exactly the
+  // regression these two tests exist to catch. Queue the callbacks and flush them
+  // after the collapsed rerender, the order production sees.
+  function queueFrames() {
+    const queued: FrameRequestCallback[] = [];
+    const spy = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => queued.push(cb));
+    return {
+      spy,
+      count: () => queued.length,
+      flush: () => {
+        const pending = queued.splice(0);
+        act(() => {
+          for (const cb of pending) cb(0);
+        });
+      },
+    };
+  }
+
+  it("leaves focus on the toggle when the click itself collapses the viewer", () => {
+    makeStoreStateful();
+    const frames = queueFrames();
+    try {
+      const { rerender } = renderPane();
+      act(() => viewerToggle().focus());
+
+      fireEvent.click(viewerToggle());
+      rerender(paneJsx());
+      // No frame requested at all: the toggle lives in the tree header, so it
+      // survives its own collapse and there is nothing to recover from.
+      expect(frames.count()).toBe(0);
+      frames.flush();
+
+      // Flushed anyway, so an unconditional redirect would have yanked focus off
+      // the button the user just pressed and failed here.
+      expect(document.activeElement).toBe(viewerToggle());
+    } finally {
+      frames.spy.mockRestore();
+    }
+  });
+
+  it("hands focus to the tree when a collapse unmounts the focused viewer control", () => {
+    makeStoreStateful();
+    const frames = queueFrames();
+    try {
+      const { rerender } = renderPane();
+      // Focus something inside the viewer, then collapse from elsewhere (an
+      // assistive or programmatic activation) — the focused node is about to go.
+      act(() => screen.getByTestId("file-browser-sidebar-toggle").focus());
+
+      act(() => {
+        viewerToggle().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      rerender(paneJsx());
+      frames.flush();
+
+      expect(document.activeElement).toBe(screen.getByTestId("file-tree-view"));
+    } finally {
+      frames.spy.mockRestore();
+    }
+  });
+
+  it("still lands focus in the tree column when there is no tree to focus", () => {
+    // The loading, error and empty branches render no role="tree" at all, so a
+    // redirect that only looked for one would drop focus to the document.
+    treeState.rows = [];
+    makeStoreStateful();
+    const frames = queueFrames();
+    try {
+      const { rerender } = renderPane();
+      // Captured before the collapse: the helper resolves the column through the
+      // viewer's toggle, which is exactly what unmounts here. The column element
+      // itself survives, so hold the reference.
+      const column = treeColumn();
+      act(() => screen.getByTestId("file-browser-sidebar-toggle").focus());
+
+      act(() => {
+        viewerToggle().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      rerender(paneJsx());
+      frames.flush();
+
+      expect(screen.queryByRole("tree")).toBeNull();
+      expect(column.contains(document.activeElement)).toBe(true);
+      expect(document.activeElement).not.toBe(document.body);
+    } finally {
+      frames.spy.mockRestore();
+    }
+  });
+});
+
+describe("FileBrowserPane row activation (#11496)", () => {
+  // Invoked non-optionally: with `?.` the negative cases below would pass even if
+  // the pane had never wired the prop, proving nothing about their guards.
+  const activate = async (path: string) => {
+    const onActivate = treeProps.onActivate;
+    expect(onActivate).toBeTypeOf("function");
+    await act(async () => {
+      onActivate!(path);
+      await Promise.resolve();
+    });
+  };
+
+  it("opens a file row in its own panel, resolved to an absolute path", async () => {
+    renderPane();
+
+    await activate("src/app.ts");
+
+    // The worktree in the store mock is /repo, so the action gets the same
+    // absolute path a row's "Copy full path" would produce.
+    expect(dispatchMock.mock.calls).toEqual([
+      ["file.openPanel", { path: "/repo/src/app.ts" }, { source: "user" }],
+    ]);
+  });
+
+  it("ignores a directory row, so Enter on a folder stays a no-op", async () => {
+    // The key resolver reports `activate` for whatever row is selected, folders
+    // included, so this guard is the only thing keeping Enter on a folder from
+    // trying to open a directory as a file panel.
+    renderPane();
+
+    await activate("src");
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a path with no row behind it", async () => {
+    // A stale path (the listing changed under a keypress) is not known to be a
+    // file, so it must not be treated as one.
+    renderPane();
+
+    await activate("src/gone.ts");
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves the path against a workspace root, not the placement worktree", async () => {
+    // A promoted workspace-rooted panel carries a placement `worktreeId` whose
+    // path is NOT what it browses (#11489), so reading that instead of the
+    // resolved base would open a file from the wrong folder.
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    mockPanel.browserWorkspaceRooted = true;
+    renderPane({ worktreeId: "wt-1" });
+
+    await activate("src/app.ts");
+
+    expect(dispatchMock.mock.calls).toEqual([
+      ["file.openPanel", { path: "/scratches/one/src/app.ts" }, { source: "user" }],
+    ]);
+  });
+
+  // `onClose` is what the dialog host wires to its own close for this panel, so
+  // asserting on it is asserting the dialog gets dismissed.
+  const renderDialogPane = (onClose: () => void) =>
+    render(
+      <TooltipProvider>
+        <FileBrowserPane
+          id="fb-1"
+          title="Files"
+          worktreeId="wt-1"
+          isFocused
+          location="dialog"
+          onFocus={vi.fn()}
+          onClose={onClose}
+        />
+      </TooltipProvider>
+    );
+
+  it("closes the browser dialog so the panel it opened is not stranded behind it", async () => {
+    // `worktree.openFileBrowser` opens this pane as a modal, so the grid panel
+    // the action just created would sit under a focus-trapping dialog and the
+    // gesture would look like it did nothing.
+    const onClose = vi.fn();
+    renderDialogPane(onClose);
+
+    await activate("src/app.ts");
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the dialog open when the open failed", async () => {
+    // Closing on failure would dismiss the browser and show nothing in its place.
+    dispatchMock.mockResolvedValue({ ok: false, error: { message: "panel limit reached" } });
+    const onClose = vi.fn();
+    renderDialogPane(onClose);
+
+    await activate("src/app.ts");
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("never closes a grid-hosted browser, where onClose would destroy the panel", async () => {
+    // Same prop, very different meaning outside a dialog: in the grid it closes
+    // the browser itself, so the location guard is load-bearing.
+    const onClose = vi.fn();
+    render(
+      <TooltipProvider>
+        <FileBrowserPane
+          id="fb-1"
+          title="Files"
+          worktreeId="wt-1"
+          isFocused
+          location="grid"
+          onFocus={vi.fn()}
+          onClose={onClose}
+        />
+      </TooltipProvider>
+    );
+
+    await activate("src/app.ts");
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed open without raising a second toast over addPanel's own", async () => {
+    // The realistic failure is the panel ceiling, which `addPanel` already warns
+    // about — a toast here would report one gesture twice.
+    dispatchMock.mockResolvedValue({ ok: false, error: { message: "panel limit reached" } });
+    renderPane();
+
+    await activate("src/app.ts");
+
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 });

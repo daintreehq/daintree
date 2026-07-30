@@ -136,6 +136,52 @@ describe("setFileBrowserView", () => {
     expect(store.get().panelsById["panel-1"]).toBe(before);
   });
 
+  it("collapses and re-opens the viewer (#11496)", () => {
+    // The viewer flag needs its own unchanged-comparison in the setter. Folded
+    // into the sidebar's, a viewer-only patch would look unchanged and hit the
+    // bail-out, making every toggle click a silent no-op with nothing persisted.
+    setFileBrowserView("panel-1", { browserViewerCollapsed: true });
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserViewerCollapsed: true });
+
+    const collapsed = store.get().panelsById["panel-1"];
+    setFileBrowserView("panel-1", { browserViewerCollapsed: false });
+    expect(store.get().panelsById["panel-1"]).not.toBe(collapsed);
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserViewerCollapsed: false });
+  });
+
+  it("treats collapsing an already-open viewer with false as a no-op", () => {
+    const before = store.get().panelsById["panel-1"];
+
+    setFileBrowserView("panel-1", { browserViewerCollapsed: false });
+
+    expect(store.get().panelsById["panel-1"]).toBe(before);
+  });
+
+  it("writes the viewer flag without disturbing the sidebar's own state", () => {
+    // Two independent bits: a collapsed tree must survive a viewer patch, since
+    // the setter compares and merges them separately.
+    setFileBrowserView("panel-1", { browserSidebarCollapsed: true });
+    setFileBrowserView("panel-1", { browserViewerCollapsed: true });
+
+    expect(store.get().panelsById["panel-1"]).toMatchObject({
+      browserSidebarCollapsed: true,
+      browserViewerCollapsed: true,
+    });
+  });
+
+  it("preserves selection, expansion and width when the viewer collapses", () => {
+    setFileBrowserView("panel-1", { browserSelectedPath: "src/app.ts" });
+    setFileBrowserView("panel-1", { browserSidebarWidth: 420 });
+    setFileBrowserView("panel-1", { browserViewerCollapsed: true });
+
+    expect(store.get().panelsById["panel-1"]).toMatchObject({
+      browserViewerCollapsed: true,
+      browserSelectedPath: "src/app.ts",
+      browserExpandedPaths: ["src"],
+      browserSidebarWidth: 420,
+    });
+  });
+
   it("stores a tree snapshot and treats a deep-equal recapture as a no-op (#11367)", () => {
     const snapshot = {
       worktreeId: "wt-1",

@@ -791,6 +791,16 @@ export interface FileBrowserPanelData extends BasePanelData {
    */
   browserSidebarCollapsed?: boolean;
   /**
+   * Whether the viewer column is collapsed, leaving the tree as the whole
+   * panel (#11496). Absent or `false` = open; only `true` is persisted.
+   *
+   * Independent of `browserSidebarCollapsed` on disk, but the two are mutually
+   * exclusive on screen: each column's toggle lives in the *other* column's
+   * header, so a reachable gesture can never hide both. A record holding both
+   * flags resolves tree-hidden/viewer-visible at read time in the pane.
+   */
+  browserViewerCollapsed?: boolean;
+  /**
    * Last-known tree structure, captured when the view goes away and painted
    * back instantly on restore while a live refresh runs (#11367). Derived
    * data, unlike every other field here — but it must live on the panel
@@ -801,8 +811,10 @@ export interface FileBrowserPanelData extends BasePanelData {
   /**
    * Dragged width of the tree column in px. Absent = the 288px default; only a
    * non-default, in-range width is persisted, so an unresized panel stays
-   * sparse. Independent of `browserSidebarCollapsed`: collapsing never clears
-   * it, so re-opening restores the last-dragged width (#11331).
+   * sparse. Independent of both collapse flags: collapsing either column never
+   * clears it, so re-opening restores the last-dragged split (#11331, #11496).
+   * Governs the split layout only — as the sole column the tree simply fills
+   * the panel, so the width is remembered rather than applied.
    */
   browserSidebarWidth?: number;
   /**
