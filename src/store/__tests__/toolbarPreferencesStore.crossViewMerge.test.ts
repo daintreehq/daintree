@@ -123,6 +123,51 @@ describe("toolbarPreferencesStore cross-view write merge (#11351)", () => {
     expect(written.state.launcher.alwaysShowDevServer).toBe(true);
   });
 
+  it("does not revert a sibling's file-browser opt-in from an untouched default (#11495)", async () => {
+    // `file-browser` ships hidden, so every fresh view holds `false` without the
+    // user having chosen it. If the null baseline normalizes to `{}`, that
+    // untouched `false` reads as this view's own edit and overwrites a sibling
+    // view that legitimately turned the button on.
+    const backing = installLocalStorage({});
+    const { useToolbarPreferencesStore: store } = await import("../toolbarPreferencesStore");
+
+    // A sibling view enabled the file browser — the toggle deletes the key.
+    backing.set(
+      STORAGE_KEY,
+      siblingBlob({
+        layout: { leftButtons: [], rightButtons: [], pinnedButtons: {} },
+      })
+    );
+
+    // This view changes something unrelated and must not carry its own default over.
+    store.getState().setAlwaysShowDevServer(true);
+
+    const written = readBlob(backing);
+    expect(written.state.layout.pinnedButtons["file-browser"]).toBeUndefined();
+    expect(written.state.launcher.alwaysShowDevServer).toBe(true);
+  });
+
+  it("still writes its own explicit file-browser hide over a sibling's opt-in", async () => {
+    // The mirror of the case above: when the user in THIS view actually turns the
+    // button off, that is a real edit and must win. Distinguishing the two is the
+    // whole point of separating "no stored map" from "an explicitly empty one".
+    const backing = installLocalStorage({});
+    const { useToolbarPreferencesStore: store } = await import("../toolbarPreferencesStore");
+
+    // Start from the opt-in state so the toggle records a departure from it.
+    store.getState().toggleButtonVisibility("file-browser", "left");
+    expect(store.getState().layout.pinnedButtons["file-browser"]).toBeUndefined();
+
+    backing.set(
+      STORAGE_KEY,
+      siblingBlob({ layout: { leftButtons: [], rightButtons: [], pinnedButtons: {} } })
+    );
+
+    store.getState().toggleButtonVisibility("file-browser", "left");
+
+    expect(readBlob(backing).state.layout.pinnedButtons["file-browser"]).toBe(false);
+  });
+
   it("does not resurrect a pin a sibling deleted that this view still holds unchanged", async () => {
     const backing = installLocalStorage({
       [STORAGE_KEY]: JSON.stringify({

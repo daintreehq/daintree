@@ -1148,14 +1148,20 @@ describe("toolbarPreferencesStore", () => {
     });
 
     describe("v9→v10 forge-stats rename", () => {
-      it("renames github-stats in position arrays and pinned keys", async () => {
+      // These two cases previously shared one fixture that placed `github-stats`
+      // on both sides at once and asserted `forge-stats` on both afterwards. The
+      // rename covering each array is the real subject; the duplication was only
+      // a shortcut for exercising both branches, and hydration now collapses a
+      // cross-side pair (the duplicate-pill defect behind #10937/#10938) — so the
+      // fixture is split rather than the heal weakened.
+      it("renames github-stats in the left array and the pinned keys", async () => {
         storageMock.setItem(
           STORAGE_KEY,
           JSON.stringify({
             state: {
               layout: {
                 leftButtons: ["terminal", "github-stats"],
-                rightButtons: ["github-stats", "settings"],
+                rightButtons: ["settings"],
                 pinnedButtons: { "github-stats": false, "copy-tree": false },
               },
               launcher: { alwaysShowDevServer: false },
@@ -1165,14 +1171,35 @@ describe("toolbarPreferencesStore", () => {
         );
 
         const store = await loadStore();
-        const { leftButtons, rightButtons, pinnedButtons } = store.getState().layout;
+        const { leftButtons, pinnedButtons } = store.getState().layout;
         expect(leftButtons).toContain("forge-stats");
         expect(leftButtons).not.toContain("github-stats");
-        expect(rightButtons).toContain("forge-stats");
-        expect(rightButtons).not.toContain("github-stats");
         expect(pinnedButtons["forge-stats"]).toBe(false);
         expect(pinnedButtons["copy-tree"]).toBe(false);
         expect(pinnedButtons).not.toHaveProperty("github-stats");
+      });
+
+      it("renames github-stats in the right array", async () => {
+        storageMock.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            state: {
+              layout: {
+                leftButtons: ["terminal"],
+                rightButtons: ["github-stats", "settings"],
+                pinnedButtons: { "github-stats": false },
+              },
+              launcher: { alwaysShowDevServer: false },
+            },
+            version: 9,
+          })
+        );
+
+        const store = await loadStore();
+        const { rightButtons, pinnedButtons } = store.getState().layout;
+        expect(rightButtons).toContain("forge-stats");
+        expect(rightButtons).not.toContain("github-stats");
+        expect(pinnedButtons["forge-stats"]).toBe(false);
       });
 
       it("is a no-op on already-renamed v10-shaped state", async () => {
@@ -1455,6 +1482,88 @@ describe("toolbarPreferencesStore", () => {
       expect([...leftButtons, ...rightButtons].filter((id) => id === "file-browser")).toHaveLength(
         1
       );
+    });
+
+    it("stays hidden for a current-version blob whose layout carries no pin map", async () => {
+      // A blob already stamped v12 never reaches `migrate`, so `merge()` is the
+      // only thing standing between a missing pin map and a visible button.
+      // Falling back to `{}` here would read as "no pins" — i.e. visible.
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: { leftButtons: ["terminal", "file-browser"], rightButtons: ["settings"] },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 12,
+        })
+      );
+
+      const store = await loadStore();
+      expect(store.getState().layout.pinnedButtons["file-browser"]).toBe(false);
+    });
+
+    it("hydrates cleanly with no persisted blob at all", async () => {
+      // zustand calls `merge` even when storage is empty. This used to throw
+      // inside the merge and get swallowed, leaving the right state by accident
+      // and `hasHydrated()` stuck false — assert the outcome is now deliberate.
+      const store = await loadStore();
+
+      expect(store.persist.hasHydrated()).toBe(true);
+      expect(store.getState().layout.pinnedButtons["file-browser"]).toBe(false);
+      expect(store.getState().layout.leftButtons).toContain("file-browser");
+    });
+
+    it("heals a default already duplicated onto both sides by the old hydration", async () => {
+      // Profiles corrupted before the cross-side fix carry the id twice. The
+      // survivor is the non-home side, which is where the user had dragged it.
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["terminal", "browser", "file-browser"],
+              rightButtons: ["file-browser", "settings"],
+              pinnedButtons: {},
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 12,
+        })
+      );
+
+      const store = await loadStore();
+      const { leftButtons, rightButtons } = store.getState().layout;
+      expect([...leftButtons, ...rightButtons].filter((id) => id === "file-browser")).toHaveLength(
+        1
+      );
+      expect(rightButtons).toContain("file-browser");
+      expect(leftButtons).not.toContain("file-browser");
+    });
+
+    it("heals a right-side default duplicated onto the left, keeping the moved copy", async () => {
+      // Mirror direction: `copy-tree` is a right-side default, so a both-sides
+      // pair means the user moved it left and the left copy is the survivor.
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["terminal", "copy-tree"],
+              rightButtons: ["copy-tree", "settings"],
+              pinnedButtons: {},
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 12,
+        })
+      );
+
+      const store = await loadStore();
+      const { leftButtons, rightButtons } = store.getState().layout;
+      expect([...leftButtons, ...rightButtons].filter((id) => id === "copy-tree")).toHaveLength(1);
+      expect(leftButtons).toContain("copy-tree");
+      expect(rightButtons).not.toContain("copy-tree");
     });
 
     it("does not re-home any moved default, not just file-browser", async () => {

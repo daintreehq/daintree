@@ -38,16 +38,27 @@ const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "problems",
 ];
 
+/**
+ * Built-ins that ship hidden: offered in Settings → Toolbar, but absent from the
+ * toolbar until the user opts in (#11495).
+ *
+ * Every path that materializes "no persisted pin map" has to resolve to this,
+ * not to `{}` — the defaults, the hydration merge, and the cross-view baseline
+ * alike. `{}` means "the user has no pins", which for a built-in reads as
+ * *visible*; using it for a missing map is what would leak the button onto a
+ * toolbar. An explicitly stored `{}` is different and must be respected: that is
+ * exactly what `toggleButtonVisibility` leaves behind when a user turns the
+ * button on.
+ */
+const DEFAULT_PINNED_BUTTONS: ToolbarPinnedState = { "file-browser": false };
+
 const DEFAULT_PREFERENCES: ToolbarPreferences = {
   layout: {
     leftButtons: DEFAULT_LEFT_BUTTONS,
     rightButtons: DEFAULT_RIGHT_BUTTONS,
-    // `file-browser` is offered in Settings but ships hidden, so adding it to
-    // the defaults above doesn't change any existing toolbar (#11495). Seeding
-    // the `false` here is not redundant with the v12 migration: a fresh install
-    // has no persisted blob, so `migrate` never runs and this object is the only
-    // source of truth for that profile.
-    pinnedButtons: { "file-browser": false },
+    // Not redundant with the v12 migration: a fresh install has no persisted
+    // blob, so `migrate` never runs and this is the only source of truth.
+    pinnedButtons: DEFAULT_PINNED_BUTTONS,
   },
   launcher: {
     alwaysShowDevServer: false,
@@ -56,6 +67,9 @@ const DEFAULT_PREFERENCES: ToolbarPreferences = {
 };
 
 const FIXED_BUTTON_IDS: ToolbarButtonId[] = ["sidebar-toggle", "assistant-toggle", "portal-toggle"];
+
+/** Home side lookup, used to pick the survivor when an id sits on both sides. */
+const DEFAULT_LEFT_BUTTON_SET = new Set<AnyToolbarButtonId>(DEFAULT_LEFT_BUTTONS);
 
 function sanitizeButtonList(buttons: AnyToolbarButtonId[]): AnyToolbarButtonId[] {
   const filtered = buttons.filter((id) => !FIXED_BUTTON_IDS.includes(id as ToolbarButtonId));
@@ -67,6 +81,44 @@ function sanitizeButtonList(buttons: AnyToolbarButtonId[]): AnyToolbarButtonId[]
   // `setRightButtons` do too, so this is the durable, version-independent guard
   // against duplicate pills (`merge()` runs every load; `migrate()` does not).
   return Array.from(new Set(filtered));
+}
+
+/**
+ * Split an id that ended up on BOTH sides back onto one.
+ *
+ * Hydration before #11495 re-materialized a default that was missing from its
+ * home side, so moving one across sides left a copy on each — and because
+ * `sanitizeButtonList` only dedupes within a list, the pair round-tripped to disk
+ * and rendered twice. `mergeButtonList` no longer creates that, but profiles
+ * already carrying it still need the repair, which is why this runs on every
+ * hydration instead of in a version-gated migration (#10938).
+ *
+ * The survivor reconstructs the move that caused the duplicate: a default on both
+ * sides is kept on the side that is NOT its home, because that is where the user
+ * dragged it. Anything else (plugin ids, unknowns) keeps its left-hand
+ * occurrence, so the outcome is at least deterministic.
+ */
+function healCrossSideDuplicates(
+  persistedLeft: AnyToolbarButtonId[] | undefined,
+  persistedRight: AnyToolbarButtonId[] | undefined
+): {
+  leftButtons: AnyToolbarButtonId[] | undefined;
+  rightButtons: AnyToolbarButtonId[] | undefined;
+} {
+  if (!persistedLeft || !persistedRight) {
+    return { leftButtons: persistedLeft, rightButtons: persistedRight };
+  }
+  const rightSet = new Set(persistedRight);
+  const onBothSides = persistedLeft.filter((id) => rightSet.has(id));
+  if (onBothSides.length === 0) {
+    return { leftButtons: persistedLeft, rightButtons: persistedRight };
+  }
+  const keepOnRight = new Set(onBothSides.filter((id) => DEFAULT_LEFT_BUTTON_SET.has(id)));
+  const keepOnLeft = new Set(onBothSides.filter((id) => !keepOnRight.has(id)));
+  return {
+    leftButtons: persistedLeft.filter((id) => !keepOnRight.has(id)),
+    rightButtons: persistedRight.filter((id) => !keepOnLeft.has(id)),
+  };
 }
 
 /**
@@ -153,7 +205,16 @@ function toToolbarPersisted(
     layout: {
       leftButtons: sanitizeButtonList(asButtonList(layout?.leftButtons) ?? DEFAULT_LEFT_BUTTONS),
       rightButtons: sanitizeButtonList(asButtonList(layout?.rightButtons) ?? DEFAULT_RIGHT_BUTTONS),
-      pinnedButtons: normalizePinnedButtons(layout?.pinnedButtons),
+      // Absent falls back to defaults like the two lists above; an explicitly
+      // stored map (including `{}`) is normalized as-is. The distinction decides
+      // whether a ships-hidden button survives a cross-view merge: normalizing a
+      // *missing* map to `{}` would make a sibling view's untouched
+      // `file-browser: false` look like a fresh edit and revert another view's
+      // opt-in (#11495).
+      pinnedButtons:
+        layout?.pinnedButtons === undefined
+          ? { ...DEFAULT_PINNED_BUTTONS }
+          : normalizePinnedButtons(layout.pinnedButtons),
     },
     launcher: {
       alwaysShowDevServer:
@@ -593,6 +654,12 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           // `mergeButtonList` already inserts a newly-defaulted id on every
           // hydration; pushing it into the arrays here as well is how a profile
           // ends up with the same id twice (#10938).
+          //
+          // Spelled out rather than spread from `DEFAULT_PINNED_BUTTONS` on
+          // purpose: a shipped migration step has to keep doing exactly what it
+          // did when it shipped. Pointing it at the live constant would make the
+          // next ships-hidden button silently re-stamp itself here, overwriting a
+          // choice its own migration step should own.
           const layout = state.layout as { pinnedButtons?: Record<string, boolean> } | undefined;
           if (layout) {
             layout.pinnedButtons = { ...(layout.pinnedButtons ?? {}), "file-browser": false };
@@ -613,22 +680,37 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
         },
       }),
       merge: (persistedState, currentState) => {
-        const persisted = persistedState as Partial<ToolbarPreferencesState>;
+        // `persistedState` really is undefined on a fresh install — zustand calls
+        // `merge` even with nothing in storage. Guarding here instead of letting
+        // the dereference throw into zustand's exception-swallowing thenable is
+        // what makes the ships-hidden default an explicit outcome rather than a
+        // side effect of where the throw landed, and it lets `hasHydrated()`
+        // resolve at all.
+        const persisted = (persistedState ?? {}) as Partial<ToolbarPreferencesState>;
+        const healed = healCrossSideDuplicates(
+          persisted.layout?.leftButtons,
+          persisted.layout?.rightButtons
+        );
         return {
           ...currentState,
           ...persisted,
           layout: {
             leftButtons: mergeButtonList(
-              persisted.layout?.leftButtons,
+              healed.leftButtons,
               currentState.layout.leftButtons,
-              persisted.layout?.rightButtons
+              healed.rightButtons
             ),
             rightButtons: mergeButtonList(
-              persisted.layout?.rightButtons,
+              healed.rightButtons,
               currentState.layout.rightButtons,
-              persisted.layout?.leftButtons
+              healed.leftButtons
             ),
-            pinnedButtons: persisted.layout?.pinnedButtons ?? {},
+            // Defaults, never `{}` — see `DEFAULT_PINNED_BUTTONS`. A blob already
+            // stamped at the current version skips `migrate` entirely, so a
+            // layout that carries no pin map would otherwise surface a
+            // ships-hidden button. An explicitly stored `{}` still wins, which is
+            // how a genuine opt-in survives.
+            pinnedButtons: persisted.layout?.pinnedButtons ?? currentState.layout.pinnedButtons,
           },
         };
       },
