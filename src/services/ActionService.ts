@@ -14,6 +14,7 @@ import type { AnyActionDefinition } from "./actions/actionTypes";
 import { logWarn } from "@/utils/logger";
 import { keybindingService } from "./KeybindingService";
 import { shortcutHintStore } from "../store/shortcutHintStore";
+import { useUIStore } from "@/store/uiStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { WORKBENCH_TIER_TOOLS } from "@shared/config/helpAssistantTierAllowlists";
 import { deriveBand } from "../../shared/utils/actionRiskBand.js";
@@ -460,6 +461,15 @@ export class ActionService {
     const wallClockStartMs = Date.now();
     const monotonicStartMs = typeof performance !== "undefined" ? performance.now() : Date.now();
 
+    // Snapshot the overlay claims owned before run() so the post-run hint can
+    // tell "this action opened a dialog" from "a dialog was already open".
+    // Only the former must suppress — see emitShortcutHint. Skipped entirely
+    // when no hint can be emitted anyway.
+    const overlayClaimsBeforeRun =
+      source === "user" && !definition.suppressShortcutHint
+        ? new Set(useUIStore.getState().overlayStack)
+        : null;
+
     try {
       // Derive (don't mutate — `context` may be a shared object from the
       // context provider) a run-scoped context carrying the dispatch source
@@ -492,7 +502,8 @@ export class ActionService {
         confirmed: options?.confirmed,
         pluginId: definition.pluginId,
       });
-      if (!definition.suppressShortcutHint) this.emitShortcutHint(actionId, source);
+      if (!definition.suppressShortcutHint)
+        this.emitShortcutHint(actionId, source, overlayClaimsBeforeRun);
       return { ok: true, result: result as Result };
     } catch (err) {
       const error: ActionError = {
@@ -726,9 +737,36 @@ export class ActionService {
     return hasAny ? picked : undefined;
   }
 
-  private emitShortcutHint(actionId: ActionId, source: ActionSource): void {
+  /**
+   * `overlayClaimsBeforeRun` is the overlay stack as it stood when the action
+   * was dispatched. A claim present now but missing from it means run() opened
+   * an overlay: the hint would render above it (z-toast sits over z-modal) and
+   * the dialog's own `clearDialogOverlays()` already fired *before* this emit,
+   * so nothing would take the hint down for the full auto-dismiss window.
+   *
+   * Comparing identities rather than depth matters — an action that closes one
+   * dialog and opens another leaves the stack the same size but must still
+   * suppress, while an action dispatched inside an already-open dialog that
+   * leaves it open must still hint.
+   */
+  private emitShortcutHint(
+    actionId: ActionId,
+    source: ActionSource,
+    overlayClaimsBeforeRun: ReadonlySet<string> | null
+  ): void {
     if (source !== "user") return;
     try {
+      // Bail before incrementCount so a suppressed hint doesn't silently
+      // consume one of the teaching milestones.
+      if (
+        overlayClaimsBeforeRun !== null &&
+        useUIStore
+          .getState()
+          .overlayStack.some((claimId) => !overlayClaimsBeforeRun.has(claimId))
+      ) {
+        return;
+      }
+
       const combo = keybindingService.getEffectiveCombo(actionId);
       if (!combo) return;
 
