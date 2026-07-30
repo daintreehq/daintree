@@ -41,17 +41,21 @@ const APPROVAL_PATTERNS: RegExp[] = [
 // misclassify an ordinary prompt wait as an error wait.
 const ERROR_PATTERNS: RegExp[] = [
   // Rate limiting / capacity. A limit phrase only means "blocked" when a
-  // depletion verb sits next to it, in either word order. Bare "usage limit"/
-  // "rate limit" is ordinary prose: agent CLIs narrate their own quota in
-  // exactly those words ("You have 2 usage limit resets available", "the API
-  // rate limits at 50 rpm"), and those lines mean the opposite of a block.
-  // The verb gate is what makes the trailing filler safe — benign notices are
-  // rejected on the verb, never reaching it.
-  /\b(?:usage|rate)[ -]?limits?\s+(?:(?:has|have|is|was|were)\s+)?(?:been\s+)?(?:reached|exceeded|exhausted|hit)\b/i,
-  /\b(?:hit|reached|exceeded|exhausted|(?:ran|run) out of)\s+(?:(?:a|the|your|my|our)\s+)?(?:[\w%-]+\s+){0,2}?(?:usage|rate)[ -]?limits?\b/i,
-  // Passive "being/been rate limited" states an active throttle. Bare "rate
-  // limited" is also how an agent describes an endpoint it works against.
-  /\b(?:being|been)\s+rate[ -]?limited\b/i,
+  // depletion verb sits next to it. Bare "usage limit"/"rate limit" is
+  // ordinary prose: agent CLIs narrate their own quota in exactly those words
+  // ("You have 2 usage limit resets available", "the API rate limits at 50
+  // rpm"), and those lines mean the opposite of a block.
+  //
+  // A verb alone is not enough either, because an agent narrates limits that
+  // something *else* hit — "retries when the client hit the API rate limit",
+  // "no request exceeded the configured rate limit". So the verb-before forms
+  // are second-person: a real block is always addressed to the user, and that
+  // is what separates it from prose about a third party. "hit" is excluded
+  // after the noun, where it reads as a metric ("rate limit hit count: 0")
+  // far more often than as a block.
+  /\b(?:usage|rate)[ -]?limits?\s+(?:(?:has|have)\s+been\s+|(?:is|was|were)\s+)?(?:reached|exceeded|exhausted)\b/i,
+  /\byou(?:'ve|'re| have| are)?\s+(?:hit|reached|exceeded|exhausted|(?:ran|run) out of)\s+(?:(?:a|the|your|our)\s+)?(?:[\w%-]+\s+){0,2}?(?:usage|rate)[ -]?limits?\b/i,
+  /\byou(?:'ve|'re| have| are)\s+(?:being|been)\s+rate[ -]?limited\b/i,
   /\bquota (?:exceeded|reached)\b/i,
   /\btoo many requests\b/i,
   /\boverloaded\b/i,

@@ -76,8 +76,10 @@ describe("classifyWaitingReason", () => {
       ["usage limit", "Usage limit reached — resets in 2 hours"],
       ["rate limit reached", "API Error: Rate limit reached"],
       ["passive rate limiting", "You are being rate limited."],
+      ["past-tense passive rate limiting", "You have been rate limited."],
       ["usage limit hit", "You've hit your usage limit. Try again at 4pm."],
       ["usage limit exceeded", "Usage limit exceeded"],
+      ["usage limit reached via auxiliary", "Your usage limit has been reached."],
       ["usage limit exhausted", "5-hour usage limit exhausted"],
       ["qualified usage limit", "You've hit your 5-hour usage limit."],
       ["plural rate limits", "You've hit your rate limits."],
@@ -146,8 +148,45 @@ describe("classifyWaitingReason", () => {
       ["a plan without rate limits", "Your plan does not impose Codex rate limits"],
       ["rate-limit narration", "the API rate limits at 50 rpm"],
       ["a rate-limited endpoint", "I added retry logic because the endpoint is rate limited."],
+      // An agent that just worked on limit handling narrates the limit
+      // something *else* hit. A depletion verb near the phrase is not enough.
+      ["a passing test name", "PASS retries when the client hit the API rate limit"],
+      ["a zero-event summary", "No request exceeded the configured rate limit."],
+      [
+        "a negated finding",
+        "I confirmed the client doesn't hit the API rate limit; all tests pass.",
+      ],
+      ["a conditional explanation", "If callers hit the per-model rate limit, the client retries."],
+      [
+        "a recovered third party",
+        "I verified the mocked endpoint has been rate limited and recovered.",
+      ],
+      ["a hit-count metric", "rate limit hit count: 0"],
+      ["a utilization reading", "usage limit has reached 80% utilization"],
     ])("keeps %s as prompt (precision guard)", (_name, line) => {
       expect(classifyWaitingReason([line], false)).toBe("prompt");
+    });
+
+    it("a benign limit notice above a real question still classifies as question", () => {
+      // Stronger than asserting "prompt": the notice has to be rejected by the
+      // error patterns AND question detection has to still fire, so this fails
+      // both for a re-broadened error pattern and for a classifier that has
+      // collapsed to its default.
+      const lines = [
+        "• You have 2 usage limit resets available. Run /usage to use one.",
+        "What should I work on next?",
+        "> ",
+      ];
+      expect(classifyWaitingReason(lines, true)).toBe("question");
+    });
+
+    it("a real error alongside a benign limit notice still classifies as error", () => {
+      const lines = [
+        "• You have 2 usage limit resets available. Run /usage to use one.",
+        "Authentication failed. Run /login to reauthenticate.",
+        "> ",
+      ];
+      expect(classifyWaitingReason(lines, true)).toBe("error");
     });
 
     it("Codex's post-interrupt tail stays prompt (precision guard)", () => {
