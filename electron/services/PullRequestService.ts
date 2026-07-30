@@ -79,6 +79,29 @@ const STAGNANT_POLL_DECAY_AT_20 = 20;
 const RESOLVED_REVALIDATION_DECAY_INTERVAL_MS = 60 * 1000;
 const RESOLVED_REVALIDATION_MAX_DECAY_INTERVAL_MS = 120 * 1000;
 
+// Terminal CI states go stale too (#11513). Re-running a failed job pushes no
+// commit, so the PR's updated_at never moves and the open-PR probe reports it
+// unchanged — and a terminal status isn't `pending`, so the compensating loop
+// in revalidateResolvedPRs skipped it as well. Re-check resolved PRs on a slow
+// cadence weighted toward failures, which is the state users actually re-run.
+// Each attempt rides the revalidation tick's existing getCIStatuses batch
+// (~2 GraphQL points), so a permanently failing PR adds ~40 points/hour and a
+// green one ~12 — negligible against the 5000/hr primary limit documented
+// above. These are minimum elapsed times, not timers: an eligible PR waits up
+// to one revalidation interval before the next tick picks it up.
+const TERMINAL_CI_RECHECK_FAILURE_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+const TERMINAL_CI_RECHECK_SUCCESS_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+
+// Null for every non-terminal status, so `undefined` (unknown / no CI checks —
+// nothing to re-poll for, #6240) and `pending` (owned by the boost cadence
+// above) are structurally ineligible for the slow pass rather than excluded by
+// a condition someone could later widen.
+function terminalCiRecheckIntervalMs(status: CIStatusState | undefined): number | null {
+  if (status === "failure") return TERMINAL_CI_RECHECK_FAILURE_INTERVAL_MS;
+  if (status === "success") return TERMINAL_CI_RECHECK_SUCCESS_INTERVAL_MS;
+  return null;
+}
+
 // Rate-limit block constants extracted from the GitHub-specific service so the
 // polling loops consult the active provider's rate-limit state through
 // ForgeProviderImpl.getRateLimit() rather than the gitHubRateLimitService singleton.
@@ -106,6 +129,21 @@ interface InternalLinkedPR {
   // probe-driven revalidation cycle seeds them.
   headSha?: string;
   updatedAt?: string;
+  // Wall-clock stamp of the last getCIStatuses attempt, taken at enqueue rather
+  // than on resolve so a rejected or slow batch still counts against the
+  // terminal re-check interval — otherwise a failing provider would re-fire the
+  // same PR on every revalidation tick. Undefined until the first attempt,
+  // which reads as "due" so entries detected before this field existed (or
+  // seeded by a re-detection) self-heal on the next tick.
+  lastCiCheckAt?: number;
+  // Set by sweepStaleCiStatus when a pending badge is cleared to `undefined` on
+  // blur. That state is invisible to every other trigger — it isn't `pending`,
+  // isn't terminal, and a CI re-run doesn't bump updated_at for the probe — so
+  // without an explicit marker the badge stays blank until the next push. The
+  // focus catch-up normally backfills it, but that's a single edge-triggered
+  // event: throttled, rate-limited, or rejected, it's gone. This flag keeps the
+  // entry eligible on the periodic tick until an authoritative result lands.
+  needsCiBackfill?: boolean;
 }
 
 export interface PRDetectionResult {
@@ -145,6 +183,10 @@ class PullRequestService {
   // declaration time so it's correct before the singleton's first checkForPRs.
   private ciEnrichmentEnabled: boolean = process.env.DAINTREE_INSTANCE_ROLE !== "worker";
   private lastCheckAt: number = Number.NEGATIVE_INFINITY;
+  // Separate from `lastCheckAt`: that one throttles PR *detection*, and reusing
+  // it would let a recent detection poll suppress the focus CI catch-up (they
+  // fetch different things).
+  private lastFocusCiCheckAt: number = Number.NEGATIVE_INFINITY;
   private startupDelayTimer: NodeJS.Timeout | null = null;
   private startupDelayResolve: (() => void) | null = null;
 
@@ -796,6 +838,7 @@ class PullRequestService {
     this.boostExpiresAt = null;
     this.clearStagnantPollCounts();
     this.lastCheckAt = Number.NEGATIVE_INFINITY;
+    this.lastFocusCiCheckAt = Number.NEGATIVE_INFINITY;
     this.invalidateProvider();
   }
 
@@ -820,6 +863,12 @@ class PullRequestService {
     if (!focused || !this.isPolling) {
       return;
     }
+
+    // CI freshness is independent of PR-detection resolution, so this runs
+    // before the unresolved-candidate gate below — that gate is false in the
+    // common steady state (every worktree already has its PR), which is exactly
+    // when the CI catch-up matters most (#11513).
+    this.recheckResolvedCIOnFocus();
 
     if (!this.hasUnresolvedCandidates() || !this.isEnabled) {
       return;
@@ -847,6 +896,65 @@ class PullRequestService {
     void this.checkForPRs()
       .catch((err) => this.handleError(formatErrorMessage(err, "PR focus catch-up failed")))
       .finally(() => this.scheduleNextPoll());
+  }
+
+  /**
+   * Re-enrich CI for every resolved PR on focus regain — the moment the user is
+   * actually looking at the sidebar. This is the only trigger that covers
+   * entries `sweepStaleCiStatus` cleared to `undefined` on blur: those are
+   * neither `pending` nor probe-flagged, so both revalidation triggers skip them
+   * and CI that finished while the window was blurred would never surface
+   * (#11513). Unlike the slow terminal pass this deliberately includes
+   * `undefined` — the issue asks for exactly that backfill.
+   *
+   * Hooked off the focus signal rather than `setCIEnrichmentEnabled(true)`
+   * because that setter early-returns when the flag is already `true` — which is
+   * the state of a workspace-host restarted while the app was blurred, since
+   * WorkspaceHostProcess replays monitor config but not the PR focus cadence, so
+   * the fresh service keeps the attended `true` default and never sees a flip.
+   */
+  private recheckResolvedCIOnFocus(): void {
+    if (!this.ciEnrichmentEnabled || !this.isEnabled) return;
+    const repo = this.repoRef;
+    if (!repo || !this.ciStatusLoader) return;
+
+    // Throttle rapid alt-tabbing, mirroring the detection catch-up above.
+    // `now < lastFocusCiCheckAt` rebases a backwards clock jump instead of
+    // suppressing catch-up until real time overtakes the stale stamp.
+    const now = Date.now();
+    if (
+      now >= this.lastFocusCiCheckAt &&
+      now - this.lastFocusCiCheckAt < FOCUS_CATCHUP_THROTTLE_MS
+    ) {
+      return;
+    }
+
+    // Resolved worktrees only: detectedPRs can still hold an entry for a
+    // worktree mid-re-detection, and re-checking that burns quota on a PR
+    // binding about to be replaced.
+    // Dedup by object, not PR number: sibling worktrees on one branch share a
+    // single InternalLinkedPR (so they collapse to one entry either way), but
+    // two worktrees that resolve the same PR through separate detection cycles
+    // hold DISTINCT objects. Number-dedup would enrich only the first and leave
+    // the other holding a stale status that a later blur sweep acts on. This
+    // costs no extra API call — BatchLoader single-flights by key, so both
+    // objects settle off one request.
+    const enrichedPRs = new Set<InternalLinkedPR>();
+    for (const worktreeId of this.resolvedWorktrees) {
+      const detectedPR = this.detectedPRs.get(worktreeId);
+      if (!detectedPR || enrichedPRs.has(detectedPR)) continue;
+      enrichedPRs.add(detectedPR);
+      // Synchronous fire-and-forget, matching revalidateResolvedPRs — every
+      // load enqueued in this loop coalesces into one getCIStatuses batch.
+      this.enrichPRWithCIStatus(detectedPR, repo);
+    }
+
+    if (enrichedPRs.size === 0) {
+      // Nothing went out, so don't arm the throttle — otherwise a focus regain
+      // with no resolved PRs would swallow the next one.
+      return;
+    }
+    this.lastFocusCiCheckAt = now;
   }
 
   /**
@@ -912,6 +1020,10 @@ class PullRequestService {
       pr.ciStatus = undefined;
       pr._ciStatus = undefined;
       pr.stagnantPollCount = 0;
+      // Mark for backfill: this entry is now indistinguishable from "no CI
+      // configured", which nothing re-polls. The flag is what makes it
+      // recoverable once enrichment comes back (#11513).
+      pr.needsCiBackfill = true;
     }
 
     // updateBoostFromDetectedPRs runs unconditionally — with no pending entries
@@ -1084,6 +1196,22 @@ class PullRequestService {
       return RESOLVED_REVALIDATION_DECAY_INTERVAL_MS;
     }
     return RESOLVED_REVALIDATION_BOOST_INTERVAL_MS;
+  }
+
+  // Is this PR's terminal CI status old enough to re-check? Gated purely on
+  // elapsed time, never on the cached status itself: a guard keyed off the
+  // status is exactly what froze the stale-green badge in #6149, because a
+  // status that never re-fetches can never stop matching its own skip
+  // condition. Elapsed time always advances, so this cannot wedge.
+  private isTerminalCiRecheckDue(pr: InternalLinkedPR, now: number): boolean {
+    const interval = terminalCiRecheckIntervalMs(pr.ciStatus);
+    if (interval === null) return false;
+    const last = pr.lastCiCheckAt;
+    // Never attempted, or the system clock moved backwards (correction / DST
+    // via a bad Date source) — rebase by treating it as due rather than letting
+    // a stamp from the future suppress re-checks until real time catches up.
+    if (last === undefined || now < last) return true;
+    return now - last >= interval;
   }
 
   private clearStagnantPollCounts(): void {
@@ -1393,16 +1521,28 @@ class PullRequestService {
 
       // CI status can change without the PR's metadata changing — a re-run does
       // not bump updated_at, so the probe reports those PRs unchanged. Keep
-      // polling CI for any in-flight PR not already enriched above, so green/red
+      // polling CI for any PR not already enriched above, so green/red
       // transitions still surface promptly even on an otherwise-quiet tick.
+      //
+      // Pending keeps its every-tick cadence (the boost bands above tune it,
+      // and re-tuning it is an explicit non-goal of #11513). Terminal states get
+      // a slow, failure-weighted pass on top: without it a re-run of a failed
+      // build is invisible to both triggers — not probe-flagged, not pending —
+      // and the cross sticks until the next push.
+      //
       // Skipped entirely when enrichment is disabled (unattended instance): the
-      // sweep on disable already cleared pending entries, so this loop would be
-      // a no-op anyway, but the guard keeps it from re-fetching after a
-      // re-detection re-seeds a pending state mid-blur.
+      // sweep on disable already cleared pending entries, so the pending half
+      // would be a no-op anyway, but the guard keeps both from re-fetching after
+      // a re-detection re-seeds state mid-blur.
       if (this.ciEnrichmentEnabled) {
+        const now = Date.now();
         for (const detectedPR of this.detectedPRs.values()) {
           if (enrichedPRNumbers.has(detectedPR.number)) continue;
-          if (detectedPR.ciStatus === "pending") {
+          if (
+            detectedPR.ciStatus === "pending" ||
+            detectedPR.needsCiBackfill === true ||
+            this.isTerminalCiRecheckDue(detectedPR, now)
+          ) {
             enrichedPRNumbers.add(detectedPR.number);
             this.enrichPRWithCIStatus(detectedPR, repo);
           }
@@ -1825,6 +1965,11 @@ class PullRequestService {
     // in a `for` loop per detected PR, so all loads enqueue in the same tick and
     // coalesce into one `getCIStatuses` batch. Do NOT add an `await` before this
     // call — it would drain the microtask queue and defeat the coalescing.
+    //
+    // Stamp the attempt, not the outcome: isTerminalCiRecheckDue reads this to
+    // pace the slow terminal re-check, and pacing on resolve would retry every
+    // tick for as long as the provider keeps rejecting.
+    pr.lastCiCheckAt = Date.now();
     loader
       .load(pr.number)
       .then((ciStatus) => {
@@ -1846,6 +1991,16 @@ class PullRequestService {
             ? ciStatus.state
             : undefined;
         pr._ciStatus = ciStatus ?? undefined;
+        // Only a positive result settles the blur-sweep backfill debt. A `null`
+        // is not trustworthy here: when the batch call itself fails, the
+        // loader's per-PR fallback converts a transient error into a resolved
+        // `null`, so clearing on null would strand a swept badge on a network
+        // blip — and a swept entry was `pending`, so it demonstrably had checks.
+        // Worst case we retry it once per tick until the provider answers or a
+        // re-detection replaces the entry.
+        if (ciStatus) {
+          pr.needsCiBackfill = undefined;
+        }
         if (pr.ciStatus !== undefined) {
           pr.stagnantPollCount = prevCiStatus === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
         }
@@ -1873,7 +2028,16 @@ class PullRequestService {
             });
           }
         }
+        const boostWasArmed = this.boostExpiresAt !== null;
         this.updateBoostFromDetectedPRs();
+        // Enrichment is fire-and-forget, so a terminal→pending flip (a CI
+        // re-run) only becomes visible here — after revalidateResolvedPRs
+        // already re-armed its timer at the 90s baseline. Without this the
+        // freshly-armed boost wouldn't take effect until that stale tick fired,
+        // making the first re-run poll up to 90s away instead of 30s (#11513).
+        if (!boostWasArmed && this.boostExpiresAt !== null) {
+          this.scheduleRevalidation();
+        }
       })
       .catch(() => {
         // CI status fetch is best-effort; failure does not invalidate the PR detection
