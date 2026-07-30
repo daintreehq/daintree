@@ -709,7 +709,8 @@ describe("agent.launch dispatch integration", () => {
 
     // Plugin agent ids are dynamic and unknown at schema-definition time, so the
     // schema must let them through; existence is resolved downstream in the
-    // launcher (an unresolved id falls back to a plain terminal, never a crash).
+    // launcher, which rejects an id that resolves to no agent (#11498) rather
+    // than degrading it to a plain terminal.
     const result = await service.dispatch(
       "agent.launch",
       { agentId: "acme-agent", worktreeId: "wt-1", location: "grid" },

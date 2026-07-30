@@ -93,6 +93,29 @@ export function resolveLaunchWorktree<T>(
   return targetWorktree ?? null;
 }
 
+/**
+ * Reject a launch whose agent id resolves to nothing. Without this, an
+ * unregistered id left `isAgent` false and fell through to the generic terminal
+ * branch, spawning a plain shell and reporting success — a typo'd id from MCP
+ * looked identical to a launched agent (#11498). Throwing (rather than
+ * returning null) is what makes it visible: `ActionService` serializes a
+ * rejection as `ok:false`/`EXECUTION_ERROR`, while a null resolves as a
+ * terminal-less success.
+ *
+ * `"terminal"` is the one legitimately unregistered id — it is the deliberate
+ * plain-shell launch. `"browser"` and `"dev-preview"` return earlier from their
+ * own panel branches and never reach here, so they are not allowed through:
+ * this stays correct standalone, and fails closed if either branch is ever
+ * bypassed.
+ */
+export function assertKnownAgentId(agentId: string, isRegistered: boolean): void {
+  if (isRegistered || agentId === "terminal") return;
+  throw new Error(
+    `Unknown agent ID '${agentId}'. Call agent.listAvailable for registered agent IDs, ` +
+      `then retry, or use terminal.new to open a plain terminal.`
+  );
+}
+
 export interface LaunchAgentOptions {
   location?: AddPanelOptions["location"];
   cwd?: string;
@@ -327,6 +350,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         // Get agent config from registry, fall back for "terminal" type
         const agentConfig = getAgentConfig(agentId);
         const isAgent = isRegisteredAgent(agentId);
+        // Fail before any settings init, command generation, or panel creation.
+        // Inside the try so the `finally` always releases the reentrancy entry.
+        assertKnownAgentId(agentId, isAgent);
 
         let command: string | undefined;
         let launchFlags: string[] | undefined;
