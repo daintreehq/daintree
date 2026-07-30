@@ -26,6 +26,11 @@ const setTabGroups = terminalLayoutNamespace.ops.setTabGroups.handler as (payloa
   removedIds?: string[];
 }) => Promise<void>;
 
+const setTerminalSizes = terminalLayoutNamespace.ops.setTerminalSizes.handler as (payload: {
+  projectId: string;
+  terminalSizes: Record<string, { cols: number; rows: number }>;
+}) => Promise<void>;
+
 const setDraftInputs = terminalLayoutNamespace.ops.setDraftInputs.handler as (payload: {
   projectId: string;
   draftInputs: Record<string, string>;
@@ -117,6 +122,44 @@ describe("setFocusMode record preservation (#11497)", () => {
     expect(result.focusMode).toBe(true);
     expect(result.focusPanelState).toEqual({ sidebarWidth: 400, diagnosticsOpen: false });
     expect(result.mruList).toBeUndefined();
+  });
+});
+
+describe("sibling rebuild updaters keep the MRU (#11497)", () => {
+  // setFocusMode is not the only updater that rebuilds the record wholesale;
+  // these four run on routine layout writes, so an omission here wipes the
+  // quick switcher far more often than a focus toggle would.
+  const mruList = ["worktree:wt-1", "terminal:1"];
+  const withMru = () =>
+    onDisk({ ...baseState([term("1")]), mruList: [...mruList] } as ProjectState);
+
+  it("setTerminals keeps it across a panel save", async () => {
+    const saved = withMru();
+    await setTerminals({
+      projectId: "p1",
+      terminals: [term("1"), term("2")],
+      changedIds: ["2"],
+      removedIds: [],
+    });
+    expect(saved()!.mruList).toEqual(mruList);
+  });
+
+  it("setTerminalSizes keeps it across a resize persist", async () => {
+    const saved = withMru();
+    await setTerminalSizes({ projectId: "p1", terminalSizes: { "1": { cols: 120, rows: 40 } } });
+    expect(saved()!.mruList).toEqual(mruList);
+  });
+
+  it("setTabGroups keeps it across a tab-group change", async () => {
+    const saved = withMru();
+    await setTabGroups({ projectId: "p1", tabGroups: [group("g1", ["1"])] });
+    expect(saved()!.mruList).toEqual(mruList);
+  });
+
+  it("setDraftInputs keeps it across a draft flush", async () => {
+    const saved = withMru();
+    await setDraftInputs({ projectId: "p1", draftInputs: { "1": "half typed" } });
+    expect(saved()!.mruList).toEqual(mruList);
   });
 });
 
