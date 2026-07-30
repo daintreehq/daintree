@@ -695,7 +695,7 @@ describe("agent.launch dispatch integration", () => {
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
   });
 
-  it("accepts an unknown (plugin-contributed) agentId through the schema so plugin agents launch (#10560)", async () => {
+  it("accepts a non-built-in agentId through the schema and forwards it for downstream resolution (#10560)", async () => {
     const { ActionService } = await import("../../../ActionService");
     const service = new ActionService();
 
@@ -709,7 +709,8 @@ describe("agent.launch dispatch integration", () => {
 
     // Plugin agent ids are dynamic and unknown at schema-definition time, so the
     // schema must let them through; existence is resolved downstream in the
-    // launcher (an unresolved id falls back to a plain terminal, never a crash).
+    // launcher, which rejects an id that resolves to no agent (#11498) rather
+    // than degrading it to a plain terminal.
     const result = await service.dispatch(
       "agent.launch",
       { agentId: "acme-agent", worktreeId: "wt-1", location: "grid" },
