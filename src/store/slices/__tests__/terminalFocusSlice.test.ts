@@ -2268,5 +2268,4 @@ describe("TerminalFocusSlice - activation leaves fullscreen (#11506)", () => {
     expect(state.focusedId).toBe("grid-2");
     expect(state.maximizedId).toBeNull();
   });
-
 });
