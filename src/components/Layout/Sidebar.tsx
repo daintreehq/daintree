@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { ProjectResourceBadge, QuickRun } from "@/components/Project";
-import { useProjectStore } from "@/store/projectStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
+import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { DEFAULT_SIDEBAR_WIDTH } from "./AppLayout";
 import {
   ContextMenu,
@@ -56,7 +56,22 @@ export function Sidebar({
   // detect a mid-drag teardown without relying on stale closure state.
   const isResizingRef = useRef(false);
   const sidebarRef = useRef<HTMLElement>(null);
-  const currentProject = useProjectStore((state) => state.currentProject);
+  // The sidebar now mounts in every workspace kind (#11499), so the background
+  // menu has to stop offering worktree-shaped commands to workspaces that have
+  // no worktrees. Absent rather than disabled, matching the rows themselves: a
+  // greyed-out "New Worktree…" in a scratch is the same dead-control lie in a
+  // quieter font.
+  //
+  // Every entry keys off the view's own workspace, never the globally broadcast
+  // `currentProject`: a sibling window switching projects repoints that in every
+  // view, so a scratch view would label its reveal "Project" and offer project
+  // settings that dispatch against the other window's project.
+  const workspaceRoot = useWorkspaceRoot();
+  const isGitBackedWorkspace = workspaceRoot?.isGitBacked ?? false;
+  // A folder opened without git is still a project — it has real settings and a
+  // name. A scratch is not, so nothing project-shaped applies to it.
+  const projectId = workspaceRoot?.kind === "project" ? workspaceRoot.id : null;
+  const revealPath = workspaceRoot?.path;
   const isMacroFocused = useMacroFocusStore((state) => state.focusedRegion === "sidebar");
   useEffect(() => {
     useMacroFocusStore.getState().setRegionRef("sidebar", sidebarRef.current);
@@ -79,8 +94,8 @@ export function Sidebar({
     onResizeEnd?.();
   }, [onResizeEnd]);
 
-  // If the sidebar unmounts mid-drag (e.g. `currentProject` becomes null
-  // because the user switched or closed the project), the listener-attaching
+  // If the sidebar unmounts mid-drag (e.g. the view loses its workspace because
+  // the user closed the project or scratch), the listener-attaching
   // effect below tears down its document listeners but stopResizing never
   // fires — leaving AppLayout's `isSidebarResizing` flag stuck true and
   // silently disabling the collapse/expand animation for the rest of the
@@ -171,7 +186,7 @@ export function Sidebar({
         >
           <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
 
-          {currentProject && <QuickRun projectId={currentProject.id} />}
+          {projectId != null && <QuickRun projectId={projectId} />}
 
           <ProjectResourceBadge />
 
@@ -206,36 +221,44 @@ export function Sidebar({
         </aside>
       </ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuActionItem actionId="worktree.createDialog.open">
-          <GitBranchPlus className={ICON_CLASS} />
-          New Worktree…
-        </ContextMenuActionItem>
-        <ContextMenuActionItem actionId="worktree.refresh">
-          <RefreshCw className={ICON_CLASS} />
-          Refresh Sidebar
-        </ContextMenuActionItem>
-        <ContextMenuSeparator />
+        {isGitBackedWorkspace && (
+          <>
+            <ContextMenuActionItem actionId="worktree.createDialog.open">
+              <GitBranchPlus className={ICON_CLASS} />
+              New Worktree…
+            </ContextMenuActionItem>
+            <ContextMenuActionItem actionId="worktree.refresh">
+              <RefreshCw className={ICON_CLASS} />
+              Refresh Sidebar
+            </ContextMenuActionItem>
+            <ContextMenuSeparator />
+          </>
+        )}
         <ContextMenuActionItem
           actionId="system.openPath"
-          args={currentProject ? { path: currentProject.path } : undefined}
-          disabled={!currentProject}
+          args={revealPath ? { path: revealPath } : undefined}
+          disabled={!revealPath}
         >
           <FolderOpen className={ICON_CLASS} />
-          Reveal Project in Finder
+          {projectId != null ? "Reveal Project in Finder" : "Reveal Workspace in Finder"}
         </ContextMenuActionItem>
-        <ContextMenuActionItem actionId="project.settings.open" disabled={!currentProject}>
-          <Settings className={ICON_CLASS} />
-          Project Settings…
-        </ContextMenuActionItem>
+        {projectId != null && (
+          <ContextMenuActionItem actionId="project.settings.open">
+            <Settings className={ICON_CLASS} />
+            Project Settings…
+          </ContextMenuActionItem>
+        )}
         <ContextMenuSeparator />
         <ContextMenuActionItem actionId="ui.sidebar.resetWidth">
           <Ruler className={ICON_CLASS} />
           Reset Sidebar Width
         </ContextMenuActionItem>
-        <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "worktree" }}>
-          <SlidersHorizontal className={ICON_CLASS} />
-          Worktree Settings…
-        </ContextMenuActionItem>
+        {isGitBackedWorkspace && (
+          <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "worktree" }}>
+            <SlidersHorizontal className={ICON_CLASS} />
+            Worktree Settings…
+          </ContextMenuActionItem>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );
