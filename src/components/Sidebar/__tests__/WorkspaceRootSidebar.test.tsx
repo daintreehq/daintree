@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render as rtlRender, screen } from "@testing-library/react";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { NO_WORKTREE } from "@/store/slices/panelRegistry/worktreeIndex";
 import type { AgentState } from "@/types";
 import type { WorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 
@@ -31,7 +32,33 @@ vi.mock("@/store/projectStore", () => ({
   useProjectStore: { getState: () => ({ openGitInitDialog }) },
 }));
 vi.mock("@/services/ActionService", () => ({
-  actionService: { dispatch: (id: string, args?: unknown, opts?: unknown) => dispatch(id, args, opts) },
+  actionService: {
+    dispatch: (id: string, args?: unknown, opts?: unknown) => dispatch(id, args, opts),
+  },
+}));
+
+// Radix keeps the row's context menu closed, so its items never reach the DOM
+// and an "absent, not disabled" assertion over the real menu would pass
+// vacuously. Rendering the content inline is what makes that contract testable.
+vi.mock("@/components/ui/context-menu", () => ({
+  ContextMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
+  ContextMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  ContextMenuContent: ({ children }: { children: ReactNode }) => (
+    <div data-testid="row-context-menu">{children}</div>
+  ),
+  ContextMenuSeparator: () => <hr />,
+  ContextMenuActionItem: ({
+    actionId,
+    children,
+  }: {
+    actionId: string;
+    args?: unknown;
+    children: ReactNode;
+  }) => (
+    <div role="menuitem" data-action-id={actionId}>
+      {children}
+    </div>
+  ),
 }));
 
 const { WorkspaceRootSidebar } = await import("../WorkspaceRootSidebar");
@@ -108,7 +135,10 @@ describe("WorkspaceRootSidebar", () => {
     };
     render(<WorkspaceRootSidebar workspace={SCRATCH} />);
 
-    expect(useWorktreeTerminals).toHaveBeenCalledWith("__none__");
+    expect(useWorktreeTerminals).toHaveBeenCalledWith(NO_WORKTREE);
+    // The regression this guards: keying the row on the workspace's own id
+    // renders a permanently-empty row beside live agents.
+    expect(useWorktreeTerminals).not.toHaveBeenCalledWith(SCRATCH.id);
     expect(screen.getByRole("img", { name: /3 sessions/ })).toBeTruthy();
   });
 
@@ -141,21 +171,25 @@ describe("WorkspaceRootSidebar", () => {
     });
   });
 
-  it("offers no worktree-shaped affordance anywhere in the slot", () => {
+  it("carries only the row actions a worktree-less workspace can honour", () => {
     // Absent, not disabled. A row that looks like a worktree row with half its
-    // controls inert is a bigger lie than the dead toggle this replaces.
+    // menu inert is a bigger lie than the dead toggle this replaces. Asserted as
+    // an exact set so a git-shaped action can't be added back unnoticed.
     render(<WorkspaceRootSidebar workspace={SCRATCH} />);
 
-    for (const forbidden of [
-      /worktree/i,
-      /review/i,
-      /commit/i,
-      /diff/i,
-      /branch/i,
-      /arm/i,
-      /refresh/i,
-    ]) {
+    const actionIds = screen
+      .getAllByRole("menuitem")
+      .map((el) => el.getAttribute("data-action-id"));
+
+    expect(actionIds).toEqual(["worktree.openFileBrowser", "system.openPath"]);
+  });
+
+  it("exposes no worktree-shaped control outside the menu either", () => {
+    render(<WorkspaceRootSidebar workspace={SCRATCH} />);
+
+    for (const forbidden of [/review/i, /commit/i, /diff/i, /branch/i, /arm/i, /refresh/i]) {
       expect(screen.queryAllByRole("button", { name: forbidden })).toHaveLength(0);
+      expect(screen.queryAllByRole("menuitem", { name: forbidden })).toHaveLength(0);
     }
   });
 });

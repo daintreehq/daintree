@@ -65,6 +65,10 @@ describe("useWorkspaceRoot", () => {
   });
 
   it("resolves a scratch, which currentProject alone could never see (#11499)", () => {
+    // `isGitBacked: false` is the load-bearing half. `isGitBackedProject(null)`
+    // answers true — absence of the discriminator means "legacy git project" —
+    // so routing a scratch through it would hand the sidebar the worktree list
+    // for a workspace that has no worktrees.
     const scratch = makeScratch();
     scratchSlice = { scratches: [scratch], currentScratch: scratch };
 
@@ -77,18 +81,6 @@ describe("useWorkspaceRoot", () => {
       name: "Quick test",
       isGitBacked: false,
     });
-  });
-
-  it("never reports a scratch as git-backed", () => {
-    // `isGitBackedProject(null)` answers true — absence of the discriminator
-    // means "legacy git project". Routing a scratch through it would hand the
-    // sidebar the worktree list for a workspace that has no worktrees.
-    const scratch = makeScratch();
-    scratchSlice = { scratches: [scratch], currentScratch: scratch };
-
-    const { result } = renderHook(() => useWorkspaceRoot());
-
-    expect(result.current?.isGitBacked).toBe(false);
   });
 
   it("treats a project with no gitBacked discriminator as git-backed", () => {

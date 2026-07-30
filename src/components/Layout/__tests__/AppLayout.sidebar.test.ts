@@ -31,9 +31,9 @@ describe("AppLayout sidebar visibility — issue #5023 hide on welcome screen", 
   it("resolves the mount gate from the workspace, not the project (issue #11499)", () => {
     // `useWorkspaceRoot` answers for all three workspace kinds — git project,
     // folder opened without git, scratch — and returns null only on the welcome
-    // screen, which is what still keeps the sidebar off there (#5023).
+    // screen, which is what still keeps the sidebar off there (#5023). Reading
+    // any narrower store here is how the scratch case regresses.
     expect(source).toContain("const hasWorkspace = useWorkspaceRoot() !== null");
-    expect(source).toContain('import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot"');
   });
 
   it("mounts the sidebar whenever a workspace is active so the width transition can run", () => {
