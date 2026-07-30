@@ -2939,30 +2939,43 @@ describe("PullRequestService", () => {
       pullRequestService.destroy();
     });
 
-    it("eventually re-checks a successful PR too", async () => {
-      const { getCIStatuses } = makeUnchangedProbeHarness(
-        new Map([
-          [1, ciState("failure")],
-          [2, ciState("success")],
-        ])
-      );
+    it("turns a green badge red when a re-run fails", async () => {
+      const ciByNumber = new Map([
+        [1, ciState("failure")],
+        [2, ciState("success")],
+      ]);
+      const { getCIStatuses } = makeUnchangedProbeHarness(ciByNumber);
 
-      const { pullRequestService } = await detectAndSettle(["feature/a", "feature/b"]);
+      const { pullRequestService, events } = await detectAndSettle(["feature/a", "feature/b"]);
+      const svc = pullRequestService as unknown as {
+        detectedPRs: Map<string, { ciStatus?: string }>;
+      };
+      expect(svc.detectedPRs.get("wt-2")?.ciStatus).toBe("success");
       getCIStatuses.mockClear();
 
-      const seen = new Set<number>();
-      for (let elapsed = 0; elapsed < 60 && !seen.has(2); elapsed++) {
+      const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+      const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+      // The green PR's next run breaks, with no push behind it.
+      ciByNumber.set(2, ciState("failure"));
+
+      for (
+        let elapsed = 0;
+        elapsed < 60 && svc.detectedPRs.get("wt-2")?.ciStatus !== "failure";
+        elapsed++
+      ) {
         jump(MINUTE);
         await revalidate(pullRequestService);
-        for (const call of getCIStatuses.mock.calls) {
-          for (const n of call[1]) seen.add(n);
-        }
       }
 
-      // A green badge is not a fixed point — it re-checks on its own cadence, so
-      // a re-run that turns it red still surfaces (#6149).
-      expect(seen.has(2)).toBe(true);
+      // A green badge is not a fixed point — asserting the badge actually flips
+      // rather than merely that PR 2 was queried, so a regression that fetches
+      // but declines to apply the result over a cached success is still caught
+      // (#6149).
+      expect(svc.detectedPRs.get("wt-2")?.ciStatus).toBe("failure");
+      expect(detected.filter((d) => d.worktreeId === "wt-2").at(-1)?.prCiStatus).toBe("failure");
 
+      unsubscribe();
       pullRequestService.destroy();
     });
 
@@ -2980,6 +2993,11 @@ describe("PullRequestService", () => {
 
       const detected: DaintreeEventMap["sys:pr:detected"][] = [];
       const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+      // Seed a stagnation count the transition has to actually clear — starting
+      // from 0 would let an implementation that never resets it still pass.
+      const pr = svc.detectedPRs.get("wt-1");
+      if (pr) pr.stagnantPollCount = 17;
 
       // The user re-runs the failed job: no push, so updated_at never moves and
       // the probe still reports the PR unchanged.
@@ -3007,15 +3025,24 @@ describe("PullRequestService", () => {
       const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, ciState("failure")]]));
 
       const { pullRequestService } = await detectAndSettle(["feature/a"]);
+      const svc = pullRequestService as unknown as {
+        detectedPRs: Map<string, { ciStatus?: string }>;
+      };
       getCIStatuses.mockClear();
-      // Every re-check from here on fails at the provider.
-      getCIStatuses.mockRejectedValue(new Error("transient GraphQL failure"));
+      // Every re-check from here on comes back with the key omitted, which the
+      // loader surfaces as a per-key rejection. Rejecting the whole call instead
+      // would fall through to the per-PR getCIStatus path, whose default mock
+      // resolves null and would quietly retire the PR from terminal state.
+      getCIStatuses.mockResolvedValue(new Map<number, CIStatus | null>());
 
       for (let elapsed = 0; elapsed < 60 && getCIStatuses.mock.calls.length === 0; elapsed++) {
         jump(MINUTE);
         await revalidate(pullRequestService);
       }
       expect(getCIStatuses).toHaveBeenCalledTimes(1);
+      // The rejection left the cached status alone, so the PR is still terminal
+      // and still a candidate — the only thing holding it back is the pacing.
+      expect(svc.detectedPRs.get("wt-1")?.ciStatus).toBe("failure");
 
       // The attempt is stamped on enqueue, so a rejected batch waits out the
       // interval instead of re-firing on every tick.
@@ -3060,9 +3087,11 @@ describe("PullRequestService", () => {
       pullRequestService.destroy();
     });
 
-    it("never re-checks a PR with no CI checks", async () => {
+    it("does not periodically re-check a PR with no CI checks", async () => {
       // `null` from the provider is a confirmed "no CI configured" → undefined
-      // status. There is nothing to re-poll for, so it must not burn quota.
+      // status. There is nothing to re-poll for, so the slow pass must not burn
+      // quota on it (#6240). Focus regain is the deliberate exception, since a
+      // blur-swept badge is indistinguishable from this state.
       const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, null]]));
 
       const { pullRequestService } = await detectAndSettle(["feature/a"]);
@@ -3119,6 +3148,40 @@ describe("PullRequestService", () => {
       pullRequestService.destroy();
     });
 
+    it("backfills a swept CI status on the periodic tick when focus is missed", async () => {
+      const ciByNumber = new Map([[1, ciState("pending")]]);
+      const { getCIStatuses } = makeUnchangedProbeHarness(ciByNumber);
+
+      const { pullRequestService } = await detectAndSettle(["feature/a"]);
+      const svc = pullRequestService as unknown as {
+        detectedPRs: Map<string, { ciStatus?: string }>;
+      };
+
+      pullRequestService.setCIEnrichmentEnabled(false);
+      expect(svc.detectedPRs.get("wt-1")?.ciStatus).toBeUndefined();
+
+      ciByNumber.set(1, ciState("success"));
+      getCIStatuses.mockClear();
+
+      // Focus regain WITHOUT the catch-up landing — it can be lost to the 5s
+      // throttle after a quick alt-tab, to a rate-limit pause, or to a rejected
+      // batch. The swept entry is neither pending nor terminal, so before the
+      // backfill marker nothing would ever pick it up again.
+      pullRequestService.setCIEnrichmentEnabled(true);
+      await revalidate(pullRequestService);
+
+      expect(getCIStatuses).toHaveBeenCalledWith(expect.anything(), [1]);
+      expect(svc.detectedPRs.get("wt-1")?.ciStatus).toBe("success");
+
+      // Debt settled: the entry drops back to the ordinary terminal cadence
+      // instead of re-fetching on every tick forever.
+      getCIStatuses.mockClear();
+      await revalidate(pullRequestService);
+      expect(getCIStatuses).not.toHaveBeenCalled();
+
+      pullRequestService.destroy();
+    });
+
     it("runs the focus catch-up even when enrichment was already enabled", async () => {
       const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, ciState("failure")]]));
 
@@ -3154,6 +3217,81 @@ describe("PullRequestService", () => {
       expect(afterFirst).toBe(1);
       expect(getCIStatuses).toHaveBeenCalledTimes(afterFirst);
 
+      // ...but the throttle must RELEASE. An implementation that allowed the
+      // first catch-up and suppressed every later one would satisfy the
+      // assertions above while breaking the feature.
+      jump(MINUTE);
+      pullRequestService.setFocusCadence(true);
+      await flushLoaders();
+
+      expect(getCIStatuses).toHaveBeenCalledTimes(afterFirst + 1);
+
+      pullRequestService.destroy();
+    });
+
+    it("re-arms the focus catch-up after a reset", async () => {
+      const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, ciState("failure")]]));
+
+      const { pullRequestService } = await detectAndSettle(["feature/a"]);
+      getCIStatuses.mockClear();
+
+      pullRequestService.setFocusCadence(true);
+      await flushLoaders();
+      expect(getCIStatuses).toHaveBeenCalledTimes(1);
+
+      // A project switch clears the throttle stamp along with the rest of the
+      // state, so the next lifecycle isn't born inside a stale throttle window.
+      pullRequestService.reset();
+      expect(
+        (pullRequestService as unknown as { lastFocusCiCheckAt: number }).lastFocusCiCheckAt
+      ).toBe(Number.NEGATIVE_INFINITY);
+
+      pullRequestService.destroy();
+    });
+
+    it("does not spend quota on focus while a rate-limit pause is active", async () => {
+      const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, ciState("failure")]]));
+
+      const { pullRequestService } = await detectAndSettle(["feature/a"]);
+      getCIStatuses.mockClear();
+
+      // A recorded primary/secondary pause parks the service until nextRetryAt.
+      const svc = pullRequestService as unknown as { nextRetryAt: number };
+      svc.nextRetryAt = Date.now() + 30 * MINUTE;
+
+      pullRequestService.setFocusCadence(true);
+      await flushLoaders();
+      expect(getCIStatuses).not.toHaveBeenCalled();
+
+      // ...and resumes once the pause expires, rather than staying wedged.
+      svc.nextRetryAt = 0;
+      pullRequestService.setFocusCadence(true);
+      await flushLoaders();
+      expect(getCIStatuses).toHaveBeenCalledTimes(1);
+
+      pullRequestService.destroy();
+    });
+
+    it("issues one CI lookup for two worktrees sharing a PR", async () => {
+      const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, ciState("failure")]]));
+
+      // Both worktrees sit on the branch that resolves to PR 1.
+      const { pullRequestService, events } = await detectAndSettle(["feature/a", "feature/a"]);
+      getCIStatuses.mockClear();
+
+      const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+      const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+      pullRequestService.setFocusCadence(true);
+      await flushLoaders();
+
+      // Deduplicated to a single batch entry, and each worktree still gets its
+      // own phase-2 emit so neither badge is left behind.
+      expect(getCIStatuses).toHaveBeenCalledWith(expect.anything(), [1]);
+      expect(detected.filter((d) => d.worktreeId === "wt-1")).toHaveLength(1);
+      expect(detected.filter((d) => d.worktreeId === "wt-2")).toHaveLength(1);
+
+      unsubscribe();
       pullRequestService.destroy();
     });
 

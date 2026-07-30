@@ -136,6 +136,14 @@ interface InternalLinkedPR {
   // which reads as "due" so entries detected before this field existed (or
   // seeded by a re-detection) self-heal on the next tick.
   lastCiCheckAt?: number;
+  // Set by sweepStaleCiStatus when a pending badge is cleared to `undefined` on
+  // blur. That state is invisible to every other trigger — it isn't `pending`,
+  // isn't terminal, and a CI re-run doesn't bump updated_at for the probe — so
+  // without an explicit marker the badge stays blank until the next push. The
+  // focus catch-up normally backfills it, but that's a single edge-triggered
+  // event: throttled, rate-limited, or rejected, it's gone. This flag keeps the
+  // entry eligible on the periodic tick until an authoritative result lands.
+  needsCiBackfill?: boolean;
 }
 
 export interface PRDetectionResult {
@@ -1005,6 +1013,10 @@ class PullRequestService {
       pr.ciStatus = undefined;
       pr._ciStatus = undefined;
       pr.stagnantPollCount = 0;
+      // Mark for backfill: this entry is now indistinguishable from "no CI
+      // configured", which nothing re-polls. The flag is what makes it
+      // recoverable once enrichment comes back (#11513).
+      pr.needsCiBackfill = true;
     }
 
     // updateBoostFromDetectedPRs runs unconditionally — with no pending entries
@@ -1519,7 +1531,11 @@ class PullRequestService {
         const now = Date.now();
         for (const detectedPR of this.detectedPRs.values()) {
           if (enrichedPRNumbers.has(detectedPR.number)) continue;
-          if (detectedPR.ciStatus === "pending" || this.isTerminalCiRecheckDue(detectedPR, now)) {
+          if (
+            detectedPR.ciStatus === "pending" ||
+            detectedPR.needsCiBackfill === true ||
+            this.isTerminalCiRecheckDue(detectedPR, now)
+          ) {
             enrichedPRNumbers.add(detectedPR.number);
             this.enrichPRWithCIStatus(detectedPR, repo);
           }
@@ -1968,6 +1984,10 @@ class PullRequestService {
             ? ciStatus.state
             : undefined;
         pr._ciStatus = ciStatus ?? undefined;
+        // An authoritative result landed (including a confirmed "no checks"),
+        // so the blur-sweep backfill debt is settled. A rejection skips this and
+        // leaves the flag set, keeping the entry eligible on the next tick.
+        pr.needsCiBackfill = undefined;
         if (pr.ciStatus !== undefined) {
           pr.stagnantPollCount = prevCiStatus === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
         }
@@ -1995,7 +2015,16 @@ class PullRequestService {
             });
           }
         }
+        const boostWasArmed = this.boostExpiresAt !== null;
         this.updateBoostFromDetectedPRs();
+        // Enrichment is fire-and-forget, so a terminal→pending flip (a CI
+        // re-run) only becomes visible here — after revalidateResolvedPRs
+        // already re-armed its timer at the 90s baseline. Without this the
+        // freshly-armed boost wouldn't take effect until that stale tick fired,
+        // making the first re-run poll up to 90s away instead of 30s (#11513).
+        if (!boostWasArmed && this.boostExpiresAt !== null) {
+          this.scheduleRevalidation();
+        }
       })
       .catch(() => {
         // CI status fetch is best-effort; failure does not invalidate the PR detection
