@@ -865,15 +865,22 @@ describe("app:boot handler", () => {
      * `expect.any(Function)` is what makes these tests bite: an updater that
      * returned `existing` unchanged, or wrote the wrong focus state, would
      * satisfy a callable-shaped assertion.
+     *
+     * Types are derived from `enqueueProjectStateUpdate` rather than asserted:
+     * the real updater may return a promise, so a hand-written synchronous
+     * signature here is a lie that only the composite `tsc` build catches.
      */
-    function runEnqueuedUpdate(existing: unknown = undefined): Record<string, unknown> {
+    type EnqueuedUpdater = Parameters<typeof projectStore.enqueueProjectStateUpdate>[1];
+
+    async function runEnqueuedUpdate(
+      existing: Parameters<EnqueuedUpdater>[0] = null
+    ): Promise<Awaited<ReturnType<EnqueuedUpdater>>> {
       const calls = vi.mocked(projectStore.enqueueProjectStateUpdate).mock.calls;
       // Exactly one write, keyed to this workspace — a second enqueue or a
       // write against another id is itself the bug these tests guard against.
       expect(calls).toHaveLength(1);
       expect(calls[0][0]).toBe(REAL_PROJECT.id);
-      const updater = calls[0][1] as (prev: unknown) => Record<string, unknown>;
-      return updater(existing);
+      return await calls[0][1](existing);
     }
 
     // Both unmigrated branches persist the legacy focus/worktree values to
@@ -910,7 +917,7 @@ describe("app:boot handler", () => {
       expect(appState.mruList).toEqual(LEGACY_WORKSPACE_STATE.mruList);
       // The same values must land in the per-project record, or the next boot
       // reads an empty one and the migration is lost.
-      const migrated = runEnqueuedUpdate();
+      const migrated = (await runEnqueuedUpdate())!;
       expect(migrated.projectId).toBe(REAL_PROJECT.id);
       expect(migrated.activeWorktreeId).toBe(LEGACY_WORKSPACE_STATE.activeWorktreeId);
       expect(migrated.focusMode).toBe(LEGACY_WORKSPACE_STATE.focusMode);
@@ -941,7 +948,11 @@ describe("app:boot handler", () => {
       expect(appState.mruList).toEqual(LEGACY_WORKSPACE_STATE.mruList);
       // The migrate-once write must carry the focus state onto the existing
       // record without discarding what that record already holds.
-      const migrated = runEnqueuedUpdate({ projectId: REAL_PROJECT.id, terminals: [] });
+      const migrated = (await runEnqueuedUpdate({
+        projectId: REAL_PROJECT.id,
+        sidebarWidth: 350,
+        terminals: [],
+      }))!;
       expect(migrated.focusMode).toBe(LEGACY_WORKSPACE_STATE.focusMode);
       expect(migrated.focusPanelState).toEqual(LEGACY_WORKSPACE_STATE.focusPanelState);
       expect(migrated.terminals).toEqual([]);
