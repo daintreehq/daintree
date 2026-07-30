@@ -28,6 +28,7 @@ import {
 } from "@/store";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { useCcrPresetsSubscription } from "@/hooks/useCcrPresetsSubscription";
@@ -161,6 +162,18 @@ export function AppLayout({
   // paint (the new width arrives with the class already gone — no animation).
   const [isSidebarWidthHydrating, setIsSidebarWidthHydrating] = useState(true);
   const currentProject = useProjectStore((state) => state.currentProject);
+  // Per-workspace state is keyed by workspace id, and a scratch owns one even
+  // though it has no Project row. Persisting a scratch through the legacy
+  // global fallback would overwrite the global focus record that unmigrated
+  // real projects still migrate from, destroying it for every project the user
+  // has not reopened yet (#11497). Only a renderer with no workspace at all may
+  // fall back to the global write.
+  //
+  // The view's own workspace id is the identity to use here, never
+  // `currentProject ?? currentScratch`: both of those are broadcast to every
+  // view, so a cached project view momentarily without a project would write
+  // its focus state into a sibling window's scratch.
+  const workspaceId = getViewWorkspaceId() ?? currentProject?.id;
   const layout = useLayoutState();
   const diagnosticsMounted = useKeepMounted(layout.diagnosticsOpen);
   const isThemeBrowserOpen = useOverlayOpen("theme-browser");
@@ -414,9 +427,8 @@ export function AppLayout({
     const persistedFocusMode = layout.gestureSidebarHidden;
 
     const persistFocusMode = async () => {
-      // Persist focus mode to per-project state if a project is active
-      if (!currentProject?.id) {
-        // No project - fall back to global state for backward compatibility
+      if (!workspaceId) {
+        // No workspace at all - fall back to global state for backward compatibility
         try {
           await appClient.setState({ focusMode: persistedFocusMode });
         } catch (error) {
@@ -427,7 +439,7 @@ export function AppLayout({
 
       try {
         await window.electron.project.setFocusMode(
-          currentProject.id,
+          workspaceId,
           persistedFocusMode,
           layout.savedPanelState as PanelState | undefined
         );
@@ -438,7 +450,7 @@ export function AppLayout({
 
     const timer = setTimeout(persistFocusMode, 100);
     return () => clearTimeout(timer);
-  }, [layout.gestureSidebarHidden, layout.savedPanelState, currentProject?.id, isHydrated]);
+  }, [layout.gestureSidebarHidden, layout.savedPanelState, workspaceId, isHydrated]);
 
   const handleToggleFocusMode = async () => {
     // Gesture-active signal is "snapshot present", not the combined
@@ -467,15 +479,15 @@ export function AppLayout({
       if (restoreAssistant) {
         useHelpPanelStore.getState().setOpen(assistantWasOpen);
       }
-      // Persist to per-project state
-      if (currentProject?.id) {
+      // Persist to per-workspace state
+      if (workspaceId) {
         try {
-          await window.electron.project.setFocusMode(currentProject.id, false, undefined);
+          await window.electron.project.setFocusMode(workspaceId, false, undefined);
         } catch (error) {
           logError("Failed to clear focus panel state", error);
         }
       } else {
-        // Fall back to global state if no project
+        // Fall back to global state only when there is no workspace at all
         try {
           await appClient.setState({ focusPanelState: undefined });
         } catch (error) {
@@ -505,14 +517,14 @@ export function AppLayout({
       // toggleFocusMode is a no-op if neither sidebar was visible.
       const persistFocusMode = useFocusStore.getState().isFocusMode || showSidebar || showAssistant;
       if (!persistFocusMode) return;
-      if (currentProject?.id) {
+      if (workspaceId) {
         try {
-          await window.electron.project.setFocusMode(currentProject.id, true, currentPanelState);
+          await window.electron.project.setFocusMode(workspaceId, true, currentPanelState);
         } catch (error) {
           logError("Failed to persist focus panel state", error);
         }
       } else {
-        // Fall back to global state if no project
+        // Fall back to global state only when there is no workspace at all
         try {
           await appClient.setState({ focusPanelState: currentPanelState });
         } catch (error) {

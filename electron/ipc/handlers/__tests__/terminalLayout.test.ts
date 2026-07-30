@@ -26,11 +26,22 @@ const setTabGroups = terminalLayoutNamespace.ops.setTabGroups.handler as (payloa
   removedIds?: string[];
 }) => Promise<void>;
 
+const setTerminalSizes = terminalLayoutNamespace.ops.setTerminalSizes.handler as (payload: {
+  projectId: string;
+  terminalSizes: Record<string, { cols: number; rows: number }>;
+}) => Promise<void>;
+
 const setDraftInputs = terminalLayoutNamespace.ops.setDraftInputs.handler as (payload: {
   projectId: string;
   draftInputs: Record<string, string>;
   changedIds?: string[];
   removedIds?: string[];
+}) => Promise<void>;
+
+const setFocusMode = terminalLayoutNamespace.ops.setFocusMode.handler as (payload: {
+  projectId: string;
+  focusMode: boolean;
+  focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
 }) => Promise<void>;
 
 function term(id: string, location: "grid" | "dock" = "grid"): TerminalSnapshot {
@@ -70,6 +81,86 @@ const baseState = (terminals: TerminalSnapshot[], tabGroups: TabGroup[] = []): P
 
 beforeEach(() => {
   projectStoreMock.enqueueProjectStateUpdate.mockReset();
+});
+
+describe("setFocusMode record preservation (#11497)", () => {
+  // This updater rebuilds the whole record rather than spreading the existing
+  // one, so any field it forgets is silently deleted on every focus toggle.
+  it("keeps the fields it does not own", async () => {
+    const saved = onDisk({
+      ...baseState([term("1")]),
+      mruList: ["worktree:wt-1", "terminal:1"],
+      activeWorktreeId: "wt-1",
+      terminalSizes: { "1": { cols: 80, rows: 24 } },
+      draftInputs: { "1": "half typed" },
+    } as ProjectState);
+
+    await setFocusMode({ projectId: "p1", focusMode: true });
+
+    const result = saved()!;
+    expect(result.focusMode).toBe(true);
+    expect(result.mruList).toEqual(["worktree:wt-1", "terminal:1"]);
+    expect(result.activeWorktreeId).toBe("wt-1");
+    expect(ids(result.terminals)).toEqual(["1"]);
+    expect(result.terminalSizes).toEqual({ "1": { cols: 80, rows: 24 } });
+    expect(result.draftInputs).toEqual({ "1": "half typed" });
+  });
+
+  it("writes a workspace with no prior record without inventing an MRU", async () => {
+    // A scratch reaches this handler before it has any saved state, so the
+    // updater has to tolerate a null existing record.
+    const saved = onDisk(null);
+
+    await setFocusMode({
+      projectId: "scratch-1",
+      focusMode: true,
+      focusPanelState: { sidebarWidth: 400, diagnosticsOpen: false },
+    });
+
+    const result = saved()!;
+    expect(result.projectId).toBe("scratch-1");
+    expect(result.focusMode).toBe(true);
+    expect(result.focusPanelState).toEqual({ sidebarWidth: 400, diagnosticsOpen: false });
+    expect(result.mruList).toBeUndefined();
+  });
+});
+
+describe("sibling rebuild updaters keep the MRU (#11497)", () => {
+  // setFocusMode is not the only updater that rebuilds the record wholesale;
+  // these four run on routine layout writes, so an omission here wipes the
+  // quick switcher far more often than a focus toggle would.
+  const mruList = ["worktree:wt-1", "terminal:1"];
+  const withMru = () =>
+    onDisk({ ...baseState([term("1")]), mruList: [...mruList] } as ProjectState);
+
+  it("setTerminals keeps it across a panel save", async () => {
+    const saved = withMru();
+    await setTerminals({
+      projectId: "p1",
+      terminals: [term("1"), term("2")],
+      changedIds: ["2"],
+      removedIds: [],
+    });
+    expect(saved()!.mruList).toEqual(mruList);
+  });
+
+  it("setTerminalSizes keeps it across a resize persist", async () => {
+    const saved = withMru();
+    await setTerminalSizes({ projectId: "p1", terminalSizes: { "1": { cols: 120, rows: 40 } } });
+    expect(saved()!.mruList).toEqual(mruList);
+  });
+
+  it("setTabGroups keeps it across a tab-group change", async () => {
+    const saved = withMru();
+    await setTabGroups({ projectId: "p1", tabGroups: [group("g1", ["1"])] });
+    expect(saved()!.mruList).toEqual(mruList);
+  });
+
+  it("setDraftInputs keeps it across a draft flush", async () => {
+    const saved = withMru();
+    await setDraftInputs({ projectId: "p1", draftInputs: { "1": "half typed" } });
+    expect(saved()!.mruList).toEqual(mruList);
+  });
 });
 
 describe("setTerminals merge (#11350)", () => {

@@ -152,14 +152,28 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     let terminalsToUse: StoreSchema["appState"]["terminals"] = [];
     let terminalsSource = "none";
 
+    // The legacy global focus/worktree/MRU fields predate per-workspace state
+    // and belong to whichever real project was open when they were written.
+    // Only a project with a real row may inherit them as migration input — a
+    // scratch (workspaceId set, no Project row) or an unresolvable sender must
+    // never adopt another workspace's worktree, focus, or MRU (#11497). The
+    // rest of `globalAppState` stays intentionally app-global.
+    const canInheritLegacyWorkspaceState = currentProject !== null;
+
     // Focus mode state to include in response
-    let focusModeToUse = globalAppState.focusMode ?? false;
-    let focusPanelStateToUse = globalAppState.focusPanelState;
+    let focusModeToUse = canInheritLegacyWorkspaceState
+      ? (globalAppState.focusMode ?? false)
+      : false;
+    let focusPanelStateToUse = canInheritLegacyWorkspaceState
+      ? globalAppState.focusPanelState
+      : undefined;
     // Active worktree state to include in response
-    let activeWorktreeIdToUse = globalAppState.activeWorktreeId;
+    let activeWorktreeIdToUse = canInheritLegacyWorkspaceState
+      ? globalAppState.activeWorktreeId
+      : undefined;
     // Quick-switcher MRU: prefer per-project, fall back to the legacy global
     // list so existing users keep their MRU on first open after upgrade.
-    let mruListToUse = globalAppState.mruList;
+    let mruListToUse = canInheritLegacyWorkspaceState ? globalAppState.mruList : undefined;
     let projectStateQuarantinedPath: string | undefined;
     // Per-project layout state folded into the payload so the renderer skips
     // the standalone getTabGroups/getTerminalSizes/getDraftInputs round-trips
@@ -208,8 +222,11 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         if (projectState.focusMode !== undefined) {
           focusModeToUse = projectState.focusMode;
           focusPanelStateToUse = projectState.focusPanelState;
-        } else if (globalAppState.focusMode !== undefined) {
-          // Migration: per-project state exists but no focusMode - migrate from global
+        } else if (canInheritLegacyWorkspaceState && globalAppState.focusMode !== undefined) {
+          // Migration: per-project state exists but no focusMode - migrate from
+          // global. Gated on a real project row: a scratch reaches this branch
+          // once it has saved panels but no focus state, and without the gate it
+          // would both adopt and persist another workspace's focus mode (#11497).
           focusModeToUse = globalAppState.focusMode;
           focusPanelStateToUse = globalAppState.focusPanelState;
 
