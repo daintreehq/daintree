@@ -163,8 +163,20 @@ describe("classifyWaitingReason", () => {
       ],
       ["a hit-count metric", "rate limit hit count: 0"],
       ["a utilization reading", "usage limit has reached 80% utilization"],
+      ["a passive description", "The code handles cases where the rate limit is reached."],
+      ["a passive zero-event summary", "No usage limit was exceeded."],
+      ["a passive test name", "PASS reports whether the rate limit was exceeded"],
+      // Second person is not enough on its own — a real banner opens the line.
+      ["a subordinate clause", "The test shows you exceeded the rate limit in the retry test."],
+      ["a hypothetical", "If you exceeded the rate limit, I can add backoff."],
+      ["a negated second person", "I don't think you hit your usage limit."],
+      ["an unrelated object", "You reached the section on rate limits."],
     ])("keeps %s as prompt (precision guard)", (_name, line) => {
       expect(classifyWaitingReason([line], false)).toBe("prompt");
+    });
+
+    it("an agent asking whether the user is limited is a question, not an error", () => {
+      expect(classifyWaitingReason(["Have you hit your usage limit?"], false)).toBe("question");
     });
 
     it("a benign limit notice above a real question still classifies as question", () => {
