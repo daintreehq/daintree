@@ -14,6 +14,7 @@ import type {
 import type { WaitingReason } from "@shared/types/agent";
 import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types/ipc/terminal";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isGitBackedProject } from "@shared/types";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { inferKind } from "./statePatcher";
 import { RECONNECT_TIMEOUT_MS } from "./reconnectManager";
@@ -262,6 +263,15 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     // needs a git repository (in-repo presets, recipes) keeps using the project.
     const currentWorkspaceId = hydrateResult.workspaceId ?? currentProjectId;
     const projectRoot = currentProject?.path;
+    // Whether this view's workspace can have git worktrees at all. A scratch has
+    // no project row behind it, and a folder opened without git has one that is
+    // explicitly not git-backed (#11405) — neither can ever enumerate a worktree.
+    // `isGitBackedProject` reads absence as git-backed (legacy rows carry no
+    // discriminator), so the null check has to be its own clause. Every use of
+    // the saved `appState.activeWorktreeId` below is gated on this: that value is
+    // one app-global field shared by every workspace, so in a worktree-less view
+    // it names whichever worktree the last git-backed project left behind.
+    const workspaceHasWorktrees = currentProject != null && isGitBackedProject(currentProject);
 
     const worktreesPromise = worktreeClient.getAll().catch((error) => {
       logWarn("Failed to prefetch worktrees during hydration", { error });
@@ -442,7 +452,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         // Fetch terminal sizes for restoration
         const terminalSizes = await terminalSizesPromise;
 
-        const activeWorktreeId = appState.activeWorktreeId ?? null;
+        // Withheld from a worktree-less workspace rather than merely left
+        // unselected later: restore re-homes worktree-less and stale-worktree
+        // panels onto it, so passing it through would stamp another workspace's
+        // worktree onto this one's panels.
+        const activeWorktreeId = workspaceHasWorktrees ? (appState.activeWorktreeId ?? null) : null;
         const projectPresetsByAgent = await projectPresetsPromise;
 
         // Seed the persistence cache so the first save after launch can
@@ -489,6 +503,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           prefetchedReconnectResults,
           terminalSizes,
           activeWorktreeId,
+          workspaceHasWorktrees,
           projectRoot: projectRoot || "",
           agentSettings,
           clipboardDirectory,
@@ -636,9 +651,25 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       }
     }
 
-    // An unknown worktree set keeps the saved selection rather than dropping it
-    // on the floor (#11234).
-    if (!worktreesAreKnown) {
+    // A worktree-less workspace has nothing to select, now or ever, so its
+    // selection stays null. The empty-list branch below reads an empty list as
+    // "the host hasn't reported yet" (#11234) — true for a project, never for a
+    // scratch — so without this gate the view adopts whichever worktree the last
+    // git-backed project left behind. Nothing then resolves it: the grid renders
+    // that foreign worktree's bucket while new panels land in the worktree-less
+    // one (invisible panels with live PTYs), and every worktree-resolving action
+    // refuses with "Worktree not found". Skipping the call — rather than clearing
+    // with `setActiveWorktree(null)` — also leaves the shared persisted restore
+    // point intact for the projects that own it.
+    if (!workspaceHasWorktrees) {
+      if (savedActiveId) {
+        logHydrationInfo(
+          `Workspace has no worktrees; leaving active worktree unset (ignoring saved ${savedActiveId})`
+        );
+      }
+    } else if (!worktreesAreKnown) {
+      // An unknown worktree set keeps the saved selection rather than dropping it
+      // on the floor (#11234).
       if (savedActiveId) {
         setActiveWorktree(savedActiveId);
       }
