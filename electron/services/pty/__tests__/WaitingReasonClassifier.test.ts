@@ -74,6 +74,19 @@ describe("classifyWaitingReason", () => {
     it.each([
       ["rate limit", "You've hit your rate limit. Try again at 3pm."],
       ["usage limit", "Usage limit reached — resets in 2 hours"],
+      ["rate limit reached", "API Error: Rate limit reached"],
+      ["passive rate limiting", "You are being rate limited."],
+      ["past-tense passive rate limiting", "You have been rate limited."],
+      ["usage limit hit", "You've hit your usage limit. Try again at 4pm."],
+      ["usage limit exceeded", "Usage limit exceeded"],
+      ["usage limit reached via auxiliary", "Your usage limit has been reached."],
+      ["usage limit exhausted", "5-hour usage limit exhausted"],
+      ["qualified usage limit", "You've hit your 5-hour usage limit."],
+      ["plural rate limits", "You've hit your rate limits."],
+      ["usage limit ran out", "You ran out of your usage limit."],
+      ["box-framed usage limit", "│ You've hit your usage limit. Try again at 4pm."],
+      ["box-cornered usage limit", "╰ You have reached your usage limit"],
+      ["pointer-prefixed usage limit", "❯ You've hit your usage limit."],
       ["quota", "Quota exceeded for this billing period"],
       ["overloaded", "API error: Overloaded. Please retry shortly."],
       ["auth", "Authentication failed. Run /login to reauthenticate."],
@@ -122,6 +135,86 @@ describe("classifyWaitingReason", () => {
     it("bare error:/failed lines stay prompt (precision guard)", () => {
       const lines = ["error: expected 2 arguments", "build failed"];
       expect(classifyWaitingReason(lines, false)).toBe("prompt");
+    });
+
+    it.each([
+      [
+        "available usage-limit resets",
+        "• You have 2 usage limit resets available. Run /usage to use one.",
+      ],
+      ["exhausted usage-limit resets", "No usage limit resets available"],
+      ["a usage-limit reset action", "Redeem usage limit reset"],
+      [
+        "remaining weekly allowance",
+        "⚠ Heads up, you have less than 10% of your weekly limit left.",
+      ],
+      ["a plan without rate limits", "Your plan does not impose Codex rate limits"],
+      ["rate-limit narration", "the API rate limits at 50 rpm"],
+      ["a rate-limited endpoint", "I added retry logic because the endpoint is rate limited."],
+      // An agent that just worked on limit handling narrates the limit
+      // something *else* hit. A depletion verb near the phrase is not enough.
+      ["a passing test name", "PASS retries when the client hit the API rate limit"],
+      ["a zero-event summary", "No request exceeded the configured rate limit."],
+      [
+        "a negated finding",
+        "I confirmed the client doesn't hit the API rate limit; all tests pass.",
+      ],
+      ["a conditional explanation", "If callers hit the per-model rate limit, the client retries."],
+      [
+        "a recovered third party",
+        "I verified the mocked endpoint has been rate limited and recovered.",
+      ],
+      ["a hit-count metric", "rate limit hit count: 0"],
+      ["a utilization reading", "usage limit has reached 80% utilization"],
+      ["a passive description", "The code handles cases where the rate limit is reached."],
+      ["a passive zero-event summary", "No usage limit was exceeded."],
+      ["a passive test name", "PASS reports whether the rate limit was exceeded"],
+      // Second person is not enough on its own — a real banner opens the line.
+      ["a subordinate clause", "The test shows you exceeded the rate limit in the retry test."],
+      ["a hypothetical", "If you exceeded the rate limit, I can add backoff."],
+      ["a negated second person", "I don't think you hit your usage limit."],
+      ["an unrelated object", "You reached the section on rate limits."],
+    ])("keeps %s as prompt (precision guard)", (_name, line) => {
+      expect(classifyWaitingReason([line], false)).toBe("prompt");
+    });
+
+    it("an agent asking whether the user is limited is a question, not an error", () => {
+      expect(classifyWaitingReason(["Have you hit your usage limit?"], false)).toBe("question");
+    });
+
+    it("a benign limit notice above a real question still classifies as question", () => {
+      // Stronger than asserting "prompt": the notice has to be rejected by the
+      // error patterns AND question detection has to still fire, so this fails
+      // both for a re-broadened error pattern and for a classifier that has
+      // collapsed to its default.
+      const lines = [
+        "• You have 2 usage limit resets available. Run /usage to use one.",
+        "What should I work on next?",
+        "> ",
+      ];
+      expect(classifyWaitingReason(lines, true)).toBe("question");
+    });
+
+    it("a real error alongside a benign limit notice still classifies as error", () => {
+      const lines = [
+        "• You have 2 usage limit resets available. Run /usage to use one.",
+        "Authentication failed. Run /login to reauthenticate.",
+        "> ",
+      ];
+      expect(classifyWaitingReason(lines, true)).toBe("error");
+    });
+
+    it("Codex's post-interrupt tail stays prompt (precision guard)", () => {
+      // The reset notice says the user *has* limit resets in reserve — the
+      // opposite of a block — and the whole tail is exactly four non-empty
+      // lines, so every one of them lands inside the error window.
+      const lines = [
+        "■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.",
+        "• You have 2 usage limit resets available. Run /usage to use one.",
+        "› Implement {feature}",
+        "  gpt-5.6-sol medium · ~/Games/Packages/tilegen                Goal achieved (32m)",
+      ];
+      expect(classifyWaitingReason(lines, true)).toBe("prompt");
     });
   });
 

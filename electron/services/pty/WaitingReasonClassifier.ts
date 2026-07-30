@@ -40,10 +40,28 @@ const APPROVAL_PATTERNS: RegExp[] = [
 // stay out — compiler output scrolling past a settling agent would
 // misclassify an ordinary prompt wait as an error wait.
 const ERROR_PATTERNS: RegExp[] = [
-  // Rate limiting / capacity
-  /\brate.?limit(?:ed|s)?\b/i,
+  // Rate limiting / capacity. A limit phrase only means "blocked" when a
+  // depletion verb sits next to it. Bare "usage limit"/"rate limit" is
+  // ordinary prose: agent CLIs narrate their own quota in exactly those words
+  // ("You have 2 usage limit resets available", "the API rate limits at 50
+  // rpm"), and those lines mean the opposite of a block.
+  //
+  // A verb alone is not enough either. An agent narrates the limit something
+  // *else* hit ("retries when the client hit the API rate limit"), asks about
+  // one ("Have you hit your usage limit?"), or negates one ("no usage limit
+  // was exceeded"). So the second-person forms have to open the line the way
+  // a real banner does, and only a quota window may sit between the verb and
+  // the limit — "your 5-hour usage limit" is a block, "the section on rate
+  // limits" is prose. Passive auxiliaries ("was exceeded", "is reached") are
+  // left out for the same reason, as is "hit" after the noun, where it reads
+  // as a metric ("rate limit hit count: 0") more often than as a block.
+  /\b(?:usage|rate)[ -]?limits?\s+(?:has\s+been\s+)?(?:reached|exceeded|exhausted)\b/i,
+  // The prefix class carries the gutter, box and pointer glyphs banners are
+  // rendered behind (same chrome PROMPT_CHROME_LINE knows about); "-" stays
+  // last so it reads as a literal.
+  /^[\s•●■▪*>❯›⟩│┃╎╭╰─⚠-]*you(?:'ve|'re|\s+(?:have|are))?\s+(?:hit|reached|exceeded|exhausted|(?:ran|run) out of)\s+(?:(?:a|the|your|our)\s+)?(?:(?:\d+[ -]?hour|hourly|daily|weekly|monthly|rolling|session)\s+){0,2}?(?:usage|rate)[ -]?limits?\b/i,
+  /^[\s•●■▪*>❯›⟩│┃╎╭╰─⚠-]*you(?:'ve|'re|\s+(?:have|are))\s+(?:being|been)\s+rate[ -]?limited\b/i,
   /\bquota (?:exceeded|reached)\b/i,
-  /\busage limit\b/i,
   /\btoo many requests\b/i,
   /\boverloaded\b/i,
   /\bcredit balance is too low\b/i,
