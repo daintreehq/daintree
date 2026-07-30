@@ -1514,6 +1514,43 @@ describe("toolbarPreferencesStore", () => {
       expect(store.getState().layout.leftButtons).toContain("file-browser");
     });
 
+    it("restores the hidden default on a re-hydrate onto a blob with no pin map", async () => {
+      // zustand hands `merge` the LIVE state on a second `rehydrate()`, not the
+      // creator defaults, so resolving a missing pin map from current state would
+      // carry the previous blob's opt-in into one that has none.
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["terminal", "file-browser"],
+              rightButtons: ["settings"],
+              pinnedButtons: {},
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 12,
+        })
+      );
+
+      const store = await loadStore();
+      expect(store.getState().layout.pinnedButtons["file-browser"]).toBeUndefined();
+
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: { leftButtons: ["terminal", "file-browser"], rightButtons: ["settings"] },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 12,
+        })
+      );
+      await store.persist.rehydrate();
+
+      expect(store.getState().layout.pinnedButtons["file-browser"]).toBe(false);
+    });
+
     it("heals a default already duplicated onto both sides by the old hydration", async () => {
       // Profiles corrupted before the cross-side fix carry the id twice. The
       // survivor is the non-home side, which is where the user had dragged it.

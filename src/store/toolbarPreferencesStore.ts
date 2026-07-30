@@ -710,7 +710,12 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             // layout that carries no pin map would otherwise surface a
             // ships-hidden button. An explicitly stored `{}` still wins, which is
             // how a genuine opt-in survives.
-            pinnedButtons: persisted.layout?.pinnedButtons ?? currentState.layout.pinnedButtons,
+            //
+            // The constant rather than `currentState.layout.pinnedButtons`: on a
+            // re-`rehydrate()` zustand passes live state here, not the creator
+            // defaults, so reading from it would carry the previous blob's pins
+            // into a blob that has none.
+            pinnedButtons: persisted.layout?.pinnedButtons ?? { ...DEFAULT_PINNED_BUTTONS },
           },
         };
       },
