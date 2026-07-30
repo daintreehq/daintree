@@ -56,8 +56,11 @@ const ERROR_PATTERNS: RegExp[] = [
   // left out for the same reason, as is "hit" after the noun, where it reads
   // as a metric ("rate limit hit count: 0") more often than as a block.
   /\b(?:usage|rate)[ -]?limits?\s+(?:has\s+been\s+)?(?:reached|exceeded|exhausted)\b/i,
-  /^[\s•●■▪*>-]*you(?:'ve|'re|\s+(?:have|are))?\s+(?:hit|reached|exceeded|exhausted|(?:ran|run) out of)\s+(?:(?:a|the|your|our)\s+)?(?:(?:\d+[ -]?hour|hourly|daily|weekly|monthly|rolling|session)\s+){0,2}?(?:usage|rate)[ -]?limits?\b/i,
-  /^[\s•●■▪*>-]*you(?:'ve|'re|\s+(?:have|are))\s+(?:being|been)\s+rate[ -]?limited\b/i,
+  // The prefix class carries the gutter, box and pointer glyphs banners are
+  // rendered behind (same chrome PROMPT_CHROME_LINE knows about); "-" stays
+  // last so it reads as a literal.
+  /^[\s•●■▪*>❯›⟩│┃╎╭╰─⚠-]*you(?:'ve|'re|\s+(?:have|are))?\s+(?:hit|reached|exceeded|exhausted|(?:ran|run) out of)\s+(?:(?:a|the|your|our)\s+)?(?:(?:\d+[ -]?hour|hourly|daily|weekly|monthly|rolling|session)\s+){0,2}?(?:usage|rate)[ -]?limits?\b/i,
+  /^[\s•●■▪*>❯›⟩│┃╎╭╰─⚠-]*you(?:'ve|'re|\s+(?:have|are))\s+(?:being|been)\s+rate[ -]?limited\b/i,
   /\bquota (?:exceeded|reached)\b/i,
   /\btoo many requests\b/i,
   /\boverloaded\b/i,
