@@ -5,6 +5,10 @@ import { AppDialog } from "../AppDialog";
 import { _resetForTests } from "@/lib/escapeStack";
 import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
 import { handleDockEscapeKeyDown } from "@/components/Layout/dockPopoverGuard";
+import {
+  setDockPopoverOpen,
+  _resetForTests as _resetDockPopoverForTests,
+} from "@/lib/dockPopoverLayer";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
 
 vi.mock("zustand/react/shallow", () => ({
@@ -1177,5 +1181,99 @@ describe("AppDialog Escape yielded by the layer underneath", () => {
     pressEscape();
 
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A dock popover renders above the standard modal tier, so any dialog opened
+ * while one is up paints underneath it while still trapping focus (#11505).
+ *
+ * Resolved here rather than per call site, which is what makes this one suite
+ * cover every dialog in the app — including the destructive confirms reachable
+ * from a docked terminal, where an unreadable prompt is the real hazard.
+ */
+describe("AppDialog layering over a dock popover", () => {
+  beforeEach(() => {
+    mockPrevOpen = false;
+    _resetDockPopoverForTests();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    _resetDockPopoverForTests();
+  });
+
+  /**
+   * The z-tier a surface resolved to, read off the rendered element rather than
+   * compared against a hard-coded token so the tier's value stays free to change.
+   */
+  function tierOf(el: Element): string | undefined {
+    return Array.from(el.classList).find((c) => c.startsWith("z-["));
+  }
+
+  function renderDialogAt(zIndex?: "modal" | "nested") {
+    const { unmount } = render(
+      <AppDialog isOpen onClose={() => {}} {...(zIndex ? { zIndex } : {})}>
+        <span>body</span>
+      </AppDialog>
+    );
+    const tier = tierOf(screen.getByRole("dialog"));
+    unmount();
+    return tier;
+  }
+
+  it("distinguishes the two tiers at all", () => {
+    // Guards every assertion below: if both options rendered the same token
+    // they would all pass while the bug was fully present.
+    expect(renderDialogAt("modal")).not.toBe(renderDialogAt("nested"));
+  });
+
+  it("keeps the standard tier while no dock popover is on screen", () => {
+    expect(renderDialogAt()).toBe(renderDialogAt("modal"));
+  });
+
+  it("clears the popover for a dialog that asked for no particular tier", () => {
+    act(() => setDockPopoverOpen(true));
+
+    expect(renderDialogAt()).toBe(renderDialogAt("nested"));
+  });
+
+  it("promotes a destructive confirm, the case that must never be unreadable", () => {
+    act(() => setDockPopoverOpen(true));
+    const { unmount } = render(
+      <AppDialog isOpen onClose={() => {}} variant="destructive">
+        <span>body</span>
+      </AppDialog>
+    );
+
+    expect(tierOf(screen.getByRole("alertdialog"))).toBe(renderDialogAt("nested"));
+    unmount();
+  });
+
+  it("re-layers an already-open dialog when the popover appears underneath it", () => {
+    const { rerender } = render(
+      <AppDialog isOpen onClose={() => {}}>
+        <span>body</span>
+      </AppDialog>
+    );
+    const before = tierOf(screen.getByRole("dialog"));
+
+    act(() => setDockPopoverOpen(true));
+    rerender(
+      <AppDialog isOpen onClose={() => {}}>
+        <span>body</span>
+      </AppDialog>
+    );
+
+    expect(tierOf(screen.getByRole("dialog"))).not.toBe(before);
+  });
+
+  it("drops back once the popover closes", () => {
+    act(() => setDockPopoverOpen(true));
+    const promoted = renderDialogAt();
+
+    act(() => setDockPopoverOpen(false));
+
+    expect(renderDialogAt()).not.toBe(promoted);
   });
 });

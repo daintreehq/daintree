@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { useOpenDockPopoverId } from "@/components/Layout/useOpenDockPopoverId";
 import { useArtifacts } from "@/hooks/useArtifacts";
 import type { Artifact } from "@shared/types";
 
@@ -256,11 +255,6 @@ function ArtifactItem({
 export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: ArtifactOverlayProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [includeAllTypes, setIncludeAllTypes] = useState(false);
-  // Rendered inside every terminal, so "Apply patch" is reachable from a docked
-  // one — where the popover outranks the standard modal tier and would bury
-  // these D2 confirms behind the panel they act on (#11505).
-  const openDockPopoverId = useOpenDockPopoverId();
-  const dialogZIndex = openDockPopoverId === null ? "modal" : "nested";
   const [bulkResult, setBulkResult] = useState<{ text: string; tone: "success" | "error" } | null>(
     null
   );
@@ -621,7 +615,6 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         confirmLabel="Apply patch"
         variant="destructive"
         hasPreview={true}
-        zIndex={dialogZIndex}
         onConfirm={() => void handleConfirmApplyPatch()}
       >
         {pendingPatch && <PatchDiffPreview content={pendingPatch.content} />}
@@ -639,7 +632,6 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         }`}
         variant="destructive"
         hasPreview={true}
-        zIndex={dialogZIndex}
         onConfirm={() => void handleConfirmApplyAllPatches()}
       >
         {pendingBulkPatches && (

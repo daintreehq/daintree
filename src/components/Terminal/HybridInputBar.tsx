@@ -44,7 +44,6 @@ import { useVoiceWaitSubmit } from "./hooks/useVoiceWaitSubmit";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
 import type { CommandResult } from "@shared/types/commands";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { useOpenDockPopoverId } from "@/components/Layout/useOpenDockPopoverId";
 import {
   useTerminalColorSchemeStore,
   selectEffectiveTheme,
@@ -187,7 +186,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     });
     const stashEditorState = useTerminalInputStore((s) => s.stashEditorState);
     const popStashedEditorState = useTerminalInputStore((s) => s.popStashedEditorState);
-    const openDockPopoverId = useOpenDockPopoverId();
     const isFocusedTerminal = usePanelStore((s) => s.focusedId === terminalId);
     const hasStash = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
@@ -1056,9 +1054,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           size="5xl"
           maxHeight="max-h-[70vh]"
           dismissible
-          // The input bar renders inside every terminal, so the expanded editor
-          // opens over a dock popover when the terminal is docked (#11505).
-          zIndex={openDockPopoverId === null ? "modal" : "nested"}
         >
           <AppDialog.Header>
             <AppDialog.Title>Expanded Editor</AppDialog.Title>

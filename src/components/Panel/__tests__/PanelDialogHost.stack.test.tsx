@@ -70,15 +70,6 @@ const panelsById = vi.hoisted(() => ({
   current: {} as Record<string, { id: string; kind: string; title: string }>,
 }));
 
-// Which dock popover the host believes is on screen. The derivation behind this
-// (a stale pointer must not count) is exercised against the real store shape in
-// dockPanelVisibility.test.ts; here it is the input to the host's tier choice.
-const openDockPopoverId = vi.hoisted(() => ({ current: null as string | null }));
-
-vi.mock("@/components/Layout/useOpenDockPopoverId", () => ({
-  useOpenDockPopoverId: () => openDockPopoverId.current,
-}));
-
 vi.mock("@/store/panelStore", async () => {
   const { useSyncExternalStore } = await import("react");
   return {
@@ -101,7 +92,6 @@ describe("PanelDialogHost stack rendering (#11243)", () => {
   beforeEach(() => {
     mountCounts.clear();
     panelsById.current = {};
-    openDockPopoverId.current = null;
     usePanelDialogStore.setState({ dialogStack: [], requestSeq: 0 });
   });
 
@@ -212,100 +202,5 @@ describe("PanelDialogHost stack rendering (#11243)", () => {
     });
 
     expect(usePanelDialogStore.getState().dialogStack).toEqual([]);
-  });
-});
-
-/**
- * A dock popover paints above the standard modal tier, so a dialog opened from
- * inside a docked panel is invisible under the panel that spawned it (#11505).
- *
- * `openPanelDialog` replaces the stack rather than growing it, so the frame that
- * needs rescuing is always index 0 — the one case the pre-existing
- * "nested means index > 0" rule can never catch.
- */
-describe("PanelDialogHost dock-popover layering (#11505)", () => {
-  beforeEach(() => {
-    mountCounts.clear();
-    panelsById.current = {};
-    openDockPopoverId.current = null;
-    usePanelDialogStore.setState({ dialogStack: [], requestSeq: 0 });
-  });
-
-  function tiersOnScreen(): string[] {
-    return screen.getAllByTestId(/^dialog-/).map((el) => el.dataset.testid ?? "");
-  }
-
-  it("keeps the base frame on the modal tier when no dock popover is on screen", () => {
-    seedPanel("diff-1", "diff");
-    render(<PanelDialogHost />);
-
-    act(() => {
-      usePanelDialogStore.setState({ dialogStack: ["diff-1"] });
-    });
-
-    expect(tiersOnScreen()).toEqual(["dialog-modal"]);
-  });
-
-  it("promotes the base frame above a dock popover that is on screen", () => {
-    openDockPopoverId.current = "dock-1";
-    seedPanel("diff-1", "diff");
-    render(<PanelDialogHost />);
-
-    act(() => {
-      usePanelDialogStore.setState({ dialogStack: ["diff-1"] });
-    });
-
-    expect(tiersOnScreen()).toEqual(["dialog-nested"]);
-  });
-
-  it("leaves a layered frame nested regardless of the dock", () => {
-    seedPanel("review-1", "review");
-    seedPanel("diff-1", "diff");
-    render(<PanelDialogHost />);
-
-    act(() => {
-      usePanelDialogStore.setState({ dialogStack: ["review-1", "diff-1"] });
-    });
-
-    // Base stays put without a popover; the child still needs the nested tier
-    // or it would paint under its own parent.
-    expect(tiersOnScreen()).toEqual(["dialog-modal", "dialog-nested"]);
-  });
-
-  it("promotes every frame when a dock popover is on screen, preserving stack order", () => {
-    openDockPopoverId.current = "dock-1";
-    seedPanel("review-1", "review");
-    seedPanel("diff-1", "diff");
-    render(<PanelDialogHost />);
-
-    act(() => {
-      usePanelDialogStore.setState({ dialogStack: ["review-1", "diff-1"] });
-    });
-
-    // Both clear the popover; among themselves they still stack by render
-    // order, so the child stays last in the DOM and therefore on top.
-    expect(tiersOnScreen()).toEqual(["dialog-nested", "dialog-nested"]);
-    expect(screen.getByTestId("pane-diff-1")).toBeTruthy();
-  });
-
-  it("drops back to the modal tier when the dock popover closes", () => {
-    openDockPopoverId.current = "dock-1";
-    seedPanel("diff-1", "diff");
-    render(<PanelDialogHost />);
-
-    act(() => {
-      usePanelDialogStore.setState({ dialogStack: ["diff-1"] });
-    });
-    expect(tiersOnScreen()).toEqual(["dialog-nested"]);
-
-    act(() => {
-      openDockPopoverId.current = null;
-      usePanelDialogStore.setState({ dialogStack: ["diff-1"] });
-    });
-
-    expect(tiersOnScreen()).toEqual(["dialog-modal"]);
-    // The promotion is a layer change, not a remount: whatever the panel was
-    // holding survives the popover closing underneath it.
-    expect(mountCounts.get("diff-1")).toBe(1);
   });
 });

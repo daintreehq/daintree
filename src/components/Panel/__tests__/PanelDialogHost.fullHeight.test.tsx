@@ -57,12 +57,6 @@ vi.mock("@/components/ui/button", () => ({
   ),
 }));
 
-// Layer promotion is this suite's neighbour's job (PanelDialogHost.stack);
-// here the real hook would only demand store fields these mocks don't carry.
-vi.mock("@/components/Layout/useOpenDockPopoverId", () => ({
-  useOpenDockPopoverId: () => null,
-}));
-
 const panelsById = vi.hoisted(() => ({
   current: {} as Record<string, { id: string; kind: string; title: string }>,
 }));

@@ -2,7 +2,6 @@ import { type ReactElement, useCallback } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { actionService } from "@/services/ActionService";
 import { closeAndAnnounce } from "@/lib/accessibility";
-import { useOpenDockPopoverId } from "@/components/Layout/useOpenDockPopoverId";
 import {
   useTerminalPendingDestructiveActionStore,
   type DeletedWorktreeGroupPreviewWorktree,
@@ -189,10 +188,6 @@ function GroupDismissPreview({ preview }: { preview: DeletedWorktreeGroupPreview
 export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
   const pending = useTerminalPendingDestructiveActionStore((s) => s.pending);
   const clear = useTerminalPendingDestructiveActionStore((s) => s.clear);
-  // A destructive confirm is the worst thing to hide behind a dock popover —
-  // the D1/D2 safeguards assume the user can read what they are agreeing to
-  // (#11505).
-  const openDockPopoverId = useOpenDockPopoverId();
 
   const handleConfirm = useCallback(() => {
     if (pending === null) return;
@@ -332,7 +327,6 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
       // The grouped clear renders a scrollable preview list, which AppDialog
       // must expose as a plain dialog rather than an alertdialog.
       hasPreview={pending.kind === "deletedWorktreeGroupDismiss"}
-      zIndex={openDockPopoverId === null ? "modal" : "nested"}
       onConfirm={handleConfirm}
     >
       {pending.kind === "deletedWorktreeGroupDismiss" && pending.preview && (

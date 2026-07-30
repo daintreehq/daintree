@@ -34,6 +34,7 @@ import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { useCcrPresetsSubscription } from "@/hooks/useCcrPresetsSubscription";
 import { useProjectPresetsSubscription } from "@/hooks/useProjectPresetsSubscription";
 import { useDiagnosticsAutoOpen } from "@/hooks/useDiagnosticsAutoOpen";
+import { useDockPopoverLayerSync } from "@/components/Layout/useOpenDockPopoverId";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
 import type { CliAvailability, AgentSettings } from "@shared/types";
@@ -143,6 +144,9 @@ export function AppLayout({
   useCcrPresetsSubscription();
   useProjectPresetsSubscription();
   useDiagnosticsAutoOpen();
+  // Published once for the whole view: every AppDialog layers itself against
+  // this rather than each caller working it out (#11505).
+  useDockPopoverLayerSync();
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   // Issue #7627: track active drag-resize per panel so AppLayout can suppress
   // the 250ms ease-out-expo width transition during the drag (the transition

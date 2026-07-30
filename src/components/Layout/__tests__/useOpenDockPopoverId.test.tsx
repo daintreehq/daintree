@@ -7,12 +7,20 @@
  */
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useOpenDockPopoverId } from "../useOpenDockPopoverId";
+import { useOpenDockPopoverId, useDockPopoverLayerSync } from "../useOpenDockPopoverId";
+import {
+  getDockPopoverOpen,
+  _resetForTests as _resetDockPopoverForTests,
+} from "@/lib/dockPopoverLayer";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import type { PtyPanelData } from "@shared/types/panel";
 
-const DOCK_PANEL = {
+// Annotated rather than inferred: a bare object literal widens `kind` and
+// `location` to `string`, which vitest runs happily and only the composite
+// typecheck rejects.
+const DOCK_PANEL: PtyPanelData = {
   id: "dock-1",
   title: "Agent",
   kind: "terminal",
@@ -88,5 +96,51 @@ describe("useOpenDockPopoverId", () => {
     });
 
     expect(result.current).toBeNull();
+  });
+});
+
+/**
+ * The publisher half. `AppDialog` reads a plain boolean and knows nothing about
+ * the dock; this is the only thing that connects the two, so a dialog's
+ * layering is only correct if this keeps the signal in step.
+ */
+describe("useDockPopoverLayerSync", () => {
+  afterEach(() => {
+    _resetDockPopoverForTests();
+  });
+
+  it("publishes that a popover is up while one is rendered", () => {
+    renderHook(() => useDockPopoverLayerSync());
+
+    expect(getDockPopoverOpen()).toBe(true);
+  });
+
+  it("publishes nothing when the pointer names a panel the dock filtered out", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-b" });
+    renderHook(() => useDockPopoverLayerSync());
+
+    expect(getDockPopoverOpen()).toBe(false);
+  });
+
+  it("follows the popover closing", () => {
+    renderHook(() => useDockPopoverLayerSync());
+    expect(getDockPopoverOpen()).toBe(true);
+
+    act(() => {
+      usePanelStore.setState({ activeDockTerminalId: null });
+    });
+
+    expect(getDockPopoverOpen()).toBe(false);
+  });
+
+  it("clears the signal when the view goes away", () => {
+    const { unmount } = renderHook(() => useDockPopoverLayerSync());
+    expect(getDockPopoverOpen()).toBe(true);
+
+    // Otherwise a dialog surviving a teardown stays promoted over a popover
+    // that no longer exists.
+    unmount();
+
+    expect(getDockPopoverOpen()).toBe(false);
   });
 });

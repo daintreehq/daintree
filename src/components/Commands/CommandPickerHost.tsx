@@ -5,7 +5,6 @@ import { useCommandStore } from "@/store/commandStore";
 import { CommandPicker } from "./CommandPicker";
 import { CommandBuilder } from "./CommandBuilder";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { useOpenDockPopoverId } from "@/components/Layout/useOpenDockPopoverId";
 import { Button } from "@/components/ui/button";
 import { AlertCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
@@ -94,11 +93,6 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
     [activeCommand, builderContext, executeCommand, onCommandExecuted]
   );
 
-  // The picker is opened from a terminal's input bar, docked ones included, so
-  // these status dialogs land over a dock popover the same way (#11505).
-  const openDockPopoverId = useOpenDockPopoverId();
-  const dialogZIndex = openDockPopoverId === null ? "modal" : "nested";
-
   const handleBuilderCancel = useCallback(() => {
     closeBuilder();
   }, [closeBuilder]);
@@ -114,7 +108,7 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
       />
 
       {activeCommand && showBuilderLoading && (
-        <AppDialog isOpen={true} onClose={handleBuilderCancel} size="md" zIndex={dialogZIndex}>
+        <AppDialog isOpen={true} onClose={handleBuilderCancel} size="md">
           <AppDialog.Header>
             <AppDialog.Title>{activeCommand.label}</AppDialog.Title>
             <AppDialog.CloseButton />
@@ -129,7 +123,7 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
       )}
 
       {activeCommand && builderLoadError && (
-        <AppDialog isOpen={true} onClose={handleBuilderCancel} size="md" zIndex={dialogZIndex}>
+        <AppDialog isOpen={true} onClose={handleBuilderCancel} size="md">
           <AppDialog.Header>
             <AppDialog.Title>{activeCommand.label}</AppDialog.Title>
             <AppDialog.CloseButton />

@@ -3,8 +3,7 @@ import { PanelTop } from "lucide-react";
 import { usePanelStore } from "@/store/panelStore";
 import { usePanelDialogStore } from "@/store/panelDialogStore";
 import { getPanelKindDefinition } from "@/panels/registry";
-import { AppDialog, type DialogZIndex } from "@/components/ui/AppDialog";
-import { useOpenDockPopoverId } from "@/components/Layout/useOpenDockPopoverId";
+import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
@@ -29,12 +28,6 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
  */
 export function PanelDialogHost() {
   const dialogStack = usePanelDialogStore((state) => state.dialogStack);
-  // `openPanelDialog` replaces the stack, so a dialog opened from a docked
-  // panel is always index 0 and would take the standard modal tier — under the
-  // dock popover that spawned it (#11505). Promote the whole stack whenever a
-  // dock popover is on screen; frames stay ordered among themselves by render
-  // order at the shared tier.
-  const openDockPopoverId = useOpenDockPopoverId();
 
   if (dialogStack.length === 0) return null;
 
@@ -46,7 +39,7 @@ export function PanelDialogHost() {
           panelId={panelId}
           // The base frame keeps the standard modal layer; anything layered on
           // top needs the nested tier or it would paint under its own parent.
-          zIndex={index > 0 || openDockPopoverId !== null ? "nested" : "modal"}
+          isNested={index > 0}
           isTop={index === dialogStack.length - 1}
         />
       ))}
@@ -56,11 +49,11 @@ export function PanelDialogHost() {
 
 function PanelDialogFrame({
   panelId,
-  zIndex,
+  isNested,
   isTop,
 }: {
   panelId: string;
-  zIndex: DialogZIndex;
+  isNested: boolean;
   isTop: boolean;
 }) {
   const requestSeq = usePanelDialogStore((state) => state.requestSeq);
@@ -106,7 +99,7 @@ function PanelDialogFrame({
       // Full-height kinds pin the surface at the max rather than sizing to
       // content, so the dialog doesn't grow and shrink as the tree loads.
       {...(definition.dialogFullHeight ? { className: "h-[85vh]" } : {})}
-      zIndex={zIndex}
+      zIndex={isNested ? "nested" : "modal"}
       data-testid="panel-dialog"
     >
       <AppDialog.Header>

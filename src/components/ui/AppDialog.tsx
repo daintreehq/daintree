@@ -22,6 +22,7 @@ import {
   markBackstopConsumedEscape,
   ESCAPE_BACKSTOP_DIALOG_ATTR,
 } from "@/lib/dialogEscapeBackstop";
+import { useDockPopoverOpen } from "@/lib/dockPopoverLayer";
 import { usePortalStore } from "@/store";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
@@ -130,6 +131,14 @@ export function AppDialog({
   restoreFocusTo,
   "data-testid": dataTestId,
 }: AppDialogProps) {
+  // A dock popover renders above the standard modal tier, so a dialog opened
+  // while one is up — from a docked terminal or anywhere else — would paint
+  // underneath it while still trapping focus (#11505). Resolved here rather
+  // than at each call site: the set of dialogs reachable from a docked panel is
+  // large, indirect, and grows, and every one of them wants the same answer.
+  const dockPopoverOpen = useDockPopoverOpen();
+  const effectiveZIndex: DialogZIndex = dockPopoverOpen ? "nested" : zIndex;
+
   const effectiveInitialFocus: DialogInitialFocus =
     initialFocus ?? (variant === "destructive" ? "cancel" : "first");
   const previousActiveElement = useRef<HTMLElement | null>(null);
@@ -381,7 +390,7 @@ export function AppDialog({
       <div
         className={cn(
           "fixed inset-0 flex items-center justify-center bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur)] backdrop-saturate-[var(--theme-material-saturation)]",
-          zIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
+          effectiveZIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
           // Opacity-only, so reduced motion leaves it alone: a scrim fade is not
           // spatial motion. WCAG 2.3.3.
           "transition-opacity",

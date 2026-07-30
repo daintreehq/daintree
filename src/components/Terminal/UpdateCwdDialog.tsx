@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import type { KeyboardEvent } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { useOpenDockPopoverId } from "@/components/Layout/useOpenDockPopoverId";
 import { Button } from "@/components/ui/button";
 import { FolderOpen, AlertCircle } from "lucide-react";
 import { logError } from "@/utils/logger";
@@ -75,16 +74,8 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
     [handleUpdate, validating]
   );
 
-  // Reached from a terminal's context menu, docked ones included (#11505).
-  const openDockPopoverId = useOpenDockPopoverId();
-
   return (
-    <AppDialog
-      isOpen={isOpen}
-      onClose={onClose}
-      size="md"
-      zIndex={openDockPopoverId === null ? "modal" : "nested"}
-    >
+    <AppDialog isOpen={isOpen} onClose={onClose} size="md">
       <AppDialog.Header>
         <AppDialog.Title icon={<FolderOpen className="w-5 h-5 text-daintree-accent" />}>
           Update Working Directory

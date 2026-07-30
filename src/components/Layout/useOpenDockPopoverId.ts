@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import { usePanelStore } from "@/store/panelStore";
+import { setDockPopoverOpen } from "@/lib/dockPopoverLayer";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { selectOpenDockPopoverId } from "./dockPanelVisibility";
@@ -29,4 +31,18 @@ export function useOpenDockPopoverId(): string | null {
   return usePanelStore((state) =>
     selectOpenDockPopoverId(state, { helpTerminalId, activeWorktreeId })
   );
+}
+
+/**
+ * Publishes the signal every `AppDialog` layers itself against. Call once, high
+ * enough to outlive any dialog — the dock chip that owns the popover unmounts
+ * on a worktree switch, and a dialog left open must not be stranded above a
+ * popover that has gone.
+ */
+export function useDockPopoverLayerSync(): void {
+  const openDockPopoverId = useOpenDockPopoverId();
+  useEffect(() => {
+    setDockPopoverOpen(openDockPopoverId !== null);
+  }, [openDockPopoverId]);
+  useEffect(() => () => setDockPopoverOpen(false), []);
 }
