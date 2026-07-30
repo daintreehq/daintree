@@ -12,8 +12,15 @@ describe("AppLayout sidebar visibility — issue #5023 hide on welcome screen", 
     source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
   });
 
-  it("derives showSidebar from gestureSidebarHidden and currentProject (issue #6659)", () => {
+  it("derives showSidebar from gestureSidebarHidden and the resolved workspace (issues #6659, #11499)", () => {
     expect(source).toContain(
+      "const showSidebar = !layout.gestureSidebarHidden && hasWorkspace"
+    );
+    // Issue #11499: the gate is "is there a workspace", not "is there a
+    // project". A scratch has no Project row, so gating on `currentProject`
+    // left the toolbar toggle and Cmd+B flipping aria-pressed over a slot that
+    // could never mount. Any re-narrowing to the project alone is that bug.
+    expect(source).not.toContain(
       "const showSidebar = !layout.gestureSidebarHidden && currentProject != null"
     );
     // The combined isFocusMode gate must not be reintroduced — the sidebar
@@ -21,15 +28,26 @@ describe("AppLayout sidebar visibility — issue #5023 hide on welcome screen", 
     expect(source).not.toContain("const showSidebar = !layout.isFocusMode && currentProject");
   });
 
-  it("mounts the sidebar whenever a project is active so the width transition can run", () => {
+  it("resolves the mount gate from the workspace, not the project (issue #11499)", () => {
+    // `useWorkspaceRoot` answers for all three workspace kinds — git project,
+    // folder opened without git, scratch — and returns null only on the welcome
+    // screen, which is what still keeps the sidebar off there (#5023).
+    expect(source).toContain("const hasWorkspace = useWorkspaceRoot() !== null");
+    expect(source).toContain('import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot"');
+  });
+
+  it("mounts the sidebar whenever a workspace is active so the width transition can run", () => {
     // Issue #5697: the sidebar stays mounted in focus mode (width=0) so the
     // CSS width transition runs instead of an abrupt unmount. The render guard
-    // is now `currentProject != null`; visibility is driven by width via
+    // is `hasWorkspace`; visibility is driven by width via
     // effectiveSidebarWidth and by macro focus via setVisibility(showSidebar).
-    expect(source).toMatch(/\{currentProject != null && \(\s*\n\s*<ErrorBoundary[^>]*Sidebar/);
-    // The old unmount-in-focus-mode guard must not be reintroduced.
+    expect(source).toMatch(/\{hasWorkspace && \(\s*\n\s*<ErrorBoundary[^>]*Sidebar/);
+    // The mount gate must stay a distinct boolean from the visibility one —
+    // collapsing them is exactly the #5697 unmount-in-focus-mode regression.
     expect(source).not.toMatch(/\{showSidebar && \(\s*\n\s*<ErrorBoundary[^>]*Sidebar/);
     expect(source).not.toMatch(/\{!layout\.isFocusMode && \(\s*\n\s*<ErrorBoundary[^>]*Sidebar/);
+    // The project-only mount gate must not return (#11499).
+    expect(source).not.toMatch(/\{currentProject != null && \(\s*\n\s*<ErrorBoundary[^>]*Sidebar/);
   });
 
   it("uses showSidebar for the macro-focus sidebar visibility effect", () => {

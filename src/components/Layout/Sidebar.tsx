@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { ProjectResourceBadge, QuickRun } from "@/components/Project";
 import { useProjectStore } from "@/store/projectStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
+import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { DEFAULT_SIDEBAR_WIDTH } from "./AppLayout";
 import {
   ContextMenu,
@@ -57,6 +58,14 @@ export function Sidebar({
   const isResizingRef = useRef(false);
   const sidebarRef = useRef<HTMLElement>(null);
   const currentProject = useProjectStore((state) => state.currentProject);
+  // The sidebar now mounts in every workspace kind (#11499), so the background
+  // menu has to stop offering worktree-shaped commands to workspaces that have
+  // no worktrees. Absent rather than disabled, matching the rows themselves: a
+  // greyed-out "New Worktree…" in a scratch is the same dead-control lie in a
+  // quieter font.
+  const workspaceRoot = useWorkspaceRoot();
+  const isGitBackedWorkspace = workspaceRoot?.isGitBacked ?? false;
+  const revealPath = workspaceRoot?.path ?? currentProject?.path;
   const isMacroFocused = useMacroFocusStore((state) => state.focusedRegion === "sidebar");
   useEffect(() => {
     useMacroFocusStore.getState().setRegionRef("sidebar", sidebarRef.current);
@@ -206,36 +215,44 @@ export function Sidebar({
         </aside>
       </ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuActionItem actionId="worktree.createDialog.open">
-          <GitBranchPlus className={ICON_CLASS} />
-          New Worktree…
-        </ContextMenuActionItem>
-        <ContextMenuActionItem actionId="worktree.refresh">
-          <RefreshCw className={ICON_CLASS} />
-          Refresh Sidebar
-        </ContextMenuActionItem>
-        <ContextMenuSeparator />
+        {isGitBackedWorkspace && (
+          <>
+            <ContextMenuActionItem actionId="worktree.createDialog.open">
+              <GitBranchPlus className={ICON_CLASS} />
+              New Worktree…
+            </ContextMenuActionItem>
+            <ContextMenuActionItem actionId="worktree.refresh">
+              <RefreshCw className={ICON_CLASS} />
+              Refresh Sidebar
+            </ContextMenuActionItem>
+            <ContextMenuSeparator />
+          </>
+        )}
         <ContextMenuActionItem
           actionId="system.openPath"
-          args={currentProject ? { path: currentProject.path } : undefined}
-          disabled={!currentProject}
+          args={revealPath ? { path: revealPath } : undefined}
+          disabled={!revealPath}
         >
           <FolderOpen className={ICON_CLASS} />
-          Reveal Project in Finder
+          {currentProject ? "Reveal Project in Finder" : "Reveal Workspace in Finder"}
         </ContextMenuActionItem>
-        <ContextMenuActionItem actionId="project.settings.open" disabled={!currentProject}>
-          <Settings className={ICON_CLASS} />
-          Project Settings…
-        </ContextMenuActionItem>
+        {currentProject != null && (
+          <ContextMenuActionItem actionId="project.settings.open">
+            <Settings className={ICON_CLASS} />
+            Project Settings…
+          </ContextMenuActionItem>
+        )}
         <ContextMenuSeparator />
         <ContextMenuActionItem actionId="ui.sidebar.resetWidth">
           <Ruler className={ICON_CLASS} />
           Reset Sidebar Width
         </ContextMenuActionItem>
-        <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "worktree" }}>
-          <SlidersHorizontal className={ICON_CLASS} />
-          Worktree Settings…
-        </ContextMenuActionItem>
+        {isGitBackedWorkspace && (
+          <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "worktree" }}>
+            <SlidersHorizontal className={ICON_CLASS} />
+            Worktree Settings…
+          </ContextMenuActionItem>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );

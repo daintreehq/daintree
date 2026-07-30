@@ -39,6 +39,7 @@ import { appClient } from "@/clients";
 import type { CliAvailability, AgentSettings } from "@shared/types";
 import { useLayoutState, useOverlayOpen } from "@/hooks";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
+import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import {
   createAssistantRevealCoordinator,
@@ -185,7 +186,14 @@ export function AppLayout({
   const isPluginManagerOpen = useOverlayOpen("plugin-manager");
   const chromeInert = isThemeBrowserOpen || isPluginManagerOpen;
   const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
-  const showSidebar = !layout.gestureSidebarHidden && currentProject != null;
+  // Every workspace kind has something for the sidebar to hold — a scratch and
+  // a folder opened without git each have their own root — so the gate is "is
+  // there a workspace at all", not "is there a project". Gating on the project
+  // left the toggle and Cmd+B flipping `aria-pressed` over a slot that could
+  // never appear in a scratch (#11499). Only the welcome screen, which has no
+  // workspace of any kind, still has no sidebar (#5023).
+  const hasWorkspace = useWorkspaceRoot() !== null;
+  const showSidebar = !layout.gestureSidebarHidden && hasWorkspace;
   const showAssistant = !layout.gestureAssistantHidden && layout.helpPanelOpen;
   const effectiveAssistantWidth = showAssistant ? layout.helpPanelWidth : 0;
   // #10693 (off-canvas): the assistant wrapper is always full-width and slides
@@ -891,7 +899,7 @@ export function AppLayout({
             }}
           >
             <div className="absolute top-0 left-0 h-full" style={{ width: sidebarWidth }}>
-              {currentProject != null && (
+              {hasWorkspace && (
                 <ErrorBoundary variant="section" componentName="Sidebar">
                   <Sidebar
                     width={sidebarWidth}
