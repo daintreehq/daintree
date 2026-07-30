@@ -62,10 +62,12 @@ export function WorkspaceRootRow({
     if (total === 0) {
       return { visibleStates: [] as { state: AgentState; count: number }[], sessionAriaLabel: "" };
     }
-    const visible = STATE_PRIORITY.filter((s) => s !== "idle" && counts.byState[s] > 0).map((s) => ({
-      state: s,
-      count: counts.byState[s],
-    }));
+    const visible = STATE_PRIORITY.filter((s) => s !== "idle" && counts.byState[s] > 0).map(
+      (s) => ({
+        state: s,
+        count: counts.byState[s],
+      })
+    );
     const parts = visible.map((v) => `${v.count} ${STATE_LABELS[v.state]}`);
     const label =
       parts.length > 0

@@ -13,9 +13,7 @@ describe("AppLayout sidebar visibility — issue #5023 hide on welcome screen", 
   });
 
   it("derives showSidebar from gestureSidebarHidden and the resolved workspace (issues #6659, #11499)", () => {
-    expect(source).toContain(
-      "const showSidebar = !layout.gestureSidebarHidden && hasWorkspace"
-    );
+    expect(source).toContain("const showSidebar = !layout.gestureSidebarHidden && hasWorkspace");
     // Issue #11499: the gate is "is there a workspace", not "is there a
     // project". A scratch has no Project row, so gating on `currentProject`
     // left the toolbar toggle and Cmd+B flipping aria-pressed over a slot that

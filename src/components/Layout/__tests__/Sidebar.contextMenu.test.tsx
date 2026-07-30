@@ -189,9 +189,9 @@ describe("Sidebar background context menu — workspace kind (#11499)", () => {
 
       expect(isSeparator(children[0]!)).toBe(false);
       expect(isSeparator(children[children.length - 1]!)).toBe(false);
-      expect(children.some((el, i) => i > 0 && isSeparator(el) && isSeparator(children[i - 1]!))).toBe(
-        false
-      );
+      expect(
+        children.some((el, i) => i > 0 && isSeparator(el) && isSeparator(children[i - 1]!))
+      ).toBe(false);
       unmount();
     }
   });
