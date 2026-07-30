@@ -319,6 +319,38 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("copy-tree", "right");
   });
 
+  it("lists the hidden-by-default file browser with its switch off (#11495)", () => {
+    // The whole point of the issue: the button has to be *offered* in Settings
+    // while staying off the toolbar until the user opts in. A fixture of its own
+    // rather than the shared default, so the visible-count and drag-array
+    // expectations elsewhere in this file stay put.
+    mockToolbarState = makeToolbarState({
+      leftButtons: ["terminal", "browser", "file-browser", "dev-server"],
+      rightButtons: ["settings"],
+      pinnedButtons: { "file-browser": false },
+    });
+
+    const { getByLabelText } = render(<ToolbarSettingsTab />);
+    const toggle = getByLabelText("Toggle Browse files visibility");
+
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("routes the file browser opt-in to toggleButtonVisibility on its own side", () => {
+    mockToolbarState = makeToolbarState({
+      leftButtons: ["terminal", "file-browser"],
+      rightButtons: ["settings"],
+      pinnedButtons: { "file-browser": false },
+    });
+
+    const { getByLabelText } = render(<ToolbarSettingsTab />);
+    fireEvent.click(getByLabelText("Toggle Browse files visibility"));
+
+    expect(toggleButtonVisibilityMock).toHaveBeenCalledTimes(1);
+    expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("file-browser", "left");
+    expect(setAgentPinnedMock).not.toHaveBeenCalled();
+  });
+
   it("reflects pinned agents in the side visible-count summary", () => {
     mockAgentSettings = agentSettings({
       claude: { pinned: true },

@@ -94,6 +94,28 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
       expect(source).toMatch(/terminal:\s*terminalShortcut/);
       expect(source).toMatch(/browser:\s*browserShortcut/);
     });
+
+    it("wires the file browser's shortcut hint like the other launchers (#11495)", () => {
+      expect(source).toContain('useKeybindingDisplay("worktree.openFileBrowser")');
+      expect(source).toMatch(/"file-browser":\s*fileBrowserShortcut/);
+    });
+  });
+
+  describe("file browser overflow item — issue #11495", () => {
+    it("reuses the visible button's handler rather than re-dispatching inline", () => {
+      // One handler for the button, the overflow item, and the Retry action, so
+      // the refusal path can't drift between them.
+      expect(source).toMatch(/"file-browser":\s*openFileBrowser,/);
+    });
+
+    it("surfaces the refusal instead of pressing silently", () => {
+      // `worktree.openFileBrowser` resolves its own target and throws when a
+      // workspace has nothing to browse; dispatch converts that to ok:false, so
+      // without this branch the press would do nothing at all.
+      expect(source).toMatch(/if \(result\.ok\) return;/);
+      expect(source).toContain("Couldn't open the file browser");
+      expect(source).toMatch(/label: "Retry", onClick: openFileBrowser/);
+    });
   });
 
   describe("review fixes", () => {

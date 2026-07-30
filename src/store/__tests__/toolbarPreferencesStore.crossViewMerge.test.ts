@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
  */
 describe("toolbarPreferencesStore cross-view write merge (#11351)", () => {
   const STORAGE_KEY = "daintree-toolbar-preferences";
-  const VERSION = 11;
+  const VERSION = 12;
   const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
   type Layout = {

@@ -68,6 +68,26 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     it("uses dynamic hook for devServer.start", () => {
       expect(source).toContain('useKeybindingDisplay("devServer.start")');
     });
+
+    it("uses dynamic hook for worktree.openFileBrowser", () => {
+      expect(source).toContain('useKeybindingDisplay("worktree.openFileBrowser")');
+    });
+  });
+
+  describe("file browser button accessibility — issue #11495", () => {
+    it("announces its shortcut and shows the hover hint like its siblings", () => {
+      // The three-hook set every shortcut-bearing toolbar button carries: the
+      // tooltip display string, the aria-keyshortcuts value for screen readers,
+      // and the press-and-hold hover hint.
+      expect(source).toContain('useAriaKeyshortcuts("worktree.openFileBrowser")');
+      expect(source).toContain('useShortcutHintHover("worktree.openFileBrowser")');
+      expect(source).toContain("aria-keyshortcuts={fileBrowserAriaShortcut}");
+      expect(source).toContain("{...fileBrowserHintHover}");
+    });
+
+    it("uses createTooltipContent for the file browser tooltip", () => {
+      expect(source).toContain('createTooltipContent("Browse files", fileBrowserShortcut)');
+    });
   });
 
   describe("no hardcoded shortcut strings in tooltips", () => {

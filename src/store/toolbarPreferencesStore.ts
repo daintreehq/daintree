@@ -22,6 +22,7 @@ const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
   ...(LAUNCHABLE_AGENT_IDS as unknown as ToolbarButtonId[]),
   "terminal",
   "browser",
+  "file-browser",
   "dev-server",
 ];
 
@@ -41,7 +42,12 @@ const DEFAULT_PREFERENCES: ToolbarPreferences = {
   layout: {
     leftButtons: DEFAULT_LEFT_BUTTONS,
     rightButtons: DEFAULT_RIGHT_BUTTONS,
-    pinnedButtons: {},
+    // `file-browser` is offered in Settings but ships hidden, so adding it to
+    // the defaults above doesn't change any existing toolbar (#11495). Seeding
+    // the `false` here is not redundant with the v12 migration: a fresh install
+    // has no persisted blob, so `migrate` never runs and this object is the only
+    // source of truth for that profile.
+    pinnedButtons: { "file-browser": false },
   },
   launcher: {
     alwaysShowDevServer: false,
@@ -67,24 +73,35 @@ function sanitizeButtonList(buttons: AnyToolbarButtonId[]): AnyToolbarButtonId[]
  * Merge persisted button list with defaults, adding any new buttons that
  * were added to defaults after the user's preferences were saved.
  * New buttons are added at their default position.
+ *
+ * `otherSidePersisted` is the opposite side's persisted list, and it is what
+ * makes a side switch survive a reload. `sanitizeButtonList` dedupes within a
+ * side but cannot see across the two, so without this check a default that the
+ * user dragged to the other side reads as "missing" here and gets
+ * re-materialized on its home side — leaving the id on BOTH sides, rendering
+ * twice. Defaults own insertion and ordering; a persisted position on either
+ * side always wins over the default one.
  */
 function mergeButtonList(
   persisted: AnyToolbarButtonId[] | undefined,
-  defaults: AnyToolbarButtonId[]
+  defaults: AnyToolbarButtonId[],
+  otherSidePersisted: AnyToolbarButtonId[] | undefined
 ): AnyToolbarButtonId[] {
-  if (!persisted) return defaults;
+  const onOtherSide = new Set(otherSidePersisted ?? []);
+  // No list of our own: still honor a default the user parked on the other side.
+  if (!persisted) return defaults.filter((id) => !onOtherSide.has(id));
 
-  const persistedSet = new Set(persisted);
+  const positioned = new Set([...persisted, ...onOtherSide]);
   const result = [...persisted];
 
-  // Find buttons in defaults that aren't in persisted (new buttons)
+  // Find buttons in defaults that aren't positioned on either side (new buttons)
   for (let i = 0; i < defaults.length; i++) {
     const buttonId = defaults[i]!;
-    if (!persistedSet.has(buttonId)) {
+    if (!positioned.has(buttonId)) {
       // Insert at the same position as in defaults, or at end if beyond length
       const insertIndex = Math.min(i, result.length);
       result.splice(insertIndex, 0, buttonId);
-      persistedSet.add(buttonId); // Track that we've added it
+      positioned.add(buttonId); // Track that we've added it
     }
   }
 
@@ -155,7 +172,7 @@ function toToolbarPersisted(
  * merged, so they're taken verbatim (last-writer-wins).
  *
  * Migration coexistence: `onDisk` is read raw (no `migrate`), so the reconciler
- * must never diff against a foreign schema version — the 11-step migrate chain
+ * must never diff against a foreign schema version — the 12-step migrate chain
  * reshapes the persisted blob (e.g. v7 `hiddenButtons` array → v8 `pinnedButtons`
  * map, v10 `github-stats` → `forge-stats`). Two guards cover the app-upgrade
  * window: a foreign on-disk version skips the merge outright; a foreign
@@ -371,7 +388,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     }),
     {
       name: "daintree-toolbar-preferences",
-      version: 11,
+      version: 12,
       storage: createSafeJSONStorage<ToolbarPreferencesPersistedState>({
         mergeOnWrite: mergeToolbarPreferencesPersistedWrite,
       }),
@@ -562,6 +579,30 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             layout.rightButtons = dedupe(layout.rightButtons);
           }
         }
+        if (version < 12) {
+          // `file-browser` joined the built-in buttons (#11495). It's offered in
+          // Settings → Toolbar but must not appear on anyone's existing toolbar,
+          // so every pre-v12 profile gets an explicit hide.
+          //
+          // Unconditional, with no carve-out for what the user already shows:
+          // inferring "this user probably wants it" from their current layout is
+          // the trap #10709 documents — a newly-introduced default belongs in the
+          // safe state for every pre-existing install, without exception.
+          //
+          // Only `pinnedButtons` is touched. Position is left to `merge()`, whose
+          // `mergeButtonList` already inserts a newly-defaulted id on every
+          // hydration; pushing it into the arrays here as well is how a profile
+          // ends up with the same id twice (#10938).
+          const layout = state.layout as { pinnedButtons?: Record<string, boolean> } | undefined;
+          if (layout) {
+            layout.pinnedButtons = { ...(layout.pinnedButtons ?? {}), "file-browser": false };
+          } else {
+            state.layout = { pinnedButtons: { "file-browser": false } } as unknown as Record<
+              string,
+              unknown
+            >;
+          }
+        }
         return state as unknown as ToolbarPreferencesState;
       },
       partialize: (state) => ({
@@ -579,11 +620,13 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           layout: {
             leftButtons: mergeButtonList(
               persisted.layout?.leftButtons,
-              currentState.layout.leftButtons
+              currentState.layout.leftButtons,
+              persisted.layout?.rightButtons
             ),
             rightButtons: mergeButtonList(
               persisted.layout?.rightButtons,
-              currentState.layout.rightButtons
+              currentState.layout.rightButtons,
+              persisted.layout?.leftButtons
             ),
             pinnedButtons: persisted.layout?.pinnedButtons ?? {},
           },

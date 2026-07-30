@@ -31,6 +31,7 @@ export type ToolbarButtonId =
   | BuiltInAgentId
   | "terminal"
   | "browser"
+  | "file-browser"
   | "dev-server"
   | "voice-recording"
   | "forge-stats"
@@ -52,6 +53,12 @@ export type ToolbarButtonId =
  *   - `false`      → user explicitly hid this button
  *   - `true`       → user explicitly pinned this button
  *   - `undefined`  → visible
+ *
+ * A built-in can still *ship* hidden by seeding an explicit `false` — see
+ * `file-browser` in `toolbarPreferencesStore`, which offers the button in
+ * Settings without changing anyone's existing toolbar (#11495). That seed is
+ * load-bearing, not redundant with the v12 migration: a fresh install never
+ * runs `migrate`.
  *
  * Plugin contributions default to tray-only (#11304) — they always appear in
  * the plugin tray, and `true` additionally promotes one to its own top-level
@@ -105,6 +112,7 @@ export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPri
   ) as Record<BuiltInAgentId, ToolbarButtonPriority>),
   terminal: 3,
   browser: 3,
+  "file-browser": 3,
   "dev-server": 3,
   "command-palette": 4,
   "resume-sessions": 4,
