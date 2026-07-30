@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
-import type { ActionSource } from "@shared/types/actions";
 
 const systemClientMock = vi.hoisted(() => ({ openExternal: vi.fn() }));
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
@@ -20,11 +19,11 @@ function setupActions() {
   const actions: ActionRegistry = new Map();
   const callbacks: ActionCallbacks = {} as unknown as ActionCallbacks;
   registerBrowserActions(actions, callbacks);
-  return async (id: string, args?: unknown, dispatchSource?: ActionSource): Promise<unknown> => {
+  return async (id: string, args?: unknown): Promise<unknown> => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
     const def = factory() as AnyActionDefinition;
-    return def.run(args, (dispatchSource ? { dispatchSource } : {}) as never);
+    return def.run(args, {} as never);
   };
 }
 
@@ -192,7 +191,7 @@ describe("browserActions adversarial", () => {
     expect(addPanelSpy).not.toHaveBeenCalled();
   });
 
-  it("browser.openUrl creates a new browser panel when none exists, leaving focus policy to the store", async () => {
+  it("browser.openUrl creates a new browser panel when none exists (no focusPolicy)", async () => {
     setPanelState({
       panelIds: ["t1"],
       panelsById: { t1: { id: "t1", kind: "terminal" } },
@@ -206,33 +205,6 @@ describe("browserActions adversarial", () => {
     expect(options.focusPolicy).toBeUndefined();
     expect(setBrowserUrlSpy).not.toHaveBeenCalled();
   });
-
-  // #11506 — same defect as file.openPanel: an MCP suppression lease or the
-  // assistant holding focus forces `preserve`, which skips the exit from
-  // fullscreen, so a URL the user asked for opens behind the maximized cell.
-  it.each<ActionSource>(["user", "keybinding", "menu", "context-menu"])(
-    "browser.openUrl takes focus for a %s dispatch so the panel can't land behind fullscreen",
-    async (source) => {
-      setPanelState({ panelIds: [], panelsById: {} });
-      const run = setupActions();
-      await run("browser.openUrl", { url: "https://fresh.example" }, source);
-
-      const options = addPanelSpy.mock.calls[0]![0] as Record<string, unknown>;
-      expect(options.focusPolicy).toBe("take");
-    }
-  );
-
-  it.each<ActionSource>(["agent", "plugin"])(
-    "browser.openUrl leaves focus policy to the store for a %s dispatch",
-    async (source) => {
-      setPanelState({ panelIds: [], panelsById: {} });
-      const run = setupActions();
-      await run("browser.openUrl", { url: "https://fresh.example" }, source);
-
-      const options = addPanelSpy.mock.calls[0]![0] as Record<string, unknown>;
-      expect(Object.hasOwn(options, "focusPolicy")).toBe(false);
-    }
-  );
 
   it("browser.openUrl does not reuse a dev-preview panel — it creates a browser panel", async () => {
     setPanelState({

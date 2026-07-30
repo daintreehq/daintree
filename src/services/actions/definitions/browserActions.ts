@@ -4,8 +4,6 @@ import { systemClient } from "@/clients";
 import { usePanelStore } from "@/store/panelStore";
 import { flushConsoleCaptureBuffer, useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 import { isBrowserPanel, isDevPreviewPanel } from "@shared/types/panel";
-import type { ActionContext } from "@shared/types/actions";
-import { isForegroundDispatch } from "./dispatchSource";
 
 const getConsoleMessagesArgsSchema = z
   .object({
@@ -96,7 +94,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     scope: "renderer",
     keywords: ["web", "navigate", "panel", "tab"],
     argsSchema: z.object({ url: z.string() }),
-    run: async (args: unknown, ctx?: ActionContext) => {
+    run: async (args: unknown) => {
       const { url } = args as { url: string };
       const store = usePanelStore.getState();
       const existing = store.panelIds
@@ -107,17 +105,9 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
         store.activateTerminal(existing.id);
         return;
       }
-      // A person asking for a URL expects to see it, so a foreground dispatch
-      // takes focus outright — that policy is also the one that leaves
-      // fullscreen, so the panel can't land buried behind a maximized cell
-      // (#11506). Agent/plugin dispatches omit focusPolicy entirely and keep
-      // the store's "auto" vs "preserve" resolution (#9035), so a background
-      // open still never steals focus from a typing user.
-      const newId = await store.addPanel({
-        kind: "browser",
-        browserUrl: url,
-        ...(isForegroundDispatch(ctx?.dispatchSource) && { focusPolicy: "take" as const }),
-      });
+      // Omit focusPolicy so the store resolves "auto" vs "preserve" via its MCP
+      // focus-suppression guard (#9035) — never steal focus from a typing user.
+      const newId = await store.addPanel({ kind: "browser", browserUrl: url });
       // addPanel returns null when the hard panel limit is reached (the store
       // raises its own toast). Throw so callers don't get a false { ok: true }.
       if (!newId) {

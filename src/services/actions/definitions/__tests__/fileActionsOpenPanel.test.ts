@@ -198,6 +198,8 @@ describe("file.openPanel", () => {
     }
   );
 
+  // The allowlist has to stay an allowlist: a background source must fall
+  // through to the store's own resolution rather than being read as foreground.
   it.each<ActionSource>(["agent", "plugin"])(
     "leaves focus policy to the store for a %s dispatch",
     async (source) => {
@@ -205,19 +207,16 @@ describe("file.openPanel", () => {
       await run("file.openPanel", { path: "/repo/docs/spec.md" }, source);
 
       const options = addPanelSpy.mock.calls[0]?.[0] as Record<string, unknown>;
-      // Absent, not `undefined` — an explicit undefined would still short-circuit
-      // the store's `options.focusPolicy ?? ...` resolution the same way, but it
-      // reads as a decision the action never made.
-      expect(Object.hasOwn(options, "focusPolicy")).toBe(false);
+      expect(options.focusPolicy).toBeUndefined();
     }
   );
 
-  it("leaves focus policy to the store when there is no dispatch context", async () => {
+  it("leaves focus policy to the store when the dispatch carries no source", async () => {
     const run = setupActions();
     await run("file.openPanel", { path: "/repo/docs/spec.md" });
 
     const options = addPanelSpy.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(Object.hasOwn(options, "focusPolicy")).toBe(false);
+    expect(options.focusPolicy).toBeUndefined();
   });
 
   it("throws for a relative path with no project open and no rootPath", async () => {

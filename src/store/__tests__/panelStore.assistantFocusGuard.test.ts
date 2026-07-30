@@ -241,8 +241,13 @@ describe("panelStore.addPanel focus guard (#6959)", () => {
 
   // #11506 — the suppression guards gate the exit from fullscreen as well as
   // the focus grab, so a panel opened under either one lands buried behind the
-  // maximized cell. `take` is how a foreground action says the user asked for
-  // this, and it has to clear both gates.
+  // maximized cell.
+  //
+  // These characterize the store contract rather than the fix: `take` already
+  // cleared both gates. `file.openPanel` is what changed, and its own suite has
+  // to mock the store to observe the options it sends — so the two halves only
+  // add up to a fix if this side is pinned too. If any of these ever go red,
+  // the action-level tests are still green and still meaningless.
   describe("explicit take policy vs. a live maximize (#11506)", () => {
     const snapshot = { gridCols: 2, gridItemCount: 4, worktreeId: "worktree-1" };
 

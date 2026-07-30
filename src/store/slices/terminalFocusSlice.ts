@@ -686,13 +686,18 @@ export const createTerminalFocusSlice =
           // undo restores `maximizedId` alone) renders the normal grid, so
           // there is nothing to leave.
           if (maximizedId && maximizeTarget) {
-            // Mirror `focusOrMaximizeByIndex`: the cell on screen is named by
-            // `maximizedId`, not `maximizeTarget.id` — the two can drift — and
-            // any member of a maximized group shares that one cell.
+            // Branch the way `ContentGrid` does, because the two halves name the
+            // cell differently and can drift apart (layout undo restores
+            // `maximizedId` alone): a group target renders the group named by
+            // `maximizeTarget.id` and ignores `maximizedId` entirely, while a
+            // panel target renders the pane named by `maximizedId`. Testing
+            // both with an `or` would call a panel "on screen" whenever
+            // `maximizedId` still pointed at it, even though a drifted group
+            // target means something else is being rendered.
             const targetIsMaximizedCell =
-              maximizedId === id ||
-              (maximizeTarget.type === "group" &&
-                getPanelGroupInfo(id)?.groupId === maximizeTarget.id);
+              maximizeTarget.type === "group"
+                ? getPanelGroupInfo(id)?.groupId === maximizeTarget.id
+                : maximizedId === id;
             if (!targetIsMaximizedCell) {
               // `exitMaximize`, never `toggleMaximize` — the conditional
               // toggle can re-maximize a stale target instead of leaving.
