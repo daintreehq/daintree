@@ -40,10 +40,19 @@ const APPROVAL_PATTERNS: RegExp[] = [
 // stay out — compiler output scrolling past a settling agent would
 // misclassify an ordinary prompt wait as an error wait.
 const ERROR_PATTERNS: RegExp[] = [
-  // Rate limiting / capacity
-  /\brate.?limit(?:ed|s)?\b/i,
+  // Rate limiting / capacity. A limit phrase only means "blocked" when a
+  // depletion verb sits next to it, in either word order. Bare "usage limit"/
+  // "rate limit" is ordinary prose: agent CLIs narrate their own quota in
+  // exactly those words ("You have 2 usage limit resets available", "the API
+  // rate limits at 50 rpm"), and those lines mean the opposite of a block.
+  // The verb gate is what makes the trailing filler safe — benign notices are
+  // rejected on the verb, never reaching it.
+  /\b(?:usage|rate)[ -]?limits?\s+(?:(?:has|have|is|was|were)\s+)?(?:been\s+)?(?:reached|exceeded|exhausted|hit)\b/i,
+  /\b(?:hit|reached|exceeded|exhausted|(?:ran|run) out of)\s+(?:(?:a|the|your|my|our)\s+)?(?:[\w%-]+\s+){0,2}?(?:usage|rate)[ -]?limits?\b/i,
+  // Passive "being/been rate limited" states an active throttle. Bare "rate
+  // limited" is also how an agent describes an endpoint it works against.
+  /\b(?:being|been)\s+rate[ -]?limited\b/i,
   /\bquota (?:exceeded|reached)\b/i,
-  /\busage limit\b/i,
   /\btoo many requests\b/i,
   /\boverloaded\b/i,
   /\bcredit balance is too low\b/i,

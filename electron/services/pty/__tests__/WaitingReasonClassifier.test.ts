@@ -74,6 +74,14 @@ describe("classifyWaitingReason", () => {
     it.each([
       ["rate limit", "You've hit your rate limit. Try again at 3pm."],
       ["usage limit", "Usage limit reached — resets in 2 hours"],
+      ["rate limit reached", "API Error: Rate limit reached"],
+      ["passive rate limiting", "You are being rate limited."],
+      ["usage limit hit", "You've hit your usage limit. Try again at 4pm."],
+      ["usage limit exceeded", "Usage limit exceeded"],
+      ["usage limit exhausted", "5-hour usage limit exhausted"],
+      ["qualified usage limit", "You've hit your 5-hour usage limit."],
+      ["plural rate limits", "You've hit your rate limits."],
+      ["usage limit ran out", "You ran out of your usage limit."],
       ["quota", "Quota exceeded for this billing period"],
       ["overloaded", "API error: Overloaded. Please retry shortly."],
       ["auth", "Authentication failed. Run /login to reauthenticate."],
@@ -122,6 +130,37 @@ describe("classifyWaitingReason", () => {
     it("bare error:/failed lines stay prompt (precision guard)", () => {
       const lines = ["error: expected 2 arguments", "build failed"];
       expect(classifyWaitingReason(lines, false)).toBe("prompt");
+    });
+
+    it.each([
+      [
+        "available usage-limit resets",
+        "• You have 2 usage limit resets available. Run /usage to use one.",
+      ],
+      ["exhausted usage-limit resets", "No usage limit resets available"],
+      ["a usage-limit reset action", "Redeem usage limit reset"],
+      [
+        "remaining weekly allowance",
+        "⚠ Heads up, you have less than 10% of your weekly limit left.",
+      ],
+      ["a plan without rate limits", "Your plan does not impose Codex rate limits"],
+      ["rate-limit narration", "the API rate limits at 50 rpm"],
+      ["a rate-limited endpoint", "I added retry logic because the endpoint is rate limited."],
+    ])("keeps %s as prompt (precision guard)", (_name, line) => {
+      expect(classifyWaitingReason([line], false)).toBe("prompt");
+    });
+
+    it("Codex's post-interrupt tail stays prompt (precision guard)", () => {
+      // The reset notice says the user *has* limit resets in reserve — the
+      // opposite of a block — and the whole tail is exactly four non-empty
+      // lines, so every one of them lands inside the error window.
+      const lines = [
+        "■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.",
+        "• You have 2 usage limit resets available. Run /usage to use one.",
+        "› Implement {feature}",
+        "  gpt-5.6-sol medium · ~/Games/Packages/tilegen                Goal achieved (32m)",
+      ];
+      expect(classifyWaitingReason(lines, true)).toBe("prompt");
     });
   });
 
