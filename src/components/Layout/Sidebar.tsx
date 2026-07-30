@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { ProjectResourceBadge, QuickRun } from "@/components/Project";
-import { useProjectStore } from "@/store/projectStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { DEFAULT_SIDEBAR_WIDTH } from "./AppLayout";
@@ -57,15 +56,22 @@ export function Sidebar({
   // detect a mid-drag teardown without relying on stale closure state.
   const isResizingRef = useRef(false);
   const sidebarRef = useRef<HTMLElement>(null);
-  const currentProject = useProjectStore((state) => state.currentProject);
   // The sidebar now mounts in every workspace kind (#11499), so the background
   // menu has to stop offering worktree-shaped commands to workspaces that have
   // no worktrees. Absent rather than disabled, matching the rows themselves: a
   // greyed-out "New Worktree…" in a scratch is the same dead-control lie in a
   // quieter font.
+  //
+  // Every entry keys off the view's own workspace, never the globally broadcast
+  // `currentProject`: a sibling window switching projects repoints that in every
+  // view, so a scratch view would label its reveal "Project" and offer project
+  // settings that dispatch against the other window's project.
   const workspaceRoot = useWorkspaceRoot();
   const isGitBackedWorkspace = workspaceRoot?.isGitBacked ?? false;
-  const revealPath = workspaceRoot?.path ?? currentProject?.path;
+  // A folder opened without git is still a project — it has real settings and a
+  // name. A scratch is not, so nothing project-shaped applies to it.
+  const projectId = workspaceRoot?.kind === "project" ? workspaceRoot.id : null;
+  const revealPath = workspaceRoot?.path;
   const isMacroFocused = useMacroFocusStore((state) => state.focusedRegion === "sidebar");
   useEffect(() => {
     useMacroFocusStore.getState().setRegionRef("sidebar", sidebarRef.current);
@@ -88,8 +94,8 @@ export function Sidebar({
     onResizeEnd?.();
   }, [onResizeEnd]);
 
-  // If the sidebar unmounts mid-drag (e.g. `currentProject` becomes null
-  // because the user switched or closed the project), the listener-attaching
+  // If the sidebar unmounts mid-drag (e.g. the view loses its workspace because
+  // the user closed the project or scratch), the listener-attaching
   // effect below tears down its document listeners but stopResizing never
   // fires — leaving AppLayout's `isSidebarResizing` flag stuck true and
   // silently disabling the collapse/expand animation for the rest of the
@@ -180,7 +186,7 @@ export function Sidebar({
         >
           <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
 
-          {currentProject && <QuickRun projectId={currentProject.id} />}
+          {projectId != null && <QuickRun projectId={projectId} />}
 
           <ProjectResourceBadge />
 
@@ -234,9 +240,9 @@ export function Sidebar({
           disabled={!revealPath}
         >
           <FolderOpen className={ICON_CLASS} />
-          {currentProject ? "Reveal Project in Finder" : "Reveal Workspace in Finder"}
+          {projectId != null ? "Reveal Project in Finder" : "Reveal Workspace in Finder"}
         </ContextMenuActionItem>
-        {currentProject != null && (
+        {projectId != null && (
           <ContextMenuActionItem actionId="project.settings.open">
             <Settings className={ICON_CLASS} />
             Project Settings…

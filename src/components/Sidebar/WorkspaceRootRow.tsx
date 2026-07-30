@@ -81,69 +81,67 @@ export function WorkspaceRootRow({
   const terminalLabel = `${counts.total} terminal${counts.total !== 1 ? "s" : ""}`;
 
   return (
-    <div role="row" aria-rowindex={1} data-workspace-root-row={workspace.id}>
-      <div role="gridcell">
-        <ContextMenu>
-          <ContextMenuTrigger asChild>
-            <div className="flex flex-col gap-1 px-4 py-3 border-b border-divider">
-              <div className="flex items-center gap-2 min-w-0">
-                <KindIcon className="w-4 h-4 shrink-0 text-daintree-text/60" aria-hidden="true" />
-                <TruncatedTooltip content={workspace.name}>
-                  <span className="truncate min-w-0 text-[13px] font-medium text-daintree-text">
-                    {workspace.name}
-                  </span>
-                </TruncatedTooltip>
-                <div className="ml-auto flex items-center gap-2 shrink-0">
-                  {visibleStates.length > 0 && (
-                    <CollapsedSessionIndicators
-                      visibleStates={visibleStates}
-                      sessionAriaLabel={sessionAriaLabel}
-                    />
-                  )}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void actionService.dispatch("worktree.openFileBrowser", undefined, {
-                            source: "user",
-                          });
-                        }}
-                        className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                        aria-label="Browse files"
-                      >
-                        <FolderTree className="w-3.5 h-3.5" aria-hidden="true" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Browse files</TooltipContent>
-                  </Tooltip>
-                </div>
-              </div>
-              {/* Kind rides the secondary line rather than a pill: origin has to
-                  be unambiguous, but it isn't the row's headline, and a badge
-                  would be a second emphasis signal on a one-row list. */}
-              <div className="flex items-center gap-1.5 text-xs text-daintree-text/50 min-w-0">
-                <span className="shrink-0">{kindLabel(workspace)}</span>
-                <span aria-hidden="true">·</span>
-                <TruncatedTooltip content={displayPath}>
-                  <span className="truncate min-w-0 font-mono">{displayPath}</span>
-                </TruncatedTooltip>
-                <span className="sr-only">, {terminalLabel}</span>
+    <div data-workspace-root-row={workspace.id}>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div className="flex flex-col gap-1 px-4 py-3 border-b border-divider">
+            <div className="flex items-center gap-2 min-w-0">
+              <KindIcon className="w-4 h-4 shrink-0 text-daintree-text/60" aria-hidden="true" />
+              <TruncatedTooltip content={workspace.name}>
+                <span className="truncate min-w-0 text-[13px] font-medium text-daintree-text">
+                  {workspace.name}
+                </span>
+              </TruncatedTooltip>
+              <div className="ml-auto flex items-center gap-2 shrink-0">
+                {visibleStates.length > 0 && (
+                  <CollapsedSessionIndicators
+                    visibleStates={visibleStates}
+                    sessionAriaLabel={sessionAriaLabel}
+                  />
+                )}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void actionService.dispatch("worktree.openFileBrowser", undefined, {
+                          source: "user",
+                        });
+                      }}
+                      className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                      aria-label="Browse files"
+                    >
+                      <FolderTree className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Browse files</TooltipContent>
+                </Tooltip>
               </div>
             </div>
-          </ContextMenuTrigger>
-          <ContextMenuContent>
-            <ContextMenuActionItem actionId="worktree.openFileBrowser">
-              <FolderTree className={ICON_CLASS} />
-              Browse files
-            </ContextMenuActionItem>
-            <ContextMenuActionItem actionId="system.openPath" args={{ path: workspace.path }}>
-              <FolderOpen className={ICON_CLASS} />
-              Reveal in Finder
-            </ContextMenuActionItem>
-          </ContextMenuContent>
-        </ContextMenu>
-      </div>
+            {/* Kind rides the secondary line rather than a pill: origin has to
+                be unambiguous, but it isn't the row's headline, and a badge
+                would be a second emphasis signal on a one-row list. */}
+            <div className="flex items-center gap-1.5 text-xs text-daintree-text/50 min-w-0">
+              <span className="shrink-0">{kindLabel(workspace)}</span>
+              <span aria-hidden="true">·</span>
+              <TruncatedTooltip content={displayPath}>
+                <span className="truncate min-w-0 font-mono">{displayPath}</span>
+              </TruncatedTooltip>
+              <span className="sr-only">, {terminalLabel}</span>
+            </div>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuActionItem actionId="worktree.openFileBrowser">
+            <FolderTree className={ICON_CLASS} />
+            Browse files
+          </ContextMenuActionItem>
+          <ContextMenuActionItem actionId="system.openPath" args={{ path: workspace.path }}>
+            <FolderOpen className={ICON_CLASS} />
+            Reveal in Finder
+          </ContextMenuActionItem>
+        </ContextMenuContent>
+      </ContextMenu>
     </div>
   );
 }

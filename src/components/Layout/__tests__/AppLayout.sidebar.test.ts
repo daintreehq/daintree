@@ -48,6 +48,28 @@ describe("AppLayout sidebar visibility — issue #5023 hide on welcome screen", 
     expect(source).not.toMatch(/\{currentProject != null && \(\s*\n\s*<ErrorBoundary[^>]*Sidebar/);
   });
 
+  it("refuses to flip the sidebar gesture when there is no sidebar to reveal (issue #11499)", () => {
+    // The welcome screen mounts no sidebar in any workspace kind, so a toggle
+    // that still flips gestureSidebarHidden moves its own icon and aria-pressed
+    // over a slot that cannot appear. #11499 rules that no-op out explicitly.
+    // The guard also covers the `nav.toggleSidebar` action and Cmd+B, which
+    // both reach the store through this callback.
+    const handler = source.slice(
+      source.indexOf("const handleToggleSidebar = useCallback("),
+      source.indexOf("const handleToggleSidebarRef")
+    );
+    expect(handler).not.toBe("");
+    expect(handler).toMatch(/if \(!hasWorkspace\) return;[\s\S]*setSidebarGestureHidden/);
+    // Stale-closure guard: without the dep the callback keeps an old answer.
+    expect(handler).toMatch(/\}, \[hasWorkspace,/);
+  });
+
+  it("tells the Toolbar whether a workspace exists so the toggle can degrade (issue #11499)", () => {
+    // Degrade, don't delete: the button stays put and explains itself in its
+    // tooltip rather than vanishing from the toolbar.
+    expect(source).toContain("hasWorkspace={hasWorkspace}");
+  });
+
   it("uses showSidebar for the macro-focus sidebar visibility effect", () => {
     expect(source).toContain('setVisibility("sidebar", showSidebar)');
     expect(source).toContain("[showSidebar]");

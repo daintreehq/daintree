@@ -94,11 +94,22 @@ beforeEach(() => {
 
 describe("WorkspaceRootSidebar", () => {
   it("gives a scratch a row, so the toggle that opened the sidebar did something", () => {
+    const { container } = render(<WorkspaceRootSidebar workspace={SCRATCH} />);
+
+    expect(container.querySelectorAll("[data-workspace-root-row]")).toHaveLength(1);
+    expect(screen.getByText("Quick test")).toBeTruthy();
+  });
+
+  it("claims no grid semantics it cannot honour", () => {
+    // The worktree list is a real grid — single tab stop, aria-activedescendant,
+    // arrow-key navigation over its rows. This row has no selection and nothing
+    // to navigate, so grid/row/gridcell roles would announce a keyboard widget
+    // that isn't there: the same shape of lie as the toggle this fixes.
     render(<WorkspaceRootSidebar workspace={SCRATCH} />);
 
-    expect(screen.getByRole("grid")).toBeTruthy();
-    expect(screen.getAllByRole("row")).toHaveLength(1);
-    expect(screen.getByText("Quick test")).toBeTruthy();
+    expect(screen.queryByRole("grid")).toBeNull();
+    expect(screen.queryAllByRole("row")).toHaveLength(0);
+    expect(screen.queryAllByRole("gridcell")).toHaveLength(0);
   });
 
   it("does not call the slot Worktrees for a workspace that has none", () => {

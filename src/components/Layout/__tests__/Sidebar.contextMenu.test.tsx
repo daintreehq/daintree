@@ -168,6 +168,33 @@ describe("Sidebar background context menu — workspace kind (#11499)", () => {
     expect(reveal?.textContent).toContain("Reveal Workspace in Finder");
   });
 
+  it("ignores a project a sibling window left globally current", () => {
+    // `currentProject` is broadcast to every view, cached ones included, so a
+    // second window switching projects repoints it here too. Keying the menu off
+    // it made a scratch view label its own folder "Project" and offer project
+    // settings that dispatch against the other window's project. The store value
+    // is still supplied so a reintroduced read resolves rather than crashing —
+    // this is the guard against that read coming back.
+    currentProject = {
+      id: "proj-elsewhere",
+      path: "/repos/other-window",
+      name: "Other Window",
+      emoji: "🪟",
+      lastOpened: 0,
+    };
+    workspaceRoot.mockReturnValue(SCRATCH);
+
+    renderSidebar();
+
+    expect(renderedActionIds()).not.toContain("project.settings.open");
+
+    const reveal = screen
+      .getAllByRole("menuitem")
+      .find((el) => el.getAttribute("data-action-id") === "system.openPath");
+    expect(reveal?.getAttribute("data-args")).toBe(JSON.stringify({ path: SCRATCH.path }));
+    expect(reveal?.textContent).toContain("Reveal Workspace in Finder");
+  });
+
   it("keeps project settings for a folder opened without git, but not its worktree entries", () => {
     currentProject = {
       id: PLAIN_FOLDER.id,

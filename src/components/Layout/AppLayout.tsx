@@ -551,13 +551,19 @@ export function AppLayout({
   // Independent from the assistant: clicking this button hides/shows only the
   // worktree sidebar, leaving the Daintree Assistant untouched.
   const handleToggleSidebar = useCallback(() => {
+    // No workspace means no sidebar mounts at all (welcome screen), so there is
+    // nothing to hide or reveal. Flipping the gesture flag anyway is what let
+    // the toolbar button and Cmd+B move their own aria-pressed over a slot that
+    // could never appear (#11499). Also guards the `nav.toggleSidebar` action,
+    // which reaches this through the window event below.
+    if (!hasWorkspace) return;
     suppressSidebarResizes();
     const focus = useFocusStore.getState();
     focus.setSidebarGestureHidden(!focus.gestureSidebarHidden, {
       sidebarWidth,
       diagnosticsOpen: layout.diagnosticsOpen,
     });
-  }, [sidebarWidth, layout.diagnosticsOpen]);
+  }, [hasWorkspace, sidebarWidth, layout.diagnosticsOpen]);
 
   const handleToggleSidebarRef = useRef(handleToggleSidebar);
   useEffect(() => {
@@ -842,6 +848,7 @@ export function AppLayout({
           onToggleProblems={handleToggleProblems}
           isFocusMode={layout.gestureSidebarHidden}
           onToggleFocusMode={handleToggleSidebar}
+          hasWorkspace={hasWorkspace}
           agentAvailability={agentAvailability}
           agentSettings={agentSettings}
           projectSwitcherPalette={projectSwitcherPalette}

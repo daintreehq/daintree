@@ -36,12 +36,13 @@ export function WorkspaceRootSidebar({
         <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Workspace</h2>
       </div>
 
-      <div
-        role="grid"
-        aria-label="Workspace"
-        aria-rowcount={1}
-        className="flex flex-col flex-1 min-h-0"
-      >
+      {/* Plain container, not a `role="grid"`: the worktree list is a grid
+          because it has selection and arrow-key navigation over its rows
+          (`SidebarContent.tsx` — tab stop, `aria-activedescendant`, key
+          handlers). This row has neither, so grid/row/gridcell roles would
+          promise a keyboard widget that isn't there — the same kind of lie as
+          the toggle this fixes. The heading above already names the region. */}
+      <div className="flex flex-col flex-1 min-h-0">
         <WorkspaceRootRow workspace={workspace} homeDir={homeDir} />
       </div>
 
