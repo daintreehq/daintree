@@ -3182,6 +3182,75 @@ describe("PullRequestService", () => {
       pullRequestService.destroy();
     });
 
+    it("keeps the backfill debt when the CI lookup fails outright", async () => {
+      const ciByNumber = new Map([[1, ciState("pending")]]);
+      const { getCIStatuses } = makeUnchangedProbeHarness(ciByNumber);
+
+      const { pullRequestService } = await detectAndSettle(["feature/a"]);
+      const svc = pullRequestService as unknown as {
+        detectedPRs: Map<string, { ciStatus?: string; needsCiBackfill?: boolean }>;
+      };
+
+      pullRequestService.setCIEnrichmentEnabled(false);
+      expect(svc.detectedPRs.get("wt-1")?.needsCiBackfill).toBe(true);
+
+      // The whole batch call fails. The loader's per-PR fallback launders that
+      // into a resolved `null`, which is indistinguishable from a confirmed
+      // "no checks" — so treating null as authoritative would clear the debt
+      // and strand the badge permanently on a transient blip.
+      getCIStatuses.mockRejectedValue(new Error("provider unreachable"));
+      pullRequestService.setCIEnrichmentEnabled(true);
+      await revalidate(pullRequestService);
+
+      expect(svc.detectedPRs.get("wt-1")?.ciStatus).toBeUndefined();
+      expect(svc.detectedPRs.get("wt-1")?.needsCiBackfill).toBe(true);
+
+      // Provider recovers → the retained debt gets the badge back.
+      getCIStatuses.mockReset();
+      getCIStatuses.mockImplementation(async (_repo: RepoRef, prNumbers: number[]) => {
+        const map = new Map<number, CIStatus | null>();
+        for (const n of prNumbers) map.set(n, ciByNumber.get(n) ?? null);
+        return map;
+      });
+      ciByNumber.set(1, ciState("success"));
+      await revalidate(pullRequestService);
+
+      expect(svc.detectedPRs.get("wt-1")?.ciStatus).toBe("success");
+      expect(svc.detectedPRs.get("wt-1")?.needsCiBackfill).toBeUndefined();
+
+      pullRequestService.destroy();
+    });
+
+    it("re-arms revalidation when a re-run newly arms the boost", async () => {
+      const ciByNumber = new Map([[1, ciState("failure")]]);
+      makeUnchangedProbeHarness(ciByNumber);
+
+      const { pullRequestService } = await detectAndSettle(["feature/a"]);
+      const svc = pullRequestService as unknown as {
+        scheduleRevalidation: () => void;
+        boostExpiresAt: number | null;
+      };
+      expect(svc.boostExpiresAt).toBeNull();
+
+      const scheduleSpy = vi.spyOn(svc, "scheduleRevalidation");
+
+      ciByNumber.set(1, ciState("pending"));
+      for (let elapsed = 0; elapsed < 60 && svc.boostExpiresAt === null; elapsed++) {
+        jump(MINUTE);
+        await revalidate(pullRequestService);
+      }
+      expect(svc.boostExpiresAt).not.toBeNull();
+
+      // Enrichment is fire-and-forget, so the tick that discovered the re-run
+      // had already re-armed its own timer at the baseline before the pending
+      // result landed. Without an explicit reschedule the freshly-armed boost
+      // wouldn't take effect until that stale interval elapsed.
+      expect(scheduleSpy).toHaveBeenCalled();
+
+      scheduleSpy.mockRestore();
+      pullRequestService.destroy();
+    });
+
     it("runs the focus catch-up even when enrichment was already enabled", async () => {
       const { getCIStatuses } = makeUnchangedProbeHarness(new Map([[1, ciState("failure")]]));
 

@@ -932,17 +932,24 @@ class PullRequestService {
     // Resolved worktrees only: detectedPRs can still hold an entry for a
     // worktree mid-re-detection, and re-checking that burns quota on a PR
     // binding about to be replaced.
-    const enrichedPRNumbers = new Set<number>();
+    // Dedup by object, not PR number: sibling worktrees on one branch share a
+    // single InternalLinkedPR (so they collapse to one entry either way), but
+    // two worktrees that resolve the same PR through separate detection cycles
+    // hold DISTINCT objects. Number-dedup would enrich only the first and leave
+    // the other holding a stale status that a later blur sweep acts on. This
+    // costs no extra API call — BatchLoader single-flights by key, so both
+    // objects settle off one request.
+    const enrichedPRs = new Set<InternalLinkedPR>();
     for (const worktreeId of this.resolvedWorktrees) {
       const detectedPR = this.detectedPRs.get(worktreeId);
-      if (!detectedPR || enrichedPRNumbers.has(detectedPR.number)) continue;
-      enrichedPRNumbers.add(detectedPR.number);
+      if (!detectedPR || enrichedPRs.has(detectedPR)) continue;
+      enrichedPRs.add(detectedPR);
       // Synchronous fire-and-forget, matching revalidateResolvedPRs — every
       // load enqueued in this loop coalesces into one getCIStatuses batch.
       this.enrichPRWithCIStatus(detectedPR, repo);
     }
 
-    if (enrichedPRNumbers.size === 0) {
+    if (enrichedPRs.size === 0) {
       // Nothing went out, so don't arm the throttle — otherwise a focus regain
       // with no resolved PRs would swallow the next one.
       return;
@@ -1984,10 +1991,16 @@ class PullRequestService {
             ? ciStatus.state
             : undefined;
         pr._ciStatus = ciStatus ?? undefined;
-        // An authoritative result landed (including a confirmed "no checks"),
-        // so the blur-sweep backfill debt is settled. A rejection skips this and
-        // leaves the flag set, keeping the entry eligible on the next tick.
-        pr.needsCiBackfill = undefined;
+        // Only a positive result settles the blur-sweep backfill debt. A `null`
+        // is not trustworthy here: when the batch call itself fails, the
+        // loader's per-PR fallback converts a transient error into a resolved
+        // `null`, so clearing on null would strand a swept badge on a network
+        // blip — and a swept entry was `pending`, so it demonstrably had checks.
+        // Worst case we retry it once per tick until the provider answers or a
+        // re-detection replaces the entry.
+        if (ciStatus) {
+          pr.needsCiBackfill = undefined;
+        }
         if (pr.ciStatus !== undefined) {
           pr.stagnantPollCount = prevCiStatus === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
         }
