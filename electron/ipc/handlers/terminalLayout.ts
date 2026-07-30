@@ -355,6 +355,10 @@ export const terminalLayoutNamespace = defineIpcNamespace({
           focusPanelState: validFocusPanelState,
           terminalSizes: existingState?.terminalSizes,
           draftInputs: existingState?.draftInputs,
+          // This updater rebuilds the whole record, so every field it does not
+          // carry forward is deleted. Dropping the MRU here wiped the quick
+          // switcher's order on any focus-mode toggle (#11497).
+          mruList: existingState?.mruList,
         }));
       }
     ),

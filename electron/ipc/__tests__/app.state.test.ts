@@ -868,8 +868,11 @@ describe("app:boot handler", () => {
      */
     function runEnqueuedUpdate(existing: unknown = undefined): Record<string, unknown> {
       const calls = vi.mocked(projectStore.enqueueProjectStateUpdate).mock.calls;
-      expect(calls.length).toBeGreaterThan(0);
-      const updater = calls[calls.length - 1][1] as (prev: unknown) => Record<string, unknown>;
+      // Exactly one write, keyed to this workspace — a second enqueue or a
+      // write against another id is itself the bug these tests guard against.
+      expect(calls).toHaveLength(1);
+      expect(calls[0][0]).toBe(REAL_PROJECT.id);
+      const updater = calls[0][1] as (prev: unknown) => Record<string, unknown>;
       return updater(existing);
     }
 
