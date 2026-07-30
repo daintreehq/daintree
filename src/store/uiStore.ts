@@ -6,6 +6,11 @@ interface UIState {
   // overlay. Idempotent registration: re-adding an id is a no-op and the
   // array reference is preserved so Zustand skips re-renders.
   overlayStack: string[];
+  // Monotonic count of claims ever registered. Claim ids are not unique over
+  // time — a dialog that closes and reopens at the same position keeps its
+  // `useId()` — so comparing stack contents cannot tell "never moved" from
+  // "closed and reopened". Snapshot this to detect the latter.
+  overlayClaimEpoch: number;
   addOverlayClaim: (id: string) => void;
   removeOverlayClaim: (id: string) => void;
   hasOpenOverlays: () => boolean;
@@ -29,6 +34,7 @@ interface UIState {
 
 export const useUIStore = create<UIState>((set, get) => ({
   overlayStack: [],
+  overlayClaimEpoch: 0,
 
   // Idempotent — return the same state reference when the claim is already
   // present so Zustand skips re-renders. Never mutate the existing array; a
@@ -36,7 +42,10 @@ export const useUIStore = create<UIState>((set, get) => ({
   addOverlayClaim: (id) =>
     set((state) => {
       if (state.overlayStack.includes(id)) return state;
-      return { overlayStack: [...state.overlayStack, id] };
+      return {
+        overlayStack: [...state.overlayStack, id],
+        overlayClaimEpoch: state.overlayClaimEpoch + 1,
+      };
     }),
 
   removeOverlayClaim: (id) =>

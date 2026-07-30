@@ -461,13 +461,13 @@ export class ActionService {
     const wallClockStartMs = Date.now();
     const monotonicStartMs = typeof performance !== "undefined" ? performance.now() : Date.now();
 
-    // Snapshot the overlay claims owned before run() so the post-run hint can
-    // tell "this action opened a dialog" from "a dialog was already open".
-    // Only the former must suppress — see emitShortcutHint. Skipped entirely
-    // when no hint can be emitted anyway.
-    const overlayClaimsBeforeRun =
+    // Snapshot the overlay epoch before run() so the post-run hint can tell
+    // "an overlay opened while this ran" from "one was already open". Only the
+    // former must suppress — see emitShortcutHint. Skipped entirely when no
+    // hint can be emitted anyway.
+    const overlayEpochBeforeRun =
       source === "user" && !definition.suppressShortcutHint
-        ? new Set(useUIStore.getState().overlayStack)
+        ? useUIStore.getState().overlayClaimEpoch
         : null;
 
     try {
@@ -503,7 +503,7 @@ export class ActionService {
         pluginId: definition.pluginId,
       });
       if (!definition.suppressShortcutHint)
-        this.emitShortcutHint(actionId, source, overlayClaimsBeforeRun);
+        this.emitShortcutHint(actionId, source, overlayEpochBeforeRun);
       return { ok: true, result: result as Result };
     } catch (err) {
       const error: ActionError = {
@@ -738,33 +738,38 @@ export class ActionService {
   }
 
   /**
-   * `overlayClaimsBeforeRun` is the overlay stack as it stood when the action
-   * was dispatched. A claim present now but missing from it means run() opened
-   * an overlay: the hint would render above it (z-toast sits over z-modal) and
-   * the dialog's own `clearDialogOverlays()` already fired *before* this emit,
-   * so nothing would take the hint down for the full auto-dismiss window.
+   * Suppresses the hint when an overlay is on screen that opened while run()
+   * was in flight. Such a hint would render above it (z-toast sits over
+   * z-modal) and the dialog's own `clearDialogOverlays()` already fired
+   * *before* this emit, so nothing would take the hint down for the full
+   * auto-dismiss window — issue #11507.
    *
-   * Comparing identities rather than depth matters — an action that closes one
-   * dialog and opens another leaves the stack the same size but must still
-   * suppress, while an action dispatched inside an already-open dialog that
-   * leaves it open must still hint.
+   * Both halves are load-bearing. The epoch alone would suppress after a
+   * dialog that opened and closed again, where there is nothing left to strand
+   * on; a non-empty stack alone would suppress hints for actions invoked
+   * inside a dialog that was already open and stays open.
+   *
+   * The epoch rather than the stack contents because claim ids are reused: a
+   * dialog reopening at the same tree position keeps its `useId()`, so an
+   * open→close→reopen across one dispatch is invisible to a contents diff.
+   *
+   * The test is temporal, not attributive: claims carry no owning action, so a
+   * dialog opened by a *concurrent* dispatch suppresses this one's hint too.
+   * That is the conservative direction — the hint would have landed over that
+   * dialog either way.
    */
   private emitShortcutHint(
     actionId: ActionId,
     source: ActionSource,
-    overlayClaimsBeforeRun: ReadonlySet<string> | null
+    overlayEpochBeforeRun: number | null
   ): void {
     if (source !== "user") return;
     try {
       // Bail before incrementCount so a suppressed hint doesn't silently
       // consume one of the teaching milestones.
-      if (
-        overlayClaimsBeforeRun !== null &&
-        useUIStore
-          .getState()
-          .overlayStack.some((claimId) => !overlayClaimsBeforeRun.has(claimId))
-      ) {
-        return;
+      if (overlayEpochBeforeRun !== null) {
+        const { overlayStack, overlayClaimEpoch } = useUIStore.getState();
+        if (overlayStack.length > 0 && overlayClaimEpoch !== overlayEpochBeforeRun) return;
       }
 
       const combo = keybindingService.getEffectiveCombo(actionId);

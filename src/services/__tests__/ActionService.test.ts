@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeAll, afterAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { z } from "zod";
 
 const hintMocks = vi.hoisted(() => {
@@ -1852,13 +1852,39 @@ describe("ActionService", () => {
         mockShow.mockReturnValue(true);
       });
 
+      // uiStore is a module-scope singleton — leave it clean so a test added
+      // after this block doesn't inherit claims from here.
+      afterEach(() => {
+        useUIStore.setState({ overlayStack: [] });
+      });
+
       it("suppresses the hint when the action opens an overlay", async () => {
         service.register(
           makeOverlayAction("test.opensDialog", () => addOverlayClaim("dialog-opened"))
         );
 
-        await service.dispatch("test.opensDialog" as ActionId, undefined, { source: "user" });
+        const result = await service.dispatch("test.opensDialog" as ActionId, undefined, {
+          source: "user",
+        });
 
+        // A rejected dispatch also emits no hint, so pin the success path —
+        // otherwise a broken fixture would satisfy the assertions below.
+        expect(result.ok).toBe(true);
+        expect(mockShow).not.toHaveBeenCalled();
+        expect(mockIncrementCount).not.toHaveBeenCalled();
+      });
+
+      it("suppresses the hint when an overlay opens on top of an existing one", async () => {
+        addOverlayClaim("dialog-base");
+        service.register(
+          makeOverlayAction("test.nestsDialog", () => addOverlayClaim("dialog-nested"))
+        );
+
+        const result = await service.dispatch("test.nestsDialog" as ActionId, undefined, {
+          source: "user",
+        });
+
+        expect(result.ok).toBe(true);
         expect(mockShow).not.toHaveBeenCalled();
         expect(mockIncrementCount).not.toHaveBeenCalled();
       });
@@ -1882,8 +1908,11 @@ describe("ActionService", () => {
           })
         );
 
-        await service.dispatch("test.swapsDialog" as ActionId, undefined, { source: "user" });
+        const result = await service.dispatch("test.swapsDialog" as ActionId, undefined, {
+          source: "user",
+        });
 
+        expect(result.ok).toBe(true);
         expect(mockShow).not.toHaveBeenCalled();
         expect(mockIncrementCount).not.toHaveBeenCalled();
       });
@@ -1900,6 +1929,27 @@ describe("ActionService", () => {
 
         expect(mockIncrementCount).toHaveBeenCalledWith("test.transientDialog");
         expect(mockShow).toHaveBeenCalledWith("test.transientDialog", "⌘K");
+      });
+
+      it("suppresses the hint when a claim id is released and re-registered", async () => {
+        // A dialog reopening at the same tree position keeps its useId(), so
+        // the stack reads identically before and after — only the epoch shows
+        // that an overlay opened during the dispatch.
+        addOverlayClaim("dialog-reused-id");
+        service.register(
+          makeOverlayAction("test.reopensDialog", () => {
+            removeOverlayClaim("dialog-reused-id");
+            addOverlayClaim("dialog-reused-id");
+          })
+        );
+
+        const result = await service.dispatch("test.reopensDialog" as ActionId, undefined, {
+          source: "user",
+        });
+
+        expect(result.ok).toBe(true);
+        expect(mockShow).not.toHaveBeenCalled();
+        expect(mockIncrementCount).not.toHaveBeenCalled();
       });
 
       it("still emits the hint when the action closes the open overlay", async () => {
