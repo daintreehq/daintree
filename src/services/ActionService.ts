@@ -278,6 +278,19 @@ export class ActionService {
   }
 
   /**
+   * Whether the action guarantees it has already shown its own error toast for
+   * any failure escaping `run()`. Single O(1) registry lookup — the flag is
+   * renderer-local and deliberately absent from `ActionManifestEntry`, so the
+   * palette reads it here rather than off the manifest row.
+   *
+   * Fails closed: unknown ids return false, so a caller that can't confirm
+   * ownership keeps showing its own fallback toast rather than silencing one.
+   */
+  selfNotifiesOnExecutionError(id: ActionId): boolean {
+    return this.registry.get(id)?.selfNotifiesOnExecutionError === true;
+  }
+
+  /**
    * Lightweight dispatch-gating metadata via a single O(1) registry lookup.
    * Bypasses toManifestEntry() (isEnabled/palette predicates, schema
    * compilation and cloning) — use when only danger/title/description are

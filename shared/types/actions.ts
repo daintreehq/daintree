@@ -170,6 +170,24 @@ export interface ActionDefinition<
    * doesn't belong in the palette (`hidden`).
    */
   palette?: PaletteBehavior;
+  /**
+   * Declares that *every* exception escaping `run()` has already produced a
+   * user-visible error notification. The action palette reads this (via
+   * `ActionService.selfNotifiesOnExecutionError`) to suppress its generic
+   * "Couldn't run '<title>'" toast for `EXECUTION_ERROR`, so the action's own
+   * specific toast isn't stacked underneath a vaguer duplicate.
+   *
+   * Renderer-local by design — deliberately *not* on `ActionManifestEntry`,
+   * since it describes renderer toast ownership and means nothing to MCP
+   * clients or plugin hosts.
+   *
+   * Only set this when the catch genuinely covers the whole run surface —
+   * including argument/precondition throws, which are easy to leave outside
+   * the `try`. A partial catch makes the claim false and silently swallows the
+   * uncovered failures at the palette. Errors raised *before* `run()` (arg
+   * validation, `NOT_FOUND`) carry a different code and still toast normally.
+   */
+  selfNotifiesOnExecutionError?: boolean;
   run: (args: InferActionArgs<S>, ctx: ActionContext) => Promise<Result>;
   /**
    * Opt-in allowlist of top-level arg keys that are safe to include in Sentry

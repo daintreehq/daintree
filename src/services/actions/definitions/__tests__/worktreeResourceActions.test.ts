@@ -198,13 +198,24 @@ describe("worktree resource action definitions", () => {
     ["worktree.resource.resume", "resume", "Resume failed"],
     ["worktree.resource.pause", "pause", "Pause failed"],
     ["worktree.resource.status", "status", "Status check failed"],
-  ] as const)("%s calls notify on failure", async (actionId, _action, expectedTitle) => {
-    // status action gates on hasStatusCommand inside run() — seed it so we reach resourceAction
-    mockWorktrees.set("/test", { hasStatusCommand: true });
-    mockResourceAction.mockRejectedValueOnce(new Error("Command exited with code 1"));
+  ] as const)("%s notifies and rejects on failure", async (actionId, verb, expectedTitle) => {
+    // status action gates on hasStatusCommand inside run() — seed it so we reach
+    // resourceAction. The cached resourceStatus is deliberately stale: before
+    // #11533 the status action swallowed the rejection and resolved with this
+    // value, indistinguishable from a fresh successful read.
+    mockWorktrees.set("/test", {
+      hasStatusCommand: true,
+      resourceStatus: { lastStatus: "stale", lastCheckedAt: 1 },
+    });
+    const clientError = new Error("Command exited with code 1");
+    mockResourceAction.mockRejectedValueOnce(clientError);
     const def = registry.get(actionId)!();
-    await def.run!({}, { activeWorktreeId: "/test" });
 
+    // Rejects with the original error instance — the action rethrows rather
+    // than wrapping, so identity and stack survive for the dispatch layer.
+    await expect(def.run!({}, { activeWorktreeId: "/test" })).rejects.toBe(clientError);
+
+    expect(mockResourceAction).toHaveBeenCalledWith("/test", verb);
     expect(mockNotify).toHaveBeenCalledOnce();
     expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -217,6 +228,59 @@ describe("worktree resource action definitions", () => {
           onClick: expect.any(Function),
         }),
       })
+    );
+  });
+
+  it("worktree.resource.status rejects rather than returning a stale cached status", async () => {
+    mockWorktrees.set("/test", {
+      hasStatusCommand: true,
+      resourceStatus: { lastStatus: "healthy", lastCheckedAt: 1 },
+    });
+    mockResourceAction.mockRejectedValueOnce(new Error("status command exited with code 1"));
+    const def = registry.get("worktree.resource.status")!();
+
+    const outcome = await def
+      .run!({}, { activeWorktreeId: "/test" })
+      .then((value) => ({ resolved: true as const, value }))
+      .catch(() => ({ resolved: false as const }));
+
+    // The pre-fix bug resolved with { configured: true, status: <the seeded
+    // stale object> }; a caller had no way to tell that from a fresh check.
+    expect(outcome.resolved).toBe(false);
+  });
+
+  it.each([
+    "worktree.resource.provision",
+    "worktree.resource.teardown",
+    "worktree.resource.resume",
+    "worktree.resource.pause",
+    "worktree.resource.status",
+  ] as const)(
+    "%s notifies and rejects when no worktree is selected (precondition covered by the catch)",
+    async (actionId) => {
+      const def = registry.get(actionId)!();
+
+      // The selfNotifiesOnExecutionError contract requires the catch to cover
+      // every throw out of run(), preconditions included — otherwise the
+      // palette suppresses a toast that was never shown.
+      await expect(def.run!({}, {})).rejects.toThrow("No worktree selected");
+
+      expect(mockResourceAction).not.toHaveBeenCalled();
+      expect(mockNotify).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("worktree.resource.status notifies and rejects when the worktree is not found", async () => {
+    const def = registry.get("worktree.resource.status")!();
+
+    await expect(def.run!({}, { activeWorktreeId: "/missing" })).rejects.toThrow(
+      "Worktree not found"
+    );
+
+    expect(mockResourceAction).not.toHaveBeenCalled();
+    expect(mockNotify).toHaveBeenCalledOnce();
+    expect(mockNotify).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Status check failed" })
     );
   });
 
@@ -249,7 +313,10 @@ describe("worktree resource action definitions", () => {
       mockWorktrees.set("/test", { hasStatusCommand: true });
       mockResourceAction.mockRejectedValueOnce(null);
       const def = registry.get(actionId)!();
-      await def.run!({}, { activeWorktreeId: "/test" });
+
+      // A non-Error rejection is rethrown as-is, so the value reaches
+      // dispatch() unchanged; only the toast copy falls back.
+      await expect(def.run!({}, { activeWorktreeId: "/test" })).rejects.toBeNull();
 
       expect(mockNotify).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -260,13 +327,75 @@ describe("worktree resource action definitions", () => {
     }
   );
 
+  it.each([
+    "worktree.resource.provision",
+    "worktree.resource.teardown",
+    "worktree.resource.resume",
+    "worktree.resource.pause",
+    "worktree.resource.status",
+  ] as const)("%s declares that it self-notifies on execution error", (actionId) => {
+    expect(registry.get(actionId)!().selfNotifiesOnExecutionError).toBe(true);
+  });
+
+  it("connect does not claim to self-notify (it has no catch of its own)", () => {
+    expect(registry.get("worktree.resource.connect")!().selfNotifiesOnExecutionError).toBeUndefined();
+  });
+
+  it.each([
+    "worktree.resource.provision",
+    "worktree.resource.teardown",
+    "worktree.resource.resume",
+    "worktree.resource.pause",
+  ] as const)("%s declares no result schema (it resolves with nothing)", (actionId) => {
+    const def = registry.get(actionId)!();
+    expect(def.resultSchema).toBeUndefined();
+    // z.void() would convert to a schema with no top-level `type: "object"`,
+    // which buildToolOutputSchema discards — so publishing one is pointless.
+    expect(def.mcpOutputSchema).toBeUndefined();
+  });
+
+  it("worktree.resource.status publishes its result schema to MCP", () => {
+    const def = registry.get("worktree.resource.status")!();
+    // resultSchema alone never reaches the wire — publication is gated on the
+    // mcpOutputSchema flag, so both are required together.
+    expect(def.resultSchema).toBeDefined();
+    expect(def.mcpOutputSchema).toBe(true);
+  });
+
+  it("worktree.resource.status result schema accepts both branches run() returns", async () => {
+    const def = registry.get("worktree.resource.status")!();
+    const schema = def.resultSchema!;
+
+    mockWorktrees.set("/unconfigured", { hasStatusCommand: false });
+    const unconfigured = await def.run!({}, { activeWorktreeId: "/unconfigured" });
+    expect(schema.safeParse(unconfigured).success).toBe(true);
+
+    const resourceStatus = {
+      lastStatus: "ready",
+      lastOutput: "ok",
+      error: "none",
+      lastCheckedAt: 5,
+      endpoint: "https://devbox.example",
+      meta: { region: "us-east-1" },
+      provider: "acme",
+      resumedAt: 6,
+      pausedAt: 7,
+    };
+    mockWorktrees.set("/configured", { hasStatusCommand: true, resourceStatus });
+    mockResourceAction.mockResolvedValueOnce(undefined);
+    const configured = await def.run!({}, { activeWorktreeId: "/configured" });
+    expect(schema.safeParse(configured).success).toBe(true);
+  });
+
   it("copy details action writes the error message to the clipboard", async () => {
     const writeTextMock = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
 
     mockResourceAction.mockRejectedValueOnce(new Error("Command exited with code 1"));
     const def = registry.get("worktree.resource.provision")!();
-    await def.run!({}, { activeWorktreeId: "/test" });
+    await expect(def.run!({}, { activeWorktreeId: "/test" })).rejects.toThrow(
+      "Command exited with code 1"
+    );
 
     const callArgs = mockNotify.mock.calls[0]![0];
     expect(callArgs.action.label).toBe("Copy details");
