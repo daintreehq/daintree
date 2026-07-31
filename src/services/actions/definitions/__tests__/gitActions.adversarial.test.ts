@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import { registerGitActions } from "../gitActions";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
@@ -12,6 +12,10 @@ import {
   GIT_SUBJECT_MAX_BYTES,
   PULSE_RECENT_COMMITS_MAX,
 } from "@shared/config/gitReadLimits";
+import {
+  setWorktreePathIndexAccessor,
+  resetStoreAccessorsForTesting,
+} from "@/store/storeAccessors";
 
 /**
  * `git.push` now awaits a deferred-Promise confirm gate (#8242). In a unit
@@ -86,29 +90,48 @@ function makeCommit(index: number, overrides: Record<string, unknown> = {}) {
 
 function setupActions(): {
   run: (id: string, args?: unknown, ctx?: Record<string, unknown>) => Promise<unknown>;
+  runParsed: (id: string, args?: unknown, ctx?: Record<string, unknown>) => Promise<unknown>;
   git: GitStub;
 } {
   const actions: ActionRegistry = new Map();
   const callbacks: ActionCallbacks = {} as unknown as ActionCallbacks;
   registerGitActions(actions, callbacks);
   const git = makeGitStub();
+
+  const invoke = async (
+    id: string,
+    args: unknown,
+    ctx: Record<string, unknown> | undefined,
+    parse: boolean
+  ): Promise<unknown> => {
+    const factory = actions.get(id);
+    if (!factory) throw new Error(`missing ${id}`);
+    const def = factory() as AnyActionDefinition;
+    Object.defineProperty(globalThis, "window", {
+      value: { electron: { git } },
+      configurable: true,
+      writable: true,
+    });
+    // `parse` mirrors ActionService.dispatch, which validates argsSchema before
+    // calling run() — the only path on which an argument alias is collapsed.
+    const effectiveArgs = parse && def.argsSchema ? def.argsSchema.parse(args) : args;
+    return def.run(effectiveArgs, (ctx ?? {}) as never);
+  };
+
   return {
     git,
-    run: async (id, args, ctx) => {
-      const factory = actions.get(id);
-      if (!factory) throw new Error(`missing ${id}`);
-      const def = factory() as AnyActionDefinition;
-      Object.defineProperty(globalThis, "window", {
-        value: { electron: { git } },
-        configurable: true,
-        writable: true,
-      });
-      return def.run(args, (ctx ?? {}) as never);
-    },
+    run: (id, args, ctx) => invoke(id, args, ctx, false),
+    runParsed: (id, args, ctx) => invoke(id, args, ctx, true),
   };
 }
 
+beforeEach(() => {
+  // Lets the shared location resolver turn a `worktreeId` into its path.
+  setWorktreePathIndexAccessor(() => new Map([["wt-1", "/repo/one"]]));
+});
+
 afterEach(() => {
+  resetStoreAccessorsForTesting();
   Object.defineProperty(globalThis, "window", { value: undefined, configurable: true });
   // Both stores are module singletons. A test that fails mid-gate would
   // otherwise leave a pending request behind and contaminate the next one.
@@ -345,6 +368,46 @@ describe("gitActions adversarial", () => {
       skip: 0,
       limit: 5,
     });
+  });
+
+  it("git.listCommits accepts the canonical worktreePath and the legacy cwd alias alike", async () => {
+    const { runParsed, git } = setupActions();
+
+    await runParsed("git.listCommits", { worktreePath: "/canonical" }, {});
+    expect(git.listCommits).toHaveBeenLastCalledWith({ cwd: "/canonical" });
+
+    await runParsed("git.listCommits", { cwd: "/legacy" }, {});
+    expect(git.listCommits).toHaveBeenLastCalledWith({ cwd: "/legacy" });
+  });
+
+  it("git.listCommits maps the legacy skip alias onto the offset it pages by", async () => {
+    const { runParsed, git } = setupActions();
+
+    await runParsed("git.listCommits", { skip: 20, limit: 5 }, { activeWorktreePath: "/repo" });
+    expect(git.listCommits).toHaveBeenLastCalledWith({ cwd: "/repo", skip: 20, limit: 5 });
+
+    await runParsed("git.listCommits", { offset: 20, limit: 5 }, { activeWorktreePath: "/repo" });
+    expect(git.listCommits).toHaveBeenLastCalledWith({ cwd: "/repo", skip: 20, limit: 5 });
+  });
+
+  it("git.listCommits rejects a legacy alias that contradicts its canonical field", async () => {
+    const { runParsed } = setupActions();
+
+    await expect(
+      runParsed("git.listCommits", { worktreePath: "/a", cwd: "/b" }, {})
+    ).rejects.toThrow();
+    await expect(runParsed("git.listCommits", { offset: 1, skip: 2 }, {})).rejects.toThrow();
+  });
+
+  it("git.getFileDiff resolves a worktreeId through the shared location resolver", async () => {
+    const { runParsed, git } = setupActions();
+
+    await runParsed(
+      "git.getFileDiff",
+      { worktreeId: "wt-1", filePath: "a.ts", status: "modified" },
+      {}
+    );
+    expect(git.getFileDiff).toHaveBeenLastCalledWith("/repo/one", "a.ts", "modified", undefined);
   });
 
   it("git.stageFile falls back to ctx.activeWorktreePath", async () => {

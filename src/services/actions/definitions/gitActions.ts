@@ -297,7 +297,10 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
         offset,
         cursor,
         limit: rawLimit,
-        ...merged
+        worktreeId,
+        worktreePath,
+        cwd,
+        ...filters
       } = (args ?? {}) as WorktreeLocationArgs & {
         search?: string;
         branch?: string;
@@ -305,7 +308,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
         cursor?: string;
         limit?: number;
       };
-      const resolvedCwd = requireWorktreePath(merged, ctx);
+      const resolvedCwd = requireWorktreePath({ worktreeId, worktreePath, cwd }, ctx);
       // This source pages by index, so its cursor IS the next offset — an
       // explicit `offset`/`skip` still wins for callers that page by hand.
       const cursorOffset = cursor !== undefined ? Number(cursor) : undefined;
@@ -316,7 +319,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       const skip = Math.max(Math.trunc(start) || 0, 0);
       const limit = clamp(rawLimit ?? GIT_LIST_COMMITS_LIMIT_DEFAULT, 1, GIT_LIST_COMMITS_LIMIT_MAX);
       const result = await window.electron.git.listCommits({
-        ...merged,
+        ...filters,
         cwd: resolvedCwd,
         skip,
         limit,

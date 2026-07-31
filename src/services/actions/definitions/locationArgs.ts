@@ -71,6 +71,15 @@ const projectPathField = z
 export interface WorktreeLocationArgs {
   worktreeId?: string;
   worktreePath?: string;
+  /**
+   * Legacy spellings. Present only when the schema was composed with
+   * {@link worktreeLocationShape} (a plain spread, no transform); the
+   * {@link withWorktreeLocation} builder folds them away before `run()` sees
+   * them. The resolver accepts either form, so both compositions behave alike.
+   */
+  cwd?: string;
+  rootPath?: string;
+  path?: string;
 }
 
 export interface ProjectLocationArgs {
@@ -98,6 +107,26 @@ type WorktreeLocationOptions = {
    */
   pagination?: PaginationOptions;
 };
+
+/**
+ * The worktree location fields on their own, for a schema that cannot use the
+ * {@link withWorktreeLocation} builder — typically one assembled by spreading
+ * into an existing `z.object({...})`. The advertised MCP surface is identical;
+ * only the schema-level alias collapse is skipped, so `run()` must go through
+ * {@link resolveWorktreeLocation} (which folds the aliases itself).
+ */
+export function worktreeLocationShape(
+  options: { legacy?: readonly LegacyWorktreePathAlias[] } = {}
+): Record<string, z.ZodTypeAny> {
+  const shape: Record<string, z.ZodTypeAny> = {
+    worktreeId: worktreeIdField,
+    worktreePath: worktreePathField,
+  };
+  for (const alias of options.legacy ?? []) {
+    shape[alias] = z.string().optional().describe(legacyAliasDescription("worktreePath"));
+  }
+  return shape;
+}
 
 /**
  * Collapse same-kind path aliases into `worktreePath`.
@@ -260,8 +289,13 @@ export function resolveWorktreeLocation(
     return { worktreeId: args.worktreeId, worktreePath: index?.get(args.worktreeId) };
   }
 
-  if (args?.worktreePath) {
-    const path = args.worktreePath;
+  // Fold the legacy spellings here too, so a schema composed by spreading
+  // `worktreeLocationShape` (no transform) resolves identically to one built by
+  // `withWorktreeLocation`.
+  const suppliedPath = args?.worktreePath ?? args?.cwd ?? args?.rootPath ?? args?.path;
+
+  if (suppliedPath) {
+    const path = suppliedPath;
     let matchedId: string | undefined;
     if (index) {
       for (const [id, candidate] of index) {
