@@ -134,8 +134,13 @@ const MAX_REPORTED_RESULT_ISSUES = 10;
  * MCP client, and the renderer log buffer, which `logs.getAll` serves as a tool
  * — so a leaked key would re-open the hole this validation exists to close.
  *
+ * There is deliberately no richer DEV-only variant either: `console.warn` is
+ * not local. `rendererConsoleCapture` forwards renderer console messages to
+ * the main logger, which buffers them before scrubbing, so a prettified error
+ * would reach `logs.getAll` too.
+ *
  * The action id plus code and depth locate the mismatch against a schema the
- * developer already has. The full prettified error is available in DEV only.
+ * developer already has.
  */
 function summarizeResultIssues(error: z.ZodError): string[] {
   const seen = new Set<string>();
@@ -542,13 +547,6 @@ export class ActionService {
       if (validatedResult && !validatedResult.success) {
         const issues = summarizeResultIssues(validatedResult.error);
         logWarn("Action result failed its own resultSchema", { actionId, issues });
-        if (import.meta.env.DEV) {
-          // Paths and values are safe on a developer's own machine, and the
-          // path is what actually locates the mismatch.
-          console.warn(
-            `[ActionService] ${actionId} result failed resultSchema:\n${z.prettifyError(validatedResult.error)}`
-          );
-        }
         const error: ActionError = {
           code: "RESULT_VALIDATION_ERROR",
           message: `Action "${actionId}" returned a result that does not match its declared schema`,
