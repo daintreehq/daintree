@@ -106,8 +106,10 @@ export function registerIntrospectionActions(
       // Sort before slicing: the registry is a Map, and re-registering a plugin
       // action (usePluginActions replaces any whose descriptor changed) moves it
       // to the end of insertion order. An offset walk over that order could
-      // repeat one entry and skip another. Same id tiebreak actions.search uses.
-      manifest.sort((a, b) => a.id.localeCompare(b.id));
+      // repeat one entry and skip another. Compared by code unit rather than
+      // localeCompare so page boundaries don't shift with the host locale —
+      // ids are opaque ASCII identifiers, so collation buys nothing here.
+      manifest.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       const page = manifest.slice(offset, offset + limit);
 
       return {

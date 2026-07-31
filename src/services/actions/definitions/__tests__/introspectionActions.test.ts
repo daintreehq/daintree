@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { z } from "zod";
+import type { z } from "zod";
+import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
 import type { ActionDefinition, ActionContext, ActionManifestEntry } from "@shared/types/actions";
 import { actionService } from "@/services/ActionService";
 
@@ -479,8 +480,11 @@ describe("actions.list", () => {
     expect(actionService.list).toHaveBeenCalledWith(stubCtx, { includeSchemas: false });
     expect(page.actions[0]!.inputSchema).toBeUndefined();
     expect(page.actions[0]!.outputSchema).toBeUndefined();
-    // Nothing schema-shaped reaches the MCP client on the wire either.
-    expect(JSON.stringify(page.actions)).not.toContain("Schema");
+    // Undefined-valued keys vanish on the wire, so nothing schema-shaped
+    // reaches the MCP client either.
+    const onTheWire = JSON.parse(JSON.stringify(page.actions[0])) as Record<string, unknown>;
+    expect(Object.keys(onTheWire)).not.toContain("inputSchema");
+    expect(Object.keys(onTheWire)).not.toContain("outputSchema");
   });
 
   it("caps an unfiltered listing and reports the full match count", async () => {
@@ -499,6 +503,18 @@ describe("actions.list", () => {
     );
     // And no caller can ask for a page big enough to hold the whole registry.
     expect(listArgsSchema().safeParse({ limit: source.length }).success).toBe(false);
+  });
+
+  it("caps pages well below the size of the real action registry", async () => {
+    // #11529 was one call returning the whole manifest, so pin the cap against
+    // the actual registry instead of copying the max out of the source: no
+    // matter what the limit is, a single page must not be able to carry the
+    // whole surface, or even a large fraction of it.
+    const schema = listArgsSchema();
+    const registrySize = BUILT_IN_ACTION_IDS.length;
+
+    expect(schema.safeParse({ limit: registrySize }).success).toBe(false);
+    expect(schema.safeParse({ limit: Math.ceil(registrySize / 3) }).success).toBe(false);
   });
 
   it("cannot be asked for an unbounded page", async () => {
