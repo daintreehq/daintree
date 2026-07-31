@@ -77,7 +77,6 @@ const storeState = vi.hoisted(() => ({
     enabled: true,
     port: 0,
     apiKey: "",
-    fullToolSurface: false,
     auditEnabled: true,
     auditMaxRecords: 500,
   },
@@ -492,7 +491,6 @@ describe("McpServerService", () => {
       enabled: true,
       port: 0,
       apiKey: "",
-      fullToolSurface: false,
       auditEnabled: true,
       auditMaxRecords: 500,
     };
@@ -1166,7 +1164,9 @@ describe("McpServerService", () => {
     expect(webContents.send).not.toHaveBeenCalled();
   });
 
-  it("hides non-allowlisted tools by default (curated MCP surface)", async () => {
+  // The curated allowlist is the only external surface — nothing widens it
+  // (#10701, #11537). Non-allowlisted and restricted entries both stay off.
+  it("hides non-allowlisted and restricted tools (curated MCP surface)", async () => {
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
@@ -1179,35 +1179,6 @@ describe("McpServerService", () => {
           id: "panel.gridLayout.setStrategy" as ActionId,
           title: "Set grid layout",
           description: "UI plumbing — should not appear in curated surface",
-        }),
-      ],
-    });
-
-    await service.start(window);
-    const { client, transport } = await connectClient(service.currentPort!);
-    transports.push(transport);
-
-    const result = await client.listTools();
-    const ids = result.tools.map((tool) => tool.name);
-
-    expect(ids).toContain("actions.list");
-    expect(ids).not.toContain("panel.gridLayout.setStrategy");
-  });
-
-  it("keeps non-allowlisted tools off the surface even when fullToolSurface is enabled (#10701)", async () => {
-    storeState.mcpServer.fullToolSurface = true;
-    const { window } = createMockWindow({
-      getManifest: () => [
-        createManifestEntry({
-          id: "actions.list" as ActionId,
-          title: "List Actions",
-          description: "Read the action registry",
-          kind: "query",
-        }),
-        createManifestEntry({
-          id: "panel.gridLayout.setStrategy" as ActionId,
-          title: "Set grid layout",
-          description: "Sensitive UI plumbing — not in the curated allowlist",
         }),
         createManifestEntry({
           id: "internal.dangerous" as ActionId,
@@ -1225,16 +1196,12 @@ describe("McpServerService", () => {
     const result = await client.listTools();
     const ids = result.tools.map((tool) => tool.name);
 
-    // fullToolSurface lifts the floor through the curated full-surface allowlist;
-    // it does not bypass it. Allowlisted tools stay reachable; non-allowlisted
-    // and restricted tools stay hidden.
     expect(ids).toContain("actions.list");
     expect(ids).not.toContain("panel.gridLayout.setStrategy");
     expect(ids).not.toContain("internal.dangerous");
   });
 
-  it("denies dispatch of non-allowlisted tools even with fullToolSurface enabled (#10701)", async () => {
-    storeState.mcpServer.fullToolSurface = true;
+  it("denies dispatch of non-allowlisted tools for the external tier (#10701)", async () => {
     const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
       ok: true,
       result: { dispatched: payload.actionId },
@@ -1265,33 +1232,6 @@ describe("McpServerService", () => {
     expect(result.content[0].text).toContain("TIER_NOT_PERMITTED");
     expect(result.content[0].text).toContain("panel.gridLayout.setStrategy");
     expect(dispatchMock).not.toHaveBeenCalled();
-  });
-
-  it("treats non-true fullToolSurface values as curated (fail-closed)", async () => {
-    (storeState.mcpServer as { fullToolSurface: unknown }).fullToolSurface = "false";
-    const { window } = createMockWindow({
-      getManifest: () => [
-        createManifestEntry({
-          id: "actions.list" as ActionId,
-          title: "List Actions",
-          description: "Read the action registry",
-          kind: "query",
-        }),
-        createManifestEntry({
-          id: "panel.gridLayout.setStrategy" as ActionId,
-          title: "Set grid layout",
-          description: "UI plumbing",
-        }),
-      ],
-    });
-
-    await service.start(window);
-    const { client, transport } = await connectClient(service.currentPort!);
-    transports.push(transport);
-
-    const ids = (await client.listTools()).tools.map((tool) => tool.name);
-    expect(ids).toContain("actions.list");
-    expect(ids).not.toContain("panel.gridLayout.setStrategy");
   });
 
   it("denies non-allowlisted actions for the external tier (dispatch never reached)", async () => {

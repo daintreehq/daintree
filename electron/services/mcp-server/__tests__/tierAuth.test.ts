@@ -23,7 +23,7 @@ import {
   resolveTokenTier,
   shouldExposeTool,
 } from "../tierAuth.js";
-import { MCP_FULL_TOOL_SURFACE_ALLOWLIST, TIER_ALLOWLISTS } from "../shared.js";
+import { TIER_ALLOWLISTS } from "../shared.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
@@ -301,54 +301,65 @@ function makeEntry(overrides: Partial<ActionManifestEntry> = {}): ActionManifest
 describe("shouldExposeTool", () => {
   it("exposes core entries when tier-permitted", () => {
     const entry = makeEntry({ id: "actions.list", mcpVisibility: "core" });
-    expect(shouldExposeTool(entry, "workbench", false)).toBe(true);
+    expect(shouldExposeTool(entry, "workbench")).toBe(true);
   });
 
   it("excludes discoverable entries from tools/list", () => {
     const entry = makeEntry({ id: "actions.list", mcpVisibility: "discoverable" });
-    expect(shouldExposeTool(entry, "workbench", false)).toBe(false);
+    expect(shouldExposeTool(entry, "workbench")).toBe(false);
   });
 
   it("excludes hidden entries from tools/list", () => {
     const entry = makeEntry({ id: "actions.list", mcpVisibility: "hidden" });
-    expect(shouldExposeTool(entry, "workbench", false)).toBe(false);
+    expect(shouldExposeTool(entry, "workbench")).toBe(false);
   });
 
   it("exposes unclassified entries (no mcpVisibility) for back-compat", () => {
     const entry = makeEntry({ id: "actions.list" });
-    expect(shouldExposeTool(entry, "workbench", false)).toBe(true);
+    expect(shouldExposeTool(entry, "workbench")).toBe(true);
   });
 
   it("still excludes core entries outside the tier allowlist (tier is the authority gate)", () => {
     const entry = makeEntry({ id: "git.push", mcpVisibility: "core" });
-    expect(shouldExposeTool(entry, "workbench", false)).toBe(false);
-    expect(shouldExposeTool(entry, "system", false)).toBe(true);
+    expect(shouldExposeTool(entry, "workbench")).toBe(false);
+    expect(shouldExposeTool(entry, "system")).toBe(true);
   });
 
   it("still excludes restricted-danger tools regardless of visibility", () => {
     const entry = makeEntry({ id: "actions.list", mcpVisibility: "core", danger: "restricted" });
-    expect(shouldExposeTool(entry, "workbench", false)).toBe(false);
+    expect(shouldExposeTool(entry, "workbench")).toBe(false);
   });
 
-  it("does not expose discoverable entries in external tier even with fullToolSurface (visibility gate precedes fullToolSurface)", () => {
-    const entry = makeEntry({ id: "actions.search", mcpVisibility: "discoverable" });
-    expect(shouldExposeTool(entry, "external", true)).toBe(false);
-  });
+  // The metadata filters are advertisement-only and layer on top of the tier
+  // floor: an id the external tier *does* permit must still be withheld from
+  // tools/list when its manifest entry opts out. Guards against a refactor that
+  // reorders the gates so membership short-circuits the visibility checks.
+  it.each(["hidden", "discoverable"] as const)(
+    "withholds an external-allowlisted tool marked %s",
+    (mcpVisibility) => {
+      const entry = makeEntry({ id: "actions.search", mcpVisibility });
+      expect(TIER_ALLOWLISTS.external.has(entry.id)).toBe(true);
+      expect(shouldExposeTool(entry, "external")).toBe(false);
+    }
+  );
 
-  it("still excludes hidden entries even with fullToolSurface", () => {
-    const entry = makeEntry({ id: "actions.search", mcpVisibility: "hidden" });
-    expect(shouldExposeTool(entry, "external", true)).toBe(false);
+  it("withholds an external-allowlisted tool marked restricted", () => {
+    const entry = makeEntry({ id: "actions.search", danger: "restricted" });
+    expect(TIER_ALLOWLISTS.external.has(entry.id)).toBe(true);
+    expect(shouldExposeTool(entry, "external")).toBe(false);
   });
 });
 
-// #10701: fullToolSurface must route through the curated full-surface allowlist
-// (MCP_FULL_TOOL_SURFACE_ALLOWLIST), not bypass the allowlist and trust the
-// author-set `danger` field. Sensitive side-effecting actions that are absent
-// from the allowlist must stay blocked even when fullToolSurface is on, and the
-// gate must agree across exposure (shouldExposeTool) and dispatch
+// #10701 / #11537: the curated `MCP_TOOL_ALLOWLIST` is the ONLY tool surface an
+// external (api-key) caller can reach — there is no opt-in that lifts the floor.
+// `fullToolSurface` used to short-circuit both gates and trust the author-set
+// `danger` field as the ceiling, which exposed 335 of 426 actions; it was later
+// defanged into an empty-add-on union and removed entirely in #11537. Sensitive
+// side-effecting actions absent from the allowlist must stay blocked, and the
+// gates must agree across exposure (shouldExposeTool) and dispatch
 // (isTierPermitted) — a divergence would advertise a tool the dispatcher then
 // rejects, or vice versa (#7155).
-describe("fullToolSurface allowlist invariants (#10701)", () => {
+describe("external tool surface invariants (#10701, #11537)", () => {
   const builtInIds = new Set<string>(BUILT_IN_ACTION_IDS);
 
   // Real, currently-shipping danger:"safe" actions with genuine side effects
@@ -373,54 +384,41 @@ describe("fullToolSurface allowlist invariants (#10701)", () => {
   });
 
   it.each(SENSITIVE_NON_ALLOWLISTED)(
-    "does not expose sensitive non-allowlisted action %s even with fullToolSurface",
+    "does not expose sensitive non-allowlisted action %s to the external tier",
     (actionId) => {
       const entry = makeEntry({ id: actionId, danger: "safe" });
-      expect(shouldExposeTool(entry, "external", true)).toBe(false);
+      expect(shouldExposeTool(entry, "external")).toBe(false);
     }
   );
 
   it.each(SENSITIVE_NON_ALLOWLISTED)(
-    "does not permit dispatch of sensitive non-allowlisted action %s even with fullToolSurface",
+    "does not permit dispatch of sensitive non-allowlisted action %s to the external tier",
     (actionId) => {
-      expect(isTierPermitted("external", actionId, true)).toBe(false);
+      expect(isTierPermitted("external", actionId)).toBe(false);
     }
   );
 
   it("exposure and dispatch gates agree for a sensitive non-allowlisted action", () => {
     const entry = makeEntry({ id: "system.openExternal", danger: "safe" });
-    expect(shouldExposeTool(entry, "external", true)).toBe(
-      isTierPermitted("external", "system.openExternal", true)
+    expect(shouldExposeTool(entry, "external")).toBe(
+      isTierPermitted("external", "system.openExternal")
     );
   });
 
-  it("still reaches curated-allowlist tools with fullToolSurface on", () => {
+  it("still reaches curated-allowlist tools", () => {
     const entry = makeEntry({ id: "actions.list" });
-    expect(shouldExposeTool(entry, "external", true)).toBe(true);
-    expect(isTierPermitted("external", "actions.list", true)).toBe(true);
+    expect(shouldExposeTool(entry, "external")).toBe(true);
+    expect(isTierPermitted("external", "actions.list")).toBe(true);
   });
 
-  // The full surface is a strict *superset* of the curated external allowlist:
-  // fullToolSurface can only ever widen, never narrow. This guards against a
-  // future edit that makes the opt-in surface smaller than the default
-  // external surface (which would silently revoke tools when the flag is on).
-  it("is a superset of the curated external allowlist", () => {
+  // Nothing in the curated allowlist may be withheld by the metadata filters
+  // when the manifest entry carries no opt-out. Catches an over-broad new early
+  // return in shouldExposeTool silently shrinking the advertised surface below
+  // what the dispatcher accepts.
+  it("advertises every curated-allowlist id whose manifest entry is unclassified", () => {
     for (const id of TIER_ALLOWLISTS.external) {
-      expect(MCP_FULL_TOOL_SURFACE_ALLOWLIST.has(id)).toBe(true);
+      expect(shouldExposeTool(makeEntry({ id }), "external"), id).toBe(true);
     }
-  });
-
-  // fullToolSurface=false must fall through to the plain external allowlist,
-  // independent of the full-surface set — so the two paths stay distinct even
-  // once the add-on seam is non-empty.
-  it("ignores the full-surface add-ons when fullToolSurface is off", () => {
-    const entry = makeEntry({ id: "actions.list" });
-    expect(shouldExposeTool(entry, "external", false)).toBe(
-      TIER_ALLOWLISTS.external.has("actions.list")
-    );
-    expect(isTierPermitted("external", "actions.list", false)).toBe(
-      TIER_ALLOWLISTS.external.has("actions.list")
-    );
   });
 });
 
@@ -519,17 +517,17 @@ describe("help-session tier policy (#10640)", () => {
   it.each(ASSISTANT_REQUIRED_TOOLS)(
     "permits the assistant's required tool %s at the action tier",
     (toolId) => {
-      expect(isTierPermitted("action", toolId, false)).toBe(true);
+      expect(isTierPermitted("action", toolId)).toBe(true);
     }
   );
 
   it.each(HIGH_BLAST_RADIUS_TOOLS)(
     "withholds high-blast-radius tool %s at the action tier (requires a grant)",
     (toolId) => {
-      expect(isTierPermitted("action", toolId, false)).toBe(false);
+      expect(isTierPermitted("action", toolId)).toBe(false);
       // Sanity check: the tool exists in the model and IS reachable one tier up,
       // so the `false` above is a real tier boundary, not a typo'd action id.
-      expect(isTierPermitted("system", toolId, false)).toBe(true);
+      expect(isTierPermitted("system", toolId)).toBe(true);
     }
   );
 
@@ -538,7 +536,7 @@ describe("help-session tier policy (#10640)", () => {
     // `action`: on `external` (the api-key fallback) these run subject only to
     // the confirm gate, with no tier floor in front of them.
     for (const toolId of ["git.push", "git.commit", "worktree.delete"]) {
-      expect(isTierPermitted("external", toolId, false)).toBe(true);
+      expect(isTierPermitted("external", toolId)).toBe(true);
     }
   });
 });
@@ -554,15 +552,15 @@ describe("narrow agent discovery tier reachability", () => {
     "permits %s at every tier",
     (toolId) => {
       for (const tier of ["workbench", "action", "system", "external"] as const) {
-        expect(isTierPermitted(tier, toolId, false)).toBe(true);
+        expect(isTierPermitted(tier, toolId)).toBe(true);
       }
     }
   );
 
   it("keeps the broad agentSettings.get off the external tier so the narrow alternative is the only external path", () => {
-    expect(isTierPermitted("external", "agentSettings.get", false)).toBe(false);
+    expect(isTierPermitted("external", "agentSettings.get")).toBe(false);
     // Sanity check the contrast is real, not a typo'd id: agentSettings.get IS
     // reachable for the trusted in-app workbench session.
-    expect(isTierPermitted("workbench", "agentSettings.get", false)).toBe(true);
+    expect(isTierPermitted("workbench", "agentSettings.get")).toBe(true);
   });
 });

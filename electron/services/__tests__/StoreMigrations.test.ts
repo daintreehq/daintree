@@ -70,6 +70,7 @@ import { migration010 } from "../migrations/010-add-working-pulse-setting.js";
 import { migration011 } from "../migrations/011-minimal-soundscape-defaults.js";
 import { migration018 } from "../migrations/018-archive-notes.js";
 import { migration019 } from "../migrations/019-remove-fleet-deck-open.js";
+import { migration026 } from "../migrations/026-remove-full-tool-surface.js";
 
 type MockStoreData = Record<string, unknown>;
 
@@ -949,6 +950,75 @@ describe("MigrationRunner", () => {
       expect("fleetDeckAlwaysPreview" in after).toBe(false);
       expect("fleetDeckQuorumThreshold" in after).toBe(false);
       expect(after.sidebarWidth).toBe(350);
+    });
+  });
+
+  describe("migration 026 — remove orphaned mcpServer.fullToolSurface", () => {
+    it.each([true, false, "false", null])(
+      "deletes the key when its value is %p and preserves siblings",
+      (fullToolSurface) => {
+        const store = createMockStore(storePath, {
+          mcpServer: {
+            enabled: true,
+            port: 45454,
+            fullToolSurface,
+            auditEnabled: true,
+            unknownFutureKey: "keep-me",
+          },
+        });
+        migration026.up(store as never);
+        const after = store.data.mcpServer as Record<string, unknown>;
+        expect("fullToolSurface" in after).toBe(false);
+        expect(after.enabled).toBe(true);
+        expect(after.port).toBe(45454);
+        expect(after.auditEnabled).toBe(true);
+        expect(after.unknownFutureKey).toBe("keep-me");
+      }
+    );
+
+    it("is a no-op when mcpServer has no fullToolSurface key", () => {
+      const store = createMockStore(storePath, {
+        mcpServer: { enabled: false, port: 45454 },
+      });
+      const before = store.data.mcpServer;
+      migration026.up(store as never);
+      expect(store.data.mcpServer).toBe(before);
+    });
+
+    it("skips when mcpServer is absent or not an object", () => {
+      const missing = createMockStore(storePath, {});
+      migration026.up(missing as never);
+      expect(missing.data.mcpServer).toBeUndefined();
+
+      const malformed = createMockStore(storePath, { mcpServer: "nonsense" });
+      migration026.up(malformed as never);
+      expect(malformed.data.mcpServer).toBe("nonsense");
+    });
+
+    it("is idempotent", () => {
+      const store = createMockStore(storePath, {
+        mcpServer: { enabled: true, fullToolSurface: true },
+      });
+      migration026.up(store as never);
+      const after1 = store.data.mcpServer;
+      migration026.up(store as never);
+      expect(store.data.mcpServer).toEqual(after1);
+    });
+
+    it("runs end-to-end through the full barrel from v25", async () => {
+      const store = createMockStore(storePath, {
+        _schemaVersion: 25,
+        mcpServer: { enabled: true, port: 45454, fullToolSurface: true, auditEnabled: true },
+      });
+      const runner = new MigrationRunner(store as never);
+
+      await runner.runMigrations(migrations);
+
+      expect(store.data._schemaVersion).toBe(migration026.version);
+      const after = store.data.mcpServer as Record<string, unknown>;
+      expect("fullToolSurface" in after).toBe(false);
+      expect(after.enabled).toBe(true);
+      expect(after.auditEnabled).toBe(true);
     });
   });
 

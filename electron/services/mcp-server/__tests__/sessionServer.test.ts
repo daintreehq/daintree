@@ -70,7 +70,6 @@ function fakeDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
     handleSkillsLoad: vi.fn(),
     appendAuditRecord: vi.fn(),
     getCachedManifest: vi.fn(() => null),
-    getFullToolSurface: vi.fn(() => false),
     ...overrides,
   };
 }
@@ -213,14 +212,13 @@ function makeManifestEntry(id: string): ActionManifestEntry {
 }
 
 describe("sessionServer tools/list handler", () => {
-  // tier "external" + fullToolSurface routes through MCP_FULL_TOOL_SURFACE_ALLOWLIST
-  // (#10701 — it no longer bypasses the allowlist). These manifest-plumbing tests
-  // therefore use allowlisted action ids so the live/cache/fail-closed paths are
-  // exercised independent of exposure gating.
-  function fullSurfaceDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
+  // The external tier is gated by the curated MCP_TOOL_ALLOWLIST and nothing
+  // widens it (#10701, #11537). These manifest-plumbing tests therefore use
+  // allowlisted action ids so the live/cache/fail-closed paths are exercised
+  // independent of exposure gating.
+  function externalDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
     return fakeDeps({
       sessionStore: fakeSessionStore("external"),
-      getFullToolSurface: vi.fn(() => true),
       ...overrides,
     });
   }
@@ -230,7 +228,7 @@ describe("sessionServer tools/list handler", () => {
   });
 
   it("returns the live manifest when requestManifest succeeds", async () => {
-    const deps = fullSurfaceDeps({
+    const deps = externalDeps({
       requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("actions.list")]),
       getCachedManifest: vi.fn(() => [makeManifestEntry("terminal.list")]),
     });
@@ -246,7 +244,7 @@ describe("sessionServer tools/list handler", () => {
   it("falls back to the cached manifest, warning with the error, when requestManifest rejects", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const rejection = new Error("Manifest request timed out");
-    const deps = fullSurfaceDeps({
+    const deps = externalDeps({
       requestManifest: vi.fn().mockRejectedValue(rejection),
       getCachedManifest: vi.fn(() => [makeManifestEntry("git.commit")]),
     });
@@ -263,7 +261,7 @@ describe("sessionServer tools/list handler", () => {
 
   it("applies the tier/visibility filter on the cached fallback path", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const deps = fullSurfaceDeps({
+    const deps = externalDeps({
       requestManifest: vi.fn().mockRejectedValue(new Error("Manifest request timed out")),
       getCachedManifest: vi.fn(() => [
         makeManifestEntry("actions.list"),
@@ -280,7 +278,7 @@ describe("sessionServer tools/list handler", () => {
   });
 
   it("fails closed with an McpError when requestManifest rejects and no cache exists", async () => {
-    const deps = fullSurfaceDeps({
+    const deps = externalDeps({
       requestManifest: vi.fn().mockRejectedValue(new Error("MCP renderer bridge unavailable")),
       getCachedManifest: vi.fn(() => null),
     });
@@ -300,7 +298,7 @@ describe("sessionServer tools/list handler", () => {
     // use the pre-await snapshot (null) and fail closed — never serve the
     // foreign cache (#7003 cross-window isolation).
     let firstCall = true;
-    const deps = fullSurfaceDeps({
+    const deps = externalDeps({
       requestManifest: vi.fn().mockRejectedValue(new Error("MCP renderer bridge destroyed")),
       getCachedManifest: vi.fn(() => {
         if (firstCall) {
@@ -320,7 +318,7 @@ describe("sessionServer tools/list handler", () => {
 
   it("treats an empty cached manifest as a valid zero-tool surface, not unavailable", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const deps = fullSurfaceDeps({
+    const deps = externalDeps({
       requestManifest: vi.fn().mockRejectedValue(new Error("MCP renderer bridge destroyed")),
       getCachedManifest: vi.fn(() => []),
     });
@@ -2528,13 +2526,11 @@ describe("structuredContent for terminal query actions (#10676)", () => {
     return (result as { content: { text: string }[] }).content[0].text;
   }
 
-  // tier "external" + getFullToolSurface routes through the full-surface allowlist
-  // (#10701); the ids exercised here (terminal.list/getStatus/getOutput) are all
-  // curated-allowlist members, so the call reaches dispatch.
+  // The ids exercised here (terminal.list/getStatus/getOutput) are all
+  // curated-allowlist members, so the external-tier call reaches dispatch.
   function deps(id: string, payload: unknown, withSchema = true): SessionServerDeps {
     return fakeDeps({
       sessionStore: fakeSessionStore("external"),
-      getFullToolSurface: vi.fn(() => true),
       requestManifest: vi
         .fn()
         .mockResolvedValue([withSchema ? entryWithOutputSchema(id) : makeManifestEntry(id)]),

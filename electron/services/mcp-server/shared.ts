@@ -329,6 +329,17 @@ export function unionSet(...sets: ReadonlySet<string>[]): ReadonlySet<string> {
   return out;
 }
 
+/**
+ * The one and only tool surface reachable by an `external` (api-key) session,
+ * and the sole seam for widening it — each entry is a deliberate, individually
+ * vetted addition. There is no opt-in that lifts this floor: a `fullToolSurface`
+ * flag used to short-circuit both tier gates and trust the author-set `danger` /
+ * `mcpVisibility` fields as the ceiling, which exposed 335 of 426 actions to any
+ * api-key caller (#10701). The MCP spec is explicit that tool annotations are
+ * untrusted UX hints, not an access-control boundary; this server-side allowlist
+ * is the enforceable one. The flag was never reachable from the UI or IPC and
+ * was removed outright in #11537 rather than left dormant.
+ */
 const MCP_TOOL_ALLOWLIST_ENTRIES = [
   ACTIONS_LIST_TOOL,
   "actions.getContext",
@@ -449,34 +460,6 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
 ] as const satisfies readonly BuiltInActionId[];
 
 const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set(MCP_TOOL_ALLOWLIST_ENTRIES);
-
-/**
- * Additional tools exposed ONLY to an `external` session that has opted into
- * `fullToolSurface`, on top of {@link MCP_TOOL_ALLOWLIST}. This is the explicit,
- * fail-closed seam for widening the api-key surface: `fullToolSurface` is a
- * *floor-lifting* opt-in, never a bypass. Previously the flag short-circuited
- * the allowlist entirely and let an external client reach any action that
- * wasn't `danger: "restricted"` / `mcpVisibility: "hidden"` — trusting the
- * author-set `danger` field as a security ceiling. The MCP spec is explicit
- * that tool annotations (and by extension a self-declared danger rating) are
- * untrusted UX hints, not an access-control boundary; the enforceable boundary
- * is this server-side allowlist (#10701). Each future addition must be a
- * deliberate, individually-vetted entry here — empty by default so that newly
- * added safe-classified actions never silently leak to api-key callers.
- */
-const MCP_FULL_TOOL_SURFACE_ADDON_ENTRIES = [] as const satisfies readonly BuiltInActionId[];
-
-/**
- * The complete tool surface reachable by an `external` session with
- * `fullToolSurface` enabled: the curated external allowlist plus the vetted
- * add-on set above. Always a *superset* of {@link MCP_TOOL_ALLOWLIST} — the
- * opt-in can only widen, never narrow, so it can never accidentally make the
- * full surface smaller than the default external surface.
- */
-export const MCP_FULL_TOOL_SURFACE_ALLOWLIST: ReadonlySet<string> = unionSet(
-  MCP_TOOL_ALLOWLIST,
-  new Set<string>(MCP_FULL_TOOL_SURFACE_ADDON_ENTRIES)
-);
 
 export const TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
   workbench: WORKBENCH_TOOLS,
