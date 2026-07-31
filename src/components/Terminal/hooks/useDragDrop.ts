@@ -1,10 +1,10 @@
 import { useCallback, useRef, useState } from "react";
 import type { EditorView } from "@codemirror/view";
 import { IMAGE_EXTENSIONS } from "../useTerminalFileTransfer";
-import { formatAtFileToken } from "../hybridInputParsing";
+import { formatAtFileTokenForCwd } from "../hybridInputParsing";
 import { addImageChip, addFileDropChip } from "../inputEditorExtensions";
 
-export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>) {
+export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>, cwd: string) {
   const dragDepthRef = useRef(0);
   const [isDragOverFiles, setIsDragOverFiles] = useState(false);
 
@@ -87,12 +87,15 @@ export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>) {
               })
             );
           } else {
-            const token = formatAtFileToken(entry.filePath);
+            const token = formatAtFileTokenForCwd(entry.filePath, cwd);
             insertText += token + " ";
             fileEffects.push(
               addFileDropChip.of({
                 from,
                 to: from + token.length,
+                // Chip metadata stays absolute: it feeds the hover tooltip and
+                // the remove-by-path lookup, neither of which has a cwd to
+                // resolve against.
                 filePath: entry.filePath,
                 fileName: entry.fileName,
                 fileSize: entry.fileSize,
@@ -110,7 +113,7 @@ export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>) {
         // Editor may have been destroyed
       }
     },
-    [editorViewRef]
+    [editorViewRef, cwd]
   );
 
   return { handleDragEnter, handleDragOver, handleDragLeave, handleDrop, isDragOverFiles };

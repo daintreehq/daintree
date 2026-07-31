@@ -12,6 +12,8 @@ import {
   getAllAtDiffTokens,
   getAllAtTerminalTokens,
   getAllAtSelectionTokens,
+  formatAtFileToken,
+  formatAtFileTokenForCwd,
 } from "../hybridInputParsing";
 
 const ALL: ReadonlySet<CompletionTrigger> = new Set(["/", "$", "@"]);
@@ -380,5 +382,57 @@ describe("getAllAtSelectionTokens", () => {
   it("returns empty for text with no selection tokens", () => {
     const tokens = getAllAtSelectionTokens("just plain text");
     expect(tokens).toHaveLength(0);
+  });
+});
+
+describe("formatAtFileTokenForCwd", () => {
+  const cwd = "/Users/greg/Projects/daintree";
+
+  // The point of the helper: an OS-absolute path (drop/paste) and the
+  // cwd-relative hit autocomplete's file search returns for the same file have
+  // to land on the identical token. Comparing the two producers rather than a
+  // copied literal is what makes this a real invariant.
+  it("agrees with the autocomplete producer for a file under cwd", () => {
+    expect(formatAtFileTokenForCwd(`${cwd}/src/App.tsx`, cwd)).toBe(
+      formatAtFileToken("src/App.tsx")
+    );
+  });
+
+  it("keeps the absolute form for a file outside cwd", () => {
+    const outside = "/etc/hosts";
+    expect(formatAtFileTokenForCwd(outside, cwd)).toBe(formatAtFileToken(outside));
+  });
+
+  // A sibling whose name merely extends the root is outside it — the mangling
+  // a bare `startsWith` would produce (`-sandbox/src/App.tsx`) is the exact
+  // failure `toWorktreeRelative` exists to prevent.
+  it("treats a sibling directory sharing the cwd prefix as outside", () => {
+    const sibling = `${cwd}-sandbox/src/App.tsx`;
+    expect(formatAtFileTokenForCwd(sibling, cwd)).toBe(formatAtFileToken(sibling));
+  });
+
+  it("falls back to absolute when there is no cwd to relativize against", () => {
+    const absolute = `${cwd}/src/App.tsx`;
+    expect(formatAtFileTokenForCwd(absolute, "")).toBe(formatAtFileToken(absolute));
+  });
+
+  // Relativizing must not cost the quoting a whitespace-bearing path needs, and
+  // the quotes belong around the emitted (relative) path, not the original.
+  it("quotes the relative path when the file name carries whitespace", () => {
+    const token = formatAtFileTokenForCwd(`${cwd}/src/my notes.md`, cwd);
+    expect(token).toBe(formatAtFileToken("src/my notes.md"));
+    expect(token).not.toContain(cwd);
+  });
+
+  // Windows hands back backslashes; autocomplete's results are posix. Both
+  // producers have to spell the same file the same way.
+  it("emits forward slashes for a Windows-style path and cwd", () => {
+    expect(formatAtFileTokenForCwd("C:\\repo\\src\\App.tsx", "C:\\repo")).toBe(
+      formatAtFileToken("src/App.tsx")
+    );
+  });
+
+  it("leaves an already-relative path alone", () => {
+    expect(formatAtFileTokenForCwd("src/App.tsx", cwd)).toBe(formatAtFileToken("src/App.tsx"));
   });
 });

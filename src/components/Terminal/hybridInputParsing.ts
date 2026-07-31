@@ -1,4 +1,5 @@
 import type { CompletionTrigger } from "@shared/types";
+import { toWorktreeRelative } from "@shared/utils/path";
 
 /**
  * One completion menu is open at a time, keyed by the trigger char that opened
@@ -242,6 +243,23 @@ export function getAllAtSelectionTokens(text: string): AtSelectionToken[] {
 export function formatAtFileToken(file: string): string {
   const needsQuotes = /\s/.test(file);
   return `@${needsQuotes ? `"${file}"` : file}`;
+}
+
+/**
+ * The `@file` token for a path the OS handed us absolute — drop and paste, as
+ * opposed to autocomplete, whose file search already returns cwd-relative hits.
+ * Relative is the form the agent can actually use: it costs no tokens on a
+ * prefix the agent already knows, survives a prompt being replayed in another
+ * worktree, and is what a fleet broadcast needs to mean the sibling worktree's
+ * copy of the file rather than this one's.
+ *
+ * `toWorktreeRelative` is the whole policy: it hands back the original path
+ * untouched when the file sits outside `cwd` (or when `cwd` is empty), so an
+ * out-of-tree drop keeps the absolute form that is the only thing that resolves
+ * for it.
+ */
+export function formatAtFileTokenForCwd(file: string, cwd: string): string {
+  return formatAtFileToken(toWorktreeRelative(file, cwd));
 }
 
 export interface SlashCommandToken {
