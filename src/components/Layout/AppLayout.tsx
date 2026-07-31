@@ -188,7 +188,11 @@ export function AppLayout({
   // The view itself is mounted in App.tsx (it carries deep-link props), so
   // AppLayout only needs the inert coordination, not the portal.
   const isPluginManagerOpen = useOverlayOpen("plugin-manager");
-  const chromeInert = isThemeBrowserOpen || isPluginManagerOpen;
+  // Pilot is the same shape: a full-window overlay that must render over the
+  // toolbar and make the chrome behind it inert, or keystrokes keep reaching
+  // the terminal it is covering.
+  const isPilotOpen = useOverlayOpen("pilot");
+  const chromeInert = isThemeBrowserOpen || isPluginManagerOpen || isPilotOpen;
   const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
   // Every workspace kind has something for the sidebar to hold — a scratch and
   // a folder opened without git each have their own root — so the gate is "is

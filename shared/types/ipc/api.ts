@@ -766,12 +766,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     locate(projectId: string): Promise<Project | null>;
   };
-  fleet: {
+  /**
+   * Fleet-wide run snapshot. `getSnapshot` is inherited from the generated
+   * namespace rather than restated, so the pull signature can't drift from
+   * codegen; only the push subscription is declared by hand.
+   */
+  fleet: GeneratedElectronAPI["fleet"] & {
     /**
      * Subscribe to the fleet-wide run snapshot: every agent run across every
      * project and scratch, including workspaces whose renderer view has been
      * evicted. Pushed on a 5s aligned poll and debounced on agent state
-     * changes, with unchanged payloads suppressed.
+     * changes, with unchanged payloads suppressed — so a subscription alone
+     * never guarantees a first payload. Pair it with `getSnapshot` on mount.
      */
     onSnapshotUpdated(callback: (snapshot: import("./fleet.js").FleetSnapshot) => void): () => void;
   };

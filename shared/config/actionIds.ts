@@ -241,6 +241,7 @@ export const BUILT_IN_ACTION_IDS = [
   "forge.editPR",
 
   // -- projectActions --
+  "pilot.toggle",
   "project.getAll",
   "project.getCurrent",
   "project.add",

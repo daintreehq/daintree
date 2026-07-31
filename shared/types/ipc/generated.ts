@@ -365,6 +365,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./fileWatch.js").FileWatchFingerprintPayload];
     result: import("./fileWatch.js").FileWatchFingerprintResult;
   };
+  "fleet:get-snapshot": {
+    args: [];
+    result: import("./fleet.js").FleetSnapshot | null;
+  };
   "forge-audit:clear-log": {
     args: [];
     result: void;

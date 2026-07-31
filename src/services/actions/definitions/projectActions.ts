@@ -5,6 +5,7 @@ import { pickAgentVisibleProjectSettings } from "@shared/types";
 import { z } from "zod";
 import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
+import { usePilotStore } from "@/store/pilotStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { notify, EVENT_KIND_TO_SETTING_KEY, EVENT_KIND_LABEL } from "@/lib/notify";
 import type { NotificationEventKind } from "@/lib/notify";
@@ -82,6 +83,21 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     nonRepeatable: true,
     run: async () => {
       callbacks.onOpenProjectSwitcherPalette();
+    },
+  }));
+
+  actions.set("pilot.toggle", () => ({
+    id: "pilot.toggle",
+    title: "Toggle fleet overview",
+    description:
+      "Show every agent run across all projects and scratches, ordered by what needs you first",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    nonRepeatable: true,
+    run: async () => {
+      usePilotStore.getState().toggle();
     },
   }));
 

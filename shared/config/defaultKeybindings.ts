@@ -865,6 +865,16 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Worktrees",
   },
   {
+    // One step further out than the project switcher it sits beside: the
+    // switcher picks a project, this shows every project at once.
+    actionId: "pilot.toggle",
+    combo: "Cmd+Alt+O",
+    scope: "global",
+    priority: 0,
+    description: "Toggle fleet overview",
+    category: "Project",
+  },
+  {
     actionId: "project.switcherPalette",
     combo: "Cmd+Alt+P",
     scope: "global",

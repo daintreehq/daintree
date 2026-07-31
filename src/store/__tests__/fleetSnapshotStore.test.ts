@@ -11,10 +11,13 @@ const onSnapshotUpdatedMock = vi.fn((cb: SnapshotCallback) => {
   return unsubMock;
 });
 
+const getSnapshotMock = vi.fn(async (): Promise<FleetSnapshot | null> => null);
+
 vi.stubGlobal("window", {
   electron: {
     fleet: {
       onSnapshotUpdated: onSnapshotUpdatedMock,
+      getSnapshot: getSnapshotMock,
     },
   },
 });
@@ -24,8 +27,8 @@ const { useFleetSnapshotStore, setupFleetSnapshotListeners, cleanupFleetSnapshot
 
 const NOW = 1_830_001;
 
-function snapshot(runs: FleetSnapshot["runs"] = []): FleetSnapshot {
-  return { runs, changedAt: NOW };
+function snapshot(runs: FleetSnapshot["runs"] = [], changedAt = NOW): FleetSnapshot {
+  return { runs, changedAt };
 }
 
 function makeRun(runId: string): FleetSnapshot["runs"][number] {
@@ -37,6 +40,7 @@ describe("fleetSnapshotStore", () => {
     cleanupFleetSnapshotListeners();
     useFleetSnapshotStore.setState({ snapshot: null });
     vi.clearAllMocks();
+    getSnapshotMock.mockResolvedValue(null);
     capturedCallback = null;
   });
 
@@ -76,6 +80,55 @@ describe("fleetSnapshotStore", () => {
     capturedCallback!(snapshot([]));
 
     expect(useFleetSnapshotStore.getState().snapshot!.runs).toEqual([]);
+  });
+
+  it("pulls a snapshot on setup so a dropped push can't leave the view blank", async () => {
+    // Main suppresses unchanged broadcasts, so a view that only subscribes can
+    // wait forever — and waiting/blocked/awaiting-review are exactly the states
+    // that stop changing.
+    getSnapshotMock.mockResolvedValue(snapshot([makeRun("a")]));
+    setupFleetSnapshotListeners();
+    await vi.waitFor(() => expect(useFleetSnapshotStore.getState().snapshot).not.toBeNull());
+
+    expect(useFleetSnapshotStore.getState().snapshot!.runs).toHaveLength(1);
+  });
+
+  it("subscribes before pulling so no push can slip through the gap", () => {
+    setupFleetSnapshotListeners();
+
+    expect(onSnapshotUpdatedMock).toHaveBeenCalled();
+    expect(onSnapshotUpdatedMock.mock.invocationCallOrder[0]!).toBeLessThan(
+      getSnapshotMock.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("lets a newer push win over a slower pull that resolves after it", async () => {
+    let releasePull: (v: FleetSnapshot | null) => void = () => {};
+    getSnapshotMock.mockReturnValue(new Promise((r) => (releasePull = r)));
+    setupFleetSnapshotListeners();
+
+    capturedCallback!(snapshot([makeRun("fresh")], NOW + 10_000));
+    releasePull(snapshot([makeRun("stale")], NOW));
+    await vi.waitFor(() => expect(getSnapshotMock.mock.results[0]!.value).resolves.toBeDefined());
+
+    expect(useFleetSnapshotStore.getState().snapshot!.runs[0]!.runId).toBe("fresh");
+  });
+
+  it("keeps the store null when main has computed nothing yet", async () => {
+    getSnapshotMock.mockResolvedValue(null);
+    setupFleetSnapshotListeners();
+    await vi.waitFor(() => expect(getSnapshotMock).toHaveBeenCalled());
+
+    expect(useFleetSnapshotStore.getState().snapshot).toBeNull();
+  });
+
+  it("survives a failed hydrate and still applies later pushes", async () => {
+    getSnapshotMock.mockRejectedValue(new Error("ipc down"));
+    setupFleetSnapshotListeners();
+    await vi.waitFor(() => expect(getSnapshotMock).toHaveBeenCalled());
+
+    capturedCallback!(snapshot([makeRun("a")]));
+    expect(useFleetSnapshotStore.getState().snapshot!.runs).toHaveLength(1);
   });
 
   it("subscribes once across repeated setup calls", () => {

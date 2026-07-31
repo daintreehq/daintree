@@ -2992,6 +2992,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "title": "Toggle Portal",
   },
   {
+    "category": "project",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Show every agent run across all projects and scratches, ordered by what needs you first",
+    "examples": undefined,
+    "id": "pilot.toggle",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": false,
+    "title": "Toggle fleet overview",
+  },
+  {
     "category": "portal",
     "danger": "safe",
     "dangerRationale": undefined,

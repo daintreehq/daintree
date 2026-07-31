@@ -75,6 +75,7 @@ import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
+import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
 import { buildProjectHistoryPreloadBindings } from "./ipc/handlers/projectHistory.preload.js";
 import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRelocation.preload.js";
 import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabricSurface.preload.js";
@@ -1912,6 +1913,8 @@ function buildElectronApi(): ElectronAPI {
     // from main. Read-only and broadcast-only: main is the only process that
     // can see past a project view's own V8 context.
     fleet: {
+      ...buildFleetPreloadBindings(_unwrappingInvoke),
+
       onSnapshotUpdated: (
         callback: (snapshot: import("../shared/types/ipc/fleet.js").FleetSnapshot) => void
       ) => _typedOn(CHANNELS.FLEET_SNAPSHOT_UPDATED, callback),

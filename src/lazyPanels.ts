@@ -47,6 +47,11 @@ export const LazyWorktreeOverviewModal = lazy(() =>
   preloadWorktreeOverviewModal().then((m) => ({ default: m.WorktreeOverviewModal }))
 );
 
+export function preloadPilotView() {
+  return import("./components/Pilot/PilotView");
+}
+export const LazyPilotView = lazy(() => preloadPilotView().then((m) => ({ default: m.PilotView })));
+
 export function preloadQuickCreatePalette() {
   return import("./components/Worktree/QuickCreatePalette");
 }

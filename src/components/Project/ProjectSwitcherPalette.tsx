@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
+import { KbdChord } from "@/components/ui/Kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   ContextMenu,
@@ -78,6 +79,7 @@ import {
   type OtherProjectsSortMode,
 } from "@/lib/projectSort";
 import { useUIStore } from "@/store/uiStore";
+import { usePilotStore } from "@/store/pilotStore";
 import {
   useProjectSettingsStore,
   areProjectNotificationsMuted,
@@ -1243,11 +1245,16 @@ function ScratchSection({
 function ProjectSwitcherFooter({
   mode,
   isScratchSelected,
+  onOpenPilot,
 }: {
   mode?: ProjectSwitcherMode;
   isScratchSelected: boolean;
+  onOpenPilot: () => void;
 }) {
   const modifiers = useModifierKeys();
+  // Resolved, not hardcoded: the literal would be wrong on Windows/Linux and
+  // wrong for anyone who rebound or removed the binding.
+  const pilotShortcut = useEffectiveCombo("pilot.toggle");
 
   const hint =
     modifiers.meta && !isScratchSelected
@@ -1268,11 +1275,25 @@ function ProjectSwitcherFooter({
           </span>
         )}
       </div>
-      {!isScratchSelected && (
-        <span className="text-daintree-text/50">
-          <span>Right-click for more</span>
-        </span>
-      )}
+      <div className="flex items-center gap-3">
+        {/*
+          The switcher answers "which project", so the fleet-wide view belongs
+          beside it rather than inside its list: adding a row would put a
+          non-workspace entry into a listbox whose every other row is a
+          workspace, and into the arrow-key domain that selects one.
+        */}
+        <button
+          type="button"
+          onClick={onOpenPilot}
+          className="inline-flex items-center text-daintree-text/50 transition-colors duration-150 ease-out hover:text-daintree-text"
+          data-testid="project-switcher-open-pilot"
+          {...(pilotShortcut ? { "aria-keyshortcuts": pilotShortcut } : {})}
+        >
+          {pilotShortcut && <KbdChord shortcut={pilotShortcut} />}
+          <span className={pilotShortcut ? "ml-1.5" : undefined}>View everything</span>
+        </button>
+        {!isScratchSelected && <span className="text-daintree-text/50">Right-click for more</span>}
+      </div>
     </div>
   );
 }
@@ -1570,7 +1591,14 @@ function ProjectPaletteInner({
       )}
 
       <AppPaletteDialog.Footer>
-        <ProjectSwitcherFooter mode={mode} isScratchSelected={activeResult?.kind === "scratch"} />
+        <ProjectSwitcherFooter
+          mode={mode}
+          isScratchSelected={activeResult?.kind === "scratch"}
+          onOpenPilot={() => {
+            onClose();
+            usePilotStore.getState().open();
+          }}
+        />
       </AppPaletteDialog.Footer>
     </>
   );
