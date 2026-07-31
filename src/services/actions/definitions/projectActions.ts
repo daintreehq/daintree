@@ -1,6 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
-import type { ProjectSettings } from "@shared/types";
+import type { AgentVisibleProjectSettingsKey, ProjectSettings } from "@shared/types";
+import { pickAgentVisibleProjectSettings } from "@shared/types";
 import { z } from "zod";
 import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
@@ -9,6 +10,58 @@ import { notify, EVENT_KIND_TO_SETTING_KEY, EVENT_KIND_LABEL } from "@/lib/notif
 import type { NotificationEventKind } from "@/lib/notify";
 import { switchToLastProject } from "@/lib/projectHistoryNav";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+
+/**
+ * Wire shape of `project.getSettings`.
+ *
+ * Typing the shape as `Record<AgentVisibleProjectSettingsKey, z.ZodType>` is what keeps
+ * this honest: omitting a key classified `exposed`, or adding one that isn't, is a
+ * compile error, so the advertised schema cannot drift from
+ * `PROJECT_SETTINGS_AGENT_EXPOSURE`. The schema is documentation only —
+ * `ActionService.dispatch` never parses results — so the actual filtering is done by
+ * `pickAgentVisibleProjectSettings` in `run()`.
+ */
+const agentVisibleProjectSettingsShape: Record<AgentVisibleProjectSettingsKey, z.ZodType> = {
+  runCommands: z.array(
+    z.object({
+      id: z.string(),
+      // Only `id` and `command` are codec-guaranteed: `decode` in
+      // projectSettingsCodec admits any entry with those two as strings, and the
+      // projection copies through only the keys that are present. Advertising
+      // `name` as required would make a nameless persisted entry emit
+      // `structuredContent` that violates this schema.
+      name: z.string().optional(),
+      command: z.string(),
+      icon: z.string().optional(),
+      description: z.string().optional(),
+      preferredLocation: z.enum(["dock", "grid"]).optional(),
+      preferredAutoRestart: z.boolean().optional(),
+      isFrameworkDefault: z.boolean().optional(),
+    })
+  ),
+  excludedPaths: z.array(z.string()).optional(),
+  defaultWorktreeRecipeId: z.string().optional(),
+  devServerCommand: z.string().optional(),
+  devServerLoadTimeout: z.number().optional(),
+  turbopackEnabled: z.boolean().optional(),
+  copyTreeSettings: z.record(z.string(), z.unknown()).optional(),
+  branchPrefixMode: z.enum(["none", "username", "custom"]).optional(),
+  branchPrefixCustom: z.string().optional(),
+  forgeRemote: z.string().optional(),
+  forgeProviderOverride: z.string().nullable().optional(),
+  worktreePathPattern: z.string().optional(),
+  terminalSettings: z
+    .object({
+      shell: z.string().optional(),
+      shellArgs: z.array(z.string()).optional(),
+      defaultWorkingDirectory: z.string().optional(),
+      scrollbackLines: z.number().optional(),
+    })
+    .optional(),
+  notificationOverrides: z.record(z.string(), z.unknown()).optional(),
+  activeResourceEnvironment: z.string().optional(),
+  defaultWorktreeMode: z.string().optional(),
+};
 
 export function registerProjectActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("project.switcherPalette", () => ({
@@ -206,18 +259,26 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.getSettings",
     title: "Get Project Settings",
     description:
-      "Read a project's persisted settings (notification overrides, runner config, worktree path pattern, etc.). Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project's id. Returns the settings object as an open-ended key/value map. Errors when no projectId is given and no project is active.",
+      "Read the operational subset of a project's persisted settings (run commands, dev server command, worktree path pattern, branch prefix, forge remote, notification overrides, terminal overrides, etc.). Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project's id. Returns only that fixed field set: environment variables (including secure ones), the project icon SVG, resource environment definitions, access-control state (MCP tier, browser allow-list), and renderer-only UI preferences are deliberately omitted and cannot be read through this action. Errors when no projectId is given and no project is active.",
     category: "project",
     kind: "query",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string().optional() }).optional(),
-    resultSchema: z.object({}).catchall(z.unknown()),
+    resultSchema: z.object(agentVisibleProjectSettingsShape),
+    mcpOutputSchema: true,
     run: async (args: unknown, ctx: ActionContext) => {
       const { projectId } = (args ?? {}) as { projectId?: string };
       const resolvedProjectId = projectId ?? ctx.projectId;
       if (!resolvedProjectId) throw new Error("No active project");
-      return await projectClient.getSettings(resolvedProjectId);
+      const settings = await projectClient.getSettings(resolvedProjectId);
+      // Project down to the agent-safe field set before returning. This action is on
+      // every MCP tier's allowlist, and the settings payload carries decrypted secure
+      // env vars (ProjectSettingsManager resolves them) plus a 250KB icon blob.
+      // `resultSchema` cannot do this — dispatch never validates results — so the
+      // filtering has to happen here, on a fresh object (projectClient caches the value
+      // it returns and the renderer's settings UI legitimately needs the full payload).
+      return pickAgentVisibleProjectSettings(settings);
     },
   }));
 

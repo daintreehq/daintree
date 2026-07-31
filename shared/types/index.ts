@@ -82,7 +82,7 @@ export type {
 export type { BrowserHistory } from "./browser.js";
 
 // Project types
-export { isGitBackedProject } from "./project.js";
+export { isGitBackedProject, pickAgentVisibleProjectSettings } from "./project.js";
 export type {
   ProjectStatus,
   Project,
@@ -99,6 +99,8 @@ export type {
   RecipeNameCollision,
   RunCommand,
   ProjectSettings,
+  AgentVisibleProjectSettings,
+  AgentVisibleProjectSettingsKey,
   ProjectTerminalSettings,
   CopyTreeSettings,
   FleetSavedScope,
