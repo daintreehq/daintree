@@ -18,8 +18,11 @@ const forgeClientMock = vi.hoisted(() => ({
   requestReviewers: vi.fn(),
   validateToken: vi.fn(),
   getRepoStats: vi.fn(),
-  listIssues: vi.fn(),
-  listPRs: vi.fn(),
+  // Typed so `.mock.calls` reads back as a tuple: asserting on an untyped
+  // `vi.fn()`'s calls needs a cast per read, which regresses the
+  // no-unsafe-type-assertion lint ratchet.
+  listIssues: vi.fn<(cwd: string, opts: Record<string, unknown>) => Promise<unknown>>(),
+  listPRs: vi.fn<(cwd: string, opts: Record<string, unknown>) => Promise<unknown>>(),
   getIssue: vi.fn(),
   getCIStatus: vi.fn(),
   closePR: vi.fn(),
@@ -69,13 +72,15 @@ function setupActions() {
   };
 }
 
-async function runAction(
+// Generic in the result so callers name the shape they read as a type
+// argument rather than asserting on an `unknown` return.
+async function runAction<T = unknown>(
   id: string,
   args?: unknown,
   ctx?: Record<string, unknown>
-): Promise<unknown> {
+): Promise<T> {
   const def = setupActions()(id);
-  return def.run(args, (ctx ?? {}) as never);
+  return (await def.run(args, (ctx ?? {}) as never)) as T;
 }
 
 function setCurrentProject(project: { path?: string } | null) {
@@ -725,7 +730,7 @@ describe("forge.* query adversarial", () => {
       { state: "all", cursor: "c1" },
       { activeWorktreePath: "/repo" }
     );
-    const [, opts] = forgeClientMock.listPRs.mock.calls[0] as [string, Record<string, unknown>];
+    const [, opts] = forgeClientMock.listPRs.mock.calls[0];
     expect(opts).toMatchObject({ state: "all", cursor: "c1" });
   });
 
@@ -742,7 +747,7 @@ describe("forge.* query adversarial", () => {
       },
       { activeWorktreePath: "/repo" }
     );
-    const [, opts] = forgeClientMock.listIssues.mock.calls[0] as [string, Record<string, unknown>];
+    const [, opts] = forgeClientMock.listIssues.mock.calls[0];
     expect(opts).toMatchObject({
       search: "no:assignee -label:human-review",
       state: "open",
@@ -759,7 +764,7 @@ describe("forge.* query adversarial", () => {
       { perPage: 5, sort: "updated", direction: "asc" },
       { activeWorktreePath: "/repo" }
     );
-    const [, opts] = forgeClientMock.listPRs.mock.calls[0] as [string, Record<string, unknown>];
+    const [, opts] = forgeClientMock.listPRs.mock.calls[0];
     expect(opts).toMatchObject({ perPage: 5, sort: "updated", direction: "asc" });
   });
 
@@ -768,11 +773,8 @@ describe("forge.* query adversarial", () => {
     forgeClientMock.listPRs.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
     await runAction("forge.listIssues", { view: "full" }, { activeWorktreePath: "/repo" });
     await runAction("forge.listPRs", { view: "full" }, { activeWorktreePath: "/repo" });
-    const [, issueOpts] = forgeClientMock.listIssues.mock.calls[0] as [
-      string,
-      Record<string, unknown>,
-    ];
-    const [, prOpts] = forgeClientMock.listPRs.mock.calls[0] as [string, Record<string, unknown>];
+    const [, issueOpts] = forgeClientMock.listIssues.mock.calls[0];
+    const [, prOpts] = forgeClientMock.listPRs.mock.calls[0];
     expect(issueOpts).not.toHaveProperty("view");
     expect(prOpts).not.toHaveProperty("view");
   });
@@ -840,7 +842,7 @@ describe("forge list arg validation rejects rather than strips", () => {
     const def = setupActions()("forge.listIssues");
     await def.run(parsed.success ? parsed.data : args, { activeWorktreePath: "/repo" } as never);
 
-    const [, opts] = forgeClientMock.listIssues.mock.calls[0] as [string, Record<string, unknown>];
+    const [, opts] = forgeClientMock.listIssues.mock.calls[0];
     expect(opts).toMatchObject(args);
   });
 });
@@ -867,9 +869,11 @@ describe("forge list view projection", () => {
 
   it("summary keeps the fields needed to choose an item, including linkedPR", async () => {
     forgeClientMock.listIssues.mockResolvedValue(page);
-    const result = (await runAction("forge.listIssues", {}, { activeWorktreePath: "/repo" })) as {
-      items: Array<Record<string, unknown>>;
-    };
+    const result = await runAction<{ items: Array<Record<string, unknown>> }>(
+      "forge.listIssues",
+      {},
+      { activeWorktreePath: "/repo" }
+    );
     expect(result.items[0]).toMatchObject({
       number: 7,
       assignees: ["octocat"],
@@ -881,11 +885,11 @@ describe("forge list view projection", () => {
 
   it("summary carries the pagination envelope through untouched", async () => {
     forgeClientMock.listIssues.mockResolvedValue(page);
-    const result = (await runAction("forge.listIssues", {}, { activeWorktreePath: "/repo" })) as {
-      nextCursor: unknown;
-      hasMore: unknown;
-      totalCount: unknown;
-    };
+    const result = await runAction<{ nextCursor: unknown; hasMore: unknown; totalCount: unknown }>(
+      "forge.listIssues",
+      {},
+      { activeWorktreePath: "/repo" }
+    );
     expect(result.nextCursor).toBe("cur");
     expect(result.hasMore).toBe(true);
     expect(result.totalCount).toBe(99);
@@ -939,9 +943,11 @@ describe("forge list view projection", () => {
 
     it("keeps a null reviewDecision, which reads as 'no review gate', not 'unknown'", async () => {
       forgeClientMock.listPRs.mockResolvedValue(prPage);
-      const result = (await runAction("forge.listPRs", {}, { activeWorktreePath: "/repo" })) as {
-        items: Array<Record<string, unknown>>;
-      };
+      const result = await runAction<{ items: Array<Record<string, unknown>> }>(
+        "forge.listPRs",
+        {},
+        { activeWorktreePath: "/repo" }
+      );
       expect(result.items[0]).toHaveProperty("reviewDecision", null);
       expect(result.items[0]).toMatchObject({
         number: 900,
