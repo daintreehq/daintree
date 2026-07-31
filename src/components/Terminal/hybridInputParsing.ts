@@ -253,15 +253,23 @@ export const RESERVED_AT_TOKEN_PATHS = new Set([
   "selection",
 ]);
 
+/**
+ * What an unquoted token cannot survive: `getAllAtFileTokens` ends one at any
+ * of these and then trims trailing sentence punctuation. A path carrying one
+ * has to be quoted or it reads back short — `@./diff:staged` would parse as
+ * `./diff`, leaving `:staged` loose in the document and the chip covering only
+ * part of the reference.
+ */
+const NEEDS_QUOTED_AT_TOKEN = /[\s,;:)}\]]|[.,;:!?]$/;
+
 export function formatAtFileToken(file: string): string {
-  // A relative path can land exactly on one of those reserved tokens — a file
+  // A relative path can land exactly on one of the reserved tokens — a file
   // named `terminal` sitting at the cwd root relativizes to `terminal`, and
   // `@terminal` is resolved on send as "paste the terminal buffer here", so
   // the reference silently becomes something else entirely. `./` keeps it a
   // path to every reader without changing what it points at.
   const path = RESERVED_AT_TOKEN_PATHS.has(file) ? `./${file}` : file;
-  const needsQuotes = /\s/.test(path);
-  return `@${needsQuotes ? `"${path}"` : path}`;
+  return `@${NEEDS_QUOTED_AT_TOKEN.test(path) ? `"${path}"` : path}`;
 }
 
 /**

@@ -1,6 +1,10 @@
 import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/view";
 import { StateField } from "@codemirror/state";
-import { getAllAtFileTokens, RESERVED_AT_TOKEN_PATHS, type AtFileToken } from "../hybridInputParsing";
+import {
+  getAllAtFileTokens,
+  RESERVED_AT_TOKEN_PATHS,
+  type AtFileToken,
+} from "../hybridInputParsing";
 import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
 import { fileDropChipField } from "./fileDropChip";
 import { imageChipField } from "./imageChip";

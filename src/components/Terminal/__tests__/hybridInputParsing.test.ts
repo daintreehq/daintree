@@ -12,8 +12,10 @@ import {
   getAllAtDiffTokens,
   getAllAtTerminalTokens,
   getAllAtSelectionTokens,
+  getAllAtFileTokens,
   formatAtFileToken,
   formatAtFileTokenForCwd,
+  RESERVED_AT_TOKEN_PATHS,
 } from "../hybridInputParsing";
 
 const ALL: ReadonlySet<CompletionTrigger> = new Set(["/", "$", "@"]);
@@ -475,5 +477,36 @@ describe("formatAtFileToken reserved-token collision", () => {
   it("leaves a reserved name alone when it is not the whole path", () => {
     expect(formatAtFileToken("src/terminal")).toBe("@src/terminal");
     expect(formatAtFileToken("terminal.ts")).toBe("@terminal.ts");
+  });
+});
+
+// The formatter and the token scanner are two halves of one contract: whatever
+// `formatAtFileToken` emits, `getAllAtFileTokens` has to read back as exactly
+// the path that went in. Asserting the round trip catches a delimiter the
+// scanner stops at that the formatter forgot to quote, which asserting the
+// literal token text would not.
+describe("formatAtFileToken round-trips through getAllAtFileTokens", () => {
+  it.each([
+    "src/App.tsx",
+    "README.md",
+    "./terminal",
+    "diff:staged",
+    "src/my notes.md",
+    "src/a,b.ts",
+    "src/fn(1).ts",
+    "src/list].ts",
+    "weird;name",
+    "trailing.",
+  ])("recovers %s unchanged", (path) => {
+    const tokens = getAllAtFileTokens(`see ${formatAtFileToken(path)} here`);
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]!.path).toBe(RESERVED_AT_TOKEN_PATHS.has(path) ? `./${path}` : path);
+  });
+
+  it("covers the whole token so the chip can span it", () => {
+    const token = formatAtFileToken("diff:staged");
+    const text = `see ${token} here`;
+    const [parsed] = getAllAtFileTokens(text);
+    expect(text.slice(parsed!.start, parsed!.end)).toBe(token);
   });
 });
