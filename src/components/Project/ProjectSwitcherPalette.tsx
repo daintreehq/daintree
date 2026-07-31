@@ -43,8 +43,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ArrowDownAZ, ChartNoAxesColumn, Clock } from "@/components/icons";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { formatTimeAgo } from "@/utils/timeAgo";
-import { getProjectRowStatus, type ProjectRowTone } from "@/lib/projectRowStatus";
+import {
+  getProjectRowStatus,
+  getScratchRowStatus,
+  type ProjectRowTone,
+} from "@/lib/projectRowStatus";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
 import { useOverlayClaim } from "@/hooks";
@@ -228,6 +231,10 @@ const WAIT_AGE_TICK_MS = 60_000;
  * suppresses broadcasts whose payload hasn't changed — so without a tick, an
  * agent that has been waiting eleven minutes keeps reading "just now" for as
  * long as nothing else happens.
+ *
+ * Lives at the palette level rather than inside the project list: the pinned
+ * scratch section is a sibling of that list, so a tick held there re-rendered
+ * everything except the rows it now also has to keep current (#11518).
  */
 function useWaitAgeTick(active: boolean): void {
   const [, setTick] = useState(0);
@@ -466,13 +473,15 @@ function ScratchListItem({
   isSelected: boolean;
   onSelect: (row: ProjectSwitcherScratchRow) => void;
 }) {
+  const status = getScratchRowStatus(scratch);
+
   return (
     <div
       id={`project-option-${scratch.id}`}
       role="option"
       aria-selected={isSelected}
       className={cn(
-        "group relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent cursor-pointer",
+        "group relative w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent cursor-pointer",
         "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-[''] before:opacity-0 before:transition-opacity aria-selected:before:opacity-100",
         isSelected
           ? "bg-overlay-raised border-overlay text-daintree-text"
@@ -482,13 +491,26 @@ function ScratchListItem({
       )}
       onClick={() => onSelect(scratch)}
     >
+      <StatusDot tone={status.tone} />
+
       <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">
-        <FileText className="h-4 w-4" />
+        <FileText className="h-4 w-4" aria-hidden="true" />
       </div>
       <div className="flex-1 min-w-0">
         <div className="truncate text-sm font-semibold leading-tight">{scratch.name}</div>
-        <div className="truncate text-[11px] leading-none text-daintree-text/50 mt-0.5">
-          {`Scratch · ${formatTimeAgo(scratch.lastOpened)}`}
+        {/*
+         * Origin trails the status rather than leading it. In the ranked list a
+         * scratch sits among projects with no section header to place it, so
+         * "Scratch" still has to be on the row — but what the row is doing
+         * outranks what kind of thing it is.
+         */}
+        <div className="flex items-center gap-1 min-w-0 mt-0.5">
+          <span className={cn("truncate text-[11px] leading-none", ROW_TONE_CLASS[status.tone])}>
+            {status.text}
+          </span>
+          <span className="truncate text-[11px] leading-none text-daintree-text/50 shrink-0">
+            · Scratch
+          </span>
         </div>
       </div>
     </div>
@@ -672,7 +694,6 @@ function ProjectListContent({
 
   // Mounted here, once for the whole list, rather than per row: sixty timers in
   // a hundred-project list would all fire for the same reason.
-  useWaitAgeTick(results.length > 0);
 
   // Bands are contiguous runs of `results`, never a re-filter of it. The hook
   // has already sorted by section, so walking the array once and cutting where
@@ -1085,6 +1106,7 @@ function ScratchSection({
                 }
 
                 const countdown = formatScratchCleanupCountdown(scratch.lastOpened, now);
+                const status = getScratchRowStatus(scratch, now);
                 const hasContextActions = Boolean(onRemove || onSaveAsProject || onRename);
                 return (
                   <ContextMenu key={scratch.id}>
@@ -1093,19 +1115,30 @@ function ScratchSection({
                         type="button"
                         onClick={() => onSelect?.(scratch)}
                         className={cn(
-                          "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors",
+                          "w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors",
                           scratch.isActive ? "bg-overlay-subtle" : "hover:bg-overlay-subtle"
                         )}
                         role="option"
                         aria-selected={scratch.isActive}
                       >
+                        <StatusDot tone={status.tone} />
                         <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">
-                          <FileText className="h-4 w-4" />
+                          <FileText className="h-4 w-4" aria-hidden="true" />
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium truncate">{scratch.name}</div>
-                          <div className="text-xs text-daintree-text/40 truncate">
-                            {formatTimeAgo(scratch.lastOpened)}
+                          {/*
+                           * No origin hint here — the section header already
+                           * says "Scratch", so repeating it on every row would
+                           * be chrome naming what the reader just read.
+                           */}
+                          <div
+                            className={cn(
+                              "text-[11px] leading-none truncate mt-0.5",
+                              ROW_TONE_CLASS[status.tone]
+                            )}
+                          >
+                            {status.text}
                           </div>
                           {countdown && (
                             <div
@@ -1396,6 +1429,8 @@ function ProjectPaletteInner({
   // that frame — and for a user whose only workspaces are scratches, that frame
   // reads as "no matches".
   const isRankedSearch = rankedSearch ?? query.trim().length > 0;
+
+  useWaitAgeTick(results.length > 0 || (scratchResults?.length ?? 0) > 0);
 
   return (
     <>

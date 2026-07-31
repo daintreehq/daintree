@@ -15,4 +15,11 @@ export interface Scratch {
   createdAt: number;
   /** Last opened timestamp (ms since epoch); used for sort order within the section. */
   lastOpened: number;
+  /**
+   * Acknowledgement watermark for completed agents, mirroring the project
+   * field. Completions at or before this stamp stop counting toward the row's
+   * "ready for review" state. Absent until the user has dwelled on the scratch
+   * with a completion on screen.
+   */
+  lastCompletionSeenAt?: number;
 }

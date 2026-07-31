@@ -126,8 +126,9 @@ vi.mock("@/store/scratchStore", () => {
     renameScratch: vi.fn().mockResolvedValue(undefined),
   };
   return {
-    useScratchStore: vi.fn((selector?: (s: unknown) => unknown) =>
-      selector ? selector(state) : state
+    useScratchStore: Object.assign(
+      vi.fn((selector?: (s: unknown) => unknown) => (selector ? selector(state) : state)),
+      { getState: () => state }
     ),
   };
 });

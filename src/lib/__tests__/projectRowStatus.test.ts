@@ -1,8 +1,26 @@
 import { describe, it, expect } from "vitest";
-import { getProjectRowStatus, formatWaitAge } from "../projectRowStatus";
-import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
+import { getProjectRowStatus, getScratchRowStatus, formatWaitAge } from "../projectRowStatus";
+import type { SearchableProject, SearchableScratch } from "@/hooks/useProjectSwitcherPalette";
 
 const NOW = 1_700_000_000_000;
+
+function scratch(overrides: Partial<SearchableScratch> = {}): SearchableScratch {
+  return {
+    id: "s1",
+    name: "Scratch",
+    path: "/userData/scratches/s1",
+    createdAt: 0,
+    lastOpened: 0,
+    isActive: false,
+    activeAgentCount: 0,
+    waitingAgentCount: 0,
+    blockedAgentCount: 0,
+    completedAgentCount: 0,
+    unacknowledgedCompletedAgentCount: 0,
+    processCount: 0,
+    ...overrides,
+  };
+}
 
 function project(overrides: Partial<SearchableProject> = {}): SearchableProject {
   return {
@@ -348,5 +366,71 @@ describe("getProjectRowStatus", () => {
       getProjectRowStatus(project({ displayPath: "payments/api", waitingAgentCount: 1 }), NOW)
         .pathHint
     ).toBe("payments/api");
+  });
+});
+
+describe("getScratchRowStatus", () => {
+  // The point of the shared core: a scratch and a project holding the same
+  // agent activity must read identically. Driving both from one field set
+  // catches a divergence introduced in either wrapper.
+  const ACTIVITY_CASES: Array<[string, Partial<SearchableScratch>]> = [
+    ["a plain wait", { waitingAgentCount: 1, oldestWaitingSince: NOW - 5 * 60_000 }],
+    ["a wait with a blocked subset", { waitingAgentCount: 3, blockedAgentCount: 1 }],
+    ["blocked without waiting", { blockedAgentCount: 2 }],
+    [
+      "one unreviewed completion",
+      { unacknowledgedCompletedAgentCount: 1, latestUnacknowledgedCompletionAt: NOW - 60_000 },
+    ],
+    [
+      "several unreviewed completions",
+      {
+        unacknowledgedCompletedAgentCount: 3,
+        oldestUnacknowledgedCompletionAt: NOW - 2 * 3600_000,
+        latestUnacknowledgedCompletionAt: NOW - 3 * 60_000,
+      },
+    ],
+    ["running agents", { activeAgentCount: 2 }],
+    ["acknowledged completions", { completedAgentCount: 2, latestCompletionAt: NOW - 60_000 }],
+    ["bare processes", { processCount: 1 }],
+  ];
+
+  it.each(ACTIVITY_CASES)("matches the project line for %s", (_label, activity) => {
+    const scratchStatus = getScratchRowStatus(scratch(activity), NOW);
+    const projectStatus = getProjectRowStatus(project(activity), NOW);
+
+    expect(scratchStatus.text).toBe(projectStatus.text);
+    expect(scratchStatus.tone).toBe(projectStatus.tone);
+  });
+
+  it("falls back to the opened time when nothing is running", () => {
+    const status = getScratchRowStatus(scratch({ lastOpened: NOW - 2 * 3600_000 }), NOW);
+
+    expect(status.text).toMatch(/^Opened /);
+    expect(status.tone).toBe("muted");
+  });
+
+  it("names the never-opened state rather than showing a bare age", () => {
+    expect(getScratchRowStatus(scratch({ lastOpened: 0 }), NOW).text).toBe("Not opened yet");
+  });
+
+  // A scratch path is a UUID under the app's own directory, so a fragment of
+  // it disambiguates nothing and would only add noise to the row.
+  it("never carries a path hint", () => {
+    for (const [, activity] of ACTIVITY_CASES) {
+      expect(getScratchRowStatus(scratch(activity), NOW).pathHint).toBeUndefined();
+    }
+    expect(getScratchRowStatus(scratch({ lastOpened: 0 }), NOW).pathHint).toBeUndefined();
+  });
+
+  // Activity outranks the dormant fallback: a scratch opened long ago but
+  // holding a waiting agent must report the agent, not the age.
+  it("prefers live activity over the opened time", () => {
+    const status = getScratchRowStatus(
+      scratch({ lastOpened: NOW - 5 * 3600_000, waitingAgentCount: 1 }),
+      NOW
+    );
+
+    expect(status.text).toContain("needs input");
+    expect(status.tone).toBe("waiting");
   });
 });

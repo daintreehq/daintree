@@ -121,8 +121,11 @@ vi.mock("@/store/projectSettingsStore", () => ({
 }));
 
 vi.mock("@/store/scratchStore", () => ({
-  useScratchStore: vi.fn((selector?: (s: typeof scratchState) => unknown) =>
-    selector ? selector(scratchState) : scratchState
+  useScratchStore: Object.assign(
+    vi.fn((selector?: (s: typeof scratchState) => unknown) =>
+      selector ? selector(scratchState) : scratchState
+    ),
+    { getState: () => scratchState }
   ),
 }));
 
@@ -146,6 +149,8 @@ const { closeAndAnnounce: realCloseAndAnnounce } =
   await vi.importActual<typeof import("@/lib/accessibility")>("@/lib/accessibility");
 
 import { useProjectSwitcherPalette } from "../useProjectSwitcherPalette";
+import type { SearchableScratch } from "../useProjectSwitcherPalette";
+import { projectClient } from "@/clients";
 
 /** Pulls the "Try again" handler out of the last error notification. */
 function lastRetryAction(): () => Promise<void> {
@@ -825,5 +830,210 @@ describe("scratches in search results", () => {
     act(() => result.current.setQuery(scratchPath));
 
     await waitFor(() => expect(result.current.results).toEqual([]));
+  });
+});
+
+/**
+ * Scratch rows join the agent-status map (#11518).
+ *
+ * A scratch terminal already carries the scratch id as its `projectId`, so the
+ * join is the same lookup projects do — what these specs hold is that it
+ * actually happens, that it re-runs when the map moves, and that the open-time
+ * pull (the only guaranteed hydration path) asks for scratch ids too.
+ */
+describe("scratch agent-status join", () => {
+  // The stats fixture is module-scoped and shared with the suites above, so it
+  // has to be cleared per-spec or a seeded map leaks into the next assertion.
+  beforeEach(() => {
+    projectStatsState.stats = {};
+  });
+
+  const STATS_FIELDS = [
+    "activeAgentCount",
+    "waitingAgentCount",
+    "blockedAgentCount",
+    "completedAgentCount",
+    "unacknowledgedCompletedAgentCount",
+    "processCount",
+  ] as const;
+
+  function scratchRow(result: { current: { scratchResults: SearchableScratch[] } }, id: string) {
+    const row = result.current.scratchResults.find((s) => s.id === id);
+    if (!row) throw new Error(`no scratch row for ${id}`);
+    return row;
+  }
+
+  it("defaults every count when the map has no entry for the scratch", async () => {
+    seedScratches(1);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    await waitFor(() => expect(result.current.scratchResults).toHaveLength(1));
+
+    const row = scratchRow(result, "scratch-1");
+    for (const field of STATS_FIELDS) expect(row[field]).toBe(0);
+    expect(row.oldestWaitingSince).toBeUndefined();
+  });
+
+  it("carries the map's counts onto the row", async () => {
+    seedScratches(1);
+    projectStatsState.stats = {
+      "scratch-1": {
+        activeAgentCount: 1,
+        waitingAgentCount: 2,
+        blockedAgentCount: 1,
+        oldestWaitingSince: 4_000,
+        completedAgentCount: 3,
+        unacknowledgedCompletedAgentCount: 2,
+        latestCompletionAt: 9_000,
+        processCount: 5,
+      } as (typeof projectStatsState.stats)[string],
+    };
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    await waitFor(() => expect(result.current.scratchResults).toHaveLength(1));
+
+    const row = scratchRow(result, "scratch-1");
+    expect(row.waitingAgentCount).toBe(2);
+    expect(row.blockedAgentCount).toBe(1);
+    expect(row.oldestWaitingSince).toBe(4_000);
+    expect(row.unacknowledgedCompletedAgentCount).toBe(2);
+    expect(row.processCount).toBe(5);
+  });
+
+  // The memo previously depended only on the scratch list. Without the stats
+  // dependency the join reads whatever was there on first build, forever.
+  it("recomputes when only the status map moves", async () => {
+    seedScratches(1);
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+    await waitFor(() => expect(result.current.scratchResults).toHaveLength(1));
+    expect(scratchRow(result, "scratch-1").waitingAgentCount).toBe(0);
+
+    projectStatsState.stats = {
+      "scratch-1": {
+        activeAgentCount: 0,
+        waitingAgentCount: 3,
+        processCount: 0,
+      } as (typeof projectStatsState.stats)[string],
+    };
+    await act(async () => {
+      rerender();
+    });
+
+    expect(scratchRow(result, "scratch-1").waitingAgentCount).toBe(3);
+  });
+
+  it("does not let a project entry bleed into a scratch row", async () => {
+    seedScratches(1);
+    projectStatsState.stats = {
+      "project-1": {
+        activeAgentCount: 7,
+        waitingAgentCount: 7,
+        processCount: 7,
+      } as (typeof projectStatsState.stats)[string],
+    };
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    await waitFor(() => expect(result.current.scratchResults).toHaveLength(1));
+
+    expect(scratchRow(result, "scratch-1").activeAgentCount).toBe(0);
+  });
+
+  it("asks the open-time pull for scratch ids alongside project ids", async () => {
+    seedScratches(2);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => expect(projectClient.getBulkStats).toHaveBeenCalled());
+
+    const requested = vi.mocked(projectClient.getBulkStats).mock.calls.at(-1)![0];
+    expect(requested).toEqual(expect.arrayContaining(["scratch-1", "scratch-2"]));
+  });
+
+  // The pull used to bail when the project list was empty. A user whose only
+  // workspaces are scratches would never get a seeded status map at all.
+  it("still pulls when scratches are the only workspaces", async () => {
+    seedScratches(1);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => expect(projectClient.getBulkStats).toHaveBeenCalledWith(["scratch-1"]));
+  });
+
+  // Both loads are independent: `Promise.all` here would let either store's IPC
+  // failure cost the OTHER kind of row its status seed entirely.
+  it("still hydrates scratches when the project load rejects", async () => {
+    seedScratches(1);
+    useProjectStoreMock.getState().loadProjects.mockRejectedValueOnce(new Error("projects down"));
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() =>
+      expect(projectClient.getBulkStats).toHaveBeenCalledWith(expect.arrayContaining(["scratch-1"]))
+    );
+  });
+
+  it("still pulls when the scratch load rejects", async () => {
+    seedScratches(1);
+    scratchState.loadScratches.mockRejectedValueOnce(new Error("scratches down"));
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    // The rows already in the store are still worth hydrating.
+    await waitFor(() => expect(projectClient.getBulkStats).toHaveBeenCalled());
+  });
+
+  it("carries the optional completion timestamps through the join", async () => {
+    seedScratches(1);
+    projectStatsState.stats = {
+      "scratch-1": {
+        activeAgentCount: 0,
+        waitingAgentCount: 0,
+        completedAgentCount: 3,
+        unacknowledgedCompletedAgentCount: 2,
+        oldestUnacknowledgedCompletionAt: 111,
+        latestUnacknowledgedCompletionAt: 222,
+        latestCompletionAt: 333,
+        processCount: 0,
+      } as (typeof projectStatsState.stats)[string],
+    };
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    await waitFor(() => expect(result.current.scratchResults).toHaveLength(1));
+
+    // Distinct sentinels: dropping any single assignment must not be maskable
+    // by another timestamp happening to hold the same value.
+    const row = scratchRow(result, "scratch-1");
+    expect(row.oldestUnacknowledgedCompletionAt).toBe(111);
+    expect(row.latestUnacknowledgedCompletionAt).toBe(222);
+    expect(row.latestCompletionAt).toBe(333);
+  });
+
+  it("makes no request when there are neither projects nor scratches", async () => {
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => expect(scratchState.loadScratches).toHaveBeenCalled());
+    expect(projectClient.getBulkStats).not.toHaveBeenCalled();
   });
 });

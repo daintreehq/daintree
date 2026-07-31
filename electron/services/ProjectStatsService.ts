@@ -2,6 +2,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { typedBroadcast } from "../ipc/utils.js";
 import { events } from "./events.js";
 import { projectStore } from "./ProjectStore.js";
+import { scratchStore } from "./ScratchStore.js";
 import { computeProjectAgentCounts } from "./projectAgentCounts.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { ProjectStatusMap } from "../../shared/types/ipc/project.js";
@@ -168,8 +169,13 @@ export class ProjectStatsService {
     const gen = ++this.generation;
 
     try {
+      // Scratches ride the same map: a scratch terminal is already stamped with
+      // the scratch id as its `projectId` (#11079), the counting helper treats
+      // ids as opaque, and the two id formats are disjoint (64-hex vs UUID), so
+      // a scratch row can never shadow a project's entry (#11518).
       const allProjects = projectStore.getAllProjects();
-      const projectIds = allProjects.map((p) => p.id);
+      const allScratches = scratchStore.getAllScratches();
+      const projectIds = [...allProjects.map((p) => p.id), ...allScratches.map((s) => s.id)];
       if (projectIds.length === 0) {
         if (this.generation !== gen) return;
         // Track the empty broadcast so a later non-empty result with the
@@ -189,11 +195,14 @@ export class ProjectStatsService {
 
       if (this.generation !== gen) return;
 
-      // Acknowledgement watermarks ride the same project rows already fetched.
+      // Acknowledgement watermarks ride the same rows already fetched.
       const seenMap = new Map<string, number>();
-      for (const project of allProjects) {
-        if (typeof project.lastCompletionSeenAt === "number" && project.lastCompletionSeenAt > 0) {
-          seenMap.set(project.id, project.lastCompletionSeenAt);
+      for (const workspace of [...allProjects, ...allScratches]) {
+        if (
+          typeof workspace.lastCompletionSeenAt === "number" &&
+          workspace.lastCompletionSeenAt > 0
+        ) {
+          seenMap.set(workspace.id, workspace.lastCompletionSeenAt);
         }
       }
       const agentCounts = computeProjectAgentCounts(projectIds, allTerminals, seenMap);
