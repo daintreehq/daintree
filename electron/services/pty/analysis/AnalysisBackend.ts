@@ -1,5 +1,20 @@
 import type { PatternDetectionConfig } from "../AgentPatternDetector.js";
-import type { AnalysisChunkFlags, AnalysisFinalSnapshot } from "../analysisWorkerProtocol.js";
+import type { AnalysisChunkFlags } from "../analysisWorkerProtocol.js";
+import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
+
+/**
+ * Backend-level counterpart of the worker-wire `AnalysisFinalSnapshot`: the
+ * same two serializations, each carrying the grid it was captured at. Both
+ * backends read that grid off the mirror in the same synchronous step as the
+ * serialize — the host cannot infer it, because a restore replay moves the
+ * mirror's grid without a host-posted resize (#11552).
+ */
+export interface AnalysisFinalCapture {
+  /** Full-buffer serialize (banner included) for the preserved snapshot. */
+  snapshot: SerializedTerminalSnapshot | null;
+  /** Banner-stripped serialize for on-disk session persistence. */
+  persistence: SerializedTerminalSnapshot | null;
+}
 
 export interface MonitorStartOptions {
   agentId?: string;
@@ -43,10 +58,16 @@ export interface AnalysisBackend {
   getViewportLines(n: number): string[];
   getCursorLine(): string | null;
 
-  serialize(): Promise<string | null>;
-  serializeForPersistence(): Promise<string | null>;
+  /**
+   * Snapshot of the mirror's buffer bundled with the grid it was captured at.
+   * The geometry is not decoration: SerializeAddon output only decodes at the
+   * capture width, so every replay site sizes its target to these numbers
+   * before writing (#11552).
+   */
+  serialize(): Promise<SerializedTerminalSnapshot | null>;
+  serializeForPersistence(): Promise<SerializedTerminalSnapshot | null>;
   /** Drain pending parses, then capture both preserved + persistence forms. */
-  captureFinalSnapshot(): Promise<AnalysisFinalSnapshot>;
+  captureFinalSnapshot(): Promise<AnalysisFinalCapture>;
 
   /** Free the analysis resources (worker slot / headless instance). Idempotent. */
   release(): void;

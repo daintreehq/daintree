@@ -107,6 +107,7 @@ import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
 import type { PanelKind, PanelTitleMode } from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
+import type { SerializedTerminalSnapshot } from "../../shared/types/terminal.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2149,10 +2150,10 @@ export class PtyClient extends EventEmitter {
    * @param id - Terminal identifier
    * @returns Serialized state string or null if terminal not found
    */
-  async getSerializedStateAsync(id: string): Promise<string | null> {
+  async getSerializedStateAsync(id: string): Promise<SerializedTerminalSnapshot | null> {
     const shard = this.shardForTerminal(id);
     // Extended timeout for large terminals with lots of scrollback (see PTY_TIMEOUTS).
-    const promise = sendPtyHostRpc<string | null>(
+    const promise = sendPtyHostRpc<SerializedTerminalSnapshot | null>(
       shard,
       `serialize-${id}`,
       (requestId) => ({ type: "get-serialized-state", id, requestId }),

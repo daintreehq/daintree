@@ -17,7 +17,10 @@ function createPreservedTerminal(options: {
 }): TerminalProcess {
   const info = {
     id: options.id,
-    preservedSnapshot: options.preserved === false ? undefined : `snapshot-${options.id}`,
+    preservedSnapshot:
+      options.preserved === false
+        ? undefined
+        : { data: `snapshot-${options.id}`, cols: 80, rows: 24 },
     preservedAt: options.preservedAt,
     preservedSnapshotLastAccessedAt: options.lastAccessedAt,
   } as unknown as TerminalInfo;

@@ -1,7 +1,12 @@
 import type { AgentState } from "../../../../shared/types/agent.js";
 import type { ActivityStateMetadata } from "../../ActivityMonitor.js";
 import type { PatternDetectionConfig } from "../AgentPatternDetector.js";
-import type { AnalysisBackend, MonitorStartOptions } from "./AnalysisBackend.js";
+import type {
+  AnalysisBackend,
+  AnalysisFinalCapture,
+  MonitorStartOptions,
+} from "./AnalysisBackend.js";
+import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
 import type {
   AnalysisChunkFlags,
   AnalysisFinalSnapshot,
@@ -32,6 +37,25 @@ export interface AnalysisFeedFlowControl {
   highWatermark: number;
   lowWatermark: number;
   holdHardCap: number;
+}
+
+/**
+ * Narrow a request reply to a single serialization, geometry included.
+ *
+ * The grid is the worker's to report, never the host's to infer (#11552): the
+ * mirror parks at a restored snapshot's capture grid with no host-posted resize
+ * to observe, so anything derived from `lastCols`/`lastRows` can tag
+ * capture-grid data with the spawn grid — which makes every replay site skip
+ * the alignment it needs. A timed-out or dead-worker reply is `null` here.
+ */
+function asSnapshot(result: AnalysisRequestResult): SerializedTerminalSnapshot | null {
+  if (result === null || typeof result !== "object" || !("data" in result)) return null;
+  return result;
+}
+
+function asFinalSnapshot(result: AnalysisRequestResult): AnalysisFinalSnapshot | null {
+  if (result === null || typeof result !== "object" || !("snapshot" in result)) return null;
+  return result;
 }
 
 export interface WorkerAnalysisDelegate {
@@ -293,28 +317,30 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     return this.cursorLine;
   }
 
-  async serialize(): Promise<string | null> {
+  async serialize(): Promise<SerializedTerminalSnapshot | null> {
     if (this.inactive()) return null;
     this.flushHeldFeed();
     const result = await this.pool.request(this.spec.terminalId, "serialize");
-    return typeof result === "string" ? result : null;
+    return asSnapshot(result);
   }
 
-  async serializeForPersistence(): Promise<string | null> {
+  async serializeForPersistence(): Promise<SerializedTerminalSnapshot | null> {
     if (this.inactive() || this.persistSuppressed) return null;
     this.flushHeldFeed();
     const result = await this.pool.request(this.spec.terminalId, "serialize-persistence");
-    return typeof result === "string" ? result : null;
+    return asSnapshot(result);
   }
 
-  async captureFinalSnapshot(): Promise<AnalysisFinalSnapshot> {
+  async captureFinalSnapshot(): Promise<AnalysisFinalCapture> {
     if (this.inactive()) return { snapshot: null, persistence: null };
     this.flushHeldFeed();
     const result = await this.pool.request(this.spec.terminalId, "final-snapshot");
-    if (result !== null && typeof result === "object") {
-      return this.persistSuppressed ? { ...result, persistence: null } : result;
-    }
-    return { snapshot: null, persistence: null };
+    const wire = asFinalSnapshot(result);
+    if (!wire) return { snapshot: null, persistence: null };
+    return {
+      snapshot: wire.snapshot,
+      persistence: this.persistSuppressed ? null : wire.persistence,
+    };
   }
 
   release(): void {

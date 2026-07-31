@@ -3,12 +3,15 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import headless, { type Terminal as HeadlessTerminal } from "@xterm/headless";
+import serialize from "@xterm/addon-serialize";
 import {
   RESTORE_PARSER_RESET_PREAMBLE,
   SESSION_SNAPSHOT_MAX_BYTES,
   getSessionPath,
   persistSessionSnapshotAsync,
   persistSessionSnapshotSync,
+  resizeMirror,
   restoreSessionFromFile,
   deleteSessionFile,
   evictSessionFiles,
@@ -17,15 +20,27 @@ import {
   getHibernatedMarkerPath,
 } from "../terminalSessionPersistence.js";
 
-function createMockHeadless(bufferType: "normal" | "alternate" = "normal") {
+const { Terminal } = headless;
+const { SerializeAddon } = serialize;
+
+function createMockHeadless(bufferType: "normal" | "alternate" = "normal", cols = 80, rows = 24) {
   let currentType = bufferType;
   let markerLine = 0;
-  const writeFn = vi.fn().mockImplementation((data: string) => {
+  const pendingWriteCallbacks: Array<() => void> = [];
+  const writeFn = vi.fn().mockImplementation((data: string, callback?: () => void) => {
     if (data === "\x1b[?1049l") currentType = "normal";
     const newlines = (data.match(/\r\n/g) || []).length;
     markerLine += newlines;
+    if (callback) pendingWriteCallbacks.push(callback);
   });
-  return {
+  const headless = {
+    cols,
+    rows,
+    options: { reflowCursorLine: false } as { reflowCursorLine?: boolean },
+    resize: vi.fn().mockImplementation((nextCols: number, nextRows: number) => {
+      headless.cols = nextCols;
+      headless.rows = nextRows;
+    }),
     write: writeFn,
     buffer: {
       get active() {
@@ -37,7 +52,18 @@ function createMockHeadless(bufferType: "normal" | "alternate" = "normal") {
       line: markerLine,
       dispose: vi.fn(),
     })),
+    /**
+     * Drain the queued write callbacks the way xterm's parser would, then let
+     * the microtask the restore defers its reflow into actually run.
+     */
+    drainWrites: async () => {
+      const callbacks = pendingWriteCallbacks.splice(0, pendingWriteCallbacks.length);
+      callbacks.forEach((cb) => cb());
+      await Promise.resolve();
+      await Promise.resolve();
+    },
   };
+  return headless;
 }
 
 describe("terminalSessionPersistence", () => {
@@ -66,8 +92,8 @@ describe("terminalSessionPersistence", () => {
     const oversized = "x".repeat(SESSION_SNAPSHOT_MAX_BYTES + 1);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    persistSessionSnapshotSync("term-sync", oversized);
-    await persistSessionSnapshotAsync("term-async", oversized);
+    persistSessionSnapshotSync("term-sync", { data: oversized, cols: 80, rows: 24 });
+    await persistSessionSnapshotAsync("term-async", { data: oversized, cols: 80, rows: 24 });
 
     const syncPath = path.join(userDataDir, "terminal-sessions", "term-sync.restore");
     const asyncPath = path.join(userDataDir, "terminal-sessions", "term-async.restore");
@@ -86,8 +112,12 @@ describe("terminalSessionPersistence", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
 
   posixIt("writes the session directory, snapshots, and marker owner-only", async () => {
-    persistSessionSnapshotSync("term-perm-sync", "sync payload");
-    await persistSessionSnapshotAsync("term-perm-async", "async payload");
+    persistSessionSnapshotSync("term-perm-sync", { data: "sync payload", cols: 80, rows: 24 });
+    await persistSessionSnapshotAsync("term-perm-async", {
+      data: "async payload",
+      cols: 80,
+      rows: 24,
+    });
     writeHibernatedMarker("term-perm-sync");
 
     const sessionDir = path.join(userDataDir, "terminal-sessions");
@@ -102,7 +132,7 @@ describe("terminalSessionPersistence", () => {
     fs.mkdirSync(sessionDir, { recursive: true });
     fs.chmodSync(sessionDir, 0o755);
 
-    await persistSessionSnapshotAsync("term-upgrade", "payload");
+    await persistSessionSnapshotAsync("term-upgrade", { data: "payload", cols: 80, rows: 24 });
 
     expect(fs.statSync(sessionDir).mode & 0o777).toBe(0o700);
   });
@@ -112,21 +142,26 @@ describe("terminalSessionPersistence", () => {
     fs.mkdirSync(sessionDir, { recursive: true });
     fs.chmodSync(sessionDir, 0o755);
 
-    persistSessionSnapshotSync("term-upgrade-sync", "payload");
+    persistSessionSnapshotSync("term-upgrade-sync", { data: "payload", cols: 80, rows: 24 });
 
     expect(fs.statSync(sessionDir).mode & 0o777).toBe(0o700);
   });
 
   it("persists and restores snapshots via the atomic write helpers", async () => {
-    persistSessionSnapshotSync("term-rt-sync", "sync payload");
-    await persistSessionSnapshotAsync("term-rt-async", "async payload");
+    persistSessionSnapshotSync("term-rt-sync", { data: "sync payload", cols: 80, rows: 24 });
+    await persistSessionSnapshotAsync("term-rt-async", {
+      data: "async payload",
+      cols: 132,
+      rows: 43,
+    });
 
     const sessionDir = path.join(userDataDir, "terminal-sessions");
     const syncPath = path.join(sessionDir, "term-rt-sync.restore");
     const asyncPath = path.join(sessionDir, "term-rt-async.restore");
 
-    expect(fs.readFileSync(syncPath, "utf8")).toBe("DAINTREE_SESSION_v1\nsync payload");
-    expect(fs.readFileSync(asyncPath, "utf8")).toBe("DAINTREE_SESSION_v1\nasync payload");
+    // The capture grid rides in the header so replay can size to it (#11552).
+    expect(fs.readFileSync(syncPath, "utf8")).toBe("DAINTREE_SESSION_v2\n80x24\nsync payload");
+    expect(fs.readFileSync(asyncPath, "utf8")).toBe("DAINTREE_SESSION_v2\n132x43\nasync payload");
 
     // The atomic helpers must not leave temp files behind
     const stragglers = fs.readdirSync(sessionDir).filter((name) => name.endsWith(".tmp"));
@@ -160,7 +195,7 @@ describe("terminalSessionPersistence", () => {
     await fsp.mkdir(sessionDir, { recursive: true });
 
     const futurePath = path.join(sessionDir, "term-future.restore");
-    await fsp.writeFile(futurePath, "DAINTREE_SESSION_v2\ncontent", "utf8");
+    await fsp.writeFile(futurePath, "DAINTREE_SESSION_v9\ncontent", "utf8");
 
     const headless = createMockHeadless();
     const result = restoreSessionFromFile(headless as never, "term-future");
@@ -181,6 +216,229 @@ describe("terminalSessionPersistence", () => {
 
     expect(result.restored).toBe(false);
     expect(headless.write).not.toHaveBeenCalled();
+  });
+
+  describe("capture-geometry round-trip (#11552)", () => {
+    // A session file is replayed into a mirror built at the NEW spawn size, so
+    // the width the payload was written at has to travel with it. Without that,
+    // SerializeAddon's wrap encoding decodes against the wrong grid and commits
+    // broken line breaks into the buffer before any output has even arrived.
+    async function writeSessionFile(id: string, contents: string): Promise<void> {
+      const sessionDir = path.join(userDataDir, "terminal-sessions");
+      await fsp.mkdir(sessionDir, { recursive: true });
+      await fsp.writeFile(path.join(sessionDir, `${id}.restore`), contents, "utf8");
+    }
+
+    it("replays at the capture grid and reflows back to the spawn grid", async () => {
+      persistSessionSnapshotSync("term-geo", { data: "captured payload", cols: 80, rows: 24 });
+
+      // The process respawned wider than the session was captured at.
+      const headless = createMockHeadless("normal", 170, 40);
+      const result = restoreSessionFromFile(headless as never, "term-geo");
+
+      expect(result.restored).toBe(true);
+      // Alignment must precede the writes: xterm parses asynchronously, so a
+      // grid corrected afterwards would arrive too late to affect the layout.
+      expect(headless.resize).toHaveBeenNthCalledWith(1, 80, 24);
+      expect(headless.resize.mock.invocationCallOrder[0]).toBeLessThan(
+        headless.write.mock.invocationCallOrder[0]
+      );
+      expect(headless.cols).toBe(80);
+
+      // The reflow home is queued behind the replay, not fired eagerly.
+      expect(headless.resize).toHaveBeenCalledTimes(1);
+      await headless.drainWrites();
+      expect(headless.resize).toHaveBeenNthCalledWith(2, 170, 40);
+      expect(headless.cols).toBe(170);
+      expect(headless.rows).toBe(40);
+      expect(headless.options.reflowCursorLine).toBe(false);
+    });
+
+    it("leaves the grid alone when the spawn size matches the capture", async () => {
+      persistSessionSnapshotSync("term-geo-same", { data: "payload", cols: 100, rows: 30 });
+
+      const headless = createMockHeadless("normal", 100, 30);
+      restoreSessionFromFile(headless as never, "term-geo-same");
+      await headless.drainWrites();
+
+      expect(headless.resize).not.toHaveBeenCalled();
+    });
+
+    it("replays a v1 file verbatim rather than dropping the session", async () => {
+      await writeSessionFile("term-v1", "DAINTREE_SESSION_v1\nlegacy payload");
+
+      const headless = createMockHeadless("normal", 170, 40);
+      const result = restoreSessionFromFile(headless as never, "term-v1");
+      await headless.drainWrites();
+
+      expect(result.restored).toBe(true);
+      expect(headless.write).toHaveBeenCalledWith("legacy payload");
+      expect(headless.resize).not.toHaveBeenCalled();
+    });
+
+    it("replays a v2 file with an unusable geometry line instead of dropping it", async () => {
+      // A grid we cannot read costs the ALIGNMENT, never the scrollback:
+      // replaying unaligned is exactly what v1 did, while refusing the file
+      // throws away a session the user can never get back.
+      const cases: Record<string, string> = {
+        "term-v2-garbage": "DAINTREE_SESSION_v2\nnot-a-grid\npayload",
+        "term-v2-zero": "DAINTREE_SESSION_v2\n0x24\npayload",
+        "term-v2-huge": "DAINTREE_SESSION_v2\n9999x9999\npayload",
+      };
+      for (const [id, contents] of Object.entries(cases)) {
+        await writeSessionFile(id, contents);
+        const headless = createMockHeadless("normal", 170, 40);
+        expect(restoreSessionFromFile(headless as never, id).restored).toBe(true);
+        expect(headless.write).toHaveBeenCalledWith("payload");
+        await headless.drainWrites();
+        expect(headless.resize).not.toHaveBeenCalled();
+      }
+    });
+
+    it("rejects a v2 file whose preamble is truncated", async () => {
+      // No newline anywhere after the version marker: the writer always emits a
+      // geometry line, so there is no way to tell where a payload would start —
+      // and at that length there is no payload to save either.
+      await writeSessionFile("term-v2-missing", "DAINTREE_SESSION_v2\npayload-no-newline");
+
+      const headless = createMockHeadless();
+      expect(restoreSessionFromFile(headless as never, "term-v2-missing").restored).toBe(false);
+      expect(headless.write).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { label: "the smallest possible grid", cols: 1, rows: 1 },
+      { label: "an ordinary grid", cols: 80, rows: 24 },
+      { label: "the largest representable grid", cols: 2000, rows: 2000 },
+      { label: "a grid past the representable bound", cols: 2001, rows: 24 },
+      { label: "an absurd grid", cols: 12000, rows: 9000 },
+    ])("round-trips a session written at $label", async ({ cols, rows }) => {
+      // The writer must never emit a file its own reader refuses — that would
+      // make a wide grid strictly WORSE than v1, which at least restored the
+      // scrollback. Alignment is allowed to drop out; the session is not.
+      const id = `term-rt-${cols}x${rows}`;
+      persistSessionSnapshotSync(id, { data: `payload ${cols}x${rows}`, cols, rows });
+
+      const headless = createMockHeadless("normal", 170, 40);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      let restored: boolean;
+      try {
+        restored = restoreSessionFromFile(headless as never, id).restored;
+      } finally {
+        warn.mockRestore();
+      }
+
+      expect(restored).toBe(true);
+      expect(headless.write).toHaveBeenCalledWith(`payload ${cols}x${rows}`);
+      // The two ends agree on one bound, so a file we wrote never sends the
+      // reader down its salvage path — a grid we cannot record is recorded as
+      // absent rather than as a line the reader has to reject.
+      expect(warn).not.toHaveBeenCalled();
+
+      // Alignment happens only for a grid the format can carry; either way the
+      // mirror ends up back on the grid it started from.
+      await headless.drainWrites();
+      expect(headless.cols).toBe(170);
+      expect(headless.rows).toBe(40);
+    });
+
+    it("still exits the alternate screen when the replay was width-aligned", async () => {
+      persistSessionSnapshotSync("term-geo-alt", { data: "alt payload", cols: 80, rows: 24 });
+
+      const headless = createMockHeadless("alternate", 170, 40);
+      const result = restoreSessionFromFile(headless as never, "term-geo-alt");
+      await headless.drainWrites();
+
+      expect(result.restored).toBe(true);
+      expect(headless.write).toHaveBeenCalledWith("\x1b[?1049l");
+      expect(headless.cols).toBe(170);
+    });
+  });
+
+  /**
+   * Real `@xterm/headless` buffers, because the thing under test is what the
+   * grid does to cell data — a mock cannot show that.
+   *
+   * A replay parks the mirror at the snapshot's capture width, so for that
+   * window `terminal.cols` describes the payload rather than the PTY. A resize
+   * arriving inside it has to WIN: reverting to the grid pinned before it
+   * arrived leaves the mirror on a size the PTY has already moved off, and
+   * nothing re-syncs it — `TerminalProcess.resize` early-returns as soon as the
+   * pty dims match, so the mirror stays stale until the next real resize.
+   */
+  describe("replay window vs. concurrent resize (#11552)", () => {
+    const drain = (terminal: HeadlessTerminal): Promise<void> =>
+      new Promise<void>((resolve) => terminal.write("", () => resolve()));
+
+    // Written without a trailing newline so the cursor is parked inside a
+    // wrapped group — where an agent leaves it between repaints.
+    const WRAPPED_LINE = "Tip: press enter and the result will display beneath the input box";
+
+    /** Rows the replayed payload occupies, stopping at the restore banner. */
+    function payloadRows(terminal: HeadlessTerminal): string[] {
+      const buffer = terminal.buffer.active;
+      const rows: string[] = [];
+      for (let i = 0; i < buffer.length; i++) {
+        const line = buffer.getLine(i);
+        if (!line) continue;
+        const text = line.translateToString(true);
+        if (text.length === 0) continue;
+        if (text.includes("───")) break;
+        rows.push(`${line.isWrapped ? "W" : "H"}${text}`);
+      }
+      return rows;
+    }
+
+    async function captureAt(cols: number, rows: number, content: string) {
+      const source = new Terminal({ cols, rows, scrollback: 200, allowProposedApi: true });
+      const addon = new SerializeAddon();
+      source.loadAddon(addon);
+      await new Promise<void>((resolve) => source.write(content, () => resolve()));
+      return { source, snapshot: { data: addon.serialize(), cols, rows } };
+    }
+
+    it("reflows to the resize that landed mid-replay, not to the pre-replay grid", async () => {
+      const { source, snapshot } = await captureAt(40, 10, WRAPPED_LINE);
+      persistSessionSnapshotSync("term-mid-resize", snapshot);
+
+      const mirror = new Terminal({ cols: 100, rows: 10, scrollback: 200, allowProposedApi: true });
+      expect(restoreSessionFromFile(mirror, "term-mid-resize").restored).toBe(true);
+      // Parked at the capture width for as long as the payload is parsing.
+      expect(mirror.cols).toBe(40);
+
+      // The user resized the pane while the replay was still in flight. The
+      // mirror must not move yet — the tail of the payload is still decoding
+      // against the capture width.
+      expect(resizeMirror(mirror, 132, 20)).toBe(false);
+      expect([mirror.cols, mirror.rows]).toEqual([40, 10]);
+
+      await drain(mirror);
+      expect([mirror.cols, mirror.rows]).toEqual([132, 20]);
+
+      // The window is closed, so the mirror tracks the PTY directly again.
+      expect(resizeMirror(mirror, 90, 30)).toBe(true);
+      expect([mirror.cols, mirror.rows]).toEqual([90, 30]);
+
+      // And the payload survived both hops: identical to the capture buffer
+      // simply reflowed to the same grid, which is what a replay owes.
+      source.options.reflowCursorLine = true;
+      source.resize(132, 20);
+      source.resize(90, 30);
+      source.options.reflowCursorLine = false;
+      await drain(source);
+      expect(payloadRows(mirror)).toEqual(payloadRows(source));
+    });
+
+    it("applies a resize immediately once no replay is in flight", async () => {
+      const mirror = new Terminal({ cols: 100, rows: 10, scrollback: 200, allowProposedApi: true });
+      expect(resizeMirror(mirror, 120, 30)).toBe(true);
+      expect([mirror.cols, mirror.rows]).toEqual([120, 30]);
+
+      // A restore that finds no file must not leave a window behind either.
+      expect(restoreSessionFromFile(mirror, "term-never-persisted").restored).toBe(false);
+      expect(resizeMirror(mirror, 60, 15)).toBe(true);
+      expect([mirror.cols, mirror.rows]).toEqual([60, 15]);
+    });
   });
 
   it("restores empty file as empty content", async () => {

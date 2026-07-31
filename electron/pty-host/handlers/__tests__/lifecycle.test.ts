@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createPtyHostMessageDispatcher } from "../index.js";
 import type { HostContext } from "../types.js";
+import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
+
+// Snapshots cross the pty-host boundary with their capture grid (#11552).
+const STATE_PAYLOAD: SerializedTerminalSnapshot = { data: "state-payload", cols: 80, rows: 24 };
 
 function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   const ptyManager = {
@@ -11,8 +15,8 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     getTerminalsForProject: vi.fn(() => []),
     getTerminalInfo: vi.fn(() => ({})),
     getAllTerminalSnapshots: vi.fn(() => []),
-    getSerializedStateAsync: vi.fn(async () => "state-payload"),
-    getSerializedState: vi.fn(() => "state-payload"),
+    getSerializedStateAsync: vi.fn(async () => STATE_PAYLOAD),
+    getSerializedState: vi.fn(() => STATE_PAYLOAD),
     isInTrash: vi.fn(() => false),
     getActivityTier: vi.fn(() => "active" as const),
     setAnalysisEnabled: vi.fn(),

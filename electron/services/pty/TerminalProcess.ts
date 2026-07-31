@@ -40,6 +40,7 @@ import { SynchronizedFrameDetector } from "./SynchronizedFrameDetector.js";
 import type { IMarker } from "@xterm/headless";
 import {
   TERMINAL_SESSION_PERSISTENCE_ENABLED,
+  resizeMirror,
   restoreSessionFromFile,
 } from "./terminalSessionPersistence.js";
 import { SessionSnapshotter, createTerminalSessionSnapshotter } from "./SessionSnapshotter.js";
@@ -72,7 +73,8 @@ import {
   readVisibleActivityLines,
   ViewportSnapshotCache,
 } from "./analysis/headlessViewport.js";
-import type { AnalysisFinalSnapshot } from "./analysisWorkerProtocol.js";
+import type { AnalysisFinalCapture } from "./analysis/AnalysisBackend.js";
+import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import { TerminalExitObservers, type TerminalExitArgs } from "./TerminalExitObservers.js";
 import { TerminalExitHandler } from "./TerminalExitHandler.js";
 import { gracefulShutdown as runGracefulShutdown } from "./TerminalGracefulShutdown.js";
@@ -674,7 +676,7 @@ export class TerminalProcess {
       readCursorLine: () => readCursorLine(this.terminalInfo.headlessTerminal),
       serialize: () => serializeTerminalAsync(this.id, this.terminalInfo),
       serializeForPersistence: () => this.serializeForPersistence(),
-      captureFinalSnapshot: async (): Promise<AnalysisFinalSnapshot> => {
+      captureFinalSnapshot: async (): Promise<AnalysisFinalCapture> => {
         const snapshot = await serializeTerminalAsync(this.id, this.terminalInfo);
         return { snapshot, persistence: this.serializeForPersistence() };
       },
@@ -815,7 +817,9 @@ export class TerminalProcess {
   private resizeAnalysisInThread(cols: number, rows: number): void {
     const terminal = this.terminalInfo;
     if (terminal.headlessTerminal) {
-      terminal.headlessTerminal.resize(cols, rows);
+      // Parked, not applied, while a session replay owns the grid — the replay
+      // reflows to this geometry instead of to the one it opened on (#11552).
+      resizeMirror(terminal.headlessTerminal, cols, rows);
       // Reflow rewraps the buffer — invalidate any wake no-change skip.
       terminal.contentEpoch++;
     }
@@ -1296,11 +1300,11 @@ export class TerminalProcess {
     return this.foregroundProbe.readSnapshot();
   }
 
-  getSerializedState(): string | null {
+  getSerializedState(): SerializedTerminalSnapshot | null {
     return serializeTerminal(this.id, this.terminalInfo);
   }
 
-  getSerializedStateAsync(): Promise<string | null> {
+  getSerializedStateAsync(): Promise<SerializedTerminalSnapshot | null> {
     const terminal = this.terminalInfo;
     // Preserved snapshot served — stamp access time so eviction (issue #10839)
     // treats it as currently-viewed. Checked host-side in both modes; the
@@ -1312,7 +1316,7 @@ export class TerminalProcess {
     return this.analysis.serialize();
   }
 
-  serializeForPersistence(): string | null {
+  serializeForPersistence(): SerializedTerminalSnapshot | null {
     return serializeForPersistence(
       this.terminalInfo,
       this._restoreBannerStart,

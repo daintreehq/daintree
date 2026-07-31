@@ -15,6 +15,7 @@ import type { AgentConfig } from "../config/agentRegistry.js";
 import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
 import type { WorkerResourceSnapshot } from "./workerGovernance.js";
+import type { SerializedTerminalSnapshot } from "./terminal.js";
 
 export type { TerminalFlowStatus };
 
@@ -602,7 +603,12 @@ export type PtyHostEvent =
   | { type: "terminals-for-project"; requestId: string; terminalIds: string[] }
   | { type: "terminal-info"; requestId: string; terminal: PtyHostTerminalInfo | null }
   | { type: "replay-history-result"; requestId: string; replayed: number }
-  | { type: "serialized-state"; requestId: string; id: string; state: string | null }
+  | {
+      type: "serialized-state";
+      requestId: string;
+      id: string;
+      state: SerializedTerminalSnapshot | null;
+    }
   | { type: "terminal-diagnostic-info"; requestId: string; info: TerminalInfoPayload | null }
   | { type: "available-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "terminals-by-state"; requestId: string; terminals: PtyHostTerminalInfo[] }

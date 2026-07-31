@@ -1,7 +1,12 @@
 import type { ActivityMonitor } from "../../ActivityMonitor.js";
 import type { PatternDetectionConfig } from "../AgentPatternDetector.js";
-import type { AnalysisBackend, MonitorStartOptions } from "./AnalysisBackend.js";
-import type { AnalysisChunkFlags, AnalysisFinalSnapshot } from "../analysisWorkerProtocol.js";
+import type {
+  AnalysisBackend,
+  AnalysisFinalCapture,
+  MonitorStartOptions,
+} from "./AnalysisBackend.js";
+import type { AnalysisChunkFlags } from "../analysisWorkerProtocol.js";
+import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
 
 /**
  * The legacy single-threaded analysis path, adapted to the AnalysisBackend
@@ -22,9 +27,9 @@ export interface InThreadAnalysisHost {
   setScrollback(lines: number): boolean;
   readViewportLines(n: number): string[];
   readCursorLine(): string | null;
-  serialize(): Promise<string | null>;
-  serializeForPersistence(): string | null;
-  captureFinalSnapshot(): Promise<AnalysisFinalSnapshot>;
+  serialize(): Promise<SerializedTerminalSnapshot | null>;
+  serializeForPersistence(): SerializedTerminalSnapshot | null;
+  captureFinalSnapshot(): Promise<AnalysisFinalCapture>;
   releaseHeadless(): void;
 }
 
@@ -89,15 +94,15 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     return this.host.readCursorLine();
   }
 
-  serialize(): Promise<string | null> {
+  serialize(): Promise<SerializedTerminalSnapshot | null> {
     return this.host.serialize();
   }
 
-  serializeForPersistence(): Promise<string | null> {
+  serializeForPersistence(): Promise<SerializedTerminalSnapshot | null> {
     return Promise.resolve(this.host.serializeForPersistence());
   }
 
-  captureFinalSnapshot(): Promise<AnalysisFinalSnapshot> {
+  captureFinalSnapshot(): Promise<AnalysisFinalCapture> {
     return this.host.captureFinalSnapshot();
   }
 

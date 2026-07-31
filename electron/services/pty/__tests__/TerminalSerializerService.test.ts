@@ -16,14 +16,16 @@ describe("TerminalSerializerService", () => {
 
   it("deduplicates concurrent serialize requests per terminal", async () => {
     const service = new TerminalSerializerService();
-    const serializeFn = vi.fn(() => "snapshot-data");
+    const serializeFn = vi.fn(() => ({ data: "snapshot-data", cols: 80, rows: 24 }));
 
     const first = service.serializeAsync("term-1", serializeFn);
     const second = service.serializeAsync("term-1", serializeFn);
 
     const [a, b] = await Promise.all([first, second]);
-    expect(a).toBe("snapshot-data");
-    expect(b).toBe("snapshot-data");
+    expect(a).toEqual({ data: "snapshot-data", cols: 80, rows: 24 });
+    // Both callers must observe the SAME object: a coalesced request that handed
+    // out a payload without its capture grid would replay at the wrong width.
+    expect(b).toBe(a);
     expect(serializeFn).toHaveBeenCalledTimes(1);
     service.dispose();
   });
@@ -37,16 +39,16 @@ describe("TerminalSerializerService", () => {
     const failed = await service.serializeAsync("term-2", failing);
     expect(failed).toBeNull();
 
-    const retryFn = vi.fn(() => "ok");
+    const retryFn = vi.fn(() => ({ data: "ok", cols: 80, rows: 24 }));
     const retried = await service.serializeAsync("term-2", retryFn);
-    expect(retried).toBe("ok");
+    expect(retried).toEqual({ data: "ok", cols: 80, rows: 24 });
     expect(retryFn).toHaveBeenCalledTimes(1);
     service.dispose();
   });
 
   it("cancels pending serialization after dispose", async () => {
     const service = new TerminalSerializerService();
-    const serializeFn = vi.fn(() => "late-result");
+    const serializeFn = vi.fn(() => ({ data: "late-result", cols: 80, rows: 24 }));
 
     const pending = service.serializeAsync("term-3", serializeFn);
     service.dispose();

@@ -514,7 +514,25 @@ export class TerminalResizeController {
     return { cols, rows };
   }
 
+  /**
+   * The single choke point for every renderer-side xterm resize — all five
+   * internal callers (fit, deferred resync, fresh reconcile, commit) route
+   * here, which is why the serialized-restore gate lives here and nowhere else.
+   *
+   * While a restore replays, xterm is deliberately parked at the snapshot's
+   * capture width so the payload decodes correctly (#11552), and live output is
+   * deferred for exactly the same window. Applying a resize now would be
+   * undone by the normalization at the end of the replay; worse, the parked
+   * width would look like the live grid to whatever ran next. Record the
+   * intent instead — TerminalRestoreController drains it when it normalizes.
+   * The PTY side is not gated: callers still send the real geometry, so the
+   * agent keeps producing output sized for the grid the user can see.
+   */
   resizeTerminal(managed: ManagedTerminal, cols: number, rows: number): void {
+    if (managed.isSerializedRestoreInProgress) {
+      managed.pendingRestoreGeometry = { cols, rows };
+      return;
+    }
     managed.terminal.resize(cols, rows);
   }
 

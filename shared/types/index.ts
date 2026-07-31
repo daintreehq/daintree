@@ -429,7 +429,10 @@ export type {
   TerminalActivityStatus,
   TerminalActivity,
   TerminalActivityPayload,
+  TerminalGeometry,
+  SerializedTerminalSnapshot,
 } from "./terminal.js";
+export { isValidTerminalGeometry, MAX_TERMINAL_GRID_DIMENSION } from "./terminal.js";
 
 // Pty Host types - IPC protocol for terminal management
 export type {

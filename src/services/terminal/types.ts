@@ -7,6 +7,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 
 import { TerminalRefreshTier, PanelKind, AgentState } from "@/types";
 import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
+import type { TerminalGeometry } from "@shared/types/terminal";
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
 
@@ -199,6 +200,32 @@ export interface ManagedTerminal {
   writeChain: Promise<void>;
   restoreGeneration: number;
   isSerializedRestoreInProgress: boolean;
+  /**
+   * The grid this pane belongs on once the in-flight serialized restore
+   * finishes (#11552).
+   *
+   * A snapshot only decodes at the width it was captured on, so a restore
+   * temporarily resizes xterm to the capture grid before writing. That makes
+   * `terminal.cols` a lie for the duration: an external resize applied against
+   * it would be reflowed away by the normalization that follows, and a
+   * successor restore reading it would adopt the capture width as "live".
+   * Seeded from the real grid when the outermost restore opens the window,
+   * overwritten by any resize that lands mid-replay
+   * (`TerminalResizeController.resizeTerminal` parks instead of applying), and
+   * drained by the restore that normalizes back. Undefined outside a restore.
+   */
+  pendingRestoreGeometry?: TerminalGeometry;
+  /**
+   * Monotonic id for the currently-open serialized-restore window (#11552).
+   *
+   * Deliberately separate from `restoreGeneration`: that one CANCELS an
+   * in-flight replay, so reusing it to identify a window would mean a snapshot
+   * fetch had to abort whatever was replaying just to be able to tell whether
+   * the window was still its own to close — and if the fetch then came back
+   * null, it would release output over a half-replayed buffer. This only
+   * answers "am I still the owner", never "should you stop".
+   */
+  restoreWindowToken: number;
   // Output that arrived mid-restore, replayed once the restore settles. Each
   // entry keeps the ingest batch's chunkCount so the replay write can settle
   // the SAME pending port-ack FIFO entries the batch owns — the entries are

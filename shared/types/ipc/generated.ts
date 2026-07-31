@@ -1547,11 +1547,11 @@ export interface GeneratedIpcInvokeMap {
   };
   "terminal:get-serialized-state": {
     args: [terminalId: string];
-    result: string | null;
+    result: import("../terminal.js").SerializedTerminalSnapshot | null;
   };
   "terminal:get-serialized-states": {
     args: [terminalIds: string[]];
-    result: Record<string, string | null>;
+    result: Record<string, import("../terminal.js").SerializedTerminalSnapshot | null>;
   };
   "terminal:get-shared-buffers": {
     args: [];

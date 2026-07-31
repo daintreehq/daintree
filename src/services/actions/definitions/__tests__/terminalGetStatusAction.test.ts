@@ -19,6 +19,22 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 
 import { registerTerminalQueryActions } from "../terminalQueryActions";
 
+/**
+ * Snapshots cross IPC bundled with the grid they were captured at (#11552).
+ * This action only reads the payload, so fixtures declare plain strings and
+ * this wraps them rather than restating the envelope at every call site.
+ */
+function snapshotMap(
+  entries: Record<string, string | null>
+): Record<string, { data: string; cols: number; rows: number } | null> {
+  return Object.fromEntries(
+    Object.entries(entries).map(([id, data]) => [
+      id,
+      data === null ? null : { data, cols: 80, rows: 24 },
+    ])
+  );
+}
+
 type StatusEntry = {
   terminalId: string;
   agentId: string | null;
@@ -384,11 +400,9 @@ describe("terminal.getStatus", () => {
         t3: { id: "t3", kind: "terminal", location: "grid", agentState: "waiting" },
       },
     });
-    getSerializedStatesMock.mockResolvedValue({
-      t1: "alpha\nbeta",
-      t2: "gamma",
-      t3: null,
-    });
+    getSerializedStatesMock.mockResolvedValue(
+      snapshotMap({ t1: "alpha\nbeta", t2: "gamma", t3: null })
+    );
 
     const { terminals } = await callGetStatus(setupActions(), {
       includeOutput: { lines: 10 },
@@ -409,9 +423,9 @@ describe("terminal.getStatus", () => {
     });
     // Codex-shaped buffer: answer + idle composer, then bottom blank padding
     // that would otherwise fill the small recentOutput window entirely.
-    getSerializedStatesMock.mockResolvedValue({
-      t1: "agent answer\nidle composer\r\n" + "\r\n".repeat(40),
-    });
+    getSerializedStatesMock.mockResolvedValue(
+      snapshotMap({ t1: "agent answer\nidle composer\r\n" + "\r\n".repeat(40) })
+    );
 
     const { terminals } = await callGetStatus(setupActions(), {
       includeOutput: { lines: 10 },
@@ -429,7 +443,7 @@ describe("terminal.getStatus", () => {
         t1: { id: "t1", kind: "terminal", location: "grid", agentState: "idle" },
       },
     });
-    getSerializedStatesMock.mockResolvedValue({ t1: lines });
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ t1: lines }));
 
     // The Zod schema rejects values >50 at the boundary, but the runtime guard
     // also clamps for callers that bypass schema validation. Test the runtime
@@ -451,14 +465,14 @@ describe("terminal.getStatus", () => {
       },
     });
     const ansi = "\x1b[31mred\x1b[0m";
-    getSerializedStatesMock.mockResolvedValue({ t1: ansi });
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ t1: ansi }));
 
     const stripped = await callGetStatus(setupActions(), {
       includeOutput: { lines: 10 },
     });
     expect(stripped.terminals[0]?.recentOutput).toBe("red");
 
-    getSerializedStatesMock.mockResolvedValue({ t1: ansi });
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ t1: ansi }));
     const raw = await callGetStatus(setupActions(), {
       includeOutput: { lines: 10, stripAnsi: false },
     });
@@ -589,7 +603,7 @@ describe("terminal.getStatus", () => {
         t1: { id: "t1", kind: "terminal", location: "grid", agentState: "idle" },
       },
     });
-    getSerializedStatesMock.mockResolvedValue({ t1: lines });
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ t1: lines }));
 
     const { terminals } = await callGetStatus(setupActions(), {
       includeOutput: { lines: 999 },
@@ -609,7 +623,7 @@ describe("terminal.getStatus", () => {
     });
     // t2 is omitted from the response (not even null) — distinct from the
     // "explicit null" failure mode of the IPC handler.
-    getSerializedStatesMock.mockResolvedValue({ t1: "alpha" });
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ t1: "alpha" }));
 
     const { terminals } = await callGetStatus(setupActions(), {
       includeOutput: { lines: 10 },

@@ -12,10 +12,12 @@
  * Also implements single-flight per terminal to prevent request pileup.
  */
 
+import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
+
 const ASYNC_SERIALIZATION_THRESHOLD_LINES = 1000;
 
 export class TerminalSerializerService {
-  private inFlightRequests = new Map<string, Promise<string | null>>();
+  private inFlightRequests = new Map<string, Promise<SerializedTerminalSnapshot | null>>();
   private isDisposed = false;
 
   shouldUseAsync(lineCount: number): boolean {
@@ -29,8 +31,16 @@ export class TerminalSerializerService {
    *
    * Implements single-flight per terminal - if a serialization is already
    * in progress for a terminal, returns the existing promise.
+   *
+   * `serializeFn` must produce the capture geometry in the SAME tick it reads
+   * the buffer (#11552): this call defers to a later `setImmediate` and
+   * coalesces concurrent callers, so a cols/rows value sampled by the caller
+   * beforehand can describe a grid the buffer has since left.
    */
-  async serializeAsync(id: string, serializeFn: () => string | null): Promise<string | null> {
+  async serializeAsync(
+    id: string,
+    serializeFn: () => SerializedTerminalSnapshot | null
+  ): Promise<SerializedTerminalSnapshot | null> {
     if (this.isDisposed) {
       return null;
     }
@@ -40,7 +50,7 @@ export class TerminalSerializerService {
       return existingRequest;
     }
 
-    const promise = new Promise<string | null>((resolve) => {
+    const promise = new Promise<SerializedTerminalSnapshot | null>((resolve) => {
       setImmediate(() => {
         try {
           if (this.isDisposed) {

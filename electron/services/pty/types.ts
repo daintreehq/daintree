@@ -6,6 +6,7 @@ import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 import type { PanelKind, PanelTitleMode } from "../../../shared/types/panel.js";
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
+import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
 
 // Re-export PtyHostSpawnOptions as PtySpawnOptions for backward compatibility/internal usage
@@ -157,9 +158,12 @@ export interface TerminalInfo extends TerminalPublicState {
    * Final serialized buffer captured when a preserved terminal exits and its
    * headless xterm is disposed to reclaim memory. Served by
    * `serializeTerminal`/`serializeTerminalAsync` in place of the live buffer.
-   * Runtime-only; not persisted, not crossed over IPC.
+   * Carries the grid it was captured at, because the headless mirror that could
+   * otherwise answer that question is disposed the moment this is assigned and
+   * replaying at the wrong width is unrepairable (#11552). Runtime-only; not
+   * persisted, not crossed over IPC.
    */
-  preservedSnapshot?: string;
+  preservedSnapshot?: SerializedTerminalSnapshot;
   /**
    * Wall-clock timestamp (`Date.now()`) captured when `preservedSnapshot` is
    * assigned. Drives oldest-first eviction in
