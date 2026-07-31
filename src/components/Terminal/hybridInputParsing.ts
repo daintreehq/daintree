@@ -259,8 +259,15 @@ export const RESERVED_AT_TOKEN_PATHS = new Set([
  * has to be quoted or it reads back short — `@./diff:staged` would parse as
  * `./diff`, leaving `:staged` loose in the document and the chip covering only
  * part of the reference.
+ *
+ * A quote char is here for the opposite reason: the scanner treats a quote
+ * *immediately after the `@`* as opening a quoted path, so a file named
+ * `'notes.txt` at the cwd root emits `@'notes.txt`, whose closing quote never
+ * arrives and whose token is dropped whole. Relativizing is what can promote a
+ * name to the token's first character, so quoting quote-bearing paths is what
+ * keeps that reachable case parseable.
  */
-const NEEDS_QUOTED_AT_TOKEN = /[\s,;:)}\]]|[.,;:!?]$/;
+const NEEDS_QUOTED_AT_TOKEN = /['"]|[\s,;:)}\]]|[.,;:!?]$/;
 
 export function formatAtFileToken(file: string): string {
   // A relative path can land exactly on one of the reserved tokens — a file
@@ -269,7 +276,11 @@ export function formatAtFileToken(file: string): string {
   // the reference silently becomes something else entirely. `./` keeps it a
   // path to every reader without changing what it points at.
   const path = RESERVED_AT_TOKEN_PATHS.has(file) ? `./${file}` : file;
-  return `@${NEEDS_QUOTED_AT_TOKEN.test(path) ? `"${path}"` : path}`;
+  if (!NEEDS_QUOTED_AT_TOKEN.test(path)) return `@${path}`;
+  // Wrapping in `"` makes an embedded `"` the token's own terminator, so it has
+  // to be escaped. `\"` is the one escape `getAllAtFileTokens` already skips
+  // while hunting the closing quote and already unescapes on the way out.
+  return `@"${path.replace(/"/g, '\\"')}"`;
 }
 
 /**

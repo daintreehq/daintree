@@ -497,16 +497,29 @@ describe("formatAtFileToken round-trips through getAllAtFileTokens", () => {
     "src/list].ts",
     "weird;name",
     "trailing.",
+    // Quote chars are the half of the contract relativizing newly exposes: a
+    // quote can now be the token's FIRST char, where the scanner reads it as
+    // opening a quoted path, and one embedded in an otherwise-quoted path is
+    // that path's own terminator unless it is escaped.
+    "'notes.txt",
+    '"notes.txt',
+    "src/it's.txt",
+    'src/say"hi".txt',
+    'src/my "notes".md',
+    '\'mixed "quotes".txt',
   ])("recovers %s unchanged", (path) => {
     const tokens = getAllAtFileTokens(`see ${formatAtFileToken(path)} here`);
     expect(tokens).toHaveLength(1);
     expect(tokens[0]!.path).toBe(RESERVED_AT_TOKEN_PATHS.has(path) ? `./${path}` : path);
   });
 
-  it("covers the whole token so the chip can span it", () => {
-    const token = formatAtFileToken("diff:staged");
-    const text = `see ${token} here`;
-    const [parsed] = getAllAtFileTokens(text);
-    expect(text.slice(parsed!.start, parsed!.end)).toBe(token);
-  });
+  it.each(["diff:staged", '\'mixed "quotes".txt'])(
+    "covers the whole %s token so the chip can span it",
+    (path) => {
+      const token = formatAtFileToken(path);
+      const text = `see ${token} here`;
+      const [parsed] = getAllAtFileTokens(text);
+      expect(text.slice(parsed!.start, parsed!.end)).toBe(token);
+    }
+  );
 });
