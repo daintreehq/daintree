@@ -49,8 +49,8 @@ function registerAll(): ActionService {
   return service;
 }
 
-function outputSchema(service: ActionService, id: string): Record<string, unknown> | undefined {
-  return service.get(id as ActionId)?.outputSchema as Record<string, unknown> | undefined;
+function outputSchema(service: ActionService, id: ActionId): Record<string, unknown> | undefined {
+  return service.get(id)?.outputSchema;
 }
 
 // #11533 — worktree.resource.status declares its result shape. A `resultSchema`
@@ -66,23 +66,19 @@ describe("worktree.resource.status emits a manifest outputSchema (#11533)", () =
     // is why a discriminated union (emitted as a bare oneOf) can't be used here.
     expect(schema!.type).toBe("object");
 
-    const props = (schema!.properties as Record<string, unknown>) ?? {};
-    expect(props.configured).toBeDefined();
-    expect(props.status).toBeDefined();
-
-    const required = (schema!.required as string[] | undefined) ?? [];
-    expect(required).toEqual(expect.arrayContaining(["configured", "status"]));
+    expect(schema!.properties).toHaveProperty("configured");
+    expect(schema!.properties).toHaveProperty("status");
+    expect(schema!.required).toEqual(expect.arrayContaining(["configured", "status"]));
   });
 
   it("advertises every field of the resource status object, and admits null", () => {
     const schema = outputSchema(registerAll(), "worktree.resource.status")!;
-    const status = (schema.properties as { status: Record<string, unknown> }).status;
+    const serialized = JSON.stringify(schema.properties);
 
     // `status` is null whenever no status command is configured, so a strict
     // MCP client would reject the unconfigured branch without the null arm.
-    expect(JSON.stringify(status)).toContain("null");
+    expect(serialized).toContain("null");
 
-    const serialized = JSON.stringify(status);
     for (const field of [
       "lastStatus",
       "lastOutput",
@@ -106,8 +102,11 @@ describe("worktree.resource.status emits a manifest outputSchema (#11533)", () =
       "worktree.resource.resume",
       "worktree.resource.pause",
       "worktree.resource.connect",
-    ]) {
-      expect(outputSchema(service, id), `${id} should not advertise an output schema`).toBeUndefined();
+    ] as const) {
+      expect(
+        outputSchema(service, id),
+        `${id} should not advertise an output schema`
+      ).toBeUndefined();
     }
   });
 });
