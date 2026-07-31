@@ -395,6 +395,8 @@ function createMockWindow(options?: {
 
   const projectViewManager = {
     getActiveView: vi.fn((): { webContents: typeof webContents } | null => ({ webContents })),
+
+    getWorkspaceRefForWebContents: vi.fn(() => null),
   };
 
   const windowContext = {

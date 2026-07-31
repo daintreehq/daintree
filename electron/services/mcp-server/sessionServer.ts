@@ -47,8 +47,8 @@ import {
   INVALID_URL_CODE,
   buildToolError,
   buildMcpErrorPayload,
-  withResolvedProject,
-  type DispatchedProjectRef,
+  withResolvedWorkspace,
+  type DispatchedWorkspaceRef,
 } from "./shared.js";
 import {
   INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
@@ -862,12 +862,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // response time (#11536). Only ever set from a completed dispatch, so
         // every failure path below (no window, session binding gone, throw)
         // leaves it undefined and stamps nothing.
-        let dispatchedProject: DispatchedProjectRef | undefined;
+        let dispatchedWorkspace: DispatchedWorkspaceRef | undefined;
         try {
           const envelope = await dispatchAction(actionId, args, dispatchConfirmed);
           outcome = { kind: "result", value: envelope.result };
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
-          dispatchedProject = envelope.dispatchedProject;
+          dispatchedWorkspace = envelope.dispatchedWorkspace;
         } catch (err) {
           outcome = { kind: "throw", error: err };
           if (err instanceof SessionBindingError) {
@@ -956,7 +956,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           if (actionId === BROWSER_CAPTURE_SCREENSHOT_TOOL) {
             const shot = asScreenshotResult(outcome.value.result);
             if (shot) {
-              return withResolvedProject(
+              return withResolvedWorkspace(
                 {
                   content: [
                     { type: "image" as const, data: shot.pngBase64, mimeType: "image/png" },
@@ -966,28 +966,28 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                     },
                   ],
                 },
-                dispatchedProject
+                dispatchedWorkspace
               );
             }
           }
           const structuredContent = buildStructuredContent(entry, outcome.value.result);
-          return withResolvedProject(
+          return withResolvedWorkspace(
             buildToolCallResult(outcome.value.result, {
               ...(structuredContent ? { structuredContent } : {}),
             }),
-            dispatchedProject
+            dispatchedWorkspace
           );
         }
 
         // A renderer was reached and reported a failure, so the target is known
         // and worth reporting — unlike the pre-dispatch errors above.
-        return withResolvedProject(
+        return withResolvedWorkspace(
           buildToolError({
             code: outcome.value.error.code,
             message: outcome.value.error.message,
             details: outcome.value.error.details,
           }),
-          dispatchedProject
+          dispatchedWorkspace
         );
       } finally {
         const settledOutcome = outcome ?? { kind: "throw" as const, error: new Error("unknown") };

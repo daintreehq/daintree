@@ -5,7 +5,7 @@ import { getProjectViewManager } from "../../window/windowRef.js";
 import type { ActionContext, ActionManifestEntry } from "../../../shared/types/actions.js";
 import type { McpBearerIdentity } from "../../../shared/types/ipc/mcpServer.js";
 import { CHANNELS } from "../../ipc/channels.js";
-import type { PendingRequest, DispatchEnvelope, DispatchedProjectRef } from "./shared.js";
+import type { PendingRequest, DispatchEnvelope, DispatchedWorkspaceRef } from "./shared.js";
 import { MCP_MANIFEST_REQUEST_TIMEOUT_MS, MCP_DISPATCH_TIMEOUT_MS } from "./shared.js";
 
 export class SessionBindingError extends Error {
@@ -71,6 +71,10 @@ export function createRendererBridge(
   // never double-register one across repeated fetches or a server restart.
   const perWebContentsEvictionWired = new Set<number>();
 
+  // One-shot latch so a persistently broken workspace lookup can't flood the
+  // log on every dispatch (#11536).
+  let warnedWorkspaceResolveFailure = false;
+
   function getActiveProjectWebContents(): Electron.WebContents {
     const registry = getRegistry();
     if (registry) {
@@ -118,7 +122,7 @@ export function createRendererBridge(
   }
 
   /**
-   * Resolve which project a dispatch landed on, for the response envelope
+   * Resolve which workspace a dispatch landed on, for the response envelope
    * (#11536). Routed through the owning window's own ProjectViewManager so the
    * answer is sender-scoped — never `getCurrentProjectId()`, which reports the
    * most-recently-switched project rather than this webContents'.
@@ -127,18 +131,28 @@ export function createRendererBridge(
    * that was already routed through it (the registry-less branch of
    * `getActiveProjectWebContents`); it is deliberately not a routing fallback.
    *
-   * Never throws: identity is decoration on an already-completed action, so a
-   * torn-down view — or a host whose manager predates this accessor — yields
-   * `undefined` and simply omits the field.
+   * Never throws. Identity is decoration on an already-completed action, and
+   * the caller has by now cleared the pending entry's timer, so letting an
+   * exception escape would strand the awaiting promise. Ordinary teardown is
+   * not an error — the accessor already converts a destroyed view to `null`, so
+   * only genuinely unexpected throws are logged, once, to keep a future
+   * refactor from silently degrading this to "never stamps".
    */
-  function resolveDispatchedProject(webContentsId: number): DispatchedProjectRef | undefined {
+  function resolveDispatchedWorkspace(webContentsId: number): DispatchedWorkspaceRef | undefined {
+    const registry = getRegistry();
+    const projectViewManager =
+      registry?.getByWebContentsId(webContentsId)?.services.projectViewManager ??
+      getProjectViewManager();
+    // A host whose manager predates this accessor is an expected shape, not a
+    // failure — resolve to "unknown" without logging.
+    if (typeof projectViewManager?.getWorkspaceRefForWebContents !== "function") return undefined;
     try {
-      const registry = getRegistry();
-      const projectViewManager =
-        registry?.getByWebContentsId(webContentsId)?.services.projectViewManager ??
-        getProjectViewManager();
-      return projectViewManager?.getProjectRefForWebContents(webContentsId) ?? undefined;
-    } catch {
+      return projectViewManager.getWorkspaceRefForWebContents(webContentsId) ?? undefined;
+    } catch (err) {
+      if (!warnedWorkspaceResolveFailure) {
+        warnedWorkspaceResolveFailure = true;
+        console.warn("[MCP] Failed to resolve the dispatched workspace for a tool result:", err);
+      }
       return undefined;
     }
   }
@@ -438,15 +452,15 @@ export function createRendererBridge(
     clearTimeout(pending.timer);
     pending.destroyedCleanup?.();
     pendingDispatches.delete(payload.requestId);
-    // Snapshot the project identity here, synchronously, off the sender we just
-    // validated (#11536). Resolving it later — after the awaiting caller in
-    // sessionServer resumes — would race view eviction and project switching,
-    // and could report a project the dispatch never ran against.
-    const dispatchedProject = resolveDispatchedProject(pending.webContentsId);
+    // Snapshot the workspace identity here, synchronously, off the sender we
+    // just validated (#11536). Resolving it later — after the awaiting caller
+    // in sessionServer resumes — would race view eviction and workspace
+    // switching, and could report a workspace the dispatch never ran against.
+    const dispatchedWorkspace = resolveDispatchedWorkspace(pending.webContentsId);
     pending.resolve({
       result: payload.result,
       confirmationDecision: payload.confirmationDecision,
-      ...(dispatchedProject ? { dispatchedProject } : {}),
+      ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}),
     });
   };
 

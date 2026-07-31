@@ -487,13 +487,19 @@ describe("rendererBridge — requesting-bearer identity passthrough (#9157)", ()
       {
         browserWindow: { isDestroyed: () => false },
         services: {
-          projectViewManager: { getActiveView: () => ({ webContents: wc }) },
+          projectViewManager: {
+            getActiveView: () => ({ webContents: wc }),
+            // Present but empty, so these tests exercise the real "no workspace
+            // registered" path rather than a missing-method error path.
+            getWorkspaceRefForWebContents: () => null,
+          },
         },
       },
     ];
     const registry = {
       all: () => contexts,
       focusOrder: () => contexts,
+      getByWebContentsId: (id: number) => (id === wc.id ? contexts[0] : undefined),
     };
     const bridge = createRendererBridge(
       pendingManifests,
@@ -598,23 +604,28 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
     windowDestroyed?: boolean;
     /** Omitted entirely for a window with no active project view. */
     activeWebContents?: FakeWebContents | null;
-    projectRef?: { projectId: string; projectPath: string } | null;
-    /** Simulates a host whose manager predates getProjectRefForWebContents. */
-    omitProjectRefAccessor?: boolean;
+    workspaceRef?: { kind: "project" | "scratch"; workspaceId: string; workspacePath: string } | null;
+    /** Simulates a host whose manager predates getWorkspaceRefForWebContents. */
+    omitWorkspaceRefAccessor?: boolean;
   }
 
   function makeContext(options: FakeContextOptions) {
-    const { windowDestroyed = false, activeWebContents = null, projectRef = null } = options;
-    const projectViewManager: Record<string, unknown> = {
-      getActiveView: () => (activeWebContents ? { webContents: activeWebContents } : null),
-    };
-    if (!options.omitProjectRefAccessor) {
-      projectViewManager.getProjectRefForWebContents = (id: number) =>
-        projectRef && activeWebContents && activeWebContents.id === id ? projectRef : null;
-    }
+    const { windowDestroyed = false, activeWebContents = null, workspaceRef = null } = options;
+    const getActiveView = () => (activeWebContents ? { webContents: activeWebContents } : null);
+    // Spied so a test can assert the lookup happened per-sender at response
+    // time, rather than eagerly at send time.
+    const getWorkspaceRefForWebContents = vi.fn((id: number) =>
+      workspaceRef && activeWebContents && activeWebContents.id === id ? workspaceRef : null
+    );
+    const projectViewManager = options.omitWorkspaceRefAccessor
+      ? { getActiveView }
+      : { getActiveView, getWorkspaceRefForWebContents };
     return {
       browserWindow: { isDestroyed: () => windowDestroyed },
       services: { projectViewManager },
+      activeWebContentsId: activeWebContents?.id ?? null,
+      /** Test-only handle on the spy — production reads it via `services`. */
+      workspaceRefSpy: getWorkspaceRefForWebContents,
     };
   }
 
@@ -631,14 +642,7 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
       all: () => registrationOrder,
       focusOrder: () => focusRef.current,
       getByWebContentsId: (id: number) =>
-        registrationOrder.find(
-          (ctx) =>
-            (
-              ctx.services.projectViewManager as {
-                getActiveView: () => { webContents: FakeWebContents } | null;
-              }
-            ).getActiveView()?.webContents.id === id
-        ),
+        registrationOrder.find((ctx) => ctx.activeWebContentsId === id),
     };
   }
 
@@ -768,17 +772,15 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
     expect(wcFirst.send).not.toHaveBeenCalled();
   });
 
-  it("stamps the dispatched project on the envelope, resolved from the responding sender", async () => {
+  it("stamps the dispatched workspace on the envelope, resolved from the responding sender", async () => {
     const wcA = makeWebContents(941);
     const wcB = makeWebContents(942);
-    const ctxA = makeContext({
-      activeWebContents: wcA,
-      projectRef: { projectId: "proj-a", projectPath: "/repos/a" },
-    });
-    const ctxB = makeContext({
-      activeWebContents: wcB,
-      projectRef: { projectId: "proj-b", projectPath: "/repos/b" },
-    });
+    const refA = { kind: "project" as const, workspaceId: "proj-a", workspacePath: "/repos/a" };
+    // A scratch is a legitimate target and carries no Project row, so the
+    // stamp has to say so rather than labelling it a project.
+    const refB = { kind: "scratch" as const, workspaceId: "scr-b", workspacePath: "/scratch/b" };
+    const ctxA = makeContext({ activeWebContents: wcA, workspaceRef: refA });
+    const ctxB = makeContext({ activeWebContents: wcB, workspaceRef: refB });
     autoRespond(wcA);
     autoRespond(wcB);
 
@@ -791,23 +793,94 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
     bridge.setupListeners([]);
 
     const focusedEnvelope = await bridge.dispatchAction("actions.list", {}, false);
-    expect(focusedEnvelope.dispatchedProject).toEqual({
-      projectId: "proj-b",
-      projectPath: "/repos/b",
-    });
+    expect(focusedEnvelope.dispatchedWorkspace).toEqual(refB);
 
     // Focus moves — the stamp must follow the window the call actually hit.
     focusRef.current = [ctxA, ctxB];
     const retargetedEnvelope = await bridge.dispatchAction("actions.list", {}, false);
-    expect(retargetedEnvelope.dispatchedProject).toEqual({
-      projectId: "proj-a",
-      projectPath: "/repos/a",
+    expect(retargetedEnvelope.dispatchedWorkspace).toEqual(refA);
+  });
+
+  it("resolves the workspace at response time, from the responding sender — not at send time", async () => {
+    // Guards the seam: resolving when the request is SENT, or from whatever is
+    // focused when the response arrives, would both pass the tests above.
+    // Here two dispatches are in flight at once and settle in reverse order,
+    // with focus moved in between — only per-sender, response-time resolution
+    // gives each its own workspace.
+    const wcA = makeWebContents(971);
+    const wcB = makeWebContents(972);
+    const refA = { kind: "project" as const, workspaceId: "proj-a", workspacePath: "/repos/a" };
+    const refB = { kind: "project" as const, workspaceId: "proj-b", workspacePath: "/repos/b" };
+    const ctxA = makeContext({ activeWebContents: wcA, workspaceRef: refA });
+    const ctxB = makeContext({ activeWebContents: wcB, workspaceRef: refB });
+
+    const pending: Array<{ id: number; requestId: string }> = [];
+    for (const [wc, id] of [
+      [wcB, 972],
+      [wcA, 971],
+    ] as const) {
+      wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+        if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+        pending.push({ id, requestId: payload.requestId });
+      });
+    }
+
+    const focusRef = { current: [ctxB, ctxA] };
+    const bridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => makeRegistry([ctxA, ctxB], focusRef) as never
+    );
+    bridge.setupListeners([]);
+
+    // First call targets B (focused). Its response is deliberately withheld.
+    const bCall = bridge.dispatchAction("actions.list", {}, false);
+    // Focus moves; the second call targets A while B is still in flight.
+    focusRef.current = [ctxA, ctxB];
+    const aCall = bridge.dispatchAction("actions.list", {}, false);
+
+    expect(pending).toHaveLength(2);
+    const bRequest = pending[0];
+    const aRequest = pending[1];
+    expect(bRequest.id).toBe(972);
+    expect(aRequest.id).toBe(971);
+
+    // A spoofed response from the wrong sender must be ignored outright.
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 971 } },
+      { requestId: bRequest.requestId, result: { ok: true, result: "spoofed" } }
+    );
+    expect(ctxB.workspaceRefSpy).not.toHaveBeenCalled();
+    expect(ctxA.workspaceRefSpy).not.toHaveBeenCalled();
+
+    // Settle in reverse order: A (sent last) first, then B.
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 971 } },
+      { requestId: aRequest.requestId, result: { ok: true, result: "from-a" } }
+    );
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 972 } },
+      { requestId: bRequest.requestId, result: { ok: true, result: "from-b" } }
+    );
+
+    // Each envelope reports its OWN sender's workspace, despite the focus
+    // change and the out-of-order settlement.
+    await expect(aCall).resolves.toMatchObject({
+      result: { ok: true, result: "from-a" },
+      dispatchedWorkspace: refA,
+    });
+    await expect(bCall).resolves.toMatchObject({
+      result: { ok: true, result: "from-b" },
+      dispatchedWorkspace: refB,
     });
   });
 
-  it("omits dispatchedProject when the sender has no registered project", async () => {
+  it("omits dispatchedWorkspace when the sender has no registered workspace", async () => {
     const wc = makeWebContents(951);
-    const ctx = makeContext({ activeWebContents: wc, projectRef: null });
+    const ctx = makeContext({ activeWebContents: wc, workspaceRef: null });
     autoRespond(wc);
 
     const focusRef = { current: [ctx] };
@@ -821,14 +894,14 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
     const envelope = await bridge.dispatchAction("actions.list", {}, false);
 
     expect(envelope.result).toEqual({ ok: true, result: "ok" });
-    expect(envelope.dispatchedProject).toBeUndefined();
-    expect("dispatchedProject" in envelope).toBe(false);
+    expect(envelope.dispatchedWorkspace).toBeUndefined();
+    expect("dispatchedWorkspace" in envelope).toBe(false);
   });
 
   it("still resolves the action when the project lookup throws", async () => {
     const wc = makeWebContents(961);
     // A manager that predates the accessor: calling it throws a TypeError.
-    const ctx = makeContext({ activeWebContents: wc, omitProjectRefAccessor: true });
+    const ctx = makeContext({ activeWebContents: wc, omitWorkspaceRefAccessor: true });
     autoRespond(wc);
 
     const focusRef = { current: [ctx] };
@@ -842,6 +915,6 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
     const envelope = await bridge.dispatchAction("actions.list", {}, false);
 
     expect(envelope.result).toEqual({ ok: true, result: "ok" });
-    expect(envelope.dispatchedProject).toBeUndefined();
+    expect(envelope.dispatchedWorkspace).toBeUndefined();
   });
 });
