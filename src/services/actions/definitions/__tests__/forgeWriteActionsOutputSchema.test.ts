@@ -71,7 +71,25 @@ describe("forge write actions publish a manifest outputSchema (#11546)", () => {
     expect(propertyNames(schema).length).toBeGreaterThan(0);
   });
 
-  it("keeps the six result families structurally distinct", () => {
+  it("keeps paired actions on an identical published shape", () => {
+    const service = registerAll();
+    // Same result family => same published contract. Drift here would force an
+    // agent to special-case which direction of the pair it called.
+    const pairs: Array<[string, string]> = [
+      ["forge.assignIssue", "forge.unassignIssue"],
+      ["forge.approvePR", "forge.requestChanges"],
+      ["forge.approvePR", "forge.dismissReview"],
+      ["forge.closePR", "forge.reopenPR"],
+      ["forge.convertPRToDraft", "forge.markPRReadyForReview"],
+    ];
+    for (const [a, b] of pairs) {
+      expect(propertyNames(outputSchema(service, a))).toEqual(
+        propertyNames(outputSchema(service, b))
+      );
+    }
+  });
+
+  it("keeps the result families structurally distinct", () => {
     const service = registerAll();
     // Each action must report the state IT changed. Comparing the families to
     // each other (rather than to a copied field list) catches the real

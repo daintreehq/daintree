@@ -317,6 +317,17 @@ describe("mergePR", () => {
     expect(result.merged).toBe(false);
   });
 
+  it.each([[null], ["false"], [0]])(
+    "treats a non-boolean merged flag (%p) as merged, trusting the 2xx status",
+    async (merged) => {
+      // Only an explicit boolean false denies the merge. A malformed flag must
+      // not silently downgrade a merge the status code says landed.
+      mockFetch({ ok: true, status: 200, body: { sha: "abc123", merged } });
+
+      expect((await githubForgeProvider.mergePR(repo, 42)).merged).toBe(true);
+    }
+  );
+
   it("still reports merged when a 2xx body omits the flag", async () => {
     // GitHub answers 405 for unmergeable and 409 for a stale head, so reaching
     // here at all means the merge landed — reporting `merged: false` would send

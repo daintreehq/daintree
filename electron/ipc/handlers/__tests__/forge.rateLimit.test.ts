@@ -828,12 +828,25 @@ describe("forge write handlers forward the provider result (#11546)", () => {
   ];
 
   beforeEach(() => {
+    // Self-contained: this describe is a sibling of the rate-limit suite, so it
+    // must register its own handlers and resolution rather than inherit them —
+    // otherwise it only passes when the other suite has run first.
+    vi.clearAllMocks();
+    registeredProvidersMock.length = 0;
+    registeredProvidersMock.push({ pluginId: "fake-plugin", contribution: { id: "fake" } });
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake-plugin.fake",
+      providerId: "fake",
+      repoRef,
+      impl: fakeImpl as unknown as ForgeProviderImpl,
+    });
     for (const [method, value] of Object.entries(sentinels)) {
       (fakeImpl[method as keyof typeof sentinels] as Mock).mockResolvedValue(value);
     }
     for (const [method, value] of Object.entries(reviewSentinels)) {
       (fakeImpl.reviews[method as keyof typeof reviewSentinels] as Mock).mockResolvedValue(value);
     }
+    registerForgeHandlers();
   });
 
   it.each(cases)("$name resolves to the provider's result", async ({ channel, expected, invoke }) => {

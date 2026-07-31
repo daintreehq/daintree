@@ -486,9 +486,10 @@ export async function mergePRImpl(
     prNumber,
     sha: typeof data.sha === "string" && data.sha ? data.sha : null,
     // A 2xx from the merge endpoint means the merge landed — GitHub answers 405
-    // for unmergeable and 409 for a stale head. So only an explicit `false`
-    // denies it; a body missing the field must not read as "did not merge".
-    merged: data.merged !== false,
+    // for unmergeable and 409 for a stale head. The status is the authority, so
+    // only an explicit boolean `false` denies it; an absent or non-boolean flag
+    // must not read as "did not merge".
+    merged: typeof data.merged === "boolean" ? data.merged : true,
     message: typeof data.message === "string" ? data.message : "",
   };
 }

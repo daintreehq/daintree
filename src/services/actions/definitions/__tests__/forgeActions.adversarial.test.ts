@@ -634,6 +634,7 @@ describe("forge.* write actions return the state they changed (#11546)", () => {
   it.each([
     ["forge.mergePR", { prNumber: 12 }],
     ["forge.convertPRToDraft", { prNumber: 12 }],
+    ["forge.markPRReadyForReview", { prNumber: 12 }],
     ["forge.requestReviewers", { prNumber: 12, users: ["octocat"] }],
   ])("%s rejects a provider result that contradicts its published schema", async (id, args) => {
     // The schema is what the MCP client is promised. A provider answering with
