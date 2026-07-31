@@ -298,7 +298,12 @@ export function DockLaunchButton({
             }
             autoComplete="off"
             spellCheck={false}
-            className="w-full bg-transparent text-sm text-daintree-text placeholder:text-text-muted outline-none border-none"
+            // The focus indicator is deliberately neutral: the selected result
+            // row owns this region's single accent anchor, so an accent ring
+            // here would be a competing signal. The hidden-outline utility is
+            // used rather than the outline-suppressing one so a real outline
+            // survives in forced-colors mode.
+            className="w-full bg-transparent text-sm text-daintree-text placeholder:text-text-muted border-none outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-border"
           />
         </div>
         <DropdownMenuSeparator />
