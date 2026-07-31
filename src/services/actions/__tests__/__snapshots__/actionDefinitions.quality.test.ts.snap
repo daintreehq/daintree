@@ -926,7 +926,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "copyTree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Generate a CopyTree context dump (file tree plus selected file contents) for a worktree and return it as a string. Args (all optional): \`worktreeId\` — a worktree id from \`worktree.list\`, defaults to the active worktree; \`options\` — CopyTree include/exclude options. Returns { content, fileCount, optional stats:{ totalSize, duration }, optional error }. A generation failure is reported in the \`error\` field; throws only when no worktree is active. Do NOT use this to inject context into a terminal — use \`copyTree.injectToTerminal\`.",
+    "description": "Generate a CopyTree context dump (file tree plus selected file contents) for a worktree and return it as a string. Args (all optional): \`worktreeId\` or \`worktreePath\` — the worktree, defaults to the active one; \`options\` — CopyTree include/exclude options. Returns { content, fileCount, optional stats:{ totalSize, duration } }. Throws when generation fails or when no worktree is given and none is active. Do NOT use this to inject context into a terminal — use \`copyTree.injectToTerminal\`.",
     "examples": undefined,
     "id": "copyTree.generate",
     "keywords": [
@@ -1217,7 +1217,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "diagnostics",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Get captured events from the event inspector. Use limit/offset for pagination.",
+    "description": "Get captured events from the event inspector. Args (all optional): \`limit\` (default 50, max 500); \`offset\` (default 0, \`skip\` is accepted as a legacy alias); \`cursor\` — pass the previous response's \`nextCursor\`. Returns { items, hasMore, nextCursor, total }.",
     "examples": undefined,
     "id": "eventInspector.getEvents",
     "keywords": undefined,

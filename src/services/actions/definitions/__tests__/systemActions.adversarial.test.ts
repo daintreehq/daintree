@@ -175,6 +175,29 @@ describe("systemActions adversarial", () => {
       const { run } = setupActions();
       await expect(run("copyTree.generate", undefined)).rejects.toThrow("No active worktree");
     });
+
+    it("throws on a generation failure instead of returning it as success data", async () => {
+      const { run } = setupActions();
+      // A returned value is serialized by the MCP bridge as a SUCCESSFUL tool
+      // result, so a failure reported in an `error` field is invisible to an
+      // agent checking isError — it has to throw (#11543).
+      copyTreeClientMock.generate.mockResolvedValueOnce({
+        content: "",
+        fileCount: 0,
+        error: "copytree exited with code 1",
+      });
+      await expect(
+        run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" })
+      ).rejects.toThrow("copytree exited with code 1");
+    });
+
+    it("passes a successful generation through untouched", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.generate.mockResolvedValueOnce({ content: "dump", fileCount: 3 });
+      await expect(
+        run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" })
+      ).resolves.toEqual({ content: "dump", fileCount: 3 });
+    });
   });
 
   describe("copyTree.generateAndCopyFile", () => {

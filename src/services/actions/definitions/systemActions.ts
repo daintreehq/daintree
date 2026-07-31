@@ -6,6 +6,7 @@ import {
   withWorktreeLocation,
   withProjectLocation,
   requireWorktreePath,
+  requireWorktreeId,
   resolveProjectLocation,
 } from "./locationArgs";
 import { z } from "zod";
@@ -310,25 +311,18 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generate",
       title: "Generate CopyTree Context",
       description:
-        "Generate a CopyTree context dump (file tree plus selected file contents) for a worktree and return it as a string. Args (all optional): `worktreeId` — a worktree id from `worktree.list`, defaults to the active worktree; `options` — CopyTree include/exclude options. Returns { content, fileCount, optional stats:{ totalSize, duration }, optional error }. A generation failure is reported in the `error` field; throws only when no worktree is active. Do NOT use this to inject context into a terminal — use `copyTree.injectToTerminal`.",
+        "Generate a CopyTree context dump (file tree plus selected file contents) for a worktree and return it as a string. Args (all optional): `worktreeId` or `worktreePath` — the worktree, defaults to the active one; `options` — CopyTree include/exclude options. Returns { content, fileCount, optional stats:{ totalSize, duration } }. Throws when generation fails or when no worktree is given and none is active. Do NOT use this to inject context into a terminal — use `copyTree.injectToTerminal`.",
       category: "copyTree",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       keywords: ["context", "dump", "snapshot", "tree"],
-      argsSchema: z
-        .object({
-          worktreeId: z
-            .string()
-            .optional()
-            .describe("Worktree ID. Defaults to the active worktree."),
-          options: CopyTreeOptionsSchema.optional(),
-        })
-        .optional(),
+      argsSchema: withWorktreeLocation({
+        options: CopyTreeOptionsSchema.optional(),
+      }).optional(),
       resultSchema: z.object({
         content: z.string(),
         fileCount: z.number(),
-        error: z.string().optional(),
         stats: z
           .object({
             totalSize: z.number(),
@@ -337,9 +331,18 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           .optional(),
       }),
       run: async (args, ctx: ActionContext) => {
-        const worktreeId = args?.worktreeId ?? ctx.activeWorktreeId;
-        if (!worktreeId) throw new Error("No active worktree");
-        return await copyTreeClient.generate(worktreeId, args?.options);
+        const result = await copyTreeClient.generate(requireWorktreeId(args, ctx), args?.options);
+        // A generation failure used to ride back in an `error` field beside an
+        // empty dump. The MCP bridge serializes a returned value as a SUCCESSFUL
+        // tool result, so an agent checking `isError` never saw it (#11543).
+        // Throwing routes it through EXECUTION_ERROR, which the bridge reports
+        // as a tool error. Everything else passes through untouched.
+        const failure =
+          result && typeof result === "object"
+            ? (result as { error?: string }).error
+            : undefined;
+        if (failure) throw new Error(failure);
+        return result;
       },
     })
   );
