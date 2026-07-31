@@ -170,7 +170,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.launch",
     title: "Launch Agent",
     description:
-      "Launch an AI agent in a new terminal. Returns { launched, terminalId, location, worktreeId, worktreePath, branch, cwd } — the resolved identity tells you where the agent landed, so parallel launches can be mapped back to their work without re-resolving the target. `launched` is false when nothing started: either a no-op (every field null) or a missing CLI, where Daintree opened a setup diagnostic instead of a PTY (terminalId is the diagnostic panel and spawnStatus is missing-cli). Fire up to 4 in parallel per message.",
+      "Launch an AI agent in a new terminal. Returns { launched, terminalId, location, worktreeId, worktreePath, branch, cwd } — the resolved identity tells you where the agent landed, so parallel launches can be mapped back to their work without re-resolving the target. `launched: true` means the panel was created and its process is starting, NOT that the agent is ready — poll agent.getState or terminal.getStatus for that. `launched: false` means no agent is running: either nothing was created (every field null) or the CLI is missing, where Daintree opened a setup diagnostic instead (terminalId is that panel, spawnStatus is missing-cli). Fire up to 4 in parallel per message.",
     category: "agent",
     kind: "command",
     danger: "safe",

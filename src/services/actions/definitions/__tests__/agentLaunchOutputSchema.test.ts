@@ -67,50 +67,73 @@ function outputSchema(service: ActionService, id: string): Record<string, unknow
  * only thing that would have caught it.
  */
 describe("agent.launch emits a manifest outputSchema (#11547)", () => {
-  const PUBLIC_FIELDS = [
-    "launched",
-    "terminalId",
-    "location",
-    "spawnStatus",
-    "worktreeId",
-    "worktreePath",
-    "branch",
-    "cwd",
-  ];
+  /** Run the action with a launcher that reports a full identity. */
+  async function runLaunch(
+    launcherResult: Record<string, unknown> | null
+  ): Promise<Record<string, unknown>> {
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, {
+      onLaunchAgent: () => Promise.resolve(launcherResult),
+    } as unknown as ActionCallbacks);
+    const def = registry.get("agent.launch")!() as AnyActionDefinition;
+    return (await def.run({ agentId: "claude" }, {} as never)) as Record<string, unknown>;
+  }
 
-  it("generates an object-typed outputSchema, not a nullable anyOf", () => {
+  const LAUNCHED = {
+    terminalId: "term-1",
+    location: "grid",
+    worktreeId: "wt-1",
+    worktreePath: "/repo/wt-1",
+    branch: "feature/x",
+    cwd: "/repo/wt-1",
+  };
+
+  it("generates an object-typed outputSchema", () => {
+    // The exact gate in buildToolOutputSchema (tierAuth): a top-level `anyOf`,
+    // which is what a `.nullable()` object renders as, has no `type` and is
+    // silently dropped — leaving mcpOutputSchema a no-op.
     const schema = outputSchema(registerAll(), "agent.launch");
     expect(schema).toBeDefined();
     expect(schema!.type).toBe("object");
-    // The exact gate in buildToolOutputSchema — a top-level `anyOf` (what a
-    // nullable object produces) has no `type` and is silently dropped.
-    expect(schema!.anyOf).toBeUndefined();
   });
 
-  it("advertises every field agent.launch actually returns", () => {
+  it("advertises exactly the keys run() emits, in both result shapes", async () => {
+    // Cross-check rather than a copy of the schema's own field list: nothing
+    // validates run()'s literal against resultSchema at runtime, so the only
+    // real invariant is that the two agree.
+    const advertised = Object.keys(
+      (outputSchema(registerAll(), "agent.launch")!.properties as Record<string, unknown>) ?? {}
+    ).sort();
+
+    expect(Object.keys(await runLaunch(LAUNCHED)).sort()).toEqual(advertised);
+    expect(Object.keys(await runLaunch(null)).sort()).toEqual(advertised);
+  });
+
+  it("requires every advertised key, so absent is never a third state beside null", () => {
     const schema = outputSchema(registerAll(), "agent.launch")!;
     const props = Object.keys((schema.properties as Record<string, unknown>) ?? {});
-    expect(props.sort()).toEqual([...PUBLIC_FIELDS].sort());
+    const required = (schema.required as string[] | undefined) ?? [];
+    // An optional field would let a strict client distinguish missing from
+    // null; run() always emits all of them, nullable and never omitted.
+    expect([...required].sort()).toEqual([...props].sort());
   });
 
-  it("marks every field required so a strict client never sees a missing key", () => {
-    const schema = outputSchema(registerAll(), "agent.launch")!;
-    const required = ((schema.required as string[] | undefined) ?? []).slice().sort();
-    // run() always emits all eight — nullable, never omitted. Optional fields
-    // would let a client treat "absent" as a third state alongside null.
-    expect(required).toEqual([...PUBLIC_FIELDS].sort());
-  });
-
-  it("admits null on every field the launcher may not resolve", () => {
+  it("admits null on every key that run() can emit as null", async () => {
+    const declined = await runLaunch(null);
     const props = outputSchema(registerAll(), "agent.launch")!.properties as Record<
       string,
       { anyOf?: Array<{ type?: string }>; type?: string }
     >;
-    for (const field of ["terminalId", "location", "spawnStatus", "worktreeId", "branch", "cwd"]) {
-      const variants = props[field]?.anyOf ?? [];
+
+    // Derived from an actual all-null result, so a newly nullable field is
+    // covered without editing a hardcoded list.
+    for (const [key, value] of Object.entries(declined)) {
+      if (value !== null) continue;
+      const variants = props[key]?.anyOf ?? [];
       expect(variants.some((v) => v.type === "null")).toBe(true);
     }
-    // `launched` is the discriminant and is never null.
+    // `launched` is the discriminant — the one key that is never null.
+    expect(declined.launched).toBe(false);
     expect(props.launched?.type).toBe("boolean");
   });
 
@@ -118,7 +141,12 @@ describe("agent.launch emits a manifest outputSchema (#11547)", () => {
     // `location` accepts overlay as an *argument*, but the launcher collapses
     // anything non-dock to "grid" before returning — advertising overlay in the
     // output would promise a value structuredContent can never carry.
-    const serialized = JSON.stringify(outputSchema(registerAll(), "agent.launch"));
-    expect(serialized).not.toContain("overlay");
+    const props = outputSchema(registerAll(), "agent.launch")!.properties as Record<
+      string,
+      { anyOf?: Array<{ enum?: string[] }> }
+    >;
+    const enums = (props.location?.anyOf ?? []).flatMap((v) => v.enum ?? []);
+    expect(enums).not.toContain("overlay");
+    expect(enums).toContain("grid");
   });
 });

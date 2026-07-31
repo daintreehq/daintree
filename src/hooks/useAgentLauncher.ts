@@ -149,7 +149,7 @@ export interface LaunchAgentOptions {
 }
 
 /**
- * Where a launch actually landed. Resolved before the panel is created, so it
+ * Where a launch landed. Resolved before the panel is created, so it
  * accompanies every non-null launch result — a caller driving several launches
  * at once can map a terminal back to its worktree without re-resolving the
  * target itself and reconciling afterwards (#11547).
@@ -161,8 +161,36 @@ export interface LaunchAgentIdentity {
   worktreePath: string | null;
   /** Branch of the resolved worktree; null when detached or absent. */
   branch: string | null;
-  /** Working directory the panel was actually spawned in. Always resolved. */
-  cwd: string;
+  /** Directory the panel was created with; null when none resolved. */
+  cwd: string | null;
+}
+
+/**
+ * Build the identity reported alongside a launch. Extracted as a pure helper so
+ * the four return points in `launchAgent` share one construction and it stays
+ * testable without mounting the hook — same reason `resolveLaunchWorktree` and
+ * `resolveAgentLaunchKind` are separate.
+ *
+ * `cwd` is normalized from `""` to null: `resolveWorkspaceCwd` returns an empty
+ * string when nothing at all resolves, and main reads a falsy cwd as "use the
+ * home dir". Reporting `""` would name a directory the process never runs in.
+ *
+ * `worktreeId` is reported even when `targetWorktree` is null (the map has not
+ * initialized yet, so the id could not be looked up) because that is the id the
+ * panel is actually created with — the path and branch stay null since neither
+ * is known.
+ */
+export function buildLaunchIdentity(
+  targetWorktreeId: string | null | undefined,
+  targetWorktree: { path?: string; branch?: string } | null,
+  cwd: string
+): LaunchAgentIdentity {
+  return {
+    worktreeId: targetWorktreeId || null,
+    worktreePath: targetWorktree?.path ?? null,
+    branch: targetWorktree?.branch ?? null,
+    cwd: cwd || null,
+  };
 }
 
 export interface LaunchAgentResult extends LaunchAgentIdentity {
@@ -282,15 +310,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           });
 
         // Resolved once, spread into every success return so a caller learns
-        // where the launch landed without re-deriving it. `|| null` matches the
-        // `targetWorktreeId || undefined` the panel options use — an empty
-        // string is not a worktree id.
-        const launchIdentity: LaunchAgentIdentity = {
-          worktreeId: targetWorktreeId || null,
-          worktreePath: targetWorktree?.path ?? null,
-          branch: targetWorktree?.branch ?? null,
-          cwd,
-        };
+        // where the launch landed without re-deriving it.
+        const launchIdentity = buildLaunchIdentity(targetWorktreeId, targetWorktree, cwd);
 
         // Handle browser pane specially
         if (agentId === "browser") {

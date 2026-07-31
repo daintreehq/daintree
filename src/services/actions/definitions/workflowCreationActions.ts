@@ -615,8 +615,13 @@ export function registerWorkflowCreationActions(
         let contextInjected = false;
         if (shouldInject) {
           try {
-            await copyTreeClient.injectToTerminal(terminalId, worktreeId);
-            contextInjected = true;
+            // CopyTree reports the common failures (terminal gone, generation
+            // failed) as a RESOLVED result carrying `error`, not a rejection —
+            // the same check useContextInjection makes. Without it every
+            // resolved call reported success, which now matters: the flag is
+            // published as structuredContent rather than buried in text.
+            const injection = await copyTreeClient.injectToTerminal(terminalId, worktreeId);
+            contextInjected = !injection?.error;
           } catch {
             // Best-effort — agent is launched; user can re-inject manually.
           }

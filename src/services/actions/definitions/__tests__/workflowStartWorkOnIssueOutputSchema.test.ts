@@ -55,39 +55,24 @@ function outputSchema(service: ActionService, id: string): Record<string, unknow
  * tierAuth `type === "object"` gate is exercised end to end.
  */
 describe("workflow.startWorkOnIssue emits a manifest outputSchema (#11547)", () => {
-  const RESULT_FIELDS = [
-    "issueNumber",
-    "issueTitle",
-    "issueUrl",
-    "worktreeId",
-    "worktreePath",
-    "branch",
-    "terminalId",
-    "recipeLaunched",
-    "spawnedTerminalCount",
-    "failedTerminalCount",
-    "assignedToSelf",
-    "assignedUsername",
-    "assignmentError",
-    "contextInjected",
-  ];
-
   it("generates an object-typed outputSchema", () => {
+    // Without mcpOutputSchema this is undefined; with a top-level nullable
+    // schema it would be an untyped `anyOf` that tierAuth drops. Either
+    // regression fails here.
     const schema = outputSchema(registerAll(), "workflow.startWorkOnIssue");
     expect(schema).toBeDefined();
     expect(schema!.type).toBe("object");
   });
 
-  it("advertises the full issue-to-agent identity", () => {
-    const schema = outputSchema(registerAll(), "workflow.startWorkOnIssue")!;
-    const props = Object.keys((schema.properties as Record<string, unknown>) ?? {});
-    expect(props.sort()).toEqual([...RESULT_FIELDS].sort());
-  });
-
   it("requires every advertised field", () => {
     const schema = outputSchema(registerAll(), "workflow.startWorkOnIssue")!;
-    const required = ((schema.required as string[] | undefined) ?? []).slice().sort();
-    expect(required).toEqual([...RESULT_FIELDS].sort());
+    const props = Object.keys((schema.properties as Record<string, unknown>) ?? {});
+    const required = (schema.required as string[] | undefined) ?? [];
+    // `run()` always emits the whole object, so nothing may be optional — an
+    // optional key lets a strict client read "absent" as a distinct state.
+    // (workflowActions.adversarial covers the run()-vs-schema agreement.)
+    expect(props.length).toBeGreaterThan(0);
+    expect([...required].sort()).toEqual([...props].sort());
   });
 
   it("does not flip the flag on its sibling worktree.createWithRecipe", () => {
