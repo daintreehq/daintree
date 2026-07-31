@@ -535,11 +535,7 @@ describe("actions.list", () => {
 
     const page = await listPage({ limit: 3, offset: 4 });
 
-    expect(page.actions.map((a) => a.id)).toEqual([
-      "actions.p004",
-      "actions.p005",
-      "actions.p006",
-    ]);
+    expect(page.actions.map((a) => a.id)).toEqual(["actions.p004", "actions.p005", "actions.p006"]);
     expect(page.limit).toBe(3);
     expect(page.offset).toBe(4);
     expect(page.total).toBe(10);
