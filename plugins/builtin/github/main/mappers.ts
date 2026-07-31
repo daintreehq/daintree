@@ -8,7 +8,9 @@ import type {
   NormalizedIssueState,
   NormalizedPRState,
   NormalizedReviewDecision,
+  NormalizedReviewState,
   PR,
+  PullRequestReview,
 } from "../../../../shared/types/forge.js";
 import type { GitHubIssue, GitHubPR, GitHubPRCIStatus, GitHubUser } from "../shared/types.js";
 
@@ -184,6 +186,43 @@ export function restToForgePR(raw: Record<string, unknown>): PR {
     updatedAt: isoToMs(raw.updated_at),
     closedAt: isoToMsOrNull(raw.closed_at),
     mergedAt: isoToMsOrNull(raw.merged_at),
+    rawData: raw,
+  };
+}
+
+function normalizeReviewState(rawState: string): NormalizedReviewState {
+  switch (rawState.toUpperCase()) {
+    case "APPROVED":
+      return "approved";
+    case "CHANGES_REQUESTED":
+      return "changes_requested";
+    case "COMMENTED":
+      return "commented";
+    case "DISMISSED":
+      return "dismissed";
+    case "PENDING":
+      return "pending";
+    default:
+      return "unknown";
+  }
+}
+
+/**
+ * Map a GitHub REST review payload (the body returned by the submit-review and
+ * dismiss-review endpoints) to the contract {@link PullRequestReview}. GitHub
+ * ids are numeric; the contract keeps them as strings so non-numeric forges fit.
+ */
+export function restToForgeReview(raw: Record<string, unknown>): PullRequestReview {
+  const rawState = typeof raw.state === "string" ? raw.state : "";
+  return {
+    id: String(raw.id),
+    state: normalizeReviewState(rawState),
+    rawState,
+    body: typeof raw.body === "string" ? raw.body : "",
+    url: typeof raw.html_url === "string" ? raw.html_url : "",
+    author: restUserToForgeUser(raw.user),
+    submittedAt: isoToMsOrNull(raw.submitted_at),
+    commitId: typeof raw.commit_id === "string" ? raw.commit_id : null,
     rawData: raw,
   };
 }

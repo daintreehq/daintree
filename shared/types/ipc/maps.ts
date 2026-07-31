@@ -1071,7 +1071,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "forge:assign-issue": {
     args: [payload: { cwd: string; issueNumber: number; username: string }];
-    result: void;
+    result: ForgeUser[];
   };
   "forge:validate-token": {
     args: [payload: { providerId: string; token: string }];

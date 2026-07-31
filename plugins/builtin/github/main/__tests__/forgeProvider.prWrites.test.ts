@@ -195,6 +195,50 @@ describe("closePR / reopenPR", () => {
     expect(JSON.parse(init.body as string)).toEqual({ state: "closed" });
   });
 
+  it("closePR returns the updated PR normalized from the response (#11546)", async () => {
+    mockFetch({ ok: true, status: 200, body: { ...restPR, state: "closed", closed_at: "2025-02-03T04:05:06Z" } });
+
+    const pr = await githubForgeProvider.closePR(repo, 42);
+
+    // The result is derived from the response, not from the request — a stale
+    // "open" here would mean the caller is reading its own input back.
+    expect(pr.state).toBe("closed");
+    expect(pr.number).toBe(restPR.number);
+    expect(pr.url).toBe(restPR.html_url);
+  });
+
+  it("reopenPR returns the updated PR", async () => {
+    mockFetch({ ok: true, status: 200, body: { ...restPR, state: "open" } });
+
+    const pr = await githubForgeProvider.reopenPR(repo, 42);
+
+    expect(pr.state).toBe("open");
+    expect(pr.number).toBe(restPR.number);
+  });
+
+  it("rejects a 2xx close whose body carries no PR number", async () => {
+    mockFetch({ ok: true, status: 200, body: { html_url: "https://example.test" } });
+
+    await expect(githubForgeProvider.closePR(repo, 42)).rejects.toThrow(
+      /missing PR number or URL/i
+    );
+  });
+
+  it("still drops the PR caches when the close response is unusable", async () => {
+    // The PATCH landed even though the body is junk — a cache left intact would
+    // keep serving the pre-close state.
+    mockFetch({ ok: true, status: 200, body: { nonsense: true } });
+    forgePRListCache.set("owner/repo:open", {
+      items: [],
+      nextCursor: null,
+      hasMore: false,
+    } as unknown as import("../../../../../shared/types/forge.js").Page<PR>);
+
+    await expect(githubForgeProvider.closePR(repo, 42)).rejects.toThrow();
+
+    expect(forgePRListCache.size()).toBe(0);
+  });
+
   it("reopenPR PATCHes state=open", async () => {
     const fetchMock = mockFetch({ ok: true, status: 200, body: restPR });
     await githubForgeProvider.reopenPR(repo, 42);
@@ -212,8 +256,49 @@ describe("closePR / reopenPR", () => {
 });
 
 describe("mergePR", () => {
+  // GitHub's merge endpoint answers with exactly this and nothing else — no
+  // resulting PR state.
+  const mergedBody = {
+    sha: "9fceb02aabbccddee",
+    merged: true,
+    message: "Pull Request successfully merged",
+  };
+
+  it("returns the merge acknowledgement from a single request (#11546)", async () => {
+    const fetchMock = mockFetch({ ok: true, status: 200, body: mergedBody });
+
+    const result = await githubForgeProvider.mergePR(repo, 42);
+
+    expect(result).toEqual({
+      prNumber: 42,
+      sha: mergedBody.sha,
+      merged: true,
+      message: mergedBody.message,
+    });
+    // No follow-up GET for the resulting PR: the merge has already landed, so a
+    // failing second read would report a completed merge as a failure.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports sha as null when the forge omits one", async () => {
+    mockFetch({ ok: true, status: 200, body: { merged: true, message: "Merged" } });
+
+    const result = await githubForgeProvider.mergePR(repo, 42);
+
+    expect(result.sha).toBeNull();
+    expect(result.merged).toBe(true);
+  });
+
+  it("passes through a non-merged acknowledgement rather than inventing success", async () => {
+    mockFetch({ ok: true, status: 200, body: { sha: null, merged: false, message: "Not merged" } });
+
+    const result = await githubForgeProvider.mergePR(repo, 42);
+
+    expect(result.merged).toBe(false);
+  });
+
   it("PUTs to the merge endpoint with the chosen strategy", async () => {
-    const fetchMock = mockFetch({ ok: true, status: 200, body: { merged: true } });
+    const fetchMock = mockFetch({ ok: true, status: 200, body: mergedBody });
     await githubForgeProvider.mergePR(repo, 42, { mergeMethod: "squash" });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api.github.com/repos/owner/repo/pulls/42/merge");
@@ -222,7 +307,7 @@ describe("mergePR", () => {
   });
 
   it("forwards commit title/message as snake_case fields", async () => {
-    const fetchMock = mockFetch({ ok: true, status: 200, body: { merged: true } });
+    const fetchMock = mockFetch({ ok: true, status: 200, body: mergedBody });
     await githubForgeProvider.mergePR(repo, 42, {
       mergeMethod: "merge",
       commitTitle: "Custom title",
@@ -255,7 +340,9 @@ describe("convertPRToDraft / markPRReadyForReview (GraphQL)", () => {
   it("convertPRToDraft resolves the node id then runs the GraphQL mutation", async () => {
     mockGraphQLClient
       .mockResolvedValueOnce({ repository: { pullRequest: { id: "PR_node_42" } } })
-      .mockResolvedValueOnce({ convertPullRequestToDraft: { pullRequest: { id: "PR_node_42" } } });
+      .mockResolvedValueOnce({
+        convertPullRequestToDraft: { pullRequest: { id: "PR_node_42", isDraft: true } },
+      });
 
     await githubForgeProvider.convertPRToDraft(repo, 42);
 
@@ -269,13 +356,38 @@ describe("convertPRToDraft / markPRReadyForReview (GraphQL)", () => {
     mockGraphQLClient
       .mockResolvedValueOnce({ repository: { pullRequest: { id: "PR_node_7" } } })
       .mockResolvedValueOnce({
-        markPullRequestReadyForReview: { pullRequest: { id: "PR_node_7" } },
+        markPullRequestReadyForReview: { pullRequest: { id: "PR_node_7", isDraft: false } },
       });
 
     await githubForgeProvider.markPRReadyForReview(repo, 7);
 
     expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
     expect((mockGraphQLClient.mock.calls[1]?.[1] as Record<string, unknown>).id).toBe("PR_node_7");
+  });
+
+  it("returns the draft state GitHub reported, not the one requested (#11546)", async () => {
+    // GitHub is the authority here: if it says the PR is still a draft after a
+    // ready-for-review call, the caller must see that, not an assumed `false`.
+    mockGraphQLClient
+      .mockResolvedValueOnce({ repository: { pullRequest: { id: "PR_node_7" } } })
+      .mockResolvedValueOnce({
+        markPullRequestReadyForReview: { pullRequest: { id: "PR_node_7", isDraft: true } },
+      });
+
+    const result = await githubForgeProvider.markPRReadyForReview(repo, 7);
+
+    expect(result).toEqual({ prNumber: 7, isDraft: true });
+  });
+
+  it("falls back to the requested state when the ack omits isDraft", async () => {
+    // The mutation already succeeded — a thin ack must not fail the write.
+    mockGraphQLClient
+      .mockResolvedValueOnce({ repository: { pullRequest: { id: "PR_node_42" } } })
+      .mockResolvedValueOnce({ convertPullRequestToDraft: { pullRequest: { id: "PR_node_42" } } });
+
+    const result = await githubForgeProvider.convertPRToDraft(repo, 42);
+
+    expect(result).toEqual({ prNumber: 42, isDraft: true });
   });
 
   it("throws when the PR node id can't be resolved", async () => {
@@ -294,8 +406,35 @@ describe("convertPRToDraft / markPRReadyForReview (GraphQL)", () => {
 });
 
 describe("commentOnPR", () => {
+  const restComment = {
+    id: 55501,
+    body: "Looks good",
+    html_url: "https://github.com/owner/repo/pull/42#issuecomment-55501",
+    user: { login: "octocat", avatar_url: "https://avatars/octocat" },
+    created_at: "2025-04-05T06:07:08Z",
+  };
+
+  it("returns the created comment normalized from the response (#11546)", async () => {
+    mockFetch({ ok: true, status: 201, body: restComment });
+
+    const comment = await githubForgeProvider.commentOnPR(repo, 42, "Looks good");
+
+    expect(comment.id).toBe(String(restComment.id));
+    expect(comment.url).toBe(restComment.html_url);
+    expect(comment.createdAt).toBe(Date.parse(restComment.created_at));
+    expect(comment.author?.login).toBe(restComment.user.login);
+  });
+
+  it("rejects a 2xx body missing the comment id or URL", async () => {
+    mockFetch({ ok: true, status: 201, body: { body: "Looks good" } });
+
+    await expect(githubForgeProvider.commentOnPR(repo, 42, "Looks good")).rejects.toThrow(
+      /missing comment id or URL/i
+    );
+  });
+
   it("POSTs to the issues/{n}/comments endpoint with the body", async () => {
-    const fetchMock = mockFetch({ ok: true, status: 201, body: { id: 1 } });
+    const fetchMock = mockFetch({ ok: true, status: 201, body: restComment });
     await githubForgeProvider.commentOnPR(repo, 42, "Looks good");
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api.github.com/repos/owner/repo/issues/42/comments");
@@ -304,14 +443,14 @@ describe("commentOnPR", () => {
   });
 
   it("requires a non-empty body", async () => {
-    mockFetch({ ok: true, status: 201, body: { id: 1 } });
+    mockFetch({ ok: true, status: 201, body: restComment });
     await expect(githubForgeProvider.commentOnPR(repo, 42, "   ")).rejects.toThrow(
       /body is required/i
     );
   });
 
   it("posts the body verbatim (does not trim user Markdown)", async () => {
-    const fetchMock = mockFetch({ ok: true, status: 201, body: { id: 1 } });
+    const fetchMock = mockFetch({ ok: true, status: 201, body: restComment });
     // Leading indentation matters inside fenced code blocks — must survive.
     await githubForgeProvider.commentOnPR(repo, 42, "    npm test\n");
     expect(JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string)).toEqual({
@@ -320,7 +459,7 @@ describe("commentOnPR", () => {
   });
 
   it("invalidates the PR list cache after a successful comment", async () => {
-    mockFetch({ ok: true, status: 201, body: { id: 1 } });
+    mockFetch({ ok: true, status: 201, body: restComment });
     forgePRListCache.set("owner/repo:open", {
       items: [],
       nextCursor: null,

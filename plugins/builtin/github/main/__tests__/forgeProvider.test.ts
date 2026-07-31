@@ -1916,8 +1916,32 @@ describe("createIssue", () => {
 });
 
 describe("review write operations", () => {
-  function mockReviewFetchOk(status = 200) {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status });
+  // GitHub answers the submit/dismiss endpoints with the review itself, and the
+  // requested-reviewers endpoint with the pull request. Both are normalized and
+  // returned to the caller (#11546), so the fixture must carry a real body.
+  const restReview = {
+    id: 8801,
+    node_id: "PRR_abc",
+    user: { login: "octocat", avatar_url: "https://avatars/octocat" },
+    body: "Looks good to me",
+    state: "APPROVED",
+    html_url: "https://github.com/owner/repo/pull/3#pullrequestreview-8801",
+    submitted_at: "2025-03-04T05:06:07Z",
+    commit_id: "deadbeefcafe",
+  };
+
+  const restReviewerPR = {
+    number: 6,
+    requested_reviewers: [{ login: "octocat" }, { login: "hubot" }],
+    requested_teams: [{ slug: "core-team", name: "Core Team" }],
+  };
+
+  function mockReviewFetchOk(status = 200, body: unknown = restReview) {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status,
+      json: vi.fn().mockResolvedValue(body),
+    });
     (globalThis as unknown as { fetch: typeof fetchMock }).fetch = fetchMock;
     return fetchMock;
   }
@@ -1976,6 +2000,39 @@ describe("review write operations", () => {
       );
     });
 
+    it("normalizes the created review (REST field names -> contract review)", async () => {
+      mockReviewFetchOk();
+
+      const review = await githubForgeProvider.reviews!.approvePR!(repo, 3, "LGTM");
+
+      expect(review.id).toBe(String(restReview.id));
+      expect(review.state).toBe("approved");
+      // rawState keeps GitHub's own spelling alongside the normalized verdict.
+      expect(review.rawState).toBe(restReview.state);
+      expect(review.url).toBe(restReview.html_url);
+      expect(review.author?.login).toBe(restReview.user.login);
+      expect(review.author?.avatarUrl).toBe(restReview.user.avatar_url);
+      expect(review.submittedAt).toBe(Date.parse(restReview.submitted_at));
+      expect(review.commitId).toBe(restReview.commit_id);
+    });
+
+    it("maps an unrecognized verdict to `unknown` without losing the raw value", async () => {
+      mockReviewFetchOk(200, { ...restReview, state: "SOMETHING_NEW" });
+
+      const review = await githubForgeProvider.reviews!.approvePR!(repo, 3);
+
+      expect(review.state).toBe("unknown");
+      expect(review.rawState).toBe("SOMETHING_NEW");
+    });
+
+    it("rejects a 2xx body that carries no review id", async () => {
+      mockReviewFetchOk(200, { state: "APPROVED" });
+
+      await expect(githubForgeProvider.reviews!.approvePR!(repo, 3)).rejects.toThrow(
+        /missing review id/i
+      );
+    });
+
     it("surfaces the HTTP status when the forge rejects the review", async () => {
       (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
         .fn()
@@ -2014,6 +2071,15 @@ describe("review write operations", () => {
       expect(prTooltipCache.get("owner/repo:4")).toBeUndefined();
     });
 
+    it("returns the created changes-requested review", async () => {
+      mockReviewFetchOk(200, { ...restReview, state: "CHANGES_REQUESTED", body: "Please fix" });
+
+      const review = await githubForgeProvider.reviews!.requestChanges!(repo, 4, "Please fix");
+
+      expect(review.state).toBe("changes_requested");
+      expect(review.body).toBe("Please fix");
+    });
+
     it("surfaces the HTTP status on failure", async () => {
       (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
         .fn()
@@ -2045,6 +2111,15 @@ describe("review write operations", () => {
       });
     });
 
+    it("returns the dismissed review", async () => {
+      mockReviewFetchOk(200, { ...restReview, state: "DISMISSED" });
+
+      const review = await githubForgeProvider.reviews!.dismissReview!(repo, 5, 99, "stale");
+
+      expect(review.state).toBe("dismissed");
+      expect(review.id).toBe(String(restReview.id));
+    });
+
     it("surfaces the HTTP status on failure", async () => {
       (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
         .fn()
@@ -2070,7 +2145,7 @@ describe("review write operations", () => {
 
   describe("requestReviewers", () => {
     it("POSTs users as reviewers and teams as team_reviewers", async () => {
-      const fetchMock = mockReviewFetchOk(201);
+      const fetchMock = mockReviewFetchOk(201, restReviewerPR);
 
       await githubForgeProvider.reviews!.requestReviewers!(repo, 6, {
         users: ["octocat"],
@@ -2088,7 +2163,7 @@ describe("review write operations", () => {
     });
 
     it("sends empty arrays for the side not supplied", async () => {
-      const fetchMock = mockReviewFetchOk(201);
+      const fetchMock = mockReviewFetchOk(201, restReviewerPR);
 
       await githubForgeProvider.reviews!.requestReviewers!(repo, 6, { users: ["octocat"] });
 
@@ -2097,6 +2172,31 @@ describe("review write operations", () => {
         reviewers: ["octocat"],
         team_reviewers: [],
       });
+    });
+
+    it("reports the PR's resulting reviewer lists, not the requested ones", async () => {
+      // The response carries a reviewer the caller did not ask for (`hubot`,
+      // requested earlier) — the result must reflect the PR's actual state.
+      mockReviewFetchOk(201, restReviewerPR);
+
+      const result = await githubForgeProvider.reviews!.requestReviewers!(repo, 6, {
+        users: ["octocat"],
+      });
+
+      expect(result.prNumber).toBe(6);
+      expect(result.requestedUsers).toEqual(["octocat", "hubot"]);
+      expect(result.requestedTeams).toEqual(["core-team"]);
+    });
+
+    it("yields empty lists when the response carries no reviewer arrays", async () => {
+      mockReviewFetchOk(201, { number: 6 });
+
+      const result = await githubForgeProvider.reviews!.requestReviewers!(repo, 6, {
+        users: ["octocat"],
+      });
+
+      expect(result.requestedUsers).toEqual([]);
+      expect(result.requestedTeams).toEqual([]);
     });
 
     it("rejects without hitting the network when no reviewer is supplied", async () => {
@@ -2123,13 +2223,80 @@ describe("review write operations", () => {
     });
 
     it("does NOT invalidate the PR caches (requested reviewers are not part of the cached PR)", async () => {
-      mockReviewFetchOk(201);
+      mockReviewFetchOk(201, restReviewerPR);
       prTooltipCache.set("owner/repo:6", {} as never);
 
       await githubForgeProvider.reviews!.requestReviewers!(repo, 6, { users: ["octocat"] });
 
       expect(prTooltipCache.get("owner/repo:6")).toBeDefined();
     });
+  });
+});
+
+describe("assignIssue / unassignIssue results (#11546)", () => {
+  const assigneesBody = (logins: string[]) => ({
+    number: 7,
+    html_url: "https://github.com/owner/repo/issues/7",
+    assignees: logins.map((login) => ({ login, avatar_url: `https://avatars/${login}` })),
+  });
+
+  function mockAssignOk(body: unknown, status = 201) {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status,
+      json: vi.fn().mockResolvedValue(body),
+      text: vi.fn().mockResolvedValue(""),
+    });
+    (globalThis as unknown as { fetch: typeof fetchMock }).fetch = fetchMock;
+    return fetchMock;
+  }
+
+  beforeEach(() => {
+    vi.mocked(GitHubAuth.getToken).mockReturnValue("test-token");
+  });
+
+  it("returns the issue's resulting assignee list, not the requested user", async () => {
+    // GitHub silently ignores an assignee without push access: the POST still
+    // succeeds, but the user is absent from the resulting list. Reporting the
+    // request back would claim an assignment that never landed.
+    mockAssignOk(assigneesBody(["existing-user"]));
+
+    const assignees = await githubForgeProvider.assignIssue(repo, 7, "no-access-user");
+
+    expect(assignees.map((a) => a.login)).toEqual(["existing-user"]);
+  });
+
+  it("carries the avatar the response supplies", async () => {
+    mockAssignOk(assigneesBody(["octocat"]));
+
+    const assignees = await githubForgeProvider.assignIssue(repo, 7, "octocat");
+
+    expect(assignees[0]?.avatarUrl).toBe("https://avatars/octocat");
+  });
+
+  it("unassignIssue DELETEs and returns the remaining assignees", async () => {
+    const fetchMock = mockAssignOk(assigneesBody(["kept-user"]), 200);
+
+    const assignees = await githubForgeProvider.unassignIssue(repo, 7, "removed-user");
+
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe("DELETE");
+    expect(assignees.map((a) => a.login)).toEqual(["kept-user"]);
+  });
+
+  it("skips entries the response can't be mapped to an account", async () => {
+    mockAssignOk({ number: 7, assignees: [{ login: "octocat" }, {}, null, { id: 4 }] });
+
+    const assignees = await githubForgeProvider.assignIssue(repo, 7, "octocat");
+
+    expect(assignees.map((a) => a.login)).toEqual(["octocat"]);
+  });
+
+  it("rejects a 2xx body with no assignees array", async () => {
+    mockAssignOk({ number: 7, html_url: "https://example.test" });
+
+    await expect(githubForgeProvider.assignIssue(repo, 7, "octocat")).rejects.toThrow(
+      /missing issue assignees/i
+    );
   });
 });
 
