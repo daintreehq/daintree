@@ -9,3 +9,11 @@
  */
 export const ACTIONS_SEARCH_MAX_LIMIT = 100;
 export const ACTIONS_SEARCH_DEFAULT_LIMIT = 20;
+
+/**
+ * Page bounds for `actions.list` (#11529), shared for the same reason: the
+ * renderer pages the match set, but tier filtering happens in main, so main
+ * has to walk those pages itself before it can page the *permitted* set.
+ */
+export const ACTIONS_LIST_MAX_LIMIT = 100;
+export const ACTIONS_LIST_DEFAULT_LIMIT = 50;

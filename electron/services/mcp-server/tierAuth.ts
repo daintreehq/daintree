@@ -6,6 +6,8 @@ import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import type { HelpTokenValidator } from "./shared.js";
 import { type McpTier, TIER_ALLOWLISTS } from "./shared.js";
 import {
+  ACTIONS_LIST_DEFAULT_LIMIT,
+  ACTIONS_LIST_MAX_LIMIT,
   ACTIONS_SEARCH_DEFAULT_LIMIT,
   ACTIONS_SEARCH_MAX_LIMIT,
 } from "../../../shared/config/mcpIntrospection.js";
@@ -139,7 +141,12 @@ export const INTROSPECTION_TOOL_IDS: ReadonlySet<string> = new Set([
   ACTIONS_GET_SCHEMA_TOOL_ID,
 ]);
 
-export { ACTIONS_SEARCH_DEFAULT_LIMIT, ACTIONS_SEARCH_MAX_LIMIT };
+export {
+  ACTIONS_LIST_DEFAULT_LIMIT,
+  ACTIONS_LIST_MAX_LIMIT,
+  ACTIONS_SEARCH_DEFAULT_LIMIT,
+  ACTIONS_SEARCH_MAX_LIMIT,
+};
 
 /**
  * The page size an `actions.search` caller asked for, clamped to the tool's
@@ -156,6 +163,31 @@ export function readSearchLimit(args: unknown): number | null {
   if (typeof limit !== "number" || !Number.isInteger(limit)) return null;
   if (limit < 1 || limit > ACTIONS_SEARCH_MAX_LIMIT) return null;
   return limit;
+}
+
+/**
+ * The page window an `actions.list` caller asked for. Returns null when the
+ * caller supplied bounds the renderer's own validation will reject, so the
+ * handler leaves those args alone instead of rewriting an out-of-contract
+ * request into a legal one.
+ */
+export function readListPaging(args: unknown): { offset: number; limit: number } | null {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return { offset: 0, limit: ACTIONS_LIST_DEFAULT_LIMIT };
+  }
+  const { limit, offset } = args as { limit?: unknown; offset?: unknown };
+  let resolvedLimit = ACTIONS_LIST_DEFAULT_LIMIT;
+  if (limit !== undefined) {
+    if (typeof limit !== "number" || !Number.isInteger(limit)) return null;
+    if (limit < 1 || limit > ACTIONS_LIST_MAX_LIMIT) return null;
+    resolvedLimit = limit;
+  }
+  let resolvedOffset = 0;
+  if (offset !== undefined) {
+    if (typeof offset !== "number" || !Number.isInteger(offset) || offset < 0) return null;
+    resolvedOffset = offset;
+  }
+  return { offset: resolvedOffset, limit: resolvedLimit };
 }
 
 /**
@@ -205,7 +237,11 @@ export function filterIntrospectionResultForSession(
   actionId: string,
   result: ActionDispatchResult,
   permittedActionIds: ReadonlySet<string>,
-  options: { callerLimit: number; requestedActionId?: string }
+  options: {
+    callerLimit: number;
+    requestedActionId?: string;
+    listPaging?: { offset: number; limit: number };
+  }
 ): ActionDispatchResult {
   if (!result.ok) return result;
 
@@ -218,10 +254,27 @@ export function filterIntrospectionResultForSession(
   if (actionId === ACTIONS_LIST_TOOL_ID) {
     const payload = result.result as { actions?: unknown } | null | undefined;
     const entries = Array.isArray(payload?.actions) ? payload.actions : [];
+    const permitted = entries.filter((entry) =>
+      isDiscoverableForSession(entry, permittedActionIds)
+    );
+    // `entries` is the COMPLETE match set — the handler walked every renderer
+    // page before calling this. Paging the permitted set here (rather than
+    // filtering a page the renderer already cut) is what keeps `total` and
+    // `hasMore` describing the surface the caller can actually reach: a page
+    // sliced before the tier filter would come back short, and its `total`
+    // would count actions this session can never dispatch (#11529 + #11525).
+    const { offset, limit } = options.listPaging ?? {
+      offset: 0,
+      limit: ACTIONS_LIST_DEFAULT_LIMIT,
+    };
     return {
       ok: true,
       result: {
-        actions: entries.filter((entry) => isDiscoverableForSession(entry, permittedActionIds)),
+        actions: permitted.slice(offset, offset + limit),
+        total: permitted.length,
+        limit,
+        offset,
+        hasMore: offset + limit < permitted.length,
       },
     };
   }
@@ -249,31 +302,33 @@ export function filterIntrospectionResultForSession(
 
   if (actionId === ACTIONS_GET_SCHEMA_TOOL_ID) {
     const payload = result.result as { ok?: unknown; entry?: unknown } | null | undefined;
-    if (payload && payload.ok === false) return result;
     // Authorize the id the CALLER asked for, never the one the payload
     // carries: a mismatch means the renderer answered a different question,
     // and honouring the payload's id would let a permitted id vouch for a
-    // denied entry's schema.
+    // denied entry's schema. An absent request id fails closed — the tool's
+    // schema requires one, so its absence means this is not an answer to a
+    // well-formed request.
     const requestedId = options.requestedActionId;
-    const entryId = readEntryId(payload?.entry);
     const answersTheRequest =
       payload?.ok === true &&
-      entryId !== null &&
-      (requestedId === undefined || entryId === requestedId);
+      requestedId !== undefined &&
+      readEntryId(payload.entry) === requestedId;
     if (answersTheRequest && isDiscoverableForSession(payload.entry, permittedActionIds)) {
-      return result;
+      return { ok: true, result: { ok: true, entry: payload.entry } };
     }
     // Collapse onto the shape the renderer already returns for an unknown,
     // hidden, or restricted id rather than minting a tier-specific error: a
     // distinct error would confirm the id exists while offering no way to
     // reach it (grants are issued off a denied *dispatch*, not a schema read).
+    // The renderer's own denial is rebuilt rather than forwarded, so the
+    // message can only ever name the id the caller asked about.
     return {
       ok: true,
       result: {
         ok: false,
         error: {
           code: "NOT_FOUND",
-          message: `No action found with id "${requestedId ?? entryId ?? "unknown"}". Use actions.search to find available actions.`,
+          message: `No action found with id "${requestedId ?? "unknown"}". Use actions.search to find available actions.`,
         },
       },
     };

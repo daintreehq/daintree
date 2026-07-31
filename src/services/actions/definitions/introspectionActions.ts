@@ -3,6 +3,8 @@ import type { ActionContext, ActionManifestEntry } from "@shared/types/actions";
 import { z } from "zod";
 import { PersistedStoreInfoSchema } from "./schemas";
 import {
+  ACTIONS_LIST_DEFAULT_LIMIT,
+  ACTIONS_LIST_MAX_LIMIT,
   ACTIONS_SEARCH_DEFAULT_LIMIT,
   ACTIONS_SEARCH_MAX_LIMIT,
 } from "@shared/config/mcpIntrospection";
@@ -15,10 +17,11 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { listPersistedStores } from "@/store/persistence/persistedStoreRegistry";
 import { readLocalStorageItemSafely } from "@/store/persistence/safeStorage";
 
-// Page bounds for actions.list. Shared by argsSchema and run() so the
-// advertised default can never drift from the applied one (#11529).
-const DEFAULT_LIST_LIMIT = 50;
-const MAX_LIST_LIMIT = 100;
+// Page bounds for actions.list, shared with the main-process tier filter so
+// the advertised default can never drift from the applied one (#11529) nor
+// from the window main walks to collect the full match set (#11525).
+const DEFAULT_LIST_LIMIT = ACTIONS_LIST_DEFAULT_LIMIT;
+const MAX_LIST_LIMIT = ACTIONS_LIST_MAX_LIMIT;
 
 export function registerIntrospectionActions(
   actions: ActionRegistry,
@@ -255,8 +258,7 @@ export function registerIntrospectionActions(
   actions.set("actions.search", () => ({
     id: "actions.search",
     title: "Search Actions",
-    description:
-      "Search the action registry by natural-language query, ranked by relevance. Args: `query` (required — keywords or phrase); `limit` (optional, 1-100, default 20). Returns { totalMatches, results } where results are lightweight manifest entries WITHOUT inputSchema/outputSchema. Errors when `query` is empty or whitespace-only. Use this for ranked discovery, then `actions.getSchema` for the chosen action's full schema; use `actions.list` when you want filtered, paginated enumeration instead of ranking.",
+    description: `Search the action registry by natural-language query, ranked by relevance. Args: \`query\` (required — keywords or phrase); \`limit\` (optional, 1-${ACTIONS_SEARCH_MAX_LIMIT}, default ${ACTIONS_SEARCH_DEFAULT_LIMIT}). Returns { totalMatches, results } where results are lightweight manifest entries WITHOUT inputSchema/outputSchema. Errors when \`query\` is empty or whitespace-only. Use this for ranked discovery, then \`actions.getSchema\` for the chosen action's full schema; use \`actions.list\` when you want filtered, paginated enumeration instead of ranking.`,
     category: "introspection",
     kind: "query",
     danger: "safe",

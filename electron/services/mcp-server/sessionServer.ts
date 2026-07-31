@@ -72,13 +72,22 @@ import {
   filterIntrospectionResultForSession,
   getTierPermittedActionIds,
   readSearchLimit,
+  readListPaging,
   readRequestedActionId,
   INTROSPECTION_TOOL_IDS,
+  ACTIONS_LIST_TOOL_ID,
+  ACTIONS_LIST_MAX_LIMIT,
   ACTIONS_SEARCH_TOOL_ID,
   ACTIONS_SEARCH_MAX_LIMIT,
   ACTIONS_SEARCH_DEFAULT_LIMIT,
 } from "./tierAuth.js";
 import { buildToolCallResult } from "./toolCallResult.js";
+
+/**
+ * Backstop on the `actions.list` page walk. The registry is a few hundred
+ * actions, so this only bounds a renderer that never stops reporting `hasMore`.
+ */
+const MAX_LIST_PAGE_WALK = 20;
 
 const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
 const TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL = "terminal.waitUntilIdleBatch";
@@ -420,6 +429,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const capturedTurnId: string | null = getCurrentTurnId?.() ?? null;
 
     const searchLimit = actionId === ACTIONS_SEARCH_TOOL_ID ? readSearchLimit(args) : null;
+    const listPaging = actionId === ACTIONS_LIST_TOOL_ID ? readListPaging(args) : null;
     // Discovery must mirror dispatch authority (#11525). The introspection
     // tools enumerate the action registry from the renderer, which has no idea
     // which session called it, so main computes the effective surface here and
@@ -444,6 +454,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           ]),
           callerLimit: searchLimit ?? ACTIONS_SEARCH_DEFAULT_LIMIT,
           requestedActionId: readRequestedActionId(args),
+          ...(listPaging ? { listPaging } : {}),
         }
       : null;
     // `actions.search` ranks and slices in the renderer, before main can see
@@ -976,8 +987,56 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // every failure path below (no window, session binding gone, throw)
         // leaves it undefined and stamps nothing.
         let dispatchedWorkspace: DispatchedWorkspaceRef | undefined;
+
+        /**
+         * Collect every page of an `actions.list` match set. The renderer pages
+         * before main can apply the tier filter (#11529), so filtering one of its
+         * pages would return a short page whose `total`/`hasMore` counted actions
+         * this session cannot dispatch. Walking the pages here lets the filter
+         * page the *permitted* set instead, which keeps the contract coherent.
+         * Entries carry no schemas, so this is a handful of cheap round trips.
+         */
+        const collectListPages = async (): Promise<DispatchEnvelope> => {
+          const base = args && typeof args === "object" && !Array.isArray(args) ? args : {};
+          const collected: unknown[] = [];
+          let offset = 0;
+          let confirmationDecision: DispatchEnvelope["confirmationDecision"];
+          // The target is resolved once, before paging, so every page lands on
+          // the same workspace — carrying the first page's ref out with the
+          // synthesized envelope lets the caller stamp the paged result through
+          // the same `withResolvedWorkspace` path the single-shot dispatch uses
+          // (#11536). Skipping it would silently drop the field from exactly the
+          // calls that walked more than one page.
+          let pagedWorkspace: DispatchedWorkspaceRef | undefined;
+          // The registry is a few hundred actions; the cap only stops a renderer
+          // that never stops reporting `hasMore`.
+          for (let page = 0; page < MAX_LIST_PAGE_WALK; page++) {
+            const envelope = await dispatchAction(
+              actionId,
+              { ...(base as Record<string, unknown>), offset, limit: ACTIONS_LIST_MAX_LIMIT },
+              dispatchConfirmed
+            );
+            confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
+            pagedWorkspace = pagedWorkspace ?? envelope.dispatchedWorkspace;
+            if (!envelope.result.ok) return envelope;
+            const payload = envelope.result.result as
+              { actions?: unknown; hasMore?: unknown } | null | undefined;
+            if (!payload || !Array.isArray(payload.actions)) break;
+            collected.push(...payload.actions);
+            if (payload.hasMore !== true || payload.actions.length === 0) break;
+            offset += ACTIONS_LIST_MAX_LIMIT;
+          }
+          return {
+            result: { ok: true, result: { actions: collected } },
+            confirmationDecision,
+            ...(pagedWorkspace ? { dispatchedWorkspace: pagedWorkspace } : {}),
+          };
+        };
+
         try {
-          const envelope = await dispatchAction(actionId, dispatchArgs, dispatchConfirmed);
+          const envelope = listPaging
+            ? await collectListPages()
+            : await dispatchAction(actionId, dispatchArgs, dispatchConfirmed);
           // Narrow registry-enumerating results to this session's effective
           // surface before anything downstream reads them (#11525). Placed
           // ahead of the `outcome` assignment so the text content, the
