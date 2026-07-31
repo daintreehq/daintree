@@ -858,8 +858,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // host-issued native grant (`nativeGrantId`) pre-authorizes a dispatch.
         emitToolCallStarted(entry?.danger === "confirm");
 
-        // The project the dispatch actually landed on, resolved renderer-side at
-        // response time (#11536). Only ever set from a completed dispatch, so
+        // The workspace the dispatch actually landed on, resolved renderer-side
+        // at response time (#11536). Only ever set from a completed dispatch, so
         // every failure path below (no window, session binding gone, throw)
         // leaves it undefined and stamps nothing.
         let dispatchedWorkspace: DispatchedWorkspaceRef | undefined;

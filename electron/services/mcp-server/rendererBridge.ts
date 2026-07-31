@@ -139,14 +139,19 @@ export function createRendererBridge(
    * refactor from silently degrading this to "never stamps".
    */
   function resolveDispatchedWorkspace(webContentsId: number): DispatchedWorkspaceRef | undefined {
-    const registry = getRegistry();
-    const projectViewManager =
-      registry?.getByWebContentsId(webContentsId)?.services.projectViewManager ??
-      getProjectViewManager();
-    // A host whose manager predates this accessor is an expected shape, not a
-    // failure — resolve to "unknown" without logging.
-    if (typeof projectViewManager?.getWorkspaceRefForWebContents !== "function") return undefined;
+    // The whole lookup is guarded, not just the accessor call: the registry
+    // read, the window lookup and the service property access can each throw on
+    // a torn-down window, and by this point the caller has already cleared the
+    // pending entry's timer — so an escaping exception would strand the
+    // awaiting promise rather than merely lose the stamp.
     try {
+      const registry = getRegistry();
+      const projectViewManager =
+        registry?.getByWebContentsId(webContentsId)?.services.projectViewManager ??
+        getProjectViewManager();
+      // A host whose manager predates this accessor is an expected shape, not a
+      // failure — resolve to "unknown" without logging.
+      if (typeof projectViewManager?.getWorkspaceRefForWebContents !== "function") return undefined;
       return projectViewManager.getWorkspaceRefForWebContents(webContentsId) ?? undefined;
     } catch (err) {
       if (!warnedWorkspaceResolveFailure) {

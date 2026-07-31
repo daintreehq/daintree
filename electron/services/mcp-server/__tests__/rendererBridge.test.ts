@@ -607,6 +607,10 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
     workspaceRef?: { kind: "project" | "scratch"; workspaceId: string; workspacePath: string } | null;
     /** Simulates a host whose manager predates getWorkspaceRefForWebContents. */
     omitWorkspaceRefAccessor?: boolean;
+    /** Simulates a torn-down view whose accessor throws rather than returning. */
+    throwFromWorkspaceRefAccessor?: boolean;
+    /** Simulates the window lookup itself throwing, before any accessor call. */
+    throwFromServices?: boolean;
   }
 
   function makeContext(options: FakeContextOptions) {
@@ -614,15 +618,29 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
     const getActiveView = () => (activeWebContents ? { webContents: activeWebContents } : null);
     // Spied so a test can assert the lookup happened per-sender at response
     // time, rather than eagerly at send time.
-    const getWorkspaceRefForWebContents = vi.fn((id: number) =>
-      workspaceRef && activeWebContents && activeWebContents.id === id ? workspaceRef : null
-    );
+    const getWorkspaceRefForWebContents = vi.fn((id: number) => {
+      if (options.throwFromWorkspaceRefAccessor) throw new Error("view torn down");
+      return workspaceRef && activeWebContents && activeWebContents.id === id ? workspaceRef : null;
+    });
     const projectViewManager = options.omitWorkspaceRefAccessor
       ? { getActiveView }
       : { getActiveView, getWorkspaceRefForWebContents };
+    // Routing reads `projectViewManager` first, then response-time resolution
+    // reads it again. Throwing only on the later reads models a window torn
+    // down mid-dispatch, without breaking the routing that must happen first.
+    let serviceReads = 0;
+    const services = options.throwFromServices
+      ? {
+          get projectViewManager() {
+            serviceReads += 1;
+            if (serviceReads > 1) throw new Error("window torn down");
+            return projectViewManager;
+          },
+        }
+      : { projectViewManager };
     return {
       browserWindow: { isDestroyed: () => windowDestroyed },
-      services: { projectViewManager },
+      services,
       activeWebContentsId: activeWebContents?.id ?? null,
       /** Test-only handle on the spy — production reads it via `services`. */
       workspaceRefSpy: getWorkspaceRefForWebContents,
@@ -898,23 +916,88 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
     expect("dispatchedWorkspace" in envelope).toBe(false);
   });
 
-  it("still resolves the action when the project lookup throws", async () => {
-    const wc = makeWebContents(961);
-    // A manager that predates the accessor: calling it throws a TypeError.
-    const ctx = makeContext({ activeWebContents: wc, omitWorkspaceRefAccessor: true });
-    autoRespond(wc);
+  it("omits the stamp, without logging, when the host manager has no accessor", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const wc = makeWebContents(961);
+      const ctx = makeContext({ activeWebContents: wc, omitWorkspaceRefAccessor: true });
+      autoRespond(wc);
 
-    const focusRef = { current: [ctx] };
-    const bridge = createRendererBridge(
-      pendingManifests,
-      pendingDispatches,
-      () => makeRegistry([ctx], focusRef) as never
-    );
-    bridge.setupListeners([]);
+      const focusRef = { current: [ctx] };
+      const bridge = createRendererBridge(
+        pendingManifests,
+        pendingDispatches,
+        () => makeRegistry([ctx], focusRef) as never
+      );
+      bridge.setupListeners([]);
 
-    const envelope = await bridge.dispatchAction("actions.list", {}, false);
+      const envelope = await bridge.dispatchAction("actions.list", {}, false);
 
-    expect(envelope.result).toEqual({ ok: true, result: "ok" });
-    expect(envelope.dispatchedWorkspace).toBeUndefined();
+      expect(envelope.result).toEqual({ ok: true, result: "ok" });
+      expect(envelope.dispatchedWorkspace).toBeUndefined();
+      // An older/partial manager is an expected shape, not a failure.
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("settles the action and warns once when the workspace accessor throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const wc = makeWebContents(981);
+      const ctx = makeContext({ activeWebContents: wc, throwFromWorkspaceRefAccessor: true });
+      autoRespond(wc);
+
+      const focusRef = { current: [ctx] };
+      const bridge = createRendererBridge(
+        pendingManifests,
+        pendingDispatches,
+        () => makeRegistry([ctx], focusRef) as never
+      );
+      bridge.setupListeners([]);
+
+      // The action must still complete — identity is decoration, and the
+      // pending entry's timer is already cleared by the time this runs, so an
+      // escaping throw would strand the promise instead of losing the stamp.
+      const first = await bridge.dispatchAction("actions.list", {}, false);
+      expect(first.result).toEqual({ ok: true, result: "ok" });
+      expect(first.dispatchedWorkspace).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      // Latched: a persistently broken lookup must not log on every dispatch.
+      const second = await bridge.dispatchAction("actions.list", {}, false);
+      expect(second.result).toEqual({ ok: true, result: "ok" });
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("settles the action when the window lookup itself throws mid-dispatch", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const wc = makeWebContents(991);
+      // The window is torn down between routing and the response, so reading
+      // `services.projectViewManager` throws — outside any accessor call.
+      const ctx = makeContext({ activeWebContents: wc, throwFromServices: true });
+      autoRespond(wc);
+
+      const focusRef = { current: [ctx] };
+      const bridge = createRendererBridge(
+        pendingManifests,
+        pendingDispatches,
+        () => makeRegistry([ctx], focusRef) as never
+      );
+      bridge.setupListeners([]);
+
+      const envelope = await bridge.dispatchAction("actions.list", {}, false);
+
+      expect(envelope.result).toEqual({ ok: true, result: "ok" });
+      expect(envelope.dispatchedWorkspace).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
