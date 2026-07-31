@@ -2,6 +2,8 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import { WorktreeSummarySchema } from "./schemas";
+import { paginate } from "@shared/utils/boundedOutput";
+import { GIT_PAGE_LIMIT_DEFAULT, GIT_PAGE_LIMIT_MAX } from "@shared/config/gitReadLimits";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { worktreeClient } from "@/clients";
 
@@ -87,7 +89,7 @@ export function registerWorktreeQueryActions(
       id: "worktree.listBranches",
       title: "List Branches",
       description:
-        "List git branches for a repository. Args: `rootPath` (required) — absolute path to the repository root (a worktree `path` from `worktree.list`). Returns { branches } — each entry has name, current (bool), commit (sha), and optional remote. Errors when `rootPath` is missing or not a git repository.",
+        "List git branches for a repository, one page at a time. Args: `rootPath` (required) — absolute path to the repository root (a worktree `path` from `worktree.list`); `offset` (optional, default 0); `limit` (optional, default 100, max 200). Returns { branches, total, hasMore, offset, limit, nextOffset } — each branch has name, current (bool), commit (sha), and optional remote. When `hasMore` is true, call again with `offset: nextOffset`. Errors when `rootPath` is missing or not a git repository.",
       category: "worktree",
       kind: "query",
       danger: "safe",
@@ -96,11 +98,26 @@ export function registerWorktreeQueryActions(
         rootPath: z
           .string()
           .describe("Absolute repository root path — a worktree `path` from `worktree.list`."),
+        offset: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe("Index to start from — pass a previous `nextOffset` (default 0)."),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(GIT_PAGE_LIMIT_MAX)
+          .optional()
+          .describe(
+            `Branches per page (default ${GIT_PAGE_LIMIT_DEFAULT}, max ${GIT_PAGE_LIMIT_MAX}).`
+          ),
       }),
       examples: [
         {
           args: { rootPath: "/Users/me/Projects/app" },
-          description: "List branches for the repository at that path",
+          description: "List the first 100 branches for the repository at that path",
         },
       ],
       resultSchema: z.object({
@@ -112,10 +129,34 @@ export function registerWorktreeQueryActions(
             remote: z.string().optional(),
           })
         ),
+        total: z.number(),
+        hasMore: z.boolean(),
+        offset: z.number(),
+        limit: z.number(),
+        nextOffset: z.number().nullable(),
       }),
-      run: async ({ rootPath }) => {
+      mcpOutputSchema: true,
+      run: async ({ rootPath, offset, limit }) => {
         const result = await worktreeClient.listBranches(rootPath);
-        return { branches: result };
+        const start = Math.max(Math.trunc(offset ?? 0) || 0, 0);
+        const size = Math.min(
+          Math.max(Math.trunc(limit ?? GIT_PAGE_LIMIT_DEFAULT) || 1, 1),
+          GIT_PAGE_LIMIT_MAX
+        );
+        const page = paginate(result, start, size);
+        return {
+          branches: page.items.map((branch) => ({
+            name: branch.name,
+            current: branch.current,
+            commit: branch.commit,
+            remote: branch.remote,
+          })),
+          total: page.total,
+          hasMore: page.hasMore,
+          offset: start,
+          limit: size,
+          nextOffset: page.nextOffset,
+        };
       },
     })
   );

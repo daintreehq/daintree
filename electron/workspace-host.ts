@@ -586,7 +586,9 @@ port.on("message", async (rawMsg: any) => {
           request.cwd,
           request.filePath,
           request.status,
-          request.ignoreWhitespace
+          request.ignoreWhitespace,
+          request.offset,
+          request.maxBytes
         );
         break;
 

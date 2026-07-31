@@ -1,6 +1,7 @@
 import type { GitStatus, WorktreeSnapshot } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { isAbsolute, join, normalize } from "@shared/utils/path";
+import { GIT_FILE_DIFF_MAX_BYTES } from "@shared/config/gitReadLimits";
 
 /**
  * Session-scoped LRU so stepping back and forth through a change set doesn't
@@ -124,17 +125,23 @@ async function fetchDiffContent(
     return typeof result === "string" ? result || "NO_CHANGES" : null;
   }
 
-  const result = await actionService.dispatch<{ content: string }>(
+  // The panes render a whole diff, so they ask for the full transport ceiling
+  // rather than the agent-facing default window. A diff that still overflows it
+  // maps back onto the FILE_TOO_LARGE sentinel the panes already handle, so the
+  // windowing added in #11531 leaves their contract unchanged.
+  const result = await actionService.dispatch<{ content: string; truncated: boolean }>(
     "git.getFileDiff",
     {
       cwd: subject.worktreePath,
       filePath: subject.filePath,
       status: subject.status,
       ignoreWhitespace,
+      maxBytes: GIT_FILE_DIFF_MAX_BYTES,
     },
     { source: "user" }
   );
   if (!result.ok) return null;
+  if (result.result.truncated) return "FILE_TOO_LARGE";
   return result.result.content || "NO_CHANGES";
 }
 

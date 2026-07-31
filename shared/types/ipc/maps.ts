@@ -80,6 +80,7 @@ import type {
 } from "./project.js";
 import type {
   GitGetFileDiffPayload,
+  GitFileDiffResult,
   GitCompareWorktreesPayload,
   CrossWorktreeDiffResult,
 } from "./git.js";
@@ -761,7 +762,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   // Git channels
   "git:get-file-diff": {
     args: [payload: GitGetFileDiffPayload];
-    result: string;
+    result: GitFileDiffResult;
   };
   "git:get-project-pulse": {
     args: [

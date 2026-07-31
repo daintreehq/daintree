@@ -408,6 +408,8 @@ export type WorkspaceHostRequest =
       filePath: string;
       status: string;
       ignoreWhitespace?: boolean;
+      offset?: number;
+      maxBytes?: number;
     }
   // Polling control
   | { type: "set-polling-enabled"; enabled: boolean }
@@ -623,7 +625,16 @@ export type WorkspaceHostEvent =
       recoveryAction?: import("./ipc/errors.js").RecoveryAction;
     }
   // Git operation responses
-  | { type: "get-file-diff-result"; requestId: string; diff: string; error?: string }
+  | {
+      type: "get-file-diff-result";
+      requestId: string;
+      diff: string;
+      offset: number;
+      totalBytes: number;
+      truncated: boolean;
+      nextOffset: number | null;
+      error?: string;
+    }
   // Spontaneous updates (no requestId - these are pushed events)
   | { type: "worktree-update"; worktree: WorktreeSnapshot; epoch: string; seq: number }
   | { type: "worktree-removed"; worktreeId: string; epoch: string; seq: number }

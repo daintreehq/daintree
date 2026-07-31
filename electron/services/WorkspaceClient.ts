@@ -36,6 +36,7 @@ import type {
   FileTreeNode,
 } from "../../shared/types/ipc.js";
 import type { ProjectPulse, PulseRangeDays } from "../../shared/types/pulse.js";
+import type { GitFileDiffResult } from "../../shared/types/ipc/git.js";
 
 const STATES_INFLIGHT_COALESCE_WINDOW_MS = 150;
 
@@ -741,20 +742,36 @@ export class WorkspaceClient extends EventEmitter {
     cwd: string,
     filePath: string,
     status: string,
-    ignoreWhitespace?: boolean
-  ): Promise<string> {
+    ignoreWhitespace?: boolean,
+    offset?: number,
+    maxBytes?: number
+  ): Promise<GitFileDiffResult> {
     const host = this.pool.resolveHostForPath(cwd);
     if (!host) throw new Error("No workspace host for path");
     const requestId = host.generateRequestId();
-    const result = await host.sendWithResponse<{ diff: string }>({
+    const result = await host.sendWithResponse<{
+      diff: string;
+      offset: number;
+      totalBytes: number;
+      truncated: boolean;
+      nextOffset: number | null;
+    }>({
       type: "get-file-diff",
       requestId,
       cwd,
       filePath,
       status,
       ignoreWhitespace,
+      offset,
+      maxBytes,
     });
-    return result.diff;
+    return {
+      content: result.diff,
+      offset: result.offset,
+      totalBytes: result.totalBytes,
+      truncated: result.truncated,
+      nextOffset: result.nextOffset,
+    };
   }
 
   // ── CopyTree ──

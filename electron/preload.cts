@@ -1981,8 +1981,21 @@ function buildElectronApi(): ElectronAPI {
 
     // Git API
     git: {
-      getFileDiff: (cwd: string, filePath: string, status: GitStatus, ignoreWhitespace?: boolean) =>
-        _unwrappingInvoke(CHANNELS.GIT_GET_FILE_DIFF, { cwd, filePath, status, ignoreWhitespace }),
+      getFileDiff: (
+        cwd: string,
+        filePath: string,
+        status: GitStatus,
+        ignoreWhitespace?: boolean,
+        window?: { offset?: number; maxBytes?: number }
+      ) =>
+        _unwrappingInvoke(CHANNELS.GIT_GET_FILE_DIFF, {
+          cwd,
+          filePath,
+          status,
+          ignoreWhitespace,
+          offset: window?.offset,
+          maxBytes: window?.maxBytes,
+        }),
 
       getProjectPulse: (options: {
         worktreeId: string;

@@ -8,6 +8,7 @@ const dispatchMock = vi.hoisted(() =>
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
 
 import { _resetDiffCacheForTests, peekCachedDiff, requestDiff } from "../diffContentCache";
+import { GIT_FILE_DIFF_MAX_BYTES } from "@shared/config/gitReadLimits";
 
 const compareWorktreesMock = vi.fn<(...args: unknown[]) => Promise<string>>();
 
@@ -27,7 +28,9 @@ function baseBranch(filePath: string): DiffSubject {
 
 beforeEach(() => {
   _resetDiffCacheForTests();
-  dispatchMock.mockReset().mockResolvedValue({ ok: true, result: { content: "diff body" } });
+  dispatchMock
+    .mockReset()
+    .mockResolvedValue({ ok: true, result: { content: "diff body", truncated: false } });
   compareWorktreesMock.mockReset().mockResolvedValue("base diff body");
   Object.assign(window, { electron: { git: { compareWorktrees: compareWorktreesMock } } });
 });
@@ -58,6 +61,40 @@ describe("diffContentCache — base-branch subjects are never cached", () => {
     await requestDiff(workingTree("src/a.ts"), false);
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("diffContentCache — diff windowing (#11531)", () => {
+  it("requests the full 1MB transport ceiling, not the agent-facing default window", async () => {
+    await requestDiff(workingTree("src/a.ts"), false);
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "git.getFileDiff",
+      expect.objectContaining({ maxBytes: GIT_FILE_DIFF_MAX_BYTES }),
+      expect.anything()
+    );
+  });
+
+  it("maps a truncated window back onto the FILE_TOO_LARGE sentinel the panes render", async () => {
+    dispatchMock.mockResolvedValue({
+      ok: true,
+      result: { content: "first megabyte", truncated: true, nextOffset: GIT_FILE_DIFF_MAX_BYTES },
+    });
+
+    const result = await requestDiff(workingTree("src/huge.ts"), false);
+
+    expect(result?.content).toBe("FILE_TOO_LARGE");
+  });
+
+  it("passes an untruncated diff through unchanged", async () => {
+    dispatchMock.mockResolvedValue({
+      ok: true,
+      result: { content: "small diff", truncated: false, nextOffset: null },
+    });
+
+    const result = await requestDiff(workingTree("src/small.ts"), false);
+
+    expect(result?.content).toBe("small diff");
   });
 });
 
