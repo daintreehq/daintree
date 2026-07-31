@@ -105,6 +105,37 @@ export function BulkCreateWorktreeDialog({
   const runIdRef = useRef(0);
   const isExecutingRef = useRef(false);
   const prevIsOpenRef = useRef(false);
+  // The batch currently executing. `controller` reaches the one callee that can
+  // stop mid-flight (spawnPanelsFromRecipe); `created` counts worktrees this run
+  // actually made, so a cancel can report what survived it.
+  const activeRunRef = useRef<{
+    controller: AbortController;
+    created: number;
+    total: number;
+  } | null>(null);
+
+  // Invalidate the in-flight batch. Bumping the run ID makes every stale-run
+  // checkpoint inside runBatch return at its next opportunity, clear() drops
+  // whatever never started, and abort() stops clone-layout spawning between its
+  // own checkpoints. Idempotent: explicit Cancel runs it, then the unmount that
+  // Cancel triggers runs it again.
+  const invalidateActiveRun = useCallback(() => {
+    runIdRef.current++;
+    activeRunRef.current?.controller.abort();
+    activeRunRef.current = null;
+    queueRef.current?.clear();
+    queueRef.current = null;
+  }, []);
+
+  // SidebarContent renders this dialog only while `isOpen`, so every close
+  // unmounts it. Without this, a close that bypasses handleClose (parent
+  // teardown, error boundary reset) leaves the batch spawning into a detached
+  // component.
+  useEffect(() => {
+    return () => {
+      invalidateActiveRun();
+    };
+  }, [invalidateActiveRun]);
 
   // Shared preferences (same store as single create dialog)
   const assignWorktreeToSelf = usePreferencesStore((s) => s.assignWorktreeToSelf);
@@ -241,9 +272,34 @@ export function BulkCreateWorktreeDialog({
 
   const runBatch = useCallback(
     async (toCreate: PlannedWorktree[]) => {
+      activeRunRef.current?.controller.abort();
       const currentRunId = ++runIdRef.current;
+      const activeRun = {
+        controller: new AbortController(),
+        created: 0,
+        total: toCreate.length,
+      };
+      activeRunRef.current = activeRun;
+
       const rootPath = currentProject?.path;
-      if (!rootPath) return;
+      if (!rootPath) {
+        // handleCreate already dispatched START, so returning bare would strand
+        // phase: "executing" — header X hidden, Escape and backdrop blocked.
+        // Fail the items instead so the dialog reaches a terminal state with a
+        // reason and a Retry affordance.
+        for (const planned of toCreate) {
+          dispatchProgress({
+            type: "ITEM_FAILED",
+            issueNumber: planned.item.number,
+            error: "The current project path is unavailable",
+            attempts: 1,
+            failedStep: "worktree",
+          });
+        }
+        dispatchProgress({ type: "DONE" });
+        activeRunRef.current = null;
+        return;
+      }
 
       const tracking = batchTrackingRef.current;
 
@@ -331,7 +387,8 @@ export function BulkCreateWorktreeDialog({
           }
           if (toCreate.every((p) => p.mode === "pr")) {
             dispatchProgress({ type: "DONE" });
-            queueRef.current = null;
+            if (queueRef.current === queue) queueRef.current = null;
+            if (activeRunRef.current === activeRun) activeRunRef.current = null;
 
             notify({
               type: "error",
@@ -475,6 +532,10 @@ export function BulkCreateWorktreeDialog({
 
                   const path = await worktreeClient.getDefaultPath(rootPath, planned.headRefName);
 
+                  // create() has no abort API, so this is the last chance to
+                  // keep a cancelled item from putting a worktree on disk.
+                  if (runIdRef.current !== currentRunId) return;
+
                   const createdId = await worktreeClient.create(
                     {
                       baseBranch: createBaseBranch,
@@ -487,6 +548,7 @@ export function BulkCreateWorktreeDialog({
                   );
 
                   if (!createdId) throw new Error("Failed to create worktree: no ID returned");
+                  activeRun.created++;
 
                   worktreeId = createdId;
                   worktreePath = path;
@@ -510,6 +572,10 @@ export function BulkCreateWorktreeDialog({
                   const path =
                     pre?.path ?? (await worktreeClient.getDefaultPath(rootPath, availableBranch));
 
+                  // create() has no abort API, so this is the last chance to
+                  // keep a cancelled item from putting a worktree on disk.
+                  if (runIdRef.current !== currentRunId) return;
+
                   const createdId = await worktreeClient.create(
                     {
                       baseBranch,
@@ -522,6 +588,7 @@ export function BulkCreateWorktreeDialog({
                   );
 
                   if (!createdId) throw new Error("Failed to create worktree: no ID returned");
+                  activeRun.created++;
 
                   worktreeId = createdId;
                   worktreePath = path;
@@ -560,6 +627,11 @@ export function BulkCreateWorktreeDialog({
                 });
               }
 
+              // Cancel lands most often inside Step 1, whose IPC calls can't be
+              // interrupted. Stop here so an item whose worktree finished after
+              // the click doesn't go on to start terminals or agents in it.
+              if (runIdRef.current !== currentRunId) return;
+
               // Step 2: Clone layout or run recipe
               const currentItem = tracking.get(itemNumber);
               if (cloneTerminals && worktreePath && worktreeId && !currentItem?.cloneComplete) {
@@ -575,6 +647,7 @@ export function BulkCreateWorktreeDialog({
                   cwd: worktreePath,
                   agentSettings: cloneAgentSettings,
                   clipboardDirectory: cloneClipboardDirectory,
+                  signal: activeRun.controller.signal,
                   onPanelSpawned: (index, panelId, _error) => {
                     if (panelId != null) {
                       spawnedIds.push(panelId);
@@ -583,6 +656,9 @@ export function BulkCreateWorktreeDialog({
                     }
                   },
                 });
+                // An aborted spawn reports no failures, just fewer panels, so a
+                // cancelled run must not read its partial result as an outcome.
+                if (runIdRef.current !== currentRunId) return;
                 const updatedTracked = tracking.get(itemNumber);
                 if (updatedTracked) {
                   updatedTracked.spawnedTerminalIds = [
@@ -653,6 +729,10 @@ export function BulkCreateWorktreeDialog({
                         spawnBatch: recipeSpawnBatches.get(itemNumber),
                       }
                     );
+
+                  // runRecipeWithResults can't be interrupted, but a cancelled
+                  // run must not carry its result on to assignment or success.
+                  if (runIdRef.current !== currentRunId) return;
 
                   const updatedTracked = tracking.get(itemNumber);
                   if (updatedTracked) {
@@ -797,7 +877,9 @@ export function BulkCreateWorktreeDialog({
 
       await queue.onIdle();
       if (runIdRef.current !== currentRunId) return;
-      queueRef.current = null;
+      // Identity-guarded so a run that went stale mid-await can't null out the
+      // refs belonging to the run that replaced it.
+      if (queueRef.current === queue) queueRef.current = null;
 
       // Post-batch verification: check terminal health for current run items only
       if (selectedRecipeId) {
@@ -849,6 +931,7 @@ export function BulkCreateWorktreeDialog({
       }
 
       dispatchProgress({ type: "DONE" });
+      if (activeRunRef.current === activeRun) activeRunRef.current = null;
     },
     [selectedRecipeId, selectedRecipe, assignWorktreeToSelf, currentProject?.path]
   );
@@ -938,9 +1021,25 @@ export function BulkCreateWorktreeDialog({
     // the same selection cleanup as the Done button — otherwise the bulk
     // bar stays visible with the now-stale selection.
     if (isExecuting) {
-      runIdRef.current++;
-      queueRef.current?.clear();
-      queueRef.current = null;
+      // Snapshot first: invalidating empties the queue and drops the run record.
+      const activeRun = activeRunRef.current;
+      const created = activeRun?.created ?? 0;
+      const total = activeRun?.total ?? progress.total;
+      const inFlight = queueRef.current?.pending ?? 0;
+
+      invalidateActiveRun();
+
+      // Cancelling can't unwind an item already past its last checkpoint, and
+      // the dialog is gone before those settle — so report what survived it.
+      if (created > 0 || inFlight > 0) {
+        notify({
+          type: "warning",
+          title: "Worktree creation cancelled",
+          message: `${created} of ${total} worktree${total !== 1 ? "s" : ""} created.${
+            inFlight > 0 ? ` ${inFlight} already started and will finish.` : ""
+          }`,
+        });
+      }
     }
     isExecutingRef.current = false;
 
@@ -953,7 +1052,7 @@ export function BulkCreateWorktreeDialog({
 
     onClose();
     storedOnComplete?.();
-  }, [isExecuting, onClose, progress.phase]);
+  }, [isExecuting, onClose, progress.phase, progress.total, invalidateActiveRun]);
 
   const handleDone = useCallback(() => {
     // Capture before onComplete()/onClose() — both are wired to closeBulkCreateDialog
@@ -1210,18 +1309,17 @@ export function BulkCreateWorktreeDialog({
               Done
             </Button>
           </>
-        ) : isExecuting ? (
-          <Button variant="ghost" onClick={handleClose}>
-            Cancel
-          </Button>
         ) : (
+          // The primary stays mounted while executing: dropping it made Cancel
+          // the rightmost button, so it inherited the CTA's hit area one render
+          // after the click that started the run.
           <>
             <Button variant="ghost" onClick={handleClose}>
               Cancel
             </Button>
             <Button
               onClick={handleCreate}
-              disabled={creatableCount === 0}
+              disabled={isExecuting || creatableCount === 0}
               className="min-w-[100px]"
               data-testid="bulk-create-confirm-button"
             >
