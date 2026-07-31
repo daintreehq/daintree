@@ -30,6 +30,7 @@ import { registerProjectActions } from "../projectActions";
 
 function setupActions(): {
   run: (id: string, args?: unknown, ctx?: Record<string, unknown>) => Promise<unknown>;
+  define: (id: string) => AnyActionDefinition;
 } {
   const actions: ActionRegistry = new Map();
   const callbacks: ActionCallbacks = {
@@ -37,13 +38,14 @@ function setupActions(): {
     onConfirmCloseActiveProject: vi.fn(),
   } as unknown as ActionCallbacks;
   registerProjectActions(actions, callbacks);
+  const define = (id: string): AnyActionDefinition => {
+    const factory = actions.get(id);
+    if (!factory) throw new Error(`missing ${id}`);
+    return factory() as AnyActionDefinition;
+  };
   return {
-    run: async (id, args, ctx) => {
-      const factory = actions.get(id);
-      if (!factory) throw new Error(`missing ${id}`);
-      const def = factory() as AnyActionDefinition;
-      return def.run(args, (ctx ?? {}) as never);
-    },
+    define,
+    run: async (id, args, ctx) => define(id).run(args, (ctx ?? {}) as never),
   };
 }
 
@@ -223,6 +225,24 @@ describe("projectActions adversarial", () => {
       await expect(run("project.getSettings", { projectId: "proj-1" })).resolves.toEqual({
         runCommands: [],
       });
+    });
+
+    // The codec validates only `id` and `command`, so a hand-edited settings.json
+    // can persist a nameless run command. `mcpOutputSchema` is on, so clients may
+    // validate structuredContent against the advertised schema — the projection
+    // must not invent a name, and the schema must not demand one.
+    it("emits a nameless run command that the advertised output schema accepts", async () => {
+      projectClientMock.getSettings.mockResolvedValue({
+        runCommands: [{ id: "r1", command: "npm run dev" }],
+      });
+      const { run, define } = setupActions();
+
+      const result = await run("project.getSettings", { projectId: "proj-1" });
+
+      expect(result).toEqual({ runCommands: [{ id: "r1", command: "npm run dev" }] });
+      const schema = define("project.getSettings").resultSchema;
+      expect(schema).toBeDefined();
+      expect(() => schema?.parse(result)).not.toThrow();
     });
   });
 

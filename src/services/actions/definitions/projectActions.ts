@@ -25,7 +25,12 @@ const agentVisibleProjectSettingsShape: Record<AgentVisibleProjectSettingsKey, z
   runCommands: z.array(
     z.object({
       id: z.string(),
-      name: z.string(),
+      // Only `id` and `command` are codec-guaranteed: `decode` in
+      // projectSettingsCodec admits any entry with those two as strings, and the
+      // projection copies through only the keys that are present. Advertising
+      // `name` as required would make a nameless persisted entry emit
+      // `structuredContent` that violates this schema.
+      name: z.string().optional(),
       command: z.string(),
       icon: z.string().optional(),
       description: z.string().optional(),
