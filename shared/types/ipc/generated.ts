@@ -465,6 +465,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("../forge.js").PR;
   };
+  "forge:get-ci-status": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: import("./forge.js").ForgeCIStatusSummary | null;
+  };
   "forge:get-first-page-cache": {
     args: [payload: { cwd: string }];
     result: import("./forge.js").ForgeFirstPageCachePayload | null;

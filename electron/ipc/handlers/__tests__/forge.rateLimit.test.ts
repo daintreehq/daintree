@@ -41,6 +41,7 @@ const fakeImpl = vi.hoisted(() => ({
   listPRs: vi.fn(),
   getIssue: vi.fn(),
   getPR: vi.fn(),
+  getCIStatus: vi.fn(),
   getRepoMetadata: vi.fn(),
   repoStats: { getRepoStats: vi.fn() },
   reviews: {
@@ -521,6 +522,14 @@ describe("forge handlers — rate limiting", () => {
         invoke: (h) => h({}, { cwd, issueNumber: 1 }),
       },
       { channel: CHANNELS.FORGE_GET_PR, maxCalls: 25, invoke: (h) => h({}, { cwd, prNumber: 1 }) },
+      {
+        channel: CHANNELS.FORGE_GET_CI_STATUS,
+        maxCalls: 25,
+        // Distinct PR number per invoke: the CI single-flight is module-scoped,
+        // so reusing one would collapse the guard-throws case into an earlier
+        // call's in-flight promise and skip checkRateLimit entirely.
+        invoke: (h) => h({}, { cwd, prNumber: 8101 }),
+      },
       // token + mutation family: 5/10s (matches github:validate-token / assign-issue)
       {
         channel: CHANNELS.FORGE_VALIDATE_TOKEN,
@@ -678,12 +687,12 @@ describe("forge handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all forge channels (44 rate-limited + 2 unrated probes)", () => {
-      expect(specs).toHaveLength(44);
+    it("registers all forge channels (45 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(45);
       // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
       // unrated replay/identity probes with no checkRateLimit, so they register
       // handlers but stay out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(46);
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(47);
     });
 
     it.each(specs)(

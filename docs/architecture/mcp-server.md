@@ -266,7 +266,7 @@ Three axes are independent — do not infer one from another:
 
 ### Forge reads (`workbench` tier)
 
-All five are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline) and in `MCP_TOOL_ALLOWLIST`, so they are reachable at every tier including `external`. All are `kind:"query"`, `danger:"safe"`, on the `standard` bucket, and not deduped.
+All six are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline) and in `MCP_TOOL_ALLOWLIST`, so they are reachable at every tier including `external`. All are `kind:"query"`, `danger:"safe"`, on the `standard` bucket, and not deduped.
 
 | Action ID            | Key args                               |
 | -------------------- | -------------------------------------- |
@@ -275,6 +275,9 @@ All five are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline) and in `MCP
 | `forge.listPRs`      | `search?`, `state?`, `cursor?`, `cwd?` |
 | `forge.getIssue`     | `issueNumber`, `cwd?`                  |
 | `forge.getPR`        | `prNumber`, `cwd?`                     |
+| `forge.getCIStatus`  | `prNumber`, `cwd?`                     |
+
+`forge.getCIStatus` is the only forge read that sets `mcpOutputSchema: true`, so it is also the only one advertising an MCP `outputSchema` and returning `structuredContent`. Its result is wrapped as `{ ciStatus }` rather than returned bare: `buildToolOutputSchema` forwards only object-typed schemas, so a top-level nullable would silently advertise nothing. The handler projects the provider's `CIStatus` down to the roll-up fields and drops `rawData`/`freshnessToken`/`notModified` — `rawData` in particular is populated on a network fetch but `null` on a cache hit, so forwarding it would make the response depend on cache state.
 
 ### Forge writes and commands (`system` tier)
 

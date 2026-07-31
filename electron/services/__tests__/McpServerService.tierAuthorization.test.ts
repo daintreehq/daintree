@@ -1259,6 +1259,18 @@ describe("McpServerService", () => {
         kind: "query",
       }),
       createManifestEntry({
+        id: "forge.getCIStatus" as ActionId,
+        title: "Get CI Status",
+        description: "Fetch the roll-up CI status for a pull request",
+        kind: "query",
+      }),
+      createManifestEntry({
+        id: "worktree.reviewReadiness" as ActionId,
+        title: "Review Readiness",
+        description: "Summarize whether a worktree is ready to commit, push, and merge",
+        kind: "query",
+      }),
+      createManifestEntry({
         id: "forge.createPR" as ActionId,
         title: "Create PR",
         description: "Open a pull request via the forge provider",
@@ -1532,6 +1544,38 @@ describe("McpServerService", () => {
       for (const id of NOT_IN_EXTERNAL_TIER) {
         expect(ids).not.toContain(id);
       }
+    });
+
+    // #11544 — an external agent must be able to answer "is this PR green?".
+    // Both routes to that answer were previously unreachable at the external
+    // tier: forge.getCIStatus did not exist, and worktree.reviewReadiness was
+    // workbench-only despite already returning a CI roll-up.
+    it("external tier (apiKey) reaches both CI-status routes (#11544)", async () => {
+      const { window } = createMockWindow({ getManifest: tierManifest });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(ids).toContain("forge.getCIStatus");
+      expect(ids).toContain("worktree.reviewReadiness");
+    });
+
+    it("workbench tier also reaches forge.getCIStatus (it is a read)", async () => {
+      paneTokenTiers.set("token-wb", "workbench");
+      const { window } = createMockWindow({ getManifest: tierManifest });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-wb",
+      });
+      transports.push(transport);
+
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(ids).toContain("forge.getCIStatus");
+      // Sanity: the tier is still scoped — a write neighbour stays out.
+      expect(ids).not.toContain("forge.createPR");
     });
 
     it("rejects callTool for fleet-broadcast tools across every tier with TIER_NOT_PERMITTED", async () => {

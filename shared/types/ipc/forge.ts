@@ -66,6 +66,28 @@ export interface PRDetectedPayload {
   timestamp: number;
 }
 
+/**
+ * Renderer-facing projection of {@link import("../forge.js").CIStatus}, used by
+ * `forge:get-ci-status`. Deliberately narrower than the provider type: the
+ * transport fields (`rawData`, `freshnessToken`, `notModified`) are dropped at
+ * the IPC boundary.
+ *
+ * `rawData` in particular is not stable enough to expose — the GitHub provider
+ * passes the full check-run rollup on a network fetch but `null` on a 60s cache
+ * hit, so the same PR would yield a different payload depending only on cache
+ * state. The remaining two are conditional-fetch protocol fields with no
+ * meaning to a caller that can't round-trip a freshness token.
+ */
+export interface ForgeCIStatusSummary {
+  state: CIStatusState;
+  total: number;
+  passed: number;
+  failed: number;
+  pending: number;
+  /** Whether required-checks gating is satisfied. Omitted if the provider doesn't gate. */
+  requiredChecksPassing?: boolean;
+}
+
 /** Payload for PR cleared notification. */
 export interface PRClearedPayload {
   worktreeId: string;
@@ -228,6 +250,7 @@ export type ForgeProviderMethodName =
   | "listPRs"
   | "getIssue"
   | "getPR"
+  | "getCIStatus"
   | "getRepoMetadata"
   | "createIssue"
   | "assignIssue"

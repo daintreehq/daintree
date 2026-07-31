@@ -19,6 +19,7 @@ import type {
   RateLimitDetails,
 } from "@shared/types/forge";
 import type {
+  ForgeCIStatusSummary,
   ForgeRepositoryStats,
   ForgeRepoStatsAndPagePayload,
   ForgeRepoCountsUpdatedPayload,
@@ -136,6 +137,10 @@ export const forgeClient = {
 
   getPR: (cwd: string, prNumber: number): Promise<PR | null> => {
     return window.electron.forge.getPR({ cwd, prNumber });
+  },
+
+  getCIStatus: (cwd: string, prNumber: number): Promise<ForgeCIStatusSummary | null> => {
+    return window.electron.forge.getCIStatus({ cwd, prNumber });
   },
 
   getRepoMetadata: (cwd: string): Promise<RepoMetadata> => {

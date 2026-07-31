@@ -71,6 +71,7 @@ export const WORKBENCH_TIER_TOOLS = [
   "forge.listPRs",
   "forge.getIssue",
   "forge.getPR",
+  "forge.getCIStatus",
 
   "workflow.prepBranchForReview",
 

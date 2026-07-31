@@ -372,6 +372,7 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "forge.listPRs",
   "forge.getIssue",
   "forge.getPR",
+  "forge.getCIStatus",
   "forge.openIssues",
   "forge.openPRs",
   "forge.openCommits",
@@ -408,6 +409,7 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
 
   "worktree.list",
   "worktree.getCurrent",
+  "worktree.reviewReadiness",
   "worktree.refresh",
   "worktree.createWithRecipe",
   "worktree.listBranches",

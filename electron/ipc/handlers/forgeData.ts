@@ -12,6 +12,7 @@ import { logWarn } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import type {
+  CIStatus,
   ForgeRepoCounts,
   ForgeTokenHealthState,
   Issue,
@@ -23,6 +24,7 @@ import type {
   ReviewThread,
 } from "../../../shared/types/forge.js";
 import type {
+  ForgeCIStatusSummary,
   ForgeFirstPageCachePayload,
   ForgeProjectHealthPayload,
   ForgeRepoCountsUpdatedPayload,
@@ -645,6 +647,69 @@ async function handleForgeGetPRsByNumbers(payload: {
   return result;
 }
 
+/**
+ * Drop the provider transport fields so only the normalized roll-up crosses to
+ * the renderer. See {@link ForgeCIStatusSummary} for why `rawData` in
+ * particular must not cross: it is populated on a network fetch and `null` on a
+ * cache hit, so forwarding it would make the response depend on cache state.
+ *
+ * `requiredChecksPassing` is copied through an explicit `!== undefined` test —
+ * `false` is meaningful (gating configured and currently failing) and must
+ * survive, while absent means the provider doesn't gate at all.
+ */
+function projectCIStatus(status: CIStatus): ForgeCIStatusSummary {
+  return {
+    state: status.state,
+    total: status.total,
+    passed: status.passed,
+    failed: status.failed,
+    pending: status.pending,
+    ...(status.requiredChecksPassing !== undefined
+      ? { requiredChecksPassing: status.requiredChecksPassing }
+      : {}),
+  };
+}
+
+/**
+ * Module-scope single-flight for CI status. Unlike the per-registration
+ * coalescer in {@link registerForgeDataHandlers}, this one is shared process-wide
+ * because CI status is polled from several surfaces at once (worktree dashboard,
+ * MCP callers, the review-readiness roll-up) and each duplicate call would
+ * otherwise write its own audit record. Holding it at module scope is safe:
+ * entries self-evict {@link SINGLE_FLIGHT_TTL_MS} after they settle and
+ * immediately on rejection, so nothing survives a project teardown.
+ */
+const ciStatusSingleFlight = createSingleFlight();
+
+async function handleForgeGetCIStatus(payload: {
+  cwd: string;
+  prNumber: number;
+}): Promise<ForgeCIStatusSummary | null> {
+  checkRateLimit(CHANNELS.FORGE_GET_CI_STATUS, 25, 10_000);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  const cwd = requireCwd(payload.cwd);
+  const prNumber = requirePositiveInt(payload.prNumber, "PR number");
+  return ciStatusSingleFlight(`${cwd}::getCIStatus::${prNumber}`, async () => {
+    const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+    const status = await auditForgeCall(
+      {
+        providerId: namespaceId,
+        methodName: "getCIStatus",
+        repoOwner: repoRef.owner,
+        repoName: repoRef.repo,
+        argsSummary: summarizeForgeArgs("getCIStatus", prNumber),
+      },
+      () => impl.getCIStatus(repoRef, prNumber),
+      // Truthiness, not `=== null`: the contract says `CIStatus | null`, but a
+      // third-party provider returning undefined must not crash the projection.
+      (value) => (value ? "success" : "not-found")
+    );
+    return status ? projectCIStatus(status) : null;
+  });
+}
+
 async function handleForgeGetPRReviewThreads(payload: {
   cwd: string;
   prNumber: number;
@@ -710,6 +775,7 @@ export const forgeCapabilityDataNamespace = defineIpcNamespace({
     getProjectHealth: op(CHANNELS.FORGE_GET_PROJECT_HEALTH, handleForgeGetProjectHealth),
     getIssueTooltip: op(CHANNELS.FORGE_GET_ISSUE_TOOLTIP, handleForgeGetIssueTooltip),
     getPRTooltip: op(CHANNELS.FORGE_GET_PR_TOOLTIP, handleForgeGetPRTooltip),
+    getCIStatus: op(CHANNELS.FORGE_GET_CI_STATUS, handleForgeGetCIStatus),
     getIssuesByNumbers: op(CHANNELS.FORGE_GET_ISSUES_BY_NUMBERS, handleForgeGetIssuesByNumbers),
     getPRsByNumbers: op(CHANNELS.FORGE_GET_PRS_BY_NUMBERS, handleForgeGetPRsByNumbers),
     getPRReviewThreads: op(CHANNELS.FORGE_GET_PR_REVIEW_THREADS, handleForgeGetPRReviewThreads),

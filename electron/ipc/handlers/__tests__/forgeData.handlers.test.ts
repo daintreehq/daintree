@@ -22,6 +22,7 @@ const fakeImpl = vi.hoisted(() => ({
   listPRs: vi.fn(),
   getIssue: vi.fn(),
   getPR: vi.fn(),
+  getCIStatus: vi.fn(),
   getRepoMetadata: vi.fn(),
 }));
 
@@ -116,12 +117,13 @@ describe("registerForgeDataHandlers", () => {
 
   it("registers the core and capability IPC handlers", () => {
     const cleanup = registerForgeDataHandlers();
-    // 6 core data handlers + the 11-op forgeCapabilityData namespace.
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(17);
+    // 6 core data handlers + the 12-op forgeCapabilityData namespace.
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(18);
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-issues", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-prs", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-issue", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-pr", expect.any(Function));
+    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-ci-status", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith(
       "forge:get-repo-metadata",
       expect.any(Function)
@@ -231,6 +233,127 @@ describe("registerForgeDataHandlers", () => {
 
     expect(fakeImpl.getPR).toHaveBeenCalledWith(repoRef, 5);
     expect(result).toMatchObject({ number: 5 });
+  });
+
+  // Each getCIStatus test uses a distinct PR number: the CI single-flight is
+  // module-scoped (shared process-wide so duplicate polls don't each write an
+  // audit record), so a repeated key would collapse across tests within the TTL.
+  describe("getCIStatus", () => {
+    let appendSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      appendSpy = vi.spyOn(forgeAuditService, "appendRecord").mockImplementation(() => {});
+    });
+
+    const fullStatus = {
+      state: "failure" as const,
+      total: 4,
+      passed: 2,
+      failed: 1,
+      pending: 1,
+      requiredChecksPassing: false,
+      freshnessToken: "etag-abc",
+      notModified: false,
+      rawData: { checkRuns: [{ name: "build", conclusion: "failure" }] },
+    };
+
+    it("strips provider transport fields so only the normalized roll-up crosses", async () => {
+      fakeImpl.getCIStatus.mockResolvedValue(fullStatus);
+      registerForgeDataHandlers();
+
+      const result = (await findHandler("forge:get-ci-status")(null, {
+        cwd: "/repo",
+        prNumber: 900,
+      })) as Record<string, unknown>;
+
+      expect(fakeImpl.getCIStatus).toHaveBeenCalledWith(repoRef, 900);
+      // The exact key set is the contract — an added provider field must not
+      // leak through by default.
+      expect(Object.keys(result).sort()).toEqual([
+        "failed",
+        "passed",
+        "pending",
+        "requiredChecksPassing",
+        "state",
+        "total",
+      ]);
+    });
+
+    it("preserves requiredChecksPassing:false rather than dropping it as falsy", async () => {
+      fakeImpl.getCIStatus.mockResolvedValue({ ...fullStatus, requiredChecksPassing: false });
+      registerForgeDataHandlers();
+
+      const result = (await findHandler("forge:get-ci-status")(null, {
+        cwd: "/repo",
+        prNumber: 901,
+      })) as Record<string, unknown>;
+
+      expect(result.requiredChecksPassing).toBe(false);
+    });
+
+    it("omits requiredChecksPassing entirely when the provider doesn't gate", async () => {
+      const { requiredChecksPassing: _omitted, ...ungated } = fullStatus;
+      fakeImpl.getCIStatus.mockResolvedValue({ ...ungated, state: "neutral", total: 0 });
+      registerForgeDataHandlers();
+
+      const result = (await findHandler("forge:get-ci-status")(null, {
+        cwd: "/repo",
+        prNumber: 902,
+      })) as Record<string, unknown>;
+
+      expect("requiredChecksPassing" in result).toBe(false);
+    });
+
+    it("passes a null lookup through and audits it as not-found", async () => {
+      fakeImpl.getCIStatus.mockResolvedValue(null);
+      registerForgeDataHandlers();
+
+      const result = await findHandler("forge:get-ci-status")(null, {
+        cwd: "/repo",
+        prNumber: 903,
+      });
+
+      expect(result).toBeNull();
+      expect(appendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ methodName: "getCIStatus", result: "not-found" })
+      );
+    });
+
+    it("coalesces concurrent identical calls into one provider call and one audit record", async () => {
+      fakeImpl.getCIStatus.mockResolvedValue(fullStatus);
+      registerForgeDataHandlers();
+      const handler = findHandler("forge:get-ci-status");
+
+      await Promise.all([
+        handler(null, { cwd: "/repo", prNumber: 904 }),
+        handler(null, { cwd: "/repo", prNumber: 904 }),
+      ]);
+
+      expect(fakeImpl.getCIStatus).toHaveBeenCalledTimes(1);
+      expect(appendSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not coalesce calls that differ by PR number", async () => {
+      fakeImpl.getCIStatus.mockResolvedValue(fullStatus);
+      registerForgeDataHandlers();
+      const handler = findHandler("forge:get-ci-status");
+
+      await Promise.all([
+        handler(null, { cwd: "/repo", prNumber: 905 }),
+        handler(null, { cwd: "/repo", prNumber: 906 }),
+      ]);
+
+      expect(fakeImpl.getCIStatus).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects a non-positive PR number before resolving a provider", async () => {
+      registerForgeDataHandlers();
+
+      await expect(
+        findHandler("forge:get-ci-status")(null, { cwd: "/repo", prNumber: 0 })
+      ).rejects.toThrow();
+      expect(fakeImpl.getCIStatus).not.toHaveBeenCalled();
+    });
   });
 
   it("getRepoMetadata delegates to impl.getRepoMetadata", async () => {

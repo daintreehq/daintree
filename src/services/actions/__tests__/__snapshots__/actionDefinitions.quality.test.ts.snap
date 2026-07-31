@@ -1823,6 +1823,25 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "Fetch the roll-up CI status for a single pull request via the active forge provider. Args: \`cwd\` (optional) — git repo working directory, defaults to the active worktree path; \`prNumber\` (required, positive int). Returns \`{ ciStatus }\`, where \`ciStatus\` is null when the PR doesn't exist and otherwise { state ('success'|'failure'|'pending'|'neutral'|'unknown'), total, passed, failed, pending, requiredChecksPassing? }. \`state\` is 'neutral' when the PR has no required checks configured — that is NOT a failure. \`requiredChecksPassing\` is omitted when the provider doesn't gate on required checks; \`false\` means gating is configured and not yet satisfied. Counts cover required checks only, and provider raw payloads are not returned. Errors when \`cwd\` is omitted and no worktree is active. Use this to verify a PR is green before merging.",
+    "examples": [
+      {
+        "args": {
+          "prNumber": 42,
+        },
+        "description": "Check whether PR #42 is green in the active worktree's repo",
+      },
+    ],
+    "id": "forge.getCIStatus",
+    "keywords": undefined,
+    "kind": "query",
+    "requiresArgs": true,
+    "title": "Get CI Status",
+  },
+  {
+    "category": "forge",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "Fetch a single issue by its number via the active forge provider. Args: \`cwd\` (optional) — git repo working directory, defaults to the active worktree path; \`issueNumber\` (required, positive int). Returns the normalized forge issue { number, title, body, state ('open'|'closed'), url, author, assignees, labels, createdAt, updatedAt, ... } or null when not found. Errors when \`cwd\` is omitted and no worktree is active. Do NOT use \`forge.listIssues\` to fetch one known number — this is the direct lookup.",
     "examples": [
       {

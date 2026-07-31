@@ -21,6 +21,7 @@ const forgeClientMock = vi.hoisted(() => ({
   listIssues: vi.fn(),
   listPRs: vi.fn(),
   getIssue: vi.fn(),
+  getCIStatus: vi.fn(),
 }));
 
 const projectStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
@@ -78,6 +79,70 @@ function setCurrentProject(project: { path?: string } | null) {
 beforeEach(() => {
   vi.clearAllMocks();
   for (const fn of Object.values(forgeClientMock)) fn.mockResolvedValue(undefined);
+});
+
+describe("forge.getCIStatus", () => {
+  const summary = { state: "success" as const, total: 3, passed: 3, failed: 0, pending: 0 };
+
+  it("wraps the client result so a missing PR is {ciStatus:null}, never a bare null", async () => {
+    // A bare null result would be dropped by the MCP structured-content path;
+    // the wrapper is what keeps "PR not found" expressible to an MCP caller.
+    forgeClientMock.getCIStatus.mockResolvedValue(null);
+
+    const result = await runAction(
+      "forge.getCIStatus",
+      { prNumber: 7 },
+      { activeWorktreePath: "/repo" }
+    );
+
+    expect(result).toEqual({ ciStatus: null });
+  });
+
+  it("wraps a resolved status under the ciStatus key", async () => {
+    forgeClientMock.getCIStatus.mockResolvedValue(summary);
+
+    const result = await runAction(
+      "forge.getCIStatus",
+      { prNumber: 7 },
+      { activeWorktreePath: "/repo" }
+    );
+
+    expect(result).toEqual({ ciStatus: summary });
+  });
+
+  it("falls back to the active worktree path when cwd is omitted", async () => {
+    forgeClientMock.getCIStatus.mockResolvedValue(summary);
+
+    await runAction("forge.getCIStatus", { prNumber: 9 }, { activeWorktreePath: "/active" });
+
+    expect(forgeClientMock.getCIStatus).toHaveBeenCalledWith("/active", 9);
+  });
+
+  it("prefers an explicit cwd over the active worktree path", async () => {
+    forgeClientMock.getCIStatus.mockResolvedValue(summary);
+
+    await runAction(
+      "forge.getCIStatus",
+      { cwd: "/explicit", prNumber: 9 },
+      { activeWorktreePath: "/active" }
+    );
+
+    expect(forgeClientMock.getCIStatus).toHaveBeenCalledWith("/explicit", 9);
+  });
+
+  it("throws without calling the client when no cwd and no active worktree", async () => {
+    await expect(runAction("forge.getCIStatus", { prNumber: 9 }, {})).rejects.toThrow(
+      /No active worktree/
+    );
+    expect(forgeClientMock.getCIStatus).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-positive prNumber through the args schema", async () => {
+    const def = setupActions()("forge.getCIStatus");
+    expect(def.argsSchema?.safeParse({ prNumber: 0 }).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ prNumber: 1.5 }).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ prNumber: 12 }).success).toBe(true);
+  });
 });
 
 describe("forge.* navigation adversarial", () => {
