@@ -289,6 +289,8 @@ export function McpServerSettingsTab() {
     return () => {
       clearTimeout(timer);
       unsub();
+      // Abandon an in-flight copy so it can't schedule a timer past cleanup.
+      copyGenerationRef.current += 1;
       if (configCopyTimeoutRef.current) clearTimeout(configCopyTimeoutRef.current);
       if (apiKeyCopyTimeoutRef.current) clearTimeout(apiKeyCopyTimeoutRef.current);
       if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
@@ -349,10 +351,12 @@ export function McpServerSettingsTab() {
   const handleCopyConfig = async () => {
     const generation = ++copyGenerationRef.current;
     try {
+      setError(null);
       // Rotating the key elsewhere (the assistant tab has its own control)
       // doesn't broadcast, so the cached status can be stale by the time the
       // user copies. Re-read it rather than hand out a dead key.
       const fresh = await window.electron.mcpServer.getStatus();
+      if (generation !== copyGenerationRef.current) return;
       setStatus(fresh);
       const { snippet } = buildMcpClientConfig(clientConfigId, {
         port: runtimeSnapshot.port ?? fresh.port,

@@ -8,8 +8,8 @@
  *
  * `/mcp` (Streamable HTTP) is the only transport advertised here. `/sse` stays
  * live for legacy and in-app callers, but it was deprecated by the MCP spec in
- * revision 2025-03-26 and drops the auth header on the POST leg, so no external
- * client should be pointed at it.
+ * revision 2025-03-26 and clients vary in whether they attach the auth header
+ * to its separate POST leg, so no external client should be pointed at it.
  */
 
 export const MCP_SERVER_KEY = "daintree";
