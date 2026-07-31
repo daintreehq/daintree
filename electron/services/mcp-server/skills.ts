@@ -62,9 +62,8 @@ export function handleSkillsLoad(rawArgs: unknown): SkillLoadResult {
     // the `tools/call` response budget entirely, so reflecting the argument
     // verbatim would let a megabyte-long id produce a megabyte-long error
     // (#11526). Real skill ids are far shorter than this.
-    const echoed = id.length > MAX_ECHOED_SKILL_ID_LENGTH
-      ? `${id.slice(0, MAX_ECHOED_SKILL_ID_LENGTH)}…`
-      : id;
+    const echoed =
+      id.length > MAX_ECHOED_SKILL_ID_LENGTH ? `${id.slice(0, MAX_ECHOED_SKILL_ID_LENGTH)}…` : id;
     throw new McpError(
       ErrorCode.InvalidParams,
       `No skill found with id "${echoed}". Use skills.search to discover available skill ids.`

@@ -72,11 +72,18 @@ function structuredFromText(
   if (!candidate) return undefined;
   try {
     const parsed: unknown = JSON.parse(text);
-    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    // Parsing successfully is not enough to bound the result: re-serializing can
+    // grow it (`1e20` parses from 4 bytes and re-emits as 21) or throw outright
+    // (deeply nested arrays overflow the stack). Measure the exact operation the
+    // transport will perform, so anything that would not survive it is dropped
+    // rather than shipped.
+    if (Buffer.byteLength(JSON.stringify(parsed), "utf8") > TOOL_RESULT_TEXT_MAX_BYTES) {
+      return undefined;
     }
+    return parsed as Record<string, unknown>;
   } catch {
-    // Not JSON — fall through and omit the structured half.
+    // Not round-trippable JSON — omit the structured half.
   }
   return undefined;
 }
@@ -134,7 +141,10 @@ export function buildToolCallTextResult(
   // trailing marker off and leave the model reading incomplete JSON as complete.
   return {
     content: [
-      { type: "text", text: `${buildNotice(Buffer.byteLength(shown, "utf8"), originalBytes)}${shown}` },
+      {
+        type: "text",
+        text: `${buildNotice(Buffer.byteLength(shown, "utf8"), originalBytes)}${shown}`,
+      },
     ],
     ...(isError ? { isError } : {}),
     _meta: { [MAX_RESULT_SIZE_CHARS_KEY]: TOOL_RESULT_TEXT_MAX_BYTES },

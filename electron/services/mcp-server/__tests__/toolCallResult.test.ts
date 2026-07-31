@@ -90,9 +90,9 @@ describe("structuredContent is bounded by the same budget as the text", () => {
     const result = buildToolCallResult(payload, { structuredContent: payload });
 
     expect(byteLength(result)).toBeLessThanOrEqual(TOOL_RESULT_TEXT_MAX_BYTES);
-    expect(
-      Buffer.byteLength(JSON.stringify(result.structuredContent), "utf8")
-    ).toBeLessThanOrEqual(TOOL_RESULT_TEXT_MAX_BYTES);
+    expect(Buffer.byteLength(JSON.stringify(result.structuredContent), "utf8")).toBeLessThanOrEqual(
+      TOOL_RESULT_TEXT_MAX_BYTES
+    );
     // Both halves must agree — that is the #10676 contract.
     expect(result.structuredContent).toEqual(JSON.parse(textOf(result)));
   });
@@ -120,7 +120,9 @@ describe("structuredContent is bounded by the same budget as the text", () => {
   });
 
   it("omits the structured half when the body is not JSON", () => {
-    expect(buildToolCallResult(null, { structuredContent: { a: 1 } }).structuredContent).toBeUndefined();
+    expect(
+      buildToolCallResult(null, { structuredContent: { a: 1 } }).structuredContent
+    ).toBeUndefined();
   });
 });
 
@@ -197,12 +199,33 @@ describe("buildToolCallResult over the cap", () => {
     expect(byteLength(result)).toBeLessThanOrEqual(TOOL_RESULT_TEXT_MAX_BYTES);
   });
 
-  it("does not discard a character that fits exactly", () => {
-    // The back-off must trigger only on a straddling cut, never shave a whole
-    // code point that landed flush against the budget.
-    const aligned = buildToolCallTextResult("🌳".repeat(TOOL_RESULT_TEXT_MAX_BYTES / 2));
-    const body = bodyAfterNotice(textOf(aligned));
-    expect(Buffer.byteLength(body, "utf8") % 4).toBe(0);
+  it("backs off no further than the straddling character", () => {
+    // The back-off must shave only the partial code point, never a whole one
+    // that fit — so the unused tail is always narrower than one character.
+    const text = textOf(buildToolCallTextResult("🌳".repeat(TOOL_RESULT_TEXT_MAX_BYTES / 2)));
+    const bodyBytes = Buffer.byteLength(bodyAfterNotice(text), "utf8");
+    const budget = TOOL_RESULT_TEXT_MAX_BYTES - (Buffer.byteLength(text, "utf8") - bodyBytes);
+
+    expect(bodyBytes % 4).toBe(0);
+    expect(budget - bodyBytes).toBeLessThan(4);
+  });
+
+  it("omits a structured half that would re-serialize past the cap", () => {
+    // `1e20` parses from 4 bytes and re-emits as 21, so a body that measured
+    // under the cap can blow past it the moment the transport stringifies it.
+    const text = `{"v":[${Array(10_000).fill("1e20").join(",")}]}`;
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(TOOL_RESULT_TEXT_MAX_BYTES);
+
+    const result = buildToolCallTextResult(text, { structuredContent: { v: [] } });
+    expect(result.structuredContent).toBeUndefined();
+  });
+
+  it("omits a structured half too deeply nested for the transport to serialize", () => {
+    const text = `${"[".repeat(10_000)}${"]".repeat(10_000)}`;
+    const result = buildToolCallTextResult(`{"v":${text}}`, { structuredContent: { v: [] } });
+
+    expect(() => JSON.stringify(result)).not.toThrow();
+    expect(result.structuredContent).toBeUndefined();
   });
 });
 
