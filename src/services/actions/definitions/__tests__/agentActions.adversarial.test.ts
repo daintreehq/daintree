@@ -1437,7 +1437,7 @@ describe("agentSessionHistory.list (#10854)", () => {
       worktreeId: "wt-1",
     })) as { sessions: Array<Record<string, unknown>> };
     expect(result.sessions).toHaveLength(1);
-    expect("bookmark" in result.sessions[0]).toBe(false);
+    expect(Object.hasOwn(result.sessions[0] ?? {}, "bookmark")).toBe(false);
   });
 
   it("omits absent optional fields rather than emitting explicit undefined", async () => {
@@ -1446,7 +1446,7 @@ describe("agentSessionHistory.list (#10854)", () => {
     const result = (await callAction(actions, "agentSessionHistory.list", {
       worktreeId: "wt-1",
     })) as { sessions: Array<Record<string, unknown>> };
-    expect(Object.keys(result.sessions[0]).sort()).toEqual([
+    expect(Object.keys(result.sessions[0] ?? {}).sort()).toEqual([
       "agentId",
       "projectId",
       "savedAt",
