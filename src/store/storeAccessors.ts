@@ -24,6 +24,7 @@ let _getWorktreeSelectionState: (() => WorktreeSelectionSnapshot) | null = null;
 let _getWorktreeIdSet: (() => Set<string> | null) | null = null;
 let _getWorktreeGitDirById: ((worktreeId: string) => string | undefined) | null = null;
 let _getWorktreePathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
+let _getProjectPathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
 let _clearPanelStoreForSwitch: (() => void) | null = null;
 let _clearFleetArming: (() => void) | null = null;
 let _getFleetArmedIds: (() => Set<string>) | null = null;
@@ -89,6 +90,22 @@ export function getWorktreePathIndex(): ReadonlyMap<string, string> | null {
   return _getWorktreePathIndex?.() ?? null;
 }
 
+export function setProjectPathIndexAccessor(
+  getter: () => ReadonlyMap<string, string> | null
+): void {
+  _getProjectPathIndex = getter;
+}
+
+/**
+ * Project id → absolute project path, or `null` when the project store has not
+ * loaded. Lets the shared location resolver turn an explicit `projectId` into
+ * the path a project-scoped IPC needs, so naming a NON-active project actually
+ * targets it instead of silently falling back to the active one (#11543).
+ */
+export function getProjectPathIndex(): ReadonlyMap<string, string> | null {
+  return _getProjectPathIndex?.() ?? null;
+}
+
 export function setPanelStoreClearForSwitchAccessor(callback: () => void): void {
   _clearPanelStoreForSwitch = callback;
 }
@@ -127,6 +144,7 @@ export function resetStoreAccessorsForTesting(): void {
   _getWorktreeIdSet = null;
   _getWorktreeGitDirById = null;
   _getWorktreePathIndex = null;
+  _getProjectPathIndex = null;
   _clearPanelStoreForSwitch = null;
   _clearFleetArming = null;
   _getFleetArmedIds = null;

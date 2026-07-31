@@ -4,14 +4,17 @@ import type { ActionContext } from "@shared/types/actions";
 import {
   withWorktreeLocation,
   withProjectLocation,
+  worktreeLocationShape,
   resolveWorktreeLocation,
+  resolveProjectLocation,
   requireWorktreePath,
   requireWorktreeId,
   requireProjectPath,
 } from "../locationArgs";
-import { withPagination, PaginatedResultSchema } from "../schemas";
+import { withPagination, PaginatedResultSchema, decodeIndexCursor } from "../schemas";
 import {
   setWorktreePathIndexAccessor,
+  setProjectPathIndexAccessor,
   resetStoreAccessorsForTesting,
 } from "@/store/storeAccessors";
 
@@ -42,7 +45,9 @@ describe("withWorktreeLocation", () => {
     const props = properties(withWorktreeLocation({ search: z.string().optional() }, { legacy: ["cwd"] }));
 
     expect(Object.keys(props).sort()).toEqual(["cwd", "search", "worktreeId", "worktreePath"]);
-    expect(props.cwd?.description).toBe("Legacy alias for `worktreePath`; prefer `worktreePath`.");
+    // An alias must point the caller at the canonical name it stands in for,
+    // and must not read as an independent argument.
+    expect(props.cwd?.description).toMatch(/alias for `worktreePath`/i);
     expect(props.worktreeId?.description).toContain("worktree.list");
   });
 
@@ -64,6 +69,18 @@ describe("withWorktreeLocation", () => {
     expect(schema.parse({ cwd: "/repo", search: "fix" })).toEqual({
       worktreePath: "/repo",
       search: "fix",
+    });
+  });
+
+  it("leaves a tool's own field alone when it shares a name with an unopted alias", () => {
+    // `path` is only an alias for tools that opt in. A tool that declares its
+    // own `path` must keep it — and must not have it folded into worktreePath.
+    const schema = withWorktreeLocation({ path: z.string() }, { legacy: ["cwd"] });
+
+    expect(schema.parse({ path: "src/index.ts" })).toEqual({ path: "src/index.ts" });
+    expect(schema.parse({ path: "src/index.ts", cwd: "/repo" })).toEqual({
+      path: "src/index.ts",
+      worktreePath: "/repo",
     });
   });
 
@@ -90,6 +107,17 @@ describe("withWorktreeLocation", () => {
     expect(schema.parse({ worktreeId: "wt-1" })).toEqual({ worktreeId: "wt-1" });
   });
 
+  it("rejects an empty selector rather than silently retargeting the active worktree", () => {
+    // An empty string that parsed successfully would read as "absent" to the
+    // resolver, so a destructive call naming `cwd: ""` would run against
+    // whatever worktree happens to be active.
+    const schema = withWorktreeLocation({}, { legacy: ["cwd"] });
+
+    expect(schema.safeParse({ cwd: "" }).success).toBe(false);
+    expect(schema.safeParse({ worktreePath: "" }).success).toBe(false);
+    expect(schema.safeParse({ worktreeId: "" }).success).toBe(false);
+  });
+
   it("still advertises the object shape when wrapped in .optional()", () => {
     const props = properties(withWorktreeLocation({}, { legacy: ["cwd"] }).optional());
     expect(Object.keys(props).sort()).toEqual(["cwd", "worktreeId", "worktreePath"]);
@@ -97,20 +125,55 @@ describe("withWorktreeLocation", () => {
 });
 
 describe("withProjectLocation", () => {
-  it("advertises both project selectors", () => {
+  it("advertises both project selectors alongside the tool's own fields", () => {
     const props = properties(withProjectLocation({ tab: z.string().optional() }));
     expect(Object.keys(props).sort()).toEqual(["projectId", "projectPath", "tab"]);
   });
 
-  it("can omit projectPath for tools that only ever took an id", () => {
-    const props = properties(withProjectLocation({}, { allowPath: false }));
-    expect(Object.keys(props)).toEqual(["projectId"]);
+  it("stays extendable, unlike the transformed worktree builder", () => {
+    // Nothing needs folding for projects, so this must not become a ZodPipe.
+    const extended = withProjectLocation({}).extend({ extra: z.string().optional() });
+    expect(Object.keys(properties(extended)).sort()).toEqual([
+      "extra",
+      "projectId",
+      "projectPath",
+    ]);
   });
 
-  it("requires a selector when the tool has no active-project fallback", () => {
-    const schema = withProjectLocation({}, { requireSelector: true });
-    expect(computeRequiresArgs(schema)).toBe(true);
-    expect(schema.parse({ projectPath: "/p" })).toEqual({ projectPath: "/p" });
+  it("rejects an empty selector rather than treating it as absent", () => {
+    expect(withProjectLocation({}).safeParse({ projectId: "" }).success).toBe(false);
+  });
+});
+
+describe("resolveProjectLocation", () => {
+  beforeEach(() => {
+    setProjectPathIndexAccessor(() => new Map([["proj-a", "/projects/a"]]));
+  });
+  afterEach(() => {
+    resetStoreAccessorsForTesting();
+  });
+
+  it("resolves an explicit projectId to its own path, not the active project's", () => {
+    // Returning no path here would be worse than rejecting the argument: every
+    // consumer falls back to the active project, so naming another project
+    // would silently operate on the active one.
+    const ctx: ActionContext = { projectId: "proj-active", projectPath: "/projects/active" };
+    expect(resolveProjectLocation({ projectId: "proj-a" }, ctx)).toEqual({
+      projectId: "proj-a",
+      projectPath: "/projects/a",
+    });
+  });
+
+  it("throws on an id no open project has", () => {
+    expect(() => resolveProjectLocation({ projectId: "nope" }, {})).toThrow(/Unknown project/);
+  });
+
+  it("falls back to the context project when no selector is given", () => {
+    const ctx: ActionContext = { projectId: "proj-active", projectPath: "/projects/active" };
+    expect(resolveProjectLocation(undefined, ctx)).toEqual({
+      projectId: "proj-active",
+      projectPath: "/projects/active",
+    });
   });
 });
 
@@ -147,6 +210,17 @@ describe("resolveWorktreeLocation", () => {
       worktreeId: "wt-9",
       worktreePath: "/repo/nine",
     });
+  });
+
+  it("rejects contradictory spellings on the spread composition too", () => {
+    // `worktreeLocationShape` has no transform, so the schema cannot catch this
+    // — the resolver has to, or forge tools would silently pick a winner while
+    // the builder-composed tools reject the same input.
+    const parsed = z.object(worktreeLocationShape({ legacy: ["cwd"] })).parse({
+      worktreePath: "/repo/a",
+      cwd: "/repo/b",
+    });
+    expect(() => resolveWorktreeLocation(parsed, emptyContext)).toThrow(/only one/i);
   });
 
   it("resolves with no view store mounted", () => {
@@ -204,7 +278,7 @@ describe("withPagination", () => {
   it("advertises limit and offset, plus opted-in cursor and legacy skip", () => {
     const props = properties(withPagination({}, { legacy: ["skip"], cursor: true }));
     expect(Object.keys(props).sort()).toEqual(["cursor", "limit", "offset", "skip"]);
-    expect(props.skip?.description).toBe("Legacy alias for `offset`; prefer `offset`.");
+    expect(props.skip?.description).toMatch(/alias for `offset`/i);
   });
 
   it("folds skip into offset and strips the alias", () => {
@@ -252,6 +326,32 @@ describe("withPagination", () => {
     });
     expect(schema.safeParse({ skip: 1, offset: 2 }).success).toBe(false);
     expect(schema.safeParse({ cwd: "/a", worktreePath: "/b" }).success).toBe(false);
+  });
+});
+
+describe("decodeIndexCursor", () => {
+  it("round-trips an offset emitted as nextCursor", () => {
+    expect(decodeIndexCursor(String(40))).toBe(40);
+    expect(decodeIndexCursor("0")).toBe(0);
+    expect(decodeIndexCursor(undefined)).toBeUndefined();
+  });
+
+  it("rejects a cursor that would silently restart or run backwards", () => {
+    // Falling back to page zero on garbage looks like a successful re-read of
+    // the first page; a negative offset would reach `git log --skip`.
+    for (const bad of ["abc", "", "-1", "1.5", "NaN", "9007199254740993"]) {
+      expect(() => decodeIndexCursor(bad)).toThrow(/Invalid cursor/);
+    }
+  });
+
+  it("never echoes the rejected cursor back to the caller", () => {
+    const secret = "/Users/someone/private";
+    try {
+      decodeIndexCursor(secret);
+      throw new Error("expected a throw");
+    } catch (err) {
+      expect((err as Error).message).not.toContain(secret);
+    }
   });
 });
 

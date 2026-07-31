@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
-import { getWorktreePathIndex } from "@/store/storeAccessors";
+import { getWorktreePathIndex, getProjectPathIndex } from "@/store/storeAccessors";
 import { paginationShape, foldPagination, type PaginationOptions } from "./schemas";
 
 /**
@@ -27,42 +27,48 @@ import { paginationShape, foldPagination, type PaginationOptions } from "./schem
  * The alias collapse happens in the zod schema rather than in the MCP bridge
  * because every surface (MCP, palette, keybindings, context menus) funnels
  * through `ActionService.dispatch`, which validates `argsSchema` before the
- * handler ever runs. A whole-object `.transform()` is used deliberately:
+ * handler ever runs.
+ *
+ * The collapse is a whole-object `.transform()` because
  * `z.toJSONSchema(..., { io: "input" })` unwraps it and still advertises every
- * alias property with its own description, whereas `z.preprocess()` would mark
- * the wrapped field `required` in the generated schema (zod 4.x upstream #5366).
+ * alias property with its own description — verified against the installed zod,
+ * and asserted in `locationArgs.test.ts` so a zod upgrade that changed it would
+ * fail rather than silently empty the advertised tool surface. The matching
+ * `io: "output"` call collapses a transformed schema to `{}`, which is why a
+ * `resultSchema` must never be transformed.
  */
 
 /** Legacy spellings that a tool may keep accepting for `worktreePath`. */
 export type LegacyWorktreePathAlias = "cwd" | "rootPath" | "path";
 
-/** Legacy spellings that a tool may keep accepting for `projectPath`. */
-export type LegacyProjectPathAlias = "projectPath";
-
 const legacyAliasDescription = (canonical: string): string =>
   `Legacy alias for \`${canonical}\`; prefer \`${canonical}\`.`;
 
-const worktreeIdField = z
-  .string()
-  .optional()
-  .describe("Worktree id (the `id` from `worktree.list`). Defaults to the active worktree.");
+/**
+ * Every selector is `.min(1)`. An empty string must be a validation error, not
+ * a silent fallback to the active worktree/project: the resolvers below treat
+ * "absent" as "use the active one", so an empty selector that parsed
+ * successfully would retarget a destructive call at whatever happens to be
+ * active. Before the shared vocabulary existed each handler's own
+ * `if (!resolved) throw` caught that; `.min(1)` is what replaces it.
+ */
+const selectorField = (description: string) => z.string().min(1).optional().describe(description);
 
-const worktreePathField = z
-  .string()
-  .optional()
-  .describe(
-    "Absolute worktree root path (the `path` from `worktree.list`). Used when `worktreeId` is omitted."
-  );
+const worktreeIdField = selectorField(
+  "Worktree id (the `id` from `worktree.list`). Defaults to the active worktree."
+);
 
-const projectIdField = z
-  .string()
-  .optional()
-  .describe("Project id (the `id` from `project.getAll`). Defaults to the active project.");
+const worktreePathField = selectorField(
+  "Absolute worktree root path (the `path` from `worktree.list`). Used when `worktreeId` is omitted."
+);
 
-const projectPathField = z
-  .string()
-  .optional()
-  .describe("Absolute project root path. Used when `projectId` is omitted.");
+const projectIdField = selectorField(
+  "Project id (the `id` from `project.getAll`). Defaults to the active project."
+);
+
+const projectPathField = selectorField(
+  "Absolute project root path. Used when `projectId` is omitted."
+);
 
 /**
  * The location half of a worktree-scoped tool's arguments, after alias collapse.
@@ -123,7 +129,7 @@ export function worktreeLocationShape(
     worktreePath: worktreePathField,
   };
   for (const alias of options.legacy ?? []) {
-    shape[alias] = z.string().optional().describe(legacyAliasDescription("worktreePath"));
+    shape[alias] = selectorField(legacyAliasDescription("worktreePath"));
   }
   return shape;
 }
@@ -139,29 +145,26 @@ export function worktreeLocationShape(
  */
 function collapseWorktreePath(
   value: Record<string, unknown>,
-  ctx: z.RefinementCtx
+  ctx: z.RefinementCtx,
+  legacy: readonly LegacyWorktreePathAlias[]
 ): Record<string, unknown> | typeof z.NEVER {
-  const {
-    cwd,
-    rootPath,
-    path: legacyPath,
-    ...rest
-  } = value as {
-    cwd?: string;
-    rootPath?: string;
-    path?: string;
-    worktreePath?: string;
-  } & Record<string, unknown>;
-
-  const supplied = [rest.worktreePath, cwd, rootPath, legacyPath].filter(
-    (candidate): candidate is string => candidate !== undefined
-  );
+  // Only the aliases this tool opted into are consumed. A tool that declares its
+  // own unrelated `path`/`cwd` field keeps it — folding every spelling
+  // unconditionally would silently swallow a caller's real argument.
+  const rest = { ...value };
+  const supplied: string[] = [];
+  if (typeof rest.worktreePath === "string") supplied.push(rest.worktreePath);
+  for (const alias of legacy) {
+    const candidate = rest[alias];
+    delete rest[alias];
+    if (typeof candidate === "string") supplied.push(candidate);
+  }
 
   if (new Set(supplied).size > 1) {
     ctx.addIssue({
       code: "custom",
       message:
-        "`worktreePath`, `cwd`, `rootPath`, and `path` are aliases for the same value — supply only one, or identical values.",
+        "`worktreePath` and its legacy aliases name the same value — supply only one, or identical values.",
     });
     return z.NEVER;
   }
@@ -170,12 +173,6 @@ function collapseWorktreePath(
   return worktreePath === undefined ? rest : { ...rest, worktreePath };
 }
 
-function collapseProjectPath(
-  value: Record<string, unknown>,
-  _ctx: z.RefinementCtx
-): Record<string, unknown> {
-  return value;
-}
 
 /**
  * Build a worktree-scoped `argsSchema`: the canonical selectors, any legacy
@@ -202,16 +199,18 @@ export function withWorktreeLocation<T extends z.ZodRawShape>(
     worktreePath: worktreePathField,
   };
   for (const alias of legacy) {
-    shape[alias] = z.string().optional().describe(legacyAliasDescription("worktreePath"));
+    shape[alias] = selectorField(legacyAliasDescription("worktreePath"));
   }
   if (pagination) Object.assign(shape, paginationShape(pagination));
 
   return z
     .object({ ...shape, ...extra })
     .transform((value, ctx) => {
-      const collapsed = collapseWorktreePath(value as Record<string, unknown>, ctx);
+      const collapsed = collapseWorktreePath(value as Record<string, unknown>, ctx, legacy);
       if (collapsed === z.NEVER) return z.NEVER;
-      const paged = pagination ? foldPagination(collapsed, ctx) : collapsed;
+      const paged = pagination
+        ? foldPagination(collapsed, ctx, pagination.legacy ?? [])
+        : collapsed;
       if (paged === z.NEVER) return z.NEVER;
       const located = paged as Record<string, unknown> & WorktreeLocationArgs;
       if (requireSelector && !located.worktreeId && !located.worktreePath) {
@@ -226,44 +225,23 @@ export function withWorktreeLocation<T extends z.ZodRawShape>(
     });
 }
 
-type ProjectLocationOptions = {
-  /** Keep `projectPath` on the surface. Preferred selector is always `projectId`. */
-  allowPath?: boolean;
-  requireSelector?: boolean;
-};
-
 /**
- * Build a project-scoped `argsSchema`. Mirrors {@link withWorktreeLocation};
- * `projectPath` is the only legacy spelling in play, and it stays canonical-ish
- * (an accepted second selector) rather than being folded away, because several
- * tools genuinely receive a path and never had an id to fold it into.
+ * Build a project-scoped `argsSchema`: both project selectors plus the tool's
+ * own fields.
+ *
+ * Unlike {@link withWorktreeLocation} there is nothing to fold — `projectId` and
+ * `projectPath` are both canonical, since several tools genuinely receive a path
+ * and never had an id to fold it into. So this returns a plain `ZodObject`
+ * rather than a transformed one, which keeps it `.extend()`-able. Precedence
+ * (id wins, resolved through the project index) lives in
+ * {@link resolveProjectLocation}.
  */
-export function withProjectLocation<T extends z.ZodRawShape>(
-  extra: T,
-  options: ProjectLocationOptions = {}
-) {
-  const { allowPath = true, requireSelector = false } = options;
-
-  const shape: Record<string, z.ZodTypeAny> = { projectId: projectIdField };
-  if (allowPath) shape.projectPath = projectPathField;
-
-  return z
-    .object({ ...shape, ...extra })
-    .transform((value, ctx) => {
-      const located = collapseProjectPath(
-        value as Record<string, unknown>,
-        ctx
-      ) as Record<string, unknown> & ProjectLocationArgs;
-      if (requireSelector && !located.projectId && !located.projectPath) {
-        ctx.addIssue({
-          code: "custom",
-          message: "Supply `projectId` or `projectPath` — this action has no active-project default.",
-        });
-        return z.NEVER;
-      }
-      return located as Omit<z.core.output<z.ZodObject<T>>, keyof ProjectLocationArgs> &
-        ProjectLocationArgs;
-    });
+export function withProjectLocation<T extends z.ZodRawShape>(extra: T) {
+  return z.object({
+    projectId: projectIdField,
+    projectPath: projectPathField,
+    ...extra,
+  });
 }
 
 export interface ResolvedWorktreeLocation {
@@ -285,14 +263,24 @@ export function resolveWorktreeLocation(
 ): ResolvedWorktreeLocation {
   const index = getWorktreePathIndex();
 
+  // Fold the legacy spellings here too, so a schema composed by spreading
+  // `worktreeLocationShape` (no transform) resolves identically to one built by
+  // `withWorktreeLocation` — including rejecting contradictory spellings, which
+  // the builder catches in the schema but the spread composition cannot.
+  const suppliedPaths = [args?.worktreePath, args?.cwd, args?.rootPath, args?.path].filter(
+    (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0
+  );
+  if (new Set(suppliedPaths).size > 1) {
+    throw new Error(
+      "`worktreePath` and its legacy aliases name the same value — supply only one, or identical values."
+    );
+  }
+
   if (args?.worktreeId) {
     return { worktreeId: args.worktreeId, worktreePath: index?.get(args.worktreeId) };
   }
 
-  // Fold the legacy spellings here too, so a schema composed by spreading
-  // `worktreeLocationShape` (no transform) resolves identically to one built by
-  // `withWorktreeLocation`.
-  const suppliedPath = args?.worktreePath ?? args?.cwd ?? args?.rootPath ?? args?.path;
+  const suppliedPath = suppliedPaths[0];
 
   if (suppliedPath) {
     const path = suppliedPath;
@@ -348,13 +336,24 @@ export function requireWorktreeId(
   throw new Error("No active worktree — supply `worktreeId` or `worktreePath`.");
 }
 
-/** Resolve a project-scoped tool's selectors against the action context. */
+/**
+ * Resolve a project-scoped tool's selectors against the action context.
+ *
+ * An explicit `projectId` is resolved to its path through the project index.
+ * Returning it without a path would be worse than not accepting the argument at
+ * all: every consumer falls back to the ACTIVE project's path, so naming
+ * another project would silently operate on the active one.
+ */
 export function resolveProjectLocation(
   args: ProjectLocationArgs | undefined,
   ctx: ActionContext
 ): { projectId: string | undefined; projectPath: string | undefined } {
   if (args?.projectId) {
-    return { projectId: args.projectId, projectPath: undefined };
+    const path = getProjectPathIndex()?.get(args.projectId);
+    if (!path) {
+      throw new Error("Unknown project — no project with that id is open.");
+    }
+    return { projectId: args.projectId, projectPath: path };
   }
   if (args?.projectPath) {
     return { projectId: undefined, projectPath: args.projectPath };

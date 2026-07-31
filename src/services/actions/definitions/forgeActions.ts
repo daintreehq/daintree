@@ -33,7 +33,12 @@ import {
  * simply finds nothing.
  */
 function assigneeCachePath(location: WorktreeLocationArgs, resolvedCwd: string): string | null {
-  if (location.worktreeId || location.worktreePath || location.cwd) return resolvedCwd;
+  // Only an explicit PATH can name a repo outside this project, so only a path
+  // is honored as given. A `worktreeId` necessarily resolves inside the current
+  // project, and resolving it yields a linked-worktree path that matches no
+  // cache slot — treat it like the no-location case and patch the project root,
+  // or the optimistic assign/unassign update is silently dropped.
+  if (location.worktreePath || location.cwd) return resolvedCwd;
   return useProjectStore.getState().currentProject?.path ?? null;
 }
 
@@ -280,6 +285,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         state: z.string().optional(),
       }).optional(),
       run: async (args, ctx) => {
+        // An explicit selector is resolved (or rejected) by the resolver, so this
+        // fallback only applies when the caller named no project at all.
         const path =
           resolveProjectLocation(args, ctx).projectPath ??
           useProjectStore.getState().currentProject?.path;
@@ -305,6 +312,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         state: z.string().optional(),
       }).optional(),
       run: async (args, ctx) => {
+        // An explicit selector is resolved (or rejected) by the resolver, so this
+        // fallback only applies when the caller named no project at all.
         const path =
           resolveProjectLocation(args, ctx).projectPath ??
           useProjectStore.getState().currentProject?.path;
@@ -327,6 +336,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       scope: "renderer",
       argsSchema: withProjectLocation({ branch: z.string().optional() }).optional(),
       run: async (args, ctx) => {
+        // An explicit selector is resolved (or rejected) by the resolver, so this
+        // fallback only applies when the caller named no project at all.
         const path =
           resolveProjectLocation(args, ctx).projectPath ??
           useProjectStore.getState().currentProject?.path;

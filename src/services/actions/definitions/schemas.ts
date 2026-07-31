@@ -98,26 +98,6 @@ export const FileSearchPayloadSchema = z.object({
 });
 
 /**
- * Shared structured error for a single entry inside a batch result (#11543).
- *
- * A batch tool that looked up N things and found N-1 of them genuinely succeeded,
- * so it must not throw — the found entries are still useful. Those per-item
- * failures are the ONE case where a failure travels as data. Everything else
- * throws, because a `{ ok: false }` returned from a handler is serialized by the
- * MCP bridge as a SUCCESSFUL tool result and an agent checking `isError` never
- * sees it.
- *
- * `code` is a stable machine-readable token; `message` is a static human string
- * that never interpolates the rejected input.
- */
-export const ActionItemErrorSchema = z.object({
-  code: z.enum(["NOT_FOUND", "UNAVAILABLE", "FAILED"]),
-  message: z.string(),
-});
-
-export type ActionItemError = z.infer<typeof ActionItemErrorSchema>;
-
-/**
  * Canonical pagination arguments (#11543). Four schemes existed before —
  * `skip`/`limit`, `limit`/`offset`, an opaque `cursor`, and none at all. The
  * documented shape is now `limit` plus a positional selector: `cursor` for
@@ -177,11 +157,18 @@ export function paginationShape(options: PaginationOptions = {}): Record<string,
   return shape;
 }
 
-/** Collapse the legacy `skip` spelling into `offset`. See {@link paginationShape}. */
+/**
+ * Collapse the legacy `skip` spelling into `offset`. See {@link paginationShape}.
+ * Only consumes `skip` when the tool opted into it, so a tool with its own
+ * unrelated `skip` field keeps it.
+ */
 export function foldPagination(
   value: Record<string, unknown>,
-  ctx: z.RefinementCtx
+  ctx: z.RefinementCtx,
+  legacy: readonly LegacyPaginationAlias[] = []
 ): Record<string, unknown> | typeof z.NEVER {
+  if (!legacy.includes("skip")) return value;
+
   const { skip, ...rest } = value as { skip?: number; offset?: number } & Record<string, unknown>;
   const supplied = [rest.offset, skip].filter(
     (candidate): candidate is number => candidate !== undefined
@@ -197,12 +184,32 @@ export function foldPagination(
   return resolved === undefined ? rest : { ...rest, offset: resolved };
 }
 
+/**
+ * Decode a cursor issued by an index-paged source back into its offset.
+ *
+ * Those sources emit `String(nextOffset)` as their `nextCursor`, so decoding is
+ * the inverse. It is strict on purpose: a garbage cursor silently restarting at
+ * page zero would look like a successful re-read of the first page, and a
+ * negative one would reach `git log --skip`. Throws a static message — the
+ * rejected value is never echoed back.
+ */
+export function decodeIndexCursor(cursor: string | undefined): number | undefined {
+  if (cursor === undefined) return undefined;
+  // `Number("")` and `Number(" ")` are 0, so an empty cursor would read as a
+  // valid "start from the top" rather than the caller error it is.
+  const parsed = cursor.trim() === "" ? Number.NaN : Number(cursor);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error("Invalid cursor — pass back the `nextCursor` from the previous response.");
+  }
+  return parsed;
+}
+
 export function withPagination<T extends z.ZodRawShape>(
   extra: T,
   options: PaginationOptions = {}
 ) {
   return z.object({ ...paginationShape(options), ...extra }).transform((value, ctx) => {
-    const folded = foldPagination(value as Record<string, unknown>, ctx);
+    const folded = foldPagination(value as Record<string, unknown>, ctx, options.legacy ?? []);
     if (folded === z.NEVER) return z.NEVER;
     return folded as Omit<z.core.output<z.ZodObject<T>>, "offset" | "skip"> & {
       limit?: number;

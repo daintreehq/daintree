@@ -6,6 +6,7 @@ import {
   PaginatedResultSchema,
   PulseRangeDaysSchema,
   StagingFileEntrySchema,
+  decodeIndexCursor,
 } from "./schemas";
 import {
   withWorktreeLocation,
@@ -311,12 +312,10 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       const resolvedCwd = requireWorktreePath({ worktreeId, worktreePath, cwd }, ctx);
       // This source pages by index, so its cursor IS the next offset — an
       // explicit `offset`/`skip` still wins for callers that page by hand.
-      const cursorOffset = cursor !== undefined ? Number(cursor) : undefined;
-      const start =
-        offset ?? (cursorOffset !== undefined && Number.isFinite(cursorOffset) ? cursorOffset : 0);
+      const start = offset ?? decodeIndexCursor(cursor);
       // Clamped here as well as in argsSchema: dispatch paths that bypass schema
       // validation must not be able to request an unbounded page.
-      const skip = Math.max(Math.trunc(start) || 0, 0);
+      const skip = Math.max(Math.trunc(start ?? 0) || 0, 0);
       const limit = clamp(rawLimit ?? GIT_LIST_COMMITS_LIMIT_DEFAULT, 1, GIT_LIST_COMMITS_LIMIT_MAX);
       const result = await window.electron.git.listCommits({
         ...filters,
