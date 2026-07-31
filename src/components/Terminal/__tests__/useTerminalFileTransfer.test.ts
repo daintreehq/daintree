@@ -43,6 +43,9 @@ import {
   formatWithBracketedPaste,
 } from "@shared/utils/terminalInputProtocol.js";
 
+/** What `clipboard.saveImage` resolves to, taken from the IPC surface itself. */
+type SavedImage = Awaited<ReturnType<typeof window.electron.clipboard.saveImage>>;
+
 /** The payload handed to `terminalClient.write` for the most recent call. */
 function lastWrittenPayload(): string {
   const calls = vi.mocked(terminalClient.write).mock.calls;
@@ -275,9 +278,9 @@ describe("useTerminalFileTransfer hook", () => {
   });
 
   it("locking while the image is still saving suppresses the write", async () => {
-    let releaseSave: (value: { filePath: string }) => void = () => {};
+    let releaseSave: (value: SavedImage) => void = () => {};
     vi.mocked(window.electron.clipboard.saveImage).mockReturnValue(
-      new Promise<{ filePath: string }>((resolve) => {
+      new Promise<SavedImage>((resolve) => {
         releaseSave = resolve;
       })
     );
@@ -292,7 +295,7 @@ describe("useTerminalFileTransfer hook", () => {
     rerender({ isInputLocked: true });
 
     await act(async () => {
-      releaseSave({ filePath: "/tmp/late.png" });
+      releaseSave({ filePath: "/tmp/late.png", thumbnailDataUrl: "" });
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -302,9 +305,9 @@ describe("useTerminalFileTransfer hook", () => {
   });
 
   it("re-reads the agent identity across the save, not the one at paste time", async () => {
-    let releaseSave: (value: { filePath: string }) => void = () => {};
+    let releaseSave: (value: SavedImage) => void = () => {};
     vi.mocked(window.electron.clipboard.saveImage).mockReturnValue(
-      new Promise<{ filePath: string }>((resolve) => {
+      new Promise<SavedImage>((resolve) => {
         releaseSave = resolve;
       })
     );
@@ -320,7 +323,7 @@ describe("useTerminalFileTransfer hook", () => {
     rerender({ detectedAgentId: "claude" });
 
     await act(async () => {
-      releaseSave({ filePath: "/tmp/shot.png" });
+      releaseSave({ filePath: "/tmp/shot.png", thumbnailDataUrl: "" });
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -329,9 +332,9 @@ describe("useTerminalFileTransfer hook", () => {
   });
 
   it("unmounting while the image is still saving suppresses the write", async () => {
-    let releaseSave: (value: { filePath: string }) => void = () => {};
+    let releaseSave: (value: SavedImage) => void = () => {};
     vi.mocked(window.electron.clipboard.saveImage).mockReturnValue(
-      new Promise<{ filePath: string }>((resolve) => {
+      new Promise<SavedImage>((resolve) => {
         releaseSave = resolve;
       })
     );
@@ -345,7 +348,7 @@ describe("useTerminalFileTransfer hook", () => {
     unmount();
 
     await act(async () => {
-      releaseSave({ filePath: "/tmp/late.png" });
+      releaseSave({ filePath: "/tmp/late.png", thumbnailDataUrl: "" });
       await Promise.resolve();
       await Promise.resolve();
     });
