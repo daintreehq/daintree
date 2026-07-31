@@ -78,8 +78,10 @@ const mocks = vi.hoisted(() => {
     notifyEnterPressed: vi.fn(),
   };
 
-  // Returns the drag-over flag the adapter renders drop feedback from.
-  const useTerminalFileTransfer = vi.fn(() => false);
+  // Returns the drag-over flag the adapter renders drop feedback from. Typed
+  // with both parameters so tests can assert on the options the adapter passes.
+  const useTerminalFileTransfer =
+    vi.fn<(containerRef: unknown, options: Record<string, unknown>) => boolean>();
 
   return {
     appearance,

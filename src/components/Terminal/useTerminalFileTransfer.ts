@@ -37,6 +37,21 @@ function hasImageClipboardItem(event: ClipboardEvent): boolean {
   return false;
 }
 
+const ESC = String.fromCharCode(27);
+
+/**
+ * Control characters that cannot be delivered safely as terminal input.
+ *
+ * CR and LF read as Enter to a program that is not in bracketed-paste mode,
+ * which would submit rather than insert; ESC can open an escape sequence. All
+ * three are legal in a POSIX filename, so a dropped path really can carry them.
+ * Such a path is skipped exactly like one that failed to resolve — there is no
+ * sanitized form that still points at the same file.
+ */
+function isDeliverablePath(filePath: string): boolean {
+  return !filePath.includes("\r") && !filePath.includes("\n") && !filePath.includes(ESC);
+}
+
 interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
   terminalId: string;
   isInputLocked?: boolean;
@@ -161,7 +176,7 @@ export function useTerminalFileTransfer(
         // Re-check after the await: the pane may have unmounted or locked, and
         // the running agent may have changed, while the image was being saved.
         if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
-        if (!filePath) return;
+        if (!filePath || !isDeliverablePath(filePath)) return;
         const isAgent = isAgentTerminal();
         writeToTerminal(`${formatPath(filePath, isAgent)} `, isAgent);
       } catch {
@@ -206,7 +221,7 @@ export function useTerminalFileTransfer(
       const formatted: string[] = [];
       for (const file of Array.from(e.dataTransfer.files)) {
         const filePath = window.electron.webUtils.getPathForFile(file);
-        if (filePath) formatted.push(formatPath(filePath, isAgent));
+        if (filePath && isDeliverablePath(filePath)) formatted.push(formatPath(filePath, isAgent));
       }
 
       if (formatted.length === 0) return;

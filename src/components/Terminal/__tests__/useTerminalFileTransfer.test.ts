@@ -536,22 +536,27 @@ describe("useTerminalFileTransfer hook", () => {
     expect(payload).not.toContain(BRACKETED_PASTE_START);
   });
 
-  it("strips ESC from a path so it cannot break out of the paste wrapper", () => {
-    instanceState.bracketedPasteMode = true;
+  it.each([
+    ["carriage return", "\r"],
+    ["newline", "\n"],
+    ["escape", String.fromCharCode(27)],
+  ])("skips a path containing a %s rather than risk submitting it", (_label, char) => {
+    // Bracketed paste off is the dangerous case: the program reads CR as Enter.
+    instanceState.bracketedPasteMode = false;
     renderFileTransferHook({ detectedAgentId: "claude" });
 
-    // A POSIX filename may legally contain ESC. Left verbatim, an embedded
-    // terminator would end the paste early and submit the remainder.
-    dropFiles([fileAt("evil", `/tmp/${BRACKETED_PASTE_END}evil.ts`)]);
+    dropFiles([fileAt("bad", `/tmp/we${char}ird.ts`), fileAt("good", "/tmp/fine.ts")]);
 
-    const payload = lastWrittenPayload();
-    expect(payload.startsWith(BRACKETED_PASTE_START)).toBe(true);
-    expect(payload.endsWith(BRACKETED_PASTE_END)).toBe(true);
-    // Exactly one terminator: the real one, at the very end.
-    expect(payload.split(BRACKETED_PASTE_END).length - 1).toBe(1);
-    // Nothing between the delimiters can start an escape sequence of its own.
-    const body = payload.slice(BRACKETED_PASTE_START.length, -BRACKETED_PASTE_END.length);
-    expect(body).not.toContain(String.fromCharCode(27));
+    // The safe sibling still lands; the unsafe path is dropped like an
+    // unresolved one, and nothing that could submit reaches the PTY.
+    expect(lastWrittenPayload()).toBe(`${formatAtFileToken("/tmp/fine.ts")} `);
+  });
+
+  it("writes nothing when every dropped path carries a control character", () => {
+    renderFileTransferHook({ detectedAgentId: "claude" });
+    dropFiles([fileAt("bad", "/tmp/we\rird.ts")]);
+
+    expect(terminalClient.write).not.toHaveBeenCalled();
   });
 
   it("hands onInput the logical text, never the bracket markers", () => {

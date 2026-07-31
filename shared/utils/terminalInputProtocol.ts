@@ -51,6 +51,7 @@ export function shouldUseBracketedPaste(
  * include a submit. This mirrors xterm's own `bracketTextForPaste`.
  */
 export function formatWithBracketedPaste(text: string): string {
-  const sanitized = text.replace(/\x1b/g, "␛");
+  // String literal, not a regex: `no-control-regex` bans the pattern form.
+  const sanitized = text.replaceAll("\x1b", "␛");
   return `${BRACKETED_PASTE_START}${sanitized}${BRACKETED_PASTE_END}`;
 }
