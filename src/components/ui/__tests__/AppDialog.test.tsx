@@ -60,16 +60,23 @@ function Dispatcher() {
 function renderDialog({
   isOpen = true,
   onClose = vi.fn(),
+  dismissible,
   children,
 }: {
   isOpen?: boolean;
   onClose?: () => void;
+  dismissible?: boolean;
   children?: React.ReactNode;
 } = {}) {
   return render(
     <>
       <Dispatcher />
-      <AppDialog isOpen={isOpen} onClose={onClose} data-testid="test-dialog">
+      <AppDialog
+        isOpen={isOpen}
+        onClose={onClose}
+        dismissible={dismissible}
+        data-testid="test-dialog"
+      >
         {children ?? (
           <AppDialog.Body>
             <button type="button">First</button>
@@ -199,6 +206,43 @@ describe("AppDialog focus trapping", () => {
     pressEscape();
 
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  function clickBackdrop() {
+    const backdrop = screen.getByTestId("test-dialog");
+    act(() => {
+      backdrop.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerId: 1 })
+      );
+      backdrop.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 1 }));
+    });
+  }
+
+  // Positive baseline for the guard below: without it, deleting the backdrop
+  // pointer handlers entirely would still look like a pass.
+  it("closes on a backdrop press-and-release", async () => {
+    const onClose = vi.fn();
+    renderDialog({ onClose });
+    await act(() => vi.runAllTimersAsync());
+
+    clickBackdrop();
+
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  // Callers that block dismissal mid-operation (bulk worktree creation, #11517)
+  // rely on every route staying shut, not just the header X being hidden.
+  it("blocks Escape and backdrop dismissal when not dismissible", async () => {
+    const onClose = vi.fn();
+    renderDialog({ onClose, dismissible: false });
+    await act(() => vi.runAllTimersAsync());
+
+    pressEscape();
+    expect(onClose).not.toHaveBeenCalled();
+
+    clickBackdrop();
+
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("restores focus to previously focused element on close", async () => {
