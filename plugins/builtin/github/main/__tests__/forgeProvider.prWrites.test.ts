@@ -196,7 +196,11 @@ describe("closePR / reopenPR", () => {
   });
 
   it("closePR returns the updated PR normalized from the response (#11546)", async () => {
-    mockFetch({ ok: true, status: 200, body: { ...restPR, state: "closed", closed_at: "2025-02-03T04:05:06Z" } });
+    mockFetch({
+      ok: true,
+      status: 200,
+      body: { ...restPR, state: "closed", closed_at: "2025-02-03T04:05:06Z" },
+    });
 
     const pr = await githubForgeProvider.closePR(repo, 42);
 

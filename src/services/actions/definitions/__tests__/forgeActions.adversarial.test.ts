@@ -370,7 +370,11 @@ describe("forge.* navigation adversarial", () => {
       const key = seedIssueSlot("/repo", makeIssue(42, []));
       forgeClientMock.assignIssue.mockResolvedValueOnce([]);
 
-      await runAction("forge.assignIssue", { cwd: "/repo", issueNumber: 42, username: "no-access" });
+      await runAction("forge.assignIssue", {
+        cwd: "/repo",
+        issueNumber: 42,
+        username: "no-access",
+      });
 
       expect(assigneesOn(key, 42)).toEqual([]);
     });
@@ -553,7 +557,10 @@ describe("forge.* write actions return the state they changed (#11546)", () => {
   it("assignIssue reports the resulting assignee list alongside the issue", async () => {
     const result = await run("forge.assignIssue", { issueNumber: 42, username: "bob" });
 
-    expect(result).toEqual({ issueNumber: 42, assignees: [{ login: "bob", avatarUrl: "https://avatars/bob" }] });
+    expect(result).toEqual({
+      issueNumber: 42,
+      assignees: [{ login: "bob", avatarUrl: "https://avatars/bob" }],
+    });
   });
 
   it("unassignIssue reports the emptied assignee list", async () => {

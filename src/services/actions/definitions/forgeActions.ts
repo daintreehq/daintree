@@ -424,7 +424,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       run: async ({ cwd, prNumber, body }, ctx: ActionContext) => {
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
-        return ForgeReviewResultSchema.parse(await forgeClient.approvePR(resolvedCwd, prNumber, body));
+        return ForgeReviewResultSchema.parse(
+          await forgeClient.approvePR(resolvedCwd, prNumber, body)
+        );
       },
     })
   );

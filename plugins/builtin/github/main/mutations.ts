@@ -112,7 +112,11 @@ async function readMutationJson(
 }
 
 // Shared PATCH for close/reopen — both flip `state` on the same endpoint.
-async function patchPRState(repo: RepoRef, prNumber: number, state: "open" | "closed"): Promise<PR> {
+async function patchPRState(
+  repo: RepoRef,
+  prNumber: number,
+  state: "open" | "closed"
+): Promise<PR> {
   const token = requireGitHubToken();
   const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}`;
   const response = await fetch(url, {

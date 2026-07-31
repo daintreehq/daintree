@@ -439,12 +439,7 @@ export interface ReviewThread {
  * model, so a provider never has to lie about what the forge reported.
  */
 export type NormalizedReviewState =
-  | "approved"
-  | "changes_requested"
-  | "commented"
-  | "dismissed"
-  | "pending"
-  | "unknown";
+  "approved" | "changes_requested" | "commented" | "dismissed" | "pending" | "unknown";
 
 /**
  * A submitted pull-request review, returned by the review-write operations so

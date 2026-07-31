@@ -849,7 +849,10 @@ describe("forge write handlers forward the provider result (#11546)", () => {
     registerForgeHandlers();
   });
 
-  it.each(cases)("$name resolves to the provider's result", async ({ channel, expected, invoke }) => {
-    await expect(invoke(getInvokeHandler(channel))).resolves.toEqual(expected);
-  });
+  it.each(cases)(
+    "$name resolves to the provider's result",
+    async ({ channel, expected, invoke }) => {
+      await expect(invoke(getInvokeHandler(channel))).resolves.toEqual(expected);
+    }
+  );
 });
