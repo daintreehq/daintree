@@ -1026,6 +1026,7 @@ class TerminalInstanceService {
       writeChain: Promise.resolve(),
       restoreGeneration: 0,
       isSerializedRestoreInProgress: false,
+      restoreWindowToken: 0,
       deferredOutput: [],
       scrollbackRestoreState: "none",
       attachGeneration: 0,

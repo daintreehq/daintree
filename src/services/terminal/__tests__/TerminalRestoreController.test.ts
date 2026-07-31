@@ -119,6 +119,7 @@ describe("TerminalRestoreController", () => {
       terminal: mockTerminal,
       writeChain: Promise.resolve(),
       restoreGeneration: 0,
+      restoreWindowToken: 0,
       isSerializedRestoreInProgress: false,
       deferredOutput: [],
       isUserScrolledBack: false,
@@ -791,6 +792,46 @@ describe("TerminalRestoreController", () => {
       expect(result).toBe(false);
       expect(trace.at(-1)).toBe("resize:170x24");
       expect(writeDataSpy).toHaveBeenCalledWith("t1", "held", 2);
+    });
+
+    it("does not let a failing fetch close a window a later restore opened", async () => {
+      const { terminalClient } = await import("@/clients");
+      let resolveFetch!: (value: SerializedTerminalSnapshot | null) => void;
+      vi.mocked(terminalClient.getSerializedState).mockImplementation(
+        () => new Promise((resolve) => (resolveFetch = resolve))
+      );
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const fetchPromise = controller.fetchAndRestore("t1");
+      await flushMicrotasks();
+
+      // A restore starts and takes over the window while the fetch is still
+      // waiting on IPC. Its write callback is dropped so it stays mid-replay.
+      mockTerminal.write.mockImplementationOnce(() => {});
+      controller.restoreFromSerialized("t1", "newer", { cols: 80, rows: 24 });
+      expect(managed.isSerializedRestoreInProgress).toBe(true);
+
+      // The fetch now comes back empty. It must not reopen the gate underneath
+      // the restore that is still writing.
+      resolveFetch(null);
+      await fetchPromise;
+
+      expect(managed.isSerializedRestoreInProgress).toBe(true);
+    });
+
+    it("does not cancel an in-flight restore just to identify its own window", async () => {
+      const { terminalClient } = await import("@/clients");
+      vi.mocked(terminalClient.getSerializedState).mockResolvedValue(null);
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const generationBefore = managed.restoreGeneration;
+      await controller.fetchAndRestore("t1");
+
+      // Bumping restoreGeneration to claim ownership would abort whatever was
+      // replaying — and this fetch had no replacement to put in its place.
+      expect(managed.restoreGeneration).toBe(generationBefore);
     });
 
     it("applies a resize parked mid-replay even when the snapshot needed no alignment", async () => {

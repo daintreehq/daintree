@@ -215,6 +215,17 @@ export interface ManagedTerminal {
    * drained by the restore that normalizes back. Undefined outside a restore.
    */
   pendingRestoreGeometry?: TerminalGeometry;
+  /**
+   * Monotonic id for the currently-open serialized-restore window (#11552).
+   *
+   * Deliberately separate from `restoreGeneration`: that one CANCELS an
+   * in-flight replay, so reusing it to identify a window would mean a snapshot
+   * fetch had to abort whatever was replaying just to be able to tell whether
+   * the window was still its own to close — and if the fetch then came back
+   * null, it would release output over a half-replayed buffer. This only
+   * answers "am I still the owner", never "should you stop".
+   */
+  restoreWindowToken: number;
   // Output that arrived mid-restore, replayed once the restore settles. Each
   // entry keeps the ingest batch's chunkCount so the replay write can settle
   // the SAME pending port-ack FIFO entries the batch owns — the entries are

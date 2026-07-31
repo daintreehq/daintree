@@ -67,7 +67,7 @@ export class TerminalRestoreController {
    * `TerminalResizeController.resizeTerminal`), so it always holds the newest
    * intended geometry (#11552).
    */
-  private beginRestoreWindow(managed: ManagedTerminal): void {
+  private beginRestoreWindow(managed: ManagedTerminal): number {
     if (!managed.isSerializedRestoreInProgress) {
       managed.pendingRestoreGeometry = {
         cols: managed.terminal.cols,
@@ -75,6 +75,7 @@ export class TerminalRestoreController {
       };
     }
     managed.isSerializedRestoreInProgress = true;
+    return ++managed.restoreWindowToken;
   }
 
   /**
@@ -123,7 +124,10 @@ export class TerminalRestoreController {
    * the configured value straight back; it is a live-typing ergonomic, not
    * something to change globally.
    */
-  private endRestoreWindow(managed: ManagedTerminal): void {
+  private endRestoreWindow(managed: ManagedTerminal, token: number): void {
+    // A later window opened over this one — it owns the gate and the pending
+    // geometry now, and closing them here would reopen its deferral mid-replay.
+    if (managed.restoreWindowToken !== token) return;
     const target = managed.pendingRestoreGeometry;
     managed.pendingRestoreGeometry = undefined;
     managed.isSerializedRestoreInProgress = false;
@@ -175,6 +179,10 @@ export class TerminalRestoreController {
       return false;
     }
 
+    // -1 until a window is actually opened: token 0 is a legitimate value on a
+    // terminal that has never restored, and the catch below must not close a
+    // window this call never took.
+    let restoreWindow = -1;
     try {
       if (serializedState.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
         void this.restoreFromSerializedIncremental(id, serializedState, captureGeometry);
@@ -182,7 +190,7 @@ export class TerminalRestoreController {
       }
 
       const restoreGeneration = ++managed.restoreGeneration;
-      this.beginRestoreWindow(managed);
+      restoreWindow = this.beginRestoreWindow(managed);
       managed.lastScrollbackRestoreError = undefined;
 
       const scrollBackOffset = managed.isUserScrolledBack
@@ -209,7 +217,7 @@ export class TerminalRestoreController {
           // Closed only now: the deferred chunks below were produced for the
           // live grid, so they must not be written while the pane is still
           // parked at the capture width.
-          this.endRestoreWindow(current);
+          this.endRestoreWindow(current, restoreWindow);
 
           if (scrollBackOffset > 0) {
             const newBaseY = current.terminal.buffer.active.baseY;
@@ -224,7 +232,7 @@ export class TerminalRestoreController {
       // The restore died synchronously (reset/resize/write threw). Put the pane
       // back on its live grid before releasing output — replaying live chunks
       // into a terminal parked at the capture width would corrupt them too.
-      this.endRestoreWindow(managed);
+      this.endRestoreWindow(managed, restoreWindow);
       managed.lastScrollbackRestoreError = classifyRestoreError(error);
       logError(`Failed to restore terminal ${id}`, error);
       // Release anything already deferred so its ledger charges settle and live
@@ -246,7 +254,7 @@ export class TerminalRestoreController {
     }
 
     const restoreGeneration = ++managed.restoreGeneration;
-    this.beginRestoreWindow(managed);
+    const restoreWindow = this.beginRestoreWindow(managed);
     managed.lastScrollbackRestoreError = undefined;
 
     const task = async (): Promise<boolean> => {
@@ -323,7 +331,7 @@ export class TerminalRestoreController {
           // is fully laid out at the capture grid by now and this reflow sees
           // the whole payload. A superseded generation never reaches here — its
           // successor is mid-replay at its own capture width and owns the grid.
-          this.endRestoreWindow(managed);
+          this.endRestoreWindow(managed, restoreWindow);
 
           if (scrollBackOffset > 0) {
             const newBaseY = managed.terminal.buffer.active.baseY;
@@ -350,7 +358,7 @@ export class TerminalRestoreController {
         this.deps.getInstance(id) === managed &&
         managed.restoreGeneration === restoreGeneration
       ) {
-        this.endRestoreWindow(managed);
+        this.endRestoreWindow(managed, restoreWindow);
         this.replayDeferred(id, managed);
       }
       return false;
@@ -385,12 +393,12 @@ export class TerminalRestoreController {
       return false;
     }
 
-    // Bump so this fetch owns a generation nothing else shares. Reading the
-    // current one instead let two concurrent fetches — or a fetch racing an
-    // in-flight incremental restore — both believe they owned the window, and
-    // whichever failed first would reopen the survivor's gate mid-replay.
-    const restoreGeneration = ++managed.restoreGeneration;
-    this.beginRestoreWindow(managed);
+    // Deliberately does NOT bump restoreGeneration: that would cancel any
+    // in-flight replay, and a fetch that then came back null would have killed
+    // a good restore and released output over a half-written buffer. The window
+    // token below is what makes ownership unique.
+    const restoreGeneration = managed.restoreGeneration;
+    const restoreWindow = this.beginRestoreWindow(managed);
     managed.lastScrollbackRestoreError = undefined;
 
     // The window this call opened is only ours to close while no newer restore
@@ -400,8 +408,7 @@ export class TerminalRestoreController {
     // capture-width alignment, at the wrong grid.
     const releaseIfStillOwned = (): void => {
       if (this.deps.getInstance(id) !== managed) return;
-      if (managed.restoreGeneration !== restoreGeneration) return;
-      this.endRestoreWindow(managed);
+      this.endRestoreWindow(managed, restoreWindow);
     };
 
     try {
@@ -457,6 +464,7 @@ export class TerminalRestoreController {
     if (!managed) return;
 
     managed.restoreGeneration++;
+    managed.restoreWindowToken++;
     managed.isSerializedRestoreInProgress = false;
     managed.pendingRestoreGeometry = undefined;
     managed.deferredOutput = [];

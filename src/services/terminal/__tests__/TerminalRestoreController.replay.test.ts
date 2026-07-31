@@ -93,6 +93,7 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
       terminal,
       writeChain: Promise.resolve(),
       restoreGeneration: 0,
+      restoreWindowToken: 0,
       isSerializedRestoreInProgress: false,
       deferredOutput: [],
       isUserScrolledBack: false,
