@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useId, useMemo, useRef } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { ChevronDown, ChevronRight, File, Folder, FolderOpen } from "lucide-react";
+import { join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
+import { FILE_DRAG_MIME, encodeFileDragPaths } from "@/lib/fileDragPayload";
 import { Spinner } from "@/components/ui/Spinner";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
@@ -41,6 +43,14 @@ export interface FileTreeViewProps {
    */
   onInsertFileReference?: (path: string) => void;
   canInsertFileReference?: boolean;
+  /**
+   * Absolute path the rows are relative to — the worktree or workspace root,
+   * NOT the folder the tree is currently rooted at. `row.path` stays relative
+   * to this even after a re-root, which is what lets a dragged row name an
+   * absolute file (#11576). Empty when no source resolves, which is the tree's
+   * signal that rows cannot be dragged anywhere useful.
+   */
+  basePath: string;
   /** Accessible name for the tree, since the panel header isn't part of it. */
   label: string;
 }
@@ -85,6 +95,7 @@ export function FileTreeView({
   rowContextMenu,
   onInsertFileReference,
   canInsertFileReference = false,
+  basePath,
   label,
 }: FileTreeViewProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -239,6 +250,7 @@ export function FileTreeView({
       rowContextMenu,
       hasDirectories,
       instanceId,
+      basePath,
     }),
     [
       selectedPath,
@@ -249,6 +261,7 @@ export function FileTreeView({
       rowContextMenu,
       hasDirectories,
       instanceId,
+      basePath,
     ]
   );
 
@@ -308,6 +321,7 @@ interface TreeContext {
   rowContextMenu?: ((row: FlatTreeRow) => React.ReactNode) | undefined;
   hasDirectories: boolean;
   instanceId: string;
+  basePath: string;
 }
 
 /**
@@ -383,6 +397,36 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
     event.stopPropagation();
   };
 
+  // Hand this row to an agent by dragging it (#11576). Folders drag exactly
+  // like files: a directory reference is meaningful to every agent that takes
+  // `@path`, and the destination decides what to do with it.
+  //
+  // Everything the drop needs is written here, synchronously. Virtuoso unmounts
+  // this row the moment it scrolls out of the window, but the browser owns the
+  // drag session once `dragstart` returns — it has already snapshotted both the
+  // payload and the drag image, and neither destination looks at the source
+  // node again.
+  //
+  // Carries one type and no `text/plain`: see `FILE_DRAG_MIME`.
+  const handleDragStart = (event: React.DragEvent<HTMLDivElement>) => {
+    const { dataTransfer } = event;
+    // A drag with no data is a drag Chromium starts and no target can accept,
+    // which reads as a broken affordance rather than an absent one.
+    if (context.basePath === "") {
+      event.preventDefault();
+      return;
+    }
+    // A list of one: the tree is single-select today, but the transport is
+    // already shaped for the multi-select follow-up.
+    dataTransfer.setData(FILE_DRAG_MIME, encodeFileDragPaths([join(context.basePath, row.path)]));
+    // Referencing a file never moves or removes it.
+    dataTransfer.effectAllowed = "copy";
+    // The row itself is the preview — it already reads as this file (icon,
+    // name, indentation) and costs no throwaway DOM node to build or clean up.
+    // Grabbed near the icon so the cursor sits on the thing being dragged.
+    dataTransfer.setDragImage(event.currentTarget, 12, ROW_HEIGHT_PX / 2);
+  };
+
   const Chevron = row.isExpanded ? ChevronDown : ChevronRight;
   const FolderIcon = row.isExpanded ? FolderOpen : Folder;
 
@@ -397,6 +441,12 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
       aria-level={row.depth + 1}
       aria-selected={isSelected}
       {...(row.isDirectory && { "aria-expanded": row.isExpanded })}
+      // Deliberately no `cursor-grab`: clicking to select or expand is what
+      // nearly every row interaction is, and advertising the drag on all of
+      // them would misdescribe the surface. Chromium supplies its own cursor
+      // once the gesture actually starts.
+      draggable={context.basePath !== ""}
+      onDragStart={handleDragStart}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       style={{ paddingLeft: BASE_PADDING_PX + row.depth * INDENT_PER_DEPTH_PX }}

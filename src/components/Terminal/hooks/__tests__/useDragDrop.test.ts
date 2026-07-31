@@ -12,6 +12,7 @@ vi.mock("../../useTerminalFileTransfer", () => ({
 }));
 
 const { useDragDrop } = await import("../useDragDrop");
+const { FILE_DRAG_MIME, encodeFileDragPaths } = await import("@/lib/fileDragPayload");
 
 const CWD = "/Users/greg/Projects/daintree";
 
@@ -24,12 +25,45 @@ function fakeView(head = 0) {
   return { view, dispatch, head, ref: { current: view } as React.RefObject<EditorView | null> };
 }
 
-function dropEvent(files: File[]): React.DragEvent {
+/**
+ * The one place a synthetic transfer becomes a `DragEvent`. Every builder
+ * below routes through it so the suite keeps a single assertion rather than
+ * one per drag shape.
+ */
+function dragEventWith(dataTransfer: object): React.DragEvent {
   return {
     preventDefault: vi.fn(),
     stopPropagation: vi.fn(),
-    dataTransfer: { files, types: ["Files"] },
+    dataTransfer,
   } as unknown as React.DragEvent;
+}
+
+function dropEvent(files: File[]): React.DragEvent {
+  return dragEventWith({ files, types: ["Files"] });
+}
+
+/**
+ * A drop from the file browser (#11576): paths, no `File` objects. `getData`
+ * only answers for the type the source actually wrote, which is what proves
+ * the handler asks for the right one.
+ */
+function internalDropEvent(
+  serialized: string,
+  getData: (type: string) => string = vi.fn((type: string) =>
+    type === FILE_DRAG_MIME ? serialized : ""
+  )
+): React.DragEvent {
+  return dragEventWith({ files: [], types: [FILE_DRAG_MIME], getData });
+}
+
+/** The same, carrying paths the source would really have encoded. */
+function internalDrop(paths: string[]): React.DragEvent {
+  return internalDropEvent(encodeFileDragPaths(paths));
+}
+
+/** A hover, with no payload readable yet — what protected mode really hands us. */
+function dragEvent(types: string[]): React.DragEvent {
+  return dragEventWith({ types, dropEffect: "none", getData: vi.fn(() => "") });
 }
 
 function fakeFile(name: string, size = 10): File {
@@ -264,6 +298,23 @@ describe("useDragDrop", () => {
     expect(insertedToken(dispatch)).toBe("@shot.png");
   });
 
+  // `IMAGE_EXTENSIONS` is anchored, so a real file called `shot.png ` is not an
+  // image. Classifying on the trimmed display name instead would promote it to
+  // a thumbnail chip — and would disagree with the same file dragged in-app,
+  // which has no OS-supplied name to trim.
+  it("does not treat a trailing-space name as an image", async () => {
+    pathForFile.mockReturnValue(`${CWD}/shot.png `);
+    const { dispatch, ref } = fakeView();
+    const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+    await act(async () => {
+      await result.current.handleDrop(dropEvent([fakeFile("shot.png ")]));
+    });
+
+    expect(thumbnailFromPath).not.toHaveBeenCalled();
+    expect(effectValues(dispatch)[0]?.fileName).toBe("shot.png");
+  });
+
   it("does not dispatch when every dropped file resolves to no path", async () => {
     pathForFile.mockReturnValue("");
     const { view, ref } = fakeView();
@@ -274,5 +325,309 @@ describe("useDragDrop", () => {
     });
 
     expect(view.dispatch).not.toHaveBeenCalled();
+  });
+
+  // A drag out of the file browser (#11576). It carries paths instead of
+  // `File` objects, so the gate and the payload both have a second source —
+  // everything downstream has to stay the OS drop's.
+  describe("in-app file drag", () => {
+    it("lights the drop affordance up for the in-app type", () => {
+      const { ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+      const enter = dragEvent([FILE_DRAG_MIME]);
+
+      act(() => {
+        result.current.handleDragEnter(enter);
+      });
+
+      expect(enter.preventDefault).toHaveBeenCalled();
+      expect(result.current.isDragOverFiles).toBe(true);
+    });
+
+    it("accepts the in-app type as a copy", () => {
+      const { ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+      const over = dragEvent([FILE_DRAG_MIME]);
+
+      act(() => {
+        result.current.handleDragOver(over);
+      });
+
+      expect(over.preventDefault).toHaveBeenCalled();
+      expect(over.dataTransfer.dropEffect).toBe("copy");
+    });
+
+    // Chromium blanks `getData` until the drop, so a gate that reached for the
+    // payload would refuse every in-app drag it is supposed to advertise.
+    it("gates on the type alone, never on the payload", () => {
+      const { ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+      const enter = dragEvent([FILE_DRAG_MIME]);
+      const over = dragEvent([FILE_DRAG_MIME]);
+
+      act(() => {
+        result.current.handleDragEnter(enter);
+        result.current.handleDragOver(over);
+      });
+
+      expect(enter.dataTransfer.getData).not.toHaveBeenCalled();
+      expect(over.dataTransfer.getData).not.toHaveBeenCalled();
+    });
+
+    it("ignores a drag carrying neither files nor the in-app type", () => {
+      const { ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+      const enter = dragEvent(["text/plain"]);
+
+      act(() => {
+        result.current.handleDragEnter(enter);
+      });
+
+      expect(enter.preventDefault).not.toHaveBeenCalled();
+      expect(result.current.isDragOverFiles).toBe(false);
+    });
+
+    // The bar the whole feature is measured against: dragging a row must
+    // produce what dropping the same file from Finder produces.
+    it("inserts the same cwd-relative token an OS drop of the file produces", async () => {
+      const { dispatch, ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      await act(async () => {
+        await result.current.handleDrop(internalDrop([`${CWD}/src/App.tsx`]));
+      });
+
+      expect(insertedToken(dispatch)).toBe("@src/App.tsx");
+    });
+
+    it("stores the absolute path on the chip and names it from the path", async () => {
+      const absolute = `${CWD}/src/App.tsx`;
+      const { dispatch, ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      await act(async () => {
+        await result.current.handleDrop(internalDrop([absolute]));
+      });
+
+      const [chip] = effectValues(dispatch);
+      expect(chip?.filePath).toBe(absolute);
+      expect(chip?.fileName).toBe("App.tsx");
+      // No `File` behind an in-app drag, so no size — the chip already treats
+      // it as optional rather than this reaching for a stat over IPC.
+      expect(chip?.fileSize).toBeUndefined();
+    });
+
+    it("keeps a reserved-name collision a path", async () => {
+      const { dispatch, ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      await act(async () => {
+        await result.current.handleDrop(internalDrop([`${CWD}/terminal`]));
+      });
+
+      expect(insertedToken(dispatch)).toBe("@./terminal");
+    });
+
+    it("quotes a dragged path that needs it", async () => {
+      const { dispatch, ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      await act(async () => {
+        await result.current.handleDrop(internalDrop([`${CWD}/my notes.md`]));
+      });
+
+      expect(insertedToken(dispatch)).toBe('@"my notes.md"');
+    });
+
+    // A folder is a meaningful reference for an agent and drags like any file.
+    it("references a dragged folder", async () => {
+      const { dispatch, ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      await act(async () => {
+        await result.current.handleDrop(internalDrop([`${CWD}/src/components`]));
+      });
+
+      expect(insertedToken(dispatch)).toBe("@src/components");
+    });
+
+    it("keeps chip ranges aligned across several dragged paths", async () => {
+      const { dispatch, ref, head } = fakeView(11);
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      await act(async () => {
+        await result.current.handleDrop(internalDrop([`${CWD}/src/a.ts`, `${CWD}/src/b.ts`]));
+      });
+
+      expect(chipSpellings(dispatch, head)).toEqual(["@src/a.ts", "@src/b.ts"]);
+    });
+
+    // Matching the OS drop means matching it for images too: Finder's drop of
+    // a PNG yields a thumbnail chip, so dragging that row must as well.
+    it("thumbnails a dragged image exactly as an OS drop does", async () => {
+      const absolute = `${CWD}/shot.png`;
+      const { dispatch, ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      await act(async () => {
+        await result.current.handleDrop(internalDrop([absolute]));
+      });
+
+      expect(thumbnailFromPath).toHaveBeenCalledWith(absolute);
+      const insert = dispatch.mock.calls[0]?.[0]?.changes?.insert as string;
+      expect(insert.trimEnd()).toBe(absolute);
+    });
+
+    // A folder whose name ends in an image extension takes the same recovery a
+    // corrupt image already takes, rather than needing its own payload field.
+    it("falls back to a file chip when the thumbnail fails", async () => {
+      thumbnailFromPath.mockRejectedValue(new Error("not an image"));
+      const { dispatch, ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      await act(async () => {
+        await result.current.handleDrop(internalDrop([`${CWD}/assets.png`]));
+      });
+
+      expect(insertedToken(dispatch)).toBe("@assets.png");
+    });
+
+    // The OS path would resolve nothing for a drag that has no `File` at all.
+    it("never asks the OS to resolve a path it was handed", async () => {
+      const { ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      await act(async () => {
+        await result.current.handleDrop(internalDrop([`${CWD}/src/App.tsx`]));
+      });
+
+      expect(pathForFile).not.toHaveBeenCalled();
+    });
+
+    it("reads the payload from the in-app type", async () => {
+      const getData = vi.fn(() => encodeFileDragPaths([`${CWD}/src/App.tsx`]));
+      const { ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      await act(async () => {
+        await result.current.handleDrop(internalDropEvent("", getData));
+      });
+
+      expect(getData).toHaveBeenCalledWith(FILE_DRAG_MIME);
+    });
+
+    // The payload is only readable once the drop has already been advertised,
+    // so a malformed one has to fail quietly rather than insert something.
+    it("dispatches nothing for a malformed payload but still clears the overlay", async () => {
+      const { view, ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      act(() => {
+        result.current.handleDragEnter(dragEvent([FILE_DRAG_MIME]));
+      });
+      expect(result.current.isDragOverFiles).toBe(true);
+
+      await act(async () => {
+        await result.current.handleDrop(internalDropEvent("not json"));
+      });
+
+      expect(view.dispatch).not.toHaveBeenCalled();
+      expect(result.current.isDragOverFiles).toBe(false);
+    });
+
+    it("dispatches nothing for a payload carrying a relative path", async () => {
+      const { view, ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      await act(async () => {
+        await result.current.handleDrop(internalDropEvent(encodeFileDragPaths(["src/App.tsx"])));
+      });
+
+      expect(view.dispatch).not.toHaveBeenCalled();
+    });
+
+    // Draining both would insert every reference twice.
+    it("prefers the in-app payload when files ride along too", async () => {
+      pathForFile.mockReturnValue(`${CWD}/from-os.ts`);
+      const { dispatch, ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+      const event = dragEventWith({
+        files: [fakeFile("from-os.ts")],
+        types: ["Files", FILE_DRAG_MIME],
+        getData: () => encodeFileDragPaths([`${CWD}/src/App.tsx`]),
+      });
+
+      await act(async () => {
+        await result.current.handleDrop(event);
+      });
+
+      // One dispatch, not two: a handler that decoded the payload and then fell
+      // through to the files would satisfy a first-call-only assertion while
+      // inserting everything twice.
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(pathForFile).not.toHaveBeenCalled();
+      expect(effectValues(dispatch)).toHaveLength(1);
+      expect(insertedToken(dispatch)).toBe("@src/App.tsx");
+    });
+
+    // Crossing CodeMirror's child elements fires nested enter/leave pairs, so
+    // the overlay has to survive the inner leave and clear only on the outer.
+    it("keeps the overlay up across nested enters and clears it on the last leave", () => {
+      const { ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      act(() => {
+        result.current.handleDragEnter(dragEvent([FILE_DRAG_MIME]));
+        result.current.handleDragEnter(dragEvent([FILE_DRAG_MIME]));
+      });
+      expect(result.current.isDragOverFiles).toBe(true);
+
+      act(() => {
+        result.current.handleDragLeave(dragEvent([FILE_DRAG_MIME]));
+      });
+      expect(result.current.isDragOverFiles).toBe(true);
+
+      act(() => {
+        result.current.handleDragLeave(dragEvent([FILE_DRAG_MIME]));
+      });
+      expect(result.current.isDragOverFiles).toBe(false);
+    });
+
+    // Ranges are accumulated against the emitted spelling, and images emit a
+    // bare absolute path while files emit a shortened token. Interleaving them
+    // on this provenance is where an accumulator could drift independently of
+    // the OS branch's own coverage.
+    it("keeps ranges aligned when a dragged image sits between two files", async () => {
+      const { dispatch, ref, head } = fakeView(6);
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      await act(async () => {
+        await result.current.handleDrop(
+          internalDrop([`${CWD}/a.ts`, `${CWD}/shot.png`, `${CWD}/b.ts`])
+        );
+      });
+
+      expect(chipSpellings(dispatch, head).sort()).toEqual(
+        [`${CWD}/shot.png`, "@a.ts", "@b.ts"].sort()
+      );
+    });
+
+    // The pane can be torn down between the drag starting and the drop landing.
+    it("does nothing when the editor is already gone", async () => {
+      const ref = { current: null } as React.RefObject<EditorView | null>;
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+      const event = internalDrop([`${CWD}/src/App.tsx`]);
+
+      act(() => {
+        result.current.handleDragEnter(dragEvent([FILE_DRAG_MIME]));
+      });
+      await act(async () => {
+        await result.current.handleDrop(event);
+      });
+
+      expect(event.dataTransfer.getData).not.toHaveBeenCalled();
+      expect(thumbnailFromPath).not.toHaveBeenCalled();
+      expect(result.current.isDragOverFiles).toBe(false);
+    });
   });
 });

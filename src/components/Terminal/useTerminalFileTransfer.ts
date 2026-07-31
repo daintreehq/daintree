@@ -5,6 +5,12 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { escapeShellArgOptional } from "@shared/utils/shellEscape.js";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol.js";
+import {
+  FILE_DRAG_MIME,
+  decodeFileDragPaths,
+  hasFileDrag,
+  hasInternalFileDrag,
+} from "@/lib/fileDragPayload";
 import { formatAtFileTokenForCwd } from "./hybridInputParsing";
 
 /**
@@ -204,7 +210,7 @@ export function useTerminalFileTransfer(
     };
 
     const handleDragEnter = (e: DragEvent) => {
-      if (!e.dataTransfer?.types.includes("Files")) return;
+      if (!e.dataTransfer || !hasFileDrag(e.dataTransfer.types)) return;
       e.preventDefault();
       e.stopPropagation();
       dragDepthRef.current++;
@@ -212,7 +218,7 @@ export function useTerminalFileTransfer(
     };
 
     const handleDragOver = (e: DragEvent) => {
-      if (!e.dataTransfer?.types.includes("Files")) return;
+      if (!e.dataTransfer || !hasFileDrag(e.dataTransfer.types)) return;
       e.preventDefault();
       e.stopPropagation();
       e.dataTransfer.dropEffect = isInputLockedRef.current ? "none" : "copy";
@@ -234,12 +240,21 @@ export function useTerminalFileTransfer(
       setIsDragOverFiles(false);
 
       if (isInputLockedRef.current) return;
-      if (!e.dataTransfer?.files.length) return;
+      const transfer = e.dataTransfer;
+      if (!transfer) return;
+
+      // A drag out of the file browser (#11576) carries paths where the OS
+      // hands over `File` objects. Only the source of the paths differs —
+      // both axes below stay exactly as an OS drop drives them, so the two
+      // gestures cannot produce different bytes for the same file. The
+      // internal type wins when both are present, so nothing is written twice.
+      const paths = hasInternalFileDrag(transfer.types)
+        ? (decodeFileDragPaths(transfer.getData(FILE_DRAG_MIME)) ?? [])
+        : Array.from(transfer.files).map((file) => window.electron.webUtils.getPathForFile(file));
 
       const isAgent = isAgentTerminal();
       const formatted: string[] = [];
-      for (const file of Array.from(e.dataTransfer.files)) {
-        const filePath = window.electron.webUtils.getPathForFile(file);
+      for (const filePath of paths) {
         if (filePath && isDeliverablePath(filePath)) formatted.push(formatPath(filePath, isAgent));
       }
 

@@ -134,6 +134,7 @@ const { treeProps } = vi.hoisted(() => ({
     onActivate: undefined as ((path: string) => void) | undefined,
     onInsertFileReference: undefined as ((path: string) => void) | undefined,
     canInsertFileReference: undefined as boolean | undefined,
+    basePath: undefined as string | undefined,
   },
 }));
 vi.mock("../FileTreeView", () => ({
@@ -142,15 +143,18 @@ vi.mock("../FileTreeView", () => ({
     onActivate,
     onInsertFileReference,
     canInsertFileReference,
+    basePath,
   }: {
     rowContextMenu?: (row: unknown) => React.ReactNode;
     onActivate?: (path: string) => void;
     onInsertFileReference?: (path: string) => void;
     canInsertFileReference?: boolean;
+    basePath?: string;
   }) => {
     treeProps.onActivate = onActivate;
     treeProps.onInsertFileReference = onInsertFileReference;
     treeProps.canInsertFileReference = canInsertFileReference;
+    treeProps.basePath = basePath;
     return (
       <div data-testid="file-tree-view" role="tree" tabIndex={-1}>
         {rowContextMenu?.(FOLDER_ROW)}
@@ -319,6 +323,7 @@ beforeEach(() => {
   treeProps.onActivate = undefined;
   treeProps.onInsertFileReference = undefined;
   treeProps.canInsertFileReference = undefined;
+  treeProps.basePath = undefined;
   insertFileReferenceMock.mockClear();
   canInsertRef.current = true;
   dispatchMock.mockReset();
@@ -1182,6 +1187,22 @@ describe("insert file reference", () => {
     canInsertRef.current = false;
     renderPane();
     expect(treeProps.canInsertFileReference).toBe(false);
+  });
+
+  // The tree's rows are relative, so the drag source (#11576) needs the same
+  // absolute base the menu's own join uses.
+  it("hands the tree the base path its rows are relative to", () => {
+    renderPane();
+    expect(treeProps.basePath).toBe("/repo");
+  });
+
+  // `row.path` stays relative to the true source root after a re-root, so the
+  // base must not follow the tree down. Joining the two would spell
+  // `/repo/src/src/App.tsx` for every dragged row.
+  it("keeps the base at the source root when the tree is re-rooted", () => {
+    mockPanel.browserRootPath = "src";
+    renderPane();
+    expect(treeProps.basePath).toBe("/repo");
   });
 });
 
