@@ -1266,6 +1266,37 @@ describe("agentSessionHistory.list (#10854)", () => {
     expect(listMock).not.toHaveBeenCalled();
   });
 
+  // A scratch view has no project and no git worktrees, so its context carries
+  // only scratchId — yet its terminals ARE journaled, under that opaque id as
+  // their ownership stamp. Without the fallback the scope guard above turns
+  // every scratch into a dead end, and no agent-visible arg can escape it.
+  it("scopes to the context's scratch id rather than dead-ending a scratch workspace", async () => {
+    const actions = setupActions(makeCallbacks());
+    const result = await callAction(
+      actions,
+      "agentSessionHistory.list",
+      {},
+      { scratchId: "scratch-7" }
+    );
+    expect(listMock).toHaveBeenCalledWith(undefined, "scratch-7");
+    expect(result).toEqual({
+      sessions: SAMPLE_SESSIONS,
+      total: SAMPLE_SESSIONS.length,
+      hasMore: false,
+    });
+  });
+
+  it("prefers a resolved project over the scratch id when the context carries both", async () => {
+    const actions = setupActions(makeCallbacks());
+    await callAction(
+      actions,
+      "agentSessionHistory.list",
+      {},
+      { projectId: "ctx-proj", scratchId: "scratch-7" }
+    );
+    expect(listMock).toHaveBeenCalledWith(undefined, "ctx-proj");
+  });
+
   it("returns an empty page for a scoped but empty journal (never throws)", async () => {
     listMock.mockResolvedValue([]);
     const actions = setupActions(makeCallbacks());

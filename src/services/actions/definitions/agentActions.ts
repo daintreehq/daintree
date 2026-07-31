@@ -644,9 +644,13 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       if (worktreeId || projectId) {
         scopeWorktreeId = worktreeId;
         scopeProjectId = projectId;
-      } else if (ctx.activeWorktreeId || ctx.projectId) {
+      } else if (ctx.activeWorktreeId || ctx.projectId || ctx.scratchId) {
         scopeWorktreeId = ctx.activeWorktreeId;
-        scopeProjectId = ctx.projectId;
+        // A scratch view has neither a project nor any git worktrees, but its
+        // terminals are journaled under the opaque scratch id as their
+        // ownership stamp (see the terminal.create handler). Without this the
+        // scope guard turns every scratch into a dead end (#11482 class).
+        scopeProjectId = ctx.projectId ?? ctx.scratchId;
       } else {
         // Throw rather than return empty: an empty list is indistinguishable
         // from a valid scope that simply has no sessions, which would read as
@@ -796,7 +800,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       // Bookmarks are project-scoped (privacy). Resolve the explicit arg, then the
       // caller's project context. With neither, DO NOT fall open to every project
       // — return empty; an all-project view is a deliberate future enhancement.
-      const scope = projectId ?? ctx.projectId;
+      const scope = projectId ?? ctx.projectId ?? ctx.scratchId;
       if (!scope) return { bookmarks: [], total: 0, hasMore: false };
       const bookmarks = await window.electron.agentSessionHistory.listBookmarks({
         projectId: scope,

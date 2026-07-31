@@ -232,6 +232,18 @@ describe("session bookmark actions", () => {
     expect(agentSessionHistoryMock.listBookmarks).not.toHaveBeenCalled();
   });
 
+  // A scratch view has no project, but its terminals are journaled under the
+  // opaque scratch id — so it is a real scope, not "no scope".
+  it("list falls back to the context scratch id when there is no project", async () => {
+    agentSessionHistoryMock.listBookmarks.mockResolvedValue([VALID_RECORD]);
+    const actions = setupActions();
+    const result = await callAction(actions, "session.bookmarks.list", undefined, {
+      scratchId: "scratch-7",
+    });
+    expect(agentSessionHistoryMock.listBookmarks).toHaveBeenCalledWith({ projectId: "scratch-7" });
+    expect(result).toStrictEqual({ bookmarks: [VALID_RECORD], total: 1, hasMore: false });
+  });
+
   // #11530 — bookmarks are exempt from both the retention window and the
   // per-worktree cap, so the stored set grows without bound; `limit` is the only
   // thing keeping the agent-facing payload finite.
