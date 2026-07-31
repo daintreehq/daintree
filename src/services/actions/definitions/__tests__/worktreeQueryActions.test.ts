@@ -20,10 +20,13 @@ type ActionFactory = () => AnyActionDefinition;
 
 function getRun(id: string): AnyActionDefinition["run"] {
   const registry = new Map<string, ActionFactory>();
-  registerWorktreeQueryActions(registry as never, {
-    getWorktrees: () => [],
-    getActiveWorktreeId: () => null,
-  } as never);
+  registerWorktreeQueryActions(
+    registry as never,
+    {
+      getWorktrees: () => [],
+      getActiveWorktreeId: () => null,
+    } as never
+  );
   return registry.get(id)!().run;
 }
 

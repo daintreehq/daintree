@@ -563,7 +563,9 @@ export function registerWorktreeContextActions(
           .positive()
           .max(GIT_PAGE_LIMIT_MAX)
           .optional()
-          .describe(`Files per page (default ${GIT_PAGE_LIMIT_DEFAULT}, max ${GIT_PAGE_LIMIT_MAX}).`),
+          .describe(
+            `Files per page (default ${GIT_PAGE_LIMIT_DEFAULT}, max ${GIT_PAGE_LIMIT_MAX}).`
+          ),
       }),
       resultSchema: z.object({
         branch1: z.string(),

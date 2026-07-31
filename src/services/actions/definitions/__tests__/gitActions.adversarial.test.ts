@@ -549,7 +549,11 @@ describe("gitActions bounded reads", () => {
   it("git.getFileDiff defaults to the 24KB window and forwards an explicit one", async () => {
     const { run, git } = setupActions();
 
-    await run("git.getFileDiff", { filePath: "a.ts", status: "modified" }, { activeWorktreePath: "/repo" });
+    await run(
+      "git.getFileDiff",
+      { filePath: "a.ts", status: "modified" },
+      { activeWorktreePath: "/repo" }
+    );
     expect(git.getFileDiff).toHaveBeenCalledWith("/repo", "a.ts", "modified", undefined, {
       offset: 0,
       maxBytes: GIT_FILE_DIFF_DEFAULT_MAX_BYTES,
@@ -573,13 +577,10 @@ describe("gitActions bounded reads", () => {
       { filePath: "a.ts", status: "modified", maxBytes: 999_999_999 },
       { activeWorktreePath: "/repo" }
     );
-    expect(git.getFileDiff).toHaveBeenCalledWith(
-      "/repo",
-      "a.ts",
-      "modified",
-      undefined,
-      { offset: 0, maxBytes: GIT_FILE_DIFF_MAX_BYTES }
-    );
+    expect(git.getFileDiff).toHaveBeenCalledWith("/repo", "a.ts", "modified", undefined, {
+      offset: 0,
+      maxBytes: GIT_FILE_DIFF_MAX_BYTES,
+    });
   });
 
   it("git.getFileDiff surfaces the continuation cursor for an oversized diff", async () => {
@@ -665,14 +666,22 @@ describe("gitActions bounded reads", () => {
       rebaseSequence: null,
     });
 
-    const first = (await run("git.getStagingStatus", { limit: 10 }, {
-      activeWorktreePath: "/repo",
-    })) as { nextOffset: number | null };
+    const first = (await run(
+      "git.getStagingStatus",
+      { limit: 10 },
+      {
+        activeWorktreePath: "/repo",
+      }
+    )) as { nextOffset: number | null };
     expect(first.nextOffset).toBe(10);
 
-    const second = (await run("git.getStagingStatus", { offset: 10, limit: 10 }, {
-      activeWorktreePath: "/repo",
-    })) as { staged: unknown[]; unstaged: { path: string }[] };
+    const second = (await run(
+      "git.getStagingStatus",
+      { offset: 10, limit: 10 },
+      {
+        activeWorktreePath: "/repo",
+      }
+    )) as { staged: unknown[]; unstaged: { path: string }[] };
 
     // The short list is exhausted; the long one keeps producing.
     expect(second.staged).toEqual([]);
@@ -754,9 +763,13 @@ describe("gitActions bounded reads", () => {
       rebaseSequence: null,
     });
 
-    const result = (await run("git.getStagingStatus", { limit: 5 }, {
-      activeWorktreePath: "/repo",
-    })) as { conflicted: string[]; conflictedFiles: { path: string }[] };
+    const result = (await run(
+      "git.getStagingStatus",
+      { limit: 5 },
+      {
+        activeWorktreePath: "/repo",
+      }
+    )) as { conflicted: string[]; conflictedFiles: { path: string }[] };
 
     expect(result.conflicted).toHaveLength(5);
     expect(result.conflictedFiles).toHaveLength(5);
@@ -861,9 +874,13 @@ describe("gitActions bounded reads", () => {
       recentCommits: [],
     });
 
-    const result = (await run("git.getProjectPulse", { rangeDays: 60 }, {
-      activeWorktreeId: "wt-1",
-    })) as { heatmap: { date: string }[] };
+    const result = (await run(
+      "git.getProjectPulse",
+      { rangeDays: 60 },
+      {
+        activeWorktreeId: "wt-1",
+      }
+    )) as { heatmap: { date: string }[] };
 
     expect(result.heatmap).toHaveLength(60);
     // Keeps the newest window, not the oldest.

@@ -110,7 +110,9 @@ export function registerWorktreeQueryActions(
           .positive()
           .max(GIT_PAGE_LIMIT_MAX)
           .optional()
-          .describe(`Branches per page (default ${GIT_PAGE_LIMIT_DEFAULT}, max ${GIT_PAGE_LIMIT_MAX}).`),
+          .describe(
+            `Branches per page (default ${GIT_PAGE_LIMIT_DEFAULT}, max ${GIT_PAGE_LIMIT_MAX}).`
+          ),
       }),
       examples: [
         {

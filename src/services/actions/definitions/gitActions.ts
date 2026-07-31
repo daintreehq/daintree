@@ -576,7 +576,9 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
           .positive()
           .max(GIT_PAGE_LIMIT_MAX)
           .optional()
-          .describe(`Entries per file list (default ${GIT_PAGE_LIMIT_DEFAULT}, max ${GIT_PAGE_LIMIT_MAX}).`),
+          .describe(
+            `Entries per file list (default ${GIT_PAGE_LIMIT_DEFAULT}, max ${GIT_PAGE_LIMIT_MAX}).`
+          ),
       })
       .optional(),
     resultSchema: z.object({
@@ -585,7 +587,11 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       conflicted: z.array(z.string()),
       conflictedFiles: z.array(ConflictedFileEntrySchema),
       totals: z.object({ staged: z.number(), unstaged: z.number(), conflictedFiles: z.number() }),
-      hasMore: z.object({ staged: z.boolean(), unstaged: z.boolean(), conflictedFiles: z.boolean() }),
+      hasMore: z.object({
+        staged: z.boolean(),
+        unstaged: z.boolean(),
+        conflictedFiles: z.boolean(),
+      }),
       offset: z.number(),
       limit: z.number(),
       nextOffset: z.number().nullable(),
@@ -656,8 +662,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
         },
         offset,
         limit,
-        nextOffset:
-          staged.nextOffset ?? unstaged.nextOffset ?? conflictedFiles.nextOffset ?? null,
+        nextOffset: staged.nextOffset ?? unstaged.nextOffset ?? conflictedFiles.nextOffset ?? null,
         isDetachedHead: status.isDetachedHead,
         currentBranch: status.currentBranch,
         hasRemote: status.hasRemote,
