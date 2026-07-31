@@ -10,6 +10,7 @@ import { triggerPopStash, triggerStashInput } from "@/store/terminalInputStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isPtyPanel } from "@shared/types/panel";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
+import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 export function registerTerminalInputActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -32,11 +33,7 @@ export function registerTerminalInputActions(
       // focus drifts across the MCP→IPC round trip (#11346). Fail closed
       // *before* the active-worktree no-op so a missing target is never
       // silently swallowed.
-      if (ctx.dispatchSource === "agent" && !terminalId) {
-        throw new Error(
-          "terminal.inject requires an explicit `terminalId` when dispatched by an agent or MCP client — pass the panel UUID from `terminal.list` (the `id` field)."
-        );
-      }
+      requireExplicitTerminalIdForAgentDispatch("terminal.inject", terminalId, ctx);
       const activeWorktreeId = callbacks.getActiveWorktreeId();
       if (activeWorktreeId) {
         // `terminalId` is undefined for interactive dispatch → the hook falls
@@ -55,8 +52,9 @@ export function registerTerminalInputActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      requireExplicitTerminalIdForAgentDispatch("terminal.copy", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
@@ -83,8 +81,9 @@ export function registerTerminalInputActions(
     denyPluginDispatch: true,
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      requireExplicitTerminalIdForAgentDispatch("terminal.paste", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
@@ -135,8 +134,9 @@ export function registerTerminalInputActions(
     nonRepeatable: true,
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args ?? {}) as { terminalId?: string };
+      requireExplicitTerminalIdForAgentDispatch("terminal.contextMenu", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
@@ -200,8 +200,9 @@ export function registerTerminalInputActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args ?? {}) as { terminalId?: string };
+      requireExplicitTerminalIdForAgentDispatch("terminal.sendToAgent", terminalId, ctx);
       const state = usePanelStore.getState();
       const sourceId = terminalId ?? state.focusedId;
       if (!sourceId) return;
