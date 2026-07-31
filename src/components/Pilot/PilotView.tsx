@@ -4,6 +4,7 @@ import { CircleCheck, MessageCircleQuestion, OctagonAlert, Radar } from "@/compo
 import { cn } from "@/lib/utils";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useOverlayClaim, useDohertyGate } from "@/hooks";
+import { isMac, isWindows } from "@/lib/platform";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { usePilotStore } from "@/store/pilotStore";
@@ -109,6 +110,15 @@ export function PilotView() {
   // inputs, so a counter absent from those inputs never recomputes an age. That
   // exact pattern is already dead in the project switcher; threading the
   // timestamp through makes the dependency explicit instead of incidental.
+  // This view is `fixed inset-0` over the toolbar, so it also covers the
+  // toolbar's OS-window-control reservations. Without mirroring them the macOS
+  // traffic lights sit on top of the title. Both spacers collapse in
+  // fullscreen, where the OS chrome is gone.
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    return window.electron.window.onFullscreenChange(setIsFullscreen);
+  }, []);
+
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), AGE_TICK_MS);
@@ -181,8 +191,18 @@ export function PilotView() {
       aria-modal="true"
       aria-label="Fleet overview"
     >
-      <header className="flex shrink-0 items-center gap-3 border-b border-daintree-border px-4 py-3">
-        <Radar className="size-4 text-daintree-text/70" aria-hidden="true" />
+      <header className="app-drag-region flex h-12 shrink-0 items-center gap-3 border-b border-daintree-border px-4">
+        {isMac() && (
+          <div
+            aria-hidden="true"
+            data-fullscreen={isFullscreen ? "true" : undefined}
+            className={cn(
+              "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+              isFullscreen ? "w-0" : "w-16"
+            )}
+          />
+        )}
+        <Radar className="size-4 shrink-0 text-daintree-text/70" aria-hidden="true" />
         <h1 className="text-sm font-medium text-daintree-text">Pilot</h1>
         <p className="min-w-0 flex-1 truncate text-xs text-daintree-text/50">
           {snapshot === null
@@ -199,10 +219,25 @@ export function PilotView() {
           type="button"
           onClick={close}
           aria-label="Close fleet overview"
-          className="rounded-[var(--radius-md)] p-1 text-daintree-text/60 transition-colors duration-150 ease-out hover:text-daintree-text"
+          className="app-no-drag shrink-0 rounded-[var(--radius-md)] p-1 text-daintree-text/60 transition-colors duration-150 ease-out hover:text-daintree-text"
         >
           <X className="size-4" aria-hidden="true" />
         </button>
+        {isWindows() && (
+          <div
+            aria-hidden="true"
+            data-fullscreen={isFullscreen ? "true" : undefined}
+            className={cn(
+              "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+              isFullscreen && "w-0"
+            )}
+            style={
+              isFullscreen
+                ? undefined
+                : { width: "calc(100vw - env(titlebar-area-width, calc(100vw - 138px)))" }
+            }
+          />
+        )}
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">

@@ -87,6 +87,27 @@ describe("buildPilotSections", () => {
     expect(atRoot[0]!.rows[0]!.branchLabel).toBeNull();
   });
 
+  it("drops a directory label that only repeats the workspace name", () => {
+    // A run in the project's root worktree would otherwise render
+    // "daintree · daintree" — a separator promising a fact it doesn't deliver.
+    const [section] = buildPilotSections(
+      [run({ agentState: "working", cwd: "/Users/dev/Projects/Daintree/daintree" })],
+      ctx({ workspaceNames: new Map([["p1", "Daintree"]]) })
+    );
+
+    expect(section!.rows[0]!.branchLabel).toBeNull();
+    expect(section!.rows[0]!.workspaceName).toBe("Daintree");
+  });
+
+  it("keeps a directory label that genuinely differs from the workspace", () => {
+    const [section] = buildPilotSections(
+      [run({ agentState: "working", cwd: "/Users/dev/daintree-worktrees/pilot-mode" })],
+      ctx({ workspaceNames: new Map([["p1", "Daintree"]]) })
+    );
+
+    expect(section!.rows[0]!.branchLabel).toBe("pilot-mode");
+  });
+
   it("carries the band onto every row it groups", () => {
     const sections = buildPilotSections(
       [

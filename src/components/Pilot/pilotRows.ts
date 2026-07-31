@@ -39,6 +39,23 @@ function directoryLabel(cwd: string): string | null {
   return segments[segments.length - 1] || null;
 }
 
+/**
+ * Drop a directory label that only repeats the workspace name.
+ *
+ * A run in the project's own root worktree has a cwd whose last segment IS the
+ * project folder, so the row renders "Daintree · daintree" — the separator
+ * promises a second fact and then doesn't deliver one. Same rule the switcher
+ * applies to its path hint: surface the fragment only when it disambiguates.
+ */
+function disambiguatingLabel(
+  label: string | null,
+  workspaceName: string | undefined
+): string | null {
+  if (label === null) return null;
+  if (workspaceName === undefined) return label;
+  return label.toLowerCase() === workspaceName.toLowerCase() ? null : label;
+}
+
 export interface PilotRowContext {
   /** Workspace id → display name, covering projects and scratches alike. */
   workspaceNames: ReadonlyMap<string, string>;
@@ -59,7 +76,10 @@ export function buildPilotSections(
       // A run whose workspace has been removed from the store still has to
       // render — dropping it would hide a live agent because a lookup missed.
       workspaceName: ctx.workspaceNames.get(run.workspaceId) ?? "Unknown workspace",
-      branchLabel: directoryLabel(run.cwd),
+      branchLabel: disambiguatingLabel(
+        directoryLabel(run.cwd),
+        ctx.workspaceNames.get(run.workspaceId)
+      ),
       agentLabel: run.agentId ? (ctx.agentNames.get(run.agentId) ?? run.agentId) : null,
       age: run.since !== undefined ? formatWaitAge(run.since, ctx.nowMs) : null,
     })),

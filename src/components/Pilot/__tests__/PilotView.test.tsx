@@ -5,6 +5,13 @@ import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 
 vi.mock("@/utils/safeFireAndForget", () => ({ safeFireAndForget: vi.fn() }));
 
+// The header reserves space for the OS window controls, so it subscribes to
+// fullscreen changes. Returns a no-op unsubscribe.
+vi.stubGlobal("window", {
+  ...globalThis.window,
+  electron: { window: { onFullscreenChange: vi.fn(() => () => {}) } },
+});
+
 import { PilotView } from "../PilotView";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { usePilotStore } from "@/store/pilotStore";
