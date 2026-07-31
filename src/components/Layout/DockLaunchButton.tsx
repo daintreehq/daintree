@@ -71,7 +71,12 @@ export function DockLaunchButton({
   const inputRef = useRef<HTMLInputElement>(null);
   const listboxId = useId();
 
-  const model = useDockLaunchModel({ agents, pinnedCount, activeWorktreeId });
+  const model = useDockLaunchModel({
+    agents,
+    pinnedCount,
+    activeWorktreeId,
+    surface: "dock",
+  });
 
   const { query, results, selectedIndex, setQuery, setSelectedIndex, selectPrevious, selectNext } =
     useSearchablePalette<DockLaunchItem>({
@@ -86,11 +91,24 @@ export function DockLaunchButton({
     });
 
   // Read synchronously from Radix's document-level Escape handler, which fires
-  // before React state has re-rendered.
+  // before React state has re-rendered. Written only from `updateQuery` (never
+  // during render) so an abandoned concurrent render can't leave the ref
+  // describing a query the user never committed.
   const queryRef = useRef(query);
-  queryRef.current = query;
 
-  const isFiltering = query.trim().length > 0;
+  const updateQuery = useCallback(
+    (next: string) => {
+      queryRef.current = next;
+      setQuery(next);
+    },
+    [setQuery]
+  );
+
+  // Whitespace alone doesn't filter, so it must not count as "has a query"
+  // anywhere — including the two Escape checks, or a stray space would cost the
+  // user an extra Escape to close a menu that looks unfiltered.
+  const hasQuery = query.trim().length > 0;
+  const isFiltering = hasQuery;
 
   // The content only mounts while open, so this fires exactly on open. Radix's
   // own mount autofocus lands on the first menu item synchronously; the rAF is
@@ -101,46 +119,57 @@ export function DockLaunchButton({
     return () => cancelAnimationFrame(frame);
   }, [open]);
 
+  // Single close path. Radix only calls onOpenChange for closes it initiates, so
+  // the Enter-to-launch path (which sets `open` directly) would otherwise skip
+  // the query reset and reopen still filtered.
+  const closeLauncher = useCallback(() => {
+    // Local state, not paletteId-backed — reset it ourselves so the next open
+    // starts unfiltered on the Recently launched / Pinned bands.
+    updateQuery("");
+    setOpen(false);
+  }, [updateQuery]);
+
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
-      setOpen(nextOpen);
       if (nextOpen) {
+        setOpen(true);
         setTooltipOpen(false);
       } else {
-        // Local state, not paletteId-backed — reset it ourselves so the next
-        // open starts unfiltered on the Recently launched / Pinned bands.
-        setQuery("");
+        closeLauncher();
       }
     },
-    [setQuery]
+    [closeLauncher]
   );
 
   const handleKeyDownCapture = useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
-      // Let an IME candidate window own the keystroke.
-      if (event.nativeEvent.isComposing) return;
+      // Let an IME candidate window own the keystroke. Chromium can emit
+      // keyCode 229 before `isComposing` flips true, so both are checked —
+      // the same pair guarded across the other palettes and terminal input.
+      if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
 
       if (event.key === "Escape") {
         // Dismissal itself is blocked in onEscapeKeyDown (Radix listens on
         // document with capture, so it runs before this handler); here we just
         // clear the query for that first press.
-        if (queryRef.current.length > 0) {
+        if (queryRef.current.trim().length > 0) {
           event.stopPropagation();
-          setQuery("");
+          updateQuery("");
         }
         return;
       }
 
-      if (event.key === "ArrowDown") {
+      // With no query the menu shows the grouped bands, which have no selected
+      // row — so arrows must fall through to Radix and move real menu-item
+      // focus, exactly as they did before search existed. Swallowing them here
+      // would strand keyboard users with an invisible selection they can't act
+      // on. Once filtering, the rows are ours to drive.
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        if (!isFiltering) return;
         event.preventDefault();
         event.stopPropagation();
-        selectNext();
-        return;
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        event.stopPropagation();
-        selectPrevious();
+        if (event.key === "ArrowDown") selectNext();
+        else selectPrevious();
         return;
       }
       if (event.key === "Home" && isFiltering) {
@@ -157,11 +186,13 @@ export function DockLaunchButton({
       }
       if (event.key === "Enter") {
         if (!isFiltering) return;
+        const selected = results[selectedIndex];
+        // No match (or an out-of-range index): swallow the key rather than
+        // letting Radix confirm whatever item it thinks is focused.
         event.preventDefault();
         event.stopPropagation();
-        const selected = results[selectedIndex];
         if (!selected) return;
-        setOpen(false);
+        closeLauncher();
         activateDockLaunchItem(selected, {
           cwd,
           activeWorktreeId,
@@ -173,6 +204,10 @@ export function DockLaunchButton({
       }
 
       if (event.key === "Tab") return;
+      // Leave shortcuts alone — swallowing modified keys here would break app
+      // keybindings while the launcher is open. Plain typing still needs
+      // stopping so Radix's typeahead doesn't hijack it.
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
       // Everything else is ordinary text editing. Stop it reaching the menu so
       // Radix's typeahead doesn't jump focus to an item on each character;
       // propagation only, so the input still receives the key natively.
@@ -180,6 +215,7 @@ export function DockLaunchButton({
     },
     [
       activeWorktreeId,
+      closeLauncher,
       cwd,
       isFiltering,
       onLaunchAgent,
@@ -188,7 +224,7 @@ export function DockLaunchButton({
       selectedIndex,
       selectNext,
       selectPrevious,
-      setQuery,
+      updateQuery,
       setSelectedIndex,
     ]
   );
@@ -232,7 +268,7 @@ export function DockLaunchButton({
           // The dismissable layer listens on document with capture, so a
           // stopPropagation from the input would be too late. Block the close
           // here for the first Escape; the input clears the query.
-          if (queryRef.current.length > 0) e.preventDefault();
+          if (queryRef.current.trim().length > 0) e.preventDefault();
         }}
         onCloseAutoFocus={(e) => {
           setTooltipOpen(false);
@@ -250,7 +286,7 @@ export function DockLaunchButton({
             type="text"
             role="searchbox"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => updateQuery(e.target.value)}
             onKeyDownCapture={handleKeyDownCapture}
             placeholder="Search agents, panels, and recipes"
             aria-label="Search agents, panels, and recipes"
@@ -275,6 +311,7 @@ export function DockLaunchButton({
             cwd={cwd}
             recipeContext={recipeContext}
             onLaunchAgent={onLaunchAgent}
+            surface="dock"
             model={model}
             search={{
               query,

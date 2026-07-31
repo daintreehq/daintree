@@ -58,10 +58,11 @@ describe("ContentDock regression test", () => {
     expect(content).toContain("DockLaunchButton");
     expect(content).toContain("agents={launchAgents}");
     expect(content).toMatch(/onLaunchAgent=\{[^}]*handleAddTerminal/);
-    // #11521 removed the hasDevPreview gate: the launcher derives its panel set
-    // from the registry, and dev-preview is offered unconditionally under the
-    // grid heading rather than behind a project-settings check.
-    expect(content).not.toContain("hasDevPreview");
+    // #11521 — the dock creates panels in the dock, so both of its launcher
+    // surfaces must declare that. A grid surface here would offer dock
+    // destinations the dock's own callback would then contradict.
+    expect(content).toContain('surface="dock"');
+    expect(content).not.toContain('surface="grid"');
   });
 
   it("places the launch button on the left side of the dock", () => {

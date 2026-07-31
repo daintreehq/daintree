@@ -20,11 +20,20 @@ const logErrorMock = vi.fn();
 // config instead, so the partition assertions below still run against real
 // registry data without that import cost.
 vi.mock("@/registry", () => ({
+  // Terminal is deliberately included even though the real selector filters it
+  // out (showInPalette:false), so the dedup below is actually exercised — with
+  // the real predicate the model could never see a second Terminal and the
+  // dedup assertion would pass even if the production guard were deleted.
   getSpawnablePanelKinds: (): PanelKindConfig[] =>
     getPanelKindIds()
       .filter((id) => id !== "agent")
       .map((id) => getPanelKindConfig(id))
-      .filter((c): c is PanelKindConfig => c !== undefined && c.showInPalette !== false),
+      .filter(
+        (c): c is PanelKindConfig =>
+          c !== undefined && (c.id === "terminal" || c.showInPalette !== false)
+      ),
+  subscribeToPanelKindDefinitions: () => () => {},
+  getPanelKindDefinitionsSnapshot: () => 0,
 }));
 
 vi.mock("@/store/panelStore", () => ({
@@ -56,6 +65,7 @@ vi.mock("@/utils/logger", () => ({
 import {
   buildDockLaunchModel,
   activateDockLaunchItem,
+  RECENCY_BAND_CAP,
   type DockLaunchAgent,
   type DockLaunchItem,
   type DockLaunchPanelItem,
@@ -77,6 +87,7 @@ function build(over: Partial<Parameters<typeof buildDockLaunchModel>[0]> = {}) {
     activeWorktreeId: null,
     recipes: [],
     mruEntries: [],
+    surface: "dock",
     ...over,
   });
 }
@@ -176,6 +187,29 @@ describe("buildDockLaunchModel — panel offering", () => {
     );
     expect(terminalEntries).toHaveLength(1);
   });
+
+  it("claims no dock destination on a grid surface, even for dockable kinds", () => {
+    // The grid context menu's launch callback dispatches location:"grid" for
+    // every kind, so offering Terminal/Browser under a dock heading there would
+    // misstate the destination exactly the way #11054 did.
+    const model = build({ surface: "grid" });
+
+    expect(model.dockPanels).toHaveLength(0);
+    const offered = model.gridPanels.map((p) => p.kindId);
+    expect(offered).toEqual(expect.arrayContaining(["terminal", "browser", "file"]));
+    for (const item of model.gridPanels) {
+      expect(item.location).toBe("grid");
+    }
+  });
+
+  it("keeps the dock destination for dockable kinds on a dock surface", () => {
+    const dock = build({ surface: "dock" });
+    // Same kinds, opposite surface — proves the split is surface-driven and not
+    // an artifact of the registry alone.
+    expect(dock.dockPanels.map((p) => p.kindId)).toEqual(
+      expect.arrayContaining(["terminal", "browser", "file"])
+    );
+  });
 });
 
 describe("buildDockLaunchModel — search set", () => {
@@ -212,26 +246,28 @@ describe("buildDockLaunchModel — search set", () => {
 
 describe("buildDockLaunchModel — bands and recipes", () => {
   it("caps the recency band and drops never-launched and unknown entries", () => {
-    const many: DockLaunchAgent[] = [
-      { id: "a", name: "A" },
-      { id: "b", name: "B" },
-      { id: "c", name: "C" },
-      { id: "d", name: "D" },
-    ];
-    const model = buildDockLaunchModel({
+    // Sized from the exported cap so raising it doesn't need the same edit here.
+    const overCap = RECENCY_BAND_CAP + 1;
+    const many: DockLaunchAgent[] = Array.from({ length: overCap }, (_, i) => ({
+      id: `a${i}`,
+      name: `Agent ${i}`,
+    }));
+    const model = build({
       agents: many,
-      activeWorktreeId: null,
-      recipes: [],
       mruEntries: [
-        { id: "agent.a", lastAccessedAt: 5 },
+        // Interleaved noise that must all be dropped: an unknown agent, a
+        // non-agent key, and a never-launched cold-start seed.
         { id: "agent.ghost", lastAccessedAt: 5 },
-        { id: "agent.b", lastAccessedAt: 4 },
         { id: "recipe.thing", lastAccessedAt: 9 },
-        { id: "agent.c", lastAccessedAt: 3 },
-        { id: "agent.d", lastAccessedAt: 2 },
+        { id: "agent.a0", lastAccessedAt: 0 },
+        ...many.map((a, i) => ({ id: `agent.${a.id}`, lastAccessedAt: overCap - i })),
       ],
     });
-    expect(model.recentAgents.map((a) => a.id)).toEqual(["a", "b", "c"]);
+
+    expect(model.recentAgents).toHaveLength(RECENCY_BAND_CAP);
+    expect(model.recentAgents.map((a) => a.id)).toEqual(
+      many.slice(0, RECENCY_BAND_CAP).map((a) => a.id)
+    );
   });
 
   it("splits Pinned/Other only for a strict subset", () => {

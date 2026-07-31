@@ -1122,6 +1122,7 @@ export function useContentGridContext({
         cwd={defaultCwd ?? ""}
         recipeContext={gridRecipeContext}
         onLaunchAgent={handleGridLaunch}
+        surface="grid"
         settingsSource="context-menu"
       />
       <ContextMenuSeparator />

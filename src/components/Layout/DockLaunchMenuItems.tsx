@@ -16,6 +16,7 @@ import {
   type DockLaunchModel,
   type DockLaunchPanelItem,
   type DockLaunchRecipeItem,
+  type DockLaunchSurface,
 } from "./dockLaunchItems";
 
 export type { DockLaunchAgent } from "./dockLaunchItems";
@@ -63,6 +64,11 @@ interface DockLaunchMenuItemsProps {
   // path overrides it so telemetry stays consistent with how the user
   // actually opened the launcher.
   settingsSource?: ActionSource;
+  /**
+   * Where this surface creates panels. The grid's context menu launches into
+   * the grid, so it must not offer a dock destination it won't honour.
+   */
+  surface: DockLaunchSurface;
   search?: DockLaunchSearchState;
   /**
    * Model built by the caller. The `+` dropdown already derives one to feed its
@@ -81,10 +87,11 @@ export function DockLaunchMenuItems({
   onLaunchAgent,
   pinnedCount,
   settingsSource = "menu",
+  surface,
   search,
   model: providedModel,
 }: DockLaunchMenuItemsProps) {
-  const derivedModel = useDockLaunchModel({ agents, pinnedCount, activeWorktreeId });
+  const derivedModel = useDockLaunchModel({ agents, pinnedCount, activeWorktreeId, surface });
   const model = providedModel ?? derivedModel;
 
   const activate = (item: DockLaunchItem) =>
@@ -171,6 +178,7 @@ export function DockLaunchMenuItems({
   );
 
   const isFiltering = search !== undefined && search.query.trim().length > 0;
+  const isSplitByDestination = model.dockPanels.length > 0 && model.gridPanels.length > 0;
 
   if (isFiltering) {
     if (search.results.length === 0) {
@@ -187,10 +195,25 @@ export function DockLaunchMenuItems({
         <C.Label>Search results</C.Label>
         {search.results.map((item, index) => {
           const isSelected = index === search.selectedIndex;
+          // A filtered row must carry the same warnings as its unfiltered twin:
+          // a blocked agent that silently opens Settings, or a shadowed recipe
+          // that resolves to a different winner, is worse when the row looks
+          // ordinary.
+          const isDimmed =
+            item.category === "agent"
+              ? !isAgentLaunchable(item.agent.availability)
+              : item.category === "recipe" && item.isShadowed;
+          const rowTitle =
+            item.category === "agent" && !isAgentLaunchable(item.agent.availability)
+              ? isAgentBlocked(item.agent.availability)
+                ? `${item.name} is blocked by endpoint security. Click to configure.`
+                : `${item.name} needs setup. Click to configure.`
+              : undefined;
           return (
             <C.Item
               key={item.key}
               id={search.getOptionId(item.key)}
+              title={rowTitle}
               data-selected-row={isSelected ? "true" : "false"}
               // Radix focuses a menu item on pointer move unless the event is
               // prevented, which would yank DOM focus off the search input the
@@ -202,6 +225,7 @@ export function DockLaunchMenuItems({
               }}
               className={cn(
                 "relative",
+                isDimmed && "opacity-70",
                 isSelected &&
                   "bg-overlay-raised before:absolute before:left-0 before:top-1 before:bottom-1 before:w-[2px] before:bg-daintree-accent before:content-['']"
               )}
@@ -227,7 +251,9 @@ export function DockLaunchMenuItems({
                     ? "Dock"
                     : "Grid"
                   : item.category === "recipe"
-                    ? item.scopeLabel
+                    ? item.isShadowed
+                      ? `${item.scopeLabel} · Overridden by Team`
+                      : item.scopeLabel
                     : "Agent"}
               </span>
             </C.Item>
@@ -271,21 +297,23 @@ export function DockLaunchMenuItems({
 
       {/* The launcher creates dockable kinds directly in the dock, and `addPanel`
           redirects a non-dockable kind to the grid (#11054) — so rather than
-          hiding those kinds, the two headings state where each group lands.
-          Both lists derive from `panelKindIsDockable`, the same predicate the
-          store guards use, so a dockability flip moves an item between sections
-          instead of letting a heading lie about it. */}
-      {model.dockPanels.length > 0 && (
+          hiding those kinds, the headings state where each group lands. Both
+          lists derive from `panelKindIsDockable`, the same predicate the store
+          guards use, so a dockability flip moves an item between sections
+          instead of letting a heading lie about it. When every panel shares one
+          destination (the grid context menu, where nothing docks) the split
+          would be noise, so a single neutral heading is used instead. */}
+      {isSplitByDestination ? (
         <>
           <C.Label>Open in dock</C.Label>
           {model.dockPanels.map(renderPanelItem)}
-        </>
-      )}
-
-      {model.gridPanels.length > 0 && (
-        <>
           <C.Label>Open in grid</C.Label>
           {model.gridPanels.map(renderPanelItem)}
+        </>
+      ) : (
+        <>
+          <C.Label>Launch panel</C.Label>
+          {[...model.dockPanels, ...model.gridPanels].map(renderPanelItem)}
         </>
       )}
 

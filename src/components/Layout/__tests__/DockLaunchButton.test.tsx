@@ -34,6 +34,8 @@ vi.mock("@/registry", () => ({
       .filter((id) => id !== "agent")
       .map((id) => getPanelKindConfig(id))
       .filter((c): c is PanelKindConfig => c !== undefined && c.showInPalette !== false),
+  subscribeToPanelKindDefinitions: () => () => {},
+  getPanelKindDefinitionsSnapshot: () => 0,
 }));
 
 vi.mock("@/store/panelStore", () => ({
@@ -64,10 +66,16 @@ vi.mock("@/utils/logger", async (importOriginal) => ({
   logError: (...args: unknown[]) => logErrorMock(...args),
 }));
 
+// The real slice defines getSortedActionMruList ONCE and reads store state at
+// call time, so its identity is stable across renders. The mock must match:
+// handing back a fresh arrow each render would silently invalidate any memo
+// keyed on it and hide staleness bugs this suite is meant to catch.
+const getSortedActionMruListMock = () => mockMruEntries;
+
 vi.mock("@/store/actionMruStore", () => ({
   useActionMruStore: Object.assign(
     (selector: (s: { getSortedActionMruList: () => typeof mockMruEntries }) => unknown) =>
-      selector({ getSortedActionMruList: () => mockMruEntries }),
+      selector({ getSortedActionMruList: getSortedActionMruListMock }),
     {
       getState: () => ({ recordActionMru: recordActionMruMock }),
     }
@@ -285,12 +293,6 @@ describe("DockLaunchButton", () => {
     expect(getByText("Codex").getAttribute("title")).toBe("Codex needs setup. Click to configure.");
   });
 
-  it("dims non-launchable agent rows with opacity-70", () => {
-    const { getByText } = renderButton();
-    expect(getByText("Claude").className).not.toContain("opacity-70");
-    expect(getByText("Gemini").className).toContain("opacity-70");
-  });
-
   it("treats unauthenticated agents as launchable (CLI handles auth at runtime)", () => {
     const onLaunchAgent = vi.fn();
     const { getByText } = renderButton({
@@ -300,7 +302,8 @@ describe("DockLaunchButton", () => {
 
     fireEvent.click(getByText("Codex"));
     expect(onLaunchAgent).toHaveBeenCalledWith("codex");
-    expect(getByText("Codex").className).not.toContain("opacity-70");
+    // Soft dim and settings tooltip must not leak onto a launchable row.
+    expect(getByText("Codex").getAttribute("title")).toBeNull();
   });
 
   it("keeps non-launchable rows selectable (no disabled attribute)", () => {
@@ -371,24 +374,53 @@ describe("DockLaunchButton", () => {
 
     it("filters across agents, panels and recipes in one list", () => {
       mockRecipes = [{ id: "r-1", name: "Deploy site", worktreeId: undefined }];
-      const { container, getByText } = renderButton();
+      const { container, getByText, queryByText } = renderButton();
       const input = searchInput(container);
 
+      // Each query must EXCLUDE the other categories — asserting only that the
+      // match survives would pass on a filter that returns everything.
       fireEvent.change(input, { target: { value: "claude" } });
       expect(getByText("Claude")).toBeTruthy();
+      expect(queryByText("Deploy site")).toBeNull();
+      expect(queryByText("File Browser")).toBeNull();
 
       fireEvent.change(input, { target: { value: "deploy" } });
       expect(getByText("Deploy site")).toBeTruthy();
+      expect(queryByText("Claude")).toBeNull();
 
       fireEvent.change(input, { target: { value: "browser" } });
       expect(getByText("Browser")).toBeTruthy();
+      expect(queryByText("Deploy site")).toBeNull();
     });
 
     it("finds a panel by a registry search alias", () => {
       // "explorer" is a file-browser alias, not part of its display name.
-      const { container, getByText } = renderButton();
+      const { container, getByText, queryByText } = renderButton();
       fireEvent.change(searchInput(container), { target: { value: "explorer" } });
       expect(getByText("File Browser")).toBeTruthy();
+      expect(queryByText("Claude")).toBeNull();
+    });
+
+    it("dims a blocked agent in the results and keeps its setup tooltip", () => {
+      // A filtered row that looks ordinary but silently opens Settings is worse
+      // than the unfiltered one, which dims and explains itself.
+      const { container, getByText } = renderButton();
+      fireEvent.change(searchInput(container), { target: { value: "gemini" } });
+
+      const row = getByText("Gemini").closest("button");
+      expect(row?.className).toContain("opacity-70");
+      expect(row?.getAttribute("title")).toContain("blocked by endpoint security");
+    });
+
+    it("keeps the Overridden marker on a shadowed recipe in the results", () => {
+      mockRecipes = [
+        { id: "r-s", name: "Deploy", worktreeId: undefined, projectId: "p", shadowedBy: "Deploy" },
+      ];
+      const { container, getByText } = renderButton();
+      fireEvent.change(searchInput(container), { target: { value: "deploy" } });
+
+      // Activating resolves to the winning recipe, so the row must say so.
+      expect(getByText(/Overridden by Team/)).toBeTruthy();
     });
 
     it("marks exactly one result row as selected", () => {
@@ -410,20 +442,107 @@ describe("DockLaunchButton", () => {
       expect(onLaunchAgent).toHaveBeenCalledWith("claude");
     });
 
-    it("Enter launches the row moved to by ArrowDown, not the first one", () => {
+    it("Enter activates the row moved to by ArrowDown, not the first one", () => {
       const onLaunchAgent = vi.fn();
       const { container } = renderButton({ onLaunchAgent });
       const input = searchInput(container);
 
       fireEvent.change(input, { target: { value: "e" } });
-      const rows = Array.from(
-        container.querySelectorAll<HTMLButtonElement>("button[data-selected-row]")
-      );
-      const firstName = rows[0]?.textContent;
+      const firstName = container.querySelector("[data-selected-row='true']")?.textContent;
 
       fireEvent.keyDown(input, { key: "ArrowDown" });
-      const selectedAfter = container.querySelector("[data-selected-row='true']");
-      expect(selectedAfter?.textContent).not.toBe(firstName);
+      const moved = container.querySelector("[data-selected-row='true']");
+      expect(moved?.textContent).not.toBe(firstName);
+
+      // Actually confirm it — the previous version never pressed Enter, so it
+      // proved nothing about what Enter would do.
+      const movedName = moved?.textContent;
+      fireEvent.keyDown(input, { key: "Enter" });
+      const launched = onLaunchAgent.mock.calls.length > 0 || addPanelMock.mock.calls.length > 0;
+      expect(launched).toBe(true);
+      expect(movedName).toBeTruthy();
+    });
+
+    it("Enter does nothing when the query matches no rows", () => {
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({ onLaunchAgent });
+      const input = searchInput(container);
+
+      fireEvent.change(input, { target: { value: "zzzzqqqq" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(onLaunchAgent).not.toHaveBeenCalled();
+      expect(addPanelMock).not.toHaveBeenCalled();
+      expect(actionDispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves arrow keys to the menu while unfiltered so items stay reachable", () => {
+      // The unfiltered bands have no selected-row styling, so swallowing arrows
+      // here would strand keyboard users with an invisible selection.
+      const { container } = renderButton();
+      const input = searchInput(container);
+
+      const menuSaw = vi.fn();
+      container.addEventListener("keydown", menuSaw);
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true })
+      );
+      container.removeEventListener("keydown", menuSaw);
+
+      expect(menuSaw).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not swallow modified keys, so app shortcuts still work", () => {
+      const { container } = renderButton();
+      const input = searchInput(container);
+
+      const menuSaw = vi.fn();
+      container.addEventListener("keydown", menuSaw);
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "w", metaKey: true, bubbles: true }));
+      container.removeEventListener("keydown", menuSaw);
+
+      expect(menuSaw).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores a keystroke that is still an IME composition", () => {
+      const { container } = renderButton();
+      const input = searchInput(container);
+      fireEvent.change(input, { target: { value: "re" } });
+
+      // Chromium reports keyCode 229 before isComposing flips true; treating it
+      // as a real Enter would launch mid-composition.
+      const menuSaw = vi.fn();
+      container.addEventListener("keydown", menuSaw);
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true })
+      );
+      container.removeEventListener("keydown", menuSaw);
+
+      expect(menuSaw).toHaveBeenCalledTimes(1);
+    });
+
+    it("clears the query when a launch closes the menu via Enter", () => {
+      // The Enter path closes directly rather than through Radix's
+      // onOpenChange, so it must reset the query itself or the next open is
+      // still filtered.
+      const { container } = renderButton();
+      const input = searchInput(container);
+
+      fireEvent.change(input, { target: { value: "claude" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(searchInput(container).value).toBe("");
+    });
+
+    it("treats a whitespace-only query as unfiltered for Escape", () => {
+      const { container } = renderButton();
+      fireEvent.change(searchInput(container), { target: { value: "   " } });
+
+      // The menu already looks unfiltered, so Escape must close rather than
+      // being spent clearing invisible whitespace.
+      const event = { preventDefault: vi.fn() };
+      dropdownEscapeKeyDownSpy!(event);
+      expect(event.preventDefault).not.toHaveBeenCalled();
     });
 
     it("ArrowDown does not reach the menu, so Radix cannot move focus off the input", () => {
@@ -780,6 +899,24 @@ describe("DockLaunchButton", () => {
       fireEvent.click(codexElement!);
       expect(onLaunchAgent).toHaveBeenCalledWith("codex");
       expect(recordActionMruMock).toHaveBeenCalledWith("agent.codex");
+    });
+
+    it("picks up an agent launched since the menu was last opened", () => {
+      // Regression pin: `getSortedActionMruList` is a stable function reference
+      // reading store state at call time, so subscribing to it never triggers a
+      // re-render. Memoizing the band on it froze the pre-launch order — launch
+      // an agent, reopen, and it was still missing.
+      mockMruEntries = [];
+      const { queryByText, getByText } = renderButton({ agents: MANY });
+      expect(queryByText("Recently launched")).toBeNull();
+
+      // A launch elsewhere records MRU while this component stays mounted.
+      mockMruEntries = [{ id: "agent.codex", score: 1, lastAccessedAt: 7000 }];
+
+      act(() => dropdownOpenChangeSpy!(false));
+      act(() => dropdownOpenChangeSpy!(true));
+
+      expect(getByText("Recently launched")).toBeTruthy();
     });
 
     it("survives an unfiltered reopen after a search is cleared", () => {

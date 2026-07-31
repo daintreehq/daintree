@@ -2,7 +2,6 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   registerPanelKind,
   unregisterPanelKind,
-  getPanelKindConfig,
   type PanelKindConfig,
 } from "@shared/config/panelKindRegistry";
 
@@ -41,17 +40,38 @@ describe("getSpawnablePanelKinds", () => {
     allBuiltInsDefined();
     const ids = getSpawnablePanelKinds().map((c) => c.id);
 
-    for (const id of ids) {
-      expect(getPanelKindConfig(id)?.showInPalette).not.toBe(false);
-    }
     // diff and terminal both opt out, for different reasons (needs a target /
     // has dedicated spawn actions).
     expect(ids).not.toContain("diff");
     expect(ids).not.toContain("terminal");
+    // ...while a kind that opts in and has a renderer is kept.
+    expect(ids).toContain("review");
+  });
+
+  it("drops a plugin kind that opts out of the palette despite having a renderer", () => {
+    // Discriminating counterpart to the above: the exclusion has to come from
+    // showInPalette, not from a missing renderer definition.
+    registerPanelKind({
+      id: PLUGIN_ID,
+      name: "Hidden Panel",
+      iconId: "package",
+      color: "#fff",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "test-plugin",
+      showInPalette: false,
+    });
+    registeredDefinitions = new Set([PLUGIN_ID]);
+
+    expect(getSpawnablePanelKinds().map((c) => c.id)).not.toContain(PLUGIN_ID);
   });
 
   it("never yields the reserved agent kind", () => {
+    // "agent" gets a renderer definition here so the only thing that can
+    // exclude it is the explicit reserved-id guard.
     allBuiltInsDefined();
+    registeredDefinitions.add("agent");
     expect(getSpawnablePanelKinds().map((c) => c.id)).not.toContain("agent");
   });
 

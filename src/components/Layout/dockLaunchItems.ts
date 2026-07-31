@@ -1,7 +1,15 @@
-import { useMemo } from "react";
-import { getSpawnablePanelKinds } from "@/registry";
-import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
-import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
+import { useMemo, useSyncExternalStore } from "react";
+import {
+  getSpawnablePanelKinds,
+  subscribeToPanelKindDefinitions,
+  getPanelKindDefinitionsSnapshot,
+} from "@/registry";
+import {
+  panelKindIsDockable,
+  getPanelKindConfig,
+  subscribeToPanelKindRegistry,
+  getPanelKindRegistrySnapshot,
+} from "@shared/config/panelKindRegistry";
 import { usePanelStore } from "@/store/panelStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useActionMruStore } from "@/store/actionMruStore";
@@ -91,22 +99,36 @@ export interface DockLaunchModel {
   searchItems: DockLaunchItem[];
 }
 
+/**
+ * Where a launcher surface creates panels by default. The dock `+` button and
+ * the dock's right-click menu create in the dock; the grid's right-click menu
+ * creates in the grid, so nothing rendered there may claim a dock landing.
+ */
+export type DockLaunchSurface = "dock" | "grid";
+
 export interface BuildDockLaunchModelOptions {
   agents: ReadonlyArray<DockLaunchAgent>;
   pinnedCount?: number;
   activeWorktreeId: string | null;
   recipes: ReadonlyArray<TerminalRecipe>;
   mruEntries: ReadonlyArray<{ id: string; lastAccessedAt: number }>;
+  surface: DockLaunchSurface;
 }
 
-function toPanelItem(config: {
-  id: string;
-  name: string;
-  iconId: string;
-  color: string;
-  searchAliases?: string[];
-}): DockLaunchPanelItem {
-  const location = panelKindIsDockable(config.id) ? "dock" : "grid";
+function toPanelItem(
+  config: {
+    id: string;
+    name: string;
+    iconId: string;
+    color: string;
+    searchAliases?: string[];
+  },
+  surface: DockLaunchSurface
+): DockLaunchPanelItem {
+  // A grid surface lands everything in the grid regardless of dockability — its
+  // launch callback dispatches `location: "grid"`, so claiming "dock" there
+  // would misstate the destination just as badly as the redirect this replaced.
+  const location = surface === "dock" && panelKindIsDockable(config.id) ? "dock" : "grid";
   return {
     category: "panel",
     key: `panel:${config.id}`,
@@ -122,12 +144,28 @@ function toPanelItem(config: {
 }
 
 /**
- * Derive every launchable entry for the dock launcher — the same set for the
- * `+` dropdown and the dock's right-click menu. Panels come from the shared
- * spawnable-kind selector (so the launcher can't drift from ⌘⇧P) plus Terminal,
- * partitioned by real dockability rather than filtered by it: a non-dockable
- * kind is offered under a heading that says it opens in the grid, instead of
- * being hidden (#11054's fix was to stop lying, not to stop offering).
+ * Capped frecency band, newest-first as the MRU store already sorted it. Drops
+ * cold-start seeds (never launched), non-agent keys, and entries whose agent is
+ * no longer registered.
+ */
+export function selectRecentAgents(
+  agents: ReadonlyArray<DockLaunchAgent>,
+  mruEntries: ReadonlyArray<{ id: string; lastAccessedAt: number }>
+): DockLaunchAgent[] {
+  return mruEntries
+    .filter((entry) => entry.lastAccessedAt > 0 && entry.id.startsWith(AGENT_MRU_PREFIX))
+    .map((entry) => agents.find((a) => a.id === entry.id.slice(AGENT_MRU_PREFIX.length)))
+    .filter((agent): agent is DockLaunchAgent => agent !== undefined)
+    .slice(0, RECENCY_BAND_CAP);
+}
+
+/**
+ * Derive every launchable entry for a launcher surface. Panels come from the
+ * shared spawnable-kind selector (so the launcher can't drift from ⌘⇧P) plus
+ * Terminal, partitioned by where they will actually land rather than filtered
+ * by dockability: a non-dockable kind is offered under a heading that says it
+ * opens in the grid, instead of being hidden (#11054's fix was to stop lying,
+ * not to stop offering).
  */
 export function buildDockLaunchModel({
   agents,
@@ -135,24 +173,21 @@ export function buildDockLaunchModel({
   activeWorktreeId,
   recipes,
   mruEntries,
+  surface,
 }: BuildDockLaunchModelOptions): DockLaunchModel {
-  const recentAgents = mruEntries
-    .filter((entry) => entry.lastAccessedAt > 0 && entry.id.startsWith(AGENT_MRU_PREFIX))
-    .map((entry) => agents.find((a) => a.id === entry.id.slice(AGENT_MRU_PREFIX.length)))
-    .filter((agent): agent is DockLaunchAgent => agent !== undefined)
-    .slice(0, RECENCY_BAND_CAP);
+  const recentAgents = selectRecentAgents(agents, mruEntries);
 
   const panelItems: DockLaunchPanelItem[] = [];
   const seenKinds = new Set<string>();
   const terminalConfig = getPanelKindConfig(TERMINAL_KIND_ID);
   if (terminalConfig) {
-    panelItems.push(toPanelItem(terminalConfig));
+    panelItems.push(toPanelItem(terminalConfig, surface));
     seenKinds.add(TERMINAL_KIND_ID);
   }
   for (const config of getSpawnablePanelKinds()) {
     if (seenKinds.has(config.id)) continue;
     seenKinds.add(config.id);
-    panelItems.push(toPanelItem(config));
+    panelItems.push(toPanelItem(config, surface));
   }
 
   const dockPanels = panelItems.filter((item) => item.location === "dock");
@@ -200,16 +235,37 @@ export function buildDockLaunchModel({
  * is re-read per open and picks up plugin kinds registered mid-session without a
  * registry subscription.
  *
- * The MRU list is read inside the memo rather than tracked as a dependency: it
- * changes on launch, which also closes the menu, so re-reading it per keystroke
- * would only risk the recency band reshuffling under the user mid-search.
+ * The panel/recipe/search derivation is memoized because `searchItems` keys the
+ * consumer's Fuse index — rebuilding it on every keystroke would be wasteful.
+ * The recency band deliberately sits OUTSIDE that memo: `getSortedActionMruList`
+ * is a stable function reference that reads store state at call time, so
+ * subscribing to it never re-renders and a memo keyed on it would never observe
+ * a launch recorded between two opens — the band would show pre-launch order
+ * forever. Reading it per render is safe: the MRU only changes on launch, which
+ * closes the menu, so it cannot reshuffle under the user mid-search.
  */
 export function useDockLaunchModel(options: {
   agents: ReadonlyArray<DockLaunchAgent>;
   pinnedCount?: number;
   activeWorktreeId: string | null;
+  surface: DockLaunchSurface;
 }): DockLaunchModel {
-  const { agents, pinnedCount, activeWorktreeId } = options;
+  const { agents, pinnedCount, activeWorktreeId, surface } = options;
+  // Both registries, because a plugin's metadata lands before its renderer
+  // definition and `getSpawnablePanelKinds` requires both. Without these the
+  // long-lived `+` button would keep a model memoized from before the plugin
+  // pull resolved — and it passes that model down, so the freshly-mounted
+  // menu's own derivation can't rescue it.
+  const kindRegistry = useSyncExternalStore(
+    subscribeToPanelKindRegistry,
+    getPanelKindRegistrySnapshot,
+    getPanelKindRegistrySnapshot
+  );
+  const definitionRegistry = useSyncExternalStore(
+    subscribeToPanelKindDefinitions,
+    getPanelKindDefinitionsSnapshot,
+    getPanelKindDefinitionsSnapshot
+  );
   // Subscribe inside the menu so the listener only runs while open.
   const recipes = useRecipeStore((s) => s.recipes);
   // Subscribe to the stable getter (not its result) so the selector returns a
@@ -218,17 +274,22 @@ export function useDockLaunchModel(options: {
   // guard. Mirrors AgentTrayButton's pattern.
   const getSortedActionMruList = useActionMruStore((s) => s.getSortedActionMruList);
 
-  return useMemo(
+  const stable = useMemo(
     () =>
       buildDockLaunchModel({
         agents,
         pinnedCount,
         activeWorktreeId,
         recipes,
-        mruEntries: getSortedActionMruList(),
+        surface,
+        mruEntries: [],
       }),
-    [agents, pinnedCount, activeWorktreeId, recipes, getSortedActionMruList]
+    // The two registry snapshots are read for invalidation only — the builder
+    // pulls the live registries itself.
+    [agents, pinnedCount, activeWorktreeId, recipes, surface, kindRegistry, definitionRegistry]
   );
+
+  return { ...stable, recentAgents: selectRecentAgents(agents, getSortedActionMruList()) };
 }
 
 export interface ActivateDockLaunchItemContext {
