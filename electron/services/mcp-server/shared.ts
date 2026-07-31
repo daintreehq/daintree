@@ -478,6 +478,7 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "project.getSettings",
   "project.getStats",
   "project.detectRunners",
+  "project.runCheck",
   "project.update",
   "project.saveSettings",
   "project.muteNotifications",

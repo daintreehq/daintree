@@ -636,8 +636,16 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       service.register(factory());
     }
     // Valid args so dispatch reaches the plugin-dispatch gate rather than
-    // short-circuiting on VALIDATION_ERROR (terminal.sendCommand requires both).
-    const args = { terminalId: "t-placeholder", command: "noop", url: "https://example.com" };
+    // short-circuiting on VALIDATION_ERROR (terminal.sendCommand requires both;
+    // project.runCheck requires projectId + runnerId). Schemas are non-strict,
+    // so the union satisfies every denied action.
+    const args = {
+      terminalId: "t-placeholder",
+      command: "noop",
+      url: "https://example.com",
+      projectId: "p-placeholder",
+      runnerId: "r-placeholder",
+    };
 
     const failures: string[] = [];
     for (const id of PLUGIN_DENIED_INJECTION_ACTIONS) {

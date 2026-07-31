@@ -15,6 +15,7 @@ import { disposePtyClient } from "../services/PtyClient.js";
 import { helpSessionJobService } from "../services/HelpSessionJobService.js";
 import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
 import { disposeMainProcessWatchdog } from "../services/MainProcessWatchdogClient.js";
+import { projectCheckService } from "../services/ProjectCheckService.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { getPanelSuspectLedger } from "../services/PanelSuspectLedgerService.js";
@@ -587,6 +588,15 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
             helpSessionJobService.dispose();
           } catch (err) {
             console.warn("[MAIN] helpSessionJobService.dispose failed:", err);
+          }
+          // Project checks spawn detached (POSIX) so a run can't pin teardown —
+          // which also means a live `npm test` would outlive the app if nobody
+          // reaped it. dispose() signals each process group and is synchronous,
+          // so it adds no await to the bounded shutdown chain.
+          try {
+            projectCheckService.dispose();
+          } catch (err) {
+            console.warn("[MAIN] projectCheckService.dispose failed:", err);
           }
           try {
             disposeWorkspaceClient();

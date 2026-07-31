@@ -151,6 +151,9 @@ export const ACTION_TIER_ADDONS = [
   "project.update",
   "project.saveSettings",
   "project.muteNotifications",
+  // Runs a project-declared command as a real child process. Read-only
+  // workbench sessions detect runners but must not execute them.
+  "project.runCheck",
 ] as const satisfies readonly BuiltInActionId[];
 
 export const SYSTEM_TIER_ADDONS = [

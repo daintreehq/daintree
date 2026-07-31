@@ -254,6 +254,7 @@ export const BUILT_IN_ACTION_IDS = [
   "project.muteNotifications",
   "project.silenceNotificationKind",
   "project.detectRunners",
+  "project.runCheck",
   "project.getStats",
   "project.settings.open",
   "project.cloneRepo",
@@ -513,6 +514,7 @@ export type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
 export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.sendCommand",
   "terminal.paste",
+  "project.runCheck",
   "fleet.accept",
   "fleet.reject",
   "fleet.interrupt",

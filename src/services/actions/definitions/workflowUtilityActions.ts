@@ -14,9 +14,12 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
   actions.set("workflow.prepBranchForReview", () =>
     defineAction({
       id: "workflow.prepBranchForReview",
-      title: "Prep Branch for Review",
+      // The id is stable (keybindings, plugins, and MCP clients reference it),
+      // but the old "Prep" title promised work this never did — it reads git
+      // status and detected runners and changes nothing (#11548).
+      title: "Inspect Branch for Review",
       description:
-        "Inspect a worktree's working tree and detected runners and return a typed go/no-go verdict for starting review checks. Args (all optional): `cwd` — worktree path, defaults to the active worktree path; `projectId` — for runner detection, defaults to the current project (pass explicitly when `cwd` is in another project). Returns verdict ('ready'|'blocked_uncommitted_changes'|'blocked_merge_conflicts'|'blocked_repo_busy'|'no_runners_detected'), the uncommitted/conflict flags, staged/unstaged counts, currentBranch, repoState, and detectedRunners. Errors when `cwd` is omitted and no worktree is active.",
+        "Inspect a worktree's working tree and detected runners and return a typed go/no-go verdict for starting review checks. Read-only: it prepares nothing and runs nothing — use `project.runCheck` to actually run a detected runner. Args (all optional): `cwd` — worktree path, defaults to the active worktree path; `projectId` — for runner detection, defaults to the current project (pass explicitly when `cwd` is in another project). Returns verdict ('ready'|'blocked_uncommitted_changes'|'blocked_merge_conflicts'|'blocked_repo_busy'|'no_runners_detected'), the uncommitted/conflict flags, staged/unstaged counts, currentBranch, repoState, and detectedRunners. Errors when `cwd` is omitted and no worktree is active.",
       category: "worktree",
       kind: "query",
       danger: "safe",

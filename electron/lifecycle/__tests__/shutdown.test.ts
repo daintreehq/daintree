@@ -82,6 +82,12 @@ vi.mock("../../services/WorkspaceClient.js", () => ({
   disposeWorkspaceClient: vi.fn(),
 }));
 
+const projectCheckServiceMock = vi.hoisted(() => ({ dispose: vi.fn() }));
+
+vi.mock("../../services/ProjectCheckService.js", () => ({
+  projectCheckService: projectCheckServiceMock,
+}));
+
 const mcpServerMock = vi.hoisted(() => ({
   stop: vi.fn(() => Promise.resolve()),
 }));
@@ -886,6 +892,18 @@ describe("registerShutdownHandler", () => {
       expect(serviceRefsMock.setAgentNotificationServiceRef).toHaveBeenCalledWith(null);
       expect(serviceRefsMock.setAutoUpdaterServiceRef).toHaveBeenCalledWith(null);
       expect(serviceRefsMock.setWindowsStoreNotifierServiceRef).toHaveBeenCalledWith(null);
+    });
+
+    it("kills in-flight project checks so detached runners don't outlive the app", async () => {
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      // POSIX checks spawn detached, so nothing else reaps them on quit.
+      expect(projectCheckServiceMock.dispose).toHaveBeenCalledTimes(1);
     });
 
     it("clears PluginService's WorkspaceClient reference during shutdown", async () => {
