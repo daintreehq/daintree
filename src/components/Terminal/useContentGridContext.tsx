@@ -78,7 +78,6 @@ import {
 } from "@/components/Layout/DockLaunchMenuItems";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
-import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { sortAgentsByToolbarPin } from "@/lib/agentMenuOrder";
 import { getMaximizedGroupFocusTarget, enterFocusedPanel } from "./contentGridFocus";
 import { setGridLayoutSnapshot } from "./gridLayoutSnapshot";
@@ -329,9 +328,6 @@ export function useContentGridContext({
   // invalidate this hook's "use memo" block on any unrelated toolbar update.
   const leftButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.leftButtons));
   const agentSettings = useAgentSettingsStore((s) => s.settings);
-  const hasDevPreview = useProjectSettingsStore((s) =>
-    Boolean(s.settings?.devServerCommand?.trim())
-  );
   // Re-derive grid agents when a plugin loads/unloads mid-session so its agents
   // appear / disappear with current icon/name/color (#9879).
   const pluginAgentRegistry = useSyncExternalStore(
@@ -1122,7 +1118,6 @@ export function useContentGridContext({
         components={GRID_CONTEXT_MENU_COMPONENTS}
         agents={gridLaunchAgents}
         pinnedCount={gridAgentPinnedCount}
-        hasDevPreview={hasDevPreview}
         activeWorktreeId={activeWorktreeId}
         cwd={defaultCwd ?? ""}
         recipeContext={gridRecipeContext}

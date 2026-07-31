@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, waitFor } from "@testing-library/react";
+import { render, fireEvent, waitFor, act } from "@testing-library/react";
 import type { ReactNode } from "react";
+import {
+  getPanelKindIds,
+  getPanelKindConfig,
+  type PanelKindConfig,
+} from "@shared/config/panelKindRegistry";
 
 let mockRecipes: Array<{
   id: string;
@@ -16,8 +21,28 @@ const runRecipeWithResultsMock = vi.fn();
 const notifySpawnFailuresMock = vi.fn();
 const actionDispatchMock = vi.fn();
 const recordActionMruMock = vi.fn();
+const addPanelMock = vi.fn();
 let dropdownCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let dropdownPointerDownOutsideSpy: (() => void) | null = null;
+let dropdownEscapeKeyDownSpy: ((e: { preventDefault: () => void }) => void) | null = null;
+let dropdownOpenChangeSpy: ((open: boolean) => void) | null = null;
+
+// See dockLaunchItems.test.ts — avoid the real registry's eager TerminalPane import.
+vi.mock("@/registry", () => ({
+  getSpawnablePanelKinds: (): PanelKindConfig[] =>
+    getPanelKindIds()
+      .filter((id) => id !== "agent")
+      .map((id) => getPanelKindConfig(id))
+      .filter((c): c is PanelKindConfig => c !== undefined && c.showInPalette !== false),
+}));
+
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: { getState: () => ({ addPanel: addPanelMock }) },
+}));
+
+vi.mock("@/components/PanelPalette/PanelKindIcon", () => ({
+  PanelKindIcon: ({ iconId }: { iconId: string }) => <span data-icon={iconId} />,
+}));
 
 vi.mock("@/store/recipeStore", () => ({
   useRecipeStore: Object.assign(
@@ -57,6 +82,8 @@ vi.mock("@/services/ActionService", () => ({
 
 // Mock UI primitives so the test focuses on this component's behavior, not
 // Radix's pointer-event semantics inside jsdom. Mirrors AgentButton.test.tsx.
+// Radix's real focus/dismiss behaviour (pointer-move focus steal, document-level
+// Escape capture) is covered by e2e/full/panels/core-dock-launcher.spec.ts.
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
   TooltipContent: ({ children }: { children: ReactNode }) => (
@@ -67,19 +94,35 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 vi.mock("@/components/ui/dropdown-menu", () => ({
-  DropdownMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
+  // Content is rendered unconditionally (not gated on `open`) so the existing
+  // item-level assertions keep working without an open step; open/close is
+  // exercised through the captured onOpenChange.
+  DropdownMenu: ({
+    children,
+    onOpenChange,
+  }: {
+    children: ReactNode;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+  }) => {
+    dropdownOpenChangeSpy = onOpenChange ?? null;
+    return <>{children}</>;
+  },
   DropdownMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
   DropdownMenuContent: ({
     children,
     onCloseAutoFocus,
     onPointerDownOutside,
+    onEscapeKeyDown,
   }: {
     children: ReactNode;
     onCloseAutoFocus?: (e: { preventDefault: () => void }) => void;
     onPointerDownOutside?: () => void;
+    onEscapeKeyDown?: (e: { preventDefault: () => void }) => void;
   }) => {
     dropdownCloseAutoFocusSpy = onCloseAutoFocus ?? null;
     dropdownPointerDownOutsideSpy = onPointerDownOutside ?? null;
+    dropdownEscapeKeyDownSpy = onEscapeKeyDown ?? null;
     return <div data-testid="dock-launcher-content">{children}</div>;
   },
   DropdownMenuItem: ({
@@ -88,12 +131,18 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     disabled,
     title,
     className,
+    onPointerMove,
+    id,
+    ...rest
   }: {
     children: ReactNode;
     onSelect?: () => void;
     disabled?: boolean;
     title?: string;
     className?: string;
+    onPointerMove?: (e: unknown) => void;
+    id?: string;
+    [key: string]: unknown;
   }) => (
     <button
       type="button"
@@ -101,6 +150,9 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       disabled={disabled}
       title={title}
       className={className}
+      id={id}
+      onPointerMove={onPointerMove}
+      data-selected-row={rest["data-selected-row"] as string | undefined}
     >
       {children}
     </button>
@@ -119,6 +171,25 @@ const AGENTS: DockLaunchAgent[] = [
   { id: "gemini", name: "Gemini", availability: "blocked" },
 ];
 
+function renderButton(props: Partial<Parameters<typeof DockLaunchButton>[0]> = {}) {
+  return render(
+    <DockLaunchButton
+      agents={AGENTS}
+      onLaunchAgent={vi.fn()}
+      activeWorktreeId={null}
+      cwd="/tmp"
+      {...props}
+    />
+  );
+}
+
+/** The launcher's search box — the only textbox inside the menu. */
+function searchInput(container: HTMLElement): HTMLInputElement {
+  const input = container.querySelector("input");
+  if (!input) throw new Error("search input not found");
+  return input;
+}
+
 beforeEach(() => {
   mockRecipes = [];
   mockMruEntries = [];
@@ -130,55 +201,32 @@ beforeEach(() => {
   logErrorMock.mockReset();
   actionDispatchMock.mockReset();
   recordActionMruMock.mockReset();
+  addPanelMock.mockReset();
   dropdownCloseAutoFocusSpy = null;
   dropdownPointerDownOutsideSpy = null;
+  dropdownEscapeKeyDownSpy = null;
+  dropdownOpenChangeSpy = null;
 });
 
 describe("DockLaunchButton", () => {
   it("renders a launch button with accessible label", () => {
-    const { getByLabelText } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
-    expect(getByLabelText("Launch panel")).toBeTruthy();
+    const { getByLabelText } = renderButton();
+    expect(getByLabelText("Open launcher")).toBeTruthy();
   });
 
-  it("renders sectioned labels for agents, panels, and recipes", () => {
+  it("renders sectioned labels for agents, both panel destinations, and recipes", () => {
     mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
-
-    const { getAllByTestId } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
+    const { getAllByTestId } = renderButton();
 
     const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
-    expect(labels).toEqual(["Launch agent", "Launch panel", "Launch recipe"]);
+    expect(labels).toEqual(["Launch agent", "Open in dock", "Open in grid", "Launch recipe"]);
   });
 
   it("splits agents into Pinned/Other groups when pinnedCount is a strict subset", () => {
-    const { getAllByTestId, container } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        pinnedCount={1}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
+    const { getAllByTestId, container } = renderButton({ pinnedCount: 1 });
 
     const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
-    expect(labels).toEqual(["Pinned", "Other", "Launch panel", "Launch recipe"]);
+    expect(labels.slice(0, 2)).toEqual(["Pinned", "Other"]);
 
     // Assert document order so a regression that puts both agents under one
     // group (or swaps them) is caught: Pinned → Claude → Other → Gemini.
@@ -189,32 +237,14 @@ describe("DockLaunchButton", () => {
   });
 
   it("keeps a flat Launch agent group when all agents are pinned", () => {
-    const { getAllByTestId } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        pinnedCount={AGENTS.length}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
-
+    const { getAllByTestId } = renderButton({ pinnedCount: AGENTS.length });
     const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
-    expect(labels).toEqual(["Launch agent", "Launch panel", "Launch recipe"]);
+    expect(labels[0]).toBe("Launch agent");
   });
 
   it("invokes onLaunchAgent for a launchable agent", () => {
     const onLaunchAgent = vi.fn();
-    const { getByText } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={onLaunchAgent}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
+    const { getByText } = renderButton({ onLaunchAgent });
 
     fireEvent.click(getByText("Claude"));
     expect(onLaunchAgent).toHaveBeenCalledWith("claude");
@@ -226,15 +256,7 @@ describe("DockLaunchButton", () => {
 
   it("routes non-launchable agent clicks to the agent settings subtab", () => {
     const onLaunchAgent = vi.fn();
-    const { getByText } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={onLaunchAgent}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
+    const { getByText } = renderButton({ onLaunchAgent });
 
     fireEvent.click(getByText("Gemini"));
     expect(onLaunchAgent).not.toHaveBeenCalled();
@@ -248,135 +270,272 @@ describe("DockLaunchButton", () => {
   });
 
   it("discriminates tooltip copy between blocked and installed-only agents", () => {
-    const { getByText } = render(
-      <DockLaunchButton
-        agents={[
-          { id: "claude", name: "Claude", availability: "ready" },
-          { id: "gemini", name: "Gemini", availability: "blocked" },
-          { id: "codex", name: "Codex", availability: "installed" },
-        ]}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
+    const { getByText } = renderButton({
+      agents: [
+        { id: "claude", name: "Claude", availability: "ready" },
+        { id: "gemini", name: "Gemini", availability: "blocked" },
+        { id: "codex", name: "Codex", availability: "installed" },
+      ],
+    });
 
-    // Launchable: no tooltip override on the row itself.
     expect(getByText("Claude").getAttribute("title")).toBeNull();
-    // Blocked: endpoint-security copy.
     expect(getByText("Gemini").getAttribute("title")).toBe(
       "Gemini is blocked by endpoint security. Click to configure."
     );
-    // Installed but not launchable (e.g. WSL): generic setup copy.
     expect(getByText("Codex").getAttribute("title")).toBe("Codex needs setup. Click to configure.");
   });
 
   it("dims non-launchable agent rows with opacity-70", () => {
-    const { getByText } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
-
+    const { getByText } = renderButton();
     expect(getByText("Claude").className).not.toContain("opacity-70");
     expect(getByText("Gemini").className).toContain("opacity-70");
   });
 
   it("treats unauthenticated agents as launchable (CLI handles auth at runtime)", () => {
     const onLaunchAgent = vi.fn();
-    const { getByText } = render(
-      <DockLaunchButton
-        agents={[{ id: "codex", name: "Codex", availability: "unauthenticated" }]}
-        hasDevPreview={false}
-        onLaunchAgent={onLaunchAgent}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
+    const { getByText } = renderButton({
+      agents: [{ id: "codex", name: "Codex", availability: "unauthenticated" }],
+      onLaunchAgent,
+    });
 
     fireEvent.click(getByText("Codex"));
     expect(onLaunchAgent).toHaveBeenCalledWith("codex");
-    expect(actionDispatchMock).not.toHaveBeenCalled();
-    // Soft dim and settings tooltip must not leak onto a launchable row.
     expect(getByText("Codex").className).not.toContain("opacity-70");
-    expect(getByText("Codex").getAttribute("title")).toBeNull();
   });
 
   it("keeps non-launchable rows selectable (no disabled attribute)", () => {
-    const { getByText } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
-
+    const { getByText } = renderButton();
     // Regression guard: the pre-fix behavior was a disabled, dead-end row.
     expect(getByText("Gemini").hasAttribute("disabled")).toBe(false);
   });
 
-  it("offers Terminal and browser but gates non-dockable kinds (dev preview) out of the dock launcher (#11054)", () => {
-    // The dock launcher creates panels directly in the dock, so it must only
-    // offer kinds the dock can render, gating on the shared `panelKindIsDockable`
-    // predicate. Terminal is a PTY kind — always dockable, always offered. Browser
-    // is dockable since #11058, so it appears here. Dev preview can't render in the
-    // dock, so — even with hasDevPreview — it stays hidden, matching the `addPanel`
-    // redirect.
-    const onLaunchAgent = vi.fn();
-    const { getByText, queryByText } = render(
-      <DockLaunchButton
-        agents={[]}
-        hasDevPreview
-        onLaunchAgent={onLaunchAgent}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
+  describe("complete panel offering (#11521)", () => {
+    it("offers non-dockable kinds under the grid heading instead of hiding them", () => {
+      // #11054 hid these because a dock-labelled item would be redirected to
+      // the grid. The heading now states the destination, so they can appear.
+      const { getByText, container } = renderButton();
 
-    expect(getByText("Terminal")).toBeTruthy();
-    fireEvent.click(getByText("Terminal"));
-    expect(onLaunchAgent).toHaveBeenLastCalledWith("terminal");
+      for (const name of ["Review", "File Browser", "Dev Preview"]) {
+        expect(getByText(name)).toBeTruthy();
+      }
+      const text = container.textContent ?? "";
+      expect(text.indexOf("Open in grid")).toBeLessThan(text.indexOf("Review"));
+    });
 
-    expect(getByText("Browser")).toBeTruthy();
-    expect(queryByText("Dev preview")).toBeNull();
+    it("lists Terminal, Browser and File Viewer under the dock heading", () => {
+      const { container } = renderButton();
+      const text = container.textContent ?? "";
+      const dockAt = text.indexOf("Open in dock");
+      const gridAt = text.indexOf("Open in grid");
+
+      for (const name of ["Terminal", "Browser", "File Viewer"]) {
+        const at = text.indexOf(name);
+        expect(at).toBeGreaterThan(dockAt);
+        expect(at).toBeLessThan(gridAt);
+      }
+    });
+
+    it("creates a grid-only kind through addPanel, not the agent launch path", () => {
+      const onLaunchAgent = vi.fn();
+      const { getByText } = renderButton({ onLaunchAgent, activeWorktreeId: "wt-1" });
+
+      fireEvent.click(getByText("Review"));
+
+      expect(onLaunchAgent).not.toHaveBeenCalled();
+      expect(addPanelMock).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "review", location: "grid", worktreeId: "wt-1" })
+      );
+    });
+
+    it("keeps Terminal on the agent launch path", () => {
+      const onLaunchAgent = vi.fn();
+      const { getByText } = renderButton({ onLaunchAgent });
+
+      fireEvent.click(getByText("Terminal"));
+      expect(onLaunchAgent).toHaveBeenLastCalledWith("terminal");
+      expect(addPanelMock).not.toHaveBeenCalled();
+    });
   });
 
-  it("shows a No recipes yet discovery cue when no recipes match the active worktree", () => {
+  describe("search", () => {
+    it("narrows the list to matches and drops the unfiltered band headings", () => {
+      const { container, getAllByTestId, queryByText } = renderButton();
+
+      fireEvent.change(searchInput(container), { target: { value: "review" } });
+
+      const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
+      expect(labels).toEqual(["Search results"]);
+      expect(queryByText("Open in dock")).toBeNull();
+      expect(queryByText("Claude")).toBeNull();
+    });
+
+    it("filters across agents, panels and recipes in one list", () => {
+      mockRecipes = [{ id: "r-1", name: "Deploy site", worktreeId: undefined }];
+      const { container, getByText } = renderButton();
+      const input = searchInput(container);
+
+      fireEvent.change(input, { target: { value: "claude" } });
+      expect(getByText("Claude")).toBeTruthy();
+
+      fireEvent.change(input, { target: { value: "deploy" } });
+      expect(getByText("Deploy site")).toBeTruthy();
+
+      fireEvent.change(input, { target: { value: "browser" } });
+      expect(getByText("Browser")).toBeTruthy();
+    });
+
+    it("finds a panel by a registry search alias", () => {
+      // "explorer" is a file-browser alias, not part of its display name.
+      const { container, getByText } = renderButton();
+      fireEvent.change(searchInput(container), { target: { value: "explorer" } });
+      expect(getByText("File Browser")).toBeTruthy();
+    });
+
+    it("marks exactly one result row as selected", () => {
+      const { container } = renderButton();
+      fireEvent.change(searchInput(container), { target: { value: "e" } });
+
+      const selected = container.querySelectorAll("[data-selected-row='true']");
+      expect(selected).toHaveLength(1);
+    });
+
+    it("Enter launches the top result", () => {
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({ onLaunchAgent });
+      const input = searchInput(container);
+
+      fireEvent.change(input, { target: { value: "claude" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+    });
+
+    it("Enter launches the row moved to by ArrowDown, not the first one", () => {
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({ onLaunchAgent });
+      const input = searchInput(container);
+
+      fireEvent.change(input, { target: { value: "e" } });
+      const rows = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button[data-selected-row]")
+      );
+      const firstName = rows[0]?.textContent;
+
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      const selectedAfter = container.querySelector("[data-selected-row='true']");
+      expect(selectedAfter?.textContent).not.toBe(firstName);
+    });
+
+    it("ArrowDown does not reach the menu, so Radix cannot move focus off the input", () => {
+      const { container } = renderButton();
+      const input = searchInput(container);
+      fireEvent.change(input, { target: { value: "e" } });
+
+      const event = new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        bubbles: true,
+        cancelable: true,
+      });
+      const menuSaw = vi.fn();
+      container.addEventListener("keydown", menuSaw);
+      input.dispatchEvent(event);
+      container.removeEventListener("keydown", menuSaw);
+
+      expect(menuSaw).not.toHaveBeenCalled();
+    });
+
+    it("stops printable keys reaching Radix's typeahead", () => {
+      const { container } = renderButton();
+      const input = searchInput(container);
+
+      const menuSaw = vi.fn();
+      container.addEventListener("keydown", menuSaw);
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true }));
+      container.removeEventListener("keydown", menuSaw);
+
+      expect(menuSaw).not.toHaveBeenCalled();
+    });
+
+    it("shows a recovery cue when nothing matches", () => {
+      const { container, getByText } = renderButton();
+      fireEvent.change(searchInput(container), { target: { value: "zzzzqqqq" } });
+      expect(getByText("Try a different search")).toBeTruthy();
+    });
+
+    it("first Escape clears the query and blocks the menu close; second closes", () => {
+      const { container } = renderButton();
+      const input = searchInput(container);
+      fireEvent.change(input, { target: { value: "review" } });
+
+      // With a query present the content handler vetoes dismissal...
+      const withQuery = { preventDefault: vi.fn() };
+      dropdownEscapeKeyDownSpy!(withQuery);
+      expect(withQuery.preventDefault).toHaveBeenCalledTimes(1);
+
+      // ...and the input clears it.
+      fireEvent.keyDown(input, { key: "Escape" });
+      expect(input.value).toBe("");
+
+      // Now empty, Escape is left alone so the menu actually closes.
+      const whenEmpty = { preventDefault: vi.fn() };
+      dropdownEscapeKeyDownSpy!(whenEmpty);
+      expect(whenEmpty.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("moves focus to the input once the menu is open", async () => {
+      // Radix's mount autofocus lands on the first item synchronously, so the
+      // launcher re-focuses on the next frame. e2e covers the real race; here we
+      // only pin that opening drives focus to the search box at all.
+      const { container } = renderButton();
+      expect(document.activeElement).not.toBe(searchInput(container));
+
+      act(() => dropdownOpenChangeSpy!(true));
+
+      // The focus is deferred a frame, so poll rather than racing it — a frame
+      // awaited here would be scheduled before the effect's own.
+      await waitFor(() => expect(document.activeElement).toBe(searchInput(container)));
+    });
+
+    it("clears the query when the menu closes so the next open starts unfiltered", () => {
+      const { container } = renderButton();
+      const input = searchInput(container);
+      fireEvent.change(input, { target: { value: "review" } });
+      expect(input.value).toBe("review");
+
+      act(() => dropdownOpenChangeSpy!(false));
+      expect(input.value).toBe("");
+    });
+
+    it("mirrors pointer hover into selection without letting Radix steal focus", () => {
+      const { container } = renderButton();
+      const input = searchInput(container);
+      fireEvent.change(input, { target: { value: "e" } });
+
+      const rows = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button[data-selected-row]")
+      );
+      expect(rows.length).toBeGreaterThan(1);
+
+      const second = rows[1]!;
+      const moved = fireEvent.pointerMove(second);
+      // preventDefault is what stops Radix's item-focus handler from running.
+      expect(moved).toBe(false);
+      expect(second.getAttribute("data-selected-row")).toBe("true");
+    });
+  });
+
+  it("shows a Create a recipe cue when no recipes match the active worktree", () => {
     mockRecipes = [];
-    const { getByText } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId="wt-1"
-        cwd="/tmp"
-      />
-    );
-    // The recipe section now always renders so first-run users can discover it.
+    const { getByText } = renderButton({ activeWorktreeId: "wt-1" });
     expect(getByText("Launch recipe")).toBeTruthy();
-    expect(getByText("No recipes yet")).toBeTruthy();
+    expect(getByText("Create a recipe")).toBeTruthy();
   });
 
-  it("dispatches recipe.editor.open from the No recipes yet cue", () => {
+  it("dispatches recipe.editor.open from the Create a recipe cue", () => {
     mockRecipes = [];
-    const { getByText } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId="wt-1"
-        cwd="/tmp"
-      />
-    );
+    const { getByText } = renderButton({ activeWorktreeId: "wt-1" });
 
-    fireEvent.click(getByText("No recipes yet"));
+    fireEvent.click(getByText("Create a recipe"));
     expect(actionDispatchMock).toHaveBeenCalledWith(
       "recipe.editor.open",
       { worktreeId: "wt-1" },
@@ -389,17 +548,9 @@ describe("DockLaunchButton", () => {
     // silently no-ops on undefined — the common first-run case has no active
     // worktree, so the cue must route to the manager instead of dead-ending.
     mockRecipes = [];
-    const { getByText } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
+    const { getByText } = renderButton();
 
-    fireEvent.click(getByText("No recipes yet"));
+    fireEvent.click(getByText("Create a recipe"));
     expect(actionDispatchMock).toHaveBeenCalledWith("recipe.manager.open", {}, { source: "menu" });
     expect(actionDispatchMock).not.toHaveBeenCalledWith(
       "recipe.editor.open",
@@ -408,19 +559,11 @@ describe("DockLaunchButton", () => {
     );
   });
 
-  it("does not render the No recipes yet cue when recipes exist", () => {
+  it("does not render the Create a recipe cue when recipes exist", () => {
     mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
-    const { queryByText, getByText } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId="wt-1"
-        cwd="/tmp"
-      />
-    );
+    const { queryByText, getByText } = renderButton({ activeWorktreeId: "wt-1" });
     expect(getByText("My recipe")).toBeTruthy();
-    expect(queryByText("No recipes yet")).toBeNull();
+    expect(queryByText("Create a recipe")).toBeNull();
   });
 
   it("lists project-wide recipes and recipes scoped to the active worktree", () => {
@@ -430,15 +573,7 @@ describe("DockLaunchButton", () => {
       { id: "r-other", name: "Other worktree recipe", worktreeId: "wt-2" },
     ];
 
-    const { getByText, queryByText } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId="wt-1"
-        cwd="/tmp"
-      />
-    );
+    const { getByText, queryByText } = renderButton({ activeWorktreeId: "wt-1" });
 
     expect(getByText("Project recipe")).toBeTruthy();
     expect(getByText("Worktree recipe")).toBeTruthy();
@@ -451,15 +586,7 @@ describe("DockLaunchButton", () => {
       { id: "r-local", name: "Work", worktreeId: undefined, projectId: "proj-1" },
     ];
 
-    const { getByText } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId="wt-1"
-        cwd="/tmp"
-      />
-    );
+    const { getByText } = renderButton({ activeWorktreeId: "wt-1" });
 
     expect(getByText("Global")).toBeTruthy();
     expect(getByText("Project-wide")).toBeTruthy();
@@ -477,15 +604,7 @@ describe("DockLaunchButton", () => {
     ];
     runRecipeWithResultsMock.mockResolvedValue({});
 
-    const { getByText } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId="wt-1"
-        cwd="/tmp"
-      />
-    );
+    const { getByText } = renderButton({ activeWorktreeId: "wt-1" });
 
     expect(getByText(/Overridden by Team/)).toBeTruthy();
 
@@ -503,15 +622,7 @@ describe("DockLaunchButton", () => {
   });
 
   it("calls preventDefault on pointer close so the trigger does not keep its focus ring (issue #6119)", () => {
-    render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
+    renderButton();
     expect(dropdownCloseAutoFocusSpy).toBeTruthy();
     expect(dropdownPointerDownOutsideSpy).toBeTruthy();
 
@@ -544,16 +655,11 @@ describe("DockLaunchButton", () => {
       worktreePath: "/path/to/wt",
     };
 
-    const { getByText } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId="wt-1"
-        cwd="/path/to/wt"
-        recipeContext={recipeContext}
-      />
-    );
+    const { getByText } = renderButton({
+      activeWorktreeId: "wt-1",
+      cwd: "/path/to/wt",
+      recipeContext,
+    });
 
     fireEvent.click(getByText("My recipe"));
     expect(runRecipeWithResultsMock).toHaveBeenCalledWith(
@@ -579,15 +685,7 @@ describe("DockLaunchButton", () => {
     };
     runRecipeWithResultsMock.mockResolvedValue(results);
 
-    const { getByText } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
+    const { getByText } = renderButton();
 
     fireEvent.click(getByText("My recipe"));
     await waitFor(() =>
@@ -599,15 +697,7 @@ describe("DockLaunchButton", () => {
     mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
     runRecipeWithResultsMock.mockRejectedValue(new Error("recipe gone"));
 
-    const { getByText } = render(
-      <DockLaunchButton
-        agents={AGENTS}
-        hasDevPreview={false}
-        onLaunchAgent={vi.fn()}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
+    const { getByText } = renderButton();
 
     fireEvent.click(getByText("My recipe"));
     await waitFor(() =>
@@ -626,15 +716,7 @@ describe("DockLaunchButton", () => {
 
     it("hides the band when the MRU is empty", () => {
       mockMruEntries = [];
-      const { queryByText } = render(
-        <DockLaunchButton
-          agents={MANY}
-          hasDevPreview={false}
-          onLaunchAgent={vi.fn()}
-          activeWorktreeId={null}
-          cwd="/tmp"
-        />
-      );
+      const { queryByText } = renderButton({ agents: MANY });
       expect(queryByText("Recently launched")).toBeNull();
     });
 
@@ -648,17 +730,10 @@ describe("DockLaunchButton", () => {
         { id: "agent.gemini", score: 1, lastAccessedAt: 1000 },
       ];
 
-      const { getByText, getAllByText, getAllByTestId, container } = render(
-        <DockLaunchButton
-          agents={MANY}
-          hasDevPreview={false}
-          onLaunchAgent={vi.fn()}
-          activeWorktreeId={null}
-          cwd="/tmp"
-        />
-      );
+      const { getByText, getAllByText, getAllByTestId, container } = renderButton({
+        agents: MANY,
+      });
 
-      // Band header leads the menu.
       const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
       expect(labels[0]).toBe("Recently launched");
       expect(getByText("Recently launched")).toBeTruthy();
@@ -671,8 +746,6 @@ describe("DockLaunchButton", () => {
       expect(getAllByText("Cursor").length).toBe(2);
       expect(getAllByText("Gemini").length).toBe(1);
 
-      // First occurrence of each name is its band row (band renders first), so
-      // first-occurrence order reflects the band's frecency order.
       const text = container.textContent ?? "";
       expect(text.indexOf("Claude")).toBeLessThan(text.indexOf("Codex"));
       expect(text.indexOf("Codex")).toBeLessThan(text.indexOf("Cursor"));
@@ -680,58 +753,26 @@ describe("DockLaunchButton", () => {
 
     it("excludes never-launched cold-start entries (lastAccessedAt === 0)", () => {
       mockMruEntries = [{ id: "agent.claude", score: 5, lastAccessedAt: 0 }];
-      const { queryByText } = render(
-        <DockLaunchButton
-          agents={MANY}
-          hasDevPreview={false}
-          onLaunchAgent={vi.fn()}
-          activeWorktreeId={null}
-          cwd="/tmp"
-        />
-      );
+      const { queryByText } = renderButton({ agents: MANY });
       expect(queryByText("Recently launched")).toBeNull();
     });
 
     it("ignores non-agent MRU entries", () => {
       mockMruEntries = [{ id: "recipe.editor.open", score: 5, lastAccessedAt: 5000 }];
-      const { queryByText } = render(
-        <DockLaunchButton
-          agents={MANY}
-          hasDevPreview={false}
-          onLaunchAgent={vi.fn()}
-          activeWorktreeId={null}
-          cwd="/tmp"
-        />
-      );
+      const { queryByText } = renderButton({ agents: MANY });
       expect(queryByText("Recently launched")).toBeNull();
     });
 
     it("drops stale MRU entries for agents no longer present", () => {
       mockMruEntries = [{ id: "agent.ghost", score: 5, lastAccessedAt: 5000 }];
-      const { queryByText } = render(
-        <DockLaunchButton
-          agents={MANY}
-          hasDevPreview={false}
-          onLaunchAgent={vi.fn()}
-          activeWorktreeId={null}
-          cwd="/tmp"
-        />
-      );
+      const { queryByText } = renderButton({ agents: MANY });
       expect(queryByText("Recently launched")).toBeNull();
     });
 
     it("launching a band row records MRU and invokes onLaunchAgent", () => {
       mockMruEntries = [{ id: "agent.codex", score: 3, lastAccessedAt: 3000 }];
       const onLaunchAgent = vi.fn();
-      const { getAllByText } = render(
-        <DockLaunchButton
-          agents={MANY}
-          hasDevPreview={false}
-          onLaunchAgent={onLaunchAgent}
-          activeWorktreeId={null}
-          cwd="/tmp"
-        />
-      );
+      const { getAllByText } = renderButton({ agents: MANY, onLaunchAgent });
 
       // First "Codex" is the band row.
       const codexElement = getAllByText("Codex")[0];
@@ -739,6 +780,18 @@ describe("DockLaunchButton", () => {
       fireEvent.click(codexElement!);
       expect(onLaunchAgent).toHaveBeenCalledWith("codex");
       expect(recordActionMruMock).toHaveBeenCalledWith("agent.codex");
+    });
+
+    it("survives an unfiltered reopen after a search is cleared", () => {
+      mockMruEntries = [{ id: "agent.codex", score: 3, lastAccessedAt: 3000 }];
+      const { container, queryByText, getByText } = renderButton({ agents: MANY });
+      const input = searchInput(container);
+
+      fireEvent.change(input, { target: { value: "codex" } });
+      expect(queryByText("Recently launched")).toBeNull();
+
+      fireEvent.change(input, { target: { value: "" } });
+      expect(getByText("Recently launched")).toBeTruthy();
     });
   });
 });

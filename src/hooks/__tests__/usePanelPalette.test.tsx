@@ -39,6 +39,20 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 
 vi.mock("@/registry", () => ({
   getPanelKindDefinition: getPanelKindDefinitionMock,
+  // The spawnable-kind predicate itself is covered by
+  // src/registry/__tests__/spawnablePanelKinds.test.ts; here it is driven from
+  // the same registry mocks the rest of this suite uses, so each case still
+  // controls which kinds reach the palette.
+  getSpawnablePanelKinds: () =>
+    (getPanelKindIdsMock() as string[])
+      .filter((kindId) => kindId !== "agent")
+      .map((kindId) => getPanelKindConfigMock(kindId) as { id: string; showInPalette?: boolean })
+      .filter(
+        (config) =>
+          config != null &&
+          config.showInPalette !== false &&
+          Boolean(getPanelKindDefinitionMock(config.id))
+      ),
 }));
 
 vi.mock("@shared/config/agentRegistry", () => ({

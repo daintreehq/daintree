@@ -19,6 +19,14 @@ export interface UseSearchablePaletteOptions<T> {
   includeMatches?: boolean;
   /** Extract a unique ID from an item for the matchesById map. Defaults to `(item as any).id`. */
   getItemId?: (item: T) => string;
+  /**
+   * Lag filtering behind the input via `useDeferredValue`. Default true, which
+   * keeps keystrokes responsive on large lists at the cost of `results` briefly
+   * trailing `query`. Small embedded launchers whose confirm key can be pressed
+   * in the same tick as the last keystroke pass false: with deferral on, that
+   * Enter reads the *previous* query's ranking and launches the wrong item.
+   */
+  deferFiltering?: boolean;
 }
 
 export interface UseSearchablePaletteReturn<T> {
@@ -62,6 +70,7 @@ export function useSearchablePalette<T>(
     paletteId,
     includeMatches = false,
     getItemId = defaultGetItemId,
+    deferFiltering = true,
   } = options;
 
   const storeIsOpen = usePaletteStore(
@@ -74,7 +83,9 @@ export function useSearchablePalette<T>(
   // Lag the filtering work behind the input so keystrokes stay responsive.
   // The expensive Fuse/filterFn pass runs in a deferred render that yields to
   // input events; the input itself binds to the urgent `query` state.
-  const deferredQuery = useDeferredValue(query);
+  // Called unconditionally (hook order) even when deferral is opted out of.
+  const deferredValue = useDeferredValue(query);
+  const deferredQuery = deferFiltering ? deferredValue : query;
   const isStale = query !== deferredQuery;
   const [selectedIndex, setSelectedIndex] = useState(0);
 
