@@ -71,6 +71,20 @@ export class ProjectCheckError extends Error {
 }
 
 /**
+ * Extra bytes retained ahead of the reported tail, purely so `scrubSecrets`
+ * sees whole credentials that straddle the final cut.
+ *
+ * The scrubber matches on a leading sigil (`ghp_`, `-----BEGIN … KEY-----`, …).
+ * Cut the buffer immediately after one and the retained bytes are the token's
+ * body with nothing left to match — a redaction bypass that hands the caller a
+ * secret it can reconstruct by prepending the known prefix. Scrubbing this
+ * larger window first means anything crossing the final cut was already seen
+ * whole and redacted. Sized well past the longest supported pattern (a PEM
+ * block) so no realistic secret can span the whole overlap.
+ */
+const SCRUB_OVERLAP_BYTES = 8 * 1024;
+
+/**
  * Fixed-size tail of the child's combined output. Keeps the LAST `maxBytes`
  * and drops from the front, because runners print their summary last. Streams
  * are still drained past the cap so the child never blocks on backpressure.
@@ -108,25 +122,13 @@ class OutputTail {
   }
 
   /**
-   * Decode the retained tail, dropping any partial first line.
-   *
-   * Dropping that line is a security requirement, not cosmetics. The byte cap
-   * cuts at an arbitrary offset, and `scrubSecrets` recognizes a credential by
-   * its sigil (`ghp_`, `sk-`, …). If the cut lands just after the sigil, the
-   * retained bytes are the token's body with nothing left for the scrubber to
-   * match — a redaction bypass that hands the caller a reconstructable secret.
-   * Realigning the front edge to a line start means a straddling token is
-   * either wholly retained (and therefore scrubbed) or wholly dropped.
-   *
-   * A tail with no newline at all cannot be realigned; it is passed through so
-   * a single enormous line still yields output. Slicing may also cut a
-   * multi-byte codepoint, leaving a leading U+FFFD.
+   * Decode the retained window — the reported tail plus the scrub overlap.
+   * Slicing may cut a multi-byte codepoint, leaving a leading U+FFFD; the
+   * overlap is discarded by {@link capTail} after scrubbing, so that artefact
+   * never reaches the caller.
    */
   toText(): string {
-    const text = Buffer.concat(this.chunks).toString("utf-8");
-    if (!this.truncated) return text;
-    const firstBreak = text.indexOf("\n");
-    return firstBreak === -1 ? text : text.slice(firstBreak + 1);
+    return Buffer.concat(this.chunks).toString("utf-8");
   }
 }
 
@@ -138,9 +140,18 @@ class OutputTail {
 function capTail(text: string, maxBytes: number): { text: string; truncated: boolean } {
   const buf = Buffer.from(text, "utf8");
   if (buf.length <= maxBytes) return { text, truncated: false };
+
   const marker = "[truncated]\n";
   const budget = Math.max(0, maxBytes - Buffer.byteLength(marker, "utf8"));
-  return { text: marker + buf.subarray(buf.length - budget).toString("utf-8"), truncated: true };
+  let slice = buf.subarray(buf.length - budget).toString("utf-8");
+
+  // Decoding can grow the payload: every byte of an invalid sequence becomes a
+  // 3-byte U+FFFD. Re-measure and shed the excess in one pass — each dropped
+  // JS code unit frees at least one UTF-8 byte, so this always lands under.
+  const over = Buffer.byteLength(marker + slice, "utf8") - maxBytes;
+  if (over > 0) slice = slice.slice(over);
+
+  return { text: marker + slice, truncated: true };
 }
 
 /**
@@ -373,7 +384,7 @@ export class ProjectCheckService {
     const { signal, slot } = context;
     return new Promise<SpawnOutcome>((resolve, reject) => {
       const useGroup = process.platform !== "win32";
-      const tail = new OutputTail(PROJECT_CHECK_MAX_OUTPUT_BYTES);
+      const tail = new OutputTail(PROJECT_CHECK_MAX_OUTPUT_BYTES + SCRUB_OVERLAP_BYTES);
 
       let child: ChildProcess;
       try {
@@ -409,8 +420,12 @@ export class ProjectCheckService {
       let escalationTimer: ReturnType<typeof setTimeout> | null = null;
       let exitGraceTimer: ReturnType<typeof setTimeout> | null = null;
       let forceSettleTimer: ReturnType<typeof setTimeout> | null = null;
+      // Whether this run ever asked for the tree to die. Drives the final
+      // SIGKILL in cleanup(); a check that exited on its own never gets one.
+      let killRequested = false;
 
       const killTree = (force = false): void => {
+        killRequested = true;
         const pid = child.pid;
         if (typeof pid !== "number") {
           child.kill();
@@ -461,11 +476,15 @@ export class ProjectCheckService {
 
       const cleanup = (): void => {
         clearTimeout(timeoutTimer);
-        // The escalation timer is deliberately NOT cleared. Settling means the
-        // foreground process is done, not that its group is — a descendant that
-        // ignored SIGTERM still needs the SIGKILL. The timer is unref'd, and
-        // signalGroup swallows ESRCH, so letting it fire on an already-dead
-        // group is free.
+        // Settling means the foreground process is done, not that its group is
+        // — a descendant that ignored SIGTERM still needs the SIGKILL. Deliver
+        // it NOW and drop the pending escalation rather than leaving a timer
+        // armed: a delayed signal fires against a bare numeric pgid, which the
+        // OS may have recycled onto an unrelated group by then.
+        if (killRequested && useGroup && typeof child.pid === "number") {
+          signalGroup(child.pid, "SIGKILL");
+        }
+        if (escalationTimer) clearTimeout(escalationTimer);
         if (exitGraceTimer) clearTimeout(exitGraceTimer);
         if (forceSettleTimer) clearTimeout(forceSettleTimer);
         signal?.removeEventListener("abort", onAbort);
@@ -483,9 +502,10 @@ export class ProjectCheckService {
         if (settled) return;
         settled = true;
         cleanup();
-        // Scrub BEFORE the final cap: the scrubber's own contract is that
-        // callers truncate downstream of it, because a cut inside a token
-        // hides the sigil it matches on.
+        // Scrub the whole retained window BEFORE the final cap. The scrubber's
+        // own contract is that callers truncate downstream of it: a cut inside
+        // a token hides the sigil it matches on, and the overlap guarantees
+        // anything spanning the cut was already seen — and redacted — here.
         const capped = capTail(scrubSecrets(tail.toText()), PROJECT_CHECK_MAX_OUTPUT_BYTES);
         resolve({
           exitCode,
@@ -517,9 +537,14 @@ export class ProjectCheckService {
       // First terminal cause wins. `exited` participates: once the process is
       // gone, a deadline that elapses while stdio is still draining describes
       // the drain, not the run, and must not mark a finished check timed out.
-      const onAbort = (): void => {
-        if (settled || aborted || timedOut || exited) return;
+      const claimAbort = (): boolean => {
+        if (settled || aborted || timedOut || exited) return false;
         aborted = true;
+        return true;
+      };
+
+      const onAbort = (): void => {
+        if (!claimAbort()) return;
         killTree();
         armForceSettle();
       };
@@ -535,8 +560,14 @@ export class ProjectCheckService {
       signal?.addEventListener("abort", onAbort, { once: true });
       slot.abort = onAbort;
       slot.abortNow = () => {
-        onAbort();
+        if (settled) return;
+        // Claims the cause without the polite kill, then issues exactly one
+        // forced kill. Routing through onAbort() would run the tree-kill twice
+        // — on Windows that is two serial 3s `taskkill` calls per check,
+        // blocking the main thread during quit.
+        claimAbort();
         killTree(true);
+        armForceSettle();
       };
 
       // Unhandled stream `error` is fatal in main; these sinks must outlive

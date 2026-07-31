@@ -363,17 +363,39 @@ describe("ProjectCheckService — output handling", () => {
     const promise = service.runCheck({ projectId: "proj-1", runnerId: "npm-test" });
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
 
-    // Straddle the cut with a token so the `ghp_` sigil falls in the dropped
-    // half. Scrubbing a raw byte-tail would miss it and hand back a body the
-    // caller could reconstruct by prepending the known prefix.
-    const body = "0123456789abcdefghijklmnopqrstuvwxyzAB";
-    const filler = "x".repeat(PROJECT_CHECK_MAX_OUTPUT_BYTES);
-    child.stdout.push(`${filler}ghp_${body}\nsummary\n`);
+    // Position the token so the reported tail STARTS in the middle of it: the
+    // `ghp_` sigil falls in the dropped half while its body survives. Scrubbing
+    // only the retained bytes would miss it and hand back a body the caller
+    // reconstructs by prepending the known prefix. No newlines anywhere, so
+    // line-realignment can't rescue it either.
+    const bodyTail = "b".repeat(20);
+    const secret = `ghp_${"a".repeat(16)}${bodyTail}`;
+    const before = "x".repeat(PROJECT_CHECK_MAX_OUTPUT_BYTES);
+    const after = "z".repeat(PROJECT_CHECK_MAX_OUTPUT_BYTES - bodyTail.length);
+    child.stdout.push(`${before}${secret}${after}`);
     child.finish(1);
 
     const result = await promise;
     expect(result.outputTruncated).toBe(true);
-    expect(result.output).not.toContain(body);
+    expect(result.output).toContain("zzz");
+    expect(result.output).not.toContain(bodyTail);
+  });
+
+  it("keeps the reported output within the byte cap even for undecodable bytes", async () => {
+    const service = new ProjectCheckService();
+    const promise = service.runCheck({ projectId: "proj-1", runnerId: "npm-test" });
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
+
+    // Every invalid byte decodes to a 3-byte U+FFFD, so a naive byte-slice
+    // then decode overshoots the cap it just enforced.
+    child.stdout.push(Buffer.alloc(PROJECT_CHECK_MAX_OUTPUT_BYTES * 2, 0xff));
+    child.finish(1);
+
+    const result = await promise;
+    expect(Buffer.byteLength(result.output, "utf8")).toBeLessThanOrEqual(
+      PROJECT_CHECK_MAX_OUTPUT_BYTES
+    );
+    expect(result.outputTruncated).toBe(true);
   });
 
   it("does not flag truncation for output under the cap", async () => {
