@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { ActionDefinition, ActionContext, ActionManifestEntry } from "@shared/types/actions";
 import { actionService } from "@/services/ActionService";
 
@@ -68,7 +69,9 @@ import {
   type StoreWithPersist,
 } from "@/store/persistence/persistedStoreRegistry";
 
-type ActionFactory = () => ActionDefinition;
+// Widened over the `S extends ZodTypeAny | undefined = undefined` default so
+// tests can read `argsSchema` (the pagination bounds live there).
+type ActionFactory = () => ActionDefinition<z.ZodTypeAny>;
 
 function makeStore(options: {
   name?: string;
@@ -422,6 +425,121 @@ describe("actions.list", () => {
       expect(ids.every((id, i) => i === ids.lastIndexOf(id))).toBe(true);
       expect(result.actions.find((a) => a.mcpVisibility === "hidden")).toBeUndefined();
     }
+  });
+
+  interface ListPage {
+    actions: ActionManifestEntry[];
+    total: number;
+    limit: number;
+    offset: number;
+    hasMore: boolean;
+  }
+
+  it("returns entries without inputSchema or outputSchema", async () => {
+    // #11529: the full manifest with schemas attached was ~430 KB / ~107k
+    // tokens per call. Mirror the real list() contract so this fails if
+    // actions.list stops passing { includeSchemas: false }.
+    vi.mocked(actionService.list).mockImplementationOnce((_ctx, options) => {
+      const entries = [
+        makeEntry({
+          id: "git.commit",
+          inputSchema: { type: "object", properties: { message: { type: "string" } } },
+          outputSchema: { type: "object" },
+        }),
+      ];
+      if (options?.includeSchemas === false) {
+        return entries.map(
+          ({ inputSchema: _i, outputSchema: _o, ...rest }) => rest as ActionManifestEntry
+        );
+      }
+      return entries;
+    });
+
+    const def = registry.get("actions.list")!();
+    const result = (await def.run(undefined, stubCtx)) as ListPage;
+
+    expect(result.actions).toHaveLength(1);
+    expect(result.actions[0]!).not.toHaveProperty("inputSchema");
+    expect(result.actions[0]!).not.toHaveProperty("outputSchema");
+  });
+
+  it("caps an unfiltered listing and reports the full match count", async () => {
+    // The registry is deliberately far larger than any sane page so the cap is
+    // observable without hard-coding the default page size.
+    const entries = Array.from({ length: 500 }, (_, i) =>
+      makeEntry({ id: `actions.item${i}`, mcpVisibility: "core" })
+    );
+    vi.mocked(actionService.list).mockReturnValueOnce(entries);
+
+    const def = registry.get("actions.list")!();
+    const result = (await def.run(undefined, stubCtx)) as ListPage;
+
+    expect(result.total).toBe(entries.length);
+    expect(result.actions.length).toBeLessThan(entries.length);
+    expect(result.actions).toHaveLength(result.limit);
+    expect(result.offset).toBe(0);
+    expect(result.hasMore).toBe(true);
+  });
+
+  it("cannot be asked for an unbounded page", async () => {
+    // A cap a caller can opt out of is no cap — the whole point of #11529.
+    const def = registry.get("actions.list")!();
+    const schema = def.argsSchema!;
+
+    expect(schema.safeParse({ limit: Number.MAX_SAFE_INTEGER }).success).toBe(false);
+    expect(schema.safeParse({ limit: 0 }).success).toBe(false);
+    expect(schema.safeParse({ limit: 1.5 }).success).toBe(false);
+    expect(schema.safeParse({ offset: -1 }).success).toBe(false);
+    expect(schema.safeParse({ limit: 1, offset: 2 }).success).toBe(true);
+    // Omitting args entirely stays valid — paging is opt-in, not required.
+    expect(schema.safeParse(undefined).success).toBe(true);
+  });
+
+  it("applies filters before paging", async () => {
+    // total/hasMore must describe the filtered match set, and a hidden entry
+    // must never be reachable by walking pages.
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "actions.keepOne", mcpVisibility: "core" }),
+      makeEntry({ id: "actions.keepHidden", mcpVisibility: "hidden" }),
+      makeEntry({ id: "actions.keepTwo", mcpVisibility: "core" }),
+      makeEntry({ id: "actions.other", mcpVisibility: "core" }),
+      makeEntry({ id: "actions.keepThree", mcpVisibility: "core" }),
+    ]);
+
+    const def = registry.get("actions.list")!();
+    const result = (await def.run(
+      { search: "keep", limit: 1, offset: 1 } as never,
+      stubCtx
+    )) as ListPage;
+
+    expect(result.actions.map((a) => a.id)).toEqual(["actions.keepTwo"]);
+    expect(result.total).toBe(3);
+    expect(result.hasMore).toBe(true);
+  });
+
+  it("returns an empty page past the end without claiming more results", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "actions.alpha", mcpVisibility: "core" }),
+      makeEntry({ id: "actions.beta", mcpVisibility: "core" }),
+    ]);
+
+    const def = registry.get("actions.list")!();
+    const result = (await def.run({ offset: 50 } as never, stubCtx)) as ListPage;
+
+    expect(result.actions).toEqual([]);
+    expect(result.total).toBe(2);
+    expect(result.hasMore).toBe(false);
+  });
+
+  it("returns a result matching its declared resultSchema", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "actions.alpha", mcpVisibility: "core" }),
+    ]);
+
+    const def = registry.get("actions.list")!();
+    const result = await def.run(undefined, stubCtx);
+
+    expect(def.resultSchema!.safeParse(result).success).toBe(true);
   });
 });
 

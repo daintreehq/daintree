@@ -11,6 +11,11 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { listPersistedStores } from "@/store/persistence/persistedStoreRegistry";
 import { readLocalStorageItemSafely } from "@/store/persistence/safeStorage";
 
+// Page bounds for actions.list. Shared by argsSchema and run() so the
+// advertised default can never drift from the applied one (#11529).
+const DEFAULT_LIST_LIMIT = 50;
+const MAX_LIST_LIMIT = 100;
+
 export function registerIntrospectionActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -19,7 +24,7 @@ export function registerIntrospectionActions(
     id: "actions.list",
     title: "List Actions",
     description:
-      "List the full action manifest, each entry including inputSchema/outputSchema. Args (all optional): `category` filters by domain (e.g. terminal, git, github); `search` substring-matches id/title/description; `enabledOnly` drops disabled actions. Returns { actions } — an array of manifest entries. Never errors; empty filters return everything. Do NOT use this for discovery — it returns every schema and is expensive; call `actions.search` first, then `actions.getSchema` for the one you need.",
+      "List lightweight action manifest entries without inputSchema/outputSchema, filtered and paginated. Args (all optional): `category` filters by exact domain (e.g. terminal, worktree, forge, git, portal); `search` substring-matches id/title/description; `enabledOnly` drops disabled actions; `limit` sets the page size (1-100, default 50); `offset` skips matching actions (default 0). Returns { actions, total, limit, offset, hasMore } where `total` counts matches after filtering but before pagination, so `hasMore` tells you whether another page remains. Errors when `limit` falls outside 1-100 or `offset` is negative; filters that match nothing, or an offset past the end, return an empty `actions` array. Use `actions.search` for ranked discovery and `actions.getSchema` to fetch one action's schemas.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -30,19 +35,53 @@ export function registerIntrospectionActions(
         category: z
           .string()
           .optional()
-          .describe("Filter by category (e.g. terminal, git, github, panel, portal)"),
+          .describe("Filter by exact category (e.g. terminal, worktree, forge, git, portal)"),
         search: z.string().optional().describe("Search in action id, title, or description"),
         enabledOnly: z
           .boolean()
           .optional()
           .describe("Only return enabled actions (default: false)"),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_LIST_LIMIT)
+          .optional()
+          .default(DEFAULT_LIST_LIMIT)
+          .describe(`Max actions to return (1-${MAX_LIST_LIMIT}, default ${DEFAULT_LIST_LIMIT})`),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .default(0)
+          .describe("Number of matching actions to skip (default: 0)"),
       })
       .optional(),
-    resultSchema: z.object({ actions: z.array(z.unknown()) }),
+    resultSchema: z.object({
+      actions: z.array(z.unknown()),
+      total: z.number().int().nonnegative(),
+      limit: z.number().int(),
+      offset: z.number().int().nonnegative(),
+      hasMore: z.boolean(),
+    }),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { category, search, enabledOnly } =
-        (args as { category?: string; search?: string; enabledOnly?: boolean } | undefined) ?? {};
-      let manifest = actionService.list(ctx);
+      const {
+        category,
+        search,
+        enabledOnly,
+        limit = DEFAULT_LIST_LIMIT,
+        offset = 0,
+      } = (args as
+        | {
+            category?: string;
+            search?: string;
+            enabledOnly?: boolean;
+            limit?: number;
+            offset?: number;
+          }
+        | undefined) ?? {};
+      let manifest = actionService.list(ctx, { includeSchemas: false });
       manifest = manifest.filter((entry) => entry.mcpVisibility !== "hidden");
 
       if (category) {
@@ -61,7 +100,18 @@ export function registerIntrospectionActions(
         manifest = manifest.filter((a) => a.enabled);
       }
 
-      return { actions: manifest };
+      // Count after filtering but before paging so `total`/`hasMore` describe
+      // the whole match set, not the slice the caller happens to be holding.
+      const total = manifest.length;
+      const page = manifest.slice(offset, offset + limit);
+
+      return {
+        actions: page,
+        total,
+        limit,
+        offset,
+        hasMore: offset + page.length < total,
+      };
     },
   }));
 
@@ -195,7 +245,7 @@ export function registerIntrospectionActions(
     id: "actions.search",
     title: "Search Actions",
     description:
-      "Search the action registry by natural-language query, ranked by relevance. Args: `query` (required — keywords or phrase); `limit` (optional, 1-100, default 20). Returns { totalMatches, results } where results are lightweight manifest entries WITHOUT inputSchema/outputSchema. Errors when `query` is empty or whitespace-only. Use this for discovery, then `actions.getSchema` for the chosen action's full schema. Do NOT use `actions.list` for discovery — it returns every schema and is far heavier.",
+      "Search the action registry by natural-language query, ranked by relevance. Args: `query` (required — keywords or phrase); `limit` (optional, 1-100, default 20). Returns { totalMatches, results } where results are lightweight manifest entries WITHOUT inputSchema/outputSchema. Errors when `query` is empty or whitespace-only. Use this for ranked discovery, then `actions.getSchema` for the chosen action's full schema; use `actions.list` when you want filtered, paginated enumeration instead of ranking.",
     category: "introspection",
     kind: "query",
     danger: "safe",
