@@ -690,12 +690,14 @@ describe("GrantCache native grants (#10648)", () => {
   it("getLiveNativeGrants excludes a grant refreshed past the hard ceiling", () => {
     let clock = 0;
     const { cache } = newCache({ ttlMs: 1000, maxLifetimeMs: 5000, now: () => clock });
-    const entry = issue(cache, { ttlMs: 1000 });
-    // Keep refreshing the TTL so `expiresAt` stays in the future, but advance
-    // past the hard ceiling — the live snapshot must drop it.
+    const entry = issue(cache, { ttlMs: 4000 });
+    // Slide the TTL so `expiresAt` stays in the FUTURE at the assertion — the
+    // ceiling must be what drops the grant. If both bounds had elapsed, an
+    // implementation that checked only `expiresAt` would pass too.
     clock = 4000;
-    cache.refreshNativeGrant(entry.id); // expiresAt -> 5000
-    clock = 6000; // past issuedAt + maxLifetimeMs (5000), expiresAt (5000) also passed
+    cache.refreshNativeGrant(entry.id); // expiresAt -> 8000, ceiling stays 5000
+    clock = 6000;
+    expect(cache.getActiveNativeGrants("s1")[0]!.expiresAt).toBeGreaterThan(clock);
     expect(cache.getLiveNativeGrants("s1")).toHaveLength(0);
     cache.dispose();
   });
@@ -755,6 +757,71 @@ describe("GrantCache native grants (#10648)", () => {
     expect(snap).toHaveLength(1);
     expect(snap[0].id).toBe(entry.id);
     expect(cache.getActiveNativeGrants("other")).toHaveLength(0);
+    cache.dispose();
+  });
+});
+
+describe("GrantCache.getLiveGrants", () => {
+  it("returns only grants live by both the sliding TTL and the hard ceiling", () => {
+    let now = 1000;
+    const { cache } = newCache({ ttlMs: 500, maxLifetimeMs: 800, now: () => now });
+    // issuedAt 1000 → TTL lapses at 1500, ceiling at 1800 for both.
+    const stale = cache.issueGrant("s1", "ttl-expired");
+    const ceilingPast = cache.issueGrant("s1", "ceiling-past");
+
+    now = 1700;
+    const fresh = cache.issueGrant("s1", "fresh");
+
+    // Slide ceiling-past's TTL forward to 2250. `refresh` never moves
+    // issuedAt, so its 1800 ceiling still bites — the case an expiresAt-only
+    // liveness filter (as at sessionStore.ts:581) silently reports as live.
+    now = 1750;
+    expect(cache.refresh("s1", "ceiling-past", ceilingPast.issuedAt)).toBe(true);
+
+    now = 1900;
+    expect(stale.expiresAt).toBeLessThan(now);
+    expect(ceilingPast.expiresAt).toBeGreaterThan(now);
+    expect(fresh.expiresAt).toBeGreaterThan(now);
+
+    expect(cache.getLiveGrants("s1").map((g) => g.toolId)).toEqual(["fresh"]);
+    // getActiveGrants establishes no liveness at all — that contrast is the
+    // whole reason getLiveGrants exists.
+    expect(cache.getActiveGrants("s1")).toHaveLength(3);
+    cache.dispose();
+  });
+
+  it("never evicts or emits, unlike check", () => {
+    let now = 1000;
+    const { cache, emitted } = newCache({ ttlMs: 100, now: () => now });
+    cache.issueGrant("s1", "git.commit");
+    emitted.length = 0;
+
+    now = 5000;
+    expect(cache.getLiveGrants("s1")).toEqual([]);
+    // The read is pure: nothing deleted, no grant.expired pushed at the renderer.
+    expect(emitted).toEqual([]);
+    expect(cache.getActiveGrants("s1")).toHaveLength(1);
+
+    // check() on the same expired grant does both, which is why a discovery
+    // filter must not use it.
+    expect(cache.check("s1", "git.commit").granted).toBe(false);
+    expect(emitted.map((e) => e.payload.type)).toEqual(["grant.expired"]);
+    expect(cache.getActiveGrants("s1")).toHaveLength(0);
+    cache.dispose();
+  });
+
+  it("scopes to one session and returns every session when unfiltered", () => {
+    const { cache } = newCache();
+    cache.issueGrant("s1", "a");
+    cache.issueGrant("s2", "b");
+    expect(cache.getLiveGrants("s1").map((g) => g.toolId)).toEqual(["a"]);
+    expect(cache.getLiveGrants("s2").map((g) => g.toolId)).toEqual(["b"]);
+    expect(
+      cache
+        .getLiveGrants()
+        .map((g) => g.toolId)
+        .sort()
+    ).toEqual(["a", "b"]);
     cache.dispose();
   });
 });

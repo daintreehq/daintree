@@ -532,9 +532,9 @@ describe("McpServerService", () => {
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
-          id: "actions.list" as ActionId,
-          title: "List Actions",
-          description: "Read the action registry",
+          id: "terminal.list" as ActionId,
+          title: "List Terminals",
+          description: "Read the terminal list",
         }),
       ],
       dispatchAction: () => ({
@@ -549,7 +549,7 @@ describe("McpServerService", () => {
 
     const result = getTextResult(
       await client.callTool({
-        name: "actions.list",
+        name: "terminal.list",
         arguments: {},
       })
     );
@@ -1031,9 +1031,9 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "actions.list" as ActionId,
-            title: "List Actions",
-            description: "Read the action registry",
+            id: "terminal.list" as ActionId,
+            title: "List Terminals",
+            description: "Read the terminal list",
             kind: "query",
           }),
         ],
@@ -1046,7 +1046,7 @@ describe("McpServerService", () => {
 
       await client.listTools();
       const result = (await client.callTool({
-        name: "actions.list",
+        name: "terminal.list",
         arguments: {},
       })) as {
         content: Array<{ type: string; text: string }>;
@@ -1061,9 +1061,9 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "actions.list" as ActionId,
-            title: "List Actions",
-            description: "Read the action registry",
+            id: "terminal.list" as ActionId,
+            title: "List Terminals",
+            description: "Read the terminal list",
             kind: "query",
             outputSchema: objectSchema,
           }),
@@ -1080,7 +1080,7 @@ describe("McpServerService", () => {
       // structured output schema is also resolved without requiring the
       // client to call `tools/list` beforehand.
       const result = (await client.callTool({
-        name: "actions.list",
+        name: "terminal.list",
         arguments: {},
       })) as {
         content: Array<{ type: string; text: string }>;

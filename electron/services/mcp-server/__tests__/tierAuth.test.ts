@@ -16,12 +16,18 @@ vi.mock("../../McpPaneConfigService.js", () => ({
 import {
   buildAnnotations,
   extractBearerToken,
+  filterIntrospectionResultForSession,
+  getTierPermittedActionIds,
   isAuthorized,
   isTierPermitted,
   parseToolArguments,
   precomputeApiKeyBearerHash,
+  readSearchLimit,
   resolveTokenTier,
   shouldExposeTool,
+  ACTIONS_SEARCH_DEFAULT_LIMIT,
+  ACTIONS_SEARCH_MAX_LIMIT,
+  INTROSPECTION_TOOL_IDS,
 } from "../tierAuth.js";
 import { TIER_ALLOWLISTS } from "../shared.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
@@ -607,5 +613,361 @@ describe("narrow agent discovery tier reachability", () => {
     // Sanity check the contrast is real, not a typo'd id: agentSettings.get IS
     // reachable for the trusted in-app workbench session.
     expect(isTierPermitted("workbench", "agentSettings.get")).toBe(true);
+  });
+});
+
+describe("getTierPermittedActionIds", () => {
+  const TIERS = ["workbench", "action", "system", "external"] as const;
+
+  // The discovery filter enumerates the tier surface while tools/call probes it
+  // one id at a time. Both must resolve to the same set or discovery drifts
+  // from dispatch — the exact failure #11525 is about.
+  it.each(TIERS)("agrees with isTierPermitted for every action id at tier %s", (tier) => {
+    const permitted = getTierPermittedActionIds(tier);
+    for (const id of BUILT_IN_ACTION_IDS) {
+      expect(permitted.has(id)).toBe(isTierPermitted(tier, id));
+    }
+  });
+
+  // Every tier must resolve to a distinct, non-empty surface: a selector bug
+  // that collapsed two tiers onto one set would widen discovery silently.
+  it.each(TIERS)("resolves tier %s to a populated surface", (tier) => {
+    expect(getTierPermittedActionIds(tier).size).toBeGreaterThan(0);
+  });
+
+  it("keeps every tier surface distinct from every other tier's", () => {
+    const sameMembership = (a: ReadonlySet<string>, b: ReadonlySet<string>) =>
+      a.size === b.size && Array.from(a).every((id) => b.has(id));
+
+    const surfaces = TIERS.map((tier) => ({ tier, ids: getTierPermittedActionIds(tier) }));
+    const collapsed = surfaces.flatMap((left, i) =>
+      surfaces
+        .slice(i + 1)
+        .filter((right) => sameMembership(left.ids, right.ids))
+        .map((right) => `${left.tier}/${right.tier}`)
+    );
+
+    // Naming the collapsed pairs makes a regression point at the two tiers that
+    // merged rather than just reporting "not distinct".
+    expect(collapsed).toEqual([]);
+  });
+});
+
+describe("readSearchLimit", () => {
+  it("falls back to the schema default when limit is absent", () => {
+    expect(readSearchLimit(undefined)).toBe(ACTIONS_SEARCH_DEFAULT_LIMIT);
+    expect(readSearchLimit({})).toBe(ACTIONS_SEARCH_DEFAULT_LIMIT);
+    expect(readSearchLimit({ query: "terminal" })).toBe(ACTIONS_SEARCH_DEFAULT_LIMIT);
+    expect(readSearchLimit("not-an-object")).toBe(ACTIONS_SEARCH_DEFAULT_LIMIT);
+    expect(readSearchLimit([1, 2])).toBe(ACTIONS_SEARCH_DEFAULT_LIMIT);
+  });
+
+  it("returns an in-contract limit unchanged", () => {
+    expect(readSearchLimit({ limit: 1 })).toBe(1);
+    expect(readSearchLimit({ limit: 7 })).toBe(7);
+    expect(readSearchLimit({ limit: ACTIONS_SEARCH_MAX_LIMIT })).toBe(ACTIONS_SEARCH_MAX_LIMIT);
+  });
+
+  // A null verdict tells the caller to leave args alone so the renderer's zod
+  // validation still rejects them. Clamping instead would silently accept
+  // input the published tool contract forbids.
+  it("returns null for a limit the tool contract rejects", () => {
+    expect(readSearchLimit({ limit: 0 })).toBeNull();
+    expect(readSearchLimit({ limit: -3 })).toBeNull();
+    expect(readSearchLimit({ limit: ACTIONS_SEARCH_MAX_LIMIT + 1 })).toBeNull();
+    expect(readSearchLimit({ limit: 2.5 })).toBeNull();
+    expect(readSearchLimit({ limit: "20" })).toBeNull();
+    expect(readSearchLimit({ limit: null })).toBeNull();
+    expect(readSearchLimit({ limit: Number.NaN })).toBeNull();
+  });
+});
+
+describe("filterIntrospectionResultForSession", () => {
+  const permitted = new Set(["terminal.list", "worktree.list", "actions.search"]);
+
+  function listResult(entries: ActionManifestEntry[]) {
+    return { ok: true as const, result: { actions: entries } };
+  }
+  function searchResult(entries: ActionManifestEntry[], totalMatches = entries.length) {
+    return { ok: true as const, result: { totalMatches, results: entries } };
+  }
+  function ids(result: ReturnType<typeof filterIntrospectionResultForSession>): string[] {
+    const payload = (result as { result: { actions?: unknown[]; results?: unknown[] } }).result;
+    const entries = payload.actions ?? payload.results ?? [];
+    return entries.map((entry) => (entry as ActionManifestEntry).id);
+  }
+
+  it("passes a failed dispatch through untouched", () => {
+    const failure = {
+      ok: false as const,
+      error: { code: "EXECUTION_ERROR" as const, message: "boom" },
+    };
+    expect(
+      filterIntrospectionResultForSession("actions.list", failure, permitted, { callerLimit: 20 })
+    ).toBe(failure);
+  });
+
+  it("passes a non-introspection action through untouched", () => {
+    const result = listResult([makeEntry({ id: "git.push" })]);
+    expect(
+      filterIntrospectionResultForSession("git.push", result, permitted, { callerLimit: 20 })
+    ).toBe(result);
+  });
+
+  // Guards against a fourth registry-enumerating tool joining
+  // INTROSPECTION_TOOL_IDS without a matching filter branch — the handler
+  // would then route it here and get its payload back unfiltered.
+  it("filters a denied entry out of every id it claims to handle", () => {
+    for (const actionId of INTROSPECTION_TOOL_IDS) {
+      const denied = makeEntry({ id: "git.push" });
+      const input =
+        actionId === "actions.getSchema"
+          ? { ok: true as const, result: { ok: true, entry: denied } }
+          : actionId === "actions.search"
+            ? searchResult([denied])
+            : listResult([denied]);
+      const filtered = filterIntrospectionResultForSession(actionId, input, permitted, {
+        callerLimit: 20,
+        requestedActionId: "git.push",
+      });
+      expect(JSON.stringify(filtered)).not.toContain('git.push"');
+    }
+  });
+
+  describe("actions.list", () => {
+    it("drops entries outside the session's permitted surface", () => {
+      const result = listResult([
+        makeEntry({ id: "terminal.list" }),
+        makeEntry({ id: "git.push" }),
+        makeEntry({ id: "worktree.list" }),
+      ]);
+      expect(
+        ids(
+          filterIntrospectionResultForSession("actions.list", result, permitted, {
+            callerLimit: 20,
+          })
+        )
+      ).toEqual(["terminal.list", "worktree.list"]);
+    });
+
+    // Progressive disclosure (#8502) depends on `discoverable` entries being
+    // reachable through introspection even though tools/list omits them. A
+    // filter built on shouldExposeTool would silently delete this whole class.
+    it("keeps permitted discoverable entries that tools/list omits", () => {
+      const entry = makeEntry({ id: "terminal.list", mcpVisibility: "discoverable" });
+      expect(shouldExposeTool(entry, "workbench")).toBe(false);
+      const result = listResult([entry]);
+      expect(
+        ids(
+          filterIntrospectionResultForSession("actions.list", result, permitted, {
+            callerLimit: 20,
+          })
+        )
+      ).toEqual(["terminal.list"]);
+    });
+
+    // Main is the authorization boundary; it re-applies the ceilings rather
+    // than trusting that the renderer already did.
+    it("drops hidden and restricted entries even when tier-permitted", () => {
+      const result = listResult([
+        makeEntry({ id: "terminal.list", mcpVisibility: "hidden" }),
+        makeEntry({ id: "worktree.list", danger: "restricted" }),
+        makeEntry({ id: "actions.search" }),
+      ]);
+      expect(
+        ids(
+          filterIntrospectionResultForSession("actions.list", result, permitted, {
+            callerLimit: 20,
+          })
+        )
+      ).toEqual(["actions.search"]);
+    });
+
+    it("drops malformed entries carrying no usable id", () => {
+      const result = { ok: true as const, result: { actions: [null, {}, { id: 42 }] } };
+      expect(
+        ids(
+          filterIntrospectionResultForSession("actions.list", result, permitted, {
+            callerLimit: 20,
+          })
+        )
+      ).toEqual([]);
+    });
+
+    it("does not mutate the payload it was given", () => {
+      const result = listResult([
+        makeEntry({ id: "terminal.list" }),
+        makeEntry({ id: "git.push" }),
+      ]);
+      const before = structuredClone(result);
+      filterIntrospectionResultForSession("actions.list", result, permitted, { callerLimit: 20 });
+      expect(result).toEqual(before);
+    });
+  });
+
+  describe("actions.search", () => {
+    it("recomputes totalMatches from the permitted subset", () => {
+      const result = searchResult([
+        makeEntry({ id: "terminal.list" }),
+        makeEntry({ id: "git.push" }),
+        makeEntry({ id: "git.commit" }),
+      ]);
+      const filtered = filterIntrospectionResultForSession("actions.search", result, permitted, {
+        callerLimit: 20,
+      });
+      const payload = (filtered as { result: { totalMatches: number } }).result;
+      expect(payload.totalMatches).toBe(1);
+      expect(ids(filtered)).toEqual(["terminal.list"]);
+    });
+
+    // The renderer ranks and slices before main sees tier, so the handler
+    // over-fetches the schema maximum. Without that, denied top-ranked hits
+    // consume the caller's page and permitted matches below them never ship —
+    // a search that reports nothing while matches exist.
+    it("fills the caller's page from permitted matches ranked below denied ones", () => {
+      const denied = Array.from({ length: 60 }, (_, i) => makeEntry({ id: `git.denied${i}` }));
+      const allowed = [
+        makeEntry({ id: "terminal.list" }),
+        makeEntry({ id: "worktree.list" }),
+        makeEntry({ id: "actions.search" }),
+      ];
+      const overFetched = searchResult([...denied, ...allowed]);
+      const filtered = filterIntrospectionResultForSession(
+        "actions.search",
+        overFetched,
+        permitted,
+        { callerLimit: 3 }
+      );
+      expect(ids(filtered)).toEqual(["terminal.list", "worktree.list", "actions.search"]);
+      expect((filtered as { result: { totalMatches: number } }).result.totalMatches).toBe(3);
+    });
+
+    it("slices the permitted matches down to the caller's limit", () => {
+      const result = searchResult([
+        makeEntry({ id: "terminal.list" }),
+        makeEntry({ id: "worktree.list" }),
+        makeEntry({ id: "actions.search" }),
+      ]);
+      const filtered = filterIntrospectionResultForSession("actions.search", result, permitted, {
+        callerLimit: 2,
+      });
+      expect(ids(filtered)).toEqual(["terminal.list", "worktree.list"]);
+      // totalMatches still reports everything permitted, not just the page.
+      expect((filtered as { result: { totalMatches: number } }).result.totalMatches).toBe(3);
+    });
+
+    it("reports zero matches rather than an inflated count when nothing is permitted", () => {
+      const result = searchResult([makeEntry({ id: "git.push" })], 40);
+      const filtered = filterIntrospectionResultForSession("actions.search", result, permitted, {
+        callerLimit: 20,
+      });
+      expect((filtered as { result: { totalMatches: number } }).result.totalMatches).toBe(0);
+      expect(ids(filtered)).toEqual([]);
+    });
+  });
+
+  describe("actions.getSchema", () => {
+    it("returns a permitted entry unchanged", () => {
+      const entry = makeEntry({ id: "terminal.list" });
+      const filtered = filterIntrospectionResultForSession(
+        "actions.getSchema",
+        { ok: true as const, result: { ok: true, entry } },
+        permitted,
+        { callerLimit: 20, requestedActionId: "terminal.list" }
+      );
+      expect(filtered).toEqual({ ok: true, result: { ok: true, entry } });
+    });
+
+    it("keeps a permitted discoverable entry reachable", () => {
+      const entry = makeEntry({ id: "worktree.list", mcpVisibility: "discoverable" });
+      const filtered = filterIntrospectionResultForSession(
+        "actions.getSchema",
+        { ok: true as const, result: { ok: true, entry } },
+        permitted,
+        { callerLimit: 20, requestedActionId: "worktree.list" }
+      );
+      expect(filtered).toEqual({ ok: true, result: { ok: true, entry } });
+    });
+
+    it("strips fields the renderer attached alongside an authorized entry", () => {
+      const entry = makeEntry({ id: "terminal.list" });
+      const filtered = filterIntrospectionResultForSession(
+        "actions.getSchema",
+        { ok: true as const, result: { ok: true, entry, leaked: makeEntry({ id: "git.push" }) } },
+        permitted,
+        { callerLimit: 20, requestedActionId: "terminal.list" }
+      );
+      expect(filtered).toEqual({ ok: true, result: { ok: true, entry } });
+    });
+
+    it("fails closed when no requested id accompanies the answer", () => {
+      const filtered = filterIntrospectionResultForSession(
+        "actions.getSchema",
+        { ok: true as const, result: { ok: true, entry: makeEntry({ id: "terminal.list" }) } },
+        permitted,
+        { callerLimit: 20 }
+      );
+      expect((filtered as { result: { ok: boolean } }).result.ok).toBe(false);
+    });
+
+    // NOT_FOUND rather than a tier error: a distinct code would confirm the id
+    // exists while offering no route to it, since grants are minted off a
+    // denied dispatch and never off a schema read.
+    it("collapses a denied entry onto the existing NOT_FOUND data shape", () => {
+      const result = {
+        ok: true as const,
+        result: { ok: true, entry: makeEntry({ id: "git.push" }) },
+      };
+      const filtered = filterIntrospectionResultForSession("actions.getSchema", result, permitted, {
+        callerLimit: 20,
+        requestedActionId: "git.push",
+      });
+      const payload = (
+        filtered as { result: { ok: boolean; error: { code: string; message: string } } }
+      ).result;
+      expect(payload.ok).toBe(false);
+      expect(payload.error.code).toBe("NOT_FOUND");
+      expect(payload.error.message).toContain("git.push");
+      expect(payload.error.message).toContain("actions.search");
+    });
+
+    it("collapses a denied hidden or restricted entry the same way", () => {
+      for (const entry of [
+        makeEntry({ id: "terminal.list", mcpVisibility: "hidden" }),
+        makeEntry({ id: "terminal.list", danger: "restricted" }),
+      ]) {
+        const filtered = filterIntrospectionResultForSession(
+          "actions.getSchema",
+          { ok: true as const, result: { ok: true, entry } },
+          permitted,
+          { callerLimit: 20, requestedActionId: "terminal.list" }
+        );
+        expect((filtered as { result: unknown }).result).toEqual({
+          ok: false,
+          error: { code: "NOT_FOUND", message: expect.stringContaining("terminal.list") },
+        });
+      }
+    });
+
+    it("rebuilds an existing denial rather than forwarding it", () => {
+      const filtered = filterIntrospectionResultForSession(
+        "actions.getSchema",
+        {
+          ok: true as const,
+          result: {
+            ok: false,
+            error: { code: "NOT_FOUND", message: "nope" },
+            entry: makeEntry({ id: "git.push" }),
+          },
+        },
+        permitted,
+        { callerLimit: 20, requestedActionId: "git.push" }
+      );
+      // The smuggled `entry` is gone and the message names the requested id.
+      expect((filtered as { result: unknown }).result).toEqual({
+        ok: false,
+        error: { code: "NOT_FOUND", message: expect.stringContaining("git.push") },
+      });
+    });
   });
 });
