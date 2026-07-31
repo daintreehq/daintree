@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
 import { forwardRef } from "react";
 import type { ReactNode } from "react";
@@ -7,6 +7,14 @@ import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { FileTreeView } from "../FileTreeView";
 import type { FlatTreeRow } from "../fileBrowserTree";
+
+// `isMac` reads navigator.platform, which jsdom reports as neither — drive it
+// explicitly so both modifier branches of the insert shortcut are covered.
+const { isMacMock } = vi.hoisted(() => ({ isMacMock: vi.fn<() => boolean>(() => true) }));
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/platform")>()),
+  isMac: isMacMock,
+}));
 
 // Render every row: the virtualization itself is not under test, and the row
 // interactions below need real DOM nodes for every item.
@@ -41,6 +49,11 @@ function row(path: string, isDirectory = false): FlatTreeRow {
 }
 
 const ROWS = [row("src", true), row("README.md")];
+
+// One test flips to Ctrl; without this reset it would leak into the rest.
+beforeEach(() => {
+  isMacMock.mockReturnValue(true);
+});
 
 function renderTree(overrides: Partial<Parameters<typeof FileTreeView>[0]> = {}) {
   const onSelect = vi.fn();
@@ -122,6 +135,198 @@ describe("FileTreeView context-menu interactions", () => {
     fireEvent.keyDown(tree, { key: "F10" });
 
     expect(contextMenuSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the selected row to the agent on the platform's insert shortcut", () => {
+    const onInsertFileReference = vi.fn();
+    const { getByRole } = renderTree({
+      selectedPath: "README.md",
+      onInsertFileReference,
+      canInsertFileReference: true,
+    });
+
+    const event = new KeyboardEvent("keydown", {
+      key: "i",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      getByRole("tree").dispatchEvent(event);
+    });
+
+    expect(onInsertFileReference.mock.calls).toEqual([["README.md"]]);
+    // Consumed so the combo can't also reach a global handler.
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("uses Ctrl rather than Cmd off macOS", () => {
+    isMacMock.mockReturnValue(false);
+    const onInsertFileReference = vi.fn();
+    const { getByRole } = renderTree({
+      selectedPath: "README.md",
+      onInsertFileReference,
+      canInsertFileReference: true,
+    });
+    const tree = getByRole("tree");
+
+    fireEvent.keyDown(tree, { key: "i", ctrlKey: true });
+    expect(onInsertFileReference.mock.calls).toEqual([["README.md"]]);
+
+    // The mac modifier must not also fire it, or a Windows user's Cmd-mapped
+    // key would double-insert.
+    fireEvent.keyDown(tree, { key: "i", metaKey: true });
+    expect(onInsertFileReference).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the bare letter and the inject combo to their own handlers", () => {
+    const onInsertFileReference = vi.fn();
+    const { getByRole } = renderTree({
+      selectedPath: "README.md",
+      onInsertFileReference,
+      canInsertFileReference: true,
+    });
+    const tree = getByRole("tree");
+
+    fireEvent.keyDown(tree, { key: "i" });
+    // Cmd+Shift+I belongs to terminal.inject.
+    fireEvent.keyDown(tree, { key: "i", metaKey: true, shiftKey: true });
+
+    expect(onInsertFileReference).not.toHaveBeenCalled();
+  });
+
+  it("no-ops the shortcut with no selection or no reachable agent", () => {
+    const onInsertFileReference = vi.fn();
+    const { getByRole, rerender } = render(
+      <FileTreeView
+        rows={ROWS}
+        selectedPath={null}
+        onSelect={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        rowContextMenu={() => <div />}
+        onInsertFileReference={onInsertFileReference}
+        canInsertFileReference
+        label="Files"
+      />
+    );
+
+    fireEvent.keyDown(getByRole("tree"), { key: "i", metaKey: true });
+    expect(onInsertFileReference).not.toHaveBeenCalled();
+
+    // A selected row but no resolvable agent must stay inert too — refusing is
+    // the contract, not routing into whatever happens to be open.
+    rerender(
+      <FileTreeView
+        rows={ROWS}
+        selectedPath="README.md"
+        onSelect={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        rowContextMenu={() => <div />}
+        onInsertFileReference={onInsertFileReference}
+        canInsertFileReference={false}
+        label="Files"
+      />
+    );
+
+    fireEvent.keyDown(getByRole("tree"), { key: "i", metaKey: true });
+    expect(onInsertFileReference).not.toHaveBeenCalled();
+  });
+
+  it("ignores a selection that no longer resolves to a row", () => {
+    // Re-rooting the tree leaves browserSelectedPath naming the old root, which
+    // is no longer in `rows`. Firing then would reference a row the user can't
+    // see and that aria-activedescendant has already disowned.
+    const onInsertFileReference = vi.fn();
+    const { getByRole } = renderTree({
+      selectedPath: "some/pruned/path",
+      onInsertFileReference,
+      canInsertFileReference: true,
+    });
+
+    fireEvent.keyDown(getByRole("tree"), { key: "i", metaKey: true });
+
+    expect(onInsertFileReference).not.toHaveBeenCalled();
+    expect(getByRole("tree").hasAttribute("aria-keyshortcuts")).toBe(false);
+  });
+
+  it("ignores auto-repeat so a held combo inserts once", () => {
+    // Beyond the obvious spam: the global keybinding handler drops repeats, so
+    // a user-rebound global Cmd+I would run its own action on the first press
+    // and let every repeat fall through to here — a genuine wrong action.
+    const onInsertFileReference = vi.fn();
+    const { getByRole } = renderTree({
+      selectedPath: "README.md",
+      onInsertFileReference,
+      canInsertFileReference: true,
+    });
+    const tree = getByRole("tree");
+
+    fireEvent.keyDown(tree, { key: "i", metaKey: true });
+    fireEvent.keyDown(tree, { key: "i", metaKey: true, repeat: true });
+    fireEvent.keyDown(tree, { key: "i", metaKey: true, repeat: true });
+
+    expect(onInsertFileReference).toHaveBeenCalledTimes(1);
+  });
+
+  it("acts on nothing for keys pressed inside an open row menu", async () => {
+    // The menu portals out of the container but still bubbles through the React
+    // tree. Every branch is affected, not just the new one: Enter would
+    // activate the SELECTED row while the user is driving a menu opened on a
+    // different one, and arrows would move the selection behind the open menu.
+    const onInsertFileReference = vi.fn();
+    const onActivate = vi.fn();
+    const onSelect = vi.fn();
+    const { getByRole, findByRole } = render(
+      <FileTreeView
+        rows={ROWS}
+        selectedPath="README.md"
+        onSelect={onSelect}
+        onToggleExpanded={vi.fn()}
+        onActivate={onActivate}
+        rowContextMenu={(clicked) => <ContextMenuItem>Act on {clicked.name}</ContextMenuItem>}
+        onInsertFileReference={onInsertFileReference}
+        canInsertFileReference
+        label="Files"
+      />
+    );
+
+    fireEvent.contextMenu(getByRole("treeitem", { name: "src" }));
+    const item = await findByRole("menuitem", { name: "Act on src" });
+
+    fireEvent.keyDown(item, { key: "i", metaKey: true });
+    fireEvent.keyDown(item, { key: "ArrowDown" });
+
+    expect(onInsertFileReference).not.toHaveBeenCalled();
+    expect(onActivate).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("advertises the shortcut only while it would do something", () => {
+    const { getByRole, rerender } = render(
+      <FileTreeView
+        rows={ROWS}
+        selectedPath="README.md"
+        onSelect={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        onInsertFileReference={vi.fn()}
+        canInsertFileReference
+        label="Files"
+      />
+    );
+    expect(getByRole("tree").getAttribute("aria-keyshortcuts")).toBe("Meta+I");
+
+    rerender(
+      <FileTreeView
+        rows={ROWS}
+        selectedPath="README.md"
+        onSelect={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        onInsertFileReference={vi.fn()}
+        canInsertFileReference={false}
+        label="Files"
+      />
+    );
+    expect(getByRole("tree").hasAttribute("aria-keyshortcuts")).toBe(false);
   });
 
   it("routes double-click by row kind: folders re-root, files activate", () => {

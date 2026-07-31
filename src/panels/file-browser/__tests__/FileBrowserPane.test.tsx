@@ -130,17 +130,27 @@ const FOLDER_ROW = {
 // double-click both land on it, and the pane's own file-vs-directory guard is
 // what these tests are after.
 const { treeProps } = vi.hoisted(() => ({
-  treeProps: { onActivate: undefined as ((path: string) => void) | undefined },
+  treeProps: {
+    onActivate: undefined as ((path: string) => void) | undefined,
+    onInsertFileReference: undefined as ((path: string) => void) | undefined,
+    canInsertFileReference: undefined as boolean | undefined,
+  },
 }));
 vi.mock("../FileTreeView", () => ({
   FileTreeView: ({
     rowContextMenu,
     onActivate,
+    onInsertFileReference,
+    canInsertFileReference,
   }: {
     rowContextMenu?: (row: unknown) => React.ReactNode;
     onActivate?: (path: string) => void;
+    onInsertFileReference?: (path: string) => void;
+    canInsertFileReference?: boolean;
   }) => {
     treeProps.onActivate = onActivate;
+    treeProps.onInsertFileReference = onInsertFileReference;
+    treeProps.canInsertFileReference = canInsertFileReference;
     return (
       <div data-testid="file-tree-view" role="tree" tabIndex={-1}>
         {rowContextMenu?.(FOLDER_ROW)}
@@ -149,15 +159,35 @@ vi.mock("../FileTreeView", () => ({
   },
 }));
 
+// The real hook subscribes to the panel/terminal/fleet stores; the pane's
+// contract is only that it joins basePath and hands the result over.
+const { insertFileReferenceMock, canInsertRef } = vi.hoisted(() => ({
+  insertFileReferenceMock: vi.fn<(path: string) => boolean>(() => true),
+  canInsertRef: { current: true },
+}));
+vi.mock("../useInsertFileReference", () => ({
+  useInsertFileReference: () => ({
+    canInsert: canInsertRef.current,
+    insert: insertFileReferenceMock,
+  }),
+}));
+
 vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/components/ui/context-menu")>()),
   ContextMenuItem: ({
     children,
     onSelect,
+    ...rest
   }: {
     children: React.ReactNode;
     onSelect?: () => void;
-  }) => <button onClick={onSelect}>{children}</button>,
+  } & React.ButtonHTMLAttributes<HTMLButtonElement>) => (
+    // `rest` is forwarded so `disabled` and `aria-keyshortcuts` stay assertable
+    // — a stub that swallowed them would let a broken gate pass.
+    <button onClick={onSelect} {...rest}>
+      {children}
+    </button>
+  ),
   ContextMenuSeparator: () => null,
 }));
 
@@ -287,6 +317,10 @@ beforeEach(() => {
   mockPanel.browserWorkspaceRooted = undefined;
   treeArgs.changeTick = undefined;
   treeProps.onActivate = undefined;
+  treeProps.onInsertFileReference = undefined;
+  treeProps.canInsertFileReference = undefined;
+  insertFileReferenceMock.mockClear();
+  canInsertRef.current = true;
   dispatchMock.mockReset();
   dispatchMock.mockResolvedValue({ ok: true, result: { panelId: "file-1" } });
   worktreeTicks.git = undefined;
@@ -1089,6 +1123,65 @@ describe("folder context menu", () => {
       "context-menu",
       expect.anything()
     );
+  });
+});
+
+/** #11577: send a row to the last agent without dragging it there. */
+describe("insert file reference", () => {
+  const insertItem = () => screen.getByRole("button", { name: /Insert file reference/ });
+
+  it("hands the agent an absolute path built from the browser's base", () => {
+    renderPane();
+    fireEvent.click(insertItem());
+
+    // Absolute, matching what a Finder drop into the hybrid input produces —
+    // a bare row path would name nothing the agent can open.
+    expect(insertFileReferenceMock).toHaveBeenCalledWith(`/repo/${FOLDER_ROW.path}`);
+  });
+
+  it("joins against the workspace root for a worktree-less browser", () => {
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    renderPane({});
+    fireEvent.click(insertItem());
+
+    expect(insertFileReferenceMock).toHaveBeenCalledWith(`/scratches/one/${FOLDER_ROW.path}`);
+  });
+
+  it("disables the item when no agent resolves", () => {
+    canInsertRef.current = false;
+    renderPane();
+
+    expect(insertItem().hasAttribute("disabled")).toBe(true);
+    // The hint would be a lie on a dead item.
+    expect(insertItem().hasAttribute("aria-keyshortcuts")).toBe(false);
+  });
+
+  it("offers no menu at all when nothing resolves a base path", () => {
+    // The pane shows its placeholder instead of a tree, so there is no row to
+    // right-click — the handler's own basePath guard is belt-and-braces, not
+    // the reachable gate.
+    renderPane({});
+    expect(screen.queryByRole("button", { name: /Insert file reference/ })).toBeNull();
+  });
+
+  it("advertises the shortcut on the live item", () => {
+    renderPane();
+    expect(insertItem().getAttribute("aria-keyshortcuts")).toBeTruthy();
+  });
+
+  it("gives the tree the same handler and gate as the menu", () => {
+    // Both gestures must resolve one target the same way; a tree wired to a
+    // different callback would drift from the menu silently.
+    renderPane();
+    expect(treeProps.canInsertFileReference).toBe(true);
+    treeProps.onInsertFileReference?.(FOLDER_ROW.path);
+    expect(insertFileReferenceMock).toHaveBeenCalledWith(`/repo/${FOLDER_ROW.path}`);
+  });
+
+  it("closes the tree's gate when the pane's is closed", () => {
+    canInsertRef.current = false;
+    renderPane();
+    expect(treeProps.canInsertFileReference).toBe(false);
   });
 });
 

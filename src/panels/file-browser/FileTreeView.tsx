@@ -6,7 +6,10 @@ import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { Spinner } from "@/components/ui/Spinner";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import { resolveTreeKey, type FlatTreeRow } from "./fileBrowserTree";
+import { INSERT_FILE_REFERENCE_COMBO, matchesInsertFileReferenceCombo } from "./fileReference";
 
 export interface FileTreeViewProps {
   // Mutable rather than `readonly`: this is exactly what the tree hook returns,
@@ -30,8 +33,28 @@ export interface FileTreeViewProps {
    * what the items do.
    */
   rowContextMenu?: (row: FlatTreeRow) => React.ReactNode;
+  /**
+   * Send the selected row to the last agent the user typed to (#11577). Fired
+   * by the tree-local Cmd+I, which only exists while a row is selected and a
+   * target actually resolves — `canInsertFileReference` is what the tree knows
+   * about the latter.
+   */
+  onInsertFileReference?: (path: string) => void;
+  canInsertFileReference?: boolean;
   /** Accessible name for the tree, since the panel header isn't part of it. */
   label: string;
+}
+
+/**
+ * Did this key actually happen in the tree, rather than in a portalled
+ * descendant? React bubbles a portal's events through the component tree, so a
+ * Radix row menu's keystrokes reach the container's handler even though its DOM
+ * lives under `document.body`.
+ */
+function isEventInsideTree(event: React.KeyboardEvent, container: HTMLElement | null): boolean {
+  if (container === null) return false;
+  const target = event.target;
+  return target instanceof Node && container.contains(target);
 }
 
 const INDENT_PER_DEPTH_PX = 12;
@@ -60,6 +83,8 @@ export function FileTreeView({
   onActivate,
   onRootFolder,
   rowContextMenu,
+  onInsertFileReference,
+  canInsertFileReference = false,
   label,
 }: FileTreeViewProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -69,11 +94,24 @@ export function FileTreeView({
   // `aria-activedescendant` ambiguous.
   const instanceId = useId();
 
+  const selectedIndex = useMemo(
+    () => (selectedPath === null ? -1 : rows.findIndex((row) => row.path === selectedPath)),
+    [rows, selectedPath]
+  );
+
   // The rows array changes identity on every listing update, so the handler is
   // rebuilt with it. Reading through a ref instead would let a keypress act on
   // a tree the user is no longer looking at.
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
+      // A row's context menu portals out of this container but still bubbles
+      // its keys through the React tree, so every branch below would otherwise
+      // act on the *selected* row while the user is driving a menu opened on a
+      // different one — Enter activating the wrong file, arrows moving the
+      // selection behind the open menu. Radix owns those keys while its menu
+      // is up; the tree only handles what actually happened inside it.
+      if (!isEventInsideTree(event, containerRef.current)) return;
+
       // Shift+F10 / the ContextMenu key open the selected row's menu — the
       // rows never take focus, so without this the row menu would be
       // mouse-only. Replayed as a synthetic contextmenu on the row's DOM node
@@ -105,6 +143,35 @@ export function FileTreeView({
         }
       }
 
+      // Handed to the agent the user was last talking to, without a drag. Sits
+      // ahead of `resolveTreeKey` only for ordering clarity — that resolver is
+      // a bare switch over the navigation keys and never claims a letter, so
+      // plain `I` (and any future typeahead) stays untouched.
+      //
+      // Gated on the selection resolving to a *rendered* row, not merely on a
+      // non-null path: re-rooting the tree leaves `browserSelectedPath` naming
+      // the old root, which no longer appears in `rows`. Firing then would
+      // reference a row the user cannot see and that `aria-activedescendant`
+      // has already disowned.
+      //
+      // Auto-repeat is dropped: holding the combo would append the same token
+      // over and over. It also keeps a user-rebound global Cmd+I from turning
+      // into this command — the global handler ignores repeats, so every
+      // repeat after its first press would otherwise fall through to here.
+      if (
+        onInsertFileReference &&
+        canInsertFileReference &&
+        selectedPath !== null &&
+        selectedIndex >= 0 &&
+        !event.repeat &&
+        matchesInsertFileReferenceCombo(event.nativeEvent, isMac())
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        onInsertFileReference(selectedPath);
+        return;
+      }
+
       const intent = resolveTreeKey(event.key, rows, selectedPath);
       if (!intent) return;
       event.preventDefault();
@@ -124,12 +191,18 @@ export function FileTreeView({
           break;
       }
     },
-    [rows, selectedPath, onSelect, onToggleExpanded, onActivate, rowContextMenu, instanceId]
-  );
-
-  const selectedIndex = useMemo(
-    () => (selectedPath === null ? -1 : rows.findIndex((row) => row.path === selectedPath)),
-    [rows, selectedPath]
+    [
+      rows,
+      selectedPath,
+      selectedIndex,
+      onSelect,
+      onToggleExpanded,
+      onActivate,
+      rowContextMenu,
+      onInsertFileReference,
+      canInsertFileReference,
+      instanceId,
+    ]
   );
 
   // Keep the selection on screen when it moves by keyboard. Runs after commit,
@@ -185,12 +258,21 @@ export function FileTreeView({
   const activeDescendant =
     selectedPath !== null && selectedIndex >= 0 ? rowDomId(instanceId, selectedPath) : undefined;
 
+  // Only advertised while the shortcut would actually do something — announcing
+  // Cmd+I with no reachable agent, or with a selection that no longer resolves
+  // to a row, would be promising a no-op. Matches the handler's own gate.
+  const insertKeyshortcuts =
+    onInsertFileReference && canInsertFileReference && selectedIndex >= 0
+      ? comboToAriaKeyshortcuts(INSERT_FILE_REFERENCE_COMBO, isMac())
+      : undefined;
+
   return (
     <div
       ref={containerRef}
       role="tree"
       aria-label={label}
       aria-activedescendant={activeDescendant}
+      {...(insertKeyshortcuts ? { "aria-keyshortcuts": insertKeyshortcuts } : {})}
       tabIndex={0}
       // Tells the global Shift+F10/ContextMenu-key handler to stand down: this
       // surface routes those keys to the selected row's own menu.
