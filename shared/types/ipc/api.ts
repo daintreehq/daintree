@@ -1523,6 +1523,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getIssue(payload: { cwd: string; issueNumber: number }): Promise<Issue | null>;
     /** Fetch a single normalized PR, or `null` when it doesn't exist. */
     getPR(payload: { cwd: string; prNumber: number }): Promise<PR | null>;
+    /**
+     * Fetch the roll-up CI status for one PR, or `null` when the PR doesn't
+     * exist. The provider's transport fields (`rawData`, `freshnessToken`,
+     * `notModified`) are stripped at the handler — see
+     * {@link import("./forge.js").ForgeCIStatusSummary}.
+     */
+    getCIStatus(payload: {
+      cwd: string;
+      prNumber: number;
+    }): Promise<import("./forge.js").ForgeCIStatusSummary | null>;
     /** Fetch the normalized repository metadata roll-up. */
     getRepoMetadata(payload: { cwd: string }): Promise<RepoMetadata>;
     /**

@@ -1823,6 +1823,25 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "Fetch the roll-up CI status for a single pull request via the active forge provider. Args: \`cwd\` (optional) — git repo working directory, defaults to the active worktree path; \`prNumber\` (required, positive int). Returns \`{ ciStatus }\`: null when the PR doesn't exist, otherwise { state ('success'|'failure'|'pending'|'neutral'|'unknown'), total, passed, failed, pending, requiredChecksPassing? }. Read \`state\` for the verdict. The counts describe REQUIRED checks only, so a repo with no required checks reports total 0 while \`state\` still reflects overall CI health — never infer 'no checks ran' from total 0; only state 'neutral' means that. \`requiredChecksPassing\` is omitted when the provider reported no gating information, and false means gating is configured but not yet satisfied. Values may be up to ~60s stale (provider-cached), so poll rather than treating one success as final. Errors when \`cwd\` is omitted and no worktree is active.",
+    "examples": [
+      {
+        "args": {
+          "prNumber": 42,
+        },
+        "description": "Check whether PR #42 is green in the active worktree's repo",
+      },
+    ],
+    "id": "forge.getCIStatus",
+    "keywords": undefined,
+    "kind": "query",
+    "requiresArgs": true,
+    "title": "Get CI Status",
+  },
+  {
+    "category": "forge",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "Fetch a single issue by its number via the active forge provider. Args: \`cwd\` (optional) — git repo working directory, defaults to the active worktree path; \`issueNumber\` (required, positive int). Returns the normalized forge issue { number, title, body, state ('open'|'closed'), url, author, assignees, labels, createdAt, updatedAt, ... } or null when not found. Errors when \`cwd\` is omitted and no worktree is active. Do NOT use \`forge.listIssues\` to fetch one known number — this is the direct lookup.",
     "examples": [
       {

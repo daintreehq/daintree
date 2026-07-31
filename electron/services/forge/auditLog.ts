@@ -64,6 +64,7 @@ export function summarizeForgeArgs(
     }
     case "getIssue":
     case "getPR":
+    case "getCIStatus":
     case "assignIssue":
     case "unassignIssue":
     case "approvePR":

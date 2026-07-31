@@ -41,6 +41,7 @@ const fakeImpl = vi.hoisted(() => ({
   listPRs: vi.fn(),
   getIssue: vi.fn(),
   getPR: vi.fn(),
+  getCIStatus: vi.fn(),
   getRepoMetadata: vi.fn(),
   repoStats: { getRepoStats: vi.fn() },
   reviews: {
@@ -146,6 +147,10 @@ describe("forge handlers — rate limiting", () => {
       counts: { issueCount: 0, prCount: 0 },
       source: "memory-cache",
     });
+    // `null` (PR not found) is the only valid no-op CI response — the handler
+    // rejects an undefined provider result as malformed, so this stub must be
+    // explicit rather than relying on the bare mock's undefined.
+    fakeImpl.getCIStatus.mockResolvedValue(null);
     fakeImpl.assignIssue.mockResolvedValue(undefined);
     fakeImpl.unassignIssue.mockResolvedValue(undefined);
     const fakePR = {
@@ -521,6 +526,15 @@ describe("forge handlers — rate limiting", () => {
         invoke: (h) => h({}, { cwd, issueNumber: 1 }),
       },
       { channel: CHANNELS.FORGE_GET_PR, maxCalls: 25, invoke: (h) => h({}, { cwd, prNumber: 1 }) },
+      {
+        channel: CHANNELS.FORGE_GET_CI_STATUS,
+        maxCalls: 25,
+        // Safe to reuse one PR number across the spec loops even though the CI
+        // single-flight is module-scoped: checkRateLimit runs before the
+        // coalescer, so a collapsed lookup still exercises the guard. (If the
+        // guard is ever moved inside the single-flight, that stops holding.)
+        invoke: (h) => h({}, { cwd, prNumber: 8101 }),
+      },
       // token + mutation family: 5/10s (matches github:validate-token / assign-issue)
       {
         channel: CHANNELS.FORGE_VALIDATE_TOKEN,
@@ -678,12 +692,12 @@ describe("forge handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all forge channels (44 rate-limited + 2 unrated probes)", () => {
-      expect(specs).toHaveLength(44);
+    it("registers all forge channels (45 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(45);
       // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
       // unrated replay/identity probes with no checkRateLimit, so they register
       // handlers but stay out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(46);
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(47);
     });
 
     it.each(specs)(

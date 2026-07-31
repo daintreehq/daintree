@@ -229,6 +229,7 @@ export const BUILT_IN_ACTION_IDS = [
   "forge.listPRs",
   "forge.getIssue",
   "forge.getPR",
+  "forge.getCIStatus",
   "forge.createPR",
   "forge.closePR",
   "forge.reopenPR",

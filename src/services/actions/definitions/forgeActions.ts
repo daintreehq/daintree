@@ -90,6 +90,28 @@ const ForgePRResultSchema = z.object({
   updatedAt: z.number().optional(),
 });
 
+// Roll-up CI state vocabulary, mirroring `CIStatusState`. `neutral` means the
+// PR has no required checks configured; `unknown` means the provider reported
+// checks whose state doesn't map onto the other four.
+const ForgeCIStatusStateSchema = z.enum(["success", "failure", "pending", "neutral", "unknown"]);
+
+const ForgeCIStatusSchema = z.object({
+  state: ForgeCIStatusStateSchema,
+  total: z.number().int().nonnegative(),
+  passed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  pending: z.number().int().nonnegative(),
+  requiredChecksPassing: z.boolean().optional(),
+});
+
+// Wrapped rather than a bare `.nullable()` so the MCP output schema stays
+// object-typed: `buildToolOutputSchema` drops any schema whose top-level `type`
+// isn't "object", and Zod emits `anyOf` for a nullable object — which would
+// silently advertise no schema at all.
+const ForgeCIStatusActionResultSchema = z.object({
+  ciStatus: ForgeCIStatusSchema.nullable(),
+});
+
 // Normalized issue returned by the create/close/reopen/edit write actions.
 const ForgeIssueResultSchema = z.object({
   number: z.number(),
@@ -607,6 +629,40 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
         return await forgeClient.getPR(resolvedCwd, prNumber);
+      },
+    })
+  );
+
+  actions.set("forge.getCIStatus", () =>
+    defineAction({
+      id: "forge.getCIStatus",
+      title: "Get CI Status",
+      description:
+        "Fetch the roll-up CI status for a single pull request via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `prNumber` (required, positive int). Returns `{ ciStatus }`: null when the PR doesn't exist, otherwise { state ('success'|'failure'|'pending'|'neutral'|'unknown'), total, passed, failed, pending, requiredChecksPassing? }. Read `state` for the verdict. The counts describe REQUIRED checks only, so a repo with no required checks reports total 0 while `state` still reflects overall CI health — never infer 'no checks ran' from total 0; only state 'neutral' means that. `requiredChecksPassing` is omitted when the provider reported no gating information, and false means gating is configured but not yet satisfied. Values may be up to ~60s stale (provider-cached), so poll rather than treating one success as final. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "query",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: cwdArg,
+        prNumber: z
+          .number()
+          .int()
+          .positive()
+          .describe("Pull request number whose CI status to fetch"),
+      }),
+      examples: [
+        {
+          args: { prNumber: 42 },
+          description: "Check whether PR #42 is green in the active worktree's repo",
+        },
+      ],
+      resultSchema: ForgeCIStatusActionResultSchema,
+      mcpOutputSchema: true,
+      run: async ({ cwd, prNumber }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return { ciStatus: await forgeClient.getCIStatus(resolvedCwd, prNumber) };
       },
     })
   );

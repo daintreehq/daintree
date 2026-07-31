@@ -12,6 +12,7 @@ import { logWarn } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import type {
+  CIStatus,
   ForgeRepoCounts,
   ForgeTokenHealthState,
   Issue,
@@ -23,6 +24,7 @@ import type {
   ReviewThread,
 } from "../../../shared/types/forge.js";
 import type {
+  ForgeCIStatusSummary,
   ForgeFirstPageCachePayload,
   ForgeProjectHealthPayload,
   ForgeRepoCountsUpdatedPayload,
@@ -645,6 +647,119 @@ async function handleForgeGetPRsByNumbers(payload: {
   return result;
 }
 
+/**
+ * Drop the provider transport fields so only the normalized roll-up crosses to
+ * the renderer. See {@link ForgeCIStatusSummary} for why `rawData` in
+ * particular must not cross: it is populated on a network fetch and `null` on a
+ * cache hit, so forwarding it would make the response depend on cache state.
+ *
+ * `requiredChecksPassing` is copied through an explicit `!== undefined` test —
+ * `false` is meaningful (gating configured and currently failing) and must
+ * survive, while absent means the provider doesn't gate at all.
+ */
+function projectCIStatus(status: CIStatus): ForgeCIStatusSummary {
+  return {
+    state: status.state,
+    total: status.total,
+    passed: status.passed,
+    failed: status.failed,
+    pending: status.pending,
+    ...(status.requiredChecksPassing !== undefined
+      ? { requiredChecksPassing: status.requiredChecksPassing }
+      : {}),
+  };
+}
+
+const CI_STATUS_STATES: ReadonlySet<string> = new Set([
+  "success",
+  "failure",
+  "pending",
+  "neutral",
+  "unknown",
+]);
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * Narrow a provider's response to a well-formed {@link CIStatus}, throwing
+ * otherwise. Providers are plugin-supplied, and this action is reachable by
+ * external API-key MCP callers, so a malformed response must not be forwarded:
+ * the advertised MCP output schema is a closed object with a `state` enum, and
+ * a strict client would reject anything off-contract. Throwing here (inside the
+ * audited call) records the problem as an `error` rather than laundering it
+ * into a `not-found`, which is reserved for a literal `null`.
+ *
+ * Returns the narrowed value rather than asserting void so the caller must
+ * consume the result — a void assert is deletable with every test still green.
+ */
+function requireValidCIStatus(value: unknown, prNumber: number): CIStatus {
+  const s = value as Partial<CIStatus> | null | undefined;
+  if (
+    !s ||
+    typeof s !== "object" ||
+    typeof s.state !== "string" ||
+    !CI_STATUS_STATES.has(s.state) ||
+    !isCount(s.total) ||
+    !isCount(s.passed) ||
+    !isCount(s.failed) ||
+    !isCount(s.pending) ||
+    (s.requiredChecksPassing !== undefined && typeof s.requiredChecksPassing !== "boolean")
+  ) {
+    throw new Error(`Forge provider returned a malformed CI status for PR #${prNumber}`);
+  }
+  return s as CIStatus;
+}
+
+/**
+ * Single-flight for CI status, collapsing concurrent duplicate lookups so they
+ * share one provider call and write one audit record.
+ *
+ * Module-scoped because {@link handleForgeGetCIStatus} is registered through the
+ * module-level {@link forgeCapabilityDataNamespace} and so cannot close over the
+ * per-registration coalescer in {@link registerForgeDataHandlers}. In practice
+ * the lifetimes match: IPC handlers are registered once globally
+ * (`electron/window/windowServices.ts`), so that coalescer is already
+ * process-wide too. Keys carry `cwd`, so worktrees never share a slot, and an
+ * entry lives only for the provider call plus {@link SINGLE_FLIGHT_TTL_MS} after
+ * it settles (evicted immediately on rejection).
+ */
+const ciStatusSingleFlight = createSingleFlight();
+
+async function handleForgeGetCIStatus(payload: {
+  cwd: string;
+  prNumber: number;
+}): Promise<ForgeCIStatusSummary | null> {
+  checkRateLimit(CHANNELS.FORGE_GET_CI_STATUS, 25, 10_000);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  const cwd = requireCwd(payload.cwd);
+  const prNumber = requirePositiveInt(payload.prNumber, "PR number");
+  return ciStatusSingleFlight(`${cwd}::getCIStatus::${prNumber}`, async () => {
+    const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+    const status = await auditForgeCall(
+      {
+        providerId: namespaceId,
+        methodName: "getCIStatus",
+        repoOwner: repoRef.owner,
+        repoName: repoRef.repo,
+        argsSummary: summarizeForgeArgs("getCIStatus", prNumber),
+      },
+      async () => {
+        const raw = await impl.getCIStatus(repoRef, prNumber);
+        // Only a literal `null` means "no such PR". Anything else must satisfy
+        // the contract or throw, so it is audited as an error rather than
+        // being reported to the caller as a missing PR.
+        return raw === null ? null : requireValidCIStatus(raw, prNumber);
+      },
+      (value) => (value === null ? "not-found" : "success")
+    );
+    return status === null ? null : projectCIStatus(status);
+  });
+}
+
 async function handleForgeGetPRReviewThreads(payload: {
   cwd: string;
   prNumber: number;
@@ -710,6 +825,7 @@ export const forgeCapabilityDataNamespace = defineIpcNamespace({
     getProjectHealth: op(CHANNELS.FORGE_GET_PROJECT_HEALTH, handleForgeGetProjectHealth),
     getIssueTooltip: op(CHANNELS.FORGE_GET_ISSUE_TOOLTIP, handleForgeGetIssueTooltip),
     getPRTooltip: op(CHANNELS.FORGE_GET_PR_TOOLTIP, handleForgeGetPRTooltip),
+    getCIStatus: op(CHANNELS.FORGE_GET_CI_STATUS, handleForgeGetCIStatus),
     getIssuesByNumbers: op(CHANNELS.FORGE_GET_ISSUES_BY_NUMBERS, handleForgeGetIssuesByNumbers),
     getPRsByNumbers: op(CHANNELS.FORGE_GET_PRS_BY_NUMBERS, handleForgeGetPRsByNumbers),
     getPRReviewThreads: op(CHANNELS.FORGE_GET_PR_REVIEW_THREADS, handleForgeGetPRReviewThreads),
