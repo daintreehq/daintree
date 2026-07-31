@@ -15,6 +15,7 @@ import {
   terminalHasRunningAgentSession,
 } from "@/utils/destructiveSessionConfirm";
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
+import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 
 function parseConfirmed(args: unknown): boolean {
   if (!args || typeof args !== "object") return false;
@@ -35,15 +36,19 @@ export function registerTerminalLifecycleActions(
     id: "terminal.close",
     title: "Close Terminal",
     description:
-      "Close a terminal (move to trash). Targets the specified terminal, or the focused terminal if omitted.",
+      "Close a terminal (move to trash). Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch, which cannot see what is focused. Interactive dispatch may omit it and falls back to the focused terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     keywords: ["trash", "hide", "dismiss", "remove"],
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      // Guard before the store read: this chain falls past focus all the way to
+      // "any visible panel", so an unbound agent call would trash something
+      // essentially at random.
+      requireExplicitTerminalIdForAgentDispatch("terminal.close", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId =
         terminalId ??
@@ -73,8 +78,9 @@ export function registerTerminalLifecycleActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
+      requireExplicitTerminalIdForAgentDispatch("terminal.trash", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
@@ -101,8 +107,9 @@ export function registerTerminalLifecycleActions(
     scope: "renderer",
     keywords: ["hide", "minimize", "stash", "park"],
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      requireExplicitTerminalIdForAgentDispatch("terminal.background", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
@@ -119,7 +126,8 @@ export function registerTerminalLifecycleActions(
   actions.set("terminal.kill", () => ({
     id: "terminal.kill",
     title: "Kill Terminal",
-    description: "Permanently kill and remove terminal",
+    description:
+      "Permanently kill and remove terminal. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch, which cannot see what is focused. Interactive dispatch may omit it and falls back to the focused terminal.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -130,8 +138,12 @@ export function registerTerminalLifecycleActions(
       terminalId: z.string().optional(),
       confirmed: z.boolean().optional(),
     }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
+      // Ahead of the pending-destructive request below: an unbound agent call
+      // must not stage a confirm dialog asking the user to approve killing
+      // whatever they happen to be looking at.
+      requireExplicitTerminalIdForAgentDispatch("terminal.kill", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
@@ -156,7 +168,8 @@ export function registerTerminalLifecycleActions(
   actions.set("terminal.restart", () => ({
     id: "terminal.restart",
     title: "Restart Terminal",
-    description: "Restart the terminal process",
+    description:
+      "Restart the terminal process. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch, which cannot see what is focused. Interactive dispatch may omit it and falls back to the focused terminal.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -168,8 +181,10 @@ export function registerTerminalLifecycleActions(
       terminalId: z.string().optional(),
       confirmed: z.boolean().optional(),
     }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
+      // See terminal.kill: guard before the confirm request is staged.
+      requireExplicitTerminalIdForAgentDispatch("terminal.restart", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
@@ -198,8 +213,9 @@ export function registerTerminalLifecycleActions(
     scope: "renderer",
     keywords: ["refresh", "render", "repair", "display"],
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      requireExplicitTerminalIdForAgentDispatch("terminal.redraw", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
@@ -212,7 +228,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.rename",
     title: "Rename Terminal",
     description:
-      "Rename the terminal tab. If name is provided, renames programmatically. Otherwise opens the rename dialog.",
+      "Rename the terminal tab. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field); `name` — the new title, where an empty string restores the identity-derived default. Both are REQUIRED for agent/MCP dispatch: a headless caller cannot see what is focused, and cannot answer the rename dialog that an omitted `name` opens. Interactive dispatch may omit either — it falls back to the focused terminal and opens the dialog.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -225,8 +241,19 @@ export function registerTerminalLifecycleActions(
         .optional()
         .describe("New name for the terminal. If omitted, opens the rename dialog."),
     }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId, name } = args as { terminalId?: string; name?: string };
+      requireExplicitTerminalIdForAgentDispatch("terminal.rename", terminalId, ctx);
+      // Second, independent requirement: without a `name` this action defers to
+      // the interactive rename dialog, which a headless caller can never answer
+      // — it would hang a prompt in front of the user instead (#11532). Tested
+      // against `undefined` rather than falsiness because "" is meaningful: it
+      // restores the identity-derived default title.
+      if (ctx.dispatchSource === "agent" && name === undefined) {
+        throw new Error(
+          "terminal.rename requires an explicit `name` when dispatched by an agent or MCP client — a headless caller cannot answer the rename dialog. Pass the new title in `name`, or an empty string to restore the default."
+        );
+      }
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
 
@@ -257,8 +284,9 @@ export function registerTerminalLifecycleActions(
     scope: "renderer",
     keywords: ["details", "metadata", "inspect", "status"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
+      requireExplicitTerminalIdForAgentDispatch("terminal.viewInfo", terminalId, ctx);
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (targetId) {
         window.dispatchEvent(
@@ -278,8 +306,9 @@ export function registerTerminalLifecycleActions(
     scope: "renderer",
     keywords: ["details", "metadata", "inspect", "status"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
+      requireExplicitTerminalIdForAgentDispatch("terminal.info.open", terminalId, ctx);
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (targetId) {
         window.dispatchEvent(
@@ -335,8 +364,12 @@ export function registerTerminalLifecycleActions(
       exitCode: z.number().optional(),
       everDetectedAgent: z.boolean().optional(),
     }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      // Supersedes the "No terminal selected" throw below for agent dispatch:
+      // that one only fires when nothing is focused either, so an agent would
+      // otherwise get a silent read of the wrong terminal whenever focus exists.
+      requireExplicitTerminalIdForAgentDispatch("terminal.info.get", terminalId, ctx);
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) {
         throw new Error("No terminal selected");
@@ -355,8 +388,9 @@ export function registerTerminalLifecycleActions(
     scope: "renderer",
     keywords: ["readonly", "typing", "disable", "keyboard"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
+      requireExplicitTerminalIdForAgentDispatch("terminal.toggleInputLock", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
@@ -375,8 +409,9 @@ export function registerTerminalLifecycleActions(
     scope: "renderer",
     keywords: ["wake", "unstick", "unpause", "stuck"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
+      requireExplicitTerminalIdForAgentDispatch("terminal.forceResume", terminalId, ctx);
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (targetId) {
         await terminalClient.forceResume(targetId);
@@ -537,6 +572,11 @@ export function registerTerminalLifecycleActions(
     },
     run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      // Binds on the argument, not `ctx.focusedTerminalId`. A pinned help
+      // session's context snapshot is ambient state captured at provision time,
+      // not the caller naming a target, and unpinned external dispatch has no
+      // snapshot at all — it falls straight through to live focus.
+      requireExplicitTerminalIdForAgentDispatch("terminal.watch", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? ctx.focusedTerminalId ?? state.focusedId;
       if (!targetId) return;

@@ -471,6 +471,62 @@ describe("terminal action hardening", () => {
     expect(mocks.terminalInstanceService.wake).not.toHaveBeenCalled();
   });
 
+  // These three are reachable from the in-app assistant's action tier, so an
+  // unbound agent call would rearrange whatever the user was looking at
+  // (#11532). terminal.toggleDock previously had no terminalId at all.
+  describe("terminal layout target binding (#11532)", () => {
+    function seedGridPair() {
+      usePanelStore.setState({
+        panelsById: {
+          focused: createTerminal({ id: "focused" }),
+          named: createTerminal({ id: "named" }),
+        },
+        panelIds: ["focused", "named"],
+        focusedId: "focused",
+        activeDockTerminalId: null,
+      });
+    }
+
+    it.each(["terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock"])(
+      "%s rejects agent dispatch that names no terminal, leaving the focused panel put",
+      async (id) => {
+        const actions = buildRegistry(registerTerminalActions);
+        const action = actions.get(id)!();
+        seedGridPair();
+        const before = usePanelStore.getState().panelsById.focused?.location;
+
+        // Matched in full so an unguarded-args TypeError (which also names
+        // terminalId) cannot pass for a guard rejection.
+        await expect(action.run({} as never, { dispatchSource: "agent" } as never)).rejects.toThrow(
+          /requires an explicit `terminalId` when dispatched by an agent or MCP client/
+        );
+
+        expect(usePanelStore.getState().panelsById.focused?.location).toBe(before);
+      }
+    );
+
+    it("toggleDock moves the terminal the agent named, not the focused one", async () => {
+      const actions = buildRegistry(registerTerminalActions);
+      const toggleDock = actions.get("terminal.toggleDock")!();
+      seedGridPair();
+
+      await toggleDock.run({ terminalId: "named" } as never, { dispatchSource: "agent" } as never);
+
+      expect(usePanelStore.getState().panelsById.named?.location).toBe("dock");
+      expect(usePanelStore.getState().panelsById.focused?.location).not.toBe("dock");
+    });
+
+    it("toggleDock keeps the focus fallback for interactive dispatch", async () => {
+      const actions = buildRegistry(registerTerminalActions);
+      const toggleDock = actions.get("terminal.toggleDock")!();
+      seedGridPair();
+
+      await toggleDock.run({} as never, { dispatchSource: "keybinding" } as never);
+
+      expect(usePanelStore.getState().panelsById.focused?.location).toBe("dock");
+    });
+  });
+
   it("preserves focus when moving a missing or already-aligned terminal to a worktree", async () => {
     const actions = buildRegistry(registerTerminalActions);
     const moveToWorktree = actions.get("terminal.moveToWorktree")!();

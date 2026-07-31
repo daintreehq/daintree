@@ -414,4 +414,72 @@ describe("terminalInputActions adversarial", () => {
       expect(callbacks.onInject).toHaveBeenCalledWith("wt-1", undefined);
     });
   });
+
+  // The same ambient-focus fallback as terminal.inject, on the rest of this
+  // file's target-taking actions (#11532). None are on an agent/MCP allowlist
+  // today, so these guards are defense in depth against a future exposure.
+  describe("agent dispatch target binding (#11532)", () => {
+    // Matched in full rather than on /terminalId/ alone, so an unguarded-args
+    // TypeError (whose message also names terminalId) can't pass as a guard hit.
+    const UNBOUND_TARGET =
+      /requires an explicit `terminalId` when dispatched by an agent or MCP client/;
+
+    const GUARDED = [
+      { id: "terminal.copy", effect: () => writeSpy },
+      { id: "terminal.paste", effect: () => terminalClientMock.write },
+      { id: "terminal.contextMenu", effect: () => contextMenuMock.openPanelContextMenu },
+      { id: "terminal.sendToAgent", effect: () => sendToAgentMock.openSendToAgentPalette },
+    ] as const;
+
+    function seedFocusedTerminal() {
+      setPanelState({
+        focusedId: "focused-panel",
+        panelsById: {
+          "focused-panel": { isInputLocked: false, kind: "terminal" },
+          "explicit-panel": { isInputLocked: false, kind: "terminal" },
+        },
+      });
+      terminalInstanceMock.get.mockReturnValue({
+        terminal: { getSelection: () => "selected text", modes: { bracketedPasteMode: false } },
+        isInputLocked: false,
+      } satisfies ManagedStub);
+    }
+
+    it.each(GUARDED)(
+      "$id rejects agent dispatch that names no terminal, and never touches the focused one",
+      async ({ id, effect }) => {
+        clipboardText = "clipboard text";
+        seedFocusedTerminal();
+        const { run } = setupActions();
+
+        await expect(run(id, {}, { dispatchSource: "agent" })).rejects.toThrow(UNBOUND_TARGET);
+
+        expect(effect()).not.toHaveBeenCalled();
+      }
+    );
+
+    it("keeps the focus fallback for interactive contextMenu dispatch", async () => {
+      seedFocusedTerminal();
+      const { run } = setupActions();
+
+      await run("terminal.contextMenu", {}, { dispatchSource: "keybinding" });
+
+      expect(contextMenuMock.openPanelContextMenu).toHaveBeenCalledWith("focused-panel");
+    });
+
+    it("lets agent dispatch through once it names a terminal, ignoring focus", async () => {
+      seedFocusedTerminal();
+      const { run } = setupActions();
+
+      await run(
+        "terminal.contextMenu",
+        { terminalId: "explicit-panel" },
+        {
+          dispatchSource: "agent",
+        }
+      );
+
+      expect(contextMenuMock.openPanelContextMenu).toHaveBeenCalledWith("explicit-panel");
+    });
+  });
 });

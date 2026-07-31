@@ -6,6 +6,7 @@ import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
+import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 export function registerTerminalLayoutActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -14,14 +15,15 @@ export function registerTerminalLayoutActions(
     id: "terminal.moveToDock",
     title: "Move to Dock",
     description:
-      "Move the target terminal from the grid to the dock. Accepts an optional terminalId; defaults to the currently focused terminal.",
+      "Move the target terminal from the grid to the dock. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch, which cannot see what is focused. Interactive dispatch may omit it and falls back to the focused terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
+      requireExplicitTerminalIdForAgentDispatch("terminal.moveToDock", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
@@ -52,14 +54,15 @@ export function registerTerminalLayoutActions(
     id: "terminal.moveToGrid",
     title: "Move to Grid",
     description:
-      "Move the target terminal from the dock back into the grid. Accepts an optional terminalId; defaults to the currently focused terminal.",
+      "Move the target terminal from the dock back into the grid. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch, which cannot see what is focused. Interactive dispatch may omit it and falls back to the focused terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
+      requireExplicitTerminalIdForAgentDispatch("terminal.moveToGrid", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
@@ -251,26 +254,34 @@ export function registerTerminalLayoutActions(
     id: "terminal.toggleDock",
     title: "Toggle Dock",
     description:
-      "Toggle the focused terminal between the dock and the grid. Pushes a layout undo snapshot so the move can be reversed.",
+      "Toggle a terminal between the dock and the grid. Pushes a layout undo snapshot so the move can be reversed. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch, which cannot see what is focused. Interactive dispatch may omit it and falls back to the focused terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: async () => {
+    // Carries a target even though the keybinding never passes one: without it
+    // an agent/MCP caller had no way to name a terminal at all, so the binding
+    // guard below could only ever reject it (#11532).
+    argsSchema: z.object({ terminalId: z.string().optional() }),
+    run: async (args: unknown, ctx) => {
+      // Tolerates absent args: this action took none until #11532, and its
+      // keybinding still dispatches without any.
+      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      requireExplicitTerminalIdForAgentDispatch("terminal.toggleDock", terminalId, ctx);
       const state = usePanelStore.getState();
-      const focusedId = state.focusedId;
-      if (!focusedId) return;
+      const targetId = terminalId ?? state.focusedId;
+      if (!targetId) return;
       useLayoutUndoStore.getState().pushLayoutSnapshot();
-      const terminal = state.panelsById[focusedId];
+      const terminal = state.panelsById[targetId];
       if (!terminal) return;
       if (terminal.location === "dock") {
-        state.moveTerminalToGrid(focusedId);
+        state.moveTerminalToGrid(targetId);
       } else {
         // Same dockability gate as terminal.moveToDock — a non-dockable kind
         // toggled dockward would strand invisibly.
         if (!panelKindIsDockable(terminal.kind ?? "terminal")) return;
-        state.moveTerminalToDock(focusedId);
-        state.openDockTerminal(focusedId);
+        state.moveTerminalToDock(targetId);
+        state.openDockTerminal(targetId);
       }
     },
   }));
