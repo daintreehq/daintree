@@ -220,7 +220,8 @@ describe("LIST_ISSUE_COMMENTS_QUERY", () => {
   });
 
   it("declares every variable it interpolates", () => {
-    const declared = /query ListIssueComments\(([^)]*)\)/.exec(LIST_ISSUE_COMMENTS_QUERY)?.[1] ?? "";
+    const declared =
+      /query ListIssueComments\(([^)]*)\)/.exec(LIST_ISSUE_COMMENTS_QUERY)?.[1] ?? "";
     const used = new Set(LIST_ISSUE_COMMENTS_QUERY.match(/\$\w+/g) ?? []);
     for (const variable of used) {
       expect(declared).toContain(variable);

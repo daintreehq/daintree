@@ -955,7 +955,7 @@ export async function listIssueCommentsImpl(
     repo.owner,
     repo.repo,
     issueNumber,
-    getIssueCommentsEpoch(repo.owner, repo.repo, issueNumber),
+    getIssueCommentsEpoch(repo.owner, repo.repo),
     cursor,
     limit,
   ]);

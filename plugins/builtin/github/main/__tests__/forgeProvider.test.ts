@@ -2190,9 +2190,9 @@ describe("listIssueComments", () => {
   it("propagates provider failures rather than reporting an empty thread", async () => {
     mockGraphQLClient.mockRejectedValueOnce(new Error("Bad credentials"));
 
-    await expect(
-      githubForgeProvider.issueComments!.listIssueComments(repo, 7, {})
-    ).rejects.toThrow(/bad credentials/i);
+    await expect(githubForgeProvider.issueComments!.listIssueComments(repo, 7, {})).rejects.toThrow(
+      /bad credentials/i
+    );
   });
 });
 
@@ -2954,6 +2954,21 @@ describe("issue write mutations (close/reopen/edit/comment/labels)", () => {
         /comment body is required/i
       );
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("still invalidates when a 201 carries an unusable body — the comment exists", async () => {
+      // Past the ok check the comment is on GitHub whatever the payload says.
+      // Leaving stale reads behind would tell a caller checking whether the
+      // post landed that it didn't, and invite a duplicate.
+      mockJsonOk({ id: "not-a-number" }, 201);
+      const invalidateSpy = vi.spyOn(issueTooltipCache, "invalidate");
+
+      await expect(githubForgeProvider.addIssueComment(repo, 7, "hi")).rejects.toThrow(
+        /missing comment id or URL/i
+      );
+
+      expect(invalidateSpy).toHaveBeenCalledWith("owner/repo:7");
+      invalidateSpy.mockRestore();
     });
   });
 

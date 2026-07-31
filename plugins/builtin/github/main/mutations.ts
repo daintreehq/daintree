@@ -682,18 +682,23 @@ export async function addIssueCommentImpl(
       `Failed to comment on issue #${issueNumber}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
     );
   }
-  const data = (await response.json()) as Record<string, unknown>;
-  if (typeof data.id !== "number" || typeof data.html_url !== "string") {
-    throw new Error("Unexpected response from GitHub: missing comment id or URL.");
-  }
+  // Invalidate on `response.ok`, BEFORE reading the body: past this line the
+  // comment exists on GitHub whatever the response says, so a malformed or
+  // truncated payload must not leave stale reads behind. A caller that catches
+  // the parse failure and lists comments to find out whether the post landed is
+  // exactly who a stale read would mislead into posting twice.
   // A new comment changes the issue's comment count, which the tooltip cache
   // holds. List/stat caches are unaffected, so a targeted invalidation is
   // enough (avoids the heavier clearGitHubCaches()).
   issueTooltipCache.invalidate(`${repo.owner}/${repo.repo}:${issueNumber}`);
-  // Retire any comment read already in flight for this issue, so the caller's
+  // Retire any comment read already in flight for this repo, so the caller's
   // follow-up read can't coalesce onto a request that predates this write and
   // come back without the comment just posted (#11545).
-  bumpIssueCommentsEpoch(repo.owner, repo.repo, issueNumber);
+  bumpIssueCommentsEpoch(repo.owner, repo.repo);
+  const data = (await response.json()) as Record<string, unknown>;
+  if (typeof data.id !== "number" || typeof data.html_url !== "string") {
+    throw new Error("Unexpected response from GitHub: missing comment id or URL.");
+  }
   return {
     id: String(data.id),
     body: typeof data.body === "string" ? data.body : "",
