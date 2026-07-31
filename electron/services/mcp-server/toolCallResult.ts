@@ -14,21 +14,58 @@ import { safeSerializeToolResultCompact } from "../../utils/safeSerializeToolRes
 export const TOOL_RESULT_TEXT_MAX_BYTES = 50 * 1024;
 
 /**
- * Advertised to clients that honour it so they don't apply a *smaller* ceiling
- * of their own to an already-bounded response. Equal to the enforced cap, which
- * is honest in both directions: the cap counts UTF-8 bytes and a string never
- * has more characters than bytes, so the response can never exceed this many
- * characters. It describes the model-visible `content` text — per MCP SEP-1624
- * `structuredContent` is for the host app to parse, not for the model context.
+ * Nesting ceiling for the structured half.
+ *
+ * V8's `JSON.stringify` recurses per level, so whether a deep value survives
+ * depends on the stack headroom wherever it happens to be called: a 10,000-deep
+ * result stringifies fine on its own and then throws `RangeError` inside the
+ * transport, which wraps it in the JSON-RPC envelope one frame further down.
+ * Measuring nesting against a fixed bound instead makes the decision
+ * deterministic. That path becomes unreliable a few thousand levels down, so
+ * this sits more than an order of magnitude below the danger zone and still far
+ * deeper than any real action result.
  */
-const MAX_RESULT_SIZE_CHARS_KEY = "anthropic/maxResultSizeChars";
+const MAX_STRUCTURED_DEPTH = 100;
 
-function buildNotice(shownBytes: number, originalBytes: number): string {
+function buildNotice(
+  shownBytes: number,
+  originalBytes: number,
+  structuredOmitted: boolean
+): string {
   return (
     `[Tool result truncated: showing ${shownBytes} of ${originalBytes} UTF-8 bytes. ` +
     `The JSON below is incomplete and will not parse. ` +
+    (structuredOmitted ? `Structured output is omitted for the same reason. ` : "") +
     `Narrow the arguments (filters, limits, paths) and retry for a complete result.]\n\n`
   );
+}
+
+/**
+ * Prefixed when the caller asked for a structured half that could not be
+ * produced from a body that otherwise fits. `isError` carries the same signal to
+ * the protocol; this carries it to the model.
+ */
+const STRUCTURED_OMITTED_NOTICE =
+  `[Structured output omitted: this result could not be reproduced as bounded, ` +
+  `transport-safe JSON. The text body below is complete — parse it instead.]\n\n`;
+
+/**
+ * True when any path through `value` nests deeper than `maxDepth`. Iterative on
+ * purpose: a recursive probe would overflow on exactly the inputs it exists to
+ * reject. Only ever run on a freshly parsed value, which is a tree, so the walk
+ * is linear in the (already bounded) text it came from.
+ */
+function exceedsDepth(value: unknown, maxDepth: number): boolean {
+  const pending: { node: unknown; depth: number }[] = [{ node: value, depth: 1 }];
+  while (pending.length > 0) {
+    const { node, depth } = pending.pop()!;
+    if (node === null || typeof node !== "object") continue;
+    if (depth > maxDepth) return true;
+    for (const child of Array.isArray(node) ? node : Object.values(node)) {
+      pending.push({ node: child, depth: depth + 1 });
+    }
+  }
+  return false;
 }
 
 /**
@@ -50,17 +87,15 @@ function utf8BoundaryEnd(buffer: Buffer, maxBytes: number): number {
 /**
  * Re-derive the structured half from the text half.
  *
- * Measuring only the text would leave `structuredContent` unbounded, because
- * the two are serialized by different code: the text goes through the replacer,
- * which collapses every *repeated* reference — not just genuine cycles — to
- * "[Circular]", while the transport `JSON.stringify`s the raw object and
- * expands each alias in full. A result holding 1,000 references to one 10 KB
- * object serializes to ~23 KB of text (under the cap, so the structured half is
- * kept) and then ships ~10 MB over the wire. Parsing the already-bounded text
- * back keeps the two halves byte-consistent — strengthening the #10676 contract
- * from "same data" to "same bytes" — and bounds them both. It also removes the
- * transport's only unserializable inputs: a truly cyclic or BigInt-bearing
- * result would make the transport's own `JSON.stringify` throw.
+ * Measuring only the text would leave `structuredContent` unbounded: the text is
+ * measured after serialization, while the transport `JSON.stringify`s the raw
+ * object independently, and the two can diverge without limit — a getter, a
+ * `toJSON`, or a value the replacer rewrote all ship different bytes than the
+ * ones that were counted. Parsing the already-bounded text back keeps the halves
+ * byte-consistent — strengthening the #10676 contract from "same data" to "same
+ * bytes" — and bounds them both. It also removes the transport's only
+ * unserializable inputs: a truly cyclic or BigInt-bearing result would make the
+ * transport's own `JSON.stringify` throw.
  *
  * Returns undefined when the text is not a JSON object — the "OK" body and the
  * serializer's string-coercion fallbacks have no structured form to offer.
@@ -70,42 +105,43 @@ function structuredFromText(
   candidate: Record<string, unknown> | undefined
 ): Record<string, unknown> | undefined {
   if (!candidate) return undefined;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(text);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-    // Parsing successfully is not enough to bound the result: re-serializing can
-    // grow it (`1e20` parses from 4 bytes and re-emits as 21) or throw outright
-    // (deeply nested arrays overflow the stack). Measure the exact operation the
-    // transport will perform, so anything that would not survive it is dropped
-    // rather than shipped.
-    if (Buffer.byteLength(JSON.stringify(parsed), "utf8") > TOOL_RESULT_TEXT_MAX_BYTES) {
-      return undefined;
-    }
-    return parsed as Record<string, unknown>;
+    parsed = JSON.parse(text);
   } catch {
-    // Not round-trippable JSON — omit the structured half.
+    return undefined;
   }
-  return undefined;
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  // Depth first: the size measurement below is itself a `JSON.stringify`, so on
+  // a deep value it would be the call that overflows.
+  if (exceedsDepth(parsed, MAX_STRUCTURED_DEPTH)) return undefined;
+  // Parsing successfully is not enough to bound the result — re-serializing can
+  // grow it (`1e20` parses from 4 bytes and re-emits as 21), so the budget has to
+  // be measured against the bytes the transport will actually send.
+  if (Buffer.byteLength(JSON.stringify(parsed), "utf8") > TOOL_RESULT_TEXT_MAX_BYTES) {
+    return undefined;
+  }
+  return parsed as Record<string, unknown>;
 }
 
 /**
  * Apply the response budget to an already-serialized text body.
  *
- * Under the cap the text passes through untouched and `structuredContent` (when
- * the caller supplied one) rides along, preserving the #10676 contract that a
- * client can parse either half and get the same data. Over the cap the text is
- * truncated behind a notice and `structuredContent` is dropped.
+ * Under the cap the text passes through and `structuredContent` (when the caller
+ * supplied one) rides along, preserving the #10676 contract that a client can
+ * parse either half and get the same data. Over the cap the text is truncated
+ * behind a notice and `structuredContent` is dropped — shipping the
+ * multi-megabyte payload the cap exists to bound would defeat the cap, and
+ * substituting a truncated object would violate the very schema it claims to
+ * satisfy.
  *
- * Dropping it is a deliberate protocol trade-off: MCP says the field should be
- * present whenever the tool declares an `outputSchema`, but the only ways to
- * honour that here are to ship the multi-megabyte payload the cap exists to
- * bound — which the client would reject wholesale — or to substitute a
- * truncated object that violates the very schema it claims to satisfy. Omitting
- * it and saying so in the notice is the least-bad option.
- *
- * Truncation never sets `isError`: per MCP that flag means the tool actually
- * failed, and a capped result is a successful call with a shortened body. The
- * caller's own `isError` (a real failure) is passed through untouched.
+ * Whenever a promised structured half is dropped, for any reason, the envelope
+ * is flagged `isError`. MCP clients treat a tool with an `outputSchema` that
+ * returns neither `structuredContent` nor `isError` as a protocol violation and
+ * throw before the model sees anything — so without the flag the agent gets an
+ * opaque client-side error in place of the notice explaining what happened and
+ * how to retry. The flag is the SDK's own escape hatch, and it also encodes the
+ * right thing: the caller asked for structured output and did not get it.
  */
 export function buildToolCallTextResult(
   text: string,
@@ -113,14 +149,18 @@ export function buildToolCallTextResult(
 ): CallToolResult {
   const { structuredContent, isError } = options;
   const originalBytes = Buffer.byteLength(text, "utf8");
+  const structured =
+    originalBytes <= TOOL_RESULT_TEXT_MAX_BYTES
+      ? structuredFromText(text, structuredContent)
+      : undefined;
+  const structuredOmitted = Boolean(structuredContent) && structured === undefined;
+  const prefix = structuredOmitted ? STRUCTURED_OMITTED_NOTICE : "";
 
-  if (originalBytes <= TOOL_RESULT_TEXT_MAX_BYTES) {
-    const structured = structuredFromText(text, structuredContent);
+  if (originalBytes + Buffer.byteLength(prefix, "utf8") <= TOOL_RESULT_TEXT_MAX_BYTES) {
     return {
-      content: [{ type: "text", text }],
+      content: [{ type: "text", text: `${prefix}${text}` }],
       ...(structured ? { structuredContent: structured } : {}),
-      ...(isError ? { isError } : {}),
-      _meta: { [MAX_RESULT_SIZE_CHARS_KEY]: TOOL_RESULT_TEXT_MAX_BYTES },
+      ...(isError || structuredOmitted ? { isError: true } : {}),
     };
   }
 
@@ -130,7 +170,7 @@ export function buildToolCallTextResult(
   // and the rebuilt notice can only be shorter. That keeps the total provably
   // within the cap without a second pass.
   const noticeBytes = Buffer.byteLength(
-    buildNotice(TOOL_RESULT_TEXT_MAX_BYTES, originalBytes),
+    buildNotice(TOOL_RESULT_TEXT_MAX_BYTES, originalBytes, structuredOmitted),
     "utf8"
   );
   const budget = Math.max(0, TOOL_RESULT_TEXT_MAX_BYTES - noticeBytes);
@@ -143,11 +183,10 @@ export function buildToolCallTextResult(
     content: [
       {
         type: "text",
-        text: `${buildNotice(Buffer.byteLength(shown, "utf8"), originalBytes)}${shown}`,
+        text: `${buildNotice(Buffer.byteLength(shown, "utf8"), originalBytes, structuredOmitted)}${shown}`,
       },
     ],
-    ...(isError ? { isError } : {}),
-    _meta: { [MAX_RESULT_SIZE_CHARS_KEY]: TOOL_RESULT_TEXT_MAX_BYTES },
+    ...(isError || structuredOmitted ? { isError: true } : {}),
   };
 }
 

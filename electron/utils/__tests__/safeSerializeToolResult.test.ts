@@ -36,6 +36,28 @@ describe("safeSerializeToolResult", () => {
     expect(result.self).toBe("[Circular]");
   });
 
+  it("expands a value referenced twice in sibling branches", () => {
+    // Only a reference that closes a cycle may be replaced. Marking a repeat as
+    // circular puts a placeholder string where a declared output schema expects
+    // an object, which the MCP client rejects outright (#11526).
+    const shared = { id: "s-1", label: "shared" };
+    const result = JSON.parse(safeSerializeToolResult({ first: shared, second: shared }));
+
+    expect(result.first).toEqual(shared);
+    expect(result.second).toEqual(shared);
+  });
+
+  it("marks the back-edge without collapsing a second path to the same node", () => {
+    const child: Record<string, unknown> = { name: "child" };
+    const root: Record<string, unknown> = { child, alias: child };
+    child.parent = root;
+
+    const result = JSON.parse(safeSerializeToolResult(root));
+
+    expect(result.child.parent).toBe("[Circular]");
+    expect(result.alias).toEqual({ name: "child", parent: "[Circular]" });
+  });
+
   it("falls back to string coercion when JSON.stringify yields undefined", () => {
     expect(safeSerializeToolResult(undefined)).toBe("undefined");
   });

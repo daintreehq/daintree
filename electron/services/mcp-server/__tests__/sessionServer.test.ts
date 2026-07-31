@@ -2771,14 +2771,31 @@ describe("structuredContent for terminal query actions (#10676)", () => {
       expect(structuredOf(result)).toBeUndefined();
     });
 
-    it("does not report a capped result as a failed call", async () => {
+    it("flags a capped result whose tool declares an output schema", async () => {
+      // structuredContent is present exactly when the entry declares an
+      // outputSchema, and a client with that schema rejects a response carrying
+      // neither it nor isError — the notice would never reach the agent.
       const server = createSessionServer(
-        "sc-oversized-ok",
+        "sc-oversized-flagged",
         deps("terminal.list", oversizedPayload())
       );
       const result = await callTool(server, { name: "terminal.list", arguments: {} });
 
+      expect((result as { isError?: boolean }).isError).toBe(true);
+      expect(textOf(result)).toContain("Tool result truncated");
+    });
+
+    it("leaves a capped result unflagged when the tool declares no output schema", async () => {
+      // Nothing was promised, so nothing is missing — a shortened body is still a
+      // successful call.
+      const server = createSessionServer(
+        "sc-oversized-ok",
+        deps("terminal.list", oversizedPayload(), false)
+      );
+      const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
       expect((result as { isError?: boolean }).isError).not.toBe(true);
+      expect(textOf(result)).toContain("Tool result truncated");
     });
 
     it("caps an error envelope whose renderer-supplied details is oversized", async () => {
@@ -2788,7 +2805,6 @@ describe("structuredContent for terminal query actions (#10676)", () => {
         "sc-oversized-error",
         fakeDeps({
           sessionStore: fakeSessionStore("external"),
-          getFullToolSurface: vi.fn(() => true),
           requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list")]),
           dispatchAction: vi.fn().mockResolvedValue({
             result: {
@@ -2818,7 +2834,6 @@ describe("structuredContent for terminal query actions (#10676)", () => {
         "sc-batch-wait",
         fakeDeps({
           sessionStore: fakeSessionStore("external"),
-          getFullToolSurface: vi.fn(() => true),
           requestManifest: vi
             .fn()
             .mockResolvedValue([makeManifestEntry("terminal.waitUntilIdleBatch")]),
@@ -2841,7 +2856,6 @@ describe("structuredContent for terminal query actions (#10676)", () => {
         "sc-oversized-skills",
         fakeDeps({
           sessionStore: fakeSessionStore("external"),
-          getFullToolSurface: vi.fn(() => true),
           requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("skills.load")]),
           handleSkillsLoad: vi.fn(() => ({
             id: "s-1",
