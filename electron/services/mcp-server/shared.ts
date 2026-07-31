@@ -477,43 +477,61 @@ export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
  * instead of redispatching, with an args-hash guard rejecting same-key
  * different-args replays as a collision (#8429).
  *
- * Inclusion criterion: a mutation tool belongs here when (a) an LLM
- * retrying after a transient error or reconnect is realistic, and (b) a
- * duplicate dispatch has an immediately user-visible side effect — an
- * orphaned terminal, a redundant agent, a duplicate commit/push, or a
- * duplicate issue/PR. The seed cohort (`terminal.new`,
- * `worktree.createWithRecipe`, `agent.launch`, `recipe.run`) is widened
- * to the git/forge mutations (`git.commit`, `git.push`, `forge.openIssue`,
- * `forge.openPR`) now that the args-hash collision guard (#8429) is in
- * place to make the widening safe. Widened further (#9156) to the remaining
- * destructive mutations — `worktree.delete`, `forge.assignIssue` — so every
- * side-effecting tool that an LLM might retry is covered.
+ * A tool belongs here only when all three hold: (a) an LLM retrying after a
+ * transient error or reconnect is realistic, (b) the repeat leaves a durable
+ * or immediately user-visible artifact — an orphaned terminal, a redundant
+ * agent, a duplicate commit/push/issue/PR/comment/review — and (c) an
+ * intentional same-argument repeat inside the TTL is not a normal use case.
  *
- * Deliberately bounded: blanket-applying dedup to all mutations would mask
- * legitimate "do it again" cases (re-running the same git command, etc.).
+ * (c) is what bounds the list, and it excludes two whole classes. Idempotent
+ * state-sets (close/reopen/draft/edit, label add/remove, assign/unassign,
+ * resource pause/resume/teardown) create no duplicate to suppress, and
+ * caching them actively breaks a set → unset → set sequence: the third call
+ * matches the first, so the cached success returns and the state stays
+ * unset. Navigation (`forge.open*`, portal/browser opens) is likewise out —
+ * reopening a URL the user closed must dispatch again, and a silent 120s
+ * no-op reads as a broken tool. Repeatable commands (`terminal.sendCommand`,
+ * `git.stage*`) stay out for the same reason.
+ *
+ * History: seeded by #7554, made safe to widen by the args-hash collision
+ * guard (#8429), widened again in #9156, then corrected against the criterion
+ * above in #11534 — which added the creation tools that were missing and
+ * dropped the navigation/idempotent entries that never met it.
  */
-export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set([
+const MCP_DEDUP_ALLOWLIST_ENTRIES = [
+  // Panel/agent spawns — a replay leaves an orphaned terminal or a second
+  // agent. `agent.terminal` spawns exactly like `terminal.new` (#11534).
   "terminal.new",
-  "worktree.createWithRecipe",
+  "agent.terminal",
   "agent.launch",
   "recipe.run",
+
+  // Worktree/workflow creation. `workflow.startWorkOnIssue` is a creation
+  // superset of the two below it — a replay duplicates the entire work setup
+  // (worktree + branch + agent + injected context) (#11534). Provisioning
+  // spins up a remote/cloud resource a retry could double.
+  "worktree.createWithRecipe",
+  "workflow.startWorkOnIssue",
+  "worktree.resource.provision",
+  "worktree.delete",
+
   "git.commit",
   "git.push",
-  "forge.openIssue",
-  "forge.openPR",
-  "worktree.delete",
-  // Provisioning spins up a remote/cloud resource — an LLM retry after a
-  // transient failure could spawn a second one. Pause/resume/teardown are
-  // idempotent enough (or intentionally re-runnable) to stay out.
-  "worktree.resource.provision",
-  "forge.assignIssue",
-  // PR writes where an LLM retry within the dispatch window leaves a visible
-  // duplicate: a second open PR, a re-merge attempt, or a duplicate comment
-  // (lesson #7554). Idempotent state-sets (close/reopen/draft/edit) are omitted.
+
+  // Forge writes that POST a new durable record every call, so a replay is
+  // visible on the remote: a second PR/issue, a re-merge attempt, a duplicate
+  // comment (lesson #7554), or a second review entry — `approvePR` and
+  // `requestChanges` both POST to `/pulls/{n}/reviews` (#11534).
   "forge.createPR",
   "forge.mergePR",
   "forge.commentOnPR",
-]);
+  "forge.createIssue",
+  "forge.addIssueComment",
+  "forge.approvePR",
+  "forge.requestChanges",
+] as const satisfies readonly BuiltInActionId[];
+
+export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set(MCP_DEDUP_ALLOWLIST_ENTRIES);
 
 /**
  * Dedup window for the creation-tool allowlist. Sized to cover the MCP

@@ -2246,8 +2246,11 @@ describe("MCP_DEDUP_ALLOWLIST widening (#8468)", () => {
     }
   });
 
-  it("adds the git/forge mutation cohort", () => {
-    for (const tool of ["git.commit", "git.push", "forge.openIssue", "forge.openPR"]) {
+  // The forge half of this cohort (`forge.openIssue`/`forge.openPR`) was
+  // dropped in #11534 — navigation never met the criterion. See the #11534
+  // block below for the redispatch proof.
+  it("adds the git mutation cohort", () => {
+    for (const tool of ["git.commit", "git.push"]) {
       expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(true);
     }
   });
@@ -2285,7 +2288,10 @@ describe("worktree resource lifecycle dedup (#10683)", () => {
 });
 
 describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
-  const NEW_MUTATIONS = ["worktree.delete", "forge.assignIssue"];
+  // `forge.assignIssue` shipped in this cohort but was dropped in #11534 —
+  // assignment is provider-idempotent, and caching it broke assign → unassign
+  // → reassign. See the #11534 block below.
+  const NEW_MUTATIONS = ["worktree.delete"];
 
   it("adds the remaining destructive-mutation cohort", () => {
     for (const tool of NEW_MUTATIONS) {
@@ -2315,6 +2321,94 @@ describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
       expect(second).toEqual(first);
     }
   );
+});
+
+describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
+  // Creation tools whose replay leaves a durable or immediately visible
+  // artifact. Each has a structural twin that was already deduped, which is
+  // exactly why the omission was invisible: the same retry was safe through
+  // one id and duplicated through the other.
+  const NEWLY_DEDUPED = [
+    "agent.terminal",
+    "workflow.startWorkOnIssue",
+    "forge.createIssue",
+    "forge.addIssueComment",
+    "forge.approvePR",
+    "forge.requestChanges",
+  ];
+
+  // Navigation and idempotent state-sets. Caching these suppresses a call the
+  // caller legitimately meant to repeat — reopening a URL the user closed, or
+  // re-assigning after an unassign — so they must always redispatch.
+  const MUST_REDISPATCH = [
+    "forge.openIssue",
+    "forge.openPR",
+    "forge.openIssues",
+    "forge.openPRs",
+    "forge.openCommits",
+    "forge.assignIssue",
+  ];
+
+  it.each(NEWLY_DEDUPED)("dedups a post-completion duplicate of %s", async (tool) => {
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+    const server = createSessionServer(`dedup-11534-${tool}`, deps);
+
+    const args = { target: "x" };
+    const first = await callTool(server, { name: tool, arguments: args });
+    const second = await callTool(server, { name: tool, arguments: args });
+
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+  });
+
+  it.each(NEWLY_DEDUPED)(
+    "shares one dispatch between concurrent duplicates of %s",
+    async (tool) => {
+      // The singleflight window, not the result cache: both calls are in flight
+      // before either resolves, which is the reconnect-replay shape.
+      const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+      const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+      const server = createSessionServer(`dedup-11534-inflight-${tool}`, deps);
+
+      const args = { target: "x" };
+      const [first, second] = await Promise.all([
+        callTool(server, { name: tool, arguments: args }),
+        callTool(server, { name: tool, arguments: args }),
+      ]);
+
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+      expect(second).toEqual(first);
+    }
+  );
+
+  it.each(MUST_REDISPATCH)(
+    "redispatches a repeated %s instead of returning a cached result",
+    async (tool) => {
+      const dispatchAction = vi
+        .fn()
+        .mockResolvedValueOnce({ result: { ok: true, result: "first" } })
+        .mockResolvedValueOnce({ result: { ok: true, result: "second" } });
+      const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+      const server = createSessionServer(`nodedup-11534-${tool}`, deps);
+
+      const args = { target: "x" };
+      const first = await callTool(server, { name: tool, arguments: args });
+      const second = await callTool(server, { name: tool, arguments: args });
+
+      expect(dispatchAction).toHaveBeenCalledTimes(2);
+      expect(second).not.toEqual(first);
+    }
+  );
+
+  it("keeps every deduped tool reachable from an MCP tier", () => {
+    // A dedup entry for a tool no tier exposes is dead weight that reads as
+    // coverage. Catches an id that survives the compile-time BuiltInActionId
+    // check but has drifted off every tier allowlist.
+    for (const tool of MCP_DEDUP_ALLOWLIST) {
+      expect(minimumPermittingTier(tool)).not.toBeNull();
+    }
+  });
 });
 
 describe("CallTool rate limiter removal (#10764)", () => {
