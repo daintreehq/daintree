@@ -11,6 +11,11 @@ import { ipcMain } from "electron";
 import { CHANNELS } from "../../../channels.js";
 import { registerTerminalSnapshotHandlers } from "../snapshots.js";
 import type { HandlerDependencies } from "../../../types.js";
+import type { SerializedTerminalSnapshot } from "../../../../../shared/types/terminal.js";
+
+function snapshot(data: string): SerializedTerminalSnapshot {
+  return { data, cols: 80, rows: 24 };
+}
 
 describe("terminal:get-serialized-states handler", () => {
   beforeEach(() => {
@@ -20,7 +25,7 @@ describe("terminal:get-serialized-states handler", () => {
   function getHandler(): (
     event: unknown,
     terminalIds: string[]
-  ) => Promise<Record<string, string | null>> {
+  ) => Promise<Record<string, SerializedTerminalSnapshot | null>> {
     const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
       .calls;
     const handlerCall = calls.find((call) => call[0] === CHANNELS.TERMINAL_GET_SERIALIZED_STATES);
@@ -28,15 +33,15 @@ describe("terminal:get-serialized-states handler", () => {
     return handlerCall?.[1] as (
       event: unknown,
       terminalIds: string[]
-    ) => Promise<Record<string, string | null>>;
+    ) => Promise<Record<string, SerializedTerminalSnapshot | null>>;
   }
 
   it("returns serialized state map for unique terminal IDs", async () => {
     const ptyClient = {
       getSerializedStateAsync: vi.fn(async (terminalId: string) => {
-        if (terminalId === "t-1") return "state-1";
+        if (terminalId === "t-1") return snapshot("state-1");
         if (terminalId === "t-2") return null;
-        return "unknown";
+        return snapshot("unknown");
       }),
     };
 
@@ -45,8 +50,10 @@ describe("terminal:get-serialized-states handler", () => {
 
     const result = await handler({}, ["t-1", "t-1", "t-2"]);
 
+    // The batch must forward the capture grid per entry, not just the payload:
+    // it is what each replay sizes itself to (#11552).
     expect(result).toEqual({
-      "t-1": "state-1",
+      "t-1": snapshot("state-1"),
       "t-2": null,
     });
     expect(ptyClient.getSerializedStateAsync).toHaveBeenCalledTimes(2);
@@ -58,7 +65,7 @@ describe("terminal:get-serialized-states handler", () => {
         if (terminalId === "t-fail") {
           throw new Error("boom");
         }
-        return "ok";
+        return snapshot("ok");
       }),
     };
 
@@ -68,14 +75,14 @@ describe("terminal:get-serialized-states handler", () => {
     const result = await handler({}, ["t-ok", "t-fail"]);
 
     expect(result).toEqual({
-      "t-ok": "ok",
+      "t-ok": snapshot("ok"),
       "t-fail": null,
     });
   });
 
   it("rejects invalid payloads", async () => {
     const ptyClient = {
-      getSerializedStateAsync: vi.fn(async () => "state"),
+      getSerializedStateAsync: vi.fn(async () => snapshot("state")),
     };
 
     registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);

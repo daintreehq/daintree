@@ -81,43 +81,53 @@ export class TerminalRestoreController {
    * Size xterm to the grid a snapshot was captured on, so SerializeAddon's
    * wrap encoding decodes the way it was written.
    *
-   * Returns false — replay verbatim, exactly as before this fix — when the
-   * snapshot carries no geometry (an older pty host across an upgrade, or a
-   * preserved snapshot captured pre-#11552), when the geometry is not a grid a
-   * terminal could plausibly have had, or when it already matches. Losing the
-   * session would be a worse compatibility policy than reproducing today's
-   * behaviour for payloads that predate the contract.
+   * A no-op — replay verbatim, exactly as before this fix — when the snapshot
+   * carries no geometry (an older pty host across an upgrade, or a preserved
+   * snapshot captured pre-#11552), when the geometry is not a grid a terminal
+   * could plausibly have had, or when it already matches. Losing the session
+   * would be a worse compatibility policy than reproducing today's behaviour
+   * for payloads that predate the contract.
    */
   private alignToCaptureGeometry(
     managed: ManagedTerminal,
     captureGeometry: TerminalGeometry | undefined
-  ): boolean {
-    if (!isValidTerminalGeometry(captureGeometry)) return false;
+  ): void {
+    if (!isValidTerminalGeometry(captureGeometry)) return;
     if (
       captureGeometry.cols === managed.terminal.cols &&
       captureGeometry.rows === managed.terminal.rows
     ) {
-      return false;
+      return;
     }
     managed.terminal.resize(captureGeometry.cols, captureGeometry.rows);
-    return true;
   }
 
   /**
-   * Reflow the replayed buffer onto the grid the pane actually belongs on and
-   * close the restore window.
+   * Close the restore window: put the pane on the grid it belongs on and reopen
+   * the write gate. Every exit from a restore — success, throw, supersede,
+   * null snapshot — must run this exactly once, while it still owns the window.
+   *
+   * The target is `pendingRestoreGeometry`: seeded from the live grid when the
+   * window opened, overwritten by any resize that arrived while it was open.
+   * Applying it covers BOTH jobs with one resize — reflowing back from a
+   * capture-width replay, and landing a resize that `resizeTerminal` parked
+   * rather than applied. Gating this on "did we align?" would silently drop
+   * that parked resize on every geometry-less replay, leaving xterm on the old
+   * grid while the PTY had already been told the new one. It is a no-op when
+   * the grid already matches, which is the common case.
    *
    * `reflowCursorLine` is off by default in xterm, which leaves the wrapped
-   * group containing the cursor untouched by a resize — normalizing to a
-   * narrower grid would truncate that row's tail instead of wrapping it, and to
-   * a wider one would leave it split. Turn it on for this one corrective
-   * resize and put the configured value straight back; it is a live-typing
-   * ergonomic, not something to change globally.
+   * group containing the cursor untouched by a resize — reflowing to a narrower
+   * grid would truncate that row's tail instead of wrapping it, and to a wider
+   * one would leave it split. Turn it on for this one corrective resize and put
+   * the configured value straight back; it is a live-typing ergonomic, not
+   * something to change globally.
    */
-  private normalizeAfterReplay(managed: ManagedTerminal, aligned: boolean): void {
+  private endRestoreWindow(managed: ManagedTerminal): void {
     const target = managed.pendingRestoreGeometry;
     managed.pendingRestoreGeometry = undefined;
-    if (!aligned || !target) return;
+    managed.isSerializedRestoreInProgress = false;
+    if (!target) return;
     if (target.cols === managed.terminal.cols && target.rows === managed.terminal.rows) {
       return;
     }
@@ -165,7 +175,6 @@ export class TerminalRestoreController {
       return false;
     }
 
-    let aligned = false;
     try {
       if (serializedState.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
         void this.restoreFromSerializedIncremental(id, serializedState, captureGeometry);
@@ -185,7 +194,7 @@ export class TerminalRestoreController {
       // replay is about to discard. xterm parses asynchronously, so the grid
       // must be correct before `write` — not after it returns.
       managed.terminal.reset();
-      aligned = this.alignToCaptureGeometry(managed, captureGeometry);
+      this.alignToCaptureGeometry(managed, captureGeometry);
       managed.terminal.write(serializedState, () => {
         // Hop out of the write callback before touching geometry. The callback
         // runs inside xterm's parser drain, and resizing there re-applies the
@@ -197,17 +206,16 @@ export class TerminalRestoreController {
           const current = this.deps.getInstance(id);
           if (current !== managed || managed.restoreGeneration !== restoreGeneration) return;
 
-          this.normalizeAfterReplay(current, aligned);
+          // Closed only now: the deferred chunks below were produced for the
+          // live grid, so they must not be written while the pane is still
+          // parked at the capture width.
+          this.endRestoreWindow(current);
 
           if (scrollBackOffset > 0) {
             const newBaseY = current.terminal.buffer.active.baseY;
             current.terminal.scrollToLine(Math.max(0, newBaseY - scrollBackOffset));
           }
 
-          // Cleared only now: the deferred chunks below were produced for the
-          // live grid, so they must not be written while the pane is still
-          // parked at the capture width.
-          current.isSerializedRestoreInProgress = false;
           this.replayDeferred(id, current);
         });
       });
@@ -216,8 +224,7 @@ export class TerminalRestoreController {
       // The restore died synchronously (reset/resize/write threw). Put the pane
       // back on its live grid before releasing output — replaying live chunks
       // into a terminal parked at the capture width would corrupt them too.
-      this.normalizeAfterReplay(managed, aligned);
-      managed.isSerializedRestoreInProgress = false;
+      this.endRestoreWindow(managed);
       managed.lastScrollbackRestoreError = classifyRestoreError(error);
       logError(`Failed to restore terminal ${id}`, error);
       // Release anything already deferred so its ledger charges settle and live
@@ -246,12 +253,6 @@ export class TerminalRestoreController {
       const scrollBackOffset = managed.isUserScrolledBack
         ? managed.terminal.buffer.active.baseY - managed.terminal.buffer.active.viewportY
         : 0;
-      // Tracks whether THIS attempt parked the grid. The finally below only
-      // normalizes when it did and still owns the terminal — a superseded
-      // generation must leave the grid to its successor, which is mid-replay
-      // at its own capture width.
-      let aligned = false;
-
       try {
         if (
           this.deps.getInstance(id) !== managed ||
@@ -261,7 +262,7 @@ export class TerminalRestoreController {
         }
 
         managed.terminal.reset();
-        aligned = this.alignToCaptureGeometry(managed, captureGeometry);
+        this.alignToCaptureGeometry(managed, captureGeometry);
 
         let offset = 0;
         const total = serializedState.length;
@@ -320,15 +321,15 @@ export class TerminalRestoreController {
         ) {
           // Every chunk write was awaited to its parse callback, so the buffer
           // is fully laid out at the capture grid by now and this reflow sees
-          // the whole payload.
-          this.normalizeAfterReplay(managed, aligned);
+          // the whole payload. A superseded generation never reaches here — its
+          // successor is mid-replay at its own capture width and owns the grid.
+          this.endRestoreWindow(managed);
 
           if (scrollBackOffset > 0) {
             const newBaseY = managed.terminal.buffer.active.baseY;
             managed.terminal.scrollToLine(Math.max(0, newBaseY - scrollBackOffset));
           }
 
-          managed.isSerializedRestoreInProgress = false;
           this.replayDeferred(id, managed);
         }
       }
@@ -349,7 +350,7 @@ export class TerminalRestoreController {
         this.deps.getInstance(id) === managed &&
         managed.restoreGeneration === restoreGeneration
       ) {
-        managed.isSerializedRestoreInProgress = false;
+        this.endRestoreWindow(managed);
         this.replayDeferred(id, managed);
       }
       return false;
@@ -384,20 +385,23 @@ export class TerminalRestoreController {
       return false;
     }
 
-    const restoreGeneration = managed.restoreGeneration;
+    // Bump so this fetch owns a generation nothing else shares. Reading the
+    // current one instead let two concurrent fetches — or a fetch racing an
+    // in-flight incremental restore — both believe they owned the window, and
+    // whichever failed first would reopen the survivor's gate mid-replay.
+    const restoreGeneration = ++managed.restoreGeneration;
     this.beginRestoreWindow(managed);
     managed.lastScrollbackRestoreError = undefined;
 
-    // The gate this call opened is only ours to close while no newer restore
-    // has claimed the terminal. Clearing it unconditionally (as this used to)
+    // The window this call opened is only ours to close while no newer restore
+    // has claimed the terminal. Closing it unconditionally (as this used to)
     // re-opens a successor's deferral mid-replay: its live output stops being
     // held and lands on top of the snapshot it is still writing — and with the
-    // capture-width alignment below, at the wrong grid.
+    // capture-width alignment, at the wrong grid.
     const releaseIfStillOwned = (): void => {
       if (this.deps.getInstance(id) !== managed) return;
       if (managed.restoreGeneration !== restoreGeneration) return;
-      managed.isSerializedRestoreInProgress = false;
-      managed.pendingRestoreGeometry = undefined;
+      this.endRestoreWindow(managed);
     };
 
     try {

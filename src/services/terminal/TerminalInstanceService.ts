@@ -1352,9 +1352,13 @@ class TerminalInstanceService {
   private ensureOpened(id: string, managed: ManagedTerminal): void {
     if (managed.isOpened) return;
     // Seed xterm's grid before open() so cold-start restore paints at the
-    // saved size instead of flashing 80x24 then snapping (#6983).
+    // saved size instead of flashing 80x24 then snapping (#6983). Routed
+    // through the resize controller rather than xterm directly so it honours
+    // the serialized-restore gate: a cross-surface rebuild can have a replay
+    // already in flight here, and resizing out from under it would both undo
+    // the capture-width alignment and make the parked width look live (#11552).
     if (managed.targetCols && managed.targetRows) {
-      managed.terminal.resize(managed.targetCols, managed.targetRows);
+      this.resizeController.resizeTerminal(managed, managed.targetCols, managed.targetRows);
     }
     // terminalOpenStartedAt anchors the first-write delta (#9809).
     managed.terminalOpenStartedAt =

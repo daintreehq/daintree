@@ -10,6 +10,7 @@ import {
   OWNER_RWX_DIR_MODE,
 } from "../../utils/fs.js";
 import path from "node:path";
+import { headlessMirrorScheduler } from "./HeadlessMirrorScheduler.js";
 import type { Terminal as HeadlessTerminalType, IMarker } from "@xterm/headless";
 import type {
   SerializedTerminalSnapshot,
@@ -188,6 +189,7 @@ const NO_ALIGNMENT: ReplayAlignment = { scheduleRestore: () => {} };
  */
 function alignForReplay(
   headlessTerminal: HeadlessTerminalType,
+  terminalId: string,
   captureGeometry: TerminalGeometry | null
 ): ReplayAlignment {
   if (!captureGeometry) return NO_ALIGNMENT;
@@ -202,7 +204,14 @@ function alignForReplay(
 
   return {
     scheduleRestore: () => {
-      headlessTerminal.write("", () => {
+      // Order the reflow behind anything the mirror scheduler is holding for
+      // this terminal, not just behind our own writes. Live PTY chunks reach
+      // the mirror through that queue with no gate of their own, and resizing
+      // while xterm still has queued entries makes its flushSync re-parse from
+      // the head of the write buffer — the same duplication this fix exists to
+      // prevent. With no queue registered (the usual cold-start case) flush()
+      // degrades to a plain sentinel write.
+      headlessMirrorScheduler.flush(terminalId, headlessTerminal, () => {
         // Hop out of the write callback before resizing: it runs inside xterm's
         // parser drain, and changing the grid there re-applies the chunk being
         // drained against the new geometry (a 4-cell write comes back as 8).
@@ -267,7 +276,7 @@ export function restoreSessionFromFile(
     // empty here, so aligning it up front costs nothing — and it must happen
     // BEFORE the writes, because xterm parses asynchronously: content queued
     // now is laid out at whatever cols the terminal has when the parser drains.
-    const alignment = alignForReplay(headlessTerminal, captureGeometry);
+    const alignment = alignForReplay(headlessTerminal, terminalId, captureGeometry);
 
     headlessTerminal.write(RESTORE_PARSER_RESET_PREAMBLE);
     headlessTerminal.write(content);

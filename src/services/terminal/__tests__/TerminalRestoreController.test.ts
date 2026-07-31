@@ -793,6 +793,40 @@ describe("TerminalRestoreController", () => {
       expect(writeDataSpy).toHaveBeenCalledWith("t1", "held", 2);
     });
 
+    it("applies a resize parked mid-replay even when the snapshot needed no alignment", async () => {
+      const trace = traceGrid();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      // Geometry-less snapshot (legacy payload): nothing to align to, so the
+      // replay never parks the grid. A resize arriving during the window is
+      // still held by resizeTerminal, and dropping it here would leave xterm on
+      // the old grid while the PTY had already been told the new one.
+      controller.restoreFromSerialized("t1", "payload");
+      managed.pendingRestoreGeometry = { cols: 120, rows: 30 };
+      await flushMicrotasks();
+
+      expect(trace.at(-1)).toBe("resize:120x30");
+      expect(managed.pendingRestoreGeometry).toBeUndefined();
+    });
+
+    it("applies a parked resize when the fetched snapshot comes back null", async () => {
+      const { terminalClient } = await import("@/clients");
+      vi.mocked(terminalClient.getSerializedState).mockResolvedValue(null);
+      const trace = traceGrid();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.fetchAndRestore("t1");
+      managed.pendingRestoreGeometry = { cols: 90, rows: 20 };
+      await promise;
+
+      // No restore ran, but the window was open across the IPC round-trip, so
+      // whatever it swallowed still has to land.
+      expect(trace.at(-1)).toBe("resize:90x20");
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+    });
+
     it("aligns the incremental path and normalizes once every chunk has parsed", async () => {
       const trace = traceGrid();
       const managed = makeManagedTerminal();
