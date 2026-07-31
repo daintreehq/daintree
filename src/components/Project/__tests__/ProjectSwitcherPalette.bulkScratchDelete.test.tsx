@@ -14,7 +14,7 @@
  * is which props the palette hands it.
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 
 const originalScrollIntoView = Element.prototype.scrollIntoView;
 beforeAll(() => {
@@ -106,51 +106,67 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 // Prop-rendering seam. Everything the palette decides — the counted title, the
 // verb-noun confirm label, whether dismissal is allowed mid-run — is visible here.
-vi.mock("@/components/ui/ConfirmDialog", () => ({
-  ConfirmDialog: ({
-    isOpen,
-    title,
-    children,
-    confirmLabel,
-    cancelLabel,
-    onConfirm,
-    onClose,
-    isConfirmLoading,
-    variant,
-    typedNameTarget,
-  }: {
-    isOpen: boolean;
-    title: React.ReactNode;
-    children?: React.ReactNode;
-    confirmLabel: string;
-    cancelLabel?: string;
-    onConfirm: () => void;
-    onClose?: () => void;
-    isConfirmLoading?: boolean;
-    variant: string;
-    typedNameTarget?: string;
-  }) =>
-    isOpen ? (
-      <div
-        data-testid="confirm-dialog"
-        data-variant={variant}
-        data-loading={String(Boolean(isConfirmLoading))}
-        data-dismissable={String(Boolean(onClose))}
-        data-typed-name-target={typedNameTarget ?? ""}
-      >
-        <h2 data-testid="confirm-title">{title}</h2>
-        <div data-testid="confirm-body">{children}</div>
-        {/* Addressed by role, not by label: pinning the locator to the exact copy
-            would make every interaction spec fail on a wording change. */}
-        <button type="button" data-testid="confirm-accept" onClick={onConfirm}>
-          {confirmLabel}
-        </button>
-        <button type="button" data-testid="confirm-cancel" onClick={onClose}>
-          {cancelLabel}
-        </button>
-      </div>
-    ) : null,
-}));
+vi.mock("@/components/ui/ConfirmDialog", async () => {
+  const { useEffect, useState } = await vi.importActual<typeof import("react")>("react");
+  return {
+    ConfirmDialog: ({
+      isOpen,
+      title,
+      children,
+      confirmLabel,
+      cancelLabel,
+      onConfirm,
+      onClose,
+      isConfirmLoading,
+      variant,
+      typedNameTarget,
+      restoreFocusTo,
+    }: {
+      isOpen: boolean;
+      title: React.ReactNode;
+      children?: React.ReactNode;
+      confirmLabel: string;
+      cancelLabel?: string;
+      onConfirm: () => void;
+      onClose?: () => void;
+      isConfirmLoading?: boolean;
+      variant: string;
+      typedNameTarget?: string;
+      restoreFocusTo?: React.RefObject<HTMLElement | null> | (() => HTMLElement | null);
+    }) => {
+      // Resolved after mount, not during render: a ref handed down from the
+      // palette is still null while the dialog is rendering.
+      const [restoreTarget, setRestoreTarget] = useState("");
+      useEffect(() => {
+        if (!restoreFocusTo) return;
+        const el = typeof restoreFocusTo === "function" ? restoreFocusTo() : restoreFocusTo.current;
+        setRestoreTarget(el?.getAttribute("data-testid") ?? "");
+      }, [restoreFocusTo]);
+
+      return isOpen ? (
+        <div
+          data-testid="confirm-dialog"
+          data-variant={variant}
+          data-loading={String(Boolean(isConfirmLoading))}
+          data-dismissable={String(Boolean(onClose))}
+          data-typed-name-target={typedNameTarget ?? ""}
+          data-restore-focus={restoreTarget}
+        >
+          <h2 data-testid="confirm-title">{title}</h2>
+          <div data-testid="confirm-body">{children}</div>
+          {/* Addressed by role, not by label: pinning the locator to the exact copy
+              would make every interaction spec fail on a wording change. */}
+          <button type="button" data-testid="confirm-accept" onClick={onConfirm}>
+            {confirmLabel}
+          </button>
+          <button type="button" data-testid="confirm-cancel" onClick={onClose}>
+            {cancelLabel}
+          </button>
+        </div>
+      ) : null;
+    },
+  };
+});
 
 vi.mock("@/hooks/useModifierKeys", () => ({
   useModifierKeys: () => ({ meta: false, alt: false }),
@@ -478,22 +494,62 @@ describe("Single scratch delete", () => {
       id: "scratch-1",
       name: "Spike 1",
       path: "/tmp/scratches/scratch-1",
-      processCount: 0,
       ...overrides,
     };
   }
 
+  /** The run's live region, addressed by its role rather than a test id. */
   function progressText(): string {
-    return screen.getByTestId("delete-scratch-progress").textContent ?? "";
+    return screen.getByRole("status").textContent ?? "";
   }
 
-  it("requests the confirmation instead of deleting from the menu", () => {
-    const { props } = renderPalette({ scratchResults: [makeScratch(1)] });
+  /**
+   * A scratch row's context-menu trigger, found in the DOM rather than through
+   * the a11y tree. An open Radix menu marks the rest of the page aria-hidden, so
+   * a paired spec that reopens the menu can no longer reach the row by role.
+   */
+  function scratchRow(): HTMLElement {
+    const row = document.querySelector<HTMLElement>('[role="option"]');
+    if (!row) throw new Error("Scratch row not found");
+    return row;
+  }
 
-    fireEvent.contextMenu(screen.getByRole("option", { name: /Spike 1/ }));
-    fireEvent.click(deleteItem());
+  // Both hosts forward scratch props through separate branches, so a modal-only
+  // suite stays green while the dropdown loses the action.
+  describe.each(["modal", "dropdown"] as const)("row menu (%s)", (mode) => {
+    it("requests the confirmation instead of deleting from the menu", () => {
+      const { props } = renderPalette({ mode, scratchResults: [makeScratch(1)] });
 
-    expect(props.onRequestDeleteScratch).toHaveBeenCalledWith("scratch-1");
+      fireEvent.contextMenu(screen.getByRole("option", { name: /Spike 1/ }));
+      fireEvent.click(deleteItem());
+
+      expect(props.onRequestDeleteScratch).toHaveBeenCalledWith("scratch-1");
+    });
+
+    it("hides the delete when the host wires no handler, but shows it when wired", () => {
+      const { view } = renderPalette({
+        mode,
+        scratchResults: [makeScratch(1)],
+        onRequestDeleteScratch: undefined,
+      });
+
+      fireEvent.contextMenu(scratchRow());
+      // Paired with the positive case: "absent when unwired" is only meaningful
+      // next to "present when wired".
+      expect(screen.queryByText(/Delete scratch/)).toBeNull();
+
+      view.rerender(
+        <ProjectSwitcherPalette
+          {...baseProps()}
+          mode={mode}
+          scratchResults={[makeScratch(1)]}
+          onRequestDeleteScratch={vi.fn()}
+        />
+      );
+      fireEvent.contextMenu(scratchRow());
+
+      expect(screen.queryByText(/Delete scratch/)).not.toBeNull();
+    });
   });
 
   it("opens only once a target is pending, and closes when it clears", () => {
@@ -589,19 +645,69 @@ describe("Single scratch delete", () => {
     expect(screen.queryByTestId("delete-scratch-progress")).toBeNull();
   });
 
-  it("mounts a polite live region for the run, gated empty at first", () => {
+  it("mounts a live region for the run, gated empty at first", () => {
     renderPalette({
       scratchResults: [makeScratch(1)],
-      deleteScratchConfirm: target({ processCount: 2 }),
+      deleteScratchConfirm: target(),
       onDismissDeleteScratchConfirm: vi.fn(),
       onConfirmDeleteScratch: vi.fn(),
       isDeletingScratch: true,
     });
 
-    const region = screen.getByTestId("delete-scratch-progress");
-    // Present from the first frame so each phase is an update to one announcer,
-    // but empty until the Doherty gate clears so a fast delete never flashes.
-    expect(region.getAttribute("aria-live")).toBe("polite");
+    // Present from the first frame so the long-wait line is an update to one
+    // announcer, but empty until the Doherty gate clears so a fast delete never
+    // flashes.
+    expect(screen.getByRole("status")).toBeTruthy();
     expect(progressText()).toBe("");
+  });
+
+  it("narrates the run once the gate clears, then escalates on a long wait", () => {
+    vi.useFakeTimers();
+    try {
+      renderPalette({
+        scratchResults: [makeScratch(1)],
+        deleteScratchConfirm: target(),
+        onDismissDeleteScratchConfirm: vi.fn(),
+        onConfirmDeleteScratch: vi.fn(),
+        isDeletingScratch: true,
+      });
+
+      // Without this the whole feature could be deleted — an always-empty region
+      // satisfies the gate spec above on its own.
+      const beforeGate = progressText();
+      act(() => {
+        vi.advanceTimersToNextTimer();
+      });
+      const afterGate = progressText();
+      act(() => {
+        vi.advanceTimersToNextTimer();
+      });
+      const afterLongWait = progressText();
+
+      expect(beforeGate).toBe("");
+      expect(afterGate).not.toBe("");
+      // The escalation adds to the narration rather than replacing it, so the
+      // user never loses sight of what is running.
+      expect(afterLongWait.startsWith(afterGate)).toBe(true);
+      expect(afterLongWait.length).toBeGreaterThan(afterGate.length);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("hands focus back inside the palette, not to the row it just deleted", () => {
+    renderPalette({
+      scratchResults: [makeScratch(1)],
+      deleteScratchConfirm: target(),
+      onDismissDeleteScratchConfirm: vi.fn(),
+      onConfirmDeleteScratch: vi.fn(),
+    });
+
+    // The trigger row is gone once the delete lands, so without a named successor
+    // the dialog's restore walks to app chrome behind a still-`aria-modal`
+    // palette. The resolved target has to be the palette's own search box.
+    const restored = screen.getByTestId("confirm-dialog").getAttribute("data-restore-focus");
+    expect(restored).toBe("palette-input");
   });
 });

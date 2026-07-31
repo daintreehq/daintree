@@ -2,76 +2,55 @@ import { useEffect, useState } from "react";
 
 import { useDohertyGate } from "./useDeferredLoading";
 
-/**
- * Main runs `scratch:remove` as two sequential awaits with no reportable
- * boundary between them — a graceful terminal teardown, then a recursive
- * `fs.rm` of the scratch folder. Neither emits progress, so the phase the
- * dialog names is inferred here rather than reported.
- *
- * The teardown's 10s bound is an RPC ceiling, not a typical duration: the host
- * signals and escalates well inside it. Crossing to the folder phase at 4s is
- * past the overwhelming majority of real teardowns while still landing before
- * the long-wait line, so the dialog keeps moving instead of freezing on one
- * string.
- */
-const TERMINAL_PHASE_MS = 4_000;
-
-/** Past this, a phase label alone stops reassuring (the >5s loading rule). */
+/** Past this, a label alone stops reassuring (the >5s loading rule). */
 const STILL_WORKING_MS = 5_000;
-
-export const SCRATCH_DELETION_PHASES = {
-  terminals: "Closing terminals…",
-  folder: "Deleting files…",
-} as const;
 
 export interface ScratchDeletionProgress {
   /**
    * Doherty-gated display truth — false for the first 400ms so a scratch that
-   * deletes instantly never flashes a phase line. Never branch state on this;
-   * the caller's raw pending flag is the state truth.
+   * deletes instantly never flashes a label. Never branch state on this; the
+   * caller's raw pending flag is the state truth.
    */
   isVisible: boolean;
-  phase: string;
   isStillWorking: boolean;
 }
 
 /**
- * Narrates which step a scratch deletion is on.
+ * Long-wait state for the single-scratch delete confirmation.
  *
- * `hasTerminals` comes from the frozen confirm snapshot, not the live row: main
- * awaits the teardown unconditionally, but with nothing to kill it returns
- * immediately, so naming that phase for a scratch with no live processes would
- * misreport the wait on the most common path.
+ * Deliberately does NOT narrate which backend step is running. `scratch:remove`
+ * snapshots the scratch's terminals, awaits a project-wide graceful kill bounded
+ * by a 10s RPC timeout, resolves branches, journals each agent session, and only
+ * then tombstones the row and recursively `fs.rm`s the folder — with no event at
+ * any boundary. Every candidate for inferring the current step was checked and
+ * rejected:
+ *
+ * - Elapsed time has no defensible crossover. The kills run in parallel under
+ *   one bound, and the snapshot and journal writes on either side of them are
+ *   themselves unbounded, so any threshold claims a boundary it cannot see.
+ * - A row's `processCount` is not "terminals main will kill": it nets out the
+ *   assistant help PTY (`electron/ipc/handlers/projectCrud/stats.ts`), defaults
+ *   to zero when stats are missing, and is polled — so it reads zero for a
+ *   scratch whose terminals main is about to tear down.
+ *
+ * Naming a step we cannot observe would put a confident lie in a destructive
+ * dialog, which is worse than saying less. The copy therefore states the whole
+ * operation, which is true for its entire duration.
  */
-export function useScratchDeletionProgress(
-  isDeleting: boolean,
-  hasTerminals: boolean
-): ScratchDeletionProgress {
-  const [isPastTerminalPhase, setIsPastTerminalPhase] = useState(false);
+export function useScratchDeletionProgress(isDeleting: boolean): ScratchDeletionProgress {
   const [isStillWorking, setIsStillWorking] = useState(false);
   const isVisible = useDohertyGate(isDeleting);
 
   useEffect(() => {
     // Reset on the falling edge too: a failed delete leaves the dialog open on
-    // its retry, and that run has to narrate from the first phase again.
+    // its retry, and that run starts its own clock.
     if (!isDeleting) {
-      setIsPastTerminalPhase(false);
       setIsStillWorking(false);
       return;
     }
-    const timers = [
-      setTimeout(() => setIsPastTerminalPhase(true), TERMINAL_PHASE_MS),
-      setTimeout(() => setIsStillWorking(true), STILL_WORKING_MS),
-    ];
-    return () => timers.forEach(clearTimeout);
+    const timer = setTimeout(() => setIsStillWorking(true), STILL_WORKING_MS);
+    return () => clearTimeout(timer);
   }, [isDeleting]);
 
-  return {
-    isVisible,
-    phase:
-      hasTerminals && !isPastTerminalPhase
-        ? SCRATCH_DELETION_PHASES.terminals
-        : SCRATCH_DELETION_PHASES.folder,
-    isStillWorking,
-  };
+  return { isVisible, isStillWorking };
 }

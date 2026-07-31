@@ -1576,14 +1576,23 @@ function ProjectPaletteInner({
   );
 }
 
+/**
+ * The palette's search box, lifted out of the two content hosts so the dialogs
+ * rendered beside them can name it as a focus successor. Only the mounted host
+ * attaches, so one ref serves both.
+ */
+interface PaletteInputRefProp {
+  paletteInputRef: React.RefObject<HTMLInputElement | null>;
+}
+
 function ModalContent({
   isOpen,
   onClose,
   mode,
+  paletteInputRef: inputRef,
   ...innerProps
-}: Omit<ProjectSwitcherPaletteProps, "children" | "dropdownAlign">) {
+}: Omit<ProjectSwitcherPaletteProps, "children" | "dropdownAlign"> & PaletteInputRefProp) {
   useOverlayClaim("project-switcher", isOpen);
-  const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   return (
@@ -1639,9 +1648,9 @@ function DropdownContent({
   children,
   mode,
   onDropdownCloseAutoFocus,
+  paletteInputRef: inputRef,
   ...innerProps
-}: ProjectSwitcherPaletteProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
+}: ProjectSwitcherPaletteProps & PaletteInputRefProp) {
   const listRef = useRef<HTMLDivElement>(null);
   const overlayStackLength = useUIStore((state) => state.overlayStack.length);
   const prevOverlayStackLengthRef = useRef<number>(overlayStackLength);
@@ -1753,13 +1762,15 @@ function DeleteScratchConfirmDialog({
   onDismiss,
   onConfirm,
   isDeleting,
+  restoreFocusTo,
 }: {
   target: DeleteScratchTarget;
   onDismiss: () => void;
   onConfirm: () => void;
   isDeleting: boolean;
+  restoreFocusTo: React.RefObject<HTMLElement | null>;
 }) {
-  const progress = useScratchDeletionProgress(isDeleting, target.processCount > 0);
+  const progress = useScratchDeletionProgress(isDeleting);
 
   return (
     <ConfirmDialog
@@ -1772,6 +1783,11 @@ function DeleteScratchConfirmDialog({
       onConfirm={onConfirm}
       isConfirmLoading={isDeleting}
       variant="destructive"
+      // The row that opened this is gone by the time it closes, so the default
+      // restore walks to the first tabbable node under #root — app chrome behind
+      // a palette that is still `aria-modal`. Hand focus back to the search box
+      // instead, which survives the delete and keeps it inside the palette.
+      restoreFocusTo={restoreFocusTo}
     >
       <div className="space-y-3">
         <div className="text-sm text-daintree-text/70">
@@ -1781,20 +1797,19 @@ function DeleteScratchConfirmDialog({
         {/*
          * Raw `isDeleting` decides whether the live region exists; the Doherty
          * gate only decides whether it has anything to say, so a scratch that
-         * deletes inside the gate never flashes a phase (lesson #10083). The
-         * region stays mounted for the whole run so each phase change is an
-         * update to one announcer rather than a fresh one.
+         * deletes inside the gate never flashes it (lesson #10083). The region
+         * stays mounted for the whole run so the long-wait line is an update to
+         * one announcer rather than a second one.
          */}
         {isDeleting && (
           <div
             role="status"
-            aria-live="polite"
             className="min-h-4 text-xs text-daintree-text/60"
             data-testid="delete-scratch-progress"
           >
             {progress.isVisible && (
               <>
-                {progress.phase}
+                Closing terminals and deleting files…
                 {progress.isStillWorking && (
                   <span className="block text-daintree-text/40">Still working…</span>
                 )}
@@ -1864,6 +1879,8 @@ export function ProjectSwitcherPalette({
   onConfirmDeleteOriginalScratch,
   isDeletingOriginalScratch = false,
 }: ProjectSwitcherPaletteProps) {
+  const paletteInputRef = useRef<HTMLInputElement>(null);
+
   const hasRunningProcesses = removeConfirmProject
     ? removeConfirmProject.processCount > 0 ||
       removeConfirmProject.activeAgentCount > 0 ||
@@ -1873,6 +1890,7 @@ export function ProjectSwitcherPalette({
   const content =
     mode === "dropdown" ? (
       <DropdownContent
+        paletteInputRef={paletteInputRef}
         isOpen={isOpen}
         query={query}
         results={results}
@@ -1912,6 +1930,7 @@ export function ProjectSwitcherPalette({
       </DropdownContent>
     ) : (
       <ModalContent
+        paletteInputRef={paletteInputRef}
         isOpen={isOpen}
         query={query}
         results={results}
@@ -2058,6 +2077,7 @@ export function ProjectSwitcherPalette({
       {deleteScratchConfirm && onDismissDeleteScratchConfirm && onConfirmDeleteScratch && (
         <DeleteScratchConfirmDialog
           target={deleteScratchConfirm}
+          restoreFocusTo={paletteInputRef}
           onDismiss={onDismissDeleteScratchConfirm}
           onConfirm={onConfirmDeleteScratch}
           isDeleting={isDeletingScratch}

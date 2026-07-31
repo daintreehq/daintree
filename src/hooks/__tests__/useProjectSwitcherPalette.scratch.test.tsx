@@ -734,20 +734,22 @@ describe("deleteScratch", () => {
     expect(result.current.deleteScratchConfirm).toBeNull();
   });
 
-  it("carries the running-process count into the frozen target", () => {
+  it("freezes the name and path so the dialog can outlive the row", () => {
     const seeded = seedScratches(2);
-    projectStatsState.stats[seeded[1]!.id] = {
-      activeAgentCount: 0,
-      waitingAgentCount: 0,
-      processCount: 3,
-    };
-    const { result } = renderHook(() => useProjectSwitcherPalette());
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
 
     act(() => result.current.requestDeleteScratch(seeded[1]!.id));
 
-    // Decides whether the dialog may claim it is stopping terminals; read live it
-    // would be re-derived from a row that is on its way out.
-    expect(result.current.deleteScratchConfirm?.processCount).toBe(3);
+    // A rename landing from another window while the user reads the dialog must
+    // not rewrite what they agreed to.
+    scratchState.scratches = [
+      seeded[0]!,
+      { ...seeded[1]!, name: "Renamed elsewhere", path: "/tmp/scratches/moved" },
+    ];
+    rerender();
+
+    expect(result.current.deleteScratchConfirm?.name).toBe(seeded[1]!.name);
+    expect(result.current.deleteScratchConfirm?.path).toBe(seeded[1]!.path);
   });
 
   it("dismisses without deleting anything", () => {
@@ -820,7 +822,7 @@ describe("deleteScratch", () => {
     expect(payload.title).toContain(seeded[0]!.name);
   });
 
-  it("routes the success receipt where a closed palette can still see it", async () => {
+  it("shapes the success receipt as a supported transient payload", async () => {
     const seeded = seedScratches(2);
     const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -830,9 +832,11 @@ describe("deleteScratch", () => {
     });
 
     const payload = lastNotification();
-    // Transient with no context: the row leaving is not reliably observable (the
-    // palette may be shut), and a context-suppressed transient is dropped outright
-    // while the origin surface IS visible — it has no inbox entry to fall back to.
+    // Shape, not delivery — delivery is `notify()`'s own contract. `transient`
+    // paired with `context` is the combination notify() DEV-warns about (context
+    // suppression needs an inbox entry to fall back to, and transient has none),
+    // and paired with a passive priority it is a silent no-op. This is the one
+    // supported transient shape, and the bulk sibling above does not use it.
     expect(payload.transient).toBe(true);
     expect(payload.priority).toBe("high");
     expect(payload.context).toBeUndefined();
@@ -919,6 +923,60 @@ describe("deleteScratch", () => {
     rerender();
 
     expect(result.current.deleteScratchConfirm).toBeNull();
+  });
+
+  it("reconciles a target another window deleted when our own run then fails", async () => {
+    const seeded = seedScratches(2);
+    const { release } = deferRemovals();
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
+
+    let run!: Promise<void>;
+    act(() => {
+      run = result.current.confirmDeleteScratch();
+    });
+
+    // Another window deletes the same scratch mid-run. The stale-target effect
+    // sees the push and skips it, because our own run is still in flight.
+    scratchState.scratches = seeded.slice(1);
+    rerender();
+    expect(result.current.deleteScratchConfirm).not.toBeNull();
+
+    // Then OUR call fails — the path that deliberately keeps the dialog open as
+    // its retry surface. Nothing about `scratches` changes on the way out, so a
+    // guard keyed on the re-entrancy ref never re-runs and strands a dialog
+    // offering to retry a scratch that is already gone.
+    scratchState.removeScratch.mockImplementation(() => Promise.reject(new Error("EBUSY")));
+    await act(async () => {
+      release();
+      await run;
+    });
+
+    expect(result.current.isDeletingScratch).toBe(false);
+    expect(result.current.deleteScratchConfirm).toBeNull();
+  });
+
+  it("closes the dialog before it settles the busy flag", async () => {
+    const seeded = seedScratches(2);
+    // Probe the guard at helper-entry time rather than after the run: every
+    // outcome assertion reads final batched state, so clearing the busy flag
+    // BEFORE the announcement would look identical from the outside.
+    let dismissWasRefused = false;
+    closeAndAnnounceSpy.mockImplementation(() => {
+      result.current.dismissDeleteScratchConfirm();
+      dismissWasRefused = result.current.deleteScratchConfirm !== null;
+    });
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
+    await act(async () => {
+      await result.current.confirmDeleteScratch();
+    });
+
+    // The dialog is still busy while the announcement is raised, so a dismiss
+    // arriving at that moment is refused rather than racing the close.
+    expect(dismissWasRefused).toBe(true);
   });
 
   it("keeps the dialog open while a different scratch vanishes", () => {

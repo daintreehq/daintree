@@ -1,27 +1,29 @@
 // @vitest-environment jsdom
 /**
- * useScratchDeletionProgress — the phase narration behind the single-scratch
+ * useScratchDeletionProgress — the long-wait state behind the single-scratch
  * delete confirmation (#11522).
  *
- * Main runs the delete as two opaque awaits, so the phase is inferred from
- * elapsed time. What matters is the ORDER of the milestones and which of them
- * apply to a given target — never the constants themselves, which is why every
- * assertion advances to the next scheduled timer rather than restating 4000/5000.
+ * Two clocks, both owned here: the Doherty gate that keeps a fast delete from
+ * flashing anything, and the long-wait mark past which a label alone stops
+ * reassuring. What these specs pin is their ORDER and their cleanup — the hook
+ * deliberately narrates no backend phase, because the backend exposes no
+ * boundary to narrate (see the hook's own docblock).
  */
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SCRATCH_DELETION_PHASES, useScratchDeletionProgress } from "../useScratchDeletionProgress";
+import { useScratchDeletionProgress } from "../useScratchDeletionProgress";
 
 beforeEach(() => {
   vi.useFakeTimers();
 });
 
 afterEach(() => {
+  vi.clearAllTimers();
   vi.useRealTimers();
 });
 
-/** Fire the next scheduled timer, whichever milestone it belongs to. */
+/** Fire the next scheduled timer, whichever clock it belongs to. */
 function advanceToNextMilestone() {
   act(() => {
     vi.advanceTimersToNextTimer();
@@ -33,13 +35,14 @@ function advanceToNextMilestone() {
  * opening frame.
  *
  * Assertions read positions out of this rather than advancing a fixed number of
- * times: the hook owns three clocks (the Doherty gate plus two milestones) and a
- * spec that counted advances would be pinned to that arrangement instead of to
- * the ordering it actually cares about.
+ * times, so they pin ordering rather than the hook's private clock count. The
+ * iteration cap is a deadlock guard: a hook that rescheduled from inside a timer
+ * callback would otherwise spin here forever instead of failing.
  */
-function traceMilestones(read: () => { phase: string; isStillWorking: boolean }) {
+function traceMilestones(read: () => { isVisible: boolean; isStillWorking: boolean }) {
   const trace = [{ ...read() }];
-  while (vi.getTimerCount() > 0) {
+  for (let i = 0; vi.getTimerCount() > 0; i++) {
+    if (i >= 10) throw new Error(`timers never drained (${vi.getTimerCount()} left)`);
     advanceToNextMilestone();
     trace.push({ ...read() });
   }
@@ -47,29 +50,20 @@ function traceMilestones(read: () => { phase: string; isStillWorking: boolean })
 }
 
 describe("visibility gate", () => {
-  it("stays silent until the Doherty gate clears, then narrates", () => {
-    const { result } = renderHook(() => useScratchDeletionProgress(true, true));
+  it("stays silent until the Doherty gate clears, then shows", () => {
+    const { result } = renderHook(() => useScratchDeletionProgress(true));
 
-    // A delete that lands inside the gate must never have flashed a phase.
+    // A delete that lands inside the gate must never have flashed.
     expect(result.current.isVisible).toBe(false);
 
     advanceToNextMilestone();
 
     expect(result.current.isVisible).toBe(true);
-  });
-
-  it("keeps naming a phase even while the gate hides it", () => {
-    const { result } = renderHook(() => useScratchDeletionProgress(true, true));
-
-    // The label is state truth and exists from the first frame; only its
-    // painting is gated. Reading the gate as "no phase yet" is the #10083 trap.
-    expect(result.current.phase).toBe(SCRATCH_DELETION_PHASES.terminals);
-    expect(result.current.isVisible).toBe(false);
   });
 
   it("goes quiet again once the deletion stops", () => {
     const { result, rerender } = renderHook(
-      ({ isDeleting }) => useScratchDeletionProgress(isDeleting, true),
+      ({ isDeleting }) => useScratchDeletionProgress(isDeleting),
       { initialProps: { isDeleting: true } }
     );
 
@@ -80,93 +74,77 @@ describe("visibility gate", () => {
 
     expect(result.current.isVisible).toBe(false);
   });
-});
 
-describe("phase ordering", () => {
-  it("names the terminal phase first, then the folder phase", () => {
-    const { result } = renderHook(() => useScratchDeletionProgress(true, true));
+  it("shows nothing at all when no deletion is running", () => {
+    const { result } = renderHook(() => useScratchDeletionProgress(false));
 
-    const phases = traceMilestones(() => result.current).map((step) => step.phase);
-
-    // The terminal phase leads and is left exactly once — a run that flipped
-    // back would be reporting a boundary the backend never crosses twice.
-    expect(phases[0]).toBe(SCRATCH_DELETION_PHASES.terminals);
-    expect(phases.at(-1)).toBe(SCRATCH_DELETION_PHASES.folder);
-    expect(phases.lastIndexOf(SCRATCH_DELETION_PHASES.terminals)).toBeLessThan(
-      phases.indexOf(SCRATCH_DELETION_PHASES.folder)
-    );
-  });
-
-  it("skips the terminal phase for a scratch with nothing running", () => {
-    const { result } = renderHook(() => useScratchDeletionProgress(true, false));
-
-    // Main awaits the teardown either way, but with no processes it returns at
-    // once — claiming otherwise would misreport the wait on the common path.
-    const phases = traceMilestones(() => result.current).map((step) => step.phase);
-
-    expect(phases).not.toContain(SCRATCH_DELETION_PHASES.terminals);
-    expect(new Set(phases)).toEqual(new Set([SCRATCH_DELETION_PHASES.folder]));
-  });
-
-  it("raises the long-wait note only after the phase has already moved on", () => {
-    const { result } = renderHook(() => useScratchDeletionProgress(true, true));
-
-    const trace = traceMilestones(() => result.current);
-
-    // Ordering, not timing: the note is the last milestone, so it can never be
-    // the thing that first replaces a phase label.
-    expect(trace[0]!.isStillWorking).toBe(false);
-    expect(trace.at(-1)!.isStillWorking).toBe(true);
-    expect(trace.findIndex((step) => step.phase === SCRATCH_DELETION_PHASES.folder)).toBeLessThan(
-      trace.findIndex((step) => step.isStillWorking)
-    );
-  });
-});
-
-describe("retry", () => {
-  it("narrates a second attempt from the first phase again", () => {
-    const { result, rerender } = renderHook(
-      ({ isDeleting }) => useScratchDeletionProgress(isDeleting, true),
-      { initialProps: { isDeleting: true } }
-    );
-
-    traceMilestones(() => result.current);
-    expect(result.current.phase).toBe(SCRATCH_DELETION_PHASES.folder);
-    expect(result.current.isStillWorking).toBe(true);
-
-    // A failure re-arms the dialog's button; the retry is a fresh run and must
-    // not open on the previous run's last phase.
-    rerender({ isDeleting: false });
-    rerender({ isDeleting: true });
-
-    expect(result.current.phase).toBe(SCRATCH_DELETION_PHASES.terminals);
+    // Paired with the specs above: without it, a hook hardwired to `false`
+    // would still look correct on the gate.
+    expect(vi.getTimerCount()).toBe(0);
+    expect(result.current.isVisible).toBe(false);
     expect(result.current.isStillWorking).toBe(false);
   });
 });
 
-describe("cleanup", () => {
-  it("leaves no timer running after unmount", () => {
-    const { unmount } = renderHook(() => useScratchDeletionProgress(true, true));
+describe("long wait", () => {
+  it("raises the long-wait note only after the run is already visible", () => {
+    const { result } = renderHook(() => useScratchDeletionProgress(true));
 
-    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    const trace = traceMilestones(() => result.current);
 
-    unmount();
-
-    // Measured against zero rather than a delta: a surviving timeout would fire
-    // setState on an unmounted hook.
-    expect(vi.getTimerCount()).toBe(0);
+    // Ordering, not timing: the note is the last milestone, so it can never be
+    // the first thing the user sees.
+    expect(trace[0]!.isStillWorking).toBe(false);
+    expect(trace.at(-1)!.isStillWorking).toBe(true);
+    expect(trace.findIndex((step) => step.isVisible)).toBeLessThan(
+      trace.findIndex((step) => step.isStillWorking)
+    );
   });
 
-  it("drops the pending milestones when the deletion resolves early", () => {
-    const { rerender } = renderHook(
-      ({ isDeleting }) => useScratchDeletionProgress(isDeleting, true),
+  it("starts a retry's clock over rather than opening on the last run's state", () => {
+    const { result, rerender } = renderHook(
+      ({ isDeleting }) => useScratchDeletionProgress(isDeleting),
       { initialProps: { isDeleting: true } }
     );
 
-    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    traceMilestones(() => result.current);
+    expect(result.current.isStillWorking).toBe(true);
+
+    // A failure re-arms the dialog's button; the retry is a fresh run and must
+    // not open already claiming it has been slow.
+    rerender({ isDeleting: false });
+    rerender({ isDeleting: true });
+
+    expect(result.current.isStillWorking).toBe(false);
+    expect(result.current.isVisible).toBe(false);
+  });
+});
+
+describe("cleanup", () => {
+  it("leaves no timer of its own running after unmount", () => {
+    const baseline = vi.getTimerCount();
+    const { unmount } = renderHook(() => useScratchDeletionProgress(true));
+
+    expect(vi.getTimerCount()).toBeGreaterThan(baseline);
+
+    unmount();
+
+    // Measured against the pre-render baseline rather than zero, so an unrelated
+    // timer from the harness can't turn this into a flake. A survivor here would
+    // fire setState on an unmounted hook.
+    expect(vi.getTimerCount()).toBe(baseline);
+  });
+
+  it("drops the pending milestones when the deletion resolves early", () => {
+    const baseline = vi.getTimerCount();
+    const { rerender } = renderHook(({ isDeleting }) => useScratchDeletionProgress(isDeleting), {
+      initialProps: { isDeleting: true },
+    });
+
+    expect(vi.getTimerCount()).toBeGreaterThan(baseline);
 
     rerender({ isDeleting: false });
 
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(baseline);
   });
 });

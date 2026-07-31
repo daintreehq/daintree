@@ -78,13 +78,9 @@ export type DeleteAllScratchesSnapshot = ReadonlyArray<
  *
  * Frozen for the same reason as the bulk snapshot: the row can be removed under
  * the open dialog by a `scratch:removed` push from another window, and the run
- * still has to name what the user agreed to. `processCount` rides along because
- * it decides whether the progress dialog may claim it is stopping terminals —
- * read live it would be re-derived from a row that is disappearing.
+ * still has to name what the user agreed to.
  */
-export type DeleteScratchTarget = Readonly<
-  Pick<SearchableScratch, "id" | "name" | "path" | "processCount">
->;
+export type DeleteScratchTarget = Readonly<Pick<SearchableScratch, "id" | "name" | "path">>;
 
 /**
  * Band a project renders under in browse. Ordered exactly as the sections
@@ -1630,12 +1626,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       // opening and the choice landing, and guessing which scratch the user
       // meant is exactly the silent default a destructive path must not have.
       if (!target) return;
-      setDeleteScratchConfirm({
-        id: target.id,
-        name: target.name,
-        path: target.path,
-        processCount: target.processCount,
-      });
+      setDeleteScratchConfirm({ id: target.id, name: target.name, path: target.path });
     },
     [scratchResults, deleteScratchConfirm]
   );
@@ -1648,11 +1639,17 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // A `scratch:removed` push from another window can retire the target under an
   // open dialog. Skipped while our own run is in flight, or the removal we just
   // performed would tear the dialog down before the outcome is announced.
+  //
+  // Gated on the STATE, not the ref that guards re-entrancy: a ref settling in
+  // `finally` re-runs nothing. Another window deleting the target mid-run would
+  // then be consumed by a skipped pass, and if our own call went on to reject —
+  // which leaves the dialog open as its own retry surface — nothing would ever
+  // reconcile it, stranding a dialog that retries a scratch already gone.
   useEffect(() => {
-    if (!deleteScratchConfirm || isDeletingScratchRef.current) return;
+    if (!deleteScratchConfirm || isDeletingScratch) return;
     if (scratches.some((scratch: Scratch) => scratch.id === deleteScratchConfirm.id)) return;
     setDeleteScratchConfirm(null);
-  }, [deleteScratchConfirm, scratches]);
+  }, [deleteScratchConfirm, scratches, isDeletingScratch]);
 
   const confirmDeleteScratch = useCallback(async () => {
     if (isDeletingScratchRef.current) return;
@@ -1672,9 +1669,13 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       // treats `fs.rm` as best-effort, so a resolved call proves the workspace is
       // gone from the app, not that the directory is gone from disk.
       //
-      // Transient with no `context`: the palette may already be closed or the row
-      // offscreen, so the receipt has to reach the user — and a context-suppressed
-      // transient is dropped outright when the origin surface is visible.
+      // A focused-window receipt, deliberately best-effort: the row leaving is
+      // only visible if the palette is still open on it, so a toast is worth
+      // raising, but a deletion that lands while the window is blurred is dropped
+      // rather than filed. `transient` is what drops it, and it stays because a
+      // routine delete is not inbox-worthy — `closeAndAnnounce` above is the
+      // guaranteed signal. No `context`: pairing it with `transient` is the
+      // unsupported shape `notify()` DEV-warns about (no inbox to fall back to).
       notify({
         type: "success",
         title,
