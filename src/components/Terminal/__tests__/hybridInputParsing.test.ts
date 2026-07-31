@@ -435,4 +435,45 @@ describe("formatAtFileTokenForCwd", () => {
   it("leaves an already-relative path alone", () => {
     expect(formatAtFileTokenForCwd("src/App.tsx", cwd)).toBe(formatAtFileToken("src/App.tsx"));
   });
+
+  // The inverse of the case above: the whitespace lives entirely in the prefix
+  // being stripped. Quoting decided before relativizing would needlessly quote
+  // a clean relative path and diverge from autocomplete.
+  it("does not quote when only the stripped cwd prefix carried whitespace", () => {
+    const spacedCwd = "/Users/greg/My Projects/daintree";
+    expect(formatAtFileTokenForCwd(`${spacedCwd}/src/App.tsx`, spacedCwd)).toBe(
+      formatAtFileToken("src/App.tsx")
+    );
+  });
+
+  it("still quotes an outside-cwd absolute path carrying whitespace", () => {
+    const outside = "/Volumes/My Drive/notes.md";
+    expect(formatAtFileTokenForCwd(outside, cwd)).toBe(formatAtFileToken(outside));
+  });
+});
+
+describe("formatAtFileToken reserved-token collision", () => {
+  // Relativizing can reduce a real file to a bare `terminal`/`diff`/`selection`,
+  // which the send path resolves as that provider's content. The emitted token
+  // has to survive every special-token scanner as a plain file reference.
+  it.each(["terminal", "selection", "diff", "diff:staged", "diff:head"])(
+    "does not emit %s as a bare reserved token",
+    (reserved) => {
+      const token = formatAtFileToken(reserved);
+      const text = `look at ${token} please`;
+      expect(getAllAtTerminalTokens(text)).toHaveLength(0);
+      expect(getAllAtSelectionTokens(text)).toHaveLength(0);
+      expect(getAllAtDiffTokens(text)).toHaveLength(0);
+    }
+  );
+
+  it("routes a reserved-name drop through the cwd formatter too", () => {
+    const cwd = "/repo";
+    expect(formatAtFileTokenForCwd(`${cwd}/terminal`, cwd)).toBe(formatAtFileToken("terminal"));
+  });
+
+  it("leaves a reserved name alone when it is not the whole path", () => {
+    expect(formatAtFileToken("src/terminal")).toBe("@src/terminal");
+    expect(formatAtFileToken("terminal.ts")).toBe("@terminal.ts");
+  });
 });

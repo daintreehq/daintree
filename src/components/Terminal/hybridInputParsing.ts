@@ -240,9 +240,28 @@ export function getAllAtSelectionTokens(text: string): AtSelectionToken[] {
 
 // --- @file token ---
 
+/**
+ * Paths that, spelled bare, are Daintree's own `@` tokens rather than files.
+ * `fileChip` uses this to refuse them a file chip; the formatter uses it to
+ * avoid ever producing one for a real file.
+ */
+export const RESERVED_AT_TOKEN_PATHS = new Set([
+  "diff",
+  "diff:staged",
+  "diff:head",
+  "terminal",
+  "selection",
+]);
+
 export function formatAtFileToken(file: string): string {
-  const needsQuotes = /\s/.test(file);
-  return `@${needsQuotes ? `"${file}"` : file}`;
+  // A relative path can land exactly on one of those reserved tokens — a file
+  // named `terminal` sitting at the cwd root relativizes to `terminal`, and
+  // `@terminal` is resolved on send as "paste the terminal buffer here", so
+  // the reference silently becomes something else entirely. `./` keeps it a
+  // path to every reader without changing what it points at.
+  const path = RESERVED_AT_TOKEN_PATHS.has(file) ? `./${file}` : file;
+  const needsQuotes = /\s/.test(path);
+  return `@${needsQuotes ? `"${path}"` : path}`;
 }
 
 /**

@@ -2,17 +2,26 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { EditorView } from "@codemirror/view";
-import { useDragDrop } from "../useDragDrop";
+
+// The hook reaches `useTerminalFileTransfer` for one regex, but that module
+// constructs the `terminalInstanceService` singleton at import time — real
+// heartbeat intervals and window listeners this suite never disposes. Stub it
+// so the suite owns nothing but the hook.
+vi.mock("../../useTerminalFileTransfer", () => ({
+  IMAGE_EXTENSIONS: /\.(png|jpe?g|bmp|tiff?|avif|heic)$/i,
+}));
+
+const { useDragDrop } = await import("../useDragDrop");
 
 const CWD = "/Users/greg/Projects/daintree";
 
-function fakeView() {
+function fakeView(head = 0) {
   const dispatch = vi.fn();
   const view = {
-    state: { selection: { main: { head: 0 } } },
+    state: { selection: { main: { head } } },
     dispatch,
   } as unknown as EditorView;
-  return { view, dispatch, ref: { current: view } as React.RefObject<EditorView | null> };
+  return { view, dispatch, head, ref: { current: view } as React.RefObject<EditorView | null> };
 }
 
 function dropEvent(files: File[]): React.DragEvent {
@@ -37,6 +46,18 @@ function insertedToken(dispatch: ReturnType<typeof vi.fn>): string {
 function effectValues(dispatch: ReturnType<typeof vi.fn>): Record<string, unknown>[] {
   const effects = dispatch.mock.calls[0]?.[0]?.effects as { value: Record<string, unknown> }[];
   return effects.map((e) => e.value);
+}
+
+/**
+ * Every chip range is a document position, so it only lines up if the hook
+ * accumulated offsets against the emitted spelling rather than the original
+ * absolute path. Returns what each range actually covers in the document.
+ */
+function chipSpellings(dispatch: ReturnType<typeof vi.fn>, head: number): string[] {
+  const insert = dispatch.mock.calls[0]?.[0]?.changes?.insert as string;
+  return effectValues(dispatch).map((chip) =>
+    insert.slice((chip.from as number) - head, (chip.to as number) - head)
+  );
 }
 
 let pathForFile: ReturnType<typeof vi.fn>;
@@ -135,19 +156,79 @@ describe("useDragDrop", () => {
 
   it("keeps consecutive chip ranges aligned with their tokens when several files drop at once", async () => {
     pathForFile.mockImplementation((file: File) => `${CWD}/src/${file.name}`);
-    const { dispatch, ref } = fakeView();
+    const { dispatch, ref, head } = fakeView(17);
     const { result } = renderHook(() => useDragDrop(ref, CWD));
 
     await act(async () => {
       await result.current.handleDrop(dropEvent([fakeFile("a.ts"), fakeFile("b.ts")]));
     });
 
-    const insert = dispatch.mock.calls[0]?.[0]?.changes?.insert as string;
-    for (const chip of effectValues(dispatch)) {
-      const from = chip.from as number;
-      const to = chip.to as number;
-      expect(insert.slice(from, to)).toBe(`@src/${chip.fileName as string}`);
-    }
+    expect(effectValues(dispatch)).toHaveLength(2);
+    expect(chipSpellings(dispatch, head)).toEqual(["@src/a.ts", "@src/b.ts"]);
+  });
+
+  // The two branches share one `insertText`/`from` accumulator while emitting
+  // different spellings — a bare absolute path for the image, a shortened
+  // relative token for the file. Interleaving them is where an accumulator
+  // still sized to the absolute path would drift.
+  it("keeps ranges aligned when an image and a file drop together", async () => {
+    pathForFile.mockImplementation((file: File) => `${CWD}/src/${file.name}`);
+    const { dispatch, ref, head } = fakeView(9);
+    const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+    await act(async () => {
+      await result.current.handleDrop(dropEvent([fakeFile("shot.png"), fakeFile("a.ts")]));
+    });
+
+    expect(effectValues(dispatch)).toHaveLength(2);
+    // Image effects are collected ahead of file effects, so compare as a set.
+    expect(chipSpellings(dispatch, head).sort()).toEqual(
+      [`${CWD}/src/shot.png`, "@src/a.ts"].sort()
+    );
+  });
+
+  it("keeps ranges aligned when a file precedes an image", async () => {
+    pathForFile.mockImplementation((file: File) => `${CWD}/src/${file.name}`);
+    const { dispatch, ref, head } = fakeView(4);
+    const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+    await act(async () => {
+      await result.current.handleDrop(dropEvent([fakeFile("a.ts"), fakeFile("shot.png")]));
+    });
+
+    expect(chipSpellings(dispatch, head).sort()).toEqual(
+      [`${CWD}/src/shot.png`, "@src/a.ts"].sort()
+    );
+  });
+
+  it("inserts at the cursor and leaves the caret after everything it inserted", async () => {
+    pathForFile.mockReturnValue(`${CWD}/src/App.tsx`);
+    const { dispatch, ref, head } = fakeView(23);
+    const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+    await act(async () => {
+      await result.current.handleDrop(dropEvent([fakeFile("App.tsx")]));
+    });
+
+    const call = dispatch.mock.calls[0]?.[0];
+    const insert = call?.changes?.insert as string;
+    expect(call?.changes?.from).toBe(head);
+    expect(call?.selection?.anchor).toBe(head + insert.length);
+  });
+
+  // A file named `terminal` at the cwd root relativizes to a bare `terminal`,
+  // which the send path would otherwise resolve as "inject the terminal
+  // buffer" instead of referencing the file.
+  it("keeps a cwd-root file that collides with a reserved token a path", async () => {
+    pathForFile.mockReturnValue(`${CWD}/terminal`);
+    const { dispatch, ref } = fakeView();
+    const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+    await act(async () => {
+      await result.current.handleDrop(dropEvent([fakeFile("terminal")]));
+    });
+
+    expect(insertedToken(dispatch)).toBe("@./terminal");
   });
 
   // Images insert a bare path rather than an `@file` token and are out of this

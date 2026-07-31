@@ -27,13 +27,13 @@ const { createFilePasteHandler } = await import("../../inputEditorExtensions");
 
 const CWD = "/Users/greg/Projects/daintree";
 
-function fakeView() {
+function fakeView(head = 0) {
   const dispatch = vi.fn();
   const view = {
-    state: { selection: { main: { head: 0 } } },
+    state: { selection: { main: { head } } },
     dispatch,
   } as unknown as EditorView;
-  return { view, dispatch };
+  return { view, dispatch, head };
 }
 
 function pasted(name: string, path: string): PasteFile {
@@ -48,6 +48,14 @@ function insertedToken(dispatch: ReturnType<typeof vi.fn>): string {
 function effectValues(dispatch: ReturnType<typeof vi.fn>): Record<string, unknown>[] {
   const effects = dispatch.mock.calls[0]?.[0]?.effects as { value: Record<string, unknown> }[];
   return effects.map((e) => e.value);
+}
+
+/** What each chip range actually covers in the document. */
+function chipSpellings(dispatch: ReturnType<typeof vi.fn>, head: number): string[] {
+  const insert = dispatch.mock.calls[0]?.[0]?.changes?.insert as string;
+  return effectValues(dispatch).map((chip) =>
+    insert.slice((chip.from as number) - head, (chip.to as number) - head)
+  );
 }
 
 beforeEach(() => {
@@ -120,18 +128,35 @@ describe("usePasteExtensions", () => {
 
   it("keeps consecutive chip ranges aligned with their tokens when several files paste at once", () => {
     renderHook(() => usePasteExtensions(CWD));
-    const { view, dispatch } = fakeView();
+    const { view, dispatch, head } = fakeView(31);
 
     captured.filePaste?.(view, [
       pasted("a.ts", `${CWD}/src/a.ts`),
       pasted("b.ts", `${CWD}/src/b.ts`),
     ]);
 
-    const insert = dispatch.mock.calls[0]?.[0]?.changes?.insert as string;
-    for (const chip of effectValues(dispatch)) {
-      const from = chip.from as number;
-      const to = chip.to as number;
-      expect(insert.slice(from, to)).toBe(`@src/${chip.fileName as string}`);
-    }
+    expect(effectValues(dispatch)).toHaveLength(2);
+    expect(chipSpellings(dispatch, head)).toEqual(["@src/a.ts", "@src/b.ts"]);
+  });
+
+  it("inserts at the cursor and leaves the caret after everything it inserted", () => {
+    renderHook(() => usePasteExtensions(CWD));
+    const { view, dispatch, head } = fakeView(12);
+
+    captured.filePaste?.(view, [pasted("App.tsx", `${CWD}/src/App.tsx`)]);
+
+    const call = dispatch.mock.calls[0]?.[0];
+    const insert = call?.changes?.insert as string;
+    expect(call?.changes?.from).toBe(head);
+    expect(call?.selection?.anchor).toBe(head + insert.length);
+  });
+
+  it("keeps a cwd-root file that collides with a reserved token a path", () => {
+    renderHook(() => usePasteExtensions(CWD));
+    const { view, dispatch } = fakeView();
+
+    captured.filePaste?.(view, [pasted("selection", `${CWD}/selection`)]);
+
+    expect(insertedToken(dispatch)).toBe("@./selection");
   });
 });
