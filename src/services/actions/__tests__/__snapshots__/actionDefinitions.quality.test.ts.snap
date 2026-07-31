@@ -61,7 +61,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "introspection",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List the full action manifest, each entry including inputSchema/outputSchema. Args (all optional): \`category\` filters by domain (e.g. terminal, git, github); \`search\` substring-matches id/title/description; \`enabledOnly\` drops disabled actions. Returns { actions } — an array of manifest entries. Never errors; empty filters return everything. Do NOT use this for discovery — it returns every schema and is expensive; call \`actions.search\` first, then \`actions.getSchema\` for the one you need.",
+    "description": "List lightweight action manifest entries without inputSchema/outputSchema, filtered and paginated. Args (all optional): \`category\` filters by exact domain (e.g. terminal, worktree, forge, git, portal); \`search\` substring-matches id/title/description; \`enabledOnly\` drops disabled actions; \`limit\` sets the page size (1-100, default 50); \`offset\` skips matching actions (default 0). Returns { actions, total, limit, offset, hasMore } with \`actions\` sorted by id so paging stays stable, and \`total\` counting matches after filtering but before pagination, so \`hasMore\` tells you whether another page remains. Errors when \`limit\` isn't an integer in 1-100 or \`offset\` isn't a non-negative integer; filters that match nothing, or an offset past the end, return an empty \`actions\` array. Use \`actions.search\` for ranked discovery and \`actions.getSchema\` to fetch one action's schemas.",
     "examples": undefined,
     "id": "actions.list",
     "keywords": undefined,
@@ -85,7 +85,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "introspection",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Search the action registry by natural-language query, ranked by relevance. Args: \`query\` (required — keywords or phrase); \`limit\` (optional, 1-100, default 20). Returns { totalMatches, results } where results are lightweight manifest entries WITHOUT inputSchema/outputSchema. Errors when \`query\` is empty or whitespace-only. Use this for discovery, then \`actions.getSchema\` for the chosen action's full schema. Do NOT use \`actions.list\` for discovery — it returns every schema and is far heavier.",
+    "description": "Search the action registry by natural-language query, ranked by relevance. Args: \`query\` (required — keywords or phrase); \`limit\` (optional, 1-100, default 20). Returns { totalMatches, results } where results are lightweight manifest entries WITHOUT inputSchema/outputSchema. Errors when \`query\` is empty or whitespace-only. Use this for ranked discovery, then \`actions.getSchema\` for the chosen action's full schema; use \`actions.list\` when you want filtered, paginated enumeration instead of ranking.",
     "examples": [
       {
         "args": {
