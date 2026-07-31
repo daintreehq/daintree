@@ -1,10 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import type { Issue, Page } from "../../../../../shared/types/forge.js";
 import {
   buildListCacheKey,
   normalizeListDirection,
   normalizeListPerPage,
   normalizeListSortOrder,
 } from "../GitHubPRs.js";
+import {
+  clearGitHubCaches,
+  forgeIssueListCache,
+  invalidateRepoListCachesForCountChange,
+} from "../GitHubCaches.js";
+
+beforeEach(() => clearGitHubCaches());
 
 const base = {
   type: "issue",
@@ -46,12 +54,30 @@ describe("list cache identity", () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("preserves the repo prefix the cache sweeps by", () => {
-    // GitHubCaches invalidates a repo's pages by prefix match, so nothing
-    // repo-identifying may move behind another field.
-    for (const key of [keyWith({}), keyWith({ perPage: 99, direction: "asc", cursor: "z" })]) {
-      expect(key.startsWith("issue:daintreehq/daintree:")).toBe(true);
-    }
+  /**
+   * Asserted through the real invalidator rather than by matching the key's
+   * prefix literally: `invalidateRepoListCachesForCountChange` sweeps a repo's
+   * pages by prefix, so what matters is that every key variant is still
+   * reachable by that sweep — and that the sweep doesn't reach another repo.
+   */
+  it("keeps every key variant reachable by the repo-scoped invalidation sweep", () => {
+    const variants = [
+      keyWith({}),
+      keyWith({ perPage: 99 }),
+      keyWith({ direction: "asc" }),
+      keyWith({ cursor: "z", sortOrder: "updated" }),
+    ];
+    const otherRepo = keyWith({ repo: "elsewhere" });
+    const page: Page<Issue> = { items: [], nextCursor: null, hasMore: false };
+    for (const key of [...variants, otherRepo]) forgeIssueListCache.set(key, page);
+
+    invalidateRepoListCachesForCountChange("daintreehq", "daintree", {
+      issues: true,
+      prs: false,
+    });
+
+    for (const key of variants) expect(forgeIssueListCache.get(key)).toBeUndefined();
+    expect(forgeIssueListCache.get(otherRepo)).toBeDefined();
   });
 });
 

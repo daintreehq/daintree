@@ -62,7 +62,12 @@ export const ForgePRSummarySchema = z.object({
   author: SummaryUserSchema.nullable(),
   baseRef: z.string(),
   headRef: z.string(),
-  reviewDecision: z.string().optional(),
+  /**
+   * `null` is a real answer — "this provider gates on no review" — and readers
+   * treat it as equivalent to approved (see `reviewReadiness.ts`). Only
+   * `undefined`, meaning "not reported", may be dropped.
+   */
+  reviewDecision: z.string().nullable().optional(),
   ciStatus: z.string().optional(),
   commentCount: z.number().optional(),
   createdAt: z.number(),
@@ -142,7 +147,7 @@ export function projectPRSummary(pr: PR): ForgePRSummary {
     author: toLogin(pr.author),
     baseRef: pr.baseRef,
     headRef: pr.headRef,
-    ...(pr.reviewDecision ? { reviewDecision: pr.reviewDecision } : {}),
+    ...(pr.reviewDecision !== undefined ? { reviewDecision: pr.reviewDecision } : {}),
     ...(pr.ciStatus ? { ciStatus: pr.ciStatus } : {}),
     ...(pr.commentCount !== undefined ? { commentCount: pr.commentCount } : {}),
     createdAt: pr.createdAt,

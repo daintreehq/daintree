@@ -100,6 +100,50 @@ describe("summary projection drops what a chooser does not need", () => {
     expect(ForgeIssueSummarySchema.safeParse(projectIssueSummary(issue)).success).toBe(true);
     expect(ForgePRSummarySchema.safeParse(projectPRSummary(pr)).success).toBe(true);
   });
+
+  it("emits nothing the declared schema does not name", () => {
+    // `safeParse` strips extras, so the check above would still pass if the
+    // projector started leaking `rawState`, `mergeable` or `body`. Strict
+    // variants turn a leak into a failure.
+    expect(ForgeIssueSummarySchema.strict().safeParse(projectIssueSummary(issue)).success).toBe(
+      true
+    );
+    expect(ForgePRSummarySchema.strict().safeParse(projectPRSummary(pr)).success).toBe(true);
+  });
+
+  it("drops the PR body as well as the issue body", () => {
+    const summary = projectPRSummary(pr);
+    expect("body" in summary).toBe(false);
+    expect("rawState" in summary).toBe(false);
+  });
+
+  it("preserves a null reviewDecision, which means 'no review gate' not 'unknown'", () => {
+    const noGate = projectPRSummary({ ...pr, reviewDecision: null });
+    expect("reviewDecision" in noGate).toBe(true);
+    expect(noGate.reviewDecision).toBeNull();
+
+    const unreported = projectPRSummary({ ...pr, reviewDecision: undefined });
+    expect("reviewDecision" in unreported).toBe(false);
+  });
+
+  it("distinguishes a null timestamp from an absent one", () => {
+    const stillOpen = projectPRSummary({ ...pr, closedAt: null, mergedAt: null });
+    expect(stillOpen.closedAt).toBeNull();
+    expect(stillOpen.mergedAt).toBeNull();
+
+    const unreported = projectPRSummary({ ...pr, closedAt: undefined, mergedAt: undefined });
+    expect("closedAt" in unreported).toBe(false);
+    expect("mergedAt" in unreported).toBe(false);
+  });
+
+  it("carries the scalar identity fields across unchanged", () => {
+    const summary = projectIssueSummary(issue);
+    expect(summary.title).toBe(issue.title);
+    expect(summary.url).toBe(issue.url);
+    expect(summary.state).toBe(issue.state);
+    expect(summary.createdAt).toBe(issue.createdAt);
+    expect(summary.updatedAt).toBe(issue.updatedAt);
+  });
 });
 
 describe("summary projection is total", () => {

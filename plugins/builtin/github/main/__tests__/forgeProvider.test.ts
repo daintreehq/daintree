@@ -1056,6 +1056,29 @@ describe("listPRs caching", () => {
     expect(forgePRListCache.get(defaultListKey("pr"))).toBeDefined();
   });
 
+  // listPRsImpl is a near-copy of listIssuesImpl; without these it could
+  // hardcode or drop either dimension while the issue-side tests stay green.
+  it.each([
+    ["page size", { perPage: 50 }],
+    ["direction", { direction: "asc" as const }],
+  ])("refetches when only the %s differs", async (_label, second) => {
+    mockGraphQLClient.mockResolvedValue(prListResponse());
+    await githubForgeProvider.listPRs(repo, { state: "open" });
+    await githubForgeProvider.listPRs(repo, { state: "open", ...second });
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("carries page size and direction into the PR GraphQL variables", async () => {
+    mockGraphQLClient.mockResolvedValue(prListResponse());
+    await githubForgeProvider.listPRs(repo, { state: "open", perPage: 7, direction: "asc" });
+    const [, variables] = mockGraphQLClient.mock.calls[0] as [
+      string,
+      { limit: number; orderBy: { direction: string } },
+    ];
+    expect(variables.limit).toBe(7);
+    expect(variables.orderBy.direction).toBe("ASC");
+  });
+
   it("a superseded slow fetch does not clobber a newer bypass result", async () => {
     let resolveP1!: (v: unknown) => void;
     const p1 = new Promise((r) => {
@@ -1288,6 +1311,11 @@ describe("listIssues search", () => {
     await githubForgeProvider.listIssues(repo, { search: "flaky", direction: "asc" });
     await githubForgeProvider.listIssues(repo, { search: "flaky", direction: "desc" });
 
+    // Both calls must actually reach the client first. When direction was
+    // ignored the two requests were byte-identical, so the second was served
+    // from `forgeQueryCache` and never appeared here — leaving the comparison
+    // below to compare a string against `undefined` and pass vacuously.
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
     const queries = mockGraphQLClient.mock.calls.map(
       (call) => (call[1] as { searchQuery: string }).searchQuery
     );
@@ -1354,7 +1382,7 @@ describe("listIssues search", () => {
 
     await githubForgeProvider.listIssues(repo, { state: "open", search: "flaky" });
 
-    expect(forgeIssueListCache.get("issue:owner/repo:open::created:")).toBeUndefined();
+    expect(forgeIssueListCache.get(defaultListKey("issue"))).toBeUndefined();
 
     // A following unfiltered list call misses the cache and issues its own query.
     mockGraphQLClient.mockResolvedValue(issueListResponse());

@@ -111,9 +111,13 @@ export function extractLinkedPR(timelineItems: unknown): LinkedPRInfo | undefine
         : undefined;
     if (!prData) continue;
 
+    // A PR needs a usable number AND url to be actionable, so anything short of
+    // a real positive integer and a non-empty url is treated as "no linked PR"
+    // rather than emitted as a half-formed reference.
     const number = prData.number;
     const url = prData.url;
-    if (typeof number !== "number" || typeof url !== "string") continue;
+    if (typeof number !== "number" || !Number.isInteger(number) || number <= 0) continue;
+    if (typeof url !== "string" || url.length === 0) continue;
     if (seenPRNumbers.has(number)) continue;
     seenPRNumbers.add(number);
 

@@ -75,10 +75,21 @@ import {
   getCIStatusesInflight,
 } from "./queryInfra.js";
 
-function buildOrderBy(opts: ListOptions): { field: string; direction: string } {
-  const direction = opts.direction === "asc" ? "ASC" : "DESC";
-  const field = opts.sort === "updated" ? "UPDATED_AT" : "CREATED_AT";
-  return { field, direction };
+/**
+ * Takes the ALREADY-normalized order rather than raw `ListOptions`, so the
+ * ordering sent to GitHub and the ordering baked into the cache key can only
+ * ever come from one decision. Re-deriving it here is how the query and the
+ * key drift apart — the failure this module's cache key was just widened to
+ * prevent (#11527).
+ */
+function buildOrderBy(
+  sortOrder: "created" | "updated",
+  direction: "asc" | "desc"
+): { field: string; direction: string } {
+  return {
+    field: sortOrder === "updated" ? "UPDATED_AT" : "CREATED_AT",
+    direction: direction === "asc" ? "ASC" : "DESC",
+  };
 }
 
 function listCacheState(opts: ListOptions): "open" | "closed" | "merged" | "all" {
@@ -201,9 +212,11 @@ async function searchIssuesImpl(
   search: string,
   opts: ListOptions
 ): Promise<Page<Issue>> {
+  // Read once, before `dedupe()` defers the fetch — see `listIssuesImpl`.
   const state = listCacheState(opts);
   const bypass = opts.bypassCache === true;
   const limit = normalizeListPerPage(opts.perPage);
+  const cursor = opts.cursor ?? null;
   // Free text is appended unquoted — GitHub search tokenizes it as keywords,
   // matching what its own search box does (see findPRByBranchImpl, which only
   // quotes because branch refs must not parse as separate operators). GitHub
@@ -217,7 +230,7 @@ async function searchIssuesImpl(
   const prefix = `repo:${repo.owner}/${repo.repo} is:issue${stateQualifier} ${sortQualifier} `;
   const available = 256 - prefix.length;
   const searchQuery = `${prefix}${available > 0 ? search.slice(0, available) : ""}`.trim();
-  const dedupeKey = `search:${searchQuery}:${opts.cursor ?? ""}:${limit}`;
+  const dedupeKey = `search:${searchQuery}:${cursor ?? ""}:${limit}`;
 
   return dedupe(listIssuesInflight, dedupeKey, bypass, async () => {
     const response = await runQuery(
@@ -225,7 +238,7 @@ async function searchIssuesImpl(
       {
         searchQuery,
         type: "ISSUE",
-        cursor: opts.cursor ?? null,
+        cursor,
         limit,
       },
       "SEARCH_QUERY",
@@ -253,10 +266,16 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
   const searchTerm = opts.search?.trim();
   if (searchTerm) return searchIssuesImpl(repo, searchTerm, opts);
 
+  // Every option that reaches either the key or the query is read ONCE, here,
+  // before `dedupe()` defers the fetch to a microtask. Re-reading `opts` inside
+  // that callback would let a caller who reuses and mutates one options object
+  // between calls cache a descending page under an ascending key.
   const state = listCacheState(opts);
   const sortOrder = normalizeListSortOrder(opts.sort);
   const direction = normalizeListDirection(opts.direction);
   const limit = normalizeListPerPage(opts.perPage);
+  const states = mapIssueGraphQLStates(opts.state);
+  const cursor = opts.cursor ?? null;
   const bypass = opts.bypassCache === true;
   // The unfiltered list path keeps `search` out of the cache key — search
   // routes through `searchIssuesImpl` above and never touches this cache.
@@ -269,7 +288,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     sortOrder,
     direction,
     perPage: limit,
-    cursor: opts.cursor ?? "",
+    cursor: cursor ?? "",
   });
 
   if (!bypass) {
@@ -278,7 +297,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
   }
 
   return dedupe(listIssuesInflight, cacheKey, bypass, async (isCurrent) => {
-    const orderBy = buildOrderBy(opts);
+    const orderBy = buildOrderBy(sortOrder, direction);
     // Captured before the network call: if the count-as-cache-buster bumps
     // the epoch mid-flight, this page predates the observed change and must
     // not repopulate the just-busted cache.
@@ -289,8 +308,8 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
       {
         owner: repo.owner,
         repo: repo.repo,
-        states: mapIssueGraphQLStates(opts.state),
-        cursor: opts.cursor ?? null,
+        states,
+        cursor,
         limit,
         orderBy,
       },
@@ -325,7 +344,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     // back to its pre-change total under a fresh `lastUpdated`.
     if (isCurrent() && getRepoListEpoch("issue", repo.owner, repo.repo) === epochAtStart) {
       forgeIssueListCache.set(cacheKey, page);
-      if (state === "open" && !opts.cursor && typeof issues?.totalCount === "number") {
+      if (state === "open" && !cursor && typeof issues?.totalCount === "number") {
         updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", issues.totalCount);
       }
     }
@@ -403,10 +422,13 @@ async function enrichPRPageWithRequiredStatus(repo: RepoRef, items: PR[]): Promi
 }
 
 export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> {
+  // Read once, before `dedupe()` defers the fetch — see `listIssuesImpl`.
   const state = listCacheState(opts);
   const sortOrder = normalizeListSortOrder(opts.sort);
   const direction = normalizeListDirection(opts.direction);
   const limit = normalizeListPerPage(opts.perPage);
+  const states = mapPRGraphQLStates(opts.state);
+  const cursor = opts.cursor ?? null;
   const bypass = opts.bypassCache === true;
   // The PR list query ignores `opts.search` (advisory — see ListOptions), so
   // it's kept out of the cache key. Wiring it would mean routing to
@@ -420,7 +442,7 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
     sortOrder,
     direction,
     perPage: limit,
-    cursor: opts.cursor ?? "",
+    cursor: cursor ?? "",
   });
 
   if (!bypass) {
@@ -429,7 +451,7 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
   }
 
   return dedupe(listPRsInflight, cacheKey, bypass, async (isCurrent) => {
-    const orderBy = buildOrderBy(opts);
+    const orderBy = buildOrderBy(sortOrder, direction);
     // Same mid-flight count-buster guard as the issues list above.
     const epochAtStart = getRepoListEpoch("pr", repo.owner, repo.repo);
 
@@ -438,8 +460,8 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
       {
         owner: repo.owner,
         repo: repo.repo,
-        states: mapPRGraphQLStates(opts.state),
-        cursor: opts.cursor ?? null,
+        states,
+        cursor,
         limit,
         orderBy,
       },
@@ -471,7 +493,7 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
 
     if (isCurrent() && getRepoListEpoch("pr", repo.owner, repo.repo) === epochAtStart) {
       forgePRListCache.set(cacheKey, page);
-      if (state === "open" && !opts.cursor && typeof prs?.totalCount === "number") {
+      if (state === "open" && !cursor && typeof prs?.totalCount === "number") {
         updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", prs.totalCount);
       }
     }

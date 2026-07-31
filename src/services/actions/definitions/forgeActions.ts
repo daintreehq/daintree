@@ -76,6 +76,12 @@ const ForgeListPagingSchema = z.object({
     .describe("Working directory of the git repo. Defaults to the active worktree path."),
   cursor: z
     .string()
+    // An empty cursor is not "page one": the provider keys its cache on
+    // `cursor ?? ""` but queries on `cursor ?? null`, so `""` would share the
+    // first page's cache entry while asking GitHub for an invalid Relay
+    // cursor — a cold call errors, the same call after a cache warm quietly
+    // returns page one. Reject it here rather than let it alias.
+    .min(1, "cursor must be a non-empty value from a previous response's nextCursor")
     .optional()
     .describe(
       "Opaque pagination cursor — pass the previous response's `nextCursor` to fetch the next page."
@@ -98,7 +104,7 @@ const ForgeListOptionsSchema = ForgeListPagingSchema.extend({
     .string()
     .optional()
     .describe(
-      "Provider-native query, passed through verbatim — NOT a plain-text filter. On GitHub this is issue-search syntax, so negations work: 'no:assignee -label:human-review'. Routes via the provider's search API, which may cap result depth."
+      "Provider-native query fragment — NOT a plain-text filter. On GitHub this is issue-search syntax, so negations work: 'no:assignee -label:human-review'. It is trimmed and appended after generated repo/type/state/sort qualifiers, and truncated to fit GitHub's 256-char query cap. Routes via the provider's search API, which caps result depth."
     ),
 }).strict();
 

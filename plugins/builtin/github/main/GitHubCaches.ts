@@ -249,9 +249,11 @@ function invalidateByPrefix(cache: Cache<string, unknown>, prefix: string): void
  * drops it; same for the legacy-shaped list caches that `GitHubIssues.listIssues`
  * / `GitHubPRs.listPullRequests` still read alongside the forge caches.
  *
- * List keys are `${type}:${owner}/${repo}:${state}:${search}:${sort}:${cursor}`
- * (see `buildListCacheKey`), so the repo prefix sweeps every state/sort/cursor
- * variant — a close/merge/reopen changes the closed and all views too.
+ * List keys are
+ * `${type}:${owner}/${repo}:${state}:${search}:${sort}:${direction}:${perPage}:${cursor}`
+ * (see `buildListCacheKey`), so the repo prefix sweeps every state/sort/
+ * direction/page-size/cursor variant — a close/merge/reopen changes the closed
+ * and all views too.
  */
 export function invalidateRepoListCachesForCountChange(
   owner: string,
