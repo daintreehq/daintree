@@ -879,6 +879,66 @@ describe("useMcpBridge", () => {
     );
   });
 
+  // Malformed top-level args must reach validation as-is. Synthesizing `{cwd}`
+  // over them would manufacture a valid push out of a request that should have
+  // been rejected — the same #7880 hazard as repairing an empty cwd string.
+  it.each([
+    ["null", null],
+    ["an array", []],
+    ["a string", "nope"],
+  ])("passes %s args through cwd pinning untouched", async (label, args) => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: false, error: { code: "VALIDATION_ERROR" } });
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/active" });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: `req-malformed-${label}`,
+      actionId: "git.push",
+      args,
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      args,
+      expect.objectContaining({ source: "agent" })
+    );
+  });
+
+  it("synthesizes only a cwd when args are omitted entirely", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/previewed" });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({ requestId: "req-noargs", actionId: "git.push" });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/elsewhere" });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { cwd: "/previewed" },
+      expect.objectContaining({ source: "agent", confirmed: true })
+    );
+  });
+
   it("leaves non-git dispatch args untouched by cwd pinning", async () => {
     mocks.get.mockReturnValue(confirmManifestEntry());
     mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
