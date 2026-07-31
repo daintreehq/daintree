@@ -105,6 +105,37 @@ describe("ActionService", () => {
       expect(service.getTitle("actions.list" as ActionId)).toBe("");
     });
 
+    it("selfNotifiesOnExecutionError() reflects the flag and fails closed for unknown ids", () => {
+      const base = {
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockResolvedValue(undefined),
+      } as const;
+
+      // An unknown id fails closed — the caller keeps its own fallback toast
+      // rather than silencing one that was never shown.
+      expect(service.selfNotifiesOnExecutionError("never.registered" as ActionId)).toBe(false);
+
+      service.register({
+        ...base,
+        id: "actions.list" as ActionId,
+        title: "Self notifying",
+        selfNotifiesOnExecutionError: true,
+      } as ActionDefinition);
+      expect(service.selfNotifiesOnExecutionError("actions.list" as ActionId)).toBe(true);
+
+      service.register({
+        ...base,
+        id: "actions.get" as ActionId,
+        title: "Quiet",
+      } as ActionDefinition);
+      expect(service.selfNotifiesOnExecutionError("actions.get" as ActionId)).toBe(false);
+    });
+
     it("unregister() removes an action and is a no-op for unknown ids", async () => {
       const action: ActionDefinition = {
         id: "actions.list" as ActionId,

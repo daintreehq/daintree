@@ -2,21 +2,28 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listMock, dispatchMock, getDisplayComboMock, getContextMock, notifyMock } = vi.hoisted(
-  () => ({
-    listMock: vi.fn(),
-    dispatchMock: vi.fn(),
-    getDisplayComboMock: vi.fn(() => ""),
-    getContextMock: vi.fn(),
-    notifyMock: vi.fn(),
-  })
-);
+const {
+  listMock,
+  dispatchMock,
+  getDisplayComboMock,
+  getContextMock,
+  notifyMock,
+  selfNotifiesMock,
+} = vi.hoisted(() => ({
+  listMock: vi.fn(),
+  dispatchMock: vi.fn(),
+  getDisplayComboMock: vi.fn(() => ""),
+  getContextMock: vi.fn(),
+  notifyMock: vi.fn(),
+  selfNotifiesMock: vi.fn<(id: string) => boolean>(() => false),
+}));
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     list: listMock,
     dispatch: dispatchMock,
     getContext: getContextMock,
+    selfNotifiesOnExecutionError: selfNotifiesMock,
   },
 }));
 
@@ -64,6 +71,9 @@ describe("useActionPalette", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getContextMock.mockReturnValue({});
+    // Most actions don't own their failure toast; the flagged cases opt in
+    // per-test so a stale `true` can't leak across tests and silence one.
+    selfNotifiesMock.mockReturnValue(false);
     usePaletteStore.setState({ activePaletteId: null });
     useActionMruStore.setState({ actionUsageEntries: new Map() });
     useActionPrefsStore.setState({ pinnedActionIds: [], hiddenActionIds: [] });
@@ -314,12 +324,13 @@ describe("useActionPalette", () => {
     expect(dispatchMock).toHaveBeenCalledWith("a.action", {}, { source: "user" });
   });
 
-  // The palette owns a generic `{ ok: false }` failure toast, but plugin
-  // actions self-notify (via usePluginActions) only on EXECUTION_ERROR. These
-  // lock in the precise suppression so plugin EXECUTION_ERRORs don't
-  // double-toast while every other failure still surfaces.
+  // The palette owns a generic `{ ok: false }` failure toast, but two kinds of
+  // action self-notify and only on EXECUTION_ERROR: plugin actions (via
+  // usePluginActions) and built-ins flagged `selfNotifiesOnExecutionError`.
+  // These lock in the precise suppression so those don't double-toast while
+  // every other failure still surfaces.
   async function runFailingPaletteAction(
-    entry: ReturnType<typeof makeEntry> & { pluginId?: string },
+    entry: ReturnType<typeof makeEntry> & { pluginId?: string; paletteRedirectTo?: string },
     query: string,
     error: { code: string; message: string }
   ): Promise<void> {
@@ -358,12 +369,46 @@ describe("useActionPalette", () => {
     );
   });
 
-  it("still toasts a built-in action EXECUTION_ERROR (no pluginId, never self-notifies)", async () => {
+  it("still toasts a built-in action EXECUTION_ERROR (no pluginId, doesn't self-notify)", async () => {
     await runFailingPaletteAction(makeEntry("builtin.thing", "Builtinthing"), "builtinthing", {
       code: "EXECUTION_ERROR",
       message: "boom",
     });
     expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses the palette toast for a self-notifying built-in EXECUTION_ERROR", async () => {
+    selfNotifiesMock.mockReturnValue(true);
+    await runFailingPaletteAction(makeEntry("builtin.thing", "Builtinthing"), "builtinthing", {
+      code: "EXECUTION_ERROR",
+      message: "boom",
+    });
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("still toasts a self-notifying built-in that failed before run() (NOT_FOUND)", async () => {
+    selfNotifiesMock.mockReturnValue(true);
+    // The action's own catch never ran, so nothing has notified yet — the flag
+    // only covers failures thrown out of run().
+    await runFailingPaletteAction(makeEntry("builtin.thing", "Builtinthing"), "builtinthing", {
+      code: "NOT_FOUND",
+      message: "action was unregistered",
+    });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks toast ownership against the redirect target, not the picked row", async () => {
+    // Only the sibling owns its toast. Keying the mock by id proves the
+    // suppression follows the action that actually ran — a hook reading
+    // `item.id` would get false here and wrongly toast.
+    selfNotifiesMock.mockImplementation((id: string) => id === "sibling.dialog");
+    await runFailingPaletteAction(
+      { ...makeEntry("headless.thing", "Headlessthing"), paletteRedirectTo: "sibling.dialog" },
+      "headlessthing",
+      { code: "EXECUTION_ERROR", message: "boom" }
+    );
+    expect(dispatchMock).toHaveBeenCalledWith("sibling.dialog", {}, { source: "user" });
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("excludes paletteHidden commands from the palette", async () => {
