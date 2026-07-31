@@ -9,6 +9,7 @@ function stubGit(overrides: {
   currentBranch?: string | null;
   items?: Array<{ hash: string; message: string; author: { name: string } }>;
   reject?: boolean;
+  rejectCommits?: boolean;
 }) {
   // `??` would swallow an explicit null, which is exactly the detached-HEAD
   // case under test — key off presence instead.
@@ -18,7 +19,11 @@ function stubGit(overrides: {
       ? Promise.reject(new Error("git status failed"))
       : Promise.resolve({ currentBranch })
   );
-  const listCommits = vi.fn(() => Promise.resolve({ items: overrides.items ?? [] }));
+  const listCommits = vi.fn(() =>
+    overrides.rejectCommits
+      ? Promise.reject(new Error("git log failed"))
+      : Promise.resolve({ items: overrides.items ?? [] })
+  );
   Object.defineProperty(globalThis, "window", {
     value: { electron: { git: { getStagingStatus, listCommits } } },
     configurable: true,
@@ -58,9 +63,17 @@ describe("buildGitRemoteOperationPreview", () => {
     await expect(buildGitRemoteOperationPreview("/repo")).resolves.toMatchObject({ branch: null });
   });
 
-  it("rejects when a read fails so callers can distinguish it from an empty repo", async () => {
+  it("rejects when the status read fails so callers can distinguish it from an empty repo", async () => {
     stubGit({ reject: true });
     await expect(buildGitRemoteOperationPreview("/repo")).rejects.toThrow("git status failed");
+  });
+
+  // A commit-read failure must NOT be laundered into an empty commit list —
+  // that would render as "no local commits" and enable approval on a preview
+  // that never loaded.
+  it("propagates a commit-read rejection instead of substituting an empty list", async () => {
+    stubGit({ rejectCommits: true });
+    await expect(buildGitRemoteOperationPreview("/repo")).rejects.toThrow("git log failed");
   });
 });
 

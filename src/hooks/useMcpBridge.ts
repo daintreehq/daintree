@@ -68,13 +68,38 @@ export function mcpConfirmPreviewTitle(target: McpConfirmPreviewTarget): string 
   return PREVIEW_TITLES[target.kind];
 }
 
-/** Read a non-empty string property off unknown args without a cast. */
-function stringArg(args: unknown, key: string): string | undefined {
-  if (args === null || typeof args !== "object" || !(key in args)) return undefined;
+/**
+ * The worktree id a `worktree.delete` targets, or undefined when it carries no
+ * usable id (#11343).
+ */
+function worktreeIdArg(args: unknown): string | undefined {
+  if (args === null || typeof args !== "object" || !("worktreeId" in args)) return undefined;
   // `in` narrows the property to `unknown` — no cast needed (and no
   // no-unsafe-type-assertion warning).
-  const value = (args as Record<string, unknown>)[key];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
+  const worktreeId = args.worktreeId;
+  return typeof worktreeId === "string" && worktreeId.length > 0 ? worktreeId : undefined;
+}
+
+/**
+ * How a git dispatch supplied its `cwd`, which is NOT the same question as
+ * "what is the cwd".
+ *
+ * `"omitted"` means the caller deferred to context — the action itself falls
+ * back to `ctx.activeWorktreePath`, so previewing and pinning that path is
+ * faithful. `"invalid"` means the caller DID name a cwd but not a usable one
+ * (`""`, `null`, a number). Those must never be silently replaced with the
+ * active worktree: the dispatch would stop failing validation and start pushing
+ * a repository the caller never asked for — precisely the #7880 no-silent-
+ * fallback rule for destructive submissions.
+ */
+type GitCwdArg = { state: "omitted" } | { state: "invalid" } | { state: "supplied"; cwd: string };
+
+function readGitCwdArg(args: unknown): GitCwdArg {
+  if (args === null || typeof args !== "object" || !("cwd" in args)) return { state: "omitted" };
+  const cwd = args.cwd;
+  if (cwd === undefined) return { state: "omitted" };
+  if (typeof cwd !== "string" || cwd.length === 0) return { state: "invalid" };
+  return { state: "supplied", cwd };
 }
 
 /**
@@ -91,15 +116,22 @@ export function resolveMcpConfirmPreviewTarget(
   context: ActionContext | undefined
 ): McpConfirmPreviewTarget | undefined {
   if (actionId === "worktree.delete") {
-    const worktreeId = stringArg(args, "worktreeId");
+    const worktreeId = worktreeIdArg(args);
     return worktreeId === undefined ? undefined : { kind: "worktreeDelete", worktreeId };
   }
   if (actionId === "git.push" || actionId === "git.pullRebase") {
+    const cwdArg = readGitCwdArg(args);
+    // A named-but-unusable cwd gets no preview and no pinning — it falls
+    // through to schema/`run()` validation and fails, as it did before #11538.
+    if (cwdArg.state === "invalid") return undefined;
     // Mirror the action's own `cwd ?? ctx.activeWorktreePath` resolution, and
     // mirror ActionService's WHOLE-OBJECT `contextOverride ?? live` precedence
     // (ActionService.ts:349). A per-field fallback would diverge: a pinned
     // context that carries no worktree path must NOT borrow the live one.
-    const cwd = stringArg(args, "cwd") ?? (context ?? actionService.getContext()).activeWorktreePath;
+    const cwd =
+      cwdArg.state === "supplied"
+        ? cwdArg.cwd
+        : (context ?? actionService.getContext()).activeWorktreePath;
     if (cwd === undefined || cwd.length === 0) return undefined;
     return actionId === "git.push" ? { kind: "gitPush", cwd } : { kind: "gitPullRebase", cwd };
   }
@@ -147,13 +179,17 @@ export async function buildMcpConfirmPreview(target: McpConfirmPreviewTarget): P
  * otherwise re-resolve live context AFTER the wait, so switching worktrees
  * mid-modal could push a different repository than the one just approved
  * (#8725). Non-git targets are untouched — only these two carry a cwd.
+ *
+ * Only ever fills in an ABSENT cwd. A target only exists when the caller
+ * omitted `cwd` or gave a usable one, so this can never overwrite a caller's
+ * value with a different path, and malformed args are passed through untouched
+ * for validation to reject rather than being repaired into a valid push.
  */
 function withPreviewedGitCwd(args: unknown, target: McpConfirmPreviewTarget | undefined): unknown {
   if (target === undefined || target.kind === "worktreeDelete") return args;
-  if (args && typeof args === "object" && !Array.isArray(args)) {
-    return { ...(args as Record<string, unknown>), cwd: target.cwd };
-  }
-  return { cwd: target.cwd };
+  if (args === undefined) return { cwd: target.cwd };
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return args;
+  return { ...args, cwd: target.cwd };
 }
 
 /**
@@ -265,9 +301,7 @@ export function useMcpBridge(): void {
                   // "Requested by" row when set, stays provenance-free when not.
                   callerInfo,
                   previewPending,
-                  ...(previewTarget
-                    ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) }
-                    : {}),
+                  ...(previewTarget ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) } : {}),
                 });
               } finally {
                 inFlightConfirms.delete(requestId);

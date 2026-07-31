@@ -32,9 +32,15 @@ export interface GitRemoteOperationPreview {
  *
  * Deliberately un-cached: the preview must describe the repository state at the
  * moment the human is asked to approve, not a snapshot taken earlier (#8725).
- * Rejects if either read fails — callers decide how to surface that (the local
+ * Rejects if a read rejects — callers decide how to surface that (the local
  * dialogs show a retryable error and keep confirm disabled; the MCP surface
  * shows a "couldn't verify" note).
+ *
+ * Caveat inherited from the IPC layer: `listCommits` swallows git failures in
+ * main and resolves `{items: []}`, so a broken commit read is indistinguishable
+ * here from a branch with no commits. Pre-existing behaviour — both dialogs read
+ * the same IPC before this module existed — and not something this layer can
+ * fix without changing that handler's contract for every caller.
  */
 export async function buildGitRemoteOperationPreview(
   cwd: string

@@ -83,6 +83,14 @@ function setupActions(): {
 
 afterEach(() => {
   Object.defineProperty(globalThis, "window", { value: undefined, configurable: true });
+  // Both stores are module singletons. A test that fails mid-gate would
+  // otherwise leave a pending request behind and contaminate the next one.
+  if (useGitPushConfirmStore.getState().pendingConfirm) {
+    useGitPushConfirmStore.getState().resolveConfirmation(false);
+  }
+  if (useGitPullRebaseConfirmStore.getState().pendingConfirm) {
+    useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+  }
 });
 
 describe("gitActions adversarial", () => {
@@ -204,6 +212,33 @@ describe("gitActions adversarial", () => {
     await resolvePullRebaseConfirm(true);
     await p;
     expect(git.pullRebase).toHaveBeenCalledWith("/repo");
+  });
+
+  it("git.pullRebase still gates plugin dispatch on the confirm store", async () => {
+    const { run, git } = setupActions();
+    const p = run("git.pullRebase", { cwd: "/repo" }, { dispatchSource: "plugin" });
+    await resolvePullRebaseConfirm(false);
+    await p;
+    expect(git.pullRebase).not.toHaveBeenCalled();
+  });
+
+  // A reverted bypass would otherwise only surface as a suite timeout. Assert
+  // the store stays empty synchronously, before awaiting, so the failure is
+  // immediate and legible.
+  it("git.push registers no pending confirm at all for agent dispatch", async () => {
+    const { run, git } = setupActions();
+    const p = run("git.push", { cwd: "/repo" }, { dispatchSource: "agent" });
+    expect(useGitPushConfirmStore.getState().pendingConfirm).toBeNull();
+    await p;
+    expect(git.push).toHaveBeenCalled();
+  });
+
+  it("git.pullRebase registers no pending confirm at all for agent dispatch", async () => {
+    const { run, git } = setupActions();
+    const p = run("git.pullRebase", { cwd: "/repo" }, { dispatchSource: "agent" });
+    expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).toBeNull();
+    await p;
+    expect(git.pullRebase).toHaveBeenCalled();
   });
 
   it("git.pullRebase falls back to ctx.activeWorktreePath when no cwd arg is given", async () => {
