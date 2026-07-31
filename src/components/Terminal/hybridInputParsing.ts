@@ -1,4 +1,5 @@
 import type { CompletionTrigger } from "@shared/types";
+import { toWorktreeRelative } from "@shared/utils/path";
 
 /**
  * One completion menu is open at a time, keyed by the trigger char that opened
@@ -239,9 +240,64 @@ export function getAllAtSelectionTokens(text: string): AtSelectionToken[] {
 
 // --- @file token ---
 
+/**
+ * Paths that, spelled bare, are Daintree's own `@` tokens rather than files.
+ * `fileChip` uses this to refuse them a file chip; the formatter uses it to
+ * avoid ever producing one for a real file.
+ */
+export const RESERVED_AT_TOKEN_PATHS = new Set([
+  "diff",
+  "diff:staged",
+  "diff:head",
+  "terminal",
+  "selection",
+]);
+
+/**
+ * What an unquoted token cannot survive: `getAllAtFileTokens` ends one at any
+ * of these and then trims trailing sentence punctuation. A path carrying one
+ * has to be quoted or it reads back short — `@./diff:staged` would parse as
+ * `./diff`, leaving `:staged` loose in the document and the chip covering only
+ * part of the reference.
+ *
+ * A quote char is here for the opposite reason: the scanner treats a quote
+ * *immediately after the `@`* as opening a quoted path, so a file named
+ * `'notes.txt` at the cwd root emits `@'notes.txt`, whose closing quote never
+ * arrives and whose token is dropped whole. Relativizing is what can promote a
+ * name to the token's first character, so quoting quote-bearing paths is what
+ * keeps that reachable case parseable.
+ */
+const NEEDS_QUOTED_AT_TOKEN = /['"]|[\s,;:)}\]]|[.,;:!?]$/;
+
 export function formatAtFileToken(file: string): string {
-  const needsQuotes = /\s/.test(file);
-  return `@${needsQuotes ? `"${file}"` : file}`;
+  // A relative path can land exactly on one of the reserved tokens — a file
+  // named `terminal` sitting at the cwd root relativizes to `terminal`, and
+  // `@terminal` is resolved on send as "paste the terminal buffer here", so
+  // the reference silently becomes something else entirely. `./` keeps it a
+  // path to every reader without changing what it points at.
+  const path = RESERVED_AT_TOKEN_PATHS.has(file) ? `./${file}` : file;
+  if (!NEEDS_QUOTED_AT_TOKEN.test(path)) return `@${path}`;
+  // Wrapping in `"` makes an embedded `"` the token's own terminator, so it has
+  // to be escaped. `\"` is the one escape `getAllAtFileTokens` already skips
+  // while hunting the closing quote and already unescapes on the way out.
+  return `@"${path.replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * The `@file` token for a path the OS handed us absolute — drop and paste, as
+ * opposed to autocomplete, whose file search already returns cwd-relative hits.
+ * Relative is the form the agent can actually use: it costs no tokens on a
+ * prefix the agent already knows, survives a prompt being replayed in another
+ * worktree, and is what a fleet broadcast needs to mean the sibling worktree's
+ * copy of the file rather than this one's.
+ *
+ * `toWorktreeRelative` is the whole policy: it hands back the original path
+ * untouched when the file sits outside `cwd` (or when `cwd` is empty), so an
+ * out-of-tree drop keeps the absolute form that is the only thing that resolves
+ * for it.
+ */
+export function formatAtFileTokenForCwd(file: string, cwd: string): string {
+  return formatAtFileToken(toWorktreeRelative(file, cwd));
 }
 
 export interface SlashCommandToken {

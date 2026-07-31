@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   createImagePasteHandler,
   addImageChip,
@@ -6,9 +6,20 @@ import {
   addFileDropChip,
   createPlainPasteKeymap,
 } from "../inputEditorExtensions";
-import { formatAtFileToken } from "../hybridInputParsing";
+import { formatAtFileTokenForCwd } from "../hybridInputParsing";
 
-export function usePasteExtensions() {
+export function usePasteExtensions(cwd: string) {
+  // `useEditorFactory` reads these extensions once, while building the initial
+  // `EditorState`, under an effect keyed on `terminalId` alone — and no
+  // compartment wraps them. A memo that rebuilt the extension when `cwd`
+  // changed would produce an object the editor never installs, so the handler
+  // has to reach the current cwd through a ref instead. Same latest-value ref
+  // pattern `useEditorDomHandlers` uses for its own installed-once handlers.
+  const cwdRef = useRef(cwd);
+  useEffect(() => {
+    cwdRef.current = cwd;
+  }, [cwd]);
+
   const imagePasteExtension = useMemo(
     () =>
       createImagePasteHandler(async (view) => {
@@ -39,13 +50,14 @@ export function usePasteExtensions() {
         const effects: ReturnType<typeof addFileDropChip.of>[] = [];
         let insertText = "";
         for (const file of files) {
-          const token = formatAtFileToken(file.path);
+          const token = formatAtFileTokenForCwd(file.path, cwdRef.current);
           const from = cursor + insertText.length;
           insertText += token + " ";
           effects.push(
             addFileDropChip.of({
               from,
               to: from + token.length,
+              // Absolute on purpose — see the matching note in `useDragDrop`.
               filePath: file.path,
               fileName: file.name,
               fileSize: file.size,
