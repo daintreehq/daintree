@@ -13,11 +13,16 @@ import type {
   CreateIssueInput,
   EditIssueInput,
   ForgeLabel,
+  ForgeUser,
   Issue,
   IssueCloseReason,
   IssueComment,
+  MergePRResult,
   PR,
+  PRDraftStateResult,
+  PullRequestReview,
   PushErrorClassification,
+  RequestReviewersResult,
 } from "../../../shared/types/forge.js";
 import {
   makeForgeProviderId,
@@ -53,7 +58,7 @@ async function handleForgeUnassignIssue(payload: {
   cwd: string;
   issueNumber: number;
   username: string;
-}): Promise<void> {
+}): Promise<ForgeUser[]> {
   checkRateLimit(CHANNELS.FORGE_UNASSIGN_ISSUE, 5, 10_000);
   if (!payload || typeof payload !== "object") {
     throw new Error("Invalid payload");
@@ -74,7 +79,7 @@ async function handleForgeUnassignIssue(payload: {
   }
   const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
   const impl = getImplForNamespace(namespaceId);
-  await auditForgeCall(
+  return auditForgeCall(
     {
       providerId: namespaceId,
       methodName: "unassignIssue",
@@ -103,7 +108,7 @@ async function handleForgeApprovePR(payload: {
   cwd: string;
   prNumber: number;
   body?: string;
-}): Promise<void> {
+}): Promise<PullRequestReview> {
   checkRateLimit(CHANNELS.FORGE_APPROVE_PR, 3, 10_000);
   if (!payload || typeof payload !== "object") {
     throw new Error("Invalid payload");
@@ -121,7 +126,7 @@ async function handleForgeApprovePR(payload: {
   if (!approvePR) {
     throw new Error("The active forge provider does not support approving pull requests");
   }
-  await auditForgeCall(
+  return auditForgeCall(
     {
       providerId: namespaceId,
       methodName: "approvePR",
@@ -137,7 +142,7 @@ async function handleForgeRequestChanges(payload: {
   cwd: string;
   prNumber: number;
   body: string;
-}): Promise<void> {
+}): Promise<PullRequestReview> {
   checkRateLimit(CHANNELS.FORGE_REQUEST_CHANGES, 3, 10_000);
   if (!payload || typeof payload !== "object") {
     throw new Error("Invalid payload");
@@ -157,7 +162,7 @@ async function handleForgeRequestChanges(payload: {
       "The active forge provider does not support requesting changes on pull requests"
     );
   }
-  await auditForgeCall(
+  return auditForgeCall(
     {
       providerId: namespaceId,
       methodName: "requestChanges",
@@ -174,7 +179,7 @@ async function handleForgeDismissReview(payload: {
   prNumber: number;
   reviewId: number;
   message: string;
-}): Promise<void> {
+}): Promise<PullRequestReview> {
   checkRateLimit(CHANNELS.FORGE_DISMISS_REVIEW, 3, 10_000);
   if (!payload || typeof payload !== "object") {
     throw new Error("Invalid payload");
@@ -199,7 +204,7 @@ async function handleForgeDismissReview(payload: {
   if (!dismissReview) {
     throw new Error("The active forge provider does not support dismissing reviews");
   }
-  await auditForgeCall(
+  return auditForgeCall(
     {
       providerId: namespaceId,
       methodName: "dismissReview",
@@ -216,7 +221,7 @@ async function handleForgeRequestReviewers(payload: {
   prNumber: number;
   users?: string[];
   teams?: string[];
-}): Promise<void> {
+}): Promise<RequestReviewersResult> {
   checkRateLimit(CHANNELS.FORGE_REQUEST_REVIEWERS, 3, 10_000);
   if (!payload || typeof payload !== "object") {
     throw new Error("Invalid payload");
@@ -248,7 +253,7 @@ async function handleForgeRequestReviewers(payload: {
   if (!requestReviewers) {
     throw new Error("The active forge provider does not support requesting reviewers");
   }
-  await auditForgeCall(
+  return auditForgeCall(
     {
       providerId: namespaceId,
       methodName: "requestReviewers",
@@ -579,14 +584,14 @@ async function handleForgeCreatePR(payload: {
   );
 }
 
-async function handleForgeClosePR(payload: { cwd: string; prNumber: number }): Promise<void> {
+async function handleForgeClosePR(payload: { cwd: string; prNumber: number }): Promise<PR> {
   checkRateLimit(CHANNELS.FORGE_CLOSE_PR, 5, 10_000);
   if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
   assertCwd(payload.cwd);
   assertPRNumber(payload.prNumber);
   const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
   const impl = getImplForNamespace(namespaceId);
-  await auditForgeCall(
+  return auditForgeCall(
     {
       providerId: namespaceId,
       methodName: "closePR",
@@ -598,14 +603,14 @@ async function handleForgeClosePR(payload: { cwd: string; prNumber: number }): P
   );
 }
 
-async function handleForgeReopenPR(payload: { cwd: string; prNumber: number }): Promise<void> {
+async function handleForgeReopenPR(payload: { cwd: string; prNumber: number }): Promise<PR> {
   checkRateLimit(CHANNELS.FORGE_REOPEN_PR, 5, 10_000);
   if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
   assertCwd(payload.cwd);
   assertPRNumber(payload.prNumber);
   const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
   const impl = getImplForNamespace(namespaceId);
-  await auditForgeCall(
+  return auditForgeCall(
     {
       providerId: namespaceId,
       methodName: "reopenPR",
@@ -623,7 +628,7 @@ async function handleForgeMergePR(payload: {
   mergeMethod?: "merge" | "squash" | "rebase";
   commitTitle?: string;
   commitMessage?: string;
-}): Promise<void> {
+}): Promise<MergePRResult> {
   checkRateLimit(CHANNELS.FORGE_MERGE_PR, 5, 10_000);
   if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
   assertCwd(payload.cwd);
@@ -638,7 +643,7 @@ async function handleForgeMergePR(payload: {
   }
   const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
   const impl = getImplForNamespace(namespaceId);
-  await auditForgeCall(
+  return auditForgeCall(
     {
       providerId: namespaceId,
       methodName: "mergePR",
@@ -660,14 +665,14 @@ async function handleForgeMergePR(payload: {
 async function handleForgeConvertPRToDraft(payload: {
   cwd: string;
   prNumber: number;
-}): Promise<void> {
+}): Promise<PRDraftStateResult> {
   checkRateLimit(CHANNELS.FORGE_CONVERT_PR_TO_DRAFT, 5, 10_000);
   if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
   assertCwd(payload.cwd);
   assertPRNumber(payload.prNumber);
   const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
   const impl = getImplForNamespace(namespaceId);
-  await auditForgeCall(
+  return auditForgeCall(
     {
       providerId: namespaceId,
       methodName: "convertPRToDraft",
@@ -682,14 +687,14 @@ async function handleForgeConvertPRToDraft(payload: {
 async function handleForgeMarkPRReadyForReview(payload: {
   cwd: string;
   prNumber: number;
-}): Promise<void> {
+}): Promise<PRDraftStateResult> {
   checkRateLimit(CHANNELS.FORGE_MARK_PR_READY_FOR_REVIEW, 5, 10_000);
   if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
   assertCwd(payload.cwd);
   assertPRNumber(payload.prNumber);
   const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
   const impl = getImplForNamespace(namespaceId);
-  await auditForgeCall(
+  return auditForgeCall(
     {
       providerId: namespaceId,
       methodName: "markPRReadyForReview",
@@ -705,7 +710,7 @@ async function handleForgeCommentOnPR(payload: {
   cwd: string;
   prNumber: number;
   body: string;
-}): Promise<void> {
+}): Promise<IssueComment> {
   checkRateLimit(CHANNELS.FORGE_COMMENT_ON_PR, 5, 10_000);
   if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
   assertCwd(payload.cwd);
@@ -715,7 +720,7 @@ async function handleForgeCommentOnPR(payload: {
   }
   const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
   const impl = getImplForNamespace(namespaceId);
-  await auditForgeCall(
+  return auditForgeCall(
     {
       providerId: namespaceId,
       methodName: "commentOnPR",
@@ -891,7 +896,7 @@ export function registerForgeHandlers(): () => void {
         }
         const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
         const impl = getImplForNamespace(namespaceId);
-        await auditForgeCall(
+        return auditForgeCall(
           {
             providerId: namespaceId,
             methodName: "assignIssue",

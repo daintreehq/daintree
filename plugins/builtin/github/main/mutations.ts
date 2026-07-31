@@ -4,12 +4,17 @@ import type {
   EditIssueInput,
   EditPRInput,
   ForgeLabel,
+  ForgeUser,
   Issue,
   IssueCloseReason,
   IssueComment,
   MergePRInput,
+  MergePRResult,
   PR,
+  PRDraftStateResult,
+  PullRequestReview,
   RepoRef,
+  RequestReviewersResult,
   ReviewerRequest,
 } from "../../../../shared/types/forge.js";
 import { GitHubAuth, GITHUB_API_TIMEOUT_MS } from "./GitHubAuth.js";
@@ -29,6 +34,7 @@ import {
   restToForgeIssue,
   restToForgeLabels,
   restToForgePR,
+  restToForgeReview,
   restUserToForgeUser,
 } from "./mappers.js";
 import { dispatchQuery } from "./queryInfra.js";
@@ -86,12 +92,31 @@ async function patchIssue(
   return restToForgeIssue(data);
 }
 
+/**
+ * Read an accepted mutation's JSON body. Callers invalidate their caches
+ * *before* calling this: the remote write has already landed by then, so a
+ * malformed body must never leave a cache serving pre-mutation state.
+ */
+async function readMutationJson(
+  response: Response,
+  missing: string
+): Promise<Record<string, unknown>> {
+  const data = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+  // `typeof [] === "object"`, so arrays need their own rejection — none of
+  // these endpoints answers with one, and letting one through would read every
+  // field as undefined.
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error(`Unexpected response from GitHub: ${missing}.`);
+  }
+  return data;
+}
+
 // Shared PATCH for close/reopen — both flip `state` on the same endpoint.
 async function patchPRState(
   repo: RepoRef,
   prNumber: number,
   state: "open" | "closed"
-): Promise<void> {
+): Promise<PR> {
   const token = requireGitHubToken();
   const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}`;
   const response = await fetch(url, {
@@ -107,6 +132,46 @@ async function patchPRState(
       `Failed to ${verb} pull request #${prNumber}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
     );
   }
+  clearPRCaches();
+  const data = await readMutationJson(response, "missing pull request payload");
+  if (typeof data.number !== "number" || typeof data.html_url !== "string") {
+    throw new Error("Unexpected response from GitHub: missing PR number or URL.");
+  }
+  return restToForgePR(data);
+}
+
+/**
+ * Shared POST/DELETE against the assignees endpoint. Both directions return the
+ * issue's full resulting assignee list, which is the authority on what landed —
+ * GitHub silently ignores assignees that lack push access.
+ */
+async function patchIssueAssignees(
+  repo: RepoRef,
+  issueNumber: number,
+  username: string,
+  method: "POST" | "DELETE",
+  failurePrefix: string
+): Promise<ForgeUser[]> {
+  const token = requireGitHubToken();
+  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/assignees`;
+  const response = await fetch(url, {
+    method,
+    headers: githubMutationHeaders(token),
+    body: JSON.stringify({ assignees: [username] }),
+    signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(
+      `${failurePrefix}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+    );
+  }
+  invalidateRepoIssueCachesForAssignment(repo.owner, repo.repo, issueNumber);
+  const data = await readMutationJson(response, "missing issue payload");
+  if (!Array.isArray(data.assignees)) {
+    throw new Error("Unexpected response from GitHub: missing issue assignees.");
+  }
+  return data.assignees.map(restUserToForgeUser).filter((u): u is ForgeUser => u !== undefined);
 }
 
 // Resolve a PR's GraphQL node id for the draft-toggle mutations.
@@ -141,7 +206,7 @@ export async function submitReviewImpl(
   prNumber: number,
   event: "APPROVE" | "REQUEST_CHANGES",
   body?: string
-): Promise<void> {
+): Promise<PullRequestReview> {
   const token = GitHubAuth.getToken();
   if (!token) {
     throw new Error("GitHub token not configured. Set it in Settings.");
@@ -165,6 +230,11 @@ export async function submitReviewImpl(
   // A submitted verdict changes the PR's `reviewDecision`, which is part of the
   // cached PR object — invalidate so the next `getPR` reflects it (#9061).
   clearPRCaches();
+  const data = await readMutationJson(response, "missing review payload");
+  if (typeof data.id !== "number" && typeof data.id !== "string") {
+    throw new Error("Unexpected response from GitHub: missing review id.");
+  }
+  return restToForgeReview(data);
 }
 
 export async function dismissReviewImpl(
@@ -172,7 +242,7 @@ export async function dismissReviewImpl(
   prNumber: number,
   reviewId: number,
   message: string
-): Promise<void> {
+): Promise<PullRequestReview> {
   const token = GitHubAuth.getToken();
   if (!token) {
     throw new Error("GitHub token not configured. Set it in Settings.");
@@ -191,13 +261,18 @@ export async function dismissReviewImpl(
     );
   }
   clearPRCaches();
+  const data = await readMutationJson(response, "missing review payload");
+  if (typeof data.id !== "number" && typeof data.id !== "string") {
+    throw new Error("Unexpected response from GitHub: missing review id.");
+  }
+  return restToForgeReview(data);
 }
 
 export async function requestReviewersImpl(
   repo: RepoRef,
   prNumber: number,
   reviewers: ReviewerRequest
-): Promise<void> {
+): Promise<RequestReviewersResult> {
   const token = GitHubAuth.getToken();
   if (!token) {
     throw new Error("GitHub token not configured. Set it in Settings.");
@@ -221,6 +296,35 @@ export async function requestReviewersImpl(
       `Failed to request reviewers on PR #${prNumber}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
     );
   }
+  // Deliberately no cache invalidation: the normalized PR carries no
+  // requested-reviewer fields, so nothing cached went stale.
+  const data = await readMutationJson(response, "missing pull request payload");
+  // The endpoint answers with the PR, whose requested-reviewer lists are the
+  // resulting state — they include reviewers requested before this call and
+  // omit any the forge refused, so they can differ from what was asked for.
+  // Both arrays are always present on a real PR payload; report a body without
+  // them as unusable rather than as an authoritative "nobody is requested",
+  // which would read as the mutation having done nothing.
+  if (!Array.isArray(data.requested_reviewers) && !Array.isArray(data.requested_teams)) {
+    throw new Error("Unexpected response from GitHub: missing requested reviewers.");
+  }
+  return {
+    prNumber,
+    requestedUsers: pluckStrings(data.requested_reviewers, "login"),
+    requestedTeams: pluckStrings(data.requested_teams, "slug"),
+  };
+}
+
+/** Collect a string field off every object entry of a GitHub list payload. */
+function pluckStrings(list: unknown, field: string): string[] {
+  if (!Array.isArray(list)) return [];
+  const values: string[] = [];
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") continue;
+    const value = (entry as Record<string, unknown>)[field];
+    if (typeof value === "string" && value) values.push(value);
+  }
+  return values;
 }
 
 export async function createIssueImpl(repo: RepoRef, input: CreateIssueInput): Promise<Issue> {
@@ -274,60 +378,28 @@ export async function assignIssueImpl(
   repo: RepoRef,
   issueNumber: number,
   username: string
-): Promise<void> {
-  const token = GitHubAuth.getToken();
-  if (!token) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
-  }
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/assignees`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ assignees: [username] }),
-    signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
-  });
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(
-      `Failed to assign issue #${issueNumber} to ${username}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
-    );
-  }
-  invalidateRepoIssueCachesForAssignment(repo.owner, repo.repo, issueNumber);
+): Promise<ForgeUser[]> {
+  return patchIssueAssignees(
+    repo,
+    issueNumber,
+    username,
+    "POST",
+    `Failed to assign issue #${issueNumber} to ${username}`
+  );
 }
 
 export async function unassignIssueImpl(
   repo: RepoRef,
   issueNumber: number,
   username: string
-): Promise<void> {
-  const token = GitHubAuth.getToken();
-  if (!token) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
-  }
-  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/assignees`;
-  const response = await fetch(url, {
-    method: "DELETE",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ assignees: [username] }),
-    signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
-  });
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(
-      `Failed to unassign issue #${issueNumber} from ${username}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
-    );
-  }
-  invalidateRepoIssueCachesForAssignment(repo.owner, repo.repo, issueNumber);
+): Promise<ForgeUser[]> {
+  return patchIssueAssignees(
+    repo,
+    issueNumber,
+    username,
+    "DELETE",
+    `Failed to unassign issue #${issueNumber} from ${username}`
+  );
 }
 
 export async function createPRImpl(repo: RepoRef, input: CreatePRInput): Promise<PR> {
@@ -365,21 +437,19 @@ export async function createPRImpl(repo: RepoRef, input: CreatePRInput): Promise
   return restToForgePR(data);
 }
 
-export async function closePRImpl(repo: RepoRef, prNumber: number): Promise<void> {
-  await patchPRState(repo, prNumber, "closed");
-  clearPRCaches();
+export async function closePRImpl(repo: RepoRef, prNumber: number): Promise<PR> {
+  return patchPRState(repo, prNumber, "closed");
 }
 
-export async function reopenPRImpl(repo: RepoRef, prNumber: number): Promise<void> {
-  await patchPRState(repo, prNumber, "open");
-  clearPRCaches();
+export async function reopenPRImpl(repo: RepoRef, prNumber: number): Promise<PR> {
+  return patchPRState(repo, prNumber, "open");
 }
 
 export async function mergePRImpl(
   repo: RepoRef,
   prNumber: number,
   input?: MergePRInput
-): Promise<void> {
+): Promise<MergePRResult> {
   const token = requireGitHubToken();
   const requestBody: Record<string, unknown> = {};
   if (input?.mergeMethod) requestBody.merge_method = input.mergeMethod;
@@ -411,31 +481,73 @@ export async function mergePRImpl(
     );
   }
   clearPRCaches();
+  // GitHub's merge endpoint answers with `{sha, merged, message}` and nothing
+  // else. Deliberately no follow-up GET for the resulting PR: the merge has
+  // already landed here, so a failing second read would report a completed
+  // merge as a failure.
+  const data = await readMutationJson(response, "missing merge payload");
+  return {
+    prNumber,
+    sha: typeof data.sha === "string" && data.sha ? data.sha : null,
+    // A 2xx from the merge endpoint means the merge landed — GitHub answers 405
+    // for unmergeable and 409 for a stale head. The status is the authority, so
+    // only an explicit boolean `false` denies it; an absent or non-boolean flag
+    // must not read as "did not merge".
+    merged: typeof data.merged === "boolean" ? data.merged : true,
+    message: typeof data.message === "string" ? data.message : "",
+  };
 }
 
-export async function convertPRToDraftImpl(repo: RepoRef, prNumber: number): Promise<void> {
-  // REST PATCH can't toggle draft state — GraphQL is the only path, and it
-  // needs the PR's node id, which the normalized PR type intentionally omits.
-  const nodeId = await fetchPRNodeId(repo, prNumber);
-  await dispatchQuery(CONVERT_PR_TO_DRAFT_MUTATION, { id: nodeId }, "convertPullRequestToDraft");
-  clearPRCaches();
+/**
+ * Read the resulting `isDraft` off a draft-toggle mutation's ack. Returns null
+ * when the payload doesn't carry one, letting the caller fall back rather than
+ * fail a mutation that already succeeded.
+ */
+function readDraftAck(response: unknown, mutationField: string): boolean | null {
+  const payload = (response as Record<string, unknown> | null)?.[mutationField];
+  const pullRequest = (payload as { pullRequest?: { isDraft?: unknown } } | undefined)?.pullRequest;
+  return typeof pullRequest?.isDraft === "boolean" ? pullRequest.isDraft : null;
 }
 
-export async function markPRReadyForReviewImpl(repo: RepoRef, prNumber: number): Promise<void> {
+// REST PATCH can't toggle draft state — GraphQL is the only path, and it needs
+// the PR's node id, which the normalized PR type intentionally omits.
+async function setPRDraftState(
+  repo: RepoRef,
+  prNumber: number,
+  draft: boolean
+): Promise<PRDraftStateResult> {
   const nodeId = await fetchPRNodeId(repo, prNumber);
-  await dispatchQuery(
-    MARK_PR_READY_FOR_REVIEW_MUTATION,
+  const mutationField = draft ? "convertPullRequestToDraft" : "markPullRequestReadyForReview";
+  const response = await dispatchQuery(
+    draft ? CONVERT_PR_TO_DRAFT_MUTATION : MARK_PR_READY_FOR_REVIEW_MUTATION,
     { id: nodeId },
-    "markPullRequestReadyForReview"
+    mutationField
   );
   clearPRCaches();
+  // Prefer the state GitHub reports; fall back to the state we asked for when
+  // the ack omits it, since the mutation itself already succeeded.
+  return { prNumber, isDraft: readDraftAck(response, mutationField) ?? draft };
+}
+
+export async function convertPRToDraftImpl(
+  repo: RepoRef,
+  prNumber: number
+): Promise<PRDraftStateResult> {
+  return setPRDraftState(repo, prNumber, true);
+}
+
+export async function markPRReadyForReviewImpl(
+  repo: RepoRef,
+  prNumber: number
+): Promise<PRDraftStateResult> {
+  return setPRDraftState(repo, prNumber, false);
 }
 
 export async function commentOnPRImpl(
   repo: RepoRef,
   prNumber: number,
   body: string
-): Promise<void> {
+): Promise<IssueComment> {
   const token = requireGitHubToken();
   // Reject an empty/whitespace body, but post the original text verbatim —
   // trimming would mangle leading indentation in fenced code blocks.
@@ -457,6 +569,18 @@ export async function commentOnPRImpl(
   // A comment changes the PR's comment count and timeline — drop PR caches so
   // the next read reflects it (matches every other PR mutation).
   clearPRCaches();
+  const data = await readMutationJson(response, "missing comment payload");
+  if (typeof data.id !== "number" || typeof data.html_url !== "string") {
+    throw new Error("Unexpected response from GitHub: missing comment id or URL.");
+  }
+  return {
+    id: String(data.id),
+    body: typeof data.body === "string" ? data.body : "",
+    url: data.html_url,
+    author: restUserToForgeUser(data.user),
+    createdAt: isoToMs(data.created_at ?? data.updated_at),
+    rawData: data,
+  };
 }
 
 export async function editPRImpl(repo: RepoRef, prNumber: number, input: EditPRInput): Promise<PR> {

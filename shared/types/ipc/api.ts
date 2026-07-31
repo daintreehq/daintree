@@ -35,6 +35,10 @@ import type {
   CreateIssueInput,
   EditIssueInput,
   IssueCloseReason,
+  MergePRResult,
+  PRDraftStateResult,
+  PullRequestReview,
+  RequestReviewersResult,
   ReviewThread,
   ForgeTokenHealthState,
   RateLimitDetails,
@@ -1421,10 +1425,25 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     openIssue(payload: { cwd: string; issueNumber: number }): Promise<void>;
     /** Resolve the canonical URL for a single issue via the resolved forge provider. */
     getIssueUrl(payload: { cwd: string; issueNumber: number }): Promise<string>;
-    /** Assign an issue to a user via the resolved forge provider. */
-    assignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
-    /** Unassign a user from an issue via the resolved forge provider. */
-    unassignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
+    /**
+     * Assign an issue to a user via the resolved forge provider, returning the
+     * issue's resulting assignee list. Forges may silently drop an assignee the
+     * account can't take, so the returned list is what actually landed.
+     */
+    assignIssue(payload: {
+      cwd: string;
+      issueNumber: number;
+      username: string;
+    }): Promise<ForgeUser[]>;
+    /**
+     * Unassign a user from an issue via the resolved forge provider, returning
+     * the issue's resulting assignee list.
+     */
+    unassignIssue(payload: {
+      cwd: string;
+      issueNumber: number;
+      username: string;
+    }): Promise<ForgeUser[]>;
     /** Create a new issue via the resolved forge provider, returning the created issue. */
     createIssue(payload: { cwd: string; input: CreateIssueInput }): Promise<Issue>;
     /** Close an open issue via the resolved forge provider, returning the updated issue. */
@@ -1456,39 +1475,50 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       label: string;
     }): Promise<ForgeLabel[]>;
     /**
-     * Approve a pull request via the resolved provider's `reviews` capability.
-     * `body` is an optional approval comment. Rejects when the provider lacks
-     * the capability or the forge refuses (e.g. approving your own PR).
+     * Approve a pull request via the resolved provider's `reviews` capability,
+     * returning the created review. `body` is an optional approval comment.
+     * Rejects when the provider lacks the capability or the forge refuses
+     * (e.g. approving your own PR).
      */
-    approvePR(payload: { cwd: string; prNumber: number; body?: string }): Promise<void>;
+    approvePR(payload: {
+      cwd: string;
+      prNumber: number;
+      body?: string;
+    }): Promise<PullRequestReview>;
     /**
      * Submit a request-changes review on a pull request via the resolved
-     * provider's `reviews` capability. `body` is required — it explains what
-     * needs to change.
+     * provider's `reviews` capability, returning the created review. `body` is
+     * required — it explains what needs to change.
      */
-    requestChanges(payload: { cwd: string; prNumber: number; body: string }): Promise<void>;
+    requestChanges(payload: {
+      cwd: string;
+      prNumber: number;
+      body: string;
+    }): Promise<PullRequestReview>;
     /**
      * Dismiss a submitted review on a pull request via the resolved provider's
-     * `reviews` capability. `reviewId` identifies the review (obtained from a
-     * prior review-thread lookup); `message` explains the dismissal.
+     * `reviews` capability, returning the dismissed review. `reviewId`
+     * identifies the review (obtained from a prior review-thread lookup);
+     * `message` explains the dismissal.
      */
     dismissReview(payload: {
       cwd: string;
       prNumber: number;
       reviewId: number;
       message: string;
-    }): Promise<void>;
+    }): Promise<PullRequestReview>;
     /**
      * Request reviewers on a pull request via the resolved provider's `reviews`
-     * capability. `users` are account logins; `teams` are team identifiers
-     * (GitHub team slugs). At least one must be non-empty.
+     * capability, returning the PR's resulting reviewer requests. `users` are
+     * account logins; `teams` are team identifiers (GitHub team slugs). At
+     * least one must be non-empty.
      */
     requestReviewers(payload: {
       cwd: string;
       prNumber: number;
       users?: string[];
       teams?: string[];
-    }): Promise<void>;
+    }): Promise<RequestReviewersResult>;
     /**
      * Validate a token against a specific forge provider, identified by its
      * canonical `{pluginId}.{contributionId}` id. The Test button in the
@@ -1647,24 +1677,27 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       body?: string;
       draft?: boolean;
     }): Promise<PR>;
-    /** Close an open pull request without merging. */
-    closePR(payload: { cwd: string; prNumber: number }): Promise<void>;
-    /** Reopen a previously closed pull request. */
-    reopenPR(payload: { cwd: string; prNumber: number }): Promise<void>;
-    /** Merge a pull request with the optional strategy/commit overrides. Irreversible. */
+    /** Close an open pull request without merging, returning the updated PR. */
+    closePR(payload: { cwd: string; prNumber: number }): Promise<PR>;
+    /** Reopen a previously closed pull request, returning the updated PR. */
+    reopenPR(payload: { cwd: string; prNumber: number }): Promise<PR>;
+    /**
+     * Merge a pull request with the optional strategy/commit overrides,
+     * returning the merge acknowledgement. Irreversible.
+     */
     mergePR(payload: {
       cwd: string;
       prNumber: number;
       mergeMethod?: "merge" | "squash" | "rebase";
       commitTitle?: string;
       commitMessage?: string;
-    }): Promise<void>;
-    /** Convert an open pull request to a draft. */
-    convertPRToDraft(payload: { cwd: string; prNumber: number }): Promise<void>;
-    /** Mark a draft pull request ready for review. */
-    markPRReadyForReview(payload: { cwd: string; prNumber: number }): Promise<void>;
-    /** Post a comment on a pull request. */
-    commentOnPR(payload: { cwd: string; prNumber: number; body: string }): Promise<void>;
+    }): Promise<MergePRResult>;
+    /** Convert an open pull request to a draft, returning its resulting draft state. */
+    convertPRToDraft(payload: { cwd: string; prNumber: number }): Promise<PRDraftStateResult>;
+    /** Mark a draft pull request ready for review, returning its resulting draft state. */
+    markPRReadyForReview(payload: { cwd: string; prNumber: number }): Promise<PRDraftStateResult>;
+    /** Post a comment on a pull request, returning the created comment. */
+    commentOnPR(payload: { cwd: string; prNumber: number; body: string }): Promise<IssueComment>;
     /** Edit a pull request's title and/or body via the resolved forge provider. */
     editPR(payload: { cwd: string; prNumber: number; title?: string; body?: string }): Promise<PR>;
     /** Provider-keyed stats + first-page push after a fresh network poll. */

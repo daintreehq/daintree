@@ -403,7 +403,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:approve-pr": {
     args: [payload: { cwd: string; prNumber: number; body?: string | undefined }];
-    result: void;
+    result: import("../forge.js").PullRequestReview;
   };
   "forge:close-issue": {
     args: [
@@ -417,15 +417,15 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:close-pr": {
     args: [payload: { cwd: string; prNumber: number }];
-    result: void;
+    result: import("../forge.js").PR;
   };
   "forge:comment-on-pr": {
     args: [payload: { cwd: string; prNumber: number; body: string }];
-    result: void;
+    result: import("../forge.js").IssueComment;
   };
   "forge:convert-pr-to-draft": {
     args: [payload: { cwd: string; prNumber: number }];
-    result: void;
+    result: import("../forge.js").PRDraftStateResult;
   };
   "forge:create-issue": {
     args: [payload: { cwd: string; input: import("../forge.js").CreateIssueInput }];
@@ -446,7 +446,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:dismiss-review": {
     args: [payload: { cwd: string; prNumber: number; reviewId: number; message: string }];
-    result: void;
+    result: import("../forge.js").PullRequestReview;
   };
   "forge:edit-issue": {
     args: [
@@ -511,7 +511,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:mark-pr-ready-for-review": {
     args: [payload: { cwd: string; prNumber: number }];
-    result: void;
+    result: import("../forge.js").PRDraftStateResult;
   };
   "forge:merge-pr": {
     args: [
@@ -523,7 +523,7 @@ export interface GeneratedIpcInvokeMap {
         commitMessage?: string | undefined;
       },
     ];
-    result: void;
+    result: import("../forge.js").MergePRResult;
   };
   "forge:open-pr": {
     args: [payload: { cwd: string; prNumber: number }];
@@ -539,11 +539,11 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:reopen-pr": {
     args: [payload: { cwd: string; prNumber: number }];
-    result: void;
+    result: import("../forge.js").PR;
   };
   "forge:request-changes": {
     args: [payload: { cwd: string; prNumber: number; body: string }];
-    result: void;
+    result: import("../forge.js").PullRequestReview;
   };
   "forge:request-reviewers": {
     args: [
@@ -554,7 +554,7 @@ export interface GeneratedIpcInvokeMap {
         teams?: string[] | undefined;
       },
     ];
-    result: void;
+    result: import("../forge.js").RequestReviewersResult;
   };
   "forge:resolve-author-avatar": {
     args: [payload: { cwd: string; email: string }];
@@ -562,7 +562,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:unassign-issue": {
     args: [payload: { cwd: string; issueNumber: number; username: string }];
-    result: void;
+    result: import("../forge.js").ForgeUser[];
   };
   "gemini:enable-alternate-buffer": {
     args: [];

@@ -723,3 +723,136 @@ describe("forge handlers — rate limiting", () => {
     );
   });
 });
+
+describe("forge write handlers forward the provider result (#11546)", () => {
+  // Each handler changed from `await auditForgeCall(...)` to
+  // `return auditForgeCall(...)`. Distinct sentinels per method mean a handler
+  // that swallows its result, or forwards the wrong provider call's, fails
+  // here — the type annotations alone can't catch a dropped `return`.
+  const sentinels = {
+    assignIssue: [{ login: "assignee-sentinel", avatarUrl: undefined, rawData: null }],
+    unassignIssue: [],
+    closePR: { sentinel: "closePR" },
+    reopenPR: { sentinel: "reopenPR" },
+    mergePR: { prNumber: 1, sha: "sha-sentinel", merged: true, message: "merged" },
+    convertPRToDraft: { prNumber: 1, isDraft: true },
+    markPRReadyForReview: { prNumber: 1, isDraft: false },
+    commentOnPR: { sentinel: "commentOnPR" },
+  } as const;
+
+  const reviewSentinels = {
+    approvePR: { sentinel: "approvePR" },
+    requestChanges: { sentinel: "requestChanges" },
+    dismissReview: { sentinel: "dismissReview" },
+    requestReviewers: { prNumber: 1, requestedUsers: ["u"], requestedTeams: [] },
+  } as const;
+
+  const cases: Array<{
+    name: string;
+    channel: string;
+    expected: unknown;
+    invoke: (h: (...a: unknown[]) => Promise<unknown>) => Promise<unknown>;
+  }> = [
+    {
+      name: "assignIssue",
+      channel: CHANNELS.FORGE_ASSIGN_ISSUE,
+      expected: sentinels.assignIssue,
+      invoke: (h) => h({}, { cwd: "/repo", issueNumber: 1, username: "octocat" }),
+    },
+    {
+      name: "unassignIssue",
+      channel: CHANNELS.FORGE_UNASSIGN_ISSUE,
+      expected: sentinels.unassignIssue,
+      invoke: (h) => h({}, { cwd: "/repo", issueNumber: 1, username: "octocat" }),
+    },
+    {
+      name: "closePR",
+      channel: CHANNELS.FORGE_CLOSE_PR,
+      expected: sentinels.closePR,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1 }),
+    },
+    {
+      name: "reopenPR",
+      channel: CHANNELS.FORGE_REOPEN_PR,
+      expected: sentinels.reopenPR,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1 }),
+    },
+    {
+      name: "mergePR",
+      channel: CHANNELS.FORGE_MERGE_PR,
+      expected: sentinels.mergePR,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1 }),
+    },
+    {
+      name: "convertPRToDraft",
+      channel: CHANNELS.FORGE_CONVERT_PR_TO_DRAFT,
+      expected: sentinels.convertPRToDraft,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1 }),
+    },
+    {
+      name: "markPRReadyForReview",
+      channel: CHANNELS.FORGE_MARK_PR_READY_FOR_REVIEW,
+      expected: sentinels.markPRReadyForReview,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1 }),
+    },
+    {
+      name: "commentOnPR",
+      channel: CHANNELS.FORGE_COMMENT_ON_PR,
+      expected: sentinels.commentOnPR,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1, body: "hi" }),
+    },
+    {
+      name: "approvePR",
+      channel: CHANNELS.FORGE_APPROVE_PR,
+      expected: reviewSentinels.approvePR,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1 }),
+    },
+    {
+      name: "requestChanges",
+      channel: CHANNELS.FORGE_REQUEST_CHANGES,
+      expected: reviewSentinels.requestChanges,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1, body: "fix" }),
+    },
+    {
+      name: "dismissReview",
+      channel: CHANNELS.FORGE_DISMISS_REVIEW,
+      expected: reviewSentinels.dismissReview,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1, reviewId: 9, message: "stale" }),
+    },
+    {
+      name: "requestReviewers",
+      channel: CHANNELS.FORGE_REQUEST_REVIEWERS,
+      expected: reviewSentinels.requestReviewers,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1, users: ["octocat"] }),
+    },
+  ];
+
+  beforeEach(() => {
+    // Self-contained: this describe is a sibling of the rate-limit suite, so it
+    // must register its own handlers and resolution rather than inherit them —
+    // otherwise it only passes when the other suite has run first.
+    vi.clearAllMocks();
+    registeredProvidersMock.length = 0;
+    registeredProvidersMock.push({ pluginId: "fake-plugin", contribution: { id: "fake" } });
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake-plugin.fake",
+      providerId: "fake",
+      repoRef,
+      impl: fakeImpl as unknown as ForgeProviderImpl,
+    });
+    for (const [method, value] of Object.entries(sentinels)) {
+      (fakeImpl[method as keyof typeof sentinels] as Mock).mockResolvedValue(value);
+    }
+    for (const [method, value] of Object.entries(reviewSentinels)) {
+      (fakeImpl.reviews[method as keyof typeof reviewSentinels] as Mock).mockResolvedValue(value);
+    }
+    registerForgeHandlers();
+  });
+
+  it.each(cases)(
+    "$name resolves to the provider's result",
+    async ({ channel, expected, invoke }) => {
+      await expect(invoke(getInvokeHandler(channel))).resolves.toEqual(expected);
+    }
+  );
+});

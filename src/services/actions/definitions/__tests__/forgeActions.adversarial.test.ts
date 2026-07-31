@@ -22,6 +22,12 @@ const forgeClientMock = vi.hoisted(() => ({
   listPRs: vi.fn(),
   getIssue: vi.fn(),
   getCIStatus: vi.fn(),
+  closePR: vi.fn(),
+  reopenPR: vi.fn(),
+  mergePR: vi.fn(),
+  convertPRToDraft: vi.fn(),
+  markPRReadyForReview: vi.fn(),
+  commentOnPR: vi.fn(),
 }));
 
 const projectStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
@@ -76,9 +82,88 @@ function setCurrentProject(project: { path?: string } | null) {
   projectStoreMock.getState.mockReturnValue({ currentProject: project });
 }
 
+// Provider results the write actions now project into their published result
+// (#11546). Deliberately wider than the schemas — `rawData` and the extra
+// normalized fields must not survive into what an MCP client receives.
+const providerUser = (login: string) => ({
+  login,
+  avatarUrl: `https://avatars/${login}`,
+  rawData: { login, secret: "raw" },
+});
+
+const providerReview = {
+  id: "8801",
+  state: "approved",
+  rawState: "APPROVED",
+  body: "LGTM",
+  url: "https://forge.test/pull/12#review-8801",
+  author: providerUser("octocat"),
+  submittedAt: 1_700_000_000_000,
+  commitId: "deadbeef",
+  rawData: { everything: "raw" },
+};
+
+const providerPR = {
+  number: 12,
+  title: "Add dark mode",
+  body: "Body",
+  state: "closed",
+  rawState: "closed",
+  isDraft: false,
+  merged: false,
+  url: "https://forge.test/pull/12",
+  author: providerUser("octocat"),
+  baseRef: "main",
+  headRef: "feature",
+  mergeable: null,
+  createdAt: 1,
+  updatedAt: 2,
+  closedAt: 3,
+  mergedAt: null,
+  rawData: { everything: "raw" },
+};
+
+const providerComment = {
+  id: "55501",
+  body: "Looks good",
+  url: "https://forge.test/pull/12#comment-55501",
+  author: providerUser("octocat"),
+  createdAt: 1_700_000_000_000,
+  rawData: { everything: "raw" },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   for (const fn of Object.values(forgeClientMock)) fn.mockResolvedValue(undefined);
+  forgeClientMock.assignIssue.mockResolvedValue([providerUser("bob")]);
+  forgeClientMock.unassignIssue.mockResolvedValue([]);
+  forgeClientMock.approvePR.mockResolvedValue(providerReview);
+  forgeClientMock.requestChanges.mockResolvedValue({
+    ...providerReview,
+    state: "changes_requested",
+    rawState: "CHANGES_REQUESTED",
+  });
+  forgeClientMock.dismissReview.mockResolvedValue({
+    ...providerReview,
+    state: "dismissed",
+    rawState: "DISMISSED",
+  });
+  forgeClientMock.requestReviewers.mockResolvedValue({
+    prNumber: 12,
+    requestedUsers: ["octocat"],
+    requestedTeams: ["core-team"],
+  });
+  forgeClientMock.closePR.mockResolvedValue(providerPR);
+  forgeClientMock.reopenPR.mockResolvedValue({ ...providerPR, state: "open" });
+  forgeClientMock.mergePR.mockResolvedValue({
+    prNumber: 12,
+    sha: "9fceb02",
+    merged: true,
+    message: "Pull Request successfully merged",
+  });
+  forgeClientMock.convertPRToDraft.mockResolvedValue({ prNumber: 12, isDraft: true });
+  forgeClientMock.markPRReadyForReview.mockResolvedValue({ prNumber: 12, isDraft: false });
+  forgeClientMock.commentOnPR.mockResolvedValue(providerComment);
 });
 
 describe("forge.getCIStatus", () => {
@@ -245,7 +330,7 @@ describe("forge.* navigation adversarial", () => {
     ).rejects.toThrow("No active worktree");
   });
 
-  describe("optimistic issue-cache patching (#11087)", () => {
+  describe("issue-cache patching from the authoritative assignee list (#11087, #11546)", () => {
     const seedIssueSlot = (projectPath: string, issue: Issue): string => {
       const key = buildCacheKey(projectPath, "issue", "open", "created");
       setCache(key, { items: [issue], nextCursor: null, hasMore: false, timestamp: 1 });
@@ -271,10 +356,48 @@ describe("forge.* navigation adversarial", () => {
 
     it("unassignIssue removes the username — the Quick Create Undo path", async () => {
       const key = seedIssueSlot("/repo", makeIssue(42, ["bob"]));
+      forgeClientMock.unassignIssue.mockResolvedValueOnce([]);
 
       await runAction("forge.unassignIssue", { cwd: "/repo", issueNumber: 42, username: "bob" });
 
       expect(assigneesOn(key, 42)).toEqual([]);
+    });
+
+    it("does NOT add an assignee the forge silently dropped", async () => {
+      // GitHub ignores assignees without push access: the call succeeds but the
+      // user is absent from the resulting list. Trusting the request instead of
+      // the response would show an assignment that never landed.
+      const key = seedIssueSlot("/repo", makeIssue(42, []));
+      forgeClientMock.assignIssue.mockResolvedValueOnce([]);
+
+      await runAction("forge.assignIssue", {
+        cwd: "/repo",
+        issueNumber: 42,
+        username: "no-access",
+      });
+
+      expect(assigneesOn(key, 42)).toEqual([]);
+    });
+
+    it("keeps an assignee the forge reports as still present after a refused unassign", async () => {
+      const key = seedIssueSlot("/repo", makeIssue(42, ["bob"]));
+      forgeClientMock.unassignIssue.mockResolvedValueOnce([providerUser("bob")]);
+
+      await runAction("forge.unassignIssue", { cwd: "/repo", issueNumber: 42, username: "bob" });
+
+      expect(assigneesOn(key, 42)).toEqual(["bob"]);
+    });
+
+    it("caches the login spelling and avatar the forge returned, not the requested casing", async () => {
+      const key = seedIssueSlot("/repo", makeIssue(42, []));
+      forgeClientMock.assignIssue.mockResolvedValueOnce([providerUser("Octocat")]);
+
+      await runAction("forge.assignIssue", { cwd: "/repo", issueNumber: 42, username: "octocat" });
+
+      expect(assigneesOn(key, 42)).toEqual(["Octocat"]);
+      const item = getCache(key)?.items.find((i) => i.number === 42);
+      const assignees = item && "assignees" in item ? item.assignees : [];
+      expect(assignees[0]?.avatarUrl).toBe("https://avatars/Octocat");
     });
 
     it("leaves the cache untouched when the forge rejects the assign", async () => {
@@ -412,6 +535,157 @@ describe("forge.* navigation adversarial", () => {
     expect(forgeClientMock.requestReviewers).toHaveBeenCalledWith("/repo", 6, {
       users: ["octocat"],
       teams: undefined,
+    });
+  });
+});
+
+describe("forge.* write actions return the state they changed (#11546)", () => {
+  const run = (id: string, args: Record<string, unknown>) =>
+    runAction(id, { cwd: "/repo", ...args });
+
+  it("mergePR returns the merge acknowledgement", async () => {
+    const result = await run("forge.mergePR", { prNumber: 12 });
+
+    expect(result).toEqual({
+      prNumber: 12,
+      sha: "9fceb02",
+      merged: true,
+      message: "Pull Request successfully merged",
+    });
+  });
+
+  it("assignIssue reports the resulting assignee list alongside the issue", async () => {
+    const result = await run("forge.assignIssue", { issueNumber: 42, username: "bob" });
+
+    expect(result).toEqual({
+      issueNumber: 42,
+      assignees: [{ login: "bob", avatarUrl: "https://avatars/bob" }],
+    });
+  });
+
+  it("unassignIssue reports the emptied assignee list", async () => {
+    const result = await run("forge.unassignIssue", { issueNumber: 42, username: "bob" });
+
+    expect(result).toEqual({ issueNumber: 42, assignees: [] });
+  });
+
+  it.each([
+    ["forge.approvePR", { prNumber: 12 }, "approved"],
+    ["forge.requestChanges", { prNumber: 12, body: "fix" }, "changes_requested"],
+    ["forge.dismissReview", { prNumber: 12, reviewId: 5, message: "stale" }, "dismissed"],
+  ])("%s returns the review carrying its verdict", async (id, args, state) => {
+    const result = (await run(id, args)) as { state: string; id: string };
+
+    expect(result.state).toBe(state);
+    expect(result.id).toBe("8801");
+  });
+
+  it("requestReviewers returns the PR's resulting reviewer requests", async () => {
+    const result = await run("forge.requestReviewers", { prNumber: 12, users: ["octocat"] });
+
+    expect(result).toEqual({
+      prNumber: 12,
+      requestedUsers: ["octocat"],
+      requestedTeams: ["core-team"],
+    });
+  });
+
+  it.each([
+    ["forge.convertPRToDraft", true],
+    ["forge.markPRReadyForReview", false],
+  ])("%s returns the resulting draft state", async (id, isDraft) => {
+    expect(await run(id, { prNumber: 12 })).toEqual({ prNumber: 12, isDraft });
+  });
+
+  it("closePR and reopenPR return the updated PR", async () => {
+    const closed = (await run("forge.closePR", { prNumber: 12 })) as { state: string };
+    const reopened = (await run("forge.reopenPR", { prNumber: 12 })) as { state: string };
+
+    expect(closed.state).toBe("closed");
+    expect(reopened.state).toBe("open");
+  });
+
+  it("commentOnPR returns the created comment", async () => {
+    const result = (await run("forge.commentOnPR", { prNumber: 12, body: "Looks good" })) as {
+      id: string;
+      url: string;
+    };
+
+    expect(result.id).toBe("55501");
+    expect(result.url).toBe(providerComment.url);
+  });
+
+  // Nothing downstream strips a run() return before it reaches MCP
+  // structuredContent (buildStructuredContent casts without parsing), so the
+  // projection has to happen here or the provider's raw payload ships verbatim.
+  it.each([
+    ["forge.approvePR", { prNumber: 12 }],
+    ["forge.requestChanges", { prNumber: 12, body: "fix" }],
+    ["forge.dismissReview", { prNumber: 12, reviewId: 5, message: "stale" }],
+    ["forge.closePR", { prNumber: 12 }],
+    ["forge.reopenPR", { prNumber: 12 }],
+    ["forge.commentOnPR", { prNumber: 12, body: "hi" }],
+    ["forge.assignIssue", { issueNumber: 42, username: "bob" }],
+    ["forge.unassignIssue", { issueNumber: 42, username: "bob" }],
+    ["forge.mergePR", { prNumber: 12 }],
+    ["forge.convertPRToDraft", { prNumber: 12 }],
+    ["forge.markPRReadyForReview", { prNumber: 12 }],
+    ["forge.requestReviewers", { prNumber: 12, users: ["octocat"] }],
+  ])("%s publishes no rawData, at any depth", async (id, args) => {
+    const result = await run(id, args);
+
+    expect(JSON.stringify(result)).not.toContain("rawData");
+    expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it.each([
+    ["forge.mergePR", { prNumber: 12 }],
+    ["forge.convertPRToDraft", { prNumber: 12 }],
+    ["forge.markPRReadyForReview", { prNumber: 12 }],
+    ["forge.requestReviewers", { prNumber: 12, users: ["octocat"] }],
+  ])("%s rejects a provider result that contradicts its published schema", async (id, args) => {
+    // The schema is what the MCP client is promised. A provider answering with
+    // the wrong scalar type must surface as an error, not ship a payload that
+    // contradicts the advertised contract.
+    const method = id.slice("forge.".length) as keyof typeof forgeClientMock;
+    forgeClientMock[method].mockResolvedValueOnce({ prNumber: "twelve", isDraft: "yes" });
+
+    await expect(runAction(id, { cwd: "/repo", ...args })).rejects.toThrow();
+  });
+
+  it("drops the provider's extra PR fields that the published schema doesn't name", async () => {
+    const result = (await run("forge.closePR", { prNumber: 12 })) as Record<string, unknown>;
+
+    // `mergeable`/`closedAt`/`author` are on the normalized PR but outside the
+    // declared result contract — leaking them would make the schema a lie.
+    expect(Object.keys(result)).not.toContain("mergeable");
+    expect(Object.keys(result)).not.toContain("closedAt");
+    expect(Object.keys(result)).not.toContain("author");
+  });
+
+  it("still returns the result when the renderer cache patch throws", async () => {
+    // The forge mutation already succeeded — a cache-layer failure must not
+    // turn a completed assignment into a failed action. Seed a corrupt row so
+    // patchIssueAssigneeCache genuinely throws on `item.assignees.some(...)`:
+    // deleting the guard in syncAssigneeCache must fail this test.
+    resetForgeResourceCache();
+    const key = buildCacheKey("/repo", "issue", "open", "created");
+    setCache(key, {
+      items: [{ ...makeIssue(42, []), assignees: null }] as never,
+      nextCursor: null,
+      hasMore: false,
+      timestamp: 1,
+    });
+
+    const result = await runAction("forge.assignIssue", {
+      cwd: "/repo",
+      issueNumber: 42,
+      username: "bob",
+    });
+
+    expect(result).toEqual({
+      issueNumber: 42,
+      assignees: [{ login: "bob", avatarUrl: "https://avatars/bob" }],
     });
   });
 });
