@@ -820,9 +820,7 @@ describe("bulk stats and acknowledgement for scratch workspaces", () => {
       new Map([[SCRATCH_ID, 5_000]])
     );
     const ptyClient = makePtyClient({
-      getAllTerminalsAsync: vi
-        .fn()
-        .mockResolvedValue([completedTerminal(SCRATCH_ID, 2_000, "t1")]),
+      getAllTerminalsAsync: vi.fn().mockResolvedValue([completedTerminal(SCRATCH_ID, 2_000, "t1")]),
     });
     registerProjectCrudHandlers(makeDeps(ptyClient));
 

@@ -142,10 +142,7 @@ vi.mock("@/store/projectStatsStore", async () => {
   return {
     useProjectStatsStore: Object.assign(
       (selector: (state: typeof projectStatsState) => unknown) => {
-        useSyncExternalStore(
-          useProjectStatsStoreMock.subscribe,
-          () => projectStatsState.stats
-        );
+        useSyncExternalStore(useProjectStatsStoreMock.subscribe, () => projectStatsState.stats);
         return useProjectStatsStoreMock(selector);
       },
       { getState: useProjectStatsStoreMock.getState }

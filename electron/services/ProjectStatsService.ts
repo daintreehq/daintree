@@ -175,10 +175,7 @@ export class ProjectStatsService {
       // a scratch row can never shadow a project's entry (#11518).
       const allProjects = projectStore.getAllProjects();
       const allScratches = scratchStore.getAllScratches();
-      const projectIds = [
-        ...allProjects.map((p) => p.id),
-        ...allScratches.map((s) => s.id),
-      ];
+      const projectIds = [...allProjects.map((p) => p.id), ...allScratches.map((s) => s.id)];
       if (projectIds.length === 0) {
         if (this.generation !== gen) return;
         // Track the empty broadcast so a later non-empty result with the
