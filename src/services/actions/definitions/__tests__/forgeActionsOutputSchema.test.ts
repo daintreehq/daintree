@@ -50,8 +50,7 @@ function ciStatusObjectBranch(service: ActionService): Record<string, unknown> {
   const schema = outputSchema(service, "forge.getCIStatus");
   if (!schema) throw new Error("forge.getCIStatus has no outputSchema");
   const ciStatus = (schema.properties as Record<string, unknown> | undefined)?.ciStatus as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
   if (!ciStatus) throw new Error("outputSchema has no `ciStatus` property");
   const branches = ciStatus.anyOf as Array<Record<string, unknown>> | undefined;
   if (!branches) {
@@ -226,7 +225,9 @@ describe("forge.getCIStatus results validate against the advertised schema (#115
     expect(
       validate({ ciStatus: { state: "banana", total: 0, passed: 0, failed: 0, pending: 0 } })
     ).toBe(false);
-    expect(validate({ ciStatus: { state: "success", total: 1, passed: 1, failed: 0 } })).toBe(false);
+    expect(validate({ ciStatus: { state: "success", total: 1, passed: 1, failed: 0 } })).toBe(
+      false
+    );
   });
 
   it("rejects a bare status that isn't wrapped under ciStatus", () => {
