@@ -1418,6 +1418,7 @@ function TerminalPaneComponent({
                     terminalId={id}
                     launchAgentId={agentId}
                     detectedAgentId={detectedAgentId}
+                    agentState={agentState}
                     isInputLocked={isInputLocked}
                     onReady={handleReady}
                     onExit={handleExit}

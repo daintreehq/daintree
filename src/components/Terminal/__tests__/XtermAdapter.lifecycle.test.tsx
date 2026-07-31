@@ -78,13 +78,18 @@ const mocks = vi.hoisted(() => {
     notifyEnterPressed: vi.fn(),
   };
 
+  // Returns the drag-over flag the adapter renders drop feedback from. Typed
+  // with both parameters so tests can assert on the options the adapter passes.
+  const useTerminalFileTransfer =
+    vi.fn<(containerRef: unknown, options: Record<string, unknown>) => boolean>();
+
   return {
     appearance,
     managed,
     platform,
     terminalInstanceService,
     writeTerminalInputOrFleet: vi.fn(),
-    useTerminalFileTransfer: vi.fn(),
+    useTerminalFileTransfer,
     getKeyHandler: () => keyHandler,
     getExitHandler: () => exitHandler,
     resetRuntime: () => {
@@ -97,6 +102,9 @@ const mocks = vi.hoisted(() => {
       // vi.clearAllMocks() drops calls but keeps implementations, so a test that
       // switches to the alt buffer would otherwise leak into the next one.
       terminalInstanceService.getAltBufferState.mockReturnValue(false);
+      // mockReset also drops queued mockReturnValueOnce results, so a drag-state
+      // override can never survive into the next test.
+      useTerminalFileTransfer.mockReset().mockReturnValue(false);
       Object.assign(appearance, defaultAppearance, { effectiveTheme: {} });
     },
   };
@@ -936,6 +944,60 @@ describe("XtermAdapter lifecycle", () => {
 
       expect(clipboard.writeText).not.toHaveBeenCalled();
       expect(keybindingService.resolveKeybinding).toHaveBeenCalled();
+    });
+  });
+
+  describe("file drop overlay", () => {
+    function overlayIn(container: HTMLElement): HTMLElement {
+      const overlay = container.querySelector<HTMLElement>("[data-visible]");
+      if (!overlay) throw new Error("drop overlay not rendered");
+      return overlay;
+    }
+
+    it("stays mounted while hidden so the exit transition can play", async () => {
+      mocks.useTerminalFileTransfer.mockReturnValue(false);
+      const { container } = renderAdapter();
+      await waitFor(() => expect(mocks.useTerminalFileTransfer).toHaveBeenCalled());
+
+      expect(overlayIn(container).dataset.visible).toBe("false");
+    });
+
+    it("becomes visible while files are dragged over the terminal", async () => {
+      mocks.useTerminalFileTransfer.mockReturnValue(true);
+      const { container } = renderAdapter();
+      await waitFor(() => expect(mocks.useTerminalFileTransfer).toHaveBeenCalled());
+
+      expect(overlayIn(container).dataset.visible).toBe("true");
+    });
+
+    it("stays hidden while input is locked, even mid-drag", async () => {
+      mocks.useTerminalFileTransfer.mockReturnValue(true);
+      const { container } = renderAdapter({ isInputLocked: true });
+      await waitFor(() => expect(mocks.useTerminalFileTransfer).toHaveBeenCalled());
+
+      expect(overlayIn(container).dataset.visible).toBe("false");
+    });
+
+    it("is decorative — the drag itself is the announcement", async () => {
+      mocks.useTerminalFileTransfer.mockReturnValue(true);
+      const { container } = renderAdapter();
+      await waitFor(() => expect(mocks.useTerminalFileTransfer).toHaveBeenCalled());
+
+      const overlay = overlayIn(container);
+      expect(overlay.getAttribute("aria-hidden")).toBe("true");
+      expect(overlay.getAttribute("role")).toBeNull();
+    });
+
+    it("forwards the runtime agent identity that decides the drop format", async () => {
+      renderAdapter({ launchAgentId: "claude", detectedAgentId: "codex", agentState: "working" });
+      await waitFor(() => expect(mocks.useTerminalFileTransfer).toHaveBeenCalled());
+
+      const [, options] = mocks.useTerminalFileTransfer.mock.calls.at(-1)!;
+      expect(options).toMatchObject({
+        launchAgentId: "claude",
+        detectedAgentId: "codex",
+        agentState: "working",
+      });
     });
   });
 });

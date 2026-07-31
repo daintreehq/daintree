@@ -1298,6 +1298,12 @@ export function HelpPanel({
                   <XtermAdapter
                     terminalId={terminalId}
                     launchAgentId={agentId ?? undefined}
+                    detectedAgentId={terminalPty?.detectedAgentId}
+                    agentState={terminalPty?.agentState}
+                    // Without this the adapter's layout effect drives
+                    // setInputLocked(id, false) on mount, unlocking the very
+                    // terminal the hybrid input below is disabling itself for.
+                    isInputLocked={terminalPty?.isInputLocked === true}
                     getRefreshTier={getRefreshTier}
                     cwd={terminalPty?.cwd}
                     hasBottomBar={showHybridInputBar}

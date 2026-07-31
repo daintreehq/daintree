@@ -80,4 +80,27 @@ describe("terminalInputProtocol", () => {
       `${BRACKETED_PASTE_START}abc${BRACKETED_PASTE_END}`
     );
   });
+
+  it("neutralizes an embedded terminator so the wrapper cannot be escaped", () => {
+    // Text carrying its own END sequence would otherwise close the paste early
+    // and hand the remainder to the program as ordinary input.
+    const wrapped = formatWithBracketedPaste(`before${BRACKETED_PASTE_END}after`);
+
+    expect(wrapped.startsWith(BRACKETED_PASTE_START)).toBe(true);
+    expect(wrapped.endsWith(BRACKETED_PASTE_END)).toBe(true);
+    expect(wrapped.split(BRACKETED_PASTE_END).length - 1).toBe(1);
+
+    const body = wrapped.slice(BRACKETED_PASTE_START.length, -BRACKETED_PASTE_END.length);
+    expect(body).not.toContain(String.fromCharCode(27));
+    // The text is still readable — only the ESC byte is swapped for its glyph.
+    expect(body).toContain("before");
+    expect(body).toContain("after");
+  });
+
+  it("leaves text without escape sequences untouched", () => {
+    const plain = "@/Users/test/src/App.tsx ";
+    expect(formatWithBracketedPaste(plain)).toBe(
+      `${BRACKETED_PASTE_START}${plain}${BRACKETED_PASTE_END}`
+    );
+  });
 });
