@@ -388,8 +388,11 @@ describe("terminalInputActions adversarial", () => {
       const { run, callbacks } = setupActions();
       (callbacks.getActiveWorktreeId as ReturnType<typeof vi.fn>).mockReturnValue("wt-1");
 
+      // Matched on the distinctive guard sentence, not a bare /terminalId/:
+      // an unguarded destructure would raise a TypeError that also names
+      // terminalId, and would pass a looser assertion without the guard.
       await expect(run("terminal.inject", undefined, { dispatchSource: "agent" })).rejects.toThrow(
-        /terminalId/
+        /requires an explicit `terminalId` when dispatched by an agent or MCP client/
       );
       expect(callbacks.onInject).not.toHaveBeenCalled();
     });
@@ -424,11 +427,21 @@ describe("terminalInputActions adversarial", () => {
     const UNBOUND_TARGET =
       /requires an explicit `terminalId` when dispatched by an agent or MCP client/;
 
+    // noTarget mirrors what ActionService really passes: undefined for a
+    // `.optional()` schema, {} for a plain object schema it coerces into.
     const GUARDED = [
-      { id: "terminal.copy", effect: () => writeSpy },
-      { id: "terminal.paste", effect: () => terminalClientMock.write },
-      { id: "terminal.contextMenu", effect: () => contextMenuMock.openPanelContextMenu },
-      { id: "terminal.sendToAgent", effect: () => sendToAgentMock.openSendToAgentPalette },
+      { id: "terminal.copy", noTarget: undefined, effect: () => writeSpy },
+      { id: "terminal.paste", noTarget: undefined, effect: () => terminalClientMock.write },
+      {
+        id: "terminal.contextMenu",
+        noTarget: {},
+        effect: () => contextMenuMock.openPanelContextMenu,
+      },
+      {
+        id: "terminal.sendToAgent",
+        noTarget: {},
+        effect: () => sendToAgentMock.openSendToAgentPalette,
+      },
     ] as const;
 
     function seedFocusedTerminal() {
@@ -447,12 +460,14 @@ describe("terminalInputActions adversarial", () => {
 
     it.each(GUARDED)(
       "$id rejects agent dispatch that names no terminal, and never touches the focused one",
-      async ({ id, effect }) => {
+      async ({ id, noTarget, effect }) => {
         clipboardText = "clipboard text";
         seedFocusedTerminal();
         const { run } = setupActions();
 
-        await expect(run(id, {}, { dispatchSource: "agent" })).rejects.toThrow(UNBOUND_TARGET);
+        await expect(run(id, noTarget, { dispatchSource: "agent" })).rejects.toThrow(
+          UNBOUND_TARGET
+        );
 
         expect(effect()).not.toHaveBeenCalled();
       }

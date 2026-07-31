@@ -256,6 +256,7 @@ function registerTerminalActions(actions: ActionRegistry, callbacks: ActionCallb
 const { registerPanelActions } = await import("../definitions/panelActions");
 const { registerWorktreeActions } = await import("../definitions/worktreeActions");
 const { usePanelStore } = await import("../../../store/panelStore");
+const { useLayoutUndoStore } = await import("../../../store/layoutUndoStore");
 const { usePortalStore } = await import("../../../store/portalStore");
 const { useUIStore } = await import("../../../store/uiStore");
 const { useWorktreeSelectionStore } = await import("../../../store/worktreeStore");
@@ -487,7 +488,12 @@ describe("terminal action hardening", () => {
       });
     }
 
-    it.each(["terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock"])(
+    it.each([
+      "terminal.moveToDock",
+      "terminal.moveToGrid",
+      "terminal.toggleDock",
+      "terminal.toggleMaximize",
+    ])(
       "%s rejects agent dispatch that names no terminal, leaving the focused panel put",
       async (id) => {
         const actions = buildRegistry(registerTerminalActions);
@@ -524,6 +530,21 @@ describe("terminal action hardening", () => {
       await toggleDock.run({} as never, { dispatchSource: "keybinding" } as never);
 
       expect(usePanelStore.getState().panelsById.focused?.location).toBe("dock");
+    });
+
+    it("toggleDock leaves redo history alone when the named terminal is gone", async () => {
+      // pushLayoutSnapshot clears the redo stack, so taking it before the
+      // existence check would let a stale UUID wipe the user's redo history
+      // and then move nothing.
+      const actions = buildRegistry(registerTerminalActions);
+      const toggleDock = actions.get("terminal.toggleDock")!();
+      seedGridPair();
+      useLayoutUndoStore.setState({ undoStack: [], redoStack: [{ panels: [] }] } as never);
+
+      await toggleDock.run({ terminalId: "gone" } as never, { dispatchSource: "agent" } as never);
+
+      expect(useLayoutUndoStore.getState().redoStack).toHaveLength(1);
+      expect(useLayoutUndoStore.getState().undoStack).toHaveLength(0);
     });
   });
 

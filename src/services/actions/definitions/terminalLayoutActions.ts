@@ -85,8 +85,9 @@ export function registerTerminalLayoutActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
+      requireExplicitTerminalIdForAgentDispatch("terminal.toggleMaximize", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
@@ -271,15 +272,19 @@ export function registerTerminalLayoutActions(
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
-      useLayoutUndoStore.getState().pushLayoutSnapshot();
       const terminal = state.panelsById[targetId];
       if (!terminal) return;
-      if (terminal.location === "dock") {
+      const toGrid = terminal.location === "dock";
+      // Same dockability gate as terminal.moveToDock — a non-dockable kind
+      // toggled dockward would strand invisibly.
+      if (!toGrid && !panelKindIsDockable(terminal.kind ?? "terminal")) return;
+      // Snapshot only once the move is certain: pushing clears the redo stack,
+      // so doing it before these bails would let a caller naming a stale panel
+      // wipe the user's redo history and then change nothing.
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      if (toGrid) {
         state.moveTerminalToGrid(targetId);
       } else {
-        // Same dockability gate as terminal.moveToDock — a non-dockable kind
-        // toggled dockward would strand invisibly.
-        if (!panelKindIsDockable(terminal.kind ?? "terminal")) return;
         state.moveTerminalToDock(targetId);
         state.openDockTerminal(targetId);
       }

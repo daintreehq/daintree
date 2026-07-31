@@ -559,12 +559,17 @@ describe("agent dispatch target binding (#11532)", () => {
   const UNBOUND_TARGET =
     /requires an explicit `terminalId` when dispatched by an agent or MCP client/;
 
-  // ActionService coerces undefined args to {} before calling run() whenever
-  // the schema accepts {} (ActionService.ts), so {} — not undefined — is what
-  // these definitions actually receive for a target-less dispatch.
-  const NO_ARGS = {};
+  // What ActionService actually hands run() for a target-less dispatch. It
+  // rewrites undefined to {} only when the schema rejects undefined but accepts
+  // {} (ActionService.ts), so a `.optional()` schema still receives undefined.
+  // Each row below uses its own action's real shape, which also keeps the
+  // undefined path — where an unguarded destructure would throw — under test.
+  const OPTIONAL_SCHEMA = undefined;
+  const OBJECT_SCHEMA = {};
 
-  function setGuardState(options: { focusedId?: string | null } = {}) {
+  function setGuardState(
+    options: { focusedId?: string | null; focusedPanel?: Record<string, unknown> } = {}
+  ) {
     const focusedId = options.focusedId === undefined ? "focused-panel" : options.focusedId;
     const store = {
       trashPanel: vi.fn(),
@@ -582,7 +587,11 @@ describe("agent dispatch target binding (#11532)", () => {
       focusedId,
       panelIds: ["focused-panel", "explicit-panel"],
       panelsById: {
-        "focused-panel": { id: "focused-panel", location: "grid" },
+        "focused-panel": {
+          id: "focused-panel",
+          location: "grid",
+          ...(options.focusedPanel ?? {}),
+        },
         "explicit-panel": { id: "explicit-panel", location: "grid" },
       },
       watchedPanels: new Set<string>(),
@@ -615,48 +624,136 @@ describe("agent dispatch target binding (#11532)", () => {
     vi.unstubAllGlobals();
   });
 
-  // id → the spy that proves the action's side effect never ran.
+  // Asserts the CustomEvent the info dialogs fire carried the focused panel.
+  function expectInfoEventFor(id: string) {
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+    const event = dispatchEvent.mock.calls[0]?.[0] as CustomEvent<{ id: string }>;
+    expect(event.type).toBe("daintree:open-terminal-info");
+    expect(event.detail).toEqual({ id });
+  }
+
   const GUARDED: ReadonlyArray<{
     id: string;
-    effect: (spies: GuardSpies) => { mock: { calls: unknown[] } };
+    // The target-less args this action really receives (see above).
+    noTarget: unknown;
+    // Extra args the interactive case needs beyond a target.
+    interactiveArgs?: Record<string, unknown>;
+    // Must NOT have run when agent dispatch named no terminal.
+    blocked: (spies: GuardSpies) => { mock: { calls: unknown[] } };
+    // Must have acted on the focused terminal for interactive dispatch.
+    hitFocused: (spies: GuardSpies) => void;
   }> = [
-    { id: "terminal.close", effect: (s) => s.trashPanel },
-    { id: "terminal.trash", effect: (s) => s.trashPanel },
-    { id: "terminal.background", effect: (s) => s.backgroundTerminal },
-    { id: "terminal.kill", effect: (s) => s.removePanel },
-    { id: "terminal.restart", effect: (s) => s.restartTerminal },
-    { id: "terminal.redraw", effect: (s) => s.resetRenderer },
-    { id: "terminal.rename", effect: (s) => s.updateTitle },
-    { id: "terminal.viewInfo", effect: (s) => s.dispatchEvent },
-    { id: "terminal.info.open", effect: (s) => s.dispatchEvent },
-    { id: "terminal.info.get", effect: (s) => s.getInfo },
-    { id: "terminal.toggleInputLock", effect: (s) => s.toggleInputLocked },
-    { id: "terminal.forceResume", effect: (s) => s.forceResume },
-    { id: "terminal.watch", effect: (s) => s.watchPanel },
+    {
+      id: "terminal.close",
+      noTarget: OPTIONAL_SCHEMA,
+      blocked: (s) => s.trashPanel,
+      hitFocused: (s) => expect(s.trashPanel).toHaveBeenCalledWith("focused-panel"),
+    },
+    {
+      id: "terminal.trash",
+      noTarget: OBJECT_SCHEMA,
+      blocked: (s) => s.trashPanel,
+      hitFocused: (s) => expect(s.trashPanel).toHaveBeenCalledWith("focused-panel"),
+    },
+    {
+      id: "terminal.background",
+      noTarget: OPTIONAL_SCHEMA,
+      blocked: (s) => s.backgroundTerminal,
+      hitFocused: (s) => expect(s.backgroundTerminal).toHaveBeenCalledWith("focused-panel"),
+    },
+    {
+      id: "terminal.kill",
+      noTarget: OBJECT_SCHEMA,
+      blocked: (s) => s.removePanel,
+      hitFocused: (s) => expect(s.removePanel).toHaveBeenCalledWith("focused-panel"),
+    },
+    {
+      id: "terminal.restart",
+      noTarget: OBJECT_SCHEMA,
+      blocked: (s) => s.restartTerminal,
+      hitFocused: (s) => expect(s.restartTerminal).toHaveBeenCalledWith("focused-panel"),
+    },
+    {
+      id: "terminal.redraw",
+      noTarget: OPTIONAL_SCHEMA,
+      blocked: (s) => s.resetRenderer,
+      hitFocused: (s) => expect(s.resetRenderer).toHaveBeenCalledWith("focused-panel"),
+    },
+    {
+      id: "terminal.rename",
+      noTarget: OBJECT_SCHEMA,
+      // Carries a name so the interactive case takes the programmatic path.
+      // Omitting it would schedule a real rename-dialog timer that outlives
+      // this test's stubbed window.
+      interactiveArgs: { name: "renamed" },
+      blocked: (s) => s.updateTitle,
+      hitFocused: (s) =>
+        expect(s.updateTitle).toHaveBeenCalledWith("focused-panel", "renamed", "automation"),
+    },
+    {
+      id: "terminal.viewInfo",
+      noTarget: OBJECT_SCHEMA,
+      blocked: (s) => s.dispatchEvent,
+      hitFocused: () => expectInfoEventFor("focused-panel"),
+    },
+    {
+      id: "terminal.info.open",
+      noTarget: OBJECT_SCHEMA,
+      blocked: (s) => s.dispatchEvent,
+      hitFocused: () => expectInfoEventFor("focused-panel"),
+    },
+    {
+      id: "terminal.info.get",
+      noTarget: OPTIONAL_SCHEMA,
+      blocked: (s) => s.getInfo,
+      hitFocused: (s) => expect(s.getInfo).toHaveBeenCalledWith("focused-panel"),
+    },
+    {
+      id: "terminal.toggleInputLock",
+      noTarget: OBJECT_SCHEMA,
+      blocked: (s) => s.toggleInputLocked,
+      hitFocused: (s) => expect(s.toggleInputLocked).toHaveBeenCalledWith("focused-panel"),
+    },
+    {
+      id: "terminal.forceResume",
+      noTarget: OBJECT_SCHEMA,
+      blocked: (s) => s.forceResume,
+      hitFocused: (s) => expect(s.forceResume).toHaveBeenCalledWith("focused-panel"),
+    },
+    {
+      id: "terminal.watch",
+      noTarget: OPTIONAL_SCHEMA,
+      blocked: (s) => s.watchPanel,
+      hitFocused: (s) => expect(s.watchPanel).toHaveBeenCalledWith("focused-panel"),
+    },
   ];
 
   it.each(GUARDED)(
     "$id rejects agent dispatch that names no terminal, and never touches the focused one",
-    async ({ id, effect }) => {
+    async ({ id, noTarget, blocked }) => {
       const spies = setGuardState();
       const run = setupActions();
 
-      await expect(run(id, NO_ARGS, { dispatchSource: "agent" })).rejects.toThrow(UNBOUND_TARGET);
+      await expect(run(id, noTarget, { dispatchSource: "agent" })).rejects.toThrow(UNBOUND_TARGET);
 
-      expect(effect(spies)).not.toHaveBeenCalled();
+      expect(blocked(spies)).not.toHaveBeenCalled();
     }
   );
 
-  it.each(GUARDED)("$id still resolves from focus for interactive dispatch", async ({ id }) => {
-    setGuardState();
-    const run = setupActions();
+  it.each(GUARDED)(
+    "$id still acts on the focused terminal for interactive dispatch",
+    async ({ id, noTarget, interactiveArgs, hitFocused }) => {
+      const spies = setGuardState();
+      const run = setupActions();
 
-    // A keybinding may legitimately omit the target — the whole point of the
-    // ambient fallback. Reaching the store at all proves the guard stayed out
-    // of the way; each action's own outcome is covered by its own suite.
-    await expect(run(id, NO_ARGS, { dispatchSource: "keybinding" })).resolves.not.toThrow();
-    expect(panelStoreMock.getState).toHaveBeenCalled();
-  });
+      // A keybinding may legitimately omit the target — that ambient fallback
+      // is the whole point, and the guard has to stay out of its way.
+      const args = interactiveArgs ? { ...(noTarget as object), ...interactiveArgs } : noTarget;
+      await run(id, args, { dispatchSource: "keybinding" });
+
+      hitFocused(spies);
+    }
+  );
 
   it("lets agent dispatch through once it names a terminal, ignoring focus", async () => {
     const spies = setGuardState();
@@ -668,18 +765,69 @@ describe("agent dispatch target binding (#11532)", () => {
     expect(spies.resetRenderer).not.toHaveBeenCalledWith("focused-panel");
   });
 
+  it("treats an empty terminalId as naming nothing", async () => {
+    // The helper checks `!terminalId`, so "" has to fail the same way a missing
+    // one does — otherwise it would sail through and resolve from focus.
+    const spies = setGuardState();
+    const run = setupActions();
+
+    await expect(
+      run("terminal.redraw", { terminalId: "" }, { dispatchSource: "agent" })
+    ).rejects.toThrow(UNBOUND_TARGET);
+
+    expect(spies.resetRenderer).not.toHaveBeenCalled();
+  });
+
   it("refuses an unbound kill before staging a confirm dialog", async () => {
     // The severe case: terminal.kill is agent-reachable and danger:"confirm",
     // so an unguarded unbound call would ask the user to approve killing the
     // terminal they are looking at rather than the one the agent meant.
-    const spies = setGuardState();
+    //
+    // The focused panel has to be a mid-work agent, or terminalHasRunningAgentSession
+    // returns false, the confirm branch never runs for any input, and asserting
+    // that it did not fire would prove nothing.
+    const spies = setGuardState({
+      focusedPanel: { kind: "terminal", detectedAgentId: "claude", agentState: "working" },
+    });
     const run = setupActions();
 
-    await expect(run("terminal.kill", NO_ARGS, { dispatchSource: "agent" })).rejects.toThrow(
+    await expect(run("terminal.kill", OBJECT_SCHEMA, { dispatchSource: "agent" })).rejects.toThrow(
       UNBOUND_TARGET
     );
 
     expect(spies.requestConfirm).not.toHaveBeenCalled();
+    expect(spies.removePanel).not.toHaveBeenCalled();
+  });
+
+  it("stages the confirm dialog for the terminal the agent named", async () => {
+    // The companion to the test above: with the guard satisfied, the confirm
+    // path is demonstrably live, so the assertion there is not vacuous.
+    const spies = setGuardState({
+      focusedPanel: { kind: "terminal", detectedAgentId: "claude", agentState: "working" },
+    });
+    panelStoreMock.getState.mockImplementation(() => ({
+      focusedId: "focused-panel",
+      panelIds: ["focused-panel", "explicit-panel"],
+      panelsById: {
+        "focused-panel": { id: "focused-panel", location: "grid" },
+        "explicit-panel": {
+          id: "explicit-panel",
+          location: "grid",
+          kind: "terminal",
+          detectedAgentId: "claude",
+          agentState: "working",
+        },
+      },
+      watchedPanels: new Set<string>(),
+      removePanel: spies.removePanel,
+    }));
+    const run = setupActions();
+
+    await run("terminal.kill", { terminalId: "explicit-panel" }, { dispatchSource: "agent" });
+
+    expect(spies.requestConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "kill", terminalId: "explicit-panel" })
+    );
     expect(spies.removePanel).not.toHaveBeenCalled();
   });
 
@@ -700,9 +848,9 @@ describe("agent dispatch target binding (#11532)", () => {
       setGuardState();
       const run = setupActions();
 
-      await expect(run("terminal.rename", NO_ARGS, { dispatchSource: "agent" })).rejects.toThrow(
-        UNBOUND_TARGET
-      );
+      await expect(
+        run("terminal.rename", OBJECT_SCHEMA, { dispatchSource: "agent" })
+      ).rejects.toThrow(UNBOUND_TARGET);
     });
 
     it("renames when the agent supplies both", async () => {
@@ -742,9 +890,9 @@ describe("agent dispatch target binding (#11532)", () => {
       const spies = setGuardState({ focusedId: "focused-panel" });
       const run = setupActions();
 
-      await expect(run("terminal.info.get", NO_ARGS, { dispatchSource: "agent" })).rejects.toThrow(
-        UNBOUND_TARGET
-      );
+      await expect(
+        run("terminal.info.get", OPTIONAL_SCHEMA, { dispatchSource: "agent" })
+      ).rejects.toThrow(UNBOUND_TARGET);
 
       expect(spies.getInfo).not.toHaveBeenCalled();
     });

@@ -228,7 +228,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.rename",
     title: "Rename Terminal",
     description:
-      "Rename the terminal tab. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field); `name` — the new title, where an empty string restores the identity-derived default. Both are REQUIRED for agent/MCP dispatch: a headless caller cannot see what is focused, and cannot answer the rename dialog that an omitted `name` opens. Interactive dispatch may omit either — it falls back to the focused terminal and opens the dialog.",
+      "Rename the terminal tab. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field); `name` — the new title, where an empty string clears back to the identity-derived default. Both are REQUIRED for agent/MCP dispatch: a headless caller cannot see what is focused, and cannot answer the rename dialog that an omitted `name` opens. Note a title the user set by hand outranks automation, so a rename of one of those is accepted and then ignored. Interactive dispatch may omit either — it falls back to the focused terminal and opens the dialog.",
     category: "terminal",
     kind: "command",
     danger: "safe",
