@@ -494,11 +494,15 @@ export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
  * returns, and the state stays unset (#11534 dropped `forge.assignIssue` for
  * exactly this).
  *
- * An entry that *does* have an inverse is kept only when the duplicate it
- * prevents outweighs the suppression it risks. A review can be dismissed and
- * a worktree recreated, so `forge.approvePR`/`forge.requestChanges`/
- * `worktree.delete` carry the same suppression risk — but unlike assignment
- * they each prevent a real second artifact, so the trade lands the other way.
+ * An entry that *does* have an inverse is kept only when the replay it
+ * absorbs outweighs the suppression it risks, on one of two grounds.
+ * `forge.approvePR`/`forge.requestChanges` POST a genuinely new record each
+ * call, so a replay leaves a visible second artifact — unlike assignment,
+ * which leaves none, so that trade lands the other way. `worktree.delete`,
+ * `forge.createPR` and `forge.mergePR` create nothing on a replay; they are
+ * here to return the original success instead of the error a redundant
+ * redispatch would raise, which is a different justification from the
+ * duplicate-artifact one and should not be confused with it.
  *
  * Known gap, retained deliberately rather than silently: `git.push` takes
  * only `{cwd, setUpstream}`, so a legitimate second push after a new commit
@@ -532,12 +536,14 @@ const MCP_DEDUP_ALLOWLIST_ENTRIES = [
   "git.commit",
   "git.push",
 
-  // Forge writes whose replay is visible on the remote. All but `mergePR`
-  // create a new durable record every call — a second PR/issue, a duplicate
-  // comment (lesson #7554), or a second review entry, since `approvePR` and
-  // `requestChanges` both POST to `/pulls/{n}/reviews` (#11534). `mergePR`
-  // PUTs and so creates no second record; it is here for the re-merge
-  // attempt against an already-merged PR.
+  // Forge writes worth absorbing a replay for. `createIssue`,
+  // `addIssueComment`, `approvePR` and `requestChanges` each POST a new
+  // record every call — a duplicate issue, a duplicate comment (lesson
+  // #7554), or a second review entry, since both verdicts POST to
+  // `/pulls/{n}/reviews` (#11534). `createPR` and `mergePR` create nothing on
+  // a replay (GitHub 422s a duplicate PR; merge is a PUT) — they are here to
+  // replay the original success rather than surface that error to a caller
+  // that is only retrying.
   "forge.createPR",
   "forge.mergePR",
   "forge.commentOnPR",

@@ -2234,18 +2234,35 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 });
 
-describe("MCP_DEDUP_ALLOWLIST widening (#8468)", () => {
+describe("MCP_DEDUP_ALLOWLIST git cohort and exclusion boundary (#8468)", () => {
   // Membership `.has()` spot-checks were dropped in #11534: they restated the
   // allowlist literal, so they stayed green even if sessionServer stopped
-  // consulting the set. The cohorts below are proven by dispatch behaviour
-  // instead — here for the bounded case, and in the #11534 block for the rest.
+  // consulting the set. Both directions are proven by dispatch behaviour
+  // instead. (The forge half of the original cohort — `forge.openIssue` /
+  // `forge.openPR` — was removed in #11534; see the block below.)
+  const twoDistinctDispatches = () =>
+    vi
+      .fn()
+      .mockResolvedValueOnce({ result: { ok: true, result: "first" } })
+      .mockResolvedValueOnce({ result: { ok: true, result: "second" } });
+
+  it.each(["git.commit", "git.push"])("dedups a repeated %s", async (tool) => {
+    const dispatchAction = twoDistinctDispatches();
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+    const server = createSessionServer(`git-8468-${tool}`, deps);
+
+    const args = { target: "x" };
+    await callTool(server, { name: tool, arguments: args });
+    const second = await callTool(server, { name: tool, arguments: args });
+
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(second)).not.toContain("second");
+  });
+
   it.each(["git.stageAll", "terminal.sendCommand"])(
     "stays bounded — redispatches unlisted mutation %s",
     async (tool) => {
-      const dispatchAction = vi
-        .fn()
-        .mockResolvedValueOnce({ result: { ok: true, result: "first" } })
-        .mockResolvedValueOnce({ result: { ok: true, result: "second" } });
+      const dispatchAction = twoDistinctDispatches();
       const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
       const server = createSessionServer(`bounded-8468-${tool}`, deps);
 
