@@ -104,6 +104,14 @@ export function FileTreeView({
   // a tree the user is no longer looking at.
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
+      // A row's context menu portals out of this container but still bubbles
+      // its keys through the React tree, so every branch below would otherwise
+      // act on the *selected* row while the user is driving a menu opened on a
+      // different one — Enter activating the wrong file, arrows moving the
+      // selection behind the open menu. Radix owns those keys while its menu
+      // is up; the tree only handles what actually happened inside it.
+      if (!isEventInsideTree(event, containerRef.current)) return;
+
       // Shift+F10 / the ContextMenu key open the selected row's menu — the
       // rows never take focus, so without this the row menu would be
       // mouse-only. Replayed as a synthetic contextmenu on the row's DOM node
@@ -146,16 +154,16 @@ export function FileTreeView({
       // reference a row the user cannot see and that `aria-activedescendant`
       // has already disowned.
       //
-      // A row menu portals outside the container but still bubbles its keys
-      // through the React tree, and the menu advertises this very shortcut —
-      // so without the containment check, pressing it there would insert the
-      // *selected* row rather than the right-clicked one.
+      // Auto-repeat is dropped: holding the combo would append the same token
+      // over and over. It also keeps a user-rebound global Cmd+I from turning
+      // into this command — the global handler ignores repeats, so every
+      // repeat after its first press would otherwise fall through to here.
       if (
         onInsertFileReference &&
         canInsertFileReference &&
         selectedPath !== null &&
         selectedIndex >= 0 &&
-        isEventInsideTree(event, containerRef.current) &&
+        !event.repeat &&
         matchesInsertFileReferenceCombo(event.nativeEvent, isMac())
       ) {
         event.preventDefault();

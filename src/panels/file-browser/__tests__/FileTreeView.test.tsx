@@ -249,17 +249,40 @@ describe("FileTreeView context-menu interactions", () => {
     expect(getByRole("tree").hasAttribute("aria-keyshortcuts")).toBe(false);
   });
 
-  it("does not fire for a key pressed inside an open row menu", async () => {
-    // The menu portals out of the container but still bubbles through the React
-    // tree, and it advertises this very shortcut — so an unguarded handler
-    // would insert the SELECTED row rather than the right-clicked one.
+  it("ignores auto-repeat so a held combo inserts once", () => {
+    // Beyond the obvious spam: the global keybinding handler drops repeats, so
+    // a user-rebound global Cmd+I would run its own action on the first press
+    // and let every repeat fall through to here — a genuine wrong action.
     const onInsertFileReference = vi.fn();
+    const { getByRole } = renderTree({
+      selectedPath: "README.md",
+      onInsertFileReference,
+      canInsertFileReference: true,
+    });
+    const tree = getByRole("tree");
+
+    fireEvent.keyDown(tree, { key: "i", metaKey: true });
+    fireEvent.keyDown(tree, { key: "i", metaKey: true, repeat: true });
+    fireEvent.keyDown(tree, { key: "i", metaKey: true, repeat: true });
+
+    expect(onInsertFileReference).toHaveBeenCalledTimes(1);
+  });
+
+  it("acts on nothing for keys pressed inside an open row menu", async () => {
+    // The menu portals out of the container but still bubbles through the React
+    // tree. Every branch is affected, not just the new one: Enter would
+    // activate the SELECTED row while the user is driving a menu opened on a
+    // different one, and arrows would move the selection behind the open menu.
+    const onInsertFileReference = vi.fn();
+    const onActivate = vi.fn();
+    const onSelect = vi.fn();
     const { getByRole, findByRole } = render(
       <FileTreeView
         rows={ROWS}
         selectedPath="README.md"
-        onSelect={vi.fn()}
+        onSelect={onSelect}
         onToggleExpanded={vi.fn()}
+        onActivate={onActivate}
         rowContextMenu={(clicked) => <ContextMenuItem>Act on {clicked.name}</ContextMenuItem>}
         onInsertFileReference={onInsertFileReference}
         canInsertFileReference
@@ -271,8 +294,11 @@ describe("FileTreeView context-menu interactions", () => {
     const item = await findByRole("menuitem", { name: "Act on src" });
 
     fireEvent.keyDown(item, { key: "i", metaKey: true });
+    fireEvent.keyDown(item, { key: "ArrowDown" });
 
     expect(onInsertFileReference).not.toHaveBeenCalled();
+    expect(onActivate).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it("advertises the shortcut only while it would do something", () => {
