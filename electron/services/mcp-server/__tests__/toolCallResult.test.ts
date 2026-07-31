@@ -29,7 +29,7 @@ function bodyAfterNotice(text: string): string {
 describe("buildToolCallResult under the cap", () => {
   it("serializes without the indentation the wire has no reader for", () => {
     const value = { a: 1, b: { c: 2 }, d: [1, 2] };
-    expect(buildToolCallResult(value).content[0]?.text).toBe(JSON.stringify(value));
+    expect(textOf(buildToolCallResult(value))).toBe(JSON.stringify(value));
   });
 
   it("round-trips the payload and keeps structuredContent alongside it", () => {

@@ -2843,7 +2843,12 @@ describe("structuredContent for terminal query actions (#10676)", () => {
           sessionStore: fakeSessionStore("external"),
           getFullToolSurface: vi.fn(() => true),
           requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("skills.load")]),
-          handleSkillsLoad: vi.fn(() => oversizedPayload()),
+          handleSkillsLoad: vi.fn(() => ({
+            id: "s-1",
+            name: "Oversized",
+            description: "A skill whose markdown body blows the budget",
+            body: "x".repeat(TOOL_RESULT_TEXT_MAX_BYTES * 2),
+          })),
         })
       );
       const result = await callTool(server, {
