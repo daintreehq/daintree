@@ -23,9 +23,7 @@ export interface SessionSnapshotterHost {
   // worker. The sync flush paths degrade to best-effort async persistence for
   // Promise-returning hosts.
   serializeForPersistence():
-    | SerializedTerminalSnapshot
-    | null
-    | Promise<SerializedTerminalSnapshot | null>;
+    SerializedTerminalSnapshot | null | Promise<SerializedTerminalSnapshot | null>;
 }
 
 // Narrow view of a TerminalProcess-shaped owner, sufficient to build either

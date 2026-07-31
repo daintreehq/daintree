@@ -21,14 +21,12 @@ function createMockHeadless(bufferType: "normal" | "alternate" = "normal", cols 
   let currentType = bufferType;
   let markerLine = 0;
   const pendingWriteCallbacks: Array<() => void> = [];
-  const writeFn = vi
-    .fn()
-    .mockImplementation((data: string, callback?: () => void) => {
-      if (data === "\x1b[?1049l") currentType = "normal";
-      const newlines = (data.match(/\r\n/g) || []).length;
-      markerLine += newlines;
-      if (callback) pendingWriteCallbacks.push(callback);
-    });
+  const writeFn = vi.fn().mockImplementation((data: string, callback?: () => void) => {
+    if (data === "\x1b[?1049l") currentType = "normal";
+    const newlines = (data.match(/\r\n/g) || []).length;
+    markerLine += newlines;
+    if (callback) pendingWriteCallbacks.push(callback);
+  });
   const headless = {
     cols,
     rows,
@@ -157,9 +155,7 @@ describe("terminalSessionPersistence", () => {
 
     // The capture grid rides in the header so replay can size to it (#11552).
     expect(fs.readFileSync(syncPath, "utf8")).toBe("DAINTREE_SESSION_v2\n80x24\nsync payload");
-    expect(fs.readFileSync(asyncPath, "utf8")).toBe(
-      "DAINTREE_SESSION_v2\n132x43\nasync payload"
-    );
+    expect(fs.readFileSync(asyncPath, "utf8")).toBe("DAINTREE_SESSION_v2\n132x43\nasync payload");
 
     // The atomic helpers must not leave temp files behind
     const stragglers = fs.readdirSync(sessionDir).filter((name) => name.endsWith(".tmp"));

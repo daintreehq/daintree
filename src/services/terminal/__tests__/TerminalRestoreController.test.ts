@@ -4,11 +4,7 @@ import { INCREMENTAL_RESTORE_CONFIG, type ManagedTerminal } from "../types";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
 
 /** Wrap a payload in the snapshot envelope the IPC now returns (#11552). */
-function snapshot(
-  data: string,
-  cols = 80,
-  rows = 24
-): SerializedTerminalSnapshot {
+function snapshot(data: string, cols = 80, rows = 24): SerializedTerminalSnapshot {
   return { data, cols, rows };
 }
 
@@ -626,7 +622,6 @@ describe("TerminalRestoreController", () => {
       expect(managed.deferredOutput).toHaveLength(0);
     });
   });
-
 
   describe("capture-geometry alignment (#11552)", () => {
     // SerializeAddon encodes wrap state that only decodes at the width it was

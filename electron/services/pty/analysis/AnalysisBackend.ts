@@ -1,12 +1,12 @@
 import type { PatternDetectionConfig } from "../AgentPatternDetector.js";
-import type { AnalysisChunkFlags, AnalysisFinalSnapshot } from "../analysisWorkerProtocol.js";
+import type { AnalysisChunkFlags } from "../analysisWorkerProtocol.js";
 import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
 
 /**
- * Backend-level counterpart of the worker-wire {@link AnalysisFinalSnapshot}:
- * the same two serializations, each carrying the grid it was captured at. The
- * wire type stays string-only — geometry is host-side state, so the worker
- * protocol needs no new field (#11552).
+ * Backend-level counterpart of the worker-wire `AnalysisFinalSnapshot`: the
+ * same two serializations, each carrying the grid it was captured at. The wire
+ * type stays string-only — geometry is host-side state, so the worker protocol
+ * needs no new field (#11552).
  */
 export interface AnalysisFinalCapture {
   /** Full-buffer serialize (banner included) for the preserved snapshot. */

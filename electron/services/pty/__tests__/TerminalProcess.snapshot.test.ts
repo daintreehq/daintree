@@ -132,17 +132,29 @@ describe("TerminalProcess.flushEventDrivenSnapshot", () => {
 
   it("persists for agent terminals via async serialization (non-banner path)", async () => {
     const terminal = createTerminal();
-    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue({ data: "agent-scrollback", cols: 80, rows: 24 });
+    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue({
+      data: "agent-scrollback",
+      cols: 80,
+      rows: 24,
+    });
 
     terminal.flushEventDrivenSnapshot();
     await flushMicrotasks();
 
-    expect(persistAsyncMock).toHaveBeenCalledWith("t1", { data: "agent-scrollback", cols: 80, rows: 24 });
+    expect(persistAsyncMock).toHaveBeenCalledWith("t1", {
+      data: "agent-scrollback",
+      cols: 80,
+      rows: 24,
+    });
   });
 
   it("suppresses an immediate repeat with unchanged content", async () => {
     const terminal = createTerminal();
-    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue({ data: "data", cols: 80, rows: 24 });
+    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue({
+      data: "data",
+      cols: 80,
+      rows: 24,
+    });
 
     terminal.flushEventDrivenSnapshot();
     await flushMicrotasks();
@@ -166,7 +178,11 @@ describe("TerminalProcess.flushEventDrivenSnapshot", () => {
 
   it("does not flush when terminal is killed", async () => {
     const terminal = createTerminal();
-    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue({ data: "data", cols: 80, rows: 24 });
+    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue({
+      data: "data",
+      cols: 80,
+      rows: 24,
+    });
 
     terminal.kill("test");
 

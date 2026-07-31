@@ -422,7 +422,11 @@ export class TerminalRestoreController {
       }
 
       // restoreFetchedState will take over the isSerializedRestoreInProgress flag
-      const result = await this.restoreFetchedState(id, snapshot?.data ?? null, snapshot ?? undefined);
+      const result = await this.restoreFetchedState(
+        id,
+        snapshot?.data ?? null,
+        snapshot ?? undefined
+      );
       if (!result) {
         // The restore never ran (null state) or failed. When it ran it bumped
         // the generation and owns the gate — releaseIfStillOwned then correctly
