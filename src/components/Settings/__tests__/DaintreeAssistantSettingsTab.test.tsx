@@ -226,7 +226,7 @@ function installApi(
       apiKey: "dnt-key-abc",
     }),
     rotateApiKey: vi.fn().mockResolvedValue("dnt-key-new"),
-    getConfigSnippet: vi.fn().mockResolvedValue('{ "url": "http://127.0.0.1:45454/sse" }'),
+    getConfigSnippet: vi.fn().mockResolvedValue('{ "url": "http://127.0.0.1:45454/mcp" }'),
     onRuntimeStateChanged: vi.fn(() => () => {}),
     onGrantLifecycle: vi.fn(() => () => {}),
     getAuditRecords: vi.fn().mockResolvedValue([]),
@@ -499,7 +499,7 @@ describe("DaintreeAssistantSettingsTab", () => {
 
     await waitFor(() => {
       expect(window.electron.mcpServer.getConfigSnippet).toHaveBeenCalledTimes(1);
-      expect(writeText).toHaveBeenCalledWith('{ "url": "http://127.0.0.1:45454/sse" }');
+      expect(writeText).toHaveBeenCalledWith('{ "url": "http://127.0.0.1:45454/mcp" }');
     });
     await waitForContent(container, "Copied");
   });

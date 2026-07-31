@@ -21,6 +21,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
+import { SettingsChoicebox } from "@/components/Settings/SettingsChoicebox";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { McpAuditLogViewer } from "@/components/Settings/McpAuditLogViewer";
 import { TurnOutcomeDiagnostics } from "@/components/Settings/TurnOutcomeDiagnostics";
@@ -41,6 +42,11 @@ import {
   MCP_AUDIT_MAX_RECORDS,
   MCP_AUDIT_MIN_RECORDS,
 } from "@shared/types";
+import {
+  buildMcpClientConfig,
+  MCP_CLIENT_CONFIGS,
+  type McpClientConfigId,
+} from "@shared/config/mcpClientConfigs";
 
 interface McpServerStatus {
   enabled: boolean;
@@ -78,6 +84,7 @@ export function McpServerSettingsTab() {
   // don't flash a loading state for sub-400ms work.
   const showInlineLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
   const [copied, setCopied] = useState(false);
+  const [clientConfigId, setClientConfigId] = useState<McpClientConfigId>("claude-code");
   const [error, setError] = useState<string | null>(null);
   const [portInput, setPortInput] = useState("");
   const portDirtyRef = useRef(false);
@@ -125,6 +132,27 @@ export function McpServerSettingsTab() {
   const [keptAliveByAssistant, setKeptAliveByAssistant] = useState(false);
 
   useSettingsTabValidation("mcp", Boolean(error));
+
+  // Prefer the runtime-snapshot port for the ready branch so a push that
+  // transitions starting→ready renders the URL without waiting for the
+  // follow-up `getStatus()` refetch. Fall back to `status.port` when the
+  // snapshot hasn't caught up yet (matches the assistant tab precedent at
+  // DaintreeAssistantSettingsTab.tsx:740).
+  const boundPort = runtimeSnapshot.port ?? status.port;
+  // Displayed URL and copied snippet come from one build, so they can't drift
+  // the way the old `/sse` box did beside a `/mcp` snippet (#11535).
+  const clientConfig = buildMcpClientConfig(clientConfigId, {
+    port: boundPort,
+    apiKey: status.apiKey,
+  });
+
+  const clearConfigCopyFeedback = () => {
+    setCopied(false);
+    if (configCopyTimeoutRef.current) {
+      clearTimeout(configCopyTimeoutRef.current);
+      configCopyTimeoutRef.current = null;
+    }
+  };
 
   // Bearer list + assistant-control flag are non-critical: a failure must not
   // block the rest of the tab, so they're fetched outside the main mount
@@ -316,20 +344,21 @@ export function McpServerSettingsTab() {
 
   const handleCopyConfig = async () => {
     try {
-      const snippet = await window.electron.mcpServer.getConfigSnippet();
-      await navigator.clipboard.writeText(snippet);
+      await navigator.clipboard.writeText(clientConfig.snippet);
       setCopied(true);
       if (configCopyTimeoutRef.current) clearTimeout(configCopyTimeoutRef.current);
       configCopyTimeoutRef.current = setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
     } catch (err) {
-      setCopied(false);
-      if (configCopyTimeoutRef.current) {
-        clearTimeout(configCopyTimeoutRef.current);
-        configCopyTimeoutRef.current = null;
-      }
+      clearConfigCopyFeedback();
       setError(formatErrorMessage(err, "Failed to copy config"));
       logError("Failed to copy MCP config", err);
     }
+  };
+
+  // Stale "Copied!" would otherwise describe a payload the user no longer has.
+  const handleSelectClientConfig = (id: McpClientConfigId) => {
+    setClientConfigId(id);
+    clearConfigCopyFeedback();
   };
 
   const handlePortSave = async () => {
@@ -358,6 +387,8 @@ export function McpServerSettingsTab() {
       setError(null);
       const key = await window.electron.mcpServer.rotateApiKey();
       setStatus((prev) => ({ ...prev, apiKey: key }));
+      // The rotated key invalidates whatever config was last copied.
+      clearConfigCopyFeedback();
       setCopiedKey(false);
       setShowApiKey(false);
       setShowRotateConfirm(false);
@@ -509,14 +540,6 @@ export function McpServerSettingsTab() {
     }
   };
 
-  // Prefer the runtime-snapshot port for the ready branch so a push that
-  // transitions starting→ready renders the URL without waiting for the
-  // follow-up `getStatus()` refetch. Fall back to `status.port` when the
-  // snapshot hasn't caught up yet (matches the assistant tab precedent at
-  // DaintreeAssistantSettingsTab.tsx:740).
-  const boundPort = runtimeSnapshot.port ?? status.port;
-  const sseUrl = boundPort ? `http://127.0.0.1:${boundPort}/sse` : null;
-
   // Rotation is the revoke-all primitive — it invalidates every external
   // client holding the current key in one shot (Tier D3). Gate it behind
   // typing the last 4 characters, matching DaintreeAssistantSettingsTab.
@@ -587,8 +610,21 @@ export function McpServerSettingsTab() {
                 </div>
 
                 <div className="flex items-center gap-2 p-2.5 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border font-mono text-xs text-daintree-text/80 select-all">
-                  {sseUrl}
+                  {clientConfig.url}
                 </div>
+
+                <SettingsChoicebox<McpClientConfigId>
+                  label="Client"
+                  description="Pick the client you're connecting, then copy its config."
+                  value={clientConfigId}
+                  onChange={handleSelectClientConfig}
+                  options={MCP_CLIENT_CONFIGS.map((entry) => ({
+                    value: entry.id,
+                    label: entry.label,
+                    description: entry.destination,
+                  }))}
+                  columns={3}
+                />
 
                 <button
                   onClick={handleCopyConfig}
@@ -605,8 +641,9 @@ export function McpServerSettingsTab() {
                 </button>
 
                 <p className="text-xs text-daintree-text/50 leading-relaxed select-text">
-                  Paste the copied config into your MCP client (e.g. Claude Code, Cursor).
-                  {status.apiKey && " The config includes the authorization header."}
+                  {clientConfig.destination}.
+                  {status.apiKey &&
+                    " It carries your API key, so treat it like a password — rotating the key below cuts off any client still holding an older copy."}
                 </p>
 
                 {activeBearers.length > 0 && (

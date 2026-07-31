@@ -94,7 +94,7 @@ export type AssistantPaneWebContentsResolver = (token: string) => number | null;
 export type AssistantPaneActionContextResolver = (token: string) => ActionContext | null;
 export type { HelpAssistantTier };
 
-export const MCP_SERVER_KEY = "daintree";
+export { MCP_SERVER_KEY } from "../../../shared/config/mcpClientConfigs.js";
 
 export const DEFAULT_PORT = 45454;
 export const MAX_PORT_RETRIES = 10;
