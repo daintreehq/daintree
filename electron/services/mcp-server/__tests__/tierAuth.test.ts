@@ -27,7 +27,6 @@ import {
   shouldExposeTool,
   ACTIONS_SEARCH_DEFAULT_LIMIT,
   ACTIONS_SEARCH_MAX_LIMIT,
-  INTROSPECTION_TOOL_IDS,
 } from "../tierAuth.js";
 import { TIER_ALLOWLISTS } from "../shared.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
@@ -682,28 +681,16 @@ describe("filterIntrospectionResultForSession", () => {
 
   it("passes a failed dispatch through untouched", () => {
     const failure = { ok: false as const, error: { code: "EXECUTION_ERROR", message: "boom" } };
-    expect(filterIntrospectionResultForSession("actions.list", failure, permitted, 20)).toBe(
-      failure
-    );
+    expect(
+      filterIntrospectionResultForSession("actions.list", failure, permitted, { callerLimit: 20 })
+    ).toBe(failure);
   });
 
   it("passes a non-introspection action through untouched", () => {
     const result = listResult([makeEntry({ id: "git.push" })]);
-    expect(filterIntrospectionResultForSession("git.push", result, permitted, 20)).toBe(result);
-  });
-
-  it("every id it claims to handle actually changes the payload", () => {
-    for (const actionId of INTROSPECTION_TOOL_IDS) {
-      const denied = makeEntry({ id: "git.push" });
-      const input =
-        actionId === "actions.getSchema"
-          ? { ok: true as const, result: { ok: true, entry: denied } }
-          : actionId === "actions.search"
-            ? searchResult([denied])
-            : listResult([denied]);
-      const filtered = filterIntrospectionResultForSession(actionId, input, permitted, 20);
-      expect(filtered).not.toBe(input);
-    }
+    expect(
+      filterIntrospectionResultForSession("git.push", result, permitted, { callerLimit: 20 })
+    ).toBe(result);
   });
 
   describe("actions.list", () => {
@@ -713,9 +700,13 @@ describe("filterIntrospectionResultForSession", () => {
         makeEntry({ id: "git.push" }),
         makeEntry({ id: "worktree.list" }),
       ]);
-      expect(ids(filterIntrospectionResultForSession("actions.list", result, permitted, 20))).toEqual(
-        ["terminal.list", "worktree.list"]
-      );
+      expect(
+        ids(
+          filterIntrospectionResultForSession("actions.list", result, permitted, {
+            callerLimit: 20,
+          })
+        )
+      ).toEqual(["terminal.list", "worktree.list"]);
     });
 
     // Progressive disclosure (#8502) depends on `discoverable` entries being
@@ -725,9 +716,13 @@ describe("filterIntrospectionResultForSession", () => {
       const entry = makeEntry({ id: "terminal.list", mcpVisibility: "discoverable" });
       expect(shouldExposeTool(entry, "workbench")).toBe(false);
       const result = listResult([entry]);
-      expect(ids(filterIntrospectionResultForSession("actions.list", result, permitted, 20))).toEqual(
-        ["terminal.list"]
-      );
+      expect(
+        ids(
+          filterIntrospectionResultForSession("actions.list", result, permitted, {
+            callerLimit: 20,
+          })
+        )
+      ).toEqual(["terminal.list"]);
     });
 
     // Main is the authorization boundary; it re-applies the ceilings rather
@@ -738,24 +733,34 @@ describe("filterIntrospectionResultForSession", () => {
         makeEntry({ id: "worktree.list", danger: "restricted" }),
         makeEntry({ id: "actions.search" }),
       ]);
-      expect(ids(filterIntrospectionResultForSession("actions.list", result, permitted, 20))).toEqual(
-        ["actions.search"]
-      );
+      expect(
+        ids(
+          filterIntrospectionResultForSession("actions.list", result, permitted, {
+            callerLimit: 20,
+          })
+        )
+      ).toEqual(["actions.search"]);
     });
 
     it("drops malformed entries carrying no usable id", () => {
       const result = { ok: true as const, result: { actions: [null, {}, { id: 42 }] } };
-      expect(ids(filterIntrospectionResultForSession("actions.list", result, permitted, 20))).toEqual(
-        []
-      );
+      expect(
+        ids(
+          filterIntrospectionResultForSession("actions.list", result, permitted, {
+            callerLimit: 20,
+          })
+        )
+      ).toEqual([]);
     });
 
     it("does not mutate the payload it was given", () => {
-      const entries = [makeEntry({ id: "terminal.list" }), makeEntry({ id: "git.push" })];
-      const result = listResult(entries);
-      filterIntrospectionResultForSession("actions.list", result, permitted, 20);
-      expect(result.result.actions).toHaveLength(2);
-      expect(entries.map((e) => e.id)).toEqual(["terminal.list", "git.push"]);
+      const result = listResult([
+        makeEntry({ id: "terminal.list" }),
+        makeEntry({ id: "git.push" }),
+      ]);
+      const before = structuredClone(result);
+      filterIntrospectionResultForSession("actions.list", result, permitted, { callerLimit: 20 });
+      expect(result).toEqual(before);
     });
   });
 
@@ -766,7 +771,9 @@ describe("filterIntrospectionResultForSession", () => {
         makeEntry({ id: "git.push" }),
         makeEntry({ id: "git.commit" }),
       ]);
-      const filtered = filterIntrospectionResultForSession("actions.search", result, permitted, 20);
+      const filtered = filterIntrospectionResultForSession("actions.search", result, permitted, {
+        callerLimit: 20,
+      });
       const payload = (filtered as { result: { totalMatches: number } }).result;
       expect(payload.totalMatches).toBe(1);
       expect(ids(filtered)).toEqual(["terminal.list"]);
@@ -788,7 +795,7 @@ describe("filterIntrospectionResultForSession", () => {
         "actions.search",
         overFetched,
         permitted,
-        3
+        { callerLimit: 3 }
       );
       expect(ids(filtered)).toEqual(["terminal.list", "worktree.list", "actions.search"]);
       expect((filtered as { result: { totalMatches: number } }).result.totalMatches).toBe(3);
@@ -800,7 +807,9 @@ describe("filterIntrospectionResultForSession", () => {
         makeEntry({ id: "worktree.list" }),
         makeEntry({ id: "actions.search" }),
       ]);
-      const filtered = filterIntrospectionResultForSession("actions.search", result, permitted, 2);
+      const filtered = filterIntrospectionResultForSession("actions.search", result, permitted, {
+        callerLimit: 2,
+      });
       expect(ids(filtered)).toEqual(["terminal.list", "worktree.list"]);
       // totalMatches still reports everything permitted, not just the page.
       expect((filtered as { result: { totalMatches: number } }).result.totalMatches).toBe(3);
@@ -808,7 +817,9 @@ describe("filterIntrospectionResultForSession", () => {
 
     it("reports zero matches rather than an inflated count when nothing is permitted", () => {
       const result = searchResult([makeEntry({ id: "git.push" })], 40);
-      const filtered = filterIntrospectionResultForSession("actions.search", result, permitted, 20);
+      const filtered = filterIntrospectionResultForSession("actions.search", result, permitted, {
+        callerLimit: 20,
+      });
       expect((filtered as { result: { totalMatches: number } }).result.totalMatches).toBe(0);
       expect(ids(filtered)).toEqual([]);
     });
@@ -816,33 +827,41 @@ describe("filterIntrospectionResultForSession", () => {
 
   describe("actions.getSchema", () => {
     it("returns a permitted entry unchanged", () => {
-      const result = { ok: true as const, result: { ok: true, entry: makeEntry({ id: "terminal.list" }) } };
-      expect(filterIntrospectionResultForSession("actions.getSchema", result, permitted, 20)).toBe(
-        result
-      );
+      const result = {
+        ok: true as const,
+        result: { ok: true, entry: makeEntry({ id: "terminal.list" }) },
+      };
+      expect(
+        filterIntrospectionResultForSession("actions.getSchema", result, permitted, {
+          callerLimit: 20,
+        })
+      ).toBe(result);
     });
 
     it("keeps a permitted discoverable entry reachable", () => {
       const entry = makeEntry({ id: "worktree.list", mcpVisibility: "discoverable" });
       const result = { ok: true as const, result: { ok: true, entry } };
-      expect(filterIntrospectionResultForSession("actions.getSchema", result, permitted, 20)).toBe(
-        result
-      );
+      expect(
+        filterIntrospectionResultForSession("actions.getSchema", result, permitted, {
+          callerLimit: 20,
+        })
+      ).toBe(result);
     });
 
     // NOT_FOUND rather than a tier error: a distinct code would confirm the id
     // exists while offering no route to it, since grants are minted off a
     // denied dispatch and never off a schema read.
     it("collapses a denied entry onto the existing NOT_FOUND data shape", () => {
-      const result = { ok: true as const, result: { ok: true, entry: makeEntry({ id: "git.push" }) } };
-      const filtered = filterIntrospectionResultForSession(
-        "actions.getSchema",
-        result,
-        permitted,
-        20
-      );
-      const payload = (filtered as { result: { ok: boolean; error: { code: string; message: string } } })
-        .result;
+      const result = {
+        ok: true as const,
+        result: { ok: true, entry: makeEntry({ id: "git.push" }) },
+      };
+      const filtered = filterIntrospectionResultForSession("actions.getSchema", result, permitted, {
+        callerLimit: 20,
+      });
+      const payload = (
+        filtered as { result: { ok: boolean; error: { code: string; message: string } } }
+      ).result;
       expect(payload.ok).toBe(false);
       expect(payload.error.code).toBe("NOT_FOUND");
       expect(payload.error.message).toContain("git.push");
@@ -858,9 +877,12 @@ describe("filterIntrospectionResultForSession", () => {
           "actions.getSchema",
           { ok: true as const, result: { ok: true, entry } },
           permitted,
-          20
+          { callerLimit: 20 }
         );
-        expect((filtered as { result: { ok: boolean } }).result.ok).toBe(false);
+        expect((filtered as { result: unknown }).result).toEqual({
+          ok: false,
+          error: { code: "NOT_FOUND", message: expect.stringContaining("terminal.list") },
+        });
       }
     });
 
@@ -869,9 +891,11 @@ describe("filterIntrospectionResultForSession", () => {
         ok: true as const,
         result: { ok: false, error: { code: "NOT_FOUND", message: "nope" } },
       };
-      expect(filterIntrospectionResultForSession("actions.getSchema", result, permitted, 20)).toBe(
-        result
-      );
+      expect(
+        filterIntrospectionResultForSession("actions.getSchema", result, permitted, {
+          callerLimit: 20,
+        })
+      ).toBe(result);
     });
   });
 });

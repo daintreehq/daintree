@@ -2,6 +2,10 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext, ActionManifestEntry } from "@shared/types/actions";
 import { z } from "zod";
 import { PersistedStoreInfoSchema } from "./schemas";
+import {
+  ACTIONS_SEARCH_DEFAULT_LIMIT,
+  ACTIONS_SEARCH_MAX_LIMIT,
+} from "@shared/config/mcpIntrospection";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { usePortalStore } from "@/store/portalStore";
@@ -268,10 +272,12 @@ export function registerIntrospectionActions(
         .number()
         .int()
         .min(1)
-        .max(100)
+        .max(ACTIONS_SEARCH_MAX_LIMIT)
         .optional()
-        .default(20)
-        .describe("Max results (1-100, default 20)"),
+        .default(ACTIONS_SEARCH_DEFAULT_LIMIT)
+        .describe(
+          `Max results (1-${ACTIONS_SEARCH_MAX_LIMIT}, default ${ACTIONS_SEARCH_DEFAULT_LIMIT})`
+        ),
     }),
     examples: [
       {
@@ -288,7 +294,10 @@ export function registerIntrospectionActions(
       results: z.array(z.unknown()),
     }),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { query, limit = 20 } = args as { query: string; limit?: number };
+      const { query, limit = ACTIONS_SEARCH_DEFAULT_LIMIT } = args as {
+        query: string;
+        limit?: number;
+      };
       const manifest = actionService.list(ctx, { includeSchemas: false });
 
       const q = query.toLowerCase();
@@ -339,7 +348,9 @@ export function registerIntrospectionActions(
 
       scored.sort((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id));
 
-      const results = scored.slice(0, Math.min(limit, 100)).map((s) => s.entry);
+      const results = scored
+        .slice(0, Math.min(limit, ACTIONS_SEARCH_MAX_LIMIT))
+        .map((s) => s.entry);
 
       return { totalMatches: scored.length, results };
     },

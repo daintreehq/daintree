@@ -72,6 +72,7 @@ import {
   filterIntrospectionResultForSession,
   getTierPermittedActionIds,
   readSearchLimit,
+  readRequestedActionId,
   INTROSPECTION_TOOL_IDS,
   ACTIONS_SEARCH_TOOL_ID,
   ACTIONS_SEARCH_MAX_LIMIT,
@@ -442,6 +443,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               .flatMap((grant) => [...grant.allowedTools]),
           ]),
           callerLimit: searchLimit ?? ACTIONS_SEARCH_DEFAULT_LIMIT,
+          requestedActionId: readRequestedActionId(args),
         }
       : null;
     // `actions.search` ranks and slices in the renderer, before main can see
@@ -989,7 +991,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   actionId,
                   envelope.result,
                   introspectionSurface.permittedActionIds,
-                  introspectionSurface.callerLimit
+                  introspectionSurface
                 )
               : envelope.result,
           };

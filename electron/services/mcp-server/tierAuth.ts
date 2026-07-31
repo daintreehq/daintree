@@ -5,6 +5,10 @@ import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import type { HelpTokenValidator } from "./shared.js";
 import { type McpTier, TIER_ALLOWLISTS } from "./shared.js";
+import {
+  ACTIONS_SEARCH_DEFAULT_LIMIT,
+  ACTIONS_SEARCH_MAX_LIMIT,
+} from "../../../shared/config/mcpIntrospection.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -135,9 +139,7 @@ export const INTROSPECTION_TOOL_IDS: ReadonlySet<string> = new Set([
   ACTIONS_GET_SCHEMA_TOOL_ID,
 ]);
 
-/** Mirrors `actions.search`'s `limit` bounds in `introspectionActions.ts`. */
-export const ACTIONS_SEARCH_MAX_LIMIT = 100;
-export const ACTIONS_SEARCH_DEFAULT_LIMIT = 20;
+export { ACTIONS_SEARCH_DEFAULT_LIMIT, ACTIONS_SEARCH_MAX_LIMIT };
 
 /**
  * The page size an `actions.search` caller asked for, clamped to the tool's
@@ -178,7 +180,10 @@ function readEntryId(entry: unknown): string | null {
  * surface non-core actions that eager `tools/list` omits (#8502). Reusing
  * {@link shouldExposeTool} here would silently defeat progressive disclosure.
  */
-function isDiscoverableForSession(entry: unknown, permittedActionIds: ReadonlySet<string>): boolean {
+function isDiscoverableForSession(
+  entry: unknown,
+  permittedActionIds: ReadonlySet<string>
+): boolean {
   const id = readEntryId(entry);
   if (id === null) return false;
   const record = entry as { mcpVisibility?: unknown; danger?: unknown };
@@ -200,28 +205,31 @@ export function filterIntrospectionResultForSession(
   actionId: string,
   result: ActionDispatchResult,
   permittedActionIds: ReadonlySet<string>,
-  callerLimit: number
+  options: { callerLimit: number; requestedActionId?: string }
 ): ActionDispatchResult {
   if (!result.ok) return result;
 
+  // Every branch below rebuilds the payload from scratch rather than spreading
+  // the renderer's, and treats an unrecognised shape as a denial. Nothing
+  // validates these payloads at runtime — not the IPC bridge, not
+  // `ActionService.dispatch` — so passing an unexpected shape through would
+  // hand back an unfiltered result, and spreading would forward any extra
+  // field the renderer attached alongside the one being filtered.
   if (actionId === ACTIONS_LIST_TOOL_ID) {
     const payload = result.result as { actions?: unknown } | null | undefined;
-    if (!payload || !Array.isArray(payload.actions)) return result;
+    const entries = Array.isArray(payload?.actions) ? payload.actions : [];
     return {
       ok: true,
       result: {
-        ...payload,
-        actions: payload.actions.filter((entry) =>
-          isDiscoverableForSession(entry, permittedActionIds)
-        ),
+        actions: entries.filter((entry) => isDiscoverableForSession(entry, permittedActionIds)),
       },
     };
   }
 
   if (actionId === ACTIONS_SEARCH_TOOL_ID) {
     const payload = result.result as { results?: unknown } | null | undefined;
-    if (!payload || !Array.isArray(payload.results)) return result;
-    const permitted = payload.results.filter((entry) =>
+    const entries = Array.isArray(payload?.results) ? payload.results : [];
+    const permitted = entries.filter((entry) =>
       isDiscoverableForSession(entry, permittedActionIds)
     );
     // `totalMatches` counts the permitted matches main actually saw. The
@@ -233,35 +241,55 @@ export function filterIntrospectionResultForSession(
     return {
       ok: true,
       result: {
-        ...payload,
         totalMatches: permitted.length,
-        results: permitted.slice(0, callerLimit),
+        results: permitted.slice(0, options.callerLimit),
       },
     };
   }
 
   if (actionId === ACTIONS_GET_SCHEMA_TOOL_ID) {
     const payload = result.result as { ok?: unknown; entry?: unknown } | null | undefined;
-    if (!payload || payload.ok !== true) return result;
-    if (isDiscoverableForSession(payload.entry, permittedActionIds)) return result;
+    if (payload && payload.ok === false) return result;
+    // Authorize the id the CALLER asked for, never the one the payload
+    // carries: a mismatch means the renderer answered a different question,
+    // and honouring the payload's id would let a permitted id vouch for a
+    // denied entry's schema.
+    const requestedId = options.requestedActionId;
+    const entryId = readEntryId(payload?.entry);
+    const answersTheRequest =
+      payload?.ok === true &&
+      entryId !== null &&
+      (requestedId === undefined || entryId === requestedId);
+    if (answersTheRequest && isDiscoverableForSession(payload.entry, permittedActionIds)) {
+      return result;
+    }
     // Collapse onto the shape the renderer already returns for an unknown,
     // hidden, or restricted id rather than minting a tier-specific error: a
     // distinct error would confirm the id exists while offering no way to
     // reach it (grants are issued off a denied *dispatch*, not a schema read).
-    const requestedId = readEntryId(payload.entry);
     return {
       ok: true,
       result: {
         ok: false,
         error: {
           code: "NOT_FOUND",
-          message: `No action found with id "${requestedId ?? "unknown"}". Use actions.search to find available actions.`,
+          message: `No action found with id "${requestedId ?? entryId ?? "unknown"}". Use actions.search to find available actions.`,
         },
       },
     };
   }
 
   return result;
+}
+
+/**
+ * The action id an `actions.getSchema` caller asked about, so the filter can
+ * authorize the request rather than whatever id the answer came back carrying.
+ */
+export function readRequestedActionId(args: unknown): string | undefined {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
+  const actionId = (args as { actionId?: unknown }).actionId;
+  return typeof actionId === "string" && actionId.length > 0 ? actionId : undefined;
 }
 
 export function buildToolInputSchema(entry: ActionManifestEntry): Record<string, unknown> {

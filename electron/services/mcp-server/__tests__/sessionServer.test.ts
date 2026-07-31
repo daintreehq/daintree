@@ -3294,8 +3294,7 @@ describe("sessionServer introspection tier filtering", () => {
     const res = await callTool(server, { name: "actions.list" });
 
     const listed = payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id);
-    expect(listed).toContain("actions.list");
-    expect(listed).not.toContain("git.push");
+    expect(listed).toEqual(["actions.list", "terminal.list"]);
     expect(isTierPermitted("workbench", "git.push")).toBe(false);
     const text = (res.content as Array<{ text: string }>)[0]!.text;
     expect(text).not.toContain("git.push");
@@ -3309,10 +3308,8 @@ describe("sessionServer introspection tier filtering", () => {
       const res = await callTool(server, { name: "actions.list" });
       return payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id);
     };
-    const workbench = await ids("workbench");
-    const system = await ids("system");
-    expect(system.length).toBeGreaterThan(workbench.length);
-    for (const id of workbench) expect(system).toContain(id);
+    expect(await ids("workbench")).toEqual(["actions.list"]);
+    expect(await ids("system")).toEqual(["actions.list", "git.push"]);
   });
 
   it("keeps discoverable entries reachable through search (progressive disclosure)", async () => {
@@ -3339,10 +3336,27 @@ describe("sessionServer introspection tier filtering", () => {
   });
 
   it("over-fetches the search page so denied top hits cannot starve it", async () => {
-    const denied = Array.from({ length: 40 }, (_, i) => entry(`git.denied${i}`));
-    const deps = introspectionDeps("workbench", {
-      totalMatches: 43,
-      results: [...denied, entry("actions.list"), entry("actions.search"), entry("terminal.list")],
+    // 40 denied hits outrank the permitted ones. A renderer honouring the
+    // caller's limit of 3 would return only denied entries, so without the
+    // over-fetch the page comes back empty — this dispatcher slices the way
+    // the real action does instead of ignoring the limit.
+    const ranked = [
+      ...Array.from({ length: 40 }, (_, i) => entry(`git.denied${i}`)),
+      entry("actions.list"),
+      entry("actions.search"),
+      entry("terminal.list"),
+    ];
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("workbench"),
+      dispatchAction: vi.fn((_id: string, args: unknown) => {
+        const limit = (args as { limit?: number }).limit ?? 20;
+        return Promise.resolve({
+          result: {
+            ok: true,
+            result: { totalMatches: ranked.length, results: ranked.slice(0, limit) },
+          },
+        });
+      }),
     });
     const server = createSessionServer("s1", deps);
     const res = await callTool(server, {
@@ -3350,14 +3364,20 @@ describe("sessionServer introspection tier filtering", () => {
       arguments: { query: "anything", limit: 3 },
     });
 
-    // Main asked the renderer for the schema maximum, not the caller's 3 —
-    // otherwise the 40 denied hits would consume the whole page.
-    const dispatched = (deps.dispatchAction as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    expect((dispatched[1] as { limit: number }).limit).toBe(100);
-
     const body = payload<{ totalMatches: number; results: ActionManifestEntry[] }>(res);
-    expect(body.results).toHaveLength(3);
+    expect(body.results.map((r) => r.id)).toEqual([
+      "actions.list",
+      "actions.search",
+      "terminal.list",
+    ]);
     expect(body.totalMatches).toBe(3);
+
+    // The audit trail must record what the CALLER asked for, not the widened
+    // limit main forwarded to the renderer.
+    const audited = (deps.appendAuditRecord as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      args: { limit: number };
+    };
+    expect(audited.args).toEqual({ query: "anything", limit: 3 });
   });
 
   it("leaves an out-of-contract search limit for the renderer to reject", async () => {
@@ -3414,9 +3434,9 @@ describe("sessionServer introspection tier filtering", () => {
 
       deps.sessionStore.grantCache.issueGrant("s1", "git.push");
       const after = await callTool(server, { name: "actions.list" });
-      expect(
-        payload<{ actions: ActionManifestEntry[] }>(after).actions.map((a) => a.id)
-      ).toEqual(["git.push"]);
+      expect(payload<{ actions: ActionManifestEntry[] }>(after).actions.map((a) => a.id)).toEqual([
+        "git.push",
+      ]);
 
       deps.sessionStore.grantCache.dispose();
     });
@@ -3481,6 +3501,73 @@ describe("sessionServer introspection tier filtering", () => {
       grantCache.dispose();
     });
 
+    // Grants are per-session. Reading them unscoped would let session A
+    // discover what session B was approved for and then fail to dispatch it —
+    // the original bug, recreated across sessions.
+    it("ignores grants belonging to a different session", async () => {
+      const deps = introspectionDeps("workbench", {
+        actions: [entry("git.push"), entry("git.commit"), entry("worktree.delete")],
+      });
+      const server = createSessionServer("s1", deps);
+      deps.sessionStore.grantCache.issueGrant("other", "git.commit");
+      deps.sessionStore.grantCache.issueNativeGrant({
+        sessionId: "other",
+        actorId: "test-actor",
+        actorType: "help-session",
+        allowedTools: ["worktree.delete"],
+        maxUses: 5,
+      });
+      // One grant that DOES belong to s1, so the test proves scoping rather
+      // than merely proving grants were ignored altogether.
+      deps.sessionStore.grantCache.issueGrant("s1", "git.push");
+
+      const res = await callTool(server, { name: "actions.list" });
+      expect(payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id)).toEqual([
+        "git.push",
+      ]);
+
+      deps.sessionStore.grantCache.dispose();
+    });
+
+    it("ignores a native grant past its hard lifetime ceiling", async () => {
+      let now = 1000;
+      const grantCache = new GrantCache({
+        ttlMs: 4000,
+        maxLifetimeMs: 5000,
+        sweepIntervalMs: 0,
+        now: () => now,
+      });
+      const store = fakeSessionStore("workbench");
+      (store as unknown as { grantCache: GrantCache }).grantCache = grantCache;
+
+      const deps = fakeDeps({
+        sessionStore: store,
+        dispatchAction: vi.fn().mockResolvedValue({
+          result: { ok: true, result: { actions: [entry("git.push")] } },
+        }),
+      });
+      const server = createSessionServer("s1", deps);
+      const grant = grantCache.issueNativeGrant({
+        sessionId: "s1",
+        actorId: "test-actor",
+        actorType: "help-session",
+        allowedTools: ["git.push"],
+        maxUses: 5,
+      });
+
+      // Slide the TTL forward so expiry is still in the future at read time;
+      // only the ceiling disqualifies the grant.
+      now = 5000;
+      grantCache.refreshNativeGrant(grant.id);
+      now = 6500;
+      expect(grantCache.getActiveNativeGrants("s1")[0]!.expiresAt).toBeGreaterThan(now);
+
+      const res = await callTool(server, { name: "actions.list" });
+      expect(payload<{ actions: unknown[] }>(res).actions).toHaveLength(0);
+
+      grantCache.dispose();
+    });
+
     it("ignores a grant that has lapsed its TTL", async () => {
       let now = 1000;
       const grantCache = new GrantCache({ ttlMs: 100, sweepIntervalMs: 0, now: () => now });
@@ -3501,6 +3588,61 @@ describe("sessionServer introspection tier filtering", () => {
       expect(payload<{ actions: unknown[] }>(res).actions).toHaveLength(0);
 
       grantCache.dispose();
+    });
+  });
+
+  // A renderer result is not runtime-validated anywhere between the action's
+  // `run()` and the MCP wire, so an unexpected shape must deny rather than
+  // sail through unfiltered.
+  describe("fails closed on a payload shape it does not recognise", () => {
+    it("returns no actions when actions is not an array", async () => {
+      const deps = introspectionDeps("workbench", {
+        actions: { smuggled: entry("git.push") },
+        leaked: [entry("git.push")],
+      });
+      const server = createSessionServer("s1", deps);
+      const res = await callTool(server, { name: "actions.list" });
+
+      expect(payload<{ actions: unknown[] }>(res).actions).toEqual([]);
+      // Fields the renderer attached alongside the filtered one are dropped,
+      // not forwarded — the payload is rebuilt, never spread.
+      expect((res.content as Array<{ text: string }>)[0]!.text).not.toContain("git.push");
+    });
+
+    it("returns no search results when results is not an array", async () => {
+      const deps = introspectionDeps("workbench", {
+        totalMatches: 99,
+        results: "not-an-array",
+        leaked: [entry("git.push")],
+      });
+      const server = createSessionServer("s1", deps);
+      const res = await callTool(server, {
+        name: "actions.search",
+        arguments: { query: "anything" },
+      });
+
+      const body = payload<{ totalMatches: number; results: unknown[] }>(res);
+      expect(body).toEqual({ totalMatches: 0, results: [] });
+      expect((res.content as Array<{ text: string }>)[0]!.text).not.toContain("git.push");
+    });
+
+    it("rejects a getSchema answer for an id other than the one requested", async () => {
+      // A permitted id must not vouch for a denied entry's schema.
+      const deps = introspectionDeps("workbench", {
+        ok: true,
+        entry: { ...entry("git.push"), id: "actions.list" },
+      });
+      const server = createSessionServer("s1", deps);
+      const res = await callTool(server, {
+        name: "actions.getSchema",
+        arguments: { actionId: "git.push" },
+      });
+
+      const body = payload<{ ok: boolean; error: { code: string; message: string } }>(res);
+      expect(body.ok).toBe(false);
+      expect(body.error.code).toBe("NOT_FOUND");
+      // The message names what the caller asked for, not what came back.
+      expect(body.error.message).toContain("git.push");
     });
   });
 

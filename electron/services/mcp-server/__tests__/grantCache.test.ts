@@ -690,12 +690,14 @@ describe("GrantCache native grants (#10648)", () => {
   it("getLiveNativeGrants excludes a grant refreshed past the hard ceiling", () => {
     let clock = 0;
     const { cache } = newCache({ ttlMs: 1000, maxLifetimeMs: 5000, now: () => clock });
-    const entry = issue(cache, { ttlMs: 1000 });
-    // Keep refreshing the TTL so `expiresAt` stays in the future, but advance
-    // past the hard ceiling — the live snapshot must drop it.
+    const entry = issue(cache, { ttlMs: 4000 });
+    // Slide the TTL so `expiresAt` stays in the FUTURE at the assertion — the
+    // ceiling must be what drops the grant. If both bounds had elapsed, an
+    // implementation that checked only `expiresAt` would pass too.
     clock = 4000;
-    cache.refreshNativeGrant(entry.id); // expiresAt -> 5000
-    clock = 6000; // past issuedAt + maxLifetimeMs (5000), expiresAt (5000) also passed
+    cache.refreshNativeGrant(entry.id); // expiresAt -> 8000, ceiling stays 5000
+    clock = 6000;
+    expect(cache.getActiveNativeGrants("s1")[0]!.expiresAt).toBeGreaterThan(clock);
     expect(cache.getLiveNativeGrants("s1")).toHaveLength(0);
     cache.dispose();
   });
@@ -814,7 +816,12 @@ describe("GrantCache.getLiveGrants", () => {
     cache.issueGrant("s2", "b");
     expect(cache.getLiveGrants("s1").map((g) => g.toolId)).toEqual(["a"]);
     expect(cache.getLiveGrants("s2").map((g) => g.toolId)).toEqual(["b"]);
-    expect(cache.getLiveGrants().map((g) => g.toolId).sort()).toEqual(["a", "b"]);
+    expect(
+      cache
+        .getLiveGrants()
+        .map((g) => g.toolId)
+        .sort()
+    ).toEqual(["a", "b"]);
     cache.dispose();
   });
 });
