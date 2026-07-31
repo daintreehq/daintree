@@ -84,7 +84,7 @@ Connected clients show up under **External clients** in the Connection section. 
 Troubleshooting the failures worth naming:
 
 - **401** — the `Authorization` header is missing, malformed, or carries a rotated-away key. Re-copy the config. A client that doesn't attach the header to `/sse` POSTs lands here too, which is one reason to stay on `/mcp`.
-- **403** — the request never reached the auth gate: its `Host` didn't match the loopback address and port exactly, or it sent an `Origin` that isn't the loopback one. Relevant mainly if a proxy rewrites either header. A *missing* `Origin` is fine and expected — non-browser MCP clients don't send one.
+- **403** — the request never reached the auth gate: its `Host` didn't match the loopback address and port exactly, or it sent an `Origin` that isn't the loopback one. Relevant mainly if a proxy rewrites either header. A _missing_ `Origin` is fine and expected — non-browser MCP clients don't send one.
 - **A tool call that returns an error rather than a failed request** — the tool is above the session's tier, or its per-tool grant hasn't been approved; the error carries `TIER_NOT_PERMITTED`. Note that a plain API-key session has no pinned renderer to prompt for a grant. See [Auth ladder](#auth-ladder-tierauthts--httplifecyclehandlerequest) and [Tier model](#tier-model-sharedts) below.
 
 ## File map

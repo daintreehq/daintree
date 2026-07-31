@@ -1430,10 +1430,8 @@ describe("McpServerSettingsTab", () => {
       });
 
       // Compare the field the client actually reads, not just a substring.
-      const copied = JSON.parse(String(writeText.mock.calls[0][0])) as {
-        mcpServers: Record<string, { url: string }>;
-      };
-      expect(copied.mcpServers.daintree.url).toBe(shownUrl);
+      const copied: unknown = JSON.parse(String(writeText.mock.calls[0][0]));
+      expect(copied).toMatchObject({ mcpServers: { daintree: { url: shownUrl } } });
     });
 
     it("offers a client picker defaulting to Claude Code", async () => {
@@ -1514,12 +1512,15 @@ describe("McpServerSettingsTab", () => {
         expect(writeText).toHaveBeenCalled();
       });
 
-      const copied = String(writeText.mock.calls[0][0]);
-      const parsed = parseToml(copied) as {
-        mcp_servers: Record<string, { url: string; http_headers?: Record<string, string> }>;
-      };
-      expect(parsed.mcp_servers.daintree.url).toBe("http://127.0.0.1:9020/mcp");
-      expect(parsed.mcp_servers.daintree.http_headers?.Authorization).toBe("Bearer dnt-key-abc123");
+      const parsed: unknown = parseToml(String(writeText.mock.calls[0][0]));
+      expect(parsed).toMatchObject({
+        mcp_servers: {
+          daintree: {
+            url: "http://127.0.0.1:9020/mcp",
+            http_headers: { Authorization: "Bearer dnt-key-abc123" },
+          },
+        },
+      });
     });
 
     it("clears stale copied feedback when the client changes", async () => {
