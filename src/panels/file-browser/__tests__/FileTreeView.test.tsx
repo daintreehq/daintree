@@ -232,6 +232,49 @@ describe("FileTreeView context-menu interactions", () => {
     expect(onInsertFileReference).not.toHaveBeenCalled();
   });
 
+  it("ignores a selection that no longer resolves to a row", () => {
+    // Re-rooting the tree leaves browserSelectedPath naming the old root, which
+    // is no longer in `rows`. Firing then would reference a row the user can't
+    // see and that aria-activedescendant has already disowned.
+    const onInsertFileReference = vi.fn();
+    const { getByRole } = renderTree({
+      selectedPath: "some/pruned/path",
+      onInsertFileReference,
+      canInsertFileReference: true,
+    });
+
+    fireEvent.keyDown(getByRole("tree"), { key: "i", metaKey: true });
+
+    expect(onInsertFileReference).not.toHaveBeenCalled();
+    expect(getByRole("tree").hasAttribute("aria-keyshortcuts")).toBe(false);
+  });
+
+  it("does not fire for a key pressed inside an open row menu", async () => {
+    // The menu portals out of the container but still bubbles through the React
+    // tree, and it advertises this very shortcut — so an unguarded handler
+    // would insert the SELECTED row rather than the right-clicked one.
+    const onInsertFileReference = vi.fn();
+    const { getByRole, findByRole } = render(
+      <FileTreeView
+        rows={ROWS}
+        selectedPath="README.md"
+        onSelect={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        rowContextMenu={(clicked) => <ContextMenuItem>Act on {clicked.name}</ContextMenuItem>}
+        onInsertFileReference={onInsertFileReference}
+        canInsertFileReference
+        label="Files"
+      />
+    );
+
+    fireEvent.contextMenu(getByRole("treeitem", { name: "src" }));
+    const item = await findByRole("menuitem", { name: "Act on src" });
+
+    fireEvent.keyDown(item, { key: "i", metaKey: true });
+
+    expect(onInsertFileReference).not.toHaveBeenCalled();
+  });
+
   it("advertises the shortcut only while it would do something", () => {
     const { getByRole, rerender } = render(
       <FileTreeView

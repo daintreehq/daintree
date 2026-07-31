@@ -62,6 +62,19 @@ export function resolveInsertTargetId(inputs: TargetInputs): string | null {
   return target !== undefined && isPtyPanel(target) ? targetId : null;
 }
 
+/**
+ * Both receipts go through the same pair: the pill for sighted users, a polite
+ * announcement because the pill is `aria-hidden`.
+ */
+function report(message: string): void {
+  useTypingLocatorStore.getState().showLocator(message);
+  useAnnouncerStore.getState().announce(message, "polite");
+}
+
+function reportRefused(): void {
+  report("No agent is available for a file reference");
+}
+
 export interface InsertFileReference {
   /** False when nothing resolves — the menu item disables and the shortcut no-ops. */
   canInsert: boolean;
@@ -124,10 +137,14 @@ export function useInsertFileReference(): InsertFileReference {
       lastTypedAgentTarget: inputStore.lastTypedAgentTarget,
       armedCount: useFleetArmingStore.getState().armedIds.size,
     });
-    if (resolvedId === null) return false;
-
-    const target = panelState.panelsById[resolvedId];
-    if (target === undefined) return false;
+    const target = resolvedId === null ? undefined : panelState.panelsById[resolvedId];
+    if (resolvedId === null || target === undefined) {
+      // Only reachable in the race the re-resolve exists for — the rendered
+      // gate disables the affordance otherwise. Announcing it beats a dead
+      // click, which is by definition something the user cannot observe.
+      reportRefused();
+      return false;
+    }
 
     // Commit the reference BEFORE any feedback. Everything below is polish —
     // if it throws, the token is already durably in the draft rather than lost
@@ -140,13 +157,8 @@ export function useInsertFileReference(): InsertFileReference {
     // typing into that agent, and recording it would let the file browser
     // silently claim the routing target on the sole-agent fallback path.
 
-    const title = getTerminalDisplayTitle(target, "compact");
-    const message = `File reference added to ${title}`;
     panelState.pingTerminal(resolvedId);
-    useTypingLocatorStore.getState().showLocator(message);
-    // The pill is `aria-hidden` (it only restates where focus already is for
-    // the rescue it was built for), so assistive tech needs its own copy.
-    useAnnouncerStore.getState().announce(message, "polite");
+    report(`File reference added to ${getTerminalDisplayTitle(target, "compact")}`);
     return true;
   }, []);
 

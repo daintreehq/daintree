@@ -45,6 +45,18 @@ export interface FileTreeViewProps {
   label: string;
 }
 
+/**
+ * Did this key actually happen in the tree, rather than in a portalled
+ * descendant? React bubbles a portal's events through the component tree, so a
+ * Radix row menu's keystrokes reach the container's handler even though its DOM
+ * lives under `document.body`.
+ */
+function isEventInsideTree(event: React.KeyboardEvent, container: HTMLElement | null): boolean {
+  if (container === null) return false;
+  const target = event.target;
+  return target instanceof Node && container.contains(target);
+}
+
 const INDENT_PER_DEPTH_PX = 12;
 const BASE_PADDING_PX = 6;
 const ROW_HEIGHT_PX = 24;
@@ -81,6 +93,11 @@ export function FileTreeView({
   // mint `file-browser-row-src/index.ts` — duplicate DOM ids that make
   // `aria-activedescendant` ambiguous.
   const instanceId = useId();
+
+  const selectedIndex = useMemo(
+    () => (selectedPath === null ? -1 : rows.findIndex((row) => row.path === selectedPath)),
+    [rows, selectedPath]
+  );
 
   // The rows array changes identity on every listing update, so the handler is
   // rebuilt with it. Reading through a ref instead would let a keypress act on
@@ -122,10 +139,23 @@ export function FileTreeView({
       // ahead of `resolveTreeKey` only for ordering clarity — that resolver is
       // a bare switch over the navigation keys and never claims a letter, so
       // plain `I` (and any future typeahead) stays untouched.
+      //
+      // Gated on the selection resolving to a *rendered* row, not merely on a
+      // non-null path: re-rooting the tree leaves `browserSelectedPath` naming
+      // the old root, which no longer appears in `rows`. Firing then would
+      // reference a row the user cannot see and that `aria-activedescendant`
+      // has already disowned.
+      //
+      // A row menu portals outside the container but still bubbles its keys
+      // through the React tree, and the menu advertises this very shortcut —
+      // so without the containment check, pressing it there would insert the
+      // *selected* row rather than the right-clicked one.
       if (
         onInsertFileReference &&
         canInsertFileReference &&
         selectedPath !== null &&
+        selectedIndex >= 0 &&
+        isEventInsideTree(event, containerRef.current) &&
         matchesInsertFileReferenceCombo(event.nativeEvent, isMac())
       ) {
         event.preventDefault();
@@ -156,6 +186,7 @@ export function FileTreeView({
     [
       rows,
       selectedPath,
+      selectedIndex,
       onSelect,
       onToggleExpanded,
       onActivate,
@@ -164,11 +195,6 @@ export function FileTreeView({
       canInsertFileReference,
       instanceId,
     ]
-  );
-
-  const selectedIndex = useMemo(
-    () => (selectedPath === null ? -1 : rows.findIndex((row) => row.path === selectedPath)),
-    [rows, selectedPath]
   );
 
   // Keep the selection on screen when it moves by keyboard. Runs after commit,
@@ -224,10 +250,11 @@ export function FileTreeView({
   const activeDescendant =
     selectedPath !== null && selectedIndex >= 0 ? rowDomId(instanceId, selectedPath) : undefined;
 
-  // Only advertised while the shortcut would actually do something — a tree
-  // with no reachable agent announcing Cmd+I would be promising a no-op.
+  // Only advertised while the shortcut would actually do something — announcing
+  // Cmd+I with no reachable agent, or with a selection that no longer resolves
+  // to a row, would be promising a no-op. Matches the handler's own gate.
   const insertKeyshortcuts =
-    onInsertFileReference && canInsertFileReference
+    onInsertFileReference && canInsertFileReference && selectedIndex >= 0
       ? comboToAriaKeyshortcuts(INSERT_FILE_REFERENCE_COMBO, isMac())
       : undefined;
 

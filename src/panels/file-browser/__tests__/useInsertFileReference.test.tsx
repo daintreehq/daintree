@@ -261,6 +261,9 @@ describe("useInsertFileReference — writing", () => {
       expect(result.current.insert("/repo/a.ts")).toBe(false);
     });
     expect(inputState.setDraftInput).not.toHaveBeenCalled();
+    // A dead click is unobservable — the refusal has to say something.
+    expect(showLocatorMock).toHaveBeenCalledWith(expect.stringContaining("No agent"));
+    expect(announceMock).toHaveBeenCalledWith(expect.stringContaining("No agent"), "polite");
   });
 
   it("ignores an empty path rather than writing a bare @", () => {
