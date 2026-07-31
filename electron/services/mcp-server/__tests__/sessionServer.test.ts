@@ -30,6 +30,7 @@ import {
   RESOLVED_WORKSPACE_META_KEY,
   withResolvedWorkspace,
 } from "../shared.js";
+import type { DispatchedWorkspaceRef } from "../shared.js";
 import { TOOL_RESULT_TEXT_MAX_BYTES } from "../toolCallResult.js";
 import { isTierPermitted, shouldExposeTool } from "../tierAuth.js";
 import { SessionBindingError, RendererBridgeUnavailableError } from "../rendererBridge.js";
@@ -3430,6 +3431,75 @@ describe("sessionServer introspection tier filtering", () => {
       expect(call[1]).toMatchObject({ category: "git", limit: 100 });
     }
     expect(calls.map((c) => (c[1] as { offset: number }).offset)).toEqual([0, 100]);
+  });
+
+  /**
+   * The page walk synthesizes its own envelope instead of returning the
+   * renderer's, so the resolved-workspace stamp (#11536) has to be carried
+   * across it deliberately. Left out, exactly the calls that span more than one
+   * page would omit the field every single-shot dispatch reports — the paged
+   * caller would be told less about where its call landed than the unpaged one.
+   */
+  function pagedListDeps(all: ActionManifestEntry[], dispatchedWorkspace?: DispatchedWorkspaceRef) {
+    return fakeDeps({
+      sessionStore: fakeSessionStore("workbench"),
+      dispatchAction: vi.fn((_id: string, callArgs: unknown) => {
+        const { offset = 0, limit = 50 } = callArgs as { offset?: number; limit?: number };
+        return Promise.resolve({
+          result: {
+            ok: true as const,
+            result: {
+              actions: all.slice(offset, offset + limit),
+              total: all.length,
+              limit,
+              offset,
+              hasMore: offset + limit < all.length,
+            },
+          },
+          ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}),
+        });
+      }),
+    });
+  }
+
+  function workspaceMetaOf(res: unknown): unknown {
+    return (res as { _meta?: Record<string, unknown> })._meta?.[RESOLVED_WORKSPACE_META_KEY];
+  }
+
+  // A permitted id parked past the first 100-entry window, so a result that
+  // contains it proves the walk reached page two.
+  const filler = Array.from({ length: 150 }, (_, i) => entry(`git.denied${i}`));
+  const spanningTwoPages = [...filler.slice(0, 120), entry("terminal.list"), ...filler.slice(120)];
+
+  it("stamps the resolved workspace on a paged actions.list, as the single-shot path does", async () => {
+    const workspace = {
+      kind: "project" as const,
+      workspaceId: "proj-paged",
+      workspacePath: "/repos/paged",
+    };
+    const deps = pagedListDeps(spanningTwoPages, workspace);
+    const server = createSessionServer("s1", deps);
+
+    const res = await callTool(server, { name: "actions.list" });
+
+    // Prove the paged branch really ran, and that page two's content came back.
+    expect((deps.dispatchAction as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(1);
+    expect(payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id)).toContain(
+      "terminal.list"
+    );
+    expect(workspaceMetaOf(res)).toEqual(workspace);
+  });
+
+  it("omits the workspace key on a paged call whose dispatch resolved none", async () => {
+    const deps = pagedListDeps(spanningTwoPages);
+    const server = createSessionServer("s1", deps);
+
+    const res = await callTool(server, { name: "actions.list" });
+
+    // Absent, not null — the paged path must not invent a stamp the dispatch
+    // never reported, any more than it may drop one it did.
+    expect((deps.dispatchAction as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(1);
+    expect(workspaceMetaOf(res)).toBeUndefined();
   });
 
   it("pages the permitted set so total and hasMore describe the reachable surface", async () => {

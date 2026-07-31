@@ -1033,11 +1033,15 @@ describe("McpServerService", () => {
     // fix the bridge walked `all()` (Map insertion order) and every external
     // call landed on A — whichever window happened to register first —
     // regardless of what the user was actually looking at.
+    // A non-introspection carrier: tier filtering rewrites `actions.list`
+    // results (#11525), which would replace the routing payload this test reads.
+    // The routing behaviour is tool-agnostic, and `terminal.list` is reachable
+    // at the external tier on the curated allowlist alone.
     const manifest = () => [
       createManifestEntry({
-        id: "actions.list",
-        title: "List Actions",
-        description: "Read the action registry",
+        id: "terminal.list",
+        title: "List Terminals",
+        description: "Read the terminal list",
         kind: "query",
       }),
     ];
@@ -1074,7 +1078,7 @@ describe("McpServerService", () => {
     const external = await connectClient(service.currentPort!);
     transports.push(external.transport);
 
-    const first = await external.client.callTool({ name: "actions.list", arguments: {} });
+    const first = await external.client.callTool({ name: "terminal.list", arguments: {} });
     expect(getTextResult(first).content[0].text).toBe('"from-window-B"');
     // Read by literal key, as a real external client would: this string is the
     // wire contract, so renaming it must fail here even if the constant moves.
@@ -1084,7 +1088,7 @@ describe("McpServerService", () => {
     // design (#7003), so the next call follows focus — and says so.
     focus.current = [winA.windowContext, winB.windowContext];
 
-    const second = await external.client.callTool({ name: "actions.list", arguments: {} });
+    const second = await external.client.callTool({ name: "terminal.list", arguments: {} });
     expect(getTextResult(second).content[0].text).toBe('"from-window-A"');
     expect(second._meta?.["org.daintree/resolved-workspace"]).toEqual(refA);
   });
