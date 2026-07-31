@@ -26,7 +26,7 @@ export interface GitGetFileDiffPayload {
  * `totalBytes: 0`.
  */
 export interface GitFileDiffResult {
-  /** Diff text for this window, or a `BINARY_FILE` / `NO_CHANGES` sentinel. */
+  /** Diff text for this window, or a `BINARY_FILE` / `NO_CHANGES` / `FILE_TOO_LARGE` sentinel. */
   content: string;
   /** Byte offset this window starts at. */
   offset: number;

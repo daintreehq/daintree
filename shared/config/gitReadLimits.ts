@@ -28,8 +28,10 @@ export const GIT_FILE_DIFF_DEFAULT_MAX_BYTES = 24 * 1024;
  */
 export const GIT_FILE_DIFF_MAX_BYTES = 1024 * 1024;
 /**
- * Read ceiling for synthesizing an untracked/added file's diff, where the whole
- * file becomes the diff body and so must be held in memory. Tracked files have no
- * such ceiling — their diff is bounded by the size of the change, not the file.
+ * Source-size ceiling applied before a diff is produced at all. Both paths hold a
+ * full result in memory before it can be windowed — the untracked path inlines the
+ * file, and git buffers a tracked file's whole diff — so the gate gives peak memory
+ * an upper bound. Sixteen times the 1MB cliff it replaced, which refused any file
+ * over 1MB regardless of how small its diff was.
  */
 export const GIT_FILE_DIFF_MAX_SOURCE_BYTES = 16 * 1024 * 1024;

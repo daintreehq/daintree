@@ -8,6 +8,7 @@ const dispatchMock = vi.hoisted(() =>
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
 
 import { _resetDiffCacheForTests, peekCachedDiff, requestDiff } from "../diffContentCache";
+import { GIT_FILE_DIFF_MAX_BYTES } from "@shared/config/gitReadLimits";
 
 const compareWorktreesMock = vi.fn<(...args: unknown[]) => Promise<string>>();
 
@@ -69,7 +70,7 @@ describe("diffContentCache — diff windowing (#11531)", () => {
 
     expect(dispatchMock).toHaveBeenCalledWith(
       "git.getFileDiff",
-      expect.objectContaining({ maxBytes: 1024 * 1024 }),
+      expect.objectContaining({ maxBytes: GIT_FILE_DIFF_MAX_BYTES }),
       expect.anything()
     );
   });
@@ -77,7 +78,7 @@ describe("diffContentCache — diff windowing (#11531)", () => {
   it("maps a truncated window back onto the FILE_TOO_LARGE sentinel the panes render", async () => {
     dispatchMock.mockResolvedValue({
       ok: true,
-      result: { content: "first megabyte", truncated: true, nextOffset: 1024 * 1024 },
+      result: { content: "first megabyte", truncated: true, nextOffset: GIT_FILE_DIFF_MAX_BYTES },
     });
 
     const result = await requestDiff(workingTree("src/huge.ts"), false);

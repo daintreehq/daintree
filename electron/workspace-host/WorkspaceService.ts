@@ -3280,7 +3280,9 @@ export class WorkspaceService {
           return;
         }
       } catch {
-        // ignore — a missing path falls through to git, which reports it
+        // Fail open: a deleted tracked file has no worktree entry to stat, and
+        // git still owes us its deletion diff. Only the size of a file that IS
+        // present can be gated here — a large HEAD blob is not covered.
       }
 
       const git = await createHardenedGit(cwd);

@@ -171,7 +171,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "git.getFileDiff",
     title: "Get File Diff",
     description:
-      "Get a byte-bounded window of the git diff for a single file. Args: `cwd` (optional) — repo working directory, defaults to the active worktree path; `filePath` (required) — repo-relative path; `status` (required) — the file's git status (from a `git.getStagingStatus` entry); `ignoreWhitespace` (optional); `offset` (optional, default 0) — byte offset to read from; `maxBytes` (optional, default 24576, max 1048576) — window size. Returns { content, offset, totalBytes, truncated, nextOffset }. When `truncated` is true, call again with `offset: nextOffset` to read the rest. `content` may be a `BINARY_FILE` or `NO_CHANGES` marker instead of diff text, in which case `totalBytes` is 0. Errors when `cwd` is omitted and no worktree is active.",
+      "Get a byte-bounded window of the git diff for a single file. Args: `cwd` (optional) — repo working directory, defaults to the active worktree path; `filePath` (required) — repo-relative path; `status` (required) — the file's git status (from a `git.getStagingStatus` entry); `ignoreWhitespace` (optional); `offset` (optional, default 0) — byte offset to read from; `maxBytes` (optional, default 24576, max 1048576) — window size. Returns { content, offset, totalBytes, truncated, nextOffset }. When `truncated` is true, call again with `offset: nextOffset` to read the rest. `content` may be a `BINARY_FILE`, `NO_CHANGES`, or `FILE_TOO_LARGE` marker instead of diff text, in which case `totalBytes` is 0. Errors when `cwd` is omitted and no worktree is active.",
     category: "git",
     kind: "query",
     danger: "safe",
@@ -332,7 +332,11 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       // Bounded at limit + 1, not limit: a hash-prefix search pins its match
       // ahead of a full page of message matches, so cutting to `limit` would
       // drop the page's last message commit — which `nextSkip` then steps over,
-      // making it unreachable on every page.
+      // making it unreachable on every page. This keeps paging exact whenever
+      // the pinned commit is absent from the message stream; a pin that also
+      // matches the search text is a pre-existing gap in `listCommits` itself,
+      // which computes `hasMore` after removing the pin and dedupes only on the
+      // first page.
       const items = (result.items ?? []).slice(0, limit + 1).map((commit) => {
         const body = truncateUtf8(commit.body ?? "", GIT_COMMIT_BODY_MAX_BYTES);
         return {

@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
+import {
+  GIT_FILE_DIFF_MAX_BYTES,
+  GIT_FILE_DIFF_MAX_SOURCE_BYTES,
+} from "../../../shared/config/gitReadLimits.js";
 
 const mockSimpleGit = {
   raw: vi.fn().mockResolvedValue(undefined),
@@ -208,7 +212,7 @@ describe("WorkspaceService.getFileDiff", () => {
 
   it("refuses a file past the source ceiling without reading it or diffing", async () => {
     const { stat, readFile } = await import("fs/promises");
-    vi.mocked(stat).mockResolvedValueOnce({ size: 16 * 1024 * 1024 + 1 } as never);
+    vi.mocked(stat).mockResolvedValueOnce({ size: GIT_FILE_DIFF_MAX_SOURCE_BYTES + 1 } as never);
 
     await service.getFileDiff("req-7", "/test/repo", "huge.txt", "untracked");
 
@@ -229,7 +233,7 @@ describe("WorkspaceService.getFileDiff", () => {
 
   it("applies the source ceiling to tracked files too, bounding peak memory", async () => {
     const { stat } = await import("fs/promises");
-    vi.mocked(stat).mockResolvedValueOnce({ size: 16 * 1024 * 1024 + 1 } as never);
+    vi.mocked(stat).mockResolvedValueOnce({ size: GIT_FILE_DIFF_MAX_SOURCE_BYTES + 1 } as never);
 
     await service.getFileDiff("req-16", "/test/repo", "huge.ts", "modified");
 
@@ -278,7 +282,7 @@ describe("WorkspaceService.getFileDiff", () => {
 
   it("windows a tracked-file diff past 1MB instead of refusing it (#11531)", async () => {
     const header = "diff --git a/foo.ts b/foo.ts\n";
-    const body = "+x".repeat(1024 * 1024);
+    const body = "+x".repeat(GIT_FILE_DIFF_MAX_BYTES);
     const full = header + body;
     mockSimpleGit.diff.mockResolvedValueOnce(full);
 
@@ -289,12 +293,14 @@ describe("WorkspaceService.getFileDiff", () => {
     expect(event.diff.startsWith(header)).toBe(true);
     expect(event.truncated).toBe(true);
     expect(event.totalBytes).toBe(full.length);
-    expect(event.nextOffset).toBe(1024 * 1024);
+    expect(event.nextOffset).toBe(GIT_FILE_DIFF_MAX_BYTES);
   });
 
-  it("does not size-gate a tracked file on its own size — only on diff length", async () => {
+  it("diffs a large file with a small diff, which the old 1MB gate refused", async () => {
     const { stat } = await import("fs/promises");
-    vi.mocked(stat).mockResolvedValueOnce({ size: 8 * 1024 * 1024 } as never);
+    vi.mocked(stat).mockResolvedValueOnce({
+      size: GIT_FILE_DIFF_MAX_SOURCE_BYTES / 2,
+    } as never);
     mockSimpleGit.diff.mockResolvedValueOnce("diff --git a/big.ts b/big.ts\n+one line");
 
     await service.getFileDiff("req-11", "/test/repo", "big.ts", "modified");
@@ -346,7 +352,7 @@ describe("WorkspaceService.getFileDiff", () => {
   });
 
   it("clamps a caller-supplied maxBytes to the 1MB transport ceiling", async () => {
-    const full = "diff --git a/foo.ts b/foo.ts\n" + "+y".repeat(1024 * 1024);
+    const full = "diff --git a/foo.ts b/foo.ts\n" + "+y".repeat(GIT_FILE_DIFF_MAX_BYTES);
     mockSimpleGit.diff.mockResolvedValueOnce(full);
 
     await service.getFileDiff(
@@ -360,7 +366,7 @@ describe("WorkspaceService.getFileDiff", () => {
     );
 
     const event = mockSendEvent.mock.calls.at(-1)?.[0];
-    expect(event.diff.length).toBe(1024 * 1024);
+    expect(event.diff.length).toBe(GIT_FILE_DIFF_MAX_BYTES);
     expect(event.truncated).toBe(true);
   });
 
