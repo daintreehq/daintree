@@ -483,15 +483,29 @@ export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
  * agent, a duplicate commit/push/issue/PR/comment/review — and (c) an
  * intentional same-argument repeat inside the TTL is not a normal use case.
  *
- * (c) is what bounds the list, and it excludes two whole classes. Idempotent
- * state-sets (close/reopen/draft/edit, label add/remove, assign/unassign,
- * resource pause/resume/teardown) create no duplicate to suppress, and
- * caching them actively breaks a set → unset → set sequence: the third call
- * matches the first, so the cached success returns and the state stays
- * unset. Navigation (`forge.open*`, portal/browser opens) is likewise out —
- * reopening a URL the user closed must dispatch again, and a silent 120s
- * no-op reads as a broken tool. Repeatable commands (`terminal.sendCommand`,
- * `git.stage*`) stay out for the same reason.
+ * (c) is what bounds the list. Navigation (`forge.open*`, portal/browser
+ * opens) is out: reopening a URL the user closed must dispatch again, and a
+ * silent 120s no-op reads as a broken tool. Repeatable commands
+ * (`terminal.sendCommand`, `git.stage*`) are out for the same reason. So are
+ * idempotent state-sets (close/reopen/draft/edit, label and assignee
+ * add/remove, resource pause/resume/teardown): they create no duplicate to
+ * suppress, so caching buys nothing and costs correctness — in a set → unset
+ * → set sequence the third call matches the first, the cached success
+ * returns, and the state stays unset (#11534 dropped `forge.assignIssue` for
+ * exactly this).
+ *
+ * An entry that *does* have an inverse is kept only when the duplicate it
+ * prevents outweighs the suppression it risks. A review can be dismissed and
+ * a worktree recreated, so `forge.approvePR`/`forge.requestChanges`/
+ * `worktree.delete` carry the same suppression risk — but unlike assignment
+ * they each prevent a real second artifact, so the trade lands the other way.
+ *
+ * Known gap, retained deliberately rather than silently: `git.push` takes
+ * only `{cwd, setUpstream}`, so a legitimate second push after a new commit
+ * is same-argument and gets suppressed — it reports success for work that
+ * did not happen. `git.commit` has the same shape when a message repeats.
+ * Both predate this criterion and fail (c); the fix is state-aware keying
+ * (HEAD for push, index identity for commit), not a membership change.
  *
  * History: seeded by #7554, made safe to widen by the args-hash collision
  * guard (#8429), widened again in #9156, then corrected against the criterion
@@ -518,10 +532,12 @@ const MCP_DEDUP_ALLOWLIST_ENTRIES = [
   "git.commit",
   "git.push",
 
-  // Forge writes that POST a new durable record every call, so a replay is
-  // visible on the remote: a second PR/issue, a re-merge attempt, a duplicate
-  // comment (lesson #7554), or a second review entry — `approvePR` and
-  // `requestChanges` both POST to `/pulls/{n}/reviews` (#11534).
+  // Forge writes whose replay is visible on the remote. All but `mergePR`
+  // create a new durable record every call — a second PR/issue, a duplicate
+  // comment (lesson #7554), or a second review entry, since `approvePR` and
+  // `requestChanges` both POST to `/pulls/{n}/reviews` (#11534). `mergePR`
+  // PUTs and so creates no second record; it is here for the re-merge
+  // attempt against an already-merged PR.
   "forge.createPR",
   "forge.mergePR",
   "forge.commentOnPR",
