@@ -1742,9 +1742,11 @@ export function Toolbar({
                     scratchResults={projectSwitcher.scratchResults}
                     onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
                     onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
-                    onRemoveScratch={(scratchId) =>
-                      void projectSwitcher.removeScratchAction(scratchId)
-                    }
+                    onRequestDeleteScratch={projectSwitcher.requestDeleteScratch}
+                    deleteScratchConfirm={projectSwitcher.deleteScratchConfirm}
+                    onDismissDeleteScratchConfirm={projectSwitcher.dismissDeleteScratchConfirm}
+                    onConfirmDeleteScratch={() => void projectSwitcher.confirmDeleteScratch()}
+                    isDeletingScratch={projectSwitcher.isDeletingScratch}
                     onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
                     deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
                     onDismissDeleteAllScratchesConfirm={

@@ -473,9 +473,11 @@ export function ModalHostLayer({
               scratchResults={projectSwitcherPalette.scratchResults}
               onCreateScratch={(name) => void projectSwitcherPalette.createScratch(name)}
               onSelectScratch={(scratch) => void projectSwitcherPalette.selectScratch(scratch)}
-              onRemoveScratch={(scratchId) =>
-                void projectSwitcherPalette.removeScratchAction(scratchId)
-              }
+              onRequestDeleteScratch={projectSwitcherPalette.requestDeleteScratch}
+              deleteScratchConfirm={projectSwitcherPalette.deleteScratchConfirm}
+              onDismissDeleteScratchConfirm={projectSwitcherPalette.dismissDeleteScratchConfirm}
+              onConfirmDeleteScratch={() => void projectSwitcherPalette.confirmDeleteScratch()}
+              isDeletingScratch={projectSwitcherPalette.isDeletingScratch}
               onRequestDeleteAllScratches={projectSwitcherPalette.requestDeleteAllScratches}
               deleteAllScratchesConfirm={projectSwitcherPalette.deleteAllScratchesConfirm}
               onDismissDeleteAllScratchesConfirm={

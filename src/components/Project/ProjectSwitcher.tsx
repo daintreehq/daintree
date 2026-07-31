@@ -189,11 +189,14 @@ export function ProjectSwitcher() {
   // Deleting the last scratch clears `currentScratch`, so a zero-project user
   // would drop straight to the bare "Open Project…" branch below — unmounting the
   // palette, and with it the confirm dialog still spinning on the delete. Hold the
-  // palette open until the run resolves.
-  const hasPendingBulkScratchDelete = Boolean(projectSwitcher.deleteAllScratchesConfirm);
+  // palette open until the run resolves. Covers the single-scratch delete too:
+  // deleting the one remaining scratch takes the same branch.
+  const hasPendingScratchDelete = Boolean(
+    projectSwitcher.deleteAllScratchesConfirm || projectSwitcher.deleteScratchConfirm
+  );
 
   if (!currentProject && !currentScratch) {
-    if (projects.length > 0 || hasPendingBulkScratchDelete) {
+    if (projects.length > 0 || hasPendingScratchDelete) {
       return (
         <>
           {stopDialog}
@@ -233,7 +236,11 @@ export function ProjectSwitcher() {
             scratchResults={projectSwitcher.scratchResults}
             onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
             onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
-            onRemoveScratch={(scratchId) => void projectSwitcher.removeScratchAction(scratchId)}
+            onRequestDeleteScratch={projectSwitcher.requestDeleteScratch}
+            deleteScratchConfirm={projectSwitcher.deleteScratchConfirm}
+            onDismissDeleteScratchConfirm={projectSwitcher.dismissDeleteScratchConfirm}
+            onConfirmDeleteScratch={() => void projectSwitcher.confirmDeleteScratch()}
+            isDeletingScratch={projectSwitcher.isDeletingScratch}
             onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
             deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
             onDismissDeleteAllScratchesConfirm={projectSwitcher.dismissDeleteAllScratchesConfirm}
@@ -316,7 +323,11 @@ export function ProjectSwitcher() {
         scratchResults={projectSwitcher.scratchResults}
         onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
         onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
-        onRemoveScratch={(scratchId) => void projectSwitcher.removeScratchAction(scratchId)}
+        onRequestDeleteScratch={projectSwitcher.requestDeleteScratch}
+        deleteScratchConfirm={projectSwitcher.deleteScratchConfirm}
+        onDismissDeleteScratchConfirm={projectSwitcher.dismissDeleteScratchConfirm}
+        onConfirmDeleteScratch={() => void projectSwitcher.confirmDeleteScratch()}
+        isDeletingScratch={projectSwitcher.isDeletingScratch}
         onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
         deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
         onDismissDeleteAllScratchesConfirm={projectSwitcher.dismissDeleteAllScratchesConfirm}
