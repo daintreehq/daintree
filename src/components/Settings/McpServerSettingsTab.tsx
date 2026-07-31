@@ -94,6 +94,7 @@ export function McpServerSettingsTab() {
   const [exportedAudit, setExportedAudit] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const configCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyGenerationRef = useRef(0);
   const apiKeyCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -146,7 +147,10 @@ export function McpServerSettingsTab() {
     apiKey: status.apiKey,
   });
 
+  // Bumping the generation abandons any copy still in flight, so a write that
+  // resolves after the payload changed can't resurrect "Copied!" for it.
   const clearConfigCopyFeedback = () => {
+    copyGenerationRef.current += 1;
     setCopied(false);
     if (configCopyTimeoutRef.current) {
       clearTimeout(configCopyTimeoutRef.current);
@@ -343,12 +347,24 @@ export function McpServerSettingsTab() {
   };
 
   const handleCopyConfig = async () => {
+    const generation = ++copyGenerationRef.current;
     try {
-      await navigator.clipboard.writeText(clientConfig.snippet);
+      // Rotating the key elsewhere (the assistant tab has its own control)
+      // doesn't broadcast, so the cached status can be stale by the time the
+      // user copies. Re-read it rather than hand out a dead key.
+      const fresh = await window.electron.mcpServer.getStatus();
+      setStatus(fresh);
+      const { snippet } = buildMcpClientConfig(clientConfigId, {
+        port: runtimeSnapshot.port ?? fresh.port,
+        apiKey: fresh.apiKey,
+      });
+      await navigator.clipboard.writeText(snippet);
+      if (generation !== copyGenerationRef.current) return;
       setCopied(true);
       if (configCopyTimeoutRef.current) clearTimeout(configCopyTimeoutRef.current);
       configCopyTimeoutRef.current = setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
     } catch (err) {
+      if (generation !== copyGenerationRef.current) return;
       clearConfigCopyFeedback();
       setError(formatErrorMessage(err, "Failed to copy config"));
       logError("Failed to copy MCP config", err);
@@ -372,6 +388,8 @@ export function McpServerSettingsTab() {
       }
       const newStatus = await window.electron.mcpServer.setPort(port);
       setStatus(newStatus);
+      // A new port invalidates whatever config was last copied.
+      clearConfigCopyFeedback();
       setPortInput(newStatus.configuredPort?.toString() ?? "");
       portDirtyRef.current = false;
     } catch (err) {

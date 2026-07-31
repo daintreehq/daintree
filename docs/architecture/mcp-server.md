@@ -16,9 +16,9 @@ This server is **security-load-bearing**: it accepts network connections (loopba
 
 ## Connecting an external client
 
-Turn the server on in **Settings → MCP server**. The Connection section then shows the URL to connect to, a client picker, and a **Copy MCP config** button that copies the config in that client's own format. Everything below is what that button produces — the settings tab is the source of truth for the live port and key, so prefer copying from it over transcribing these examples.
+Turn the server on in **Settings → MCP server**. The Connection section then shows the URL to connect to, a client picker, and a **Copy MCP config** button that copies the config in that client's own format. The config blocks below are what that button produces; the CLI commands are equivalents you can run instead. The settings tab is the source of truth for the live port and key, so prefer copying from it over transcribing these examples.
 
-Always connect to `/mcp` (Streamable HTTP). The server also still answers `/sse`, but that transport was deprecated by the MCP spec in revision 2025-03-26 and drops the `Authorization` header on its POST leg, so an external client pointed at it will fail to authenticate. Config generation lives in [`shared/config/mcpClientConfigs.ts`](../../shared/config/mcpClientConfigs.ts), which returns the displayed URL and the copied snippet from one build so the two cannot disagree.
+Always connect to `/mcp` (Streamable HTTP). The server also still answers `/sse`, but that transport was deprecated by the MCP spec in revision 2025-03-26, and client support for attaching the `Authorization` header to its separate POST leg is inconsistent (see the `McpPaneConfigService` comments for the client bugs we've hit). Config generation lives in [`shared/config/mcpClientConfigs.ts`](../../shared/config/mcpClientConfigs.ts), which returns the displayed URL and the copied snippet from one build so the two cannot disagree.
 
 The port is whatever the server bound (default `45454`, incremented on collision) and the key is the one shown under **API key** in the same tab. Both appear in the examples below as `<port>` and `<api-key>`.
 
@@ -77,16 +77,15 @@ Editors such as Cursor and VS Code read their own config files; their exact sche
 
 ### Keeping a connection working
 
-The copied config embeds the key verbatim, so treat any file holding it as a secret and keep it out of commits. Rotating the key (**Rotate** in the same tab) is the revoke-all primitive: it immediately invalidates every client still presenting the old key, and each one has to be re-pasted. Changing the configured port likewise invalidates the URL every client holds.
+The copied config embeds the key verbatim, so treat any file holding it as a secret and keep it out of commits. Rotating the key (**Rotate API key** in the same tab) is the revoke-all primitive: it immediately invalidates every client still presenting the old key, and each one has to be re-pasted. Changing the configured port likewise invalidates the URL every client holds.
 
-A connected client shows up under **External clients** in the Connection section, where it can be disconnected individually.
+Connected clients show up under **External clients** in the Connection section. Entries are keyed by the hash of the bearer they present, so every client configured from this tab shares one entry — disconnecting it drops every session using that key, and does not stop a client from reconnecting with the same key. Rotate the key to lock one out for good.
 
-Troubleshooting the two failures worth naming:
+Troubleshooting the failures worth naming:
 
-- **401** — the `Authorization` header is missing, malformed, or carries a rotated-away key. Re-copy the config. A client pointed at `/sse` presents this way too, because that transport drops the header.
-- **403** — authentication worked but the tool is above the session's tier, or its per-tool grant hasn't been approved. See [Auth ladder](#auth-ladder-tierauthts--httplifecyclehandlerequest) and [Tier model](#tier-model-sharedts) below.
-
-Requests must carry a `Host` matching the loopback address and port exactly — relevant only if you front the server with a proxy that rewrites it. A missing `Origin` header is fine and expected; non-browser MCP clients don't send one.
+- **401** — the `Authorization` header is missing, malformed, or carries a rotated-away key. Re-copy the config. A client that doesn't attach the header to `/sse` POSTs lands here too, which is one reason to stay on `/mcp`.
+- **403** — the request never reached the auth gate: its `Host` didn't match the loopback address and port exactly, or it sent an `Origin` that isn't the loopback one. Relevant mainly if a proxy rewrites either header. A *missing* `Origin` is fine and expected — non-browser MCP clients don't send one.
+- **A tool call that returns an error rather than a failed request** — the tool is above the session's tier, or its per-tool grant hasn't been approved; the error carries `TIER_NOT_PERMITTED`. Note that a plain API-key session has no pinned renderer to prompt for a grant. See [Auth ladder](#auth-ladder-tierauthts--httplifecyclehandlerequest) and [Tier model](#tier-model-sharedts) below.
 
 ## File map
 

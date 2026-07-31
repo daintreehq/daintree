@@ -50,8 +50,15 @@ describe("mcpClientConfigs", () => {
     it("falls back to a port placeholder before the server binds", () => {
       const built = buildMcpClientConfig(id, { port: null, apiKey: READY.apiKey });
       expect(built.url).toContain("<port>");
+      expect(built.snippet).toContain(built.url);
       expect(built.snippet).not.toContain("null");
       expect(built.snippet).not.toContain("undefined");
+    });
+
+    it("normalizes an empty key the same as no key", () => {
+      const empty = buildMcpClientConfig(id, { port: 9020, apiKey: "" });
+      const absent = buildMcpClientConfig(id, { port: 9020, apiKey: null });
+      expect(empty.snippet).toBe(absent.snippet);
     });
   });
 
@@ -100,6 +107,7 @@ describe("mcpClientConfigs", () => {
         return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
       })
     );
+    expect(fields.get("Transport")).toBe("Streamable HTTP");
     expect(fields.get("URL")).toBe(built.url);
     expect(fields.get("Header")).toBe(`Authorization: Bearer ${READY.apiKey}`);
   });

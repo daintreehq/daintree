@@ -136,6 +136,13 @@ describe("McpServerSettingsTab", () => {
     installMcpApi();
   });
 
+  // The connection box is the only select-all region holding a URL (the other
+  // is the masked API key).
+  const readDisplayedUrl = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll(".select-all"))
+      .map((el) => el.textContent?.trim() ?? "")
+      .find((text) => text.startsWith("http://"));
+
   const waitForContent = (container: HTMLElement, text: string) =>
     waitFor(
       () => {
@@ -1400,8 +1407,8 @@ describe("McpServerSettingsTab", () => {
       );
       await waitForContent(container, "API key active");
       expect(container.textContent).toContain("Running on port 9020");
-      expect(container.textContent).toContain("http://127.0.0.1:9020/mcp");
-      expect(container.textContent).not.toContain("/sse");
+      // Regression (#11535): the box advertised the legacy /sse transport.
+      expect(readDisplayedUrl(container)).toBe("http://127.0.0.1:9020/mcp");
       expect(screen.getByRole("button", { name: /copy mcp config/i })).toBeTruthy();
     });
 
@@ -1414,16 +1421,19 @@ describe("McpServerSettingsTab", () => {
       );
       await waitForContent(container, "API key active");
 
-      const shownUrl = Array.from(container.querySelectorAll(".select-all"))
-        .map((el) => el.textContent?.trim() ?? "")
-        .find((text) => text.startsWith("http://"));
+      const shownUrl = readDisplayedUrl(container);
       expect(shownUrl).toBeTruthy();
 
       fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
       await waitFor(() => {
         expect(writeText).toHaveBeenCalled();
       });
-      expect(String(writeText.mock.calls[0][0])).toContain(shownUrl);
+
+      // Compare the field the client actually reads, not just a substring.
+      const copied = JSON.parse(String(writeText.mock.calls[0][0])) as {
+        mcpServers: Record<string, { url: string }>;
+      };
+      expect(copied.mcpServers.daintree.url).toBe(shownUrl);
     });
 
     it("offers a client picker defaulting to Claude Code", async () => {
@@ -1434,11 +1444,60 @@ describe("McpServerSettingsTab", () => {
       );
       await waitForContent(container, "API key active");
 
-      const choices = screen.getAllByRole("radio");
-      expect(choices.length).toBeGreaterThan(1);
+      const group = screen.getByRole("radiogroup", { name: /client/i });
+      const choices = Array.from(group.querySelectorAll('[role="radio"]'));
+      expect(choices.map((c) => c.textContent)).toEqual([
+        expect.stringContaining("Claude Code"),
+        expect.stringContaining("Codex"),
+        expect.stringContaining("Other client"),
+      ]);
+
       const checked = choices.filter((c) => c.getAttribute("aria-checked") === "true");
       expect(checked).toHaveLength(1);
       expect(checked[0].textContent).toContain("Claude Code");
+    });
+
+    it("copies generic connection details when Other client is selected", async () => {
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+
+      fireEvent.click(screen.getByRole("radio", { name: /other client/i }));
+      fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalled();
+      });
+
+      const copied = String(writeText.mock.calls[0][0]);
+      expect(copied).toContain("Streamable HTTP");
+      expect(copied).toContain(readDisplayedUrl(container));
+      expect(copied).toContain("Bearer dnt-key-abc123");
+    });
+
+    it("copies the rotated key rather than the one cached at mount", async () => {
+      // Rotation elsewhere doesn't broadcast, so the copy path re-reads status.
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+
+      vi.mocked(window.electron.mcpServer.getStatus).mockResolvedValue({
+        enabled: true,
+        port: 9020,
+        configuredPort: 9020,
+        apiKey: "dnt-key-rotated789",
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalled();
+      });
+      expect(String(writeText.mock.calls[0][0])).toContain("dnt-key-rotated789");
     });
 
     it("copies Codex TOML carrying the live port and key when Codex is selected", async () => {

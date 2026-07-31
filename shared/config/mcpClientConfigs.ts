@@ -43,7 +43,7 @@ export const MCP_CLIENT_CONFIGS: readonly McpClientConfigDescriptor[] = [
     id: "claude-code",
     label: "Claude Code",
     language: "json",
-    destination: "Add to .mcp.json in your project, or run claude mcp add",
+    destination: "Add to .mcp.json in your project, or ~/.claude.json for every project",
   },
   {
     id: "codex",
