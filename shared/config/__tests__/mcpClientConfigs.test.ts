@@ -5,7 +5,7 @@ import {
   buildMcpClientConfig,
   buildMcpServerUrl,
   type McpClientConfigId,
-} from "../mcpClientConfigs";
+} from "../mcpClientConfigs.js";
 
 const ALL_IDS = MCP_CLIENT_CONFIGS.map((entry) => entry.id);
 
@@ -64,39 +64,45 @@ describe("mcpClientConfigs", () => {
 
   it("emits claude code json that parses to a bearer-authed http server entry", () => {
     const built = buildMcpClientConfig("claude-code", READY);
-    const parsed = JSON.parse(built.snippet) as {
-      mcpServers: Record<string, { type: string; url: string; headers?: Record<string, string> }>;
-    };
-    const entry = parsed.mcpServers.daintree;
-    expect(entry.type).toBe("http");
-    expect(entry.url).toBe(built.url);
-    expect(entry.headers?.Authorization).toBe(`Bearer ${READY.apiKey}`);
+    const parsed: unknown = JSON.parse(built.snippet);
+    expect(parsed).toMatchObject({
+      mcpServers: {
+        daintree: {
+          type: "http",
+          url: built.url,
+          headers: { Authorization: `Bearer ${READY.apiKey}` },
+        },
+      },
+    });
   });
 
   it("drops the headers key rather than emitting an empty object when unauthed", () => {
-    const parsed = JSON.parse(
-      buildMcpClientConfig("claude-code", { port: 9020, apiKey: null }).snippet
-    ) as { mcpServers: Record<string, Record<string, unknown>> };
-    expect("headers" in parsed.mcpServers.daintree).toBe(false);
+    const { snippet } = buildMcpClientConfig("claude-code", { port: 9020, apiKey: null });
+    const parsed: unknown = JSON.parse(snippet);
+    expect(parsed).toMatchObject({ mcpServers: { daintree: { type: "http" } } });
+    expect(snippet).not.toContain("headers");
   });
 
   it("emits codex toml that parses to the same url and bearer", () => {
     const built = buildMcpClientConfig("codex", READY);
-    const parsed = parseToml(built.snippet) as {
-      mcp_servers: Record<string, { url: string; http_headers?: Record<string, string> }>;
-    };
-    const entry = parsed.mcp_servers.daintree;
-    expect(entry.url).toBe(built.url);
-    expect(entry.http_headers?.Authorization).toBe(`Bearer ${READY.apiKey}`);
+    const parsed: unknown = parseToml(built.snippet);
+    expect(parsed).toMatchObject({
+      mcp_servers: {
+        daintree: {
+          url: built.url,
+          http_headers: { Authorization: `Bearer ${READY.apiKey}` },
+        },
+      },
+    });
   });
 
   it("escapes a key containing toml string metacharacters", () => {
     const nasty = 'key"with\\quotes';
     const built = buildMcpClientConfig("codex", { port: 9020, apiKey: nasty });
-    const parsed = parseToml(built.snippet) as {
-      mcp_servers: Record<string, { http_headers?: Record<string, string> }>;
-    };
-    expect(parsed.mcp_servers.daintree.http_headers?.Authorization).toBe(`Bearer ${nasty}`);
+    const parsed: unknown = parseToml(built.snippet);
+    expect(parsed).toMatchObject({
+      mcp_servers: { daintree: { http_headers: { Authorization: `Bearer ${nasty}` } } },
+    });
   });
 
   it("emits generic connection details as parseable label/value lines", () => {

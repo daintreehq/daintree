@@ -143,6 +143,8 @@ describe("McpServerSettingsTab", () => {
       .map((el) => el.textContent?.trim() ?? "")
       .find((text) => text.startsWith("http://"));
 
+  const lastCopiedText = () => String(writeText.mock.calls.at(-1)?.[0] ?? "");
+
   const waitForContent = (container: HTMLElement, text: string) =>
     waitFor(
       () => {
@@ -1430,7 +1432,7 @@ describe("McpServerSettingsTab", () => {
       });
 
       // Compare the field the client actually reads, not just a substring.
-      const copied: unknown = JSON.parse(String(writeText.mock.calls[0][0]));
+      const copied: unknown = JSON.parse(lastCopiedText());
       expect(copied).toMatchObject({ mcpServers: { daintree: { url: shownUrl } } });
     });
 
@@ -1452,7 +1454,7 @@ describe("McpServerSettingsTab", () => {
 
       const checked = choices.filter((c) => c.getAttribute("aria-checked") === "true");
       expect(checked).toHaveLength(1);
-      expect(checked[0].textContent).toContain("Claude Code");
+      expect(checked[0]?.textContent).toContain("Claude Code");
     });
 
     it("copies generic connection details when Other client is selected", async () => {
@@ -1469,9 +1471,12 @@ describe("McpServerSettingsTab", () => {
         expect(writeText).toHaveBeenCalled();
       });
 
-      const copied = String(writeText.mock.calls[0][0]);
+      const shownUrl = readDisplayedUrl(container);
+      expect(shownUrl).toBeTruthy();
+
+      const copied = lastCopiedText();
       expect(copied).toContain("Streamable HTTP");
-      expect(copied).toContain(readDisplayedUrl(container));
+      expect(copied).toContain(shownUrl);
       expect(copied).toContain("Bearer dnt-key-abc123");
     });
 
@@ -1495,7 +1500,7 @@ describe("McpServerSettingsTab", () => {
       await waitFor(() => {
         expect(writeText).toHaveBeenCalled();
       });
-      expect(String(writeText.mock.calls[0][0])).toContain("dnt-key-rotated789");
+      expect(lastCopiedText()).toContain("dnt-key-rotated789");
     });
 
     it("copies Codex TOML carrying the live port and key when Codex is selected", async () => {
@@ -1512,7 +1517,7 @@ describe("McpServerSettingsTab", () => {
         expect(writeText).toHaveBeenCalled();
       });
 
-      const parsed: unknown = parseToml(String(writeText.mock.calls[0][0]));
+      const parsed: unknown = parseToml(lastCopiedText());
       expect(parsed).toMatchObject({
         mcp_servers: {
           daintree: {
