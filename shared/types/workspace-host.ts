@@ -447,6 +447,12 @@ export type WorkspaceHostRequest =
       operationId: string;
       rootPath: string;
       options?: CopyTreeOptions;
+      /**
+       * Where to stream the bundle. Main-process-chosen and internal to this
+       * protocol — with it set, only the path returns instead of a multi-MB
+       * string (#11528).
+       */
+      outputPath?: string;
     }
   | { type: "copytree:cancel"; operationId: string }
   | {

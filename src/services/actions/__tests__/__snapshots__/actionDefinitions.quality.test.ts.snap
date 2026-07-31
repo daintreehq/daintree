@@ -935,7 +935,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "copyTree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Generate a CopyTree context dump (file tree plus selected file contents) for a worktree and return it as a string. Args (all optional): \`worktreeId\` or \`worktreePath\` — the worktree, defaults to the active one; \`options\` — CopyTree include/exclude options. Returns { content, fileCount, optional stats:{ totalSize, duration } }. Throws when generation fails or when no worktree is given and none is active. Do NOT use this to inject context into a terminal — use \`copyTree.injectToTerminal\`.",
+    "description": "Generate a CopyTree context dump (file tree plus selected file contents) for a worktree and write it to a file, returning the path. Args (all optional): \`worktreeId\` or \`worktreePath\` — the worktree, defaults to the active one; \`options\` — CopyTree include/exclude options; \`includeContent\` — also return a bounded head of the bundle. Returns { filePath, fileCount, outputBytes, optional content, optional contentTruncated, optional stats:{ totalSize, duration } }. \`filePath\` is a temporary file that is pruned by age and count, so read it promptly. The bundle is NOT returned inline by default — it routinely runs to tens of megabytes, far past what any tool result can carry; \`includeContent\` returns only the first few KB. Throws when generation fails or when no worktree is given and none is active. Do NOT use this to inject context into a terminal — use \`copyTree.injectToTerminal\`.",
     "examples": undefined,
     "id": "copyTree.generate",
     "keywords": [
@@ -952,7 +952,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "copyTree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Generate worktree context and copy to clipboard",
+    "description": "Generate worktree context, write it to a file and put that file on the clipboard. Args (all optional): \`worktreeId\` — the worktree, defaults to the active one; \`options\` — CopyTree include/exclude options. Returns { filePath, fileCount, outputBytes, optional stats:{ totalSize, duration } }. The bundle is never returned inline. Throws when generation or the clipboard write fails.",
     "examples": undefined,
     "id": "copyTree.generateAndCopyFile",
     "keywords": undefined,
@@ -976,7 +976,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "copyTree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Inject worktree context into a terminal",
+    "description": "Write a worktree's CopyTree context straight into a terminal. Args: \`terminalId\` — required; \`worktreeId\` — defaults to the active worktree; \`options\` — CopyTree include/exclude options. Returns { fileCount, optional stats:{ totalSize, duration } } — the context goes to the terminal, never back through this result. Throws when generation or injection fails.",
     "examples": undefined,
     "id": "copyTree.injectToTerminal",
     "keywords": [

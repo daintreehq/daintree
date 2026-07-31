@@ -361,7 +361,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     applyPatch(options: ApplyPatchOptions): Promise<ApplyPatchResult>;
   };
   copyTree: {
-    generate(worktreeId: string, options?: CopyTreeOptions): Promise<CopyTreeResult>;
+    generate(
+      worktreeId: string,
+      options?: CopyTreeOptions,
+      includeContent?: boolean
+    ): Promise<CopyTreeResult>;
     generateAndCopyFile(worktreeId: string, options?: CopyTreeOptions): Promise<CopyTreeResult>;
     injectToTerminal(
       terminalId: string,

@@ -19,6 +19,52 @@ import {
   systemClient,
 } from "@/clients";
 import { cancelContextInjection } from "@/hooks/useContextInjection";
+import type { CopyTreeResult } from "@shared/types";
+
+/**
+ * The generation numbers every CopyTree action reports. Kept separate from
+ * CopyTree's own richer budget stats so the advertised shape stays small — the
+ * whole point of #11528 is that these tools return metadata, not bulk.
+ */
+const CopyTreeStatsSchema = z
+  .object({
+    totalSize: z.number(),
+    duration: z.number(),
+  })
+  .optional();
+
+const CopyTreeGenerateResultSchema = z.object({
+  filePath: z
+    .string()
+    .describe("Absolute path of the written bundle. Temporary — read it promptly."),
+  fileCount: z.number(),
+  outputBytes: z.number().describe("UTF-8 size of the bundle on disk."),
+  content: z
+    .string()
+    .optional()
+    .describe("Head of the bundle, only when `includeContent` was set."),
+  contentTruncated: z.boolean().optional(),
+  stats: CopyTreeStatsSchema,
+});
+
+function projectCopyTreeStats(stats: NonNullable<CopyTreeResult["stats"]>) {
+  return { totalSize: stats.totalSize, duration: stats.duration };
+}
+
+/**
+ * Turn an error-shaped CopyTree result into a thrown error.
+ *
+ * A returned value is serialized by the MCP bridge as a SUCCESSFUL tool result,
+ * so a failure reported in an `error` field beside an empty dump is invisible to
+ * an agent checking `isError` (#11543). Throwing routes it through
+ * EXECUTION_ERROR, which the bridge reports as a tool error. `generate` already
+ * did this; the other two returned their failures as success data.
+ */
+function throwOnCopyTreeFailure(result: CopyTreeResult): void {
+  const failure =
+    result && typeof result === "object" ? (result as { error?: string }).error : undefined;
+  if (failure) throw new Error(failure);
+}
 
 export function registerSystemActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("system.openExternal", () =>
@@ -314,36 +360,53 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generate",
       title: "Generate CopyTree Context",
       description:
-        "Generate a CopyTree context dump (file tree plus selected file contents) for a worktree and return it as a string. Args (all optional): `worktreeId` or `worktreePath` — the worktree, defaults to the active one; `options` — CopyTree include/exclude options. Returns { content, fileCount, optional stats:{ totalSize, duration } }. Throws when generation fails or when no worktree is given and none is active. Do NOT use this to inject context into a terminal — use `copyTree.injectToTerminal`.",
+        "Generate a CopyTree context dump (file tree plus selected file contents) for a worktree and write it to a file, returning the path. Args (all optional): `worktreeId` or `worktreePath` — the worktree, defaults to the active one; `options` — CopyTree include/exclude options; `includeContent` — also return a bounded head of the bundle. Returns { filePath, fileCount, outputBytes, optional content, optional contentTruncated, optional stats:{ totalSize, duration } }. `filePath` is a temporary file that is pruned by age and count, so read it promptly. The bundle is NOT returned inline by default — it routinely runs to tens of megabytes, far past what any tool result can carry; `includeContent` returns only the first few KB. Throws when generation fails or when no worktree is given and none is active. Do NOT use this to inject context into a terminal — use `copyTree.injectToTerminal`.",
       category: "copyTree",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       keywords: ["context", "dump", "snapshot", "tree"],
+      // Kind stays `query` — this reads a worktree and the palette treats it as
+      // one — but the annotations it would imply are now false: every call
+      // writes a new temp file, so the result is neither read-only nor the same
+      // twice (#11528).
+      mcpAnnotations: { readOnlyHint: false, idempotentHint: false },
       argsSchema: withWorktreeLocation({
         options: CopyTreeOptionsSchema.optional(),
+        includeContent: z
+          .boolean()
+          .optional()
+          .describe(
+            "Also return a bounded head of the bundle in `content`. Capped well under the tool-result limit; `contentTruncated` reports when it was cut. The file at `filePath` always holds the whole bundle."
+          ),
       }).optional(),
-      resultSchema: z.object({
-        content: z.string(),
-        fileCount: z.number(),
-        stats: z
-          .object({
-            totalSize: z.number(),
-            duration: z.number(),
-          })
-          .optional(),
-      }),
+      resultSchema: CopyTreeGenerateResultSchema,
+      // A `resultSchema` alone advertises nothing — the manifest only publishes
+      // an MCP outputSchema when this flag is set too.
+      mcpOutputSchema: true,
       run: async (args, ctx: ActionContext) => {
-        const result = await copyTreeClient.generate(requireWorktreeId(args, ctx), args?.options);
-        // A generation failure used to ride back in an `error` field beside an
-        // empty dump. The MCP bridge serializes a returned value as a SUCCESSFUL
-        // tool result, so an agent checking `isError` never saw it (#11543).
-        // Throwing routes it through EXECUTION_ERROR, which the bridge reports
-        // as a tool error. Everything else passes through untouched.
-        const failure =
-          result && typeof result === "object" ? (result as { error?: string }).error : undefined;
-        if (failure) throw new Error(failure);
-        return result;
+        const result = await copyTreeClient.generate(
+          requireWorktreeId(args, ctx),
+          args?.options,
+          args?.includeContent
+        );
+        throwOnCopyTreeFailure(result);
+        // Projected explicitly rather than passed through: `resultSchema` is
+        // manifest documentation and strips nothing, so omitting `content` from
+        // the schema would not stop it reaching the wire. Building the result
+        // here is what actually keeps the bundle off it.
+        return {
+          filePath: result.filePath,
+          fileCount: result.fileCount,
+          outputBytes: result.outputBytes,
+          // Gated on what was ASKED for, not on what came back: keying off the
+          // response would forward a bundle to a caller who never opted in if
+          // the layer below ever returned one.
+          ...(args?.includeContent
+            ? { content: result.content, contentTruncated: result.contentTruncated === true }
+            : {}),
+          ...(result.stats ? { stats: projectCopyTreeStats(result.stats) } : {}),
+        };
       },
     })
   );
@@ -352,7 +415,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     defineAction({
       id: "copyTree.generateAndCopyFile",
       title: "Generate And Copy Context",
-      description: "Generate worktree context and copy to clipboard",
+      description:
+        "Generate worktree context, write it to a file and put that file on the clipboard. Args (all optional): `worktreeId` — the worktree, defaults to the active one; `options` — CopyTree include/exclude options. Returns { filePath, fileCount, outputBytes, optional stats:{ totalSize, duration } }. The bundle is never returned inline. Throws when generation or the clipboard write fails.",
       category: "copyTree",
       kind: "command",
       danger: "safe",
@@ -374,10 +438,24 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           options: CopyTreeOptionsSchema.optional(),
         })
         .optional(),
+      resultSchema: z.object({
+        filePath: z.string(),
+        fileCount: z.number(),
+        outputBytes: z.number(),
+        stats: CopyTreeStatsSchema,
+      }),
+      mcpOutputSchema: true,
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId ?? ctx.activeWorktreeId;
         if (!worktreeId) throw new Error("No active worktree");
-        return await copyTreeClient.generateAndCopyFile(worktreeId, args?.options);
+        const result = await copyTreeClient.generateAndCopyFile(worktreeId, args?.options);
+        throwOnCopyTreeFailure(result);
+        return {
+          filePath: result.filePath,
+          fileCount: result.fileCount,
+          outputBytes: result.outputBytes,
+          ...(result.stats ? { stats: projectCopyTreeStats(result.stats) } : {}),
+        };
       },
     })
   );
@@ -386,7 +464,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     defineAction({
       id: "copyTree.injectToTerminal",
       title: "Inject Context To Terminal",
-      description: "Inject worktree context into a terminal",
+      description:
+        "Write a worktree's CopyTree context straight into a terminal. Args: `terminalId` — required; `worktreeId` — defaults to the active worktree; `options` — CopyTree include/exclude options. Returns { fileCount, optional stats:{ totalSize, duration } } — the context goes to the terminal, never back through this result. Throws when generation or injection fails.",
       category: "copyTree",
       kind: "command",
       danger: "safe",
@@ -397,10 +476,25 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         worktreeId: z.string().optional().describe("Worktree ID. Defaults to the active worktree."),
         options: CopyTreeOptionsSchema.optional(),
       }),
+      // No path: this bundle is streamed into the PTY and never written to disk.
+      resultSchema: z.object({
+        fileCount: z.number(),
+        stats: CopyTreeStatsSchema,
+      }),
+      mcpOutputSchema: true,
       run: async ({ terminalId, worktreeId, options }, ctx: ActionContext) => {
         const resolvedWorktreeId = worktreeId ?? ctx.activeWorktreeId;
         if (!resolvedWorktreeId) throw new Error("No active worktree");
-        return await copyTreeClient.injectToTerminal(terminalId, resolvedWorktreeId, options);
+        const result = await copyTreeClient.injectToTerminal(
+          terminalId,
+          resolvedWorktreeId,
+          options
+        );
+        throwOnCopyTreeFailure(result);
+        return {
+          fileCount: result.fileCount,
+          ...(result.stats ? { stats: projectCopyTreeStats(result.stats) } : {}),
+        };
       },
     })
   );

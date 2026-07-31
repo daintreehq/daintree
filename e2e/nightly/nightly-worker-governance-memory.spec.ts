@@ -92,7 +92,12 @@ async function generateContext(window: AppContext["window"], worktreeId: string)
     worktreeId
   );
   expect(result?.error).toBeFalsy();
-  expect(result?.content?.length).toBeGreaterThan(0);
+  // The default path streams the bundle to a file, so nothing but metadata
+  // crosses the worker → host → main → renderer boundaries — which is exactly
+  // the memory behaviour this churn loop measures (#11528).
+  expect(result?.content).toBe("");
+  expect(result?.filePath).toBeTruthy();
+  expect(result?.outputBytes).toBeGreaterThan(0);
 }
 
 async function waitForFileOpsRateLimitWindow(window: AppContext["window"]): Promise<void> {

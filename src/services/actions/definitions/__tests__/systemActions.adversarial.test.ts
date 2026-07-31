@@ -74,11 +74,31 @@ function setupActions(): {
   };
 }
 
+/**
+ * A plausible file-backed CopyTreeResult, i.e. what the IPC layer actually
+ * answers with. The copyTree actions project their MCP result out of this, so a
+ * bare `undefined` mock would only prove they never look at it.
+ */
+const COPY_TREE_RESULT = {
+  content: "",
+  fileCount: 3,
+  filePath: "/tmp/daintree-context/repo-main-x.xml",
+  outputBytes: 2048,
+  outputFormatVersion: "copytree-xml@1",
+  stats: { totalSize: 4096, duration: 12 },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   for (const fn of Object.values(filesClientMock)) fn.mockResolvedValue(undefined);
   for (const fn of Object.values(copyTreeClientMock)) fn.mockResolvedValue(undefined);
   for (const fn of Object.values(slashCommandsClientMock)) fn.mockResolvedValue(undefined);
+  copyTreeClientMock.generate.mockResolvedValue({ ...COPY_TREE_RESULT });
+  copyTreeClientMock.generateAndCopyFile.mockResolvedValue({ ...COPY_TREE_RESULT });
+  copyTreeClientMock.injectToTerminal.mockResolvedValue({
+    ...COPY_TREE_RESULT,
+    filePath: undefined,
+  });
 });
 
 describe("systemActions adversarial", () => {
@@ -161,14 +181,20 @@ describe("systemActions adversarial", () => {
     it("falls back to ctx.activeWorktreeId when worktreeId is omitted", async () => {
       const { run } = setupActions();
       await run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" });
-      expect(copyTreeClientMock.generate).toHaveBeenCalledWith("wt-active", undefined);
+      expect(copyTreeClientMock.generate).toHaveBeenCalledWith("wt-active", undefined, undefined);
     });
 
     it("forwards options when provided", async () => {
       const { run } = setupActions();
       const options = { format: "xml" as const };
       await run("copyTree.generate", { options }, { activeWorktreeId: "wt-active" });
-      expect(copyTreeClientMock.generate).toHaveBeenCalledWith("wt-active", options);
+      expect(copyTreeClientMock.generate).toHaveBeenCalledWith("wt-active", options, undefined);
+    });
+
+    it("forwards the content opt-in so the head is only read when asked for", async () => {
+      const { run } = setupActions();
+      await run("copyTree.generate", { includeContent: true }, { activeWorktreeId: "wt-active" });
+      expect(copyTreeClientMock.generate).toHaveBeenCalledWith("wt-active", undefined, true);
     });
 
     it("throws when worktreeId is omitted and no active worktree", async () => {
@@ -191,12 +217,67 @@ describe("systemActions adversarial", () => {
       ).rejects.toThrow("copytree exited with code 1");
     });
 
-    it("passes a successful generation through untouched", async () => {
+    it("returns the file handle and keeps the bundle off the result", async () => {
       const { run } = setupActions();
-      copyTreeClientMock.generate.mockResolvedValueOnce({ content: "dump", fileCount: 3 });
+      // The IPC layer answers with the full CopyTreeResult shape. Anything the
+      // success schema doesn't name has to be dropped here: `resultSchema` is
+      // manifest documentation and strips nothing (#10870), so a field left in
+      // reaches the wire regardless of what the schema advertises.
+      // A non-empty sentinel: an empty string would let a projection that
+      // forwards `content` unconditionally pass this test anyway.
+      copyTreeClientMock.generate.mockResolvedValueOnce({
+        content: "LEAKED BUNDLE".repeat(1000),
+        fileCount: 3,
+        filePath: "/tmp/daintree-context/repo-main-x.xml",
+        outputBytes: 31_457_280,
+        outputFormatVersion: "copytree-xml@1",
+        stats: { totalSize: 4096, duration: 12, estimatedTokens: 7_500_063 },
+      });
+
       await expect(
         run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" })
-      ).resolves.toEqual({ content: "dump", fileCount: 3 });
+      ).resolves.toEqual({
+        filePath: "/tmp/daintree-context/repo-main-x.xml",
+        fileCount: 3,
+        outputBytes: 31_457_280,
+        stats: { totalSize: 4096, duration: 12 },
+      });
+    });
+
+    it("reports a head that was not truncated as such", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.generate.mockResolvedValueOnce({
+        content: "<files>whole</files>",
+        contentTruncated: false,
+        fileCount: 1,
+        filePath: "/tmp/daintree-context/repo-main-x.xml",
+        outputBytes: 20,
+      });
+
+      await expect(
+        run("copyTree.generate", { includeContent: true }, { activeWorktreeId: "wt-active" })
+      ).resolves.toMatchObject({ content: "<files>whole</files>", contentTruncated: false });
+    });
+
+    it("carries the head and its truncation flag only when one came back", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.generate.mockResolvedValueOnce({
+        content: "<files>head</files>",
+        contentTruncated: true,
+        fileCount: 3,
+        filePath: "/tmp/daintree-context/repo-main-x.xml",
+        outputBytes: 31_457_280,
+      });
+
+      await expect(
+        run("copyTree.generate", { includeContent: true }, { activeWorktreeId: "wt-active" })
+      ).resolves.toEqual({
+        filePath: "/tmp/daintree-context/repo-main-x.xml",
+        fileCount: 3,
+        outputBytes: 31_457_280,
+        content: "<files>head</files>",
+        contentTruncated: true,
+      });
     });
   });
 
@@ -205,6 +286,33 @@ describe("systemActions adversarial", () => {
       const { run } = setupActions();
       await run("copyTree.generateAndCopyFile", undefined, { activeWorktreeId: "wt-active" });
       expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith("wt-active", undefined);
+    });
+
+    it("returns the file handle without the bundle", async () => {
+      const { run } = setupActions();
+      await expect(
+        run("copyTree.generateAndCopyFile", undefined, { activeWorktreeId: "wt-active" })
+      ).resolves.toEqual({
+        filePath: "/tmp/daintree-context/repo-main-x.xml",
+        fileCount: 3,
+        outputBytes: 2048,
+        stats: { totalSize: 4096, duration: 12 },
+      });
+    });
+
+    it("throws on a failure instead of returning it as success data", async () => {
+      const { run } = setupActions();
+      // Same trap #11543 fixed for `generate`: a returned value is serialized as
+      // a SUCCESSFUL tool result, so an agent checking isError never sees an
+      // `error` field riding back beside an empty dump.
+      copyTreeClientMock.generateAndCopyFile.mockResolvedValueOnce({
+        content: "",
+        fileCount: 0,
+        error: "Failed to copy file to clipboard: EACCES",
+      });
+      await expect(
+        run("copyTree.generateAndCopyFile", undefined, { activeWorktreeId: "wt-active" })
+      ).rejects.toThrow("Failed to copy file to clipboard: EACCES");
     });
   });
 
@@ -242,6 +350,25 @@ describe("systemActions adversarial", () => {
       await expect(run("copyTree.injectToTerminal", { terminalId: "t-1" })).rejects.toThrow(
         "No active worktree"
       );
+    });
+
+    it("reports only the counts — the context went to the terminal, not the result", async () => {
+      const { run } = setupActions();
+      await expect(
+        run("copyTree.injectToTerminal", { terminalId: "t-1" }, { activeWorktreeId: "wt-active" })
+      ).resolves.toEqual({ fileCount: 3, stats: { totalSize: 4096, duration: 12 } });
+    });
+
+    it("throws on a failure instead of returning it as success data", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.injectToTerminal.mockResolvedValueOnce({
+        content: "",
+        fileCount: 0,
+        error: "Terminal closed during injection",
+      });
+      await expect(
+        run("copyTree.injectToTerminal", { terminalId: "t-1" }, { activeWorktreeId: "wt-active" })
+      ).rejects.toThrow("Terminal closed during injection");
     });
   });
 });

@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import nodeFs from "fs/promises";
+import nodeOs from "os";
+import nodePath from "path";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -54,6 +57,7 @@ vi.mock("../../../window/windowRef.js", () => ({
 
 import { CHANNELS } from "../../channels.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
+import { contextDir, _resetReservedPathsForTests } from "../../../services/copyTreeOutputFile.js";
 import {
   registerCopyTreeHandlers,
   mergeCopyTreeOptions,
@@ -634,6 +638,204 @@ describe("copyTree handlers", () => {
           expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(GLOBAL_PROJECT);
         });
       }
+    );
+  });
+});
+
+const mockSender = { sender: { id: 1 } } as never;
+
+describe("file-backed generation", () => {
+  let tmpRoot: string;
+  /** The destination the handler reserved and handed to the workspace host. */
+  let lastOutputPath: string | undefined;
+
+  /**
+   * Stand in for the workspace host: write the bundle where the handler asked,
+   * exactly as the streaming service does, and report only the path back.
+   */
+  function makeService(body: string, overrides: Record<string, unknown> = {}) {
+    const generateContext = vi.fn(
+      async (_root: string, _options: unknown, _onProgress: unknown, outputPath?: string) => {
+        lastOutputPath = outputPath;
+        if (!outputPath) return { content: body, fileCount: 2 };
+        await nodeFs.writeFile(outputPath, body, { encoding: "utf8", mode: 0o600 });
+        return {
+          content: "",
+          fileCount: 2,
+          filePath: outputPath,
+          outputBytes: Buffer.byteLength(body, "utf8"),
+          stats: { totalSize: 10, duration: 3 },
+          ...overrides,
+        };
+      }
+    );
+
+    browserWindowMock.fromWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
+    ipcMainMock.handle.mockClear();
+    registerCopyTreeHandlers({
+      mainWindow: {
+        isDestroyed: () => false,
+        webContents: { isDestroyed: () => false, send: vi.fn() },
+      },
+      ptyClient: { hasTerminal: vi.fn(() => true), write: vi.fn() },
+      worktreeService: {
+        getAllStatesAsync: vi.fn(async () => [
+          { id: "wt-1", path: "/repos/daintree", branch: "main" },
+        ]),
+        generateContext,
+        testConfig: vi.fn(),
+        getContextFileTree: vi.fn(),
+      },
+    } as never);
+    return generateContext;
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    _resetRateLimitQueuesForTest();
+    _resetReservedPathsForTests();
+    lastOutputPath = undefined;
+    tmpRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "daintree-handlers-"));
+    // contextDir() reads os.tmpdir() per call, so redirecting the temp vars
+    // keeps every bundle this suite writes inside its own scratch directory.
+    vi.stubEnv("TMPDIR", tmpRoot);
+    vi.stubEnv("TEMP", tmpRoot);
+    vi.stubEnv("TMP", tmpRoot);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+    projectStoreMock.getProjectById.mockReturnValue(null);
+    projectStoreMock.getProjectSettings.mockReset();
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await nodeFs.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("returns a path instead of the bundle, and never asks the host for the string", async () => {
+    const body = "<files>a very large bundle</files>";
+    const generateContext = makeService(body);
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    const result = (await handler(mockSender, { worktreeId: "wt-1" })) as Record<string, unknown>;
+
+    expect(result.filePath).toBe(lastOutputPath);
+    expect(result.content).toBe("");
+    expect(result.outputBytes).toBe(Buffer.byteLength(body, "utf8"));
+    // The destination reached the host, which is what keeps the bundle off the
+    // worker → host → main crossings.
+    expect(generateContext.mock.calls[0][3]).toBe(lastOutputPath);
+    expect(await nodeFs.readFile(result.filePath as string, "utf8")).toBe(body);
+  });
+
+  it("writes the bundle into the shared context directory", async () => {
+    makeService("<files/>");
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    const result = (await handler(mockSender, { worktreeId: "wt-1" })) as Record<string, unknown>;
+
+    expect(nodePath.dirname(result.filePath as string)).toBe(contextDir());
+    expect(nodePath.basename(result.filePath as string)).toMatch(/^daintree-main-.*\.xml$/);
+  });
+
+  it("takes the extension from the merged format", async () => {
+    makeService("# context");
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    const result = (await handler(mockSender, {
+      worktreeId: "wt-1",
+      options: { format: "markdown" },
+    })) as Record<string, unknown>;
+
+    expect(result.filePath).toMatch(/\.md$/);
+  });
+
+  it("omits content unless it was asked for", async () => {
+    makeService("<files>body</files>");
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    const result = (await handler(mockSender, { worktreeId: "wt-1" })) as Record<string, unknown>;
+
+    expect(result.content).toBe("");
+    expect(result.contentTruncated).toBeUndefined();
+  });
+
+  it("reads a small bundle back whole when content was asked for", async () => {
+    makeService("<files>body</files>");
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    const result = (await handler(mockSender, {
+      worktreeId: "wt-1",
+      includeContent: true,
+    })) as Record<string, unknown>;
+
+    expect(result.content).toBe("<files>body</files>");
+    expect(result.contentTruncated).toBe(false);
+    expect(result.filePath).toBe(lastOutputPath);
+  });
+
+  it("keeps an opted-in result inside the tool-result budget for a huge bundle", async () => {
+    makeService("<file>".concat("x".repeat(400_000), "</file>"));
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    const result = (await handler(mockSender, {
+      worktreeId: "wt-1",
+      includeContent: true,
+    })) as Record<string, unknown>;
+
+    expect(result.contentTruncated).toBe(true);
+    // The transport drops structuredContent and flags isError past 50 KiB, so
+    // the opt-in is only useful if the whole serialized result stays under it.
+    expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThan(50 * 1024);
+    // The file still holds everything the head was cut from.
+    expect((await nodeFs.stat(result.filePath as string)).size).toBeGreaterThan(400_000);
+  });
+
+  it("ignores an output path supplied by the caller", async () => {
+    const generateContext = makeService("<files/>");
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+    const hijack = nodePath.join(tmpRoot, "attacker-owned.xml");
+
+    const result = (await handler(mockSender, {
+      worktreeId: "wt-1",
+      outputPath: hijack,
+      options: { outputPath: hijack, output: hijack },
+    })) as Record<string, unknown>;
+
+    // The destination is main's alone. Honouring a caller's would turn a
+    // context dump into an arbitrary file write for any MCP consumer.
+    expect(generateContext.mock.calls[0][3]).not.toBe(hijack);
+    expect(result.filePath).not.toBe(hijack);
+    await expect(nodeFs.access(hijack)).rejects.toThrow();
+  });
+
+  it("refuses a result that names a file other than the one reserved", async () => {
+    makeService("<files/>", { filePath: "/tmp/somewhere-else.xml" });
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    const result = (await handler(mockSender, { worktreeId: "wt-1" })) as Record<string, unknown>;
+
+    expect(result.error).toBe("Failed to generate context");
+    expect(result.filePath).toBeUndefined();
+  });
+
+  it("puts the host-written file on the clipboard without rewriting it in main", async () => {
+    const generateContext = makeService("<files>clipboard me</files>");
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE);
+
+    const result = (await handler(mockSender, { worktreeId: "wt-1" })) as Record<string, unknown>;
+
+    expect(result.filePath).toBe(lastOutputPath);
+    expect(result.content).toBe("");
+    expect(generateContext.mock.calls[0][3]).toBe(lastOutputPath);
+
+    const onClipboard = clipboardMock.writeText.mock.calls
+      .concat(clipboardMock.writeBuffer.mock.calls)
+      .flat()
+      .map((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : String(value)))
+      .join("\n");
+    expect(onClipboard).toContain(result.filePath as string);
+    expect(await nodeFs.readFile(result.filePath as string, "utf8")).toBe(
+      "<files>clipboard me</files>"
     );
   });
 });

@@ -652,7 +652,7 @@ port.on("message", async (rawMsg: any) => {
       }
 
       case "copytree:generate": {
-        const { requestId, operationId, rootPath, options } = request;
+        const { requestId, operationId, rootPath, options, outputPath } = request;
         console.log(`[WorkspaceHost] CopyTree generate started: ${operationId}`);
 
         const onProgress = (progress: CopyTreeProgress) => {
@@ -668,7 +668,8 @@ port.on("message", async (rawMsg: any) => {
             rootPath,
             options || {},
             onProgress,
-            operationId
+            operationId,
+            outputPath
           );
           sendEvent({
             type: "copytree:complete",

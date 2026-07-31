@@ -50,6 +50,20 @@ export interface CopyTreeOptions {
 export interface CopyTreeGeneratePayload {
   worktreeId: string;
   options?: CopyTreeOptions;
+  /**
+   * Return a bounded head of the bundle alongside the file path (#11528).
+   *
+   * Off by default: the bundle is written to a file and only its path comes
+   * back, so a multi-MB context never crosses a process boundary. Opting in
+   * never restores that — the file is still the source, and the head is read
+   * back from it under a hard serialized-size budget.
+   *
+   * Deliberately a payload field rather than a `CopyTreeOptions` one: the
+   * options object is caller-supplied over MCP and merged with persisted
+   * project settings, and this is a per-call response shape, not a
+   * context-generation setting.
+   */
+  includeContent?: boolean;
 }
 
 export interface CopyTreeGenerateAndCopyFilePayload {
@@ -182,10 +196,28 @@ export interface CopyTreeGetFileTreePayload {
 
 /** Result from CopyTree generation */
 export interface CopyTreeResult {
-  /** Generated content */
+  /**
+   * Generated content.
+   *
+   * Empty on every file-backed path — `generate` (which now writes a file by
+   * default), `generateAndCopyFile` and `injectToTerminal` all deliver the
+   * bundle somewhere other than this field and drop it rather than clone a
+   * second multi-MB copy across a process boundary.
+   */
   content: string;
   /** Number of files included */
   fileCount: number;
+  /**
+   * Absolute path of the written bundle, when generation was file-backed.
+   *
+   * Ephemeral: it lives in the OS temp directory and is pruned by age and by
+   * count, so a consumer must read it promptly rather than store it.
+   */
+  filePath?: string;
+  /** UTF-8 byte size of the written bundle. Present whenever `filePath` is. */
+  outputBytes?: number;
+  /** True when `content` holds only the head of a larger bundle. */
+  contentTruncated?: boolean;
   /** Error message if generation failed */
   error?: string;
   /**

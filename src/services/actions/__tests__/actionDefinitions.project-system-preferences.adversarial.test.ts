@@ -651,8 +651,13 @@ describe("system action hardening", () => {
     mocks.systemClient.checkCommand.mockResolvedValueOnce(true);
     mocks.filesClient.search.mockResolvedValueOnce(["src/main.ts"]);
     mocks.slashCommandsClient.list.mockResolvedValueOnce(["/review"]);
-    mocks.copyTreeClient.generate.mockResolvedValueOnce("tree");
-    mocks.copyTreeClient.injectToTerminal.mockResolvedValueOnce({ injected: true });
+    mocks.copyTreeClient.generate.mockResolvedValueOnce({
+      content: "",
+      fileCount: 2,
+      filePath: "/tmp/daintree-context/repo-main-x.xml",
+      outputBytes: 512,
+    });
+    mocks.copyTreeClient.injectToTerminal.mockResolvedValueOnce({ content: "", fileCount: 2 });
     mocks.copyTreeClient.getFileTree.mockResolvedValueOnce([{ path: "src", type: "directory" }]);
     const { service } = buildService(registerSystemActions);
 
@@ -671,21 +676,33 @@ describe("system action hardening", () => {
         worktreeId: "wt-1",
         options: { includeGitStatus: true },
       })
-    ).resolves.toEqual({ ok: true, result: "tree" });
+    ).resolves.toEqual({
+      ok: true,
+      result: {
+        filePath: "/tmp/daintree-context/repo-main-x.xml",
+        fileCount: 2,
+        outputBytes: 512,
+      },
+    });
     await expect(
       service.dispatch("copyTree.injectToTerminal", {
         terminalId: "term-1",
         worktreeId: "wt-1",
         options: { includeGitStatus: true },
       })
-    ).resolves.toEqual({ ok: true, result: { injected: true } });
+    ).resolves.toEqual({ ok: true, result: { fileCount: 2 } });
     await expect(
       service.dispatch("copyTree.getFileTree", { worktreeId: "wt-1", dirPath: "src" })
     ).resolves.toEqual({ ok: true, result: { nodes: [{ path: "src", type: "directory" }] } });
   });
 
   it("keeps scoped folder paths in copyTree options instead of validating them away", async () => {
-    mocks.copyTreeClient.generate.mockResolvedValueOnce("tree");
+    mocks.copyTreeClient.generate.mockResolvedValueOnce({
+      content: "",
+      fileCount: 1,
+      filePath: "/tmp/daintree-context/repo-main-x.xml",
+      outputBytes: 128,
+    });
     const { service } = buildService(registerSystemActions);
 
     await service.dispatch("copyTree.generate", {

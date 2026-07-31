@@ -7,7 +7,16 @@ import type { CopyTreeTestConfigResult, FileTreeNode } from "../../shared/types/
  * it onto its own per-operation AbortController inside CopyTreeService.
  */
 export type CopytreeWorkerRequest =
-  | { type: "generate"; id: string; rootPath: string; options: CopyTreeOptions }
+  // `outputPath` is chosen by the main process, never by a caller: with it set
+  // the bundle is streamed to that file and only its path returns, so a
+  // multi-MB string never crosses this port (#11528).
+  | {
+      type: "generate";
+      id: string;
+      rootPath: string;
+      options: CopyTreeOptions;
+      outputPath?: string;
+    }
   | { type: "test-config"; id: string; rootPath: string; options: CopyTreeOptions }
   | {
       type: "get-file-tree";

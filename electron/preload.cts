@@ -1398,8 +1398,8 @@ function buildElectronApi(): ElectronAPI {
 
     // CopyTree API
     copyTree: {
-      generate: (worktreeId: string, options?: CopyTreeOptions) =>
-        _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE, { worktreeId, options }),
+      generate: (worktreeId: string, options?: CopyTreeOptions, includeContent?: boolean) =>
+        _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE, { worktreeId, options, includeContent }),
 
       generateAndCopyFile: (worktreeId: string, options?: CopyTreeOptions) =>
         _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, { worktreeId, options }),

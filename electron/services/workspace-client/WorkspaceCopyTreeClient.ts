@@ -21,10 +21,16 @@ export class WorkspaceCopyTreeClient {
     this.iterateEntries = deps.iterateEntries;
   }
 
+  /**
+   * `outputPath` streams the bundle to that file in the host and returns only
+   * its path, keeping a multi-MB string off this structured-clone boundary
+   * (#11528). It is main-process-chosen — never a caller's.
+   */
   async generateContext(
     rootPath: string,
     options?: CopyTreeOptions,
-    onProgress?: CopyTreeProgressCallback
+    onProgress?: CopyTreeProgressCallback,
+    outputPath?: string
   ): Promise<CopyTreeResult> {
     const host = this.resolveHostForPath(rootPath);
     if (!host) throw new Error("No workspace host for path");
@@ -45,6 +51,7 @@ export class WorkspaceCopyTreeClient {
           operationId,
           rootPath,
           options,
+          outputPath,
         },
         120000
       );
