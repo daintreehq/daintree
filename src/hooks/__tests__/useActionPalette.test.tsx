@@ -324,12 +324,13 @@ describe("useActionPalette", () => {
     expect(dispatchMock).toHaveBeenCalledWith("a.action", {}, { source: "user" });
   });
 
-  // The palette owns a generic `{ ok: false }` failure toast, but plugin
-  // actions self-notify (via usePluginActions) only on EXECUTION_ERROR. These
-  // lock in the precise suppression so plugin EXECUTION_ERRORs don't
-  // double-toast while every other failure still surfaces.
+  // The palette owns a generic `{ ok: false }` failure toast, but two kinds of
+  // action self-notify and only on EXECUTION_ERROR: plugin actions (via
+  // usePluginActions) and built-ins flagged `selfNotifiesOnExecutionError`.
+  // These lock in the precise suppression so those don't double-toast while
+  // every other failure still surfaces.
   async function runFailingPaletteAction(
-    entry: ReturnType<typeof makeEntry> & { pluginId?: string },
+    entry: ReturnType<typeof makeEntry> & { pluginId?: string; paletteRedirectTo?: string },
     query: string,
     error: { code: string; message: string }
   ): Promise<void> {
@@ -397,15 +398,17 @@ describe("useActionPalette", () => {
   });
 
   it("checks toast ownership against the redirect target, not the picked row", async () => {
-    selfNotifiesMock.mockReturnValue(true);
+    // Only the sibling owns its toast. Keying the mock by id proves the
+    // suppression follows the action that actually ran — a hook reading
+    // `item.id` would get false here and wrongly toast.
+    selfNotifiesMock.mockImplementation((id: string) => id === "sibling.dialog");
     await runFailingPaletteAction(
       { ...makeEntry("headless.thing", "Headlessthing"), paletteRedirectTo: "sibling.dialog" },
       "headlessthing",
       { code: "EXECUTION_ERROR", message: "boom" }
     );
-    // The sibling is what actually ran and failed, so its ownership decides.
-    expect(selfNotifiesMock).toHaveBeenCalledWith("sibling.dialog");
     expect(dispatchMock).toHaveBeenCalledWith("sibling.dialog", {}, { source: "user" });
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("excludes paletteHidden commands from the palette", async () => {

@@ -9,25 +9,45 @@ import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 
+/**
+ * Never throws. Callers rethrow the original failure immediately after this
+ * returns, and they advertise `selfNotifiesOnExecutionError` so the palette
+ * drops its own generic toast. If this helper threw, it would both mask the
+ * real error and leave the user with no toast at all — the suppression would
+ * hide a failure entirely. `formatErrorMessage` evaluates `err instanceof
+ * Error` outside its own guard, so a hostile/exotic rejection value (a Proxy
+ * with a throwing trap) can throw here.
+ */
 function notifyWorktreeResourceError(err: unknown, title: string, fallbackMessage: string): void {
-  const message = formatErrorMessage(err, fallbackMessage) || fallbackMessage;
-  notify({
-    type: "error",
-    priority: "high",
-    title,
-    message,
-    action: {
-      label: "Copy details",
-      successLabel: "Copied",
-      onClick: async () => {
-        try {
-          await navigator.clipboard.writeText(message);
-        } catch {
-          // clipboard write is non-critical
-        }
+  try {
+    const message = formatErrorMessage(err, fallbackMessage) || fallbackMessage;
+    notify({
+      type: "error",
+      priority: "high",
+      title,
+      message,
+      action: {
+        label: "Copy details",
+        successLabel: "Copied",
+        onClick: async () => {
+          try {
+            await navigator.clipboard.writeText(message);
+          } catch {
+            // clipboard write is non-critical
+          }
+        },
       },
-    },
-  });
+    });
+  } catch {
+    // Last resort: a bare toast still beats a silently swallowed failure.
+    try {
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+      notify({ type: "error", priority: "high", title, message: fallbackMessage });
+    } catch {
+      // The notification layer itself is broken; the rethrow below is all
+      // that's left to carry the failure.
+    }
+  }
 }
 
 const worktreeResourceStatusSchema = z.object({
