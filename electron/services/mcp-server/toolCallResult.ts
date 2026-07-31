@@ -48,14 +48,53 @@ function utf8BoundaryEnd(buffer: Buffer, maxBytes: number): number {
 }
 
 /**
+ * Re-derive the structured half from the text half.
+ *
+ * Measuring only the text would leave `structuredContent` unbounded, because
+ * the two are serialized by different code: the text goes through the replacer,
+ * which collapses every *repeated* reference — not just genuine cycles — to
+ * "[Circular]", while the transport `JSON.stringify`s the raw object and
+ * expands each alias in full. A result holding 1,000 references to one 10 KB
+ * object serializes to ~23 KB of text (under the cap, so the structured half is
+ * kept) and then ships ~10 MB over the wire. Parsing the already-bounded text
+ * back keeps the two halves byte-consistent — strengthening the #10676 contract
+ * from "same data" to "same bytes" — and bounds them both. It also removes the
+ * transport's only unserializable inputs: a truly cyclic or BigInt-bearing
+ * result would make the transport's own `JSON.stringify` throw.
+ *
+ * Returns undefined when the text is not a JSON object — the "OK" body and the
+ * serializer's string-coercion fallbacks have no structured form to offer.
+ */
+function structuredFromText(
+  text: string,
+  candidate: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined {
+  if (!candidate) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Not JSON — fall through and omit the structured half.
+  }
+  return undefined;
+}
+
+/**
  * Apply the response budget to an already-serialized text body.
  *
  * Under the cap the text passes through untouched and `structuredContent` (when
  * the caller supplied one) rides along, preserving the #10676 contract that a
  * client can parse either half and get the same data. Over the cap the text is
- * truncated behind a notice and `structuredContent` is dropped — keeping it
- * would ship the very payload the cap exists to bound, and a truncated stand-in
- * could violate the tool's declared output schema.
+ * truncated behind a notice and `structuredContent` is dropped.
+ *
+ * Dropping it is a deliberate protocol trade-off: MCP says the field should be
+ * present whenever the tool declares an `outputSchema`, but the only ways to
+ * honour that here are to ship the multi-megabyte payload the cap exists to
+ * bound — which the client would reject wholesale — or to substitute a
+ * truncated object that violates the very schema it claims to satisfy. Omitting
+ * it and saying so in the notice is the least-bad option.
  *
  * Truncation never sets `isError`: per MCP that flag means the tool actually
  * failed, and a capped result is a successful call with a shortened body. The
@@ -69,9 +108,10 @@ export function buildToolCallTextResult(
   const originalBytes = Buffer.byteLength(text, "utf8");
 
   if (originalBytes <= TOOL_RESULT_TEXT_MAX_BYTES) {
+    const structured = structuredFromText(text, structuredContent);
     return {
       content: [{ type: "text", text }],
-      ...(structuredContent ? { structuredContent } : {}),
+      ...(structured ? { structuredContent: structured } : {}),
       ...(isError ? { isError } : {}),
       _meta: { [MAX_RESULT_SIZE_CHARS_KEY]: TOOL_RESULT_TEXT_MAX_BYTES },
     };

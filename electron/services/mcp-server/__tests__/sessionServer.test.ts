@@ -2778,7 +2778,60 @@ describe("structuredContent for terminal query actions (#10676)", () => {
       );
       const result = await callTool(server, { name: "terminal.list", arguments: {} });
 
-      expect((result as { isError?: boolean }).isError).toBeUndefined();
+      expect((result as { isError?: boolean }).isError).not.toBe(true);
+    });
+
+    it("caps an error envelope whose renderer-supplied details is oversized", async () => {
+      // `details` crosses from the renderer unbounded, so failures reach the
+      // same oversized-response bug the success path just closed.
+      const server = createSessionServer(
+        "sc-oversized-error",
+        fakeDeps({
+          sessionStore: fakeSessionStore("external"),
+          getFullToolSurface: vi.fn(() => true),
+          requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list")]),
+          dispatchAction: vi.fn().mockResolvedValue({
+            result: {
+              ok: false,
+              error: {
+                code: "EXECUTION_ERROR",
+                message: "boom",
+                details: { trace: "x".repeat(TOOL_RESULT_TEXT_MAX_BYTES * 2) },
+              },
+            },
+          }),
+        })
+      );
+      const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+      expect((result as { isError?: boolean }).isError).toBe(true);
+      expect(Buffer.byteLength(textOf(result), "utf8")).toBeLessThanOrEqual(
+        TOOL_RESULT_TEXT_MAX_BYTES
+      );
+      expect(textOf(result).startsWith("[Tool result truncated:")).toBe(true);
+    });
+
+    it("keeps the batched-wait short-circuit intact below the cap", async () => {
+      // The only converted call site with no other result-path coverage.
+      const payload = { results: [{ terminalId: "t-1", idle: true }], timedOut: false };
+      const server = createSessionServer(
+        "sc-batch-wait",
+        fakeDeps({
+          sessionStore: fakeSessionStore("external"),
+          getFullToolSurface: vi.fn(() => true),
+          requestManifest: vi
+            .fn()
+            .mockResolvedValue([makeManifestEntry("terminal.waitUntilIdleBatch")]),
+          handleWaitUntilIdleBatch: vi.fn().mockResolvedValue(payload),
+        })
+      );
+      const result = await callTool(server, {
+        name: "terminal.waitUntilIdleBatch",
+        arguments: { terminalIds: ["t-1"] },
+      });
+
+      expect(JSON.parse(textOf(result))).toEqual(payload);
+      expect(structuredOf(result)).toEqual(payload);
     });
 
     it("caps a main-process short-circuit that attaches structuredContent unconditionally", async () => {
