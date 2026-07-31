@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { AgentState } from "@shared/types/agent";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { deriveTerminalChrome, type TerminalChromeInput } from "@/utils/terminalChrome";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { escapeShellArgOptional } from "@shared/utils/shellEscape.js";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol.js";
 import { formatAtFileToken } from "./hybridInputParsing";
@@ -18,10 +19,11 @@ export const IMAGE_EXTENSIONS = /\.(png|jpe?g|bmp|tiff?|avif|heic)$/i;
  * owns the precedence rules (`detectedAgentId` first, `launchAgentId` only
  * while no explicit exit has been observed).
  */
-export type TerminalFileTransferIdentity = Pick<
-  TerminalChromeInput,
-  "launchAgentId" | "detectedAgentId" | "agentState"
->;
+export interface TerminalFileTransferIdentity {
+  launchAgentId?: string;
+  detectedAgentId?: string;
+  agentState?: AgentState;
+}
 
 /**
  * Checks whether a ClipboardEvent contains an image MIME type item.
@@ -81,34 +83,38 @@ export function useTerminalFileTransfer(
   }: UseTerminalFileTransferOptions
 ): boolean {
   const dragDepthRef = useRef(0);
+  // Physical presence of a file drag, independent of whether we would accept a
+  // drop. Masking happens on the way out, so unlocking mid-drag restores the
+  // affordance without waiting for the pointer to leave and re-enter.
   const [isDragOverFiles, setIsDragOverFiles] = useState(false);
 
   // Runtime identity and lock state are read at gesture time, not captured in
   // the listener closure: a detected-agent flip must change the next drop's
-  // format without tearing down and re-registering five DOM listeners, and the
+  // format without tearing down and re-registering the DOM listeners, and the
   // image-paste path has to re-read both across its `await saveImage()`.
+  //
+  // Layout phase, not passive: a promise continuation or a native drag event
+  // can run after a commit but before passive effects flush, and would then
+  // read a lock or identity the UI has already moved on from.
   const identityRef = useRef<TerminalFileTransferIdentity>({
     launchAgentId,
     detectedAgentId,
     agentState,
   });
   const isInputLockedRef = useRef(isInputLocked);
+  const isMountedRef = useRef(true);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     identityRef.current = { launchAgentId, detectedAgentId, agentState };
-  }, [launchAgentId, detectedAgentId, agentState]);
-
-  useEffect(() => {
     isInputLockedRef.current = isInputLocked;
-  }, [isInputLocked]);
+  });
 
-  // Locking mid-drag strands the hover state on: the drop that would clear it
-  // is now a no-op, so clear it here instead.
-  useEffect(() => {
-    if (!isInputLocked) return;
-    dragDepthRef.current = 0;
-    setIsDragOverFiles(false);
-  }, [isInputLocked]);
+  useLayoutEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -116,21 +122,25 @@ export function useTerminalFileTransfer(
 
     let cancelled = false;
 
-    const formatPath = (filePath: string): string =>
-      deriveTerminalChrome(identityRef.current).isAgent
-        ? formatAtFileToken(filePath)
-        : escapeShellArgOptional(filePath);
+    const isAgentTerminal = (): boolean => deriveTerminalChrome(identityRef.current).isAgent;
+
+    const formatPath = (filePath: string, isAgent: boolean): string =>
+      isAgent ? formatAtFileToken(filePath) : escapeShellArgOptional(filePath);
 
     /**
      * Writes one already-formatted batch as a single insertion, wrapping it in
      * bracketed paste when the foreground program has asked for it.
+     *
+     * The renderer instance is created asynchronously, so `get()` can return
+     * null while a live PTY is already attached. "Unknown" is not evidence of
+     * either mode, so fall back on identity: an agent almost certainly enabled
+     * bracketed paste and must not be fed raw `@` keystrokes, whereas a shell
+     * that never enabled it would render the delimiters as literal input.
      */
-    const writeToTerminal = (text: string) => {
+    const writeToTerminal = (text: string, isAgent: boolean) => {
       const managed = terminalInstanceService.get(terminalId);
-      const payload =
-        !managed || managed.terminal.modes.bracketedPasteMode
-          ? formatWithBracketedPaste(text)
-          : text;
+      const useBracketedPaste = managed ? managed.terminal.modes.bracketedPasteMode : isAgent;
+      const payload = useBracketedPaste ? formatWithBracketedPaste(text) : text;
 
       terminalClient.write(terminalId, payload);
       terminalInstanceService.notifyUserInput(terminalId);
@@ -150,8 +160,10 @@ export function useTerminalFileTransfer(
         const { filePath } = await window.electron.clipboard.saveImage();
         // Re-check after the await: the pane may have unmounted or locked, and
         // the running agent may have changed, while the image was being saved.
-        if (cancelled || isInputLockedRef.current) return;
-        writeToTerminal(`${formatPath(filePath)} `);
+        if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
+        if (!filePath) return;
+        const isAgent = isAgentTerminal();
+        writeToTerminal(`${formatPath(filePath, isAgent)} `, isAgent);
       } catch {
         // Empty clipboard, IPC failure during window close, etc. — nothing to do.
       }
@@ -161,7 +173,6 @@ export function useTerminalFileTransfer(
       if (!e.dataTransfer?.types.includes("Files")) return;
       e.preventDefault();
       e.stopPropagation();
-      if (isInputLockedRef.current) return;
       dragDepthRef.current++;
       if (dragDepthRef.current === 1) setIsDragOverFiles(true);
     };
@@ -191,17 +202,18 @@ export function useTerminalFileTransfer(
       if (isInputLockedRef.current) return;
       if (!e.dataTransfer?.files.length) return;
 
+      const isAgent = isAgentTerminal();
       const formatted: string[] = [];
       for (const file of Array.from(e.dataTransfer.files)) {
         const filePath = window.electron.webUtils.getPathForFile(file);
-        if (filePath) formatted.push(formatPath(filePath));
+        if (filePath) formatted.push(formatPath(filePath, isAgent));
       }
 
       if (formatted.length === 0) return;
 
       // Trailing space terminates the last token and leaves the caret ready for
       // the next argument or prompt word, matching the hybrid input's drop.
-      writeToTerminal(`${formatted.join(" ")} `);
+      writeToTerminal(`${formatted.join(" ")} `, isAgent);
     };
 
     // Use capture phase for paste so we intercept before xterm's own handler
@@ -221,5 +233,5 @@ export function useTerminalFileTransfer(
     };
   }, [containerRef, terminalId, onInput]);
 
-  return isDragOverFiles;
+  return isDragOverFiles && !isInputLocked;
 }

@@ -108,26 +108,15 @@ describe("useTerminalFileTransfer hook", () => {
     (window as unknown as Record<string, unknown>).electron = originalElectron;
   });
 
-  interface HookProps {
-    isInputLocked?: boolean;
-    onInput?: (data: string) => void;
-    launchAgentId?: string;
-    detectedAgentId?: string;
-    agentState?: string;
-  }
+  // Derived from the hook's own options type, so a tightened contract surfaces
+  // here as a type error instead of being papered over by a cast.
+  type HookProps = Omit<Parameters<typeof useTerminalFileTransfer>[1], "terminalId">;
 
   function renderFileTransferHook(options: HookProps = {}) {
     return renderHook(
       (props: HookProps) => {
         const ref = useRef<HTMLDivElement>(container);
-        return useTerminalFileTransfer(ref, {
-          terminalId: "term-1",
-          isInputLocked: props.isInputLocked,
-          onInput: props.onInput,
-          launchAgentId: props.launchAgentId,
-          detectedAgentId: props.detectedAgentId,
-          agentState: props.agentState as never,
-        });
+        return useTerminalFileTransfer(ref, { terminalId: "term-1", ...props });
       },
       { initialProps: options }
     );
@@ -307,6 +296,34 @@ describe("useTerminalFileTransfer hook", () => {
     });
 
     expect(terminalClient.write).not.toHaveBeenCalled();
+    expect(terminalInstanceService.notifyUserInput).not.toHaveBeenCalled();
+  });
+
+  it("re-reads the agent identity across the save, not the one at paste time", async () => {
+    let releaseSave: (value: { filePath: string }) => void = () => {};
+    (window.electron.clipboard.saveImage as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise<{ filePath: string }>((resolve) => {
+        releaseSave = resolve;
+      })
+    );
+
+    // Pasted while a shell owned the terminal…
+    const { rerender } = renderFileTransferHook({});
+
+    act(() => {
+      container.dispatchEvent(makePasteEvent(true));
+    });
+
+    // …but an agent is detected before the image finishes saving.
+    rerender({ detectedAgentId: "claude" });
+
+    await act(async () => {
+      releaseSave({ filePath: "/tmp/shot.png" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(lastWrittenPayload()).toBe(`${formatAtFileToken("/tmp/shot.png")} `);
   });
 
   it("unmounting while the image is still saving suppresses the write", async () => {
@@ -332,6 +349,7 @@ describe("useTerminalFileTransfer hook", () => {
     });
 
     expect(terminalClient.write).not.toHaveBeenCalled();
+    expect(terminalInstanceService.notifyUserInput).not.toHaveBeenCalled();
   });
 
   // --- File drop tests ---
@@ -434,11 +452,17 @@ describe("useTerminalFileTransfer hook", () => {
     renderFileTransferHook({ detectedAgentId: "claude" });
     dropFiles([fileAt("my notes.md", "/Users/test/my notes.md")]);
 
-    const payload = lastWrittenPayload();
-    expect(payload).toBe(`${formatAtFileToken("/Users/test/my notes.md")} `);
-    // The quoting must survive into the payload — an unquoted space would split
-    // the reference into two arguments for the agent.
-    expect(payload).toContain('"');
+    // Pinned to the literal wire format an agent CLI has to parse, rather than
+    // re-deriving it from the same formatter the hook calls — an unquoted space
+    // would split the reference into two arguments.
+    expect(lastWrittenPayload()).toBe('@"/Users/test/my notes.md" ');
+  });
+
+  it("writes the plain @ wire format for a path needing no quoting", () => {
+    renderFileTransferHook({ detectedAgentId: "claude" });
+    dropFiles([fileAt("App.tsx", "/Users/test/src/App.tsx")]);
+
+    expect(lastWrittenPayload()).toBe("@/Users/test/src/App.tsx ");
   });
 
   it("switches format when the detected agent changes, without re-registering listeners", () => {
@@ -489,14 +513,45 @@ describe("useTerminalFileTransfer hook", () => {
     expect(payload).not.toContain(BRACKETED_PASTE_START);
   });
 
-  it("falls back to wrapping when no managed terminal instance exists", () => {
+  // The renderer instance is created asynchronously, so a live PTY can exist
+  // while `get()` still returns null. "Unknown" must not be read as "on".
+  it("falls back to wrapping for an agent when no managed instance exists", () => {
+    instanceState.hasManagedInstance = false;
+    renderFileTransferHook({ detectedAgentId: "claude" });
+    dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+
+    expect(lastWrittenPayload()).toBe(
+      formatWithBracketedPaste(`${formatAtFileToken("/Users/test/a.ts")} `)
+    );
+  });
+
+  it("falls back to raw text for a shell when no managed instance exists", () => {
     instanceState.hasManagedInstance = false;
     renderFileTransferHook();
     dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
 
-    expect(lastWrittenPayload()).toBe(
-      formatWithBracketedPaste(`${escapeShellArgOptional("/Users/test/a.ts")} `)
-    );
+    const payload = lastWrittenPayload();
+    expect(payload).toBe(`${escapeShellArgOptional("/Users/test/a.ts")} `);
+    // A shell that never enabled DECSET 2004 would echo these as literal input.
+    expect(payload).not.toContain(BRACKETED_PASTE_START);
+  });
+
+  it("strips ESC from a path so it cannot break out of the paste wrapper", () => {
+    instanceState.bracketedPasteMode = true;
+    renderFileTransferHook({ detectedAgentId: "claude" });
+
+    // A POSIX filename may legally contain ESC. Left verbatim, an embedded
+    // terminator would end the paste early and submit the remainder.
+    dropFiles([fileAt("evil", `/tmp/${BRACKETED_PASTE_END}evil.ts`)]);
+
+    const payload = lastWrittenPayload();
+    expect(payload.startsWith(BRACKETED_PASTE_START)).toBe(true);
+    expect(payload.endsWith(BRACKETED_PASTE_END)).toBe(true);
+    // Exactly one terminator: the real one, at the very end.
+    expect(payload.split(BRACKETED_PASTE_END).length - 1).toBe(1);
+    // Nothing between the delimiters can start an escape sequence of its own.
+    const body = payload.slice(BRACKETED_PASTE_START.length, -BRACKETED_PASTE_END.length);
+    expect(body).not.toContain(String.fromCharCode(27));
   });
 
   it("hands onInput the logical text, never the bracket markers", () => {
@@ -646,6 +701,22 @@ describe("useTerminalFileTransfer hook", () => {
     });
 
     expect(result.current).toBe(false);
+  });
+
+  it("restores the affordance when input unlocks mid-drag", () => {
+    const { result, rerender } = renderFileTransferHook({ isInputLocked: true });
+
+    // The pointer entered while locked, so no further dragenter will arrive.
+    // Depth is tracked physically, so unlocking alone must restore feedback —
+    // otherwise the drop is silently accepted with nothing on screen.
+    dispatchDrag("dragenter");
+    expect(result.current).toBe(false);
+
+    act(() => {
+      rerender({ isInputLocked: false });
+    });
+
+    expect(result.current).toBe(true);
   });
 
   // --- Cleanup test ---

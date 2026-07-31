@@ -78,14 +78,16 @@ const mocks = vi.hoisted(() => {
     notifyEnterPressed: vi.fn(),
   };
 
+  // Returns the drag-over flag the adapter renders drop feedback from.
+  const useTerminalFileTransfer = vi.fn(() => false);
+
   return {
     appearance,
     managed,
     platform,
     terminalInstanceService,
     writeTerminalInputOrFleet: vi.fn(),
-    // Returns the drag-over flag the adapter renders drop feedback from.
-    useTerminalFileTransfer: vi.fn(() => false),
+    useTerminalFileTransfer,
     getKeyHandler: () => keyHandler,
     getExitHandler: () => exitHandler,
     resetRuntime: () => {
@@ -98,6 +100,9 @@ const mocks = vi.hoisted(() => {
       // vi.clearAllMocks() drops calls but keeps implementations, so a test that
       // switches to the alt buffer would otherwise leak into the next one.
       terminalInstanceService.getAltBufferState.mockReturnValue(false);
+      // mockReset also drops queued mockReturnValueOnce results, so a drag-state
+      // override can never survive into the next test.
+      useTerminalFileTransfer.mockReset().mockReturnValue(false);
       Object.assign(appearance, defaultAppearance, { effectiveTheme: {} });
     },
   };

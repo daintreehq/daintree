@@ -84,6 +84,7 @@ export function XtermAdapter({
   // repairs the mis-sized grid out-of-band via `repairFontGrid()` (wired once to
   // `onTerminalFontArrivedLate` in its constructor) (#9809).
   const containerRef = useRef<HTMLDivElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const prevDimensionsRef = useRef<{ cols: number; rows: number } | null>(null);
   const exitUnsubRef = useRef<(() => void) | null>(null);
   const rafIdRef = useRef<number | null>(null);
@@ -155,10 +156,14 @@ export function XtermAdapter({
     terminalInstanceService.getAltBufferState(terminalId)
   );
 
-  // Attach image paste and file drag-and-drop handlers to the xterm container.
-  // The agent identity decides whether a dropped path arrives as an `@` token
-  // or a shell-escaped path (#11574).
-  const isDragOverFiles = useTerminalFileTransfer(containerRef, {
+  // Attach image paste and file drag-and-drop handlers to the padded wrapper
+  // rather than the xterm host: in normal-buffer mode the wrapper adds a 12px
+  // gutter that reads as part of the terminal, so listening on the host alone
+  // would leave a visible border that silently rejects drops. Paste still
+  // intercepts correctly — the wrapper is an ancestor, and the listener is
+  // registered in the capture phase. The agent identity decides whether a
+  // dropped path arrives as an `@` token or a shell-escaped path (#11574).
+  const isDragOverFiles = useTerminalFileTransfer(wrapperRef, {
     terminalId,
     isInputLocked,
     onInput: stableOnInput,
@@ -807,6 +812,7 @@ export function XtermAdapter({
 
   return (
     <div
+      ref={wrapperRef}
       className={cn(
         "w-full h-full text-text-primary overflow-hidden",
         // Full-screen TUIs run on the alternate buffer, which has no scrollback —
