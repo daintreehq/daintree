@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { getWorktreePathIndex } from "@/store/storeAccessors";
+import { paginationShape, foldPagination, type PaginationOptions } from "./schemas";
 
 /**
  * Shared location-argument vocabulary for the MCP tool surface (#11543).
@@ -33,7 +34,7 @@ import { getWorktreePathIndex } from "@/store/storeAccessors";
  */
 
 /** Legacy spellings that a tool may keep accepting for `worktreePath`. */
-export type LegacyWorktreePathAlias = "cwd" | "rootPath";
+export type LegacyWorktreePathAlias = "cwd" | "rootPath" | "path";
 
 /** Legacy spellings that a tool may keep accepting for `projectPath`. */
 export type LegacyProjectPathAlias = "projectPath";
@@ -90,6 +91,12 @@ type WorktreeLocationOptions = {
    * required location argument, so the palette still routes them correctly.
    */
   requireSelector?: boolean;
+  /**
+   * Merge the canonical pagination fields in as well. Needed because a
+   * transformed schema cannot be `.extend()`ed, so a tool that both paginates
+   * and takes a location must build one flat shape instead of chaining builders.
+   */
+  pagination?: PaginationOptions;
 };
 
 /**
@@ -105,13 +112,19 @@ function collapseWorktreePath(
   value: Record<string, unknown>,
   ctx: z.RefinementCtx
 ): Record<string, unknown> | typeof z.NEVER {
-  const { cwd, rootPath, ...rest } = value as {
+  const {
+    cwd,
+    rootPath,
+    path: legacyPath,
+    ...rest
+  } = value as {
     cwd?: string;
     rootPath?: string;
+    path?: string;
     worktreePath?: string;
   } & Record<string, unknown>;
 
-  const supplied = [rest.worktreePath, cwd, rootPath].filter(
+  const supplied = [rest.worktreePath, cwd, rootPath, legacyPath].filter(
     (candidate): candidate is string => candidate !== undefined
   );
 
@@ -119,7 +132,7 @@ function collapseWorktreePath(
     ctx.addIssue({
       code: "custom",
       message:
-        "`worktreePath`, `cwd`, and `rootPath` are aliases for the same value — supply only one, or identical values.",
+        "`worktreePath`, `cwd`, `rootPath`, and `path` are aliases for the same value — supply only one, or identical values.",
     });
     return z.NEVER;
   }
@@ -153,7 +166,7 @@ export function withWorktreeLocation<T extends z.ZodRawShape>(
   extra: T,
   options: WorktreeLocationOptions = {}
 ) {
-  const { legacy = [], requireSelector = false } = options;
+  const { legacy = [], requireSelector = false, pagination } = options;
 
   const shape: z.ZodRawShape = {
     worktreeId: worktreeIdField,
@@ -162,13 +175,16 @@ export function withWorktreeLocation<T extends z.ZodRawShape>(
   for (const alias of legacy) {
     shape[alias] = z.string().optional().describe(legacyAliasDescription("worktreePath"));
   }
+  if (pagination) Object.assign(shape, paginationShape(pagination));
 
   return z
     .object({ ...shape, ...extra })
     .transform((value, ctx) => {
       const collapsed = collapseWorktreePath(value as Record<string, unknown>, ctx);
       if (collapsed === z.NEVER) return z.NEVER;
-      const located = collapsed as Record<string, unknown> & WorktreeLocationArgs;
+      const paged = pagination ? foldPagination(collapsed, ctx) : collapsed;
+      if (paged === z.NEVER) return z.NEVER;
+      const located = paged as Record<string, unknown> & WorktreeLocationArgs;
       if (requireSelector && !located.worktreeId && !located.worktreePath) {
         ctx.addIssue({
           code: "custom",

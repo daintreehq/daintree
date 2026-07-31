@@ -129,15 +129,20 @@ export type ActionItemError = z.infer<typeof ActionItemErrorSchema>;
  */
 export type LegacyPaginationAlias = "skip";
 
-export function withPagination<T extends z.ZodRawShape>(
-  extra: T,
-  options: {
-    legacy?: readonly LegacyPaginationAlias[];
-    cursor?: boolean;
-    offset?: boolean;
-    maxLimit?: number;
-  } = {}
-) {
+export interface PaginationOptions {
+  legacy?: readonly LegacyPaginationAlias[];
+  cursor?: boolean;
+  offset?: boolean;
+  maxLimit?: number;
+}
+
+/**
+ * The pagination fields on their own, so they can be merged into a larger object
+ * BEFORE it is transformed. A transformed schema is a `ZodPipe` and can no
+ * longer be `.extend()`ed, so a tool that paginates *and* takes a location has
+ * to assemble one flat shape rather than chaining two builders.
+ */
+export function paginationShape(options: PaginationOptions = {}): z.ZodRawShape {
   const { legacy = [], cursor = false, offset = true, maxLimit } = options;
 
   const limitField = maxLimit
@@ -169,24 +174,41 @@ export function withPagination<T extends z.ZodRawShape>(
       .optional()
       .describe("Legacy alias for `offset`; prefer `offset`.");
   }
+  return shape;
+}
 
-  return z.object({ ...shape, ...extra }).transform((value, ctx) => {
-    const { skip, ...rest } = value as { skip?: number; offset?: number } & Record<string, unknown>;
-    const supplied = [rest.offset, skip].filter(
-      (candidate): candidate is number => candidate !== undefined
-    );
-    if (new Set(supplied).size > 1) {
-      ctx.addIssue({
-        code: "custom",
-        message: "`offset` and `skip` are aliases for the same value — supply only one.",
-      });
-      return z.NEVER;
-    }
-    const resolved = supplied[0];
-    return (resolved === undefined ? rest : { ...rest, offset: resolved }) as Omit<
-      z.core.output<z.ZodObject<T>>,
-      "offset" | "skip"
-    > & { limit?: number; offset?: number; cursor?: string };
+/** Collapse the legacy `skip` spelling into `offset`. See {@link paginationShape}. */
+export function foldPagination(
+  value: Record<string, unknown>,
+  ctx: z.RefinementCtx
+): Record<string, unknown> | typeof z.NEVER {
+  const { skip, ...rest } = value as { skip?: number; offset?: number } & Record<string, unknown>;
+  const supplied = [rest.offset, skip].filter(
+    (candidate): candidate is number => candidate !== undefined
+  );
+  if (new Set(supplied).size > 1) {
+    ctx.addIssue({
+      code: "custom",
+      message: "`offset` and `skip` are aliases for the same value — supply only one.",
+    });
+    return z.NEVER;
+  }
+  const resolved = supplied[0];
+  return resolved === undefined ? rest : { ...rest, offset: resolved };
+}
+
+export function withPagination<T extends z.ZodRawShape>(
+  extra: T,
+  options: PaginationOptions = {}
+) {
+  return z.object({ ...paginationShape(options), ...extra }).transform((value, ctx) => {
+    const folded = foldPagination(value as Record<string, unknown>, ctx);
+    if (folded === z.NEVER) return z.NEVER;
+    return folded as Omit<z.core.output<z.ZodObject<T>>, "offset" | "skip"> & {
+      limit?: number;
+      offset?: number;
+      cursor?: string;
+    };
   });
 }
 

@@ -231,18 +231,27 @@ describe("withPagination", () => {
 
   it("composes with a worktree location without losing either half", () => {
     const schema = withWorktreeLocation(
-      { ...withPagination({}, { legacy: ["skip"] }).def.in.shape },
-      { legacy: ["cwd"] }
+      { search: z.string().optional() },
+      { legacy: ["cwd"], pagination: { legacy: ["skip"] } }
     );
-    const props = properties(schema);
-    expect(Object.keys(props).sort()).toEqual([
+
+    expect(Object.keys(properties(schema)).sort()).toEqual([
       "cwd",
       "limit",
       "offset",
+      "search",
       "skip",
       "worktreeId",
       "worktreePath",
     ]);
+    // Both folds run: the path alias and the pagination alias collapse together.
+    expect(schema.parse({ cwd: "/repo", skip: 10, limit: 5 })).toEqual({
+      worktreePath: "/repo",
+      offset: 10,
+      limit: 5,
+    });
+    expect(schema.safeParse({ skip: 1, offset: 2 }).success).toBe(false);
+    expect(schema.safeParse({ cwd: "/a", worktreePath: "/b" }).success).toBe(false);
   });
 });
 

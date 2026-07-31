@@ -3,9 +3,16 @@ import type { ActionContext } from "@shared/types/actions";
 import {
   ConflictedFileEntrySchema,
   GitStatusSchema,
+  PaginatedResultSchema,
   PulseRangeDaysSchema,
   StagingFileEntrySchema,
 } from "./schemas";
+import {
+  withWorktreeLocation,
+  requireWorktreeId,
+  requireWorktreePath,
+  type WorktreeLocationArgs,
+} from "./locationArgs";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { paginate, truncateUtf8 } from "@shared/utils/boundedOutput";
@@ -32,20 +39,17 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "git.getProjectPulse",
     title: "Get Project Pulse",
     description:
-      "Get a worktree's git activity pulse — historical commit heatmap, range counts, streak, and optional uncommitted/delta-to-main summary. Args (all optional): `worktreeId` (from `worktree.list`, defaults to active); `rangeDays` (60|120|180); `includeDelta`; `includeRecentCommits`; `forceRefresh`. Returns worktree/branch info, heatmap, commitsInRange, activeDays, projectAgeDays, recentCommits, and optional uncommitted/deltaToMain. Errors when no worktree is active. Do NOT use this for current staged/unstaged state — use `git.getStagingStatus`.",
+      "Get a worktree's git activity pulse — historical commit heatmap, range counts, streak, and optional uncommitted/delta-to-main summary. Args (all optional): `worktreeId` or `worktreePath` (from `worktree.list`, defaults to active); `rangeDays` (60|120|180); `includeDelta`; `includeRecentCommits`; `forceRefresh`. Returns worktree/branch info, heatmap, commitsInRange, activeDays, projectAgeDays, recentCommits, and optional uncommitted/deltaToMain. Errors when no worktree is active. Do NOT use this for current staged/unstaged state — use `git.getStagingStatus`.",
     category: "git",
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z
-      .object({
-        worktreeId: z.string().optional().describe("Worktree ID. Defaults to the active worktree."),
-        rangeDays: PulseRangeDaysSchema,
-        includeDelta: z.boolean().optional(),
-        includeRecentCommits: z.boolean().optional(),
-        forceRefresh: z.boolean().optional(),
-      })
-      .optional(),
+    argsSchema: withWorktreeLocation({
+      rangeDays: PulseRangeDaysSchema,
+      includeDelta: z.boolean().optional(),
+      includeRecentCommits: z.boolean().optional(),
+      forceRefresh: z.boolean().optional(),
+    }).optional(),
     resultSchema: z.object({
       worktreeId: z.string(),
       worktreePath: z.string(),
@@ -97,15 +101,13 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     }),
     mcpOutputSchema: true,
     run: async (args: unknown, ctx: ActionContext) => {
-      const merged = (args ?? {}) as {
-        worktreeId?: string;
+      const merged = (args ?? {}) as WorktreeLocationArgs & {
         rangeDays?: 60 | 120 | 180;
         includeDelta?: boolean;
         includeRecentCommits?: boolean;
         forceRefresh?: boolean;
       };
-      const resolvedWorktreeId = merged.worktreeId ?? ctx.activeWorktreeId;
-      if (!resolvedWorktreeId) throw new Error("No active worktree");
+      const resolvedWorktreeId = requireWorktreeId(merged, ctx);
       const rangeDays = merged.rangeDays ?? 60;
       const pulse = await window.electron.git.getProjectPulse({
         ...merged,
@@ -171,42 +173,44 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "git.getFileDiff",
     title: "Get File Diff",
     description:
-      "Get a byte-bounded window of the git diff for a single file. Args: `cwd` (optional) — repo working directory, defaults to the active worktree path; `filePath` (required) — repo-relative path; `status` (required) — the file's git status (from a `git.getStagingStatus` entry); `ignoreWhitespace` (optional); `offset` (optional, default 0) — byte offset to read from; `maxBytes` (optional, default 24576, max 1048576) — window size. Returns { content, offset, totalBytes, truncated, nextOffset }. When `truncated` is true, call again with `offset: nextOffset` to read the rest. `content` may be a `BINARY_FILE`, `NO_CHANGES`, or `FILE_TOO_LARGE` marker instead of diff text, in which case `totalBytes` is 0. Errors when `cwd` is omitted and no worktree is active.",
+      "Get a byte-bounded window of the git diff for a single file. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias for `worktreePath`); `filePath` (required) — repo-relative path; `status` (required) — the file's git status (from a `git.getStagingStatus` entry); `ignoreWhitespace` (optional); `offset` (optional, default 0) — byte offset to read from; `maxBytes` (optional, default 24576, max 1048576) — window size. Returns { content, offset, totalBytes, truncated, nextOffset }. When `truncated` is true, call again with `offset: nextOffset` to read the rest. `content` may be a `BINARY_FILE`, `NO_CHANGES`, or `FILE_TOO_LARGE` marker instead of diff text, in which case `totalBytes` is 0. Errors when no worktree is given and none is active.",
     category: "git",
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({
-      cwd: z
-        .string()
-        .optional()
-        .describe("Repository working directory. Defaults to the active worktree path."),
-      filePath: z
-        .string()
-        .describe("Repo-relative file path (from a `git.getStagingStatus` entry)."),
-      status: GitStatusSchema.describe(
-        "The file's git status — the `status` value from a `git.getStagingStatus` entry."
-      ),
-      ignoreWhitespace: z
-        .boolean()
-        .optional()
-        .describe("When true, whitespace-only changes are omitted from the diff."),
-      offset: z
-        .number()
-        .int()
-        .nonnegative()
-        .optional()
-        .describe("Byte offset to start reading from — pass a previous `nextOffset` (default 0)."),
-      maxBytes: z
-        .number()
-        .int()
-        .min(1)
-        .max(GIT_FILE_DIFF_MAX_BYTES)
-        .optional()
-        .describe(
-          `Maximum bytes to return (default ${GIT_FILE_DIFF_DEFAULT_MAX_BYTES}, max ${GIT_FILE_DIFF_MAX_BYTES}).`
+    argsSchema: withWorktreeLocation(
+      {
+        filePath: z
+          .string()
+          .describe("Repo-relative file path (from a `git.getStagingStatus` entry)."),
+        status: GitStatusSchema.describe(
+          "The file's git status — the `status` value from a `git.getStagingStatus` entry."
         ),
-    }),
+        ignoreWhitespace: z
+          .boolean()
+          .optional()
+          .describe("When true, whitespace-only changes are omitted from the diff."),
+        // A BYTE offset into the diff text, not a list position — this action
+        // windows one file's diff rather than paging a collection, so it stays
+        // outside the shared `paginationShape` vocabulary.
+        offset: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe("Byte offset to start reading from — pass a previous `nextOffset` (default 0)."),
+        maxBytes: z
+          .number()
+          .int()
+          .min(1)
+          .max(GIT_FILE_DIFF_MAX_BYTES)
+          .optional()
+          .describe(
+            `Maximum bytes to return (default ${GIT_FILE_DIFF_DEFAULT_MAX_BYTES}, max ${GIT_FILE_DIFF_MAX_BYTES}).`
+          ),
+      },
+      { legacy: ["cwd"] }
+    ),
     examples: [
       {
         args: { filePath: "src/index.css", status: "modified" },
@@ -226,16 +230,15 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     }),
     mcpOutputSchema: true,
     run: async (args: unknown, ctx: ActionContext) => {
-      const { cwd, filePath, status, ignoreWhitespace, offset, maxBytes } = args as {
-        cwd?: string;
-        filePath: string;
-        status: z.infer<typeof GitStatusSchema>;
-        ignoreWhitespace?: boolean;
-        offset?: number;
-        maxBytes?: number;
-      };
-      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-      if (!resolvedCwd) throw new Error("No active worktree");
+      const { filePath, status, ignoreWhitespace, offset, maxBytes, ...location } =
+        args as WorktreeLocationArgs & {
+          filePath: string;
+          status: z.infer<typeof GitStatusSchema>;
+          ignoreWhitespace?: boolean;
+          offset?: number;
+          maxBytes?: number;
+        };
+      const resolvedCwd = requireWorktreePath(location, ctx);
       // Clamped here as well as in argsSchema: dispatch paths that bypass
       // schema validation must not be able to request an unbounded window.
       const result = await window.electron.git.getFileDiff(
@@ -262,66 +265,56 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "git.listCommits",
     title: "List Commits",
     description:
-      "List commits for a repository with optional search and pagination. Args (all optional): `cwd` (repo dir, defaults to the active worktree path); `search` (message/author filter); `branch`; `skip`; `limit` (default 30, max 100). Returns { items, hasMore, total, skip, limit, nextSkip } — each item has hash, shortHash, message, body, bodyTruncated, author {name,email}, date. Commit bodies are cut at 1KB and flagged with `bodyTruncated: true`. When `hasMore` is true, call again with `skip: nextSkip`. Errors when `cwd` is omitted and no worktree is active.",
+      "List commits for a repository with optional search and pagination. Args (all optional): `worktreeId` or `worktreePath` (defaults to the active worktree; `cwd` is accepted as a legacy alias for `worktreePath`); `search` (message/author filter); `branch`; `limit` (default 30, max 100) plus `offset` or `cursor` for paging (`skip` is accepted as a legacy alias for `offset`). Returns { items, hasMore, nextCursor, total } — each item has hash, shortHash, message, body, bodyTruncated, author {name,email}, date. Commit bodies are cut at 1KB and flagged with `bodyTruncated: true`. When `hasMore` is true, call again with `cursor: nextCursor`. Errors when no worktree is given and none is active.",
     category: "git",
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z
-      .object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Repository working directory. Defaults to the active worktree path."),
+    argsSchema: withWorktreeLocation(
+      {
         search: z.string().optional(),
         branch: z.string().optional(),
-        skip: z.number().int().nonnegative().optional(),
-        limit: z
-          .number()
-          .int()
-          .positive()
-          .max(GIT_LIST_COMMITS_LIMIT_MAX)
-          .optional()
-          .describe(
-            `Commits per page (default ${GIT_LIST_COMMITS_LIMIT_DEFAULT}, max ${GIT_LIST_COMMITS_LIMIT_MAX}).`
-          ),
+      },
+      {
+        legacy: ["cwd"],
+        pagination: { legacy: ["skip"], cursor: true, maxLimit: GIT_LIST_COMMITS_LIMIT_MAX },
+      }
+    ).optional(),
+    resultSchema: PaginatedResultSchema(
+      z.object({
+        hash: z.string(),
+        shortHash: z.string(),
+        message: z.string(),
+        body: z.string().optional(),
+        bodyTruncated: z.boolean(),
+        author: z.object({ name: z.string(), email: z.string() }),
+        date: z.string(),
       })
-      .optional(),
-    resultSchema: z.object({
-      items: z.array(
-        z.object({
-          hash: z.string(),
-          shortHash: z.string(),
-          message: z.string(),
-          body: z.string().optional(),
-          bodyTruncated: z.boolean(),
-          author: z.object({ name: z.string(), email: z.string() }),
-          date: z.string(),
-        })
-      ),
-      hasMore: z.boolean(),
-      total: z.number(),
-      skip: z.number(),
-      limit: z.number(),
-      nextSkip: z.number().nullable(),
-    }),
+    ),
     mcpOutputSchema: true,
     run: async (args: unknown, ctx: ActionContext) => {
-      const merged = (args ?? {}) as {
-        cwd?: string;
+      const {
+        offset,
+        cursor,
+        limit: rawLimit,
+        ...merged
+      } = (args ?? {}) as WorktreeLocationArgs & {
         search?: string;
         branch?: string;
-        skip?: number;
+        offset?: number;
+        cursor?: string;
         limit?: number;
       };
-      const resolvedCwd = merged.cwd ?? ctx.activeWorktreePath;
-      if (!resolvedCwd) throw new Error("No active worktree");
-      const skip = Math.max(Math.trunc(merged.skip ?? 0) || 0, 0);
-      const limit = clamp(
-        merged.limit ?? GIT_LIST_COMMITS_LIMIT_DEFAULT,
-        1,
-        GIT_LIST_COMMITS_LIMIT_MAX
-      );
+      const resolvedCwd = requireWorktreePath(merged, ctx);
+      // This source pages by index, so its cursor IS the next offset — an
+      // explicit `offset`/`skip` still wins for callers that page by hand.
+      const cursorOffset = cursor !== undefined ? Number(cursor) : undefined;
+      const start =
+        offset ?? (cursorOffset !== undefined && Number.isFinite(cursorOffset) ? cursorOffset : 0);
+      // Clamped here as well as in argsSchema: dispatch paths that bypass schema
+      // validation must not be able to request an unbounded page.
+      const skip = Math.max(Math.trunc(start) || 0, 0);
+      const limit = clamp(rawLimit ?? GIT_LIST_COMMITS_LIMIT_DEFAULT, 1, GIT_LIST_COMMITS_LIMIT_MAX);
       const result = await window.electron.git.listCommits({
         ...merged,
         cwd: resolvedCwd,
@@ -331,12 +324,12 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
 
       // Bounded at limit + 1, not limit: a hash-prefix search pins its match
       // ahead of a full page of message matches, so cutting to `limit` would
-      // drop the page's last message commit — which `nextSkip` then steps over,
-      // making it unreachable on every page. This keeps paging exact whenever
-      // the pinned commit is absent from the message stream; a pin that also
-      // matches the search text is a pre-existing gap in `listCommits` itself,
-      // which computes `hasMore` after removing the pin and dedupes only on the
-      // first page.
+      // drop the page's last message commit — which the next cursor then steps
+      // over, making it unreachable on every page. This keeps paging exact
+      // whenever the pinned commit is absent from the message stream; a pin that
+      // also matches the search text is a pre-existing gap in `listCommits`
+      // itself, which computes `hasMore` after removing the pin and dedupes only
+      // on the first page.
       const items = (result.items ?? []).slice(0, limit + 1).map((commit) => {
         const body = truncateUtf8(commit.body ?? "", GIT_COMMIT_BODY_MAX_BYTES);
         return {
@@ -357,14 +350,12 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
 
       return {
         items,
-        hasMore: result.hasMore,
+        hasMore: result.hasMore ?? false,
+        // The cursor is the next offset into the message stream, which advances
+        // by exactly `limit` whenever hasMore is set — never by the returned
+        // item count, which the pinned hash match can inflate.
+        nextCursor: result.hasMore ? String(skip + limit) : null,
         total: result.total,
-        skip,
-        limit,
-        // `skip` addresses the message stream, which advances by exactly `limit`
-        // whenever hasMore is set — never by the returned item count, which the
-        // pinned hash match can inflate.
-        nextSkip: result.hasMore ? skip + limit : null,
       };
     },
   }));
@@ -377,18 +368,10 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({
-      cwd: z
-        .string()
-        .optional()
-        .describe("Repository working directory. Defaults to the active worktree path."),
-      filePath: z.string(),
-    }),
+    argsSchema: withWorktreeLocation({ filePath: z.string() }, { legacy: ["cwd"] }),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { cwd, filePath } = args as { cwd?: string; filePath: string };
-      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-      if (!resolvedCwd) throw new Error("No active worktree");
-      await window.electron.git.stageFile(resolvedCwd, filePath);
+      const { filePath, ...location } = args as WorktreeLocationArgs & { filePath: string };
+      await window.electron.git.stageFile(requireWorktreePath(location, ctx), filePath);
     },
   }));
 
@@ -400,18 +383,10 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({
-      cwd: z
-        .string()
-        .optional()
-        .describe("Repository working directory. Defaults to the active worktree path."),
-      filePath: z.string(),
-    }),
+    argsSchema: withWorktreeLocation({ filePath: z.string() }, { legacy: ["cwd"] }),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { cwd, filePath } = args as { cwd?: string; filePath: string };
-      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-      if (!resolvedCwd) throw new Error("No active worktree");
-      await window.electron.git.unstageFile(resolvedCwd, filePath);
+      const { filePath, ...location } = args as WorktreeLocationArgs & { filePath: string };
+      await window.electron.git.unstageFile(requireWorktreePath(location, ctx), filePath);
     },
   }));
 
@@ -423,12 +398,11 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ cwd: z.string().optional() }).optional(),
+    argsSchema: withWorktreeLocation({}, { legacy: ["cwd"] }).optional(),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { cwd } = (args ?? {}) as { cwd?: string };
-      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-      if (!resolvedCwd) throw new Error("No active worktree");
-      await window.electron.git.stageAll(resolvedCwd);
+      await window.electron.git.stageAll(
+        requireWorktreePath(args as WorktreeLocationArgs | undefined, ctx)
+      );
     },
   }));
 
@@ -440,12 +414,11 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ cwd: z.string().optional() }).optional(),
+    argsSchema: withWorktreeLocation({}, { legacy: ["cwd"] }).optional(),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { cwd } = (args ?? {}) as { cwd?: string };
-      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-      if (!resolvedCwd) throw new Error("No active worktree");
-      await window.electron.git.unstageAll(resolvedCwd);
+      await window.electron.git.unstageAll(
+        requireWorktreePath(args as WorktreeLocationArgs | undefined, ctx)
+      );
     },
   }));
 
@@ -463,13 +436,13 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     // must never derive a message — redirect to the Review Hub, which shows the
     // staged files and requires the user to type the message before committing.
     palette: { mode: "redirect", to: "worktree.openReviewHub" },
-    argsSchema: z
-      .object({ cwd: z.string().optional(), message: z.string().min(1).optional() })
-      .optional(),
+    argsSchema: withWorktreeLocation(
+      { message: z.string().min(1).optional() },
+      { legacy: ["cwd"] }
+    ).optional(),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { cwd, message } = (args ?? {}) as { cwd?: string; message?: string };
-      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-      if (!resolvedCwd) throw new Error("No active worktree");
+      const { message, ...location } = (args ?? {}) as WorktreeLocationArgs & { message?: string };
+      const resolvedCwd = requireWorktreePath(location, ctx);
       const trimmed = message?.trim();
       if (!trimmed) throw new Error("Commit message is required");
       return await window.electron.git.commit(resolvedCwd, trimmed);
@@ -485,13 +458,15 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     danger: "confirm",
     scope: "renderer",
     dangerRationale: "Pushes local commits to the remote. Recovery requires a force-push to undo.",
-    argsSchema: z
-      .object({ cwd: z.string().optional(), setUpstream: z.boolean().optional() })
-      .optional(),
+    argsSchema: withWorktreeLocation(
+      { setUpstream: z.boolean().optional() },
+      { legacy: ["cwd"] }
+    ).optional(),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { cwd, setUpstream } = (args ?? {}) as { cwd?: string; setUpstream?: boolean };
-      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-      if (!resolvedCwd) throw new Error("No active worktree");
+      const { setUpstream, ...location } = (args ?? {}) as WorktreeLocationArgs & {
+        setUpstream?: boolean;
+      };
+      const resolvedCwd = requireWorktreePath(location, ctx);
       // Palette/keybinding/user sources reach run() ungated, so enforce the D2
       // push preview here (#8242) — the dialog shows the target branch and the
       // commits that would be pushed before the IPC fires. An agent dispatch
@@ -518,11 +493,9 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     scope: "renderer",
     dangerRationale:
       "Rebases local commits onto remote changes. Local history is rewritten and unrecoverable until pushed.",
-    argsSchema: z.object({ cwd: z.string().optional() }).optional(),
+    argsSchema: withWorktreeLocation({}, { legacy: ["cwd"] }).optional(),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { cwd } = (args ?? {}) as { cwd?: string };
-      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-      if (!resolvedCwd) throw new Error("No active worktree");
+      const resolvedCwd = requireWorktreePath(args as WorktreeLocationArgs | undefined, ctx);
       // Palette, keybinding, and the terminal push-error recovery banner reach
       // run() ungated, so enforce the rebase confirm here (#8242). The ReviewHub
       // CTA calls the IPC directly and is gated by its own in-component dialog,
@@ -548,12 +521,11 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ path: z.string().optional(), cwd: z.string().optional() }).optional(),
+    argsSchema: withWorktreeLocation({}, { legacy: ["path", "cwd"] }).optional(),
     run: async (args: unknown, ctx: ActionContext) => {
-      const merged = (args ?? {}) as { path?: string; cwd?: string };
-      const resolvedPath = merged.path ?? merged.cwd ?? ctx.activeWorktreePath;
-      if (!resolvedPath) throw new Error("No active worktree");
-      await window.electron.git.markSafeDirectory(resolvedPath);
+      await window.electron.git.markSafeDirectory(
+        requireWorktreePath(args as WorktreeLocationArgs | undefined, ctx)
+      );
     },
   }));
 
@@ -561,14 +533,17 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "git.getStagingStatus",
     title: "Get Staging Status",
     description:
-      "Get the current working-tree state for a repository. Args (all optional): `cwd` — repo working directory, defaults to the active worktree path; `offset` (default 0) and `limit` (default 100, max 200), applied to each file list. Returns staged/unstaged/conflictedFiles pages plus `totals` and `hasMore` per list, the legacy `conflicted` path strings, currentBranch, isDetachedHead, hasRemote, repoState, rebase progress, and `rebaseSummary` (backend + step counts + current subject) instead of the full rebase todo. When any `hasMore` is true, call again with `offset: nextOffset`. Errors when `cwd` is omitted and no worktree is active. Use this before committing; do NOT use `git.getProjectPulse` for current changes — that reports historical activity, not working-tree state.",
+      "Get the current working-tree state for a repository. Args (all optional): `worktreeId` or `worktreePath` — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias for `worktreePath`); `offset` (default 0) and `limit` (default 100, max 200), applied to each file list. Returns staged/unstaged/conflictedFiles pages plus `totals` and `hasMore` per list, the legacy `conflicted` path strings, currentBranch, isDetachedHead, hasRemote, repoState, rebase progress, and `rebaseSummary` (backend + step counts + current subject) instead of the full rebase todo. When any `hasMore` is true, call again with `offset: nextOffset`. Errors when no worktree is given and none is active. Use this before committing; do NOT use `git.getProjectPulse` for current changes — that reports historical activity, not working-tree state.",
     category: "git",
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z
-      .object({
-        cwd: z.string().optional(),
+    // `offset`/`limit` are declared inline rather than through `paginationShape`:
+    // they are already the canonical spellings, and one page position is applied
+    // to THREE independent file lists, so the shared per-list descriptions and
+    // the single-list `PaginatedResultSchema` envelope would both misdescribe it.
+    argsSchema: withWorktreeLocation(
+      {
         offset: z.number().int().nonnegative().optional(),
         limit: z
           .number()
@@ -579,8 +554,9 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
           .describe(
             `Entries per file list (default ${GIT_PAGE_LIMIT_DEFAULT}, max ${GIT_PAGE_LIMIT_MAX}).`
           ),
-      })
-      .optional(),
+      },
+      { legacy: ["cwd"] }
+    ).optional(),
     resultSchema: z.object({
       staged: z.array(StagingFileEntrySchema),
       unstaged: z.array(StagingFileEntrySchema),
@@ -614,12 +590,13 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     mcpOutputSchema: true,
     run: async (args: unknown, ctx: ActionContext) => {
       const {
-        cwd,
         offset: rawOffset,
         limit: rawLimit,
-      } = (args ?? {}) as { cwd?: string; offset?: number; limit?: number };
-      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-      if (!resolvedCwd) throw new Error("No active worktree");
+        ...location
+      } = (args ?? {}) as WorktreeLocationArgs & { offset?: number; limit?: number };
+      const resolvedCwd = requireWorktreePath(location, ctx);
+      // Clamped here as well as in argsSchema: dispatch paths that bypass schema
+      // validation must not be able to request an unbounded page.
       const offset = Math.max(Math.trunc(rawOffset ?? 0) || 0, 0);
       const limit = clamp(rawLimit ?? GIT_PAGE_LIMIT_DEFAULT, 1, GIT_PAGE_LIMIT_MAX);
       const status = await window.electron.git.getStagingStatus(resolvedCwd);
