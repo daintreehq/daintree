@@ -568,17 +568,42 @@ describe("registerForgeDataHandlers", () => {
       expect(listIssueComments).toHaveBeenCalledWith(repoRef, 7, {});
     });
 
-    it("returns an empty page — not a throw — when the provider lacks the capability", async () => {
-      // `fakeImpl` has no `issueComments` field, matching a forge that can't
-      // serve comment reads. Read capabilities degrade; only mutations throw.
+    it("throws when the provider lacks the capability, so silence is never faked", async () => {
+      // `fakeImpl` has no `issueComments` field. An empty page here would tell
+      // an agent "nobody replied" when the truth is "nobody could look".
       registerForgeDataHandlers();
 
-      const result = await findHandler("forge:list-issue-comments")(null, {
+      await expect(
+        findHandler("forge:list-issue-comments")(null, { cwd: "/repo", issueNumber: 7 })
+      ).rejects.toThrow(/does not support reading issue comments/i);
+    });
+
+    it("strips option fields the read does not honor and drops malformed ones", async () => {
+      // The preload types `opts` loosely, so a direct renderer call can put
+      // anything here — only the action's zod schema guards agent callers.
+      const listIssueComments = vi
+        .fn()
+        .mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+      resolveForCwdMock.mockResolvedValue({
+        namespaceId: "fake.provider",
+        repoRef,
+        impl: implWithComments(listIssueComments) as unknown as ForgeProviderImpl,
+      });
+      registerForgeDataHandlers();
+
+      await findHandler("forge:list-issue-comments")(null, {
         cwd: "/repo",
         issueNumber: 7,
+        opts: {
+          perPage: Number.NaN,
+          cursor: 42,
+          bypassCache: "yes",
+          state: "closed",
+          search: "drop me",
+        },
       });
 
-      expect(result).toEqual({ items: [], nextCursor: null, hasMore: false });
+      expect(listIssueComments).toHaveBeenCalledWith(repoRef, 7, {});
     });
 
     it("rejects a non-positive or non-integer issue number before resolving a provider", async () => {

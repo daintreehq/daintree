@@ -24,6 +24,7 @@ import {
   MARK_PR_READY_FOR_REVIEW_MUTATION,
 } from "./GitHubQueries.js";
 import {
+  bumpIssueCommentsEpoch,
   clearGitHubCaches,
   clearPRCaches,
   invalidateRepoIssueCachesForAssignment,
@@ -689,6 +690,10 @@ export async function addIssueCommentImpl(
   // holds. List/stat caches are unaffected, so a targeted invalidation is
   // enough (avoids the heavier clearGitHubCaches()).
   issueTooltipCache.invalidate(`${repo.owner}/${repo.repo}:${issueNumber}`);
+  // Retire any comment read already in flight for this issue, so the caller's
+  // follow-up read can't coalesce onto a request that predates this write and
+  // come back without the comment just posted (#11545).
+  bumpIssueCommentsEpoch(repo.owner, repo.repo, issueNumber);
   return {
     id: String(data.id),
     body: typeof data.body === "string" ? data.body : "",

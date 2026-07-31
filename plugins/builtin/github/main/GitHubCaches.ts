@@ -227,6 +227,29 @@ function bumpRepoListEpoch(type: "issue" | "pr", owner: string, repo: string): v
   repoListCacheEpochs.set(key, (repoListCacheEpochs.get(key) ?? 0) + 1);
 }
 
+/**
+ * Per-issue write counter for comment reads (#11545). `listIssueComments` holds
+ * no cache, but it does coalesce concurrent reads — so a read issued *after* a
+ * successful `addIssueComment` could otherwise join one issued *before* it and
+ * come back without the comment just posted. That's precisely the sequence an
+ * agent runs (post, then poll for the reply), so the read path folds this epoch
+ * into its single-flight key and `addIssueComment` bumps it, forcing any
+ * post-write read into a fresh request.
+ *
+ * Same Map-not-cache reasoning as {@link repoListCacheEpochs}: one integer per
+ * issue touched, and eviction mid-flight would reset the guard to zero.
+ */
+const issueCommentsEpochs = new Map<string, number>();
+
+export function getIssueCommentsEpoch(owner: string, repo: string, issueNumber: number): number {
+  return issueCommentsEpochs.get(`${owner}/${repo}#${issueNumber}`) ?? 0;
+}
+
+export function bumpIssueCommentsEpoch(owner: string, repo: string, issueNumber: number): void {
+  const key = `${owner}/${repo}#${issueNumber}`;
+  issueCommentsEpochs.set(key, (issueCommentsEpochs.get(key) ?? 0) + 1);
+}
+
 /** Drop every entry whose key starts with `prefix`. `Cache.forEach` snapshots
  *  entries up front, so invalidating inside the walk is safe. */
 function invalidateByPrefix(cache: Cache<string, unknown>, prefix: string): void {

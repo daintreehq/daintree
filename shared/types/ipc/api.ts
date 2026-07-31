@@ -1660,9 +1660,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getPRReviewThreads(payload: { cwd: string; prNumber: number }): Promise<ReviewThread[]>;
     /**
      * One page of an issue's comment thread, oldest-first, via the provider's
-     * `issueComments` capability. An empty page when the capability is absent —
-     * distinguishable from a genuinely empty thread only by `totalCount`, which
-     * capable providers set. Provider failures reject.
+     * `issueComments` capability. Rejects when the provider lacks the
+     * capability or the issue doesn't exist, so an empty page always means
+     * "nobody has commented" and never "couldn't look".
      */
     listIssueComments(payload: {
       cwd: string;

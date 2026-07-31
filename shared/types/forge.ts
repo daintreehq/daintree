@@ -585,6 +585,15 @@ export interface ReviewCapability {
  * `IssueCommentOrderField` has no `CREATED_AT`). A caller wanting the newest
  * comment must therefore page to the end and take the last item — never ask
  * for one descending item.
+ *
+ * Throws when the issue doesn't exist, rather than returning an empty page.
+ * The consumer here is an agent deciding whether anyone replied, and "no such
+ * issue", "this provider can't read comments" and "nobody has replied yet"
+ * lead it to opposite conclusions — so only the last of the three may present
+ * as an empty page. The host applies the same rule to capability absence
+ * (`ForgeProviderImpl.issueComments` missing throws, matching `repoStats`),
+ * which is why this capability is not modeled as best-effort the way
+ * {@link TooltipCapability} is.
  */
 export interface IssueCommentCapability {
   listIssueComments(

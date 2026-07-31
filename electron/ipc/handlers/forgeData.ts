@@ -788,13 +788,32 @@ async function handleForgeGetPRReviewThreads(payload: {
 }
 
 /**
- * Paged read of an issue's comment thread (#11545). Follows the read-capability
- * convention: a provider without `issueComments` degrades to a neutral empty
- * page rather than throwing — only mutation capabilities announce themselves as
- * unsupported (see `handleForgeApprovePR` in the sibling `forge.ts`).
+ * Narrow the loosely-typed `opts` an untrusted renderer can put on the wire
+ * down to the fields this read honors. The MCP action validates its own args,
+ * but `window.electron.forge.listIssueComments` is callable directly, so a
+ * `perPage: NaN` or a non-string cursor would otherwise reach the provider.
+ */
+function normalizeCommentListOptions(value: unknown): ListOptions {
+  if (!value || typeof value !== "object") return {};
+  const raw = value as Record<string, unknown>;
+  return {
+    ...(typeof raw.cursor === "string" && raw.cursor.trim() ? { cursor: raw.cursor } : {}),
+    ...(typeof raw.perPage === "number" && Number.isFinite(raw.perPage)
+      ? { perPage: raw.perPage }
+      : {}),
+    ...(raw.bypassCache === true ? { bypassCache: true } : {}),
+  };
+}
+
+/**
+ * Paged read of an issue's comment thread (#11545).
  *
- * Provider failures (auth, network, GraphQL) still propagate: reporting an
- * outage as "this issue has no comments" would be worse than an error.
+ * Throws when the provider can't serve comments, rather than returning an
+ * empty page. The neutral-empty convention belongs to best-effort ambient
+ * reads — a tooltip that fails just doesn't render (`handleForgeGetIssueTooltip`
+ * above) — but this answers an explicit "has anyone replied?" from an agent,
+ * and an empty page is a wrong answer to that question, not a missing one.
+ * The optional `repoStats` read throws for the same reason.
  */
 async function handleForgeListIssueComments(payload: {
   cwd: string;
@@ -807,12 +826,22 @@ async function handleForgeListIssueComments(payload: {
   }
   const cwd = requireCwd(payload.cwd);
   const issueNumber = requirePositiveInt(payload.issueNumber, "issue number");
-  const opts = payload.opts ?? {};
-  const { impl, repoRef } = await resolveForCwd(cwd);
-  if (!impl.issueComments) {
-    return { items: [], nextCursor: null, hasMore: false };
+  const opts = normalizeCommentListOptions(payload.opts);
+  const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+  const capability = impl.issueComments;
+  if (!capability) {
+    throw new Error("The active forge provider does not support reading issue comments");
   }
-  return impl.issueComments.listIssueComments(repoRef, issueNumber, opts);
+  return auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "listIssueComments",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("listIssueComments", { issueNumber, ...opts }),
+    },
+    () => capability.listIssueComments(repoRef, issueNumber, opts)
+  );
 }
 
 async function handleForgeResolveAuthorAvatar(payload: {

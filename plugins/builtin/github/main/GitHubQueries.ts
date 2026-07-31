@@ -517,6 +517,7 @@ export const LIST_ISSUE_COMMENTS_QUERY = `
             endCursor
           }
           nodes {
+            id
             databaseId
             body
             url

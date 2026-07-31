@@ -44,6 +44,7 @@ const fakeImpl = vi.hoisted(() => ({
   getCIStatus: vi.fn(),
   getRepoMetadata: vi.fn(),
   repoStats: { getRepoStats: vi.fn() },
+  issueComments: { listIssueComments: vi.fn() },
   reviews: {
     getReviewThreads: vi.fn(),
     approvePR: vi.fn(),

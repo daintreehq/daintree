@@ -186,8 +186,19 @@ describe("LIST_ISSUE_COMMENTS_QUERY", () => {
     expect(commentSelection).not.toContain("bodyText");
   });
 
-  it("selects databaseId so read ids stay interchangeable with REST mutation ids", () => {
-    expect(LIST_ISSUE_COMMENTS_QUERY).toContain("databaseId");
+  it("selects every comment field the mapper projects", () => {
+    // Scoped to the node selection: a global toContain would pass even if one
+    // of these moved to the wrong level of the query.
+    const commentSelection = /nodes\s*\{([^}]*)\}/.exec(LIST_ISSUE_COMMENTS_QUERY)?.[1] ?? "";
+    for (const field of ["id", "databaseId", "body", "url", "createdAt", "author"]) {
+      expect(commentSelection).toContain(field);
+    }
+  });
+
+  it("selects the author's login and avatar, not a bare actor node", () => {
+    const authorSelection = /author\s*\{([^}]*)\}/.exec(LIST_ISSUE_COMMENTS_QUERY)?.[1] ?? "";
+    expect(authorSelection).toContain("login");
+    expect(authorSelection).toContain("avatarUrl");
   });
 
   it("pages forward with first/after and returns pageInfo plus totalCount", () => {
@@ -201,8 +212,11 @@ describe("LIST_ISSUE_COMMENTS_QUERY", () => {
     expect(LIST_ISSUE_COMMENTS_QUERY).not.toContain("orderBy");
   });
 
-  it("includes rateLimit so comment reads keep rate-limit state in sync", () => {
-    expect(LIST_ISSUE_COMMENTS_QUERY).toContain("rateLimit");
+  it("includes the rateLimit fields the accounting service reads", () => {
+    const rateLimitSelection = /rateLimit\s*\{([^}]*)\}/.exec(LIST_ISSUE_COMMENTS_QUERY)?.[1] ?? "";
+    for (const field of ["cost", "remaining", "resetAt", "limit"]) {
+      expect(rateLimitSelection).toContain(field);
+    }
   });
 
   it("declares every variable it interpolates", () => {
