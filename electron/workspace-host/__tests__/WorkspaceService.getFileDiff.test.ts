@@ -206,7 +206,7 @@ describe("WorkspaceService.getFileDiff", () => {
     expect(mockSimpleGit.diff).toHaveBeenCalledWith(expect.arrayContaining(["--no-textconv"]));
   });
 
-  it("refuses only an untracked file past the 16MB source ceiling, without reading it", async () => {
+  it("refuses a file past the source ceiling without reading it or diffing", async () => {
     const { stat, readFile } = await import("fs/promises");
     vi.mocked(stat).mockResolvedValueOnce({ size: 16 * 1024 * 1024 + 1 } as never);
 
@@ -217,11 +217,63 @@ describe("WorkspaceService.getFileDiff", () => {
         type: "get-file-diff-result",
         requestId: "req-7",
         diff: "FILE_TOO_LARGE",
+        offset: 0,
         totalBytes: 0,
+        truncated: false,
+        nextOffset: null,
       })
     );
     expect(readFile).not.toHaveBeenCalled();
     expect(mockSimpleGit.diff).not.toHaveBeenCalled();
+  });
+
+  it("applies the source ceiling to tracked files too, bounding peak memory", async () => {
+    const { stat } = await import("fs/promises");
+    vi.mocked(stat).mockResolvedValueOnce({ size: 16 * 1024 * 1024 + 1 } as never);
+
+    await service.getFileDiff("req-16", "/test/repo", "huge.ts", "modified");
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: "req-16", diff: "FILE_TOO_LARGE" })
+    );
+    // The point of the gate: git never buffers the diff of a file this size.
+    expect(mockSimpleGit.diff).not.toHaveBeenCalled();
+  });
+
+  it("never windows the BINARY_FILE sentinel", async () => {
+    mockSimpleGit.diff.mockResolvedValueOnce("Binary files a/x.bin and b/x.bin differ");
+
+    await service.getFileDiff("req-17", "/test/repo", "x.bin", "modified", undefined, 0, 1);
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "req-17",
+        diff: "BINARY_FILE",
+        offset: 0,
+        totalBytes: 0,
+        truncated: false,
+        nextOffset: null,
+      })
+    );
+  });
+
+  it("reconstructs a multibyte diff across windows without replacement characters", async () => {
+    const full = "diff --git a/f.ts b/f.ts\n" + "+日本語テキスト😀\n".repeat(50);
+    mockSimpleGit.diff.mockResolvedValue(full);
+
+    let offset: number | null = 0;
+    let rebuilt = "";
+    let guard = 0;
+    while (offset !== null) {
+      await service.getFileDiff("req-mb", "/test/repo", "f.ts", "modified", undefined, offset, 7);
+      const event = mockSendEvent.mock.calls.at(-1)?.[0];
+      rebuilt += event.diff;
+      offset = event.nextOffset;
+      expect(++guard).toBeLessThan(500);
+    }
+
+    expect(rebuilt).toBe(full);
+    expect(rebuilt).not.toContain("�");
   });
 
   it("windows a tracked-file diff past 1MB instead of refusing it (#11531)", async () => {

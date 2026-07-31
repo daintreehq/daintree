@@ -90,9 +90,12 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
           ahead: z.number(),
           behind: z.number(),
           filesChanged: z.number().optional(),
+          insertions: z.number().optional(),
+          deletions: z.number().optional(),
         })
         .optional(),
     }),
+    mcpOutputSchema: true,
     run: async (args: unknown, ctx: ActionContext) => {
       const merged = (args ?? {}) as {
         worktreeId?: string;
@@ -138,7 +141,10 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
           .map((commit: CommitItem) => ({
             sha: commit.sha,
             subject: truncateUtf8(commit.subject ?? "", GIT_SUBJECT_MAX_BYTES).text,
-            authorName: commit.authorName,
+            authorName:
+              commit.authorName === undefined
+                ? undefined
+                : truncateUtf8(commit.authorName, GIT_SUBJECT_MAX_BYTES).text,
             timestamp: commit.timestamp,
           })),
         uncommitted: pulse.uncommitted && {
@@ -153,6 +159,9 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
           ahead: pulse.deltaToMain.ahead,
           behind: pulse.deltaToMain.behind,
           filesChanged: pulse.deltaToMain.filesChanged,
+          // PulseSummary renders these; dropping them blanks the +/- churn.
+          insertions: pulse.deltaToMain.insertions,
+          deletions: pulse.deltaToMain.deletions,
         },
       };
     },
@@ -320,10 +329,11 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
         limit,
       } as any);
 
-      // Sliced as well as limited: `limit` bounds what git returns, but the
-      // implementation pins a hash-prefix match ahead of a full page, so a
-      // search can hand back limit + 1 items.
-      const items = (result.items ?? []).slice(0, limit).map((commit) => {
+      // Bounded at limit + 1, not limit: a hash-prefix search pins its match
+      // ahead of a full page of message matches, so cutting to `limit` would
+      // drop the page's last message commit — which `nextSkip` then steps over,
+      // making it unreachable on every page.
+      const items = (result.items ?? []).slice(0, limit + 1).map((commit) => {
         const body = truncateUtf8(commit.body ?? "", GIT_COMMIT_BODY_MAX_BYTES);
         return {
           hash: commit.hash,
@@ -331,7 +341,12 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
           message: truncateUtf8(commit.message ?? "", GIT_SUBJECT_MAX_BYTES).text,
           body: commit.body === undefined ? undefined : body.text,
           bodyTruncated: body.truncated,
-          author: { name: commit.author?.name ?? "", email: commit.author?.email ?? "" },
+          // Author identity is attacker-controlled free text in a crafted
+          // commit, so it needs the same ceiling as the subject and body.
+          author: {
+            name: truncateUtf8(commit.author?.name ?? "", GIT_SUBJECT_MAX_BYTES).text,
+            email: truncateUtf8(commit.author?.email ?? "", GIT_SUBJECT_MAX_BYTES).text,
+          },
           date: commit.date,
         };
       });
@@ -342,7 +357,10 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
         total: result.total,
         skip,
         limit,
-        nextSkip: result.hasMore ? skip + items.length : null,
+        // `skip` addresses the message stream, which advances by exactly `limit`
+        // whenever hasMore is set — never by the returned item count, which the
+        // pinned hash match can inflate.
+        nextSkip: result.hasMore ? skip + limit : null,
       };
     },
   }));

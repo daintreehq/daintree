@@ -3,6 +3,15 @@ import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../..
 import { registerGitActions } from "../gitActions";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
+import { utf8ByteLength } from "@shared/utils/boundedOutput";
+import {
+  GIT_COMMIT_BODY_MAX_BYTES,
+  GIT_FILE_DIFF_DEFAULT_MAX_BYTES,
+  GIT_FILE_DIFF_MAX_BYTES,
+  GIT_LIST_COMMITS_LIMIT_MAX,
+  GIT_SUBJECT_MAX_BYTES,
+  PULSE_RECENT_COMMITS_MAX,
+} from "@shared/config/gitReadLimits";
 
 /**
  * `git.push` now awaits a deferred-Promise confirm gate (#8242). In a unit
@@ -279,7 +288,7 @@ describe("gitActions adversarial", () => {
       "src/file with spaces.ts",
       "renamed",
       undefined,
-      { offset: 0, maxBytes: 24 * 1024 }
+      { offset: 0, maxBytes: GIT_FILE_DIFF_DEFAULT_MAX_BYTES }
     );
   });
 
@@ -323,7 +332,7 @@ describe("gitActions adversarial", () => {
     );
     expect(git.getFileDiff).toHaveBeenCalledWith("/repo", "x.ts", "modified", undefined, {
       offset: 0,
-      maxBytes: 24 * 1024,
+      maxBytes: GIT_FILE_DIFF_DEFAULT_MAX_BYTES,
     });
   });
 
@@ -392,7 +401,7 @@ describe("gitActions adversarial", () => {
  * prove nothing about what reaches an agent (#11531).
  */
 describe("gitActions bounded reads", () => {
-  it("git.listCommits caps the returned page at the requested limit", async () => {
+  it("git.listCommits bounds a runaway page from the IPC layer", async () => {
     const { run, git } = setupActions();
     git.listCommits.mockResolvedValue({
       items: Array.from({ length: 500 }, (_, i) => makeCommit(i)),
@@ -400,12 +409,38 @@ describe("gitActions bounded reads", () => {
       total: 5000,
     });
 
-    const result = (await run("git.listCommits", { limit: 10 }, { activeWorktreePath: "/repo" })) as {
-      items: unknown[];
-      nextSkip: number | null;
-    };
+    const result = (await run(
+      "git.listCommits",
+      { limit: 10 },
+      { activeWorktreePath: "/repo" }
+    )) as { items: unknown[] };
 
-    expect(result.items).toHaveLength(10);
+    // limit + 1 is the real ceiling — a hash-prefix search pins its match ahead
+    // of a full page of message matches.
+    expect(result.items.length).toBeLessThanOrEqual(11);
+  });
+
+  it("git.listCommits advances nextSkip by limit so a pinned hash match skips nothing", async () => {
+    const { run, git } = setupActions();
+    // Shape produced by a hash-prefix search: the pinned match plus a full page.
+    git.listCommits.mockResolvedValue({
+      items: [
+        makeCommit(999, { hash: "pinned" }),
+        ...Array.from({ length: 10 }, (_, i) => makeCommit(i)),
+      ],
+      hasMore: true,
+      total: 5000,
+    });
+
+    const result = (await run(
+      "git.listCommits",
+      { limit: 10 },
+      { activeWorktreePath: "/repo" }
+    )) as { items: { hash: string }[]; nextSkip: number | null };
+
+    // All ten message commits survive alongside the pin: cutting to `limit`
+    // would drop message commit 9, which nextSkip then steps over for good.
+    expect(result.items.map((c) => c.hash)).toContain("hash-9");
     expect(result.nextSkip).toBe(10);
   });
 
@@ -423,9 +458,12 @@ describe("gitActions bounded reads", () => {
       { activeWorktreePath: "/repo" }
     )) as { items: unknown[]; limit: number };
 
-    expect(git.listCommits).toHaveBeenCalledWith(expect.objectContaining({ limit: 100 }));
-    expect(result.items).toHaveLength(100);
-    expect(result.limit).toBe(100);
+    expect(git.listCommits).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: GIT_LIST_COMMITS_LIMIT_MAX })
+    );
+    // limit + 1 leaves room for a pinned hash match alongside a full page.
+    expect(result.items).toHaveLength(GIT_LIST_COMMITS_LIMIT_MAX + 1);
+    expect(result.limit).toBe(GIT_LIST_COMMITS_LIMIT_MAX);
   });
 
   it("git.listCommits truncates each commit body and flags it", async () => {
@@ -440,10 +478,55 @@ describe("gitActions bounded reads", () => {
       items: { body?: string; bodyTruncated: boolean }[];
     };
 
-    expect(result.items[0]?.body).toHaveLength(1024);
+    expect(utf8ByteLength(result.items[0]?.body ?? "")).toBe(GIT_COMMIT_BODY_MAX_BYTES);
     expect(result.items[0]?.bodyTruncated).toBe(true);
     expect(result.items[1]?.body).toBe("short");
     expect(result.items[1]?.bodyTruncated).toBe(false);
+  });
+
+  it("git.listCommits caps every free-text field by BYTES, not UTF-16 units", async () => {
+    const { run, git } = setupActions();
+    // Multibyte throughout: a .slice(n) implementation would pass a length
+    // check while still shipping 3x the byte budget.
+    git.listCommits.mockResolvedValue({
+      items: [
+        makeCommit(0, {
+          message: "実".repeat(5000),
+          body: "😀".repeat(5000),
+          author: { name: "あ".repeat(5000), email: "え".repeat(5000) },
+        }),
+      ],
+      hasMore: false,
+      total: 1,
+    });
+
+    const result = (await run("git.listCommits", undefined, { activeWorktreePath: "/repo" })) as {
+      items: { message: string; body?: string; author: { name: string; email: string } }[];
+    };
+    const commit = result.items[0];
+
+    expect(utf8ByteLength(commit?.message ?? "")).toBeLessThanOrEqual(GIT_SUBJECT_MAX_BYTES);
+    expect(utf8ByteLength(commit?.body ?? "")).toBeLessThanOrEqual(GIT_COMMIT_BODY_MAX_BYTES);
+    expect(utf8ByteLength(commit?.author.name ?? "")).toBeLessThanOrEqual(GIT_SUBJECT_MAX_BYTES);
+    expect(utf8ByteLength(commit?.author.email ?? "")).toBeLessThanOrEqual(GIT_SUBJECT_MAX_BYTES);
+    // Cutting mid-character would leave a replacement character behind.
+    expect(`${commit?.message}${commit?.body}${commit?.author.name}`).not.toContain("�");
+  });
+
+  it("git.listCommits leaves an absent body absent rather than inventing an empty one", async () => {
+    const { run, git } = setupActions();
+    git.listCommits.mockResolvedValue({
+      items: [makeCommit(0, { body: undefined })],
+      hasMore: false,
+      total: 1,
+    });
+
+    const result = (await run("git.listCommits", undefined, { activeWorktreePath: "/repo" })) as {
+      items: { body?: string; bodyTruncated: boolean }[];
+    };
+
+    expect(result.items[0]?.body).toBeUndefined();
+    expect(result.items[0]?.bodyTruncated).toBe(false);
   });
 
   it("git.listCommits drops fields the schema does not advertise", async () => {
@@ -469,7 +552,7 @@ describe("gitActions bounded reads", () => {
     await run("git.getFileDiff", { filePath: "a.ts", status: "modified" }, { activeWorktreePath: "/repo" });
     expect(git.getFileDiff).toHaveBeenCalledWith("/repo", "a.ts", "modified", undefined, {
       offset: 0,
-      maxBytes: 24 * 1024,
+      maxBytes: GIT_FILE_DIFF_DEFAULT_MAX_BYTES,
     });
 
     await run(
@@ -495,7 +578,7 @@ describe("gitActions bounded reads", () => {
       "a.ts",
       "modified",
       undefined,
-      { offset: 0, maxBytes: 1024 * 1024 }
+      { offset: 0, maxBytes: GIT_FILE_DIFF_MAX_BYTES }
     );
   });
 
@@ -556,6 +639,44 @@ describe("gitActions bounded reads", () => {
     expect(result.totals.staged).toBe(500);
     expect(result.hasMore.staged).toBe(true);
     expect(result.hasMore.unstaged).toBe(false);
+  });
+
+  it("git.getStagingStatus reports a cursor when ANY list has more, not just staged", async () => {
+    const { run, git } = setupActions();
+    const entry = (i: number) => ({
+      path: `file-${i}.ts`,
+      status: "modified",
+      insertions: null,
+      deletions: null,
+    });
+    // staged is short and unstaged is long — a regression to `staged.nextOffset`
+    // alone would strand every unstaged entry past the first page.
+    git.getStagingStatus.mockResolvedValue({
+      staged: [entry(0)],
+      unstaged: Array.from({ length: 500 }, (_, i) => entry(i)),
+      conflicted: [],
+      conflictedFiles: [],
+      isDetachedHead: false,
+      currentBranch: "main",
+      hasRemote: true,
+      repoState: "DIRTY",
+      rebaseStep: null,
+      rebaseTotalSteps: null,
+      rebaseSequence: null,
+    });
+
+    const first = (await run("git.getStagingStatus", { limit: 10 }, {
+      activeWorktreePath: "/repo",
+    })) as { nextOffset: number | null };
+    expect(first.nextOffset).toBe(10);
+
+    const second = (await run("git.getStagingStatus", { offset: 10, limit: 10 }, {
+      activeWorktreePath: "/repo",
+    })) as { staged: unknown[]; unstaged: { path: string }[] };
+
+    // The short list is exhausted; the long one keeps producing.
+    expect(second.staged).toEqual([]);
+    expect(second.unstaged[0]?.path).toBe("file-10.ts");
   });
 
   it("git.getStagingStatus summarizes the rebase sequence instead of shipping the todo", async () => {
@@ -674,8 +795,55 @@ describe("gitActions bounded reads", () => {
     // The renderer pulse card charts every cell, so the heatmap is projected whole.
     expect(result.heatmap).toHaveLength(60);
     expect(result.heatmap[0]).not.toHaveProperty("internalNote");
-    expect(result.recentCommits).toHaveLength(10);
-    expect(result.recentCommits[0]?.subject.length).toBeLessThanOrEqual(512);
+    expect(result.recentCommits).toHaveLength(PULSE_RECENT_COMMITS_MAX);
+    expect(utf8ByteLength(result.recentCommits[0]?.subject ?? "")).toBeLessThanOrEqual(
+      GIT_SUBJECT_MAX_BYTES
+    );
+  });
+
+  it("git.getProjectPulse keeps the churn fields PulseSummary renders", async () => {
+    const { run, git } = setupActions();
+    git.getProjectPulse.mockResolvedValue({
+      worktreeId: "wt-1",
+      worktreePath: "/repo",
+      mainBranch: "main",
+      rangeDays: 60,
+      generatedAt: 1,
+      heatmap: [{ date: "d", count: 1, level: 1, isBeforeProject: true, isMostRecentActive: true }],
+      commitsInRange: 1,
+      activeDays: 1,
+      projectAgeDays: 1,
+      currentStreakDays: 3,
+      recentCommits: [],
+      uncommitted: { changedFiles: 4, insertions: 9, deletions: 2, lastUpdated: 7 },
+      deltaToMain: {
+        baseBranch: "main",
+        headBranch: "feature",
+        ahead: 2,
+        behind: 1,
+        filesChanged: 5,
+        insertions: 100,
+        deletions: 20,
+      },
+    });
+
+    const result = (await run("git.getProjectPulse", undefined, { activeWorktreeId: "wt-1" })) as {
+      deltaToMain: Record<string, unknown>;
+      uncommitted: Record<string, unknown>;
+      currentStreakDays?: number;
+      heatmap: Record<string, unknown>[];
+    };
+
+    // PulseSummary renders +insertions/-deletions; a projection that drops them
+    // blanks the churn readout in the pulse card.
+    expect(result.deltaToMain.insertions).toBe(100);
+    expect(result.deltaToMain.deletions).toBe(20);
+    expect(result.deltaToMain.filesChanged).toBe(5);
+    expect(result.uncommitted.changedFiles).toBe(4);
+    expect(result.currentStreakDays).toBe(3);
+    // Heatmap cell flags drive the card's "before project" / "most recent" styling.
+    expect(result.heatmap[0]?.isBeforeProject).toBe(true);
+    expect(result.heatmap[0]?.isMostRecentActive).toBe(true);
   });
 
   it("git.getProjectPulse trims a heatmap longer than the requested range", async () => {

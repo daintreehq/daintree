@@ -9,7 +9,10 @@
  */
 
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
+// ignoreBOM keeps a leading U+FEFF as content: the default decoder strips it,
+// which would silently drop the BOM from the first window of a BOM'd file's diff
+// and break reconstruction.
+const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 
 export interface Page<T> {
   items: T[];

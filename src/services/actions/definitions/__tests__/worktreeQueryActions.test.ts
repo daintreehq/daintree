@@ -76,23 +76,28 @@ describe("worktree.listBranches bounded reads", () => {
     expect(result.nextOffset).toBeNull();
   });
 
-  it("walking nextOffset yields every branch exactly once", async () => {
-    mockListBranches.mockResolvedValue(branches(450));
+  it("walking nextOffset yields every branch once, in source order", async () => {
+    const source = branches(450);
+    mockListBranches.mockResolvedValue(source);
     const run = getRun("worktree.listBranches");
 
     const seen: string[] = [];
     let offset: number | null = 0;
+    let iterations = 0;
     while (offset !== null) {
-      const page = (await run({ rootPath: "/repo", offset, limit: 200 } as never, {} as never)) as {
-        branches: { name: string }[];
-        nextOffset: number | null;
-      };
+      const current: number = offset;
+      const page = (await run(
+        { rootPath: "/repo", offset: current, limit: 200 } as never,
+        {} as never
+      )) as { branches: { name: string }[]; nextOffset: number | null };
       seen.push(...page.branches.map((b) => b.name));
       offset = page.nextOffset;
+      expect(++iterations).toBeLessThan(20);
     }
 
-    expect(seen).toHaveLength(450);
-    expect(new Set(seen).size).toBe(450);
+    // Exact ordered identity — a count-and-Set check passes even if pages come
+    // back reversed or a page repeats a slice another page already yielded.
+    expect(seen).toEqual(source.map((b) => b.name));
   });
 
   it("clamps an over-ceiling limit reaching run() unvalidated", async () => {
@@ -120,7 +125,13 @@ describe("worktree.listBranches bounded reads", () => {
 
     expect(result.branches[0]).not.toHaveProperty("label");
     expect(result.branches[0]).not.toHaveProperty("blob");
-    expect(result.branches[0]?.name).toBe("main");
+    // Every advertised field must survive the projection, not just `name`.
+    expect(result.branches[0]).toEqual({
+      name: "main",
+      current: true,
+      commit: "abc",
+      remote: undefined,
+    });
   });
 
   it("returns an empty page past the end rather than throwing", async () => {

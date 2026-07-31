@@ -3267,23 +3267,25 @@ export class WorkspaceService {
 
       const absolutePath = resolve(cwd, normalizedPath);
 
+      // Bounds peak memory: both branches materialize a full result before
+      // windowing — the untracked one inlines the file, and git buffers a
+      // tracked file's entire diff. The ceiling is 16x the 1MB cliff it
+      // replaced, so the "large file, small diff" case that the old gate
+      // wrongly refused now succeeds (#11531).
+      try {
+        const { stat } = await import("fs/promises");
+        const stats = await stat(absolutePath);
+        if (stats.size > GIT_FILE_DIFF_MAX_SOURCE_BYTES) {
+          sendSentinel("FILE_TOO_LARGE");
+          return;
+        }
+      } catch {
+        // ignore — a missing path falls through to git, which reports it
+      }
+
       const git = await createHardenedGit(cwd);
 
       if (status === "untracked" || status === "added") {
-        // Only this branch inlines the whole file into the diff, so only this
-        // branch needs a source-size ceiling. Tracked files are bounded by the
-        // size of their change, and are windowed rather than refused (#11531).
-        try {
-          const { stat } = await import("fs/promises");
-          const stats = await stat(absolutePath);
-          if (stats.size > GIT_FILE_DIFF_MAX_SOURCE_BYTES) {
-            sendSentinel("FILE_TOO_LARGE");
-            return;
-          }
-        } catch {
-          // ignore
-        }
-
         const { readFile } = await import("fs/promises");
         const buffer = await readFile(absolutePath);
 
