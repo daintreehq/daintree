@@ -1879,6 +1879,167 @@ describe("getReviewThreads", () => {
   });
 });
 
+describe("listIssueComments", () => {
+  beforeEach(() => {
+    mockGraphQLClient.mockReset();
+  });
+
+  function makeCommentNode(databaseId: number, body: string) {
+    return {
+      databaseId,
+      body,
+      url: `https://github.com/owner/repo/issues/7#issuecomment-${databaseId}`,
+      createdAt: "2025-03-01T12:00:00Z",
+      author: { login: "octocat", avatarUrl: "https://avatars/u" },
+    };
+  }
+
+  function makePageResponse(
+    nodes: Array<ReturnType<typeof makeCommentNode>>,
+    { hasNextPage = false, endCursor = null as string | null, totalCount = nodes.length } = {}
+  ) {
+    return {
+      repository: {
+        issue: {
+          comments: { totalCount, pageInfo: { hasNextPage, endCursor }, nodes },
+        },
+      },
+    };
+  }
+
+  it("normalizes GraphQL comment nodes onto the forge shape", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(101, "First **reply**")])
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]).toMatchObject({
+      id: "101",
+      body: "First **reply**",
+      url: "https://github.com/owner/repo/issues/7#issuecomment-101",
+      author: { login: "octocat" },
+    });
+    expect(page.items[0].createdAt).toBe(Date.parse("2025-03-01T12:00:00Z"));
+    expect(page.items[0].rawData).toEqual(makeCommentNode(101, "First **reply**"));
+  });
+
+  it("stringifies databaseId so read ids match what addIssueComment returns", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(makePageResponse([makeCommentNode(12345, "hi")]));
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page.items[0].id).toBe("12345");
+    expect(typeof page.items[0].id).toBe("string");
+  });
+
+  it("preserves the thread's oldest-first order", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([
+        makeCommentNode(1, "oldest"),
+        makeCommentNode(2, "middle"),
+        makeCommentNode(3, "newest"),
+      ])
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page.items.map((c) => c.body)).toEqual(["oldest", "middle", "newest"]);
+  });
+
+  it("maps pageInfo onto nextCursor/hasMore and threads a cursor back through", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(1, "a")], {
+        hasNextPage: true,
+        endCursor: "cursor-2",
+        totalCount: 40,
+      })
+    );
+
+    const first = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+    expect(first).toMatchObject({ nextCursor: "cursor-2", hasMore: true, totalCount: 40 });
+
+    mockGraphQLClient.mockResolvedValueOnce(makePageResponse([makeCommentNode(2, "b")]));
+    await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {
+      cursor: first.nextCursor,
+    });
+
+    const [, vars] = mockGraphQLClient.mock.calls[1] as [string, Record<string, unknown>];
+    expect(vars.cursor).toBe("cursor-2");
+    expect(vars.number).toBe(7);
+  });
+
+  it("defaults perPage to 20 and clamps out-of-range values into GitHub's 1-100 window", async () => {
+    const requested = [undefined, 50, 0, -5, 250, 7.9];
+    const expected = [20, 50, 1, 1, 100, 7];
+
+    for (const perPage of requested) {
+      mockGraphQLClient.mockResolvedValueOnce(makePageResponse([]));
+      await githubForgeProvider.issueComments!.listIssueComments(repo, 7, { perPage });
+    }
+
+    const limits = mockGraphQLClient.mock.calls.map(
+      (call) => (call[1] as Record<string, unknown>).limit
+    );
+    expect(limits).toEqual(expected);
+  });
+
+  it("re-fetches on a repeat read so a reply posted meanwhile is visible", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(makePageResponse([makeCommentNode(1, "question")]));
+    const before = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(1, "question"), makeCommentNode(2, "answer")])
+    );
+    const after = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(before.items).toHaveLength(1);
+    expect(after.items.map((c) => c.body)).toEqual(["question", "answer"]);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces concurrent identical reads into one request", async () => {
+    mockGraphQLClient.mockResolvedValue(makePageResponse([makeCommentNode(1, "a")]));
+
+    const [a, b] = await Promise.all([
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, {}),
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, {}),
+    ]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    expect(a).toBe(b);
+  });
+
+  it("does not coalesce reads for different issues or cursors", async () => {
+    mockGraphQLClient.mockResolvedValue(makePageResponse([]));
+
+    await Promise.all([
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, {}),
+      githubForgeProvider.issueComments!.listIssueComments(repo, 8, {}),
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, { cursor: "c" }),
+    ]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(3);
+  });
+
+  it("returns an empty page when the issue does not exist", async () => {
+    mockGraphQLClient.mockResolvedValueOnce({ repository: { issue: null } });
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 999, {});
+
+    expect(page).toEqual({ items: [], nextCursor: null, hasMore: false });
+  });
+
+  it("propagates provider failures rather than reporting an empty thread", async () => {
+    mockGraphQLClient.mockRejectedValueOnce(new Error("Bad credentials"));
+
+    await expect(
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, {})
+    ).rejects.toThrow(/bad credentials/i);
+  });
+});
+
 describe("createIssue", () => {
   const restIssueResponse = {
     number: 7,

@@ -24,6 +24,7 @@ const forgeClientMock = vi.hoisted(() => ({
   listIssues: vi.fn<(cwd: string, opts: Record<string, unknown>) => Promise<unknown>>(),
   listPRs: vi.fn<(cwd: string, opts: Record<string, unknown>) => Promise<unknown>>(),
   getIssue: vi.fn(),
+  listIssueComments: vi.fn(),
   getCIStatus: vi.fn(),
   closePR: vi.fn(),
   reopenPR: vi.fn(),
@@ -1029,6 +1030,82 @@ describe("forge.* single-resource query adversarial", () => {
     forgeClientMock.getIssue.mockResolvedValue(null);
     await runAction("forge.getIssue", { issueNumber: 5 }, { activeWorktreePath: "/repo" });
     expect(forgeClientMock.getIssue).toHaveBeenCalledWith("/repo", 5);
+  });
+
+  describe("listIssueComments (#11545)", () => {
+    const emptyPage = { items: [], nextCursor: null, hasMore: false };
+
+    it("forwards cwd positionally and the paging args as options", async () => {
+      forgeClientMock.listIssueComments.mockResolvedValue(emptyPage);
+      const def = setupActions()("forge.listIssueComments");
+      await def.run({ cwd: "/repo", issueNumber: 42, cursor: "c1", perPage: 50 }, {} as never);
+      expect(forgeClientMock.listIssueComments).toHaveBeenCalledWith("/repo", 42, {
+        cursor: "c1",
+        perPage: 50,
+      });
+    });
+
+    it("falls back to ctx.activeWorktreePath and prefers an explicit cwd over it", async () => {
+      forgeClientMock.listIssueComments.mockResolvedValue(emptyPage);
+      await runAction(
+        "forge.listIssueComments",
+        { issueNumber: 1 },
+        { activeWorktreePath: "/ctx" }
+      );
+      expect(forgeClientMock.listIssueComments).toHaveBeenCalledWith("/ctx", 1, expect.any(Object));
+
+      await runAction(
+        "forge.listIssueComments",
+        { issueNumber: 1, cwd: "/explicit" },
+        { activeWorktreePath: "/ctx" }
+      );
+      expect(forgeClientMock.listIssueComments).toHaveBeenLastCalledWith(
+        "/explicit",
+        1,
+        expect.any(Object)
+      );
+    });
+
+    it("throws when no cwd and no ctx.activeWorktreePath", async () => {
+      await expect(runAction("forge.listIssueComments", { issueNumber: 1 })).rejects.toThrow(
+        "No active worktree"
+      );
+      expect(forgeClientMock.listIssueComments).not.toHaveBeenCalled();
+    });
+
+    it("rejects a missing, non-positive or fractional issue number", async () => {
+      const schema = setupActions()("forge.listIssueComments").argsSchema;
+      for (const args of [{}, { issueNumber: 0 }, { issueNumber: -1 }, { issueNumber: 1.5 }]) {
+        expect(schema?.safeParse(args).success).toBe(false);
+      }
+      expect(schema?.safeParse({ issueNumber: 1 }).success).toBe(true);
+    });
+
+    it("rejects perPage outside GitHub's 1-100 window", async () => {
+      const schema = setupActions()("forge.listIssueComments").argsSchema;
+      for (const perPage of [0, -5, 101, 2.5]) {
+        expect(schema?.safeParse({ issueNumber: 1, perPage }).success).toBe(false);
+      }
+      for (const perPage of [1, 20, 100]) {
+        expect(schema?.safeParse({ issueNumber: 1, perPage }).success).toBe(true);
+      }
+    });
+
+    it("returns the provider's page unchanged", async () => {
+      const page = {
+        items: [{ id: "1", body: "hi", url: "u", createdAt: 0 }],
+        nextCursor: "c2",
+        hasMore: true,
+        totalCount: 3,
+      };
+      forgeClientMock.listIssueComments.mockResolvedValue(page);
+      const result = await runAction(
+        "forge.listIssueComments",
+        { issueNumber: 1 },
+        { activeWorktreePath: "/repo" }
+      );
+      expect(result).toEqual(page);
+    });
   });
 });
 

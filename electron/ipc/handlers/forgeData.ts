@@ -16,8 +16,10 @@ import type {
   ForgeRepoCounts,
   ForgeTokenHealthState,
   Issue,
+  IssueComment,
   IssueTooltipData,
   ListOptions,
+  Page,
   PR,
   PRTooltipData,
   RateLimitDetails,
@@ -785,6 +787,34 @@ async function handleForgeGetPRReviewThreads(payload: {
   return impl.reviews.getReviewThreads(repoRef, payload.prNumber);
 }
 
+/**
+ * Paged read of an issue's comment thread (#11545). Follows the read-capability
+ * convention: a provider without `issueComments` degrades to a neutral empty
+ * page rather than throwing — only mutation capabilities announce themselves as
+ * unsupported (see `handleForgeApprovePR` in the sibling `forge.ts`).
+ *
+ * Provider failures (auth, network, GraphQL) still propagate: reporting an
+ * outage as "this issue has no comments" would be worse than an error.
+ */
+async function handleForgeListIssueComments(payload: {
+  cwd: string;
+  issueNumber: number;
+  opts?: ListOptions;
+}): Promise<Page<IssueComment>> {
+  checkRateLimit(CHANNELS.FORGE_LIST_ISSUE_COMMENTS, 10, 10_000);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  const cwd = requireCwd(payload.cwd);
+  const issueNumber = requirePositiveInt(payload.issueNumber, "issue number");
+  const opts = payload.opts ?? {};
+  const { impl, repoRef } = await resolveForCwd(cwd);
+  if (!impl.issueComments) {
+    return { items: [], nextCursor: null, hasMore: false };
+  }
+  return impl.issueComments.listIssueComments(repoRef, issueNumber, opts);
+}
+
 async function handleForgeResolveAuthorAvatar(payload: {
   cwd: string;
   email: string;
@@ -835,6 +865,7 @@ export const forgeCapabilityDataNamespace = defineIpcNamespace({
     getIssuesByNumbers: op(CHANNELS.FORGE_GET_ISSUES_BY_NUMBERS, handleForgeGetIssuesByNumbers),
     getPRsByNumbers: op(CHANNELS.FORGE_GET_PRS_BY_NUMBERS, handleForgeGetPRsByNumbers),
     getPRReviewThreads: op(CHANNELS.FORGE_GET_PR_REVIEW_THREADS, handleForgeGetPRReviewThreads),
+    listIssueComments: op(CHANNELS.FORGE_LIST_ISSUE_COMMENTS, handleForgeListIssueComments),
     resolveAuthorAvatar: op(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, handleForgeResolveAuthorAvatar),
     getTokenHealth: op(CHANNELS.FORGE_GET_TOKEN_HEALTH, handleForgeGetTokenHealth),
     getRateLimitDetails: op(CHANNELS.FORGE_GET_RATE_LIMIT_DETAILS, handleForgeGetRateLimitDetails),

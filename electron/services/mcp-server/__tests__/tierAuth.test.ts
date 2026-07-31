@@ -431,6 +431,31 @@ describe("external tool surface invariants (#10701, #11537)", () => {
   });
 });
 
+// The two forge-read surfaces are curated by hand in separate files —
+// WORKBENCH_TIER_TOOLS in shared/config/helpAssistantTierAllowlists.ts and
+// MCP_TOOL_ALLOWLIST_ENTRIES here in mcp-server/shared.ts — with nothing
+// linking them. Adding a read action to only one has shipped a tool invisible
+// to the other caller class more than once (#10696, #11545). The two lists
+// diverge deliberately for *mutations* (the workbench system tier carries
+// writes the external api-key surface must never reach), so the invariant is
+// scoped to reads: whatever the in-app assistant can read from a forge, an
+// external client can read too.
+describe("forge read parity across the two curated allowlists", () => {
+  it("every forge read at the workbench tier is also reachable externally", () => {
+    const workbenchForgeReads = [...TIER_ALLOWLISTS.workbench].filter((id) =>
+      id.startsWith("forge.")
+    );
+
+    // Guard the guard: an empty list would make this vacuously pass.
+    expect(workbenchForgeReads.length).toBeGreaterThan(0);
+
+    const missingExternally = workbenchForgeReads.filter(
+      (id) => !TIER_ALLOWLISTS.external.has(id)
+    );
+    expect(missingExternally).toEqual([]);
+  });
+});
+
 describe("buildAnnotations", () => {
   it("safe command → destructiveHint: false", () => {
     const entry = makeEntry({ kind: "command", danger: "safe" });

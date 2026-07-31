@@ -12,6 +12,7 @@ import type {
   IdentityCapability,
   IssueTooltipData,
   PRTooltipData,
+  IssueCommentCapability,
   ProjectHealthCapability,
   ProjectHealthSnapshot,
   RateLimitDetails,
@@ -58,6 +59,7 @@ import {
   probeOpenPRListImpl,
   getRepoMetadataImpl,
   getReviewThreadsImpl,
+  listIssueCommentsImpl,
   getRateLimitImpl,
   classifyPushErrorImpl,
 } from "./readOps.js";
@@ -93,6 +95,10 @@ const reviewCapability: ReviewCapability = {
     submitReviewImpl(repo, prNumber, "REQUEST_CHANGES", body),
   dismissReview: dismissReviewImpl,
   requestReviewers: requestReviewersImpl,
+};
+
+const issueCommentCapability: IssueCommentCapability = {
+  listIssueComments: listIssueCommentsImpl,
 };
 
 // Thin pass-through over `GitHubAuth.getConfigAsync()` — reuses the same
@@ -452,6 +458,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
   classifyPushError: classifyPushErrorImpl,
 
   reviews: reviewCapability,
+  issueComments: issueCommentCapability,
   identity: identityCapability,
   tooltips: tooltipCapability,
   repoStats: repoStatsCapability,

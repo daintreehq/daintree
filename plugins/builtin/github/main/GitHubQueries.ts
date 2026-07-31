@@ -496,6 +496,48 @@ export const GET_ISSUE_QUERY = `
   }
 `;
 
+// Selects raw `body` (Markdown), not `bodyText` — `addIssueCommentImpl`
+// returns the REST `body` verbatim, so the read path has to match or a
+// round-trip through both would silently strip formatting. `databaseId` is the
+// REST numeric id, which keeps `IssueComment.id` interchangeable with the
+// write path's `String(data.id)`.
+//
+// No `orderBy`: GitHub's `IssueCommentOrderField` only offers `UPDATED_AT`, and
+// forward `first`/`after` pagination is oldest-first anyway — the order a
+// thread reads in. See IssueCommentCapability for why "newest comment" must
+// page to the end rather than ask for one descending item.
+export const LIST_ISSUE_COMMENTS_QUERY = `
+  query ListIssueComments($owner: String!, $repo: String!, $number: Int!, $cursor: String, $limit: Int!) {
+    repository(owner: $owner, name: $repo) {
+      issue(number: $number) {
+        comments(first: $limit, after: $cursor) {
+          totalCount
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            databaseId
+            body
+            url
+            createdAt
+            author {
+              login
+              avatarUrl
+            }
+          }
+        }
+      }
+    }
+    rateLimit {
+      cost
+      remaining
+      resetAt
+      limit
+    }
+  }
+`;
+
 export const GET_PR_REVIEW_THREADS_QUERY = `
   query GetPRReviewThreads($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
     repository(owner: $owner, name: $repo) {

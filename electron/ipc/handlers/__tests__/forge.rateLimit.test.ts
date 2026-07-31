@@ -656,6 +656,11 @@ describe("forge handlers — rate limiting", () => {
         maxCalls: 10,
         invoke: (h) => h({}, { cwd, prNumber: 1 }),
       },
+      {
+        channel: CHANNELS.FORGE_LIST_ISSUE_COMMENTS,
+        maxCalls: 10,
+        invoke: (h) => h({}, { cwd, issueNumber: 1 }),
+      },
       // tooltip + batch lookups: 20/10s (matches github:get-*-tooltip / by-numbers)
       {
         channel: CHANNELS.FORGE_GET_ISSUE_TOOLTIP,

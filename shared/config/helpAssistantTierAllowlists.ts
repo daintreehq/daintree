@@ -70,6 +70,7 @@ export const WORKBENCH_TIER_TOOLS = [
   "forge.listIssues",
   "forge.listPRs",
   "forge.getIssue",
+  "forge.listIssueComments",
   "forge.getPR",
   "forge.getCIStatus",
 

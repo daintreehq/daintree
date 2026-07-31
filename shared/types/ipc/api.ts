@@ -1658,6 +1658,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * `github.getPRReviewThreads` per-path count record.
      */
     getPRReviewThreads(payload: { cwd: string; prNumber: number }): Promise<ReviewThread[]>;
+    /**
+     * One page of an issue's comment thread, oldest-first, via the provider's
+     * `issueComments` capability. An empty page when the capability is absent —
+     * distinguishable from a genuinely empty thread only by `totalCount`, which
+     * capable providers set. Provider failures reject.
+     */
+    listIssueComments(payload: {
+      cwd: string;
+      issueNumber: number;
+      opts?: ListOptions;
+    }): Promise<Page<IssueComment>>;
     /** Resolve a commit-author email to an avatar URL. Best-effort — `null` on any failure. */
     resolveAuthorAvatar(payload: { cwd: string; email: string }): Promise<string | null>;
     /**

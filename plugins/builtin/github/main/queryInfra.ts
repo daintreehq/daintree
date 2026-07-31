@@ -1,7 +1,7 @@
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { createHash } from "node:crypto";
 import { configure } from "safe-stable-stringify";
-import type { CIStatus, Issue, Page, PR } from "../../../../shared/types/forge.js";
+import type { CIStatus, Issue, IssueComment, Page, PR } from "../../../../shared/types/forge.js";
 import { GitHubAuth, GITHUB_API_TIMEOUT_MS } from "./GitHubAuth.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import { forgeQueryCache, forgeQueryInflight } from "./GitHubCaches.js";
@@ -104,6 +104,7 @@ export async function runQuery(
  * lookups from every view at once.
  */
 export const listIssuesInflight = new Map<string, Promise<Page<Issue>>>();
+export const listIssueCommentsInflight = new Map<string, Promise<Page<IssueComment>>>();
 export const listPRsInflight = new Map<string, Promise<Page<PR>>>();
 export const getIssueInflight = new Map<string, Promise<Issue | null>>();
 export const getPRInflight = new Map<string, Promise<PR | null>>();

@@ -3,6 +3,7 @@ import type {
   ForgeLabel,
   ForgeUser,
   Issue,
+  IssueComment,
   LinkedPRSummary,
   ListOptions,
   NormalizedIssueState,
@@ -185,6 +186,24 @@ export function toForgeIssue(node: Record<string, unknown>): Issue {
     createdAt: isoToMs(node.createdAt ?? node.updatedAt),
     updatedAt: isoToMs(node.updatedAt),
     closedAt: isoToMsOrNull(node.closedAt),
+    rawData: node,
+  };
+}
+
+/**
+ * GraphQL `IssueComment` node → normalized {@link IssueComment}. `databaseId`
+ * is GitHub's REST numeric id, stringified so it matches what the REST write
+ * path (`addIssueCommentImpl`) returns for the same comment — the two ids stay
+ * interchangeable for any later edit/delete.
+ */
+export function toForgeIssueComment(node: Record<string, unknown>): IssueComment {
+  const author = toForgeUser(node.author);
+  return {
+    id: typeof node.databaseId === "number" ? String(node.databaseId) : "",
+    body: typeof node.body === "string" ? node.body : "",
+    url: typeof node.url === "string" ? node.url : "",
+    ...(author ? { author } : {}),
+    createdAt: isoToMs(node.createdAt),
     rawData: node,
   };
 }

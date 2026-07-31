@@ -2,6 +2,7 @@ import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import type {
   CIStatus,
   Issue,
+  IssueComment,
   IssueTooltipData,
   ListOptions,
   Page,
@@ -18,6 +19,7 @@ import type {
 import { GitHubAuth } from "./GitHubAuth.js";
 import {
   LIST_ISSUES_QUERY,
+  LIST_ISSUE_COMMENTS_QUERY,
   LIST_PRS_QUERY,
   SEARCH_QUERY,
   GET_ISSUE_QUERY,
@@ -59,6 +61,7 @@ import {
   mapIssueGraphQLStates,
   mapPRGraphQLStates,
   toForgeIssue,
+  toForgeIssueComment,
   toForgePR,
   gitHubIssueToForgeIssue,
 } from "./mappers.js";
@@ -66,6 +69,7 @@ import {
   dedupe,
   runQuery,
   listIssuesInflight,
+  listIssueCommentsInflight,
   listPRsInflight,
   getIssueInflight,
   getPRInflight,
@@ -897,6 +901,63 @@ export async function getReviewThreadsImpl(
     break;
   }
   return threads;
+}
+
+/** GitHub caps a GraphQL connection's `first:` at 100. */
+const MAX_ISSUE_COMMENTS_PER_PAGE = 100;
+
+/**
+ * Paged read of an issue's comment thread (#11545) — the read half of
+ * `addIssueComment`.
+ *
+ * Deliberately bypasses `runQuery`'s 60-second raw-response cache: the calling
+ * agent has often just posted into this very thread, or is polling for a human
+ * reply, so a minute of staleness reads as "nobody answered" and defeats the
+ * point. The call-site `dedupe` below still collapses concurrent identical
+ * reads, so bypassing costs nothing under fan-out.
+ *
+ * Order is GitHub's own: oldest-first. `opts.sort`/`opts.direction` are
+ * advisory and ignored — neither GitHub API honors them on a comment thread
+ * (see {@link IssueCommentCapability}), so accepting them would be a lie.
+ */
+export async function listIssueCommentsImpl(
+  repo: RepoRef,
+  issueNumber: number,
+  opts: ListOptions
+): Promise<Page<IssueComment>> {
+  const bypass = opts.bypassCache === true;
+  const limit = Math.min(Math.max(Math.trunc(opts.perPage ?? 20), 1), MAX_ISSUE_COMMENTS_PER_PAGE);
+  const cursor = opts.cursor ?? null;
+  const dedupeKey = `${repo.owner}/${repo.repo}#${issueNumber}:${cursor ?? ""}:${limit}`;
+
+  return dedupe(listIssueCommentsInflight, dedupeKey, bypass, async () => {
+    const response = await runQuery(
+      LIST_ISSUE_COMMENTS_QUERY,
+      { owner: repo.owner, repo: repo.repo, number: issueNumber, cursor, limit },
+      "LIST_ISSUE_COMMENTS_QUERY",
+      true
+    );
+
+    const comments = (
+      (response?.repository as Record<string, unknown> | undefined)?.issue as
+        | {
+            comments?: {
+              nodes?: unknown[];
+              pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+              totalCount?: number;
+            };
+          }
+        | undefined
+    )?.comments;
+
+    const nodes = (comments?.nodes ?? []) as Array<Record<string, unknown>>;
+    return {
+      items: nodes.filter(Boolean).map(toForgeIssueComment),
+      nextCursor: comments?.pageInfo?.endCursor ?? null,
+      hasMore: comments?.pageInfo?.hasNextPage ?? false,
+      ...(typeof comments?.totalCount === "number" ? { totalCount: comments.totalCount } : {}),
+    };
+  });
 }
 
 export function getRateLimitImpl(): Promise<RateLimitInfo> {

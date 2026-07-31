@@ -194,6 +194,14 @@ export const forgeClient = {
     return window.electron.forge.getPRReviewThreads({ cwd, prNumber });
   },
 
+  listIssueComments: (
+    cwd: string,
+    issueNumber: number,
+    opts?: ListOptions
+  ): Promise<Page<IssueComment>> => {
+    return window.electron.forge.listIssueComments({ cwd, issueNumber, opts });
+  },
+
   resolveAuthorAvatar: (cwd: string, email: string): Promise<string | null> => {
     return window.electron.forge.resolveAuthorAvatar({ cwd, email });
   },

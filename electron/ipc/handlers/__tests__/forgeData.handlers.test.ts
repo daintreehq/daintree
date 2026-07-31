@@ -157,6 +157,10 @@ describe("registerForgeDataHandlers", () => {
       expect.any(Function)
     );
     expect(ipcMainMock.handle).toHaveBeenCalledWith(
+      "forge:list-issue-comments",
+      expect.any(Function)
+    );
+    expect(ipcMainMock.handle).toHaveBeenCalledWith(
       "forge:resolve-author-avatar",
       expect.any(Function)
     );
@@ -513,6 +517,104 @@ describe("registerForgeDataHandlers", () => {
     const result = await findHandler("forge:get-current-user")(null, { cwd: "/repo" });
 
     expect(result).toBeNull();
+  });
+
+  describe("listIssueComments", () => {
+    const comment = {
+      id: "101",
+      body: "any progress here?",
+      url: "https://fake.test/acme/widgets/issues/7#comment-101",
+      createdAt: 1,
+      rawData: null,
+    };
+
+    function implWithComments(listIssueComments: ReturnType<typeof vi.fn>) {
+      return { ...fakeImpl, issueComments: { listIssueComments } };
+    }
+
+    it("delegates to the capability and returns its page verbatim", async () => {
+      const page = { items: [comment], nextCursor: "c2", hasMore: true, totalCount: 9 };
+      const listIssueComments = vi.fn().mockResolvedValue(page);
+      resolveForCwdMock.mockResolvedValue({
+        namespaceId: "fake.provider",
+        repoRef,
+        impl: implWithComments(listIssueComments) as unknown as ForgeProviderImpl,
+      });
+      registerForgeDataHandlers();
+
+      const result = await findHandler("forge:list-issue-comments")(null, {
+        cwd: "/repo",
+        issueNumber: 7,
+        opts: { cursor: "c1", perPage: 50 },
+      });
+
+      expect(listIssueComments).toHaveBeenCalledWith(repoRef, 7, { cursor: "c1", perPage: 50 });
+      expect(result).toEqual(page);
+    });
+
+    it("defaults opts to an empty object when omitted", async () => {
+      const listIssueComments = vi
+        .fn()
+        .mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+      resolveForCwdMock.mockResolvedValue({
+        namespaceId: "fake.provider",
+        repoRef,
+        impl: implWithComments(listIssueComments) as unknown as ForgeProviderImpl,
+      });
+      registerForgeDataHandlers();
+
+      await findHandler("forge:list-issue-comments")(null, { cwd: "/repo", issueNumber: 7 });
+
+      expect(listIssueComments).toHaveBeenCalledWith(repoRef, 7, {});
+    });
+
+    it("returns an empty page — not a throw — when the provider lacks the capability", async () => {
+      // `fakeImpl` has no `issueComments` field, matching a forge that can't
+      // serve comment reads. Read capabilities degrade; only mutations throw.
+      registerForgeDataHandlers();
+
+      const result = await findHandler("forge:list-issue-comments")(null, {
+        cwd: "/repo",
+        issueNumber: 7,
+      });
+
+      expect(result).toEqual({ items: [], nextCursor: null, hasMore: false });
+    });
+
+    it("rejects a non-positive or non-integer issue number before resolving a provider", async () => {
+      registerForgeDataHandlers();
+      const handler = findHandler("forge:list-issue-comments");
+
+      for (const issueNumber of [0, -1, 1.5, "7", null, undefined]) {
+        await expect(handler(null, { cwd: "/repo", issueNumber })).rejects.toThrow(
+          /invalid issue number/i
+        );
+      }
+      expect(resolveForCwdMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects a blank cwd", async () => {
+      registerForgeDataHandlers();
+
+      await expect(
+        findHandler("forge:list-issue-comments")(null, { cwd: "   ", issueNumber: 7 })
+      ).rejects.toThrow(/invalid working directory/i);
+      expect(resolveForCwdMock).not.toHaveBeenCalled();
+    });
+
+    it("propagates a capability failure instead of masking it as an empty thread", async () => {
+      const listIssueComments = vi.fn().mockRejectedValue(new Error("Bad credentials"));
+      resolveForCwdMock.mockResolvedValue({
+        namespaceId: "fake.provider",
+        repoRef,
+        impl: implWithComments(listIssueComments) as unknown as ForgeProviderImpl,
+      });
+      registerForgeDataHandlers();
+
+      await expect(
+        findHandler("forge:list-issue-comments")(null, { cwd: "/repo", issueNumber: 7 })
+      ).rejects.toThrow(/bad credentials/i);
+    });
   });
 
   it("getCurrentUser does not write an audit record (read probe, matches getRateLimit)", async () => {
