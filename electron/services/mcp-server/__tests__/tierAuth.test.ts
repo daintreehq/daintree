@@ -461,8 +461,8 @@ describe("forge tool exposure across the two curated allowlists", () => {
   it("permits forge.listIssueComments at both the workbench and external tiers", () => {
     const entry = makeEntry({ id: "forge.listIssueComments", kind: "query", danger: "safe" });
     for (const tier of ["workbench", "external"] as const) {
-      expect(isTierPermitted(tier, "forge.listIssueComments", false)).toBe(true);
-      expect(shouldExposeTool(entry, tier, false)).toBe(true);
+      expect(isTierPermitted(tier, "forge.listIssueComments")).toBe(true);
+      expect(shouldExposeTool(entry, tier)).toBe(true);
     }
   });
 });
