@@ -227,6 +227,8 @@ function baseProps() {
     onRenameScratch: vi.fn(),
     onSelectScratch: vi.fn(),
     onRequestDeleteScratch: vi.fn(),
+    onDismissDeleteScratchConfirm: vi.fn(),
+    onConfirmDeleteScratch: vi.fn(),
     onRequestDeleteAllScratches: vi.fn(),
     onDismissDeleteAllScratchesConfirm: vi.fn(),
     onConfirmDeleteAllScratches: vi.fn(),
@@ -559,8 +561,6 @@ describe("Single scratch delete", () => {
     const { view } = renderPalette({
       scratchResults: [makeScratch(1)],
       deleteScratchConfirm: target(),
-      onDismissDeleteScratchConfirm: vi.fn(),
-      onConfirmDeleteScratch: vi.fn(),
     });
     expect(screen.queryByTestId("confirm-dialog")).not.toBeNull();
 
@@ -581,8 +581,6 @@ describe("Single scratch delete", () => {
       // keep naming what the user agreed to.
       scratchResults: [],
       deleteScratchConfirm: target({ name: "Retry queue spike" }),
-      onDismissDeleteScratchConfirm: vi.fn(),
-      onConfirmDeleteScratch: vi.fn(),
     });
 
     expect(screen.getByTestId("confirm-title").textContent).toContain("Retry queue spike");
@@ -593,8 +591,6 @@ describe("Single scratch delete", () => {
     renderPalette({
       scratchResults: [makeScratch(1)],
       deleteScratchConfirm: target(),
-      onDismissDeleteScratchConfirm: vi.fn(),
-      onConfirmDeleteScratch: vi.fn(),
     });
 
     const dialog = screen.getByTestId("confirm-dialog");
@@ -608,8 +604,6 @@ describe("Single scratch delete", () => {
     const { props } = renderPalette({
       scratchResults: [makeScratch(1)],
       deleteScratchConfirm: target(),
-      onDismissDeleteScratchConfirm: vi.fn(),
-      onConfirmDeleteScratch: vi.fn(),
     });
 
     fireEvent.click(screen.getByTestId("confirm-accept"));
@@ -625,8 +619,6 @@ describe("Single scratch delete", () => {
     renderPalette({
       scratchResults: [makeScratch(1)],
       deleteScratchConfirm: target(),
-      onDismissDeleteScratchConfirm: vi.fn(),
-      onConfirmDeleteScratch: vi.fn(),
       isDeletingScratch: true,
     });
 
@@ -642,8 +634,6 @@ describe("Single scratch delete", () => {
       renderPalette({
         scratchResults: [makeScratch(1)],
         deleteScratchConfirm: target(),
-        onDismissDeleteScratchConfirm: vi.fn(),
-        onConfirmDeleteScratch: vi.fn(),
         isDeletingScratch: true,
       });
 
@@ -669,8 +659,6 @@ describe("Single scratch delete", () => {
     renderPalette({
       scratchResults: [makeScratch(1)],
       deleteScratchConfirm: target(),
-      onDismissDeleteScratchConfirm: vi.fn(),
-      onConfirmDeleteScratch: vi.fn(),
     });
 
     // Reading the dialog is not the operation: a region present here would be
@@ -682,8 +670,6 @@ describe("Single scratch delete", () => {
     renderPalette({
       scratchResults: [makeScratch(1)],
       deleteScratchConfirm: target(),
-      onDismissDeleteScratchConfirm: vi.fn(),
-      onConfirmDeleteScratch: vi.fn(),
       isDeletingScratch: true,
     });
 
@@ -700,8 +686,6 @@ describe("Single scratch delete", () => {
       renderPalette({
         scratchResults: [makeScratch(1)],
         deleteScratchConfirm: target(),
-        onDismissDeleteScratchConfirm: vi.fn(),
-        onConfirmDeleteScratch: vi.fn(),
         isDeletingScratch: true,
       });
 
@@ -733,8 +717,6 @@ describe("Single scratch delete", () => {
     renderPalette({
       scratchResults: [makeScratch(1)],
       deleteScratchConfirm: target(),
-      onDismissDeleteScratchConfirm: vi.fn(),
-      onConfirmDeleteScratch: vi.fn(),
     });
 
     // The trigger row is gone once the delete lands, so without a named successor
