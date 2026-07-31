@@ -604,7 +604,11 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
     windowDestroyed?: boolean;
     /** Omitted entirely for a window with no active project view. */
     activeWebContents?: FakeWebContents | null;
-    workspaceRef?: { kind: "project" | "scratch"; workspaceId: string; workspacePath: string } | null;
+    workspaceRef?: {
+      kind: "project" | "scratch";
+      workspaceId: string;
+      workspacePath: string;
+    } | null;
     /** Simulates a host whose manager predates getWorkspaceRefForWebContents. */
     omitWorkspaceRefAccessor?: boolean;
     /** Simulates a torn-down view whose accessor throws rather than returning. */
