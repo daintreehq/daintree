@@ -36,6 +36,7 @@ vi.mock("../GitHubErrors.js", () => ({
 }));
 
 import { githubForgeProvider } from "../forgeProvider.js";
+import { buildListCacheKey } from "../GitHubPRs.js";
 import {
   _resetForgeQueryCachesForTests,
   clearGitHubCaches,
@@ -1052,7 +1053,30 @@ describe("listPRs caching", () => {
   it("writes the cache entry under the forge list cache key", async () => {
     mockGraphQLClient.mockResolvedValue(prListResponse());
     await githubForgeProvider.listPRs(repo, { state: "open" });
-    expect(forgePRListCache.get("pr:owner/repo:open::created:")).toBeDefined();
+    expect(forgePRListCache.get(defaultListKey("pr"))).toBeDefined();
+  });
+
+  // listPRsImpl is a near-copy of listIssuesImpl; without these it could
+  // hardcode or drop either dimension while the issue-side tests stay green.
+  it.each([
+    ["page size", { perPage: 50 }],
+    ["direction", { direction: "asc" as const }],
+  ])("refetches when only the %s differs", async (_label, second) => {
+    mockGraphQLClient.mockResolvedValue(prListResponse());
+    await githubForgeProvider.listPRs(repo, { state: "open" });
+    await githubForgeProvider.listPRs(repo, { state: "open", ...second });
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("carries page size and direction into the PR GraphQL variables", async () => {
+    mockGraphQLClient.mockResolvedValue(prListResponse());
+    await githubForgeProvider.listPRs(repo, { state: "open", perPage: 7, direction: "asc" });
+    const [, variables] = mockGraphQLClient.mock.calls[0] as [
+      string,
+      { limit: number; orderBy: { direction: string } },
+    ];
+    expect(variables.limit).toBe(7);
+    expect(variables.orderBy.direction).toBe("ASC");
   });
 
   it("a superseded slow fetch does not clobber a newer bypass result", async () => {
@@ -1112,9 +1136,28 @@ describe("listPRs caching", () => {
     mockGraphQLClient.mockResolvedValue(prListResponse(99));
     await githubForgeProvider.listPRs(repo, { state: "open", cursor: "next" });
     // No throw and distinct cache keys — cursored result cached separately.
-    expect(forgePRListCache.get("pr:owner/repo:open::created:next")).toBeDefined();
+    expect(forgePRListCache.get(defaultListKey("pr", { cursor: "next" }))).toBeDefined();
   });
 });
+
+/** The cache key a default, unfiltered, uncursored first page lands under. */
+function defaultListKey(
+  type: "issue" | "pr",
+  overrides: Partial<Parameters<typeof buildListCacheKey>[0]> = {}
+): string {
+  return buildListCacheKey({
+    type,
+    owner: "owner",
+    repo: "repo",
+    state: "open",
+    search: "",
+    sortOrder: "created",
+    direction: "desc",
+    perPage: 20,
+    cursor: "",
+    ...overrides,
+  });
+}
 
 describe("listIssues caching", () => {
   beforeEach(() => mockGraphQLClient.mockReset());
@@ -1125,7 +1168,52 @@ describe("listIssues caching", () => {
     const second = await githubForgeProvider.listIssues(repo, { state: "open" });
     expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
     expect(second.items[0]?.number).toBe(5);
-    expect(forgeIssueListCache.get("issue:owner/repo:open::created:")).toBeDefined();
+    expect(forgeIssueListCache.get(defaultListKey("issue"))).toBeDefined();
+  });
+
+  it("treats an omitted page size and an explicit default as the same request", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse());
+    await githubForgeProvider.listIssues(repo, { state: "open" });
+    await githubForgeProvider.listIssues(repo, { state: "open", perPage: 20 });
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Before #11527 neither `perPage` nor `direction` was part of the cache key,
+   * so the second call here would have been served the first call's page.
+   */
+  it.each([
+    ["page size", { perPage: 50 }],
+    ["direction", { direction: "asc" as const }],
+  ])("refetches when only the %s differs", async (_label, second) => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse());
+    await githubForgeProvider.listIssues(repo, { state: "open" });
+    await githubForgeProvider.listIssues(repo, { state: "open", ...second });
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks GitHub for the page size the caller requested", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse());
+    await githubForgeProvider.listIssues(repo, { state: "open", perPage: 7 });
+    const [, variables] = mockGraphQLClient.mock.calls[0] as [string, { limit: number }];
+    expect(variables.limit).toBe(7);
+  });
+
+  it("clamps a page size GitHub would reject rather than sending it on", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse());
+    await githubForgeProvider.listIssues(repo, { state: "open", perPage: 5000 });
+    const [, variables] = mockGraphQLClient.mock.calls[0] as [string, { limit: number }];
+    expect(variables.limit).toBeLessThanOrEqual(100);
+  });
+
+  it("carries the caller's direction into the GraphQL ordering", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse());
+    await githubForgeProvider.listIssues(repo, { state: "open", direction: "asc" });
+    const [, variables] = mockGraphQLClient.mock.calls[0] as [
+      string,
+      { orderBy: { direction: string } },
+    ];
+    expect(variables.orderBy.direction).toBe("ASC");
   });
 });
 
@@ -1199,6 +1287,50 @@ describe("listIssues search", () => {
     expect(searchQuery).toBe("repo:owner/repo is:issue state:open sort:updated-desc flaky");
   });
 
+  /**
+   * The search path used to pin `-desc` and drop `direction` on the floor
+   * (#11527) — invisible while the action couldn't set it, wrong afterwards.
+   */
+  it.each([
+    ["created", "asc", "sort:created-asc"],
+    ["created", "desc", "sort:created-desc"],
+    ["updated", "asc", "sort:updated-asc"],
+    ["updated", "desc", "sort:updated-desc"],
+  ] as const)("honors sort '%s' with direction '%s'", async (sort, direction, expected) => {
+    mockGraphQLClient.mockResolvedValue(issueSearchResponse());
+
+    await githubForgeProvider.listIssues(repo, { state: "open", search: "flaky", sort, direction });
+
+    const { searchQuery } = mockGraphQLClient.mock.calls[0]![1] as { searchQuery: string };
+    expect(searchQuery).toContain(expected);
+  });
+
+  it("asks for a different page when only the direction flips", async () => {
+    mockGraphQLClient.mockResolvedValue(issueSearchResponse());
+
+    await githubForgeProvider.listIssues(repo, { search: "flaky", direction: "asc" });
+    await githubForgeProvider.listIssues(repo, { search: "flaky", direction: "desc" });
+
+    // Both calls must actually reach the client first. When direction was
+    // ignored the two requests were byte-identical, so the second was served
+    // from `forgeQueryCache` and never appeared here — leaving the comparison
+    // below to compare a string against `undefined` and pass vacuously.
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+    const queries = mockGraphQLClient.mock.calls.map(
+      (call) => (call[1] as { searchQuery: string }).searchQuery
+    );
+    expect(queries[0]).not.toBe(queries[1]);
+  });
+
+  it("passes the requested page size to the search query", async () => {
+    mockGraphQLClient.mockResolvedValue(issueSearchResponse());
+
+    await githubForgeProvider.listIssues(repo, { search: "flaky", perPage: 3 });
+
+    const [, variables] = mockGraphQLClient.mock.calls[0] as [string, { limit: number }];
+    expect(variables.limit).toBe(3);
+  });
+
   it("truncates the free-text term so the query stays within GitHub's 256-char cap", async () => {
     mockGraphQLClient.mockResolvedValue(issueSearchResponse());
 
@@ -1250,7 +1382,7 @@ describe("listIssues search", () => {
 
     await githubForgeProvider.listIssues(repo, { state: "open", search: "flaky" });
 
-    expect(forgeIssueListCache.get("issue:owner/repo:open::created:")).toBeUndefined();
+    expect(forgeIssueListCache.get(defaultListKey("issue"))).toBeUndefined();
 
     // A following unfiltered list call misses the cache and issues its own query.
     mockGraphQLClient.mockResolvedValue(issueListResponse());

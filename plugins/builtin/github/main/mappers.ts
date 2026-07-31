@@ -12,7 +12,17 @@ import type {
   PR,
   PullRequestReview,
 } from "../../../../shared/types/forge.js";
-import type { GitHubIssue, GitHubPR, GitHubPRCIStatus, GitHubUser } from "../shared/types.js";
+import type {
+  GitHubIssue,
+  GitHubPR,
+  GitHubPRCIStatus,
+  GitHubUser,
+  LinkedPRInfo,
+} from "../shared/types.js";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 export function isoToMs(value: unknown): number {
   if (typeof value !== "string") return 0;
@@ -71,10 +81,95 @@ function normalizePRState(rawState: string, merged: boolean): NormalizedPRState 
   return "open";
 }
 
+/**
+ * Pick the PR an issue is "being worked on" by from a GraphQL
+ * `timelineItems(itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT])`
+ * selection. `CrossReferencedEvent` carries the PR under `source`,
+ * `ConnectedEvent` under `subject`; both shapes are read, deduped by PR number,
+ * and the freshest (most recently updated, then highest-numbered) one wins.
+ *
+ * Lives here rather than in `GitHubIssues.ts` so both mapper families can share
+ * one implementation — `mappers.ts` is a leaf module, so importing it drags in
+ * no auth/cache/query machinery. Takes `unknown` and narrows structurally: the
+ * callers hold raw GraphQL nodes, and a malformed timeline must degrade to "no
+ * linked PR" rather than throw inside a list mapper.
+ */
+export function extractLinkedPR(timelineItems: unknown): LinkedPRInfo | undefined {
+  if (!isRecord(timelineItems)) return undefined;
+  const nodes = timelineItems.nodes;
+  if (!Array.isArray(nodes)) return undefined;
+
+  const prs: LinkedPRInfo[] = [];
+  const seenPRNumbers = new Set<number>();
+
+  for (const node of nodes) {
+    if (!isRecord(node)) continue;
+    const prData = isRecord(node.source)
+      ? node.source
+      : isRecord(node.subject)
+        ? node.subject
+        : undefined;
+    if (!prData) continue;
+
+    // A PR needs a usable number AND url to be actionable, so anything short of
+    // a real positive integer and a non-empty url is treated as "no linked PR"
+    // rather than emitted as a half-formed reference.
+    const number = prData.number;
+    const url = prData.url;
+    if (typeof number !== "number" || !Number.isInteger(number) || number <= 0) continue;
+    if (typeof url !== "string" || url.length === 0) continue;
+    if (seenPRNumbers.has(number)) continue;
+    seenPRNumbers.add(number);
+
+    const rawState = typeof prData.state === "string" ? prData.state.toUpperCase() : "";
+    const state: LinkedPRInfo["state"] =
+      prData.merged === true ? "MERGED" : rawState === "CLOSED" ? "CLOSED" : "OPEN";
+
+    prs.push({
+      number,
+      state,
+      url,
+      ...(typeof prData.updatedAt === "string" ? { updatedAt: prData.updatedAt } : {}),
+    });
+  }
+
+  if (prs.length === 0) return undefined;
+  prs.sort(compareLinkedPRFreshness);
+  return prs[0];
+}
+
+function compareLinkedPRFreshness(a: LinkedPRInfo, b: LinkedPRInfo): number {
+  const aParsed = typeof a.updatedAt === "string" ? Date.parse(a.updatedAt) : 0;
+  const bParsed = typeof b.updatedAt === "string" ? Date.parse(b.updatedAt) : 0;
+  const aTime = Number.isFinite(aParsed) ? aParsed : 0;
+  const bTime = Number.isFinite(bParsed) ? bParsed : 0;
+  if (aTime !== bTime) return bTime - aTime;
+  return b.number - a.number;
+}
+
+/**
+ * Narrow a {@link LinkedPRInfo} (GitHub-shaped, raw `OPEN|CLOSED|MERGED`) to the
+ * cross-provider {@link LinkedPRSummary} the forge `Issue` contract declares.
+ */
+function toLinkedPRSummary(linked: LinkedPRInfo | undefined): LinkedPRSummary | undefined {
+  if (!linked) return undefined;
+  const ciStatus = mapListCIStatus(linked.ciStatus);
+  return {
+    number: linked.number,
+    state: normalizePRState(linked.state, linked.state === "MERGED"),
+    url: linked.url,
+    ...(ciStatus ? { ciStatus } : {}),
+  };
+}
+
 export function toForgeIssue(node: Record<string, unknown>): Issue {
   const rawState = typeof node.state === "string" ? node.state : "OPEN";
   const comments = node.comments as { totalCount?: unknown } | undefined;
   const commentCount = typeof comments?.totalCount === "number" ? comments.totalCount : undefined;
+  // `timelineItems` is selected by LIST_ISSUES_QUERY, SEARCH_QUERY and
+  // GET_ISSUE_QUERY. Queries that don't project it yield `undefined` here,
+  // which is the same "no linked PR" answer as an empty timeline (#11527).
+  const linkedPR = toLinkedPRSummary(extractLinkedPR(node.timelineItems));
   return {
     number: node.number as number,
     title: (node.title as string) ?? "",
@@ -86,6 +181,7 @@ export function toForgeIssue(node: Record<string, unknown>): Issue {
     assignees: toForgeUsers(node.assignees),
     labels: toForgeLabels(node.labels),
     ...(commentCount !== undefined ? { commentCount } : {}),
+    ...(linkedPR ? { linkedPR } : {}),
     createdAt: isoToMs(node.createdAt ?? node.updatedAt),
     updatedAt: isoToMs(node.updatedAt),
     closedAt: isoToMsOrNull(node.closedAt),
@@ -307,15 +403,7 @@ function gitHubUserToForgeUser(user: GitHubUser): ForgeUser {
  */
 export function gitHubIssueToForgeIssue(item: GitHubIssue): Issue {
   const updatedAt = isoToMs(item.updatedAt);
-  const linkedCI = mapListCIStatus(item.linkedPR?.ciStatus);
-  const linkedPR: LinkedPRSummary | undefined = item.linkedPR
-    ? {
-        number: item.linkedPR.number,
-        state: normalizePRState(item.linkedPR.state, item.linkedPR.state === "MERGED"),
-        url: item.linkedPR.url,
-        ...(linkedCI ? { ciStatus: linkedCI } : {}),
-      }
-    : undefined;
+  const linkedPR = toLinkedPRSummary(item.linkedPR);
   return {
     number: item.number,
     title: item.title,

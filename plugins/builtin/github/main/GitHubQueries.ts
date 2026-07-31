@@ -340,6 +340,32 @@ export const SEARCH_QUERY = `
               color
             }
           }
+          timelineItems(itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT], last: 20) {
+            nodes {
+              ... on CrossReferencedEvent {
+                source {
+                  ... on PullRequest {
+                    number
+                    state
+                    merged
+                    url
+                    updatedAt
+                  }
+                }
+              }
+              ... on ConnectedEvent {
+                subject {
+                  ... on PullRequest {
+                    number
+                    state
+                    merged
+                    url
+                    updatedAt
+                  }
+                }
+              }
+            }
+          }
         }
         ... on PullRequest {
           number

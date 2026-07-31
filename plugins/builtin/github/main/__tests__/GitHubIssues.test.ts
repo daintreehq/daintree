@@ -41,6 +41,7 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 import { assignIssue, extractLinkedPR, listIssues } from "../GitHubIssues.js";
+import { buildListCacheKey, DEFAULT_LIST_PER_PAGE } from "../GitHubPRs.js";
 import { GitHubAuth } from "../GitHubAuth.js";
 import {
   issueListCache,
@@ -462,7 +463,21 @@ describe("listIssues — mid-flight count-buster guard", () => {
     const result = await listIssues({ cwd: "/test", bypassCache: true });
 
     expect(result.totalCount).toBe(5);
-    expect(issueListCache.get("issue:testowner/testrepo:open::created:")).toBeDefined();
+    expect(
+      issueListCache.get(
+        buildListCacheKey({
+          type: "issue",
+          owner: "testowner",
+          repo: "testrepo",
+          state: "open",
+          search: "",
+          sortOrder: "created",
+          direction: "desc",
+          perPage: DEFAULT_LIST_PER_PAGE,
+          cursor: "",
+        })
+      )
+    ).toBeDefined();
     expect(repoStatsCache.get("testowner/testrepo")?.issueCount).toBe(5);
   });
 });

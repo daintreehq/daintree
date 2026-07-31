@@ -1343,7 +1343,9 @@ async function readResourceContents(
     return { uri, mimeType: "application/json", text };
   }
   if (parsed.kind === "issues") {
-    const envelope = await dispatchAction("forge.listIssues", {});
+    // Explicit rather than riding the action's default: this resource is read
+    // whole and then truncated, so the compact projection is the point.
+    const envelope = await dispatchAction("forge.listIssues", { view: "summary" });
     const text = serializeResourcePayload(unwrapDispatchResult(envelope));
     return { uri, mimeType: "application/json", text: truncateText(text) };
   }

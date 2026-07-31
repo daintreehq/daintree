@@ -45,16 +45,64 @@ import type {
 } from "../../../../shared/types/forge.js";
 import type { RepoContext, RepoStats } from "./types.js";
 
-export function buildListCacheKey(
-  type: "issue" | "pr",
-  owner: string,
-  repo: string,
-  state: string,
-  search: string,
-  sortOrder: string,
-  cursor: string
-): string {
-  return `${type}:${owner}/${repo}:${state}:${search}:${sortOrder}:${cursor}`;
+/** Page size used when a caller names none. Mirrored by the action's default. */
+export const DEFAULT_LIST_PER_PAGE = 20;
+
+/** GitHub's GraphQL connections cap `first:` at 100. */
+const MAX_LIST_PER_PAGE = 100;
+
+/**
+ * Collapse a requested page size onto the value actually sent to GitHub, so the
+ * cache key and the query can never disagree: an omitted `perPage` and an
+ * explicit `20` are the same request and must share a cache entry, while an
+ * out-of-range value is clamped rather than sent on to be rejected.
+ */
+export function normalizeListPerPage(perPage: number | undefined): number {
+  if (typeof perPage !== "number" || !Number.isFinite(perPage)) return DEFAULT_LIST_PER_PAGE;
+  const truncated = Math.trunc(perPage);
+  if (truncated < 1) return 1;
+  if (truncated > MAX_LIST_PER_PAGE) return MAX_LIST_PER_PAGE;
+  return truncated;
+}
+
+/** Anything that isn't an explicit ascending request sorts newest-first. */
+export function normalizeListDirection(direction: string | undefined): "asc" | "desc" {
+  return direction === "asc" ? "asc" : "desc";
+}
+
+/** GitHub orders issue/PR connections by creation or update time only. */
+export function normalizeListSortOrder(sort: string | undefined): "created" | "updated" {
+  return sort === "updated" ? "updated" : "created";
+}
+
+/**
+ * Cache/in-flight identity for one list page. EVERY option that changes what
+ * the provider fetches must appear here — a key missing a dimension hands the
+ * second caller the first caller's payload off the shared `dedupe()` promise
+ * (#11527 for `perPage`/`direction`, which were readable by `readOps` long
+ * before the action could set them).
+ *
+ * Takes named fields rather than positionals: the tuple is now long enough that
+ * a transposed pair would silently produce a plausible-but-wrong key.
+ *
+ * The `${type}:${owner}/${repo}:` prefix is load-bearing — `GitHubCaches` sweeps
+ * a repo's pages by prefix match, so nothing repo-identifying may move after it.
+ */
+export function buildListCacheKey(params: {
+  type: "issue" | "pr";
+  owner: string;
+  repo: string;
+  state: string;
+  search: string;
+  sortOrder: string;
+  direction: string;
+  perPage: number;
+  cursor: string;
+}): string {
+  const { type, owner, repo, state, search, sortOrder, direction, perPage, cursor } = params;
+  // `cursor` stays last: it is an opaque provider blob that may itself contain
+  // the separator, so no fixed-width field may follow it.
+  return `${type}:${owner}/${repo}:${state}:${search}:${sortOrder}:${direction}:${perPage}:${cursor}`;
 }
 
 export function updateRepoStatsCount(cacheKey: string, type: "issue" | "pr", count: number): void {
@@ -474,15 +522,19 @@ export async function listPullRequests(
   };
 
   return withRepoContextRetry(options.cwd, async (context) => {
-    const cacheKey = buildListCacheKey(
-      "pr",
-      context.owner,
-      context.repo,
-      options.state ?? "open",
-      options.search ?? "",
-      resolvedSortOrder,
-      options.cursor ?? ""
-    );
+    const cacheKey = buildListCacheKey({
+      type: "pr",
+      owner: context.owner,
+      repo: context.repo,
+      state: options.state ?? "open",
+      search: options.search ?? "",
+      sortOrder: resolvedSortOrder,
+      // This legacy path pins both: `orderBy.direction` is hardcoded DESC above
+      // and every query below requests `limit: 20`.
+      direction: "desc",
+      perPage: DEFAULT_LIST_PER_PAGE,
+      cursor: options.cursor ?? "",
+    });
 
     if (!options.search && !options.bypassCache) {
       const cached = prListCache.get(cacheKey);

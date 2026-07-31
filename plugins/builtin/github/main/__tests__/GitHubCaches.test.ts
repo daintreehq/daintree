@@ -128,11 +128,20 @@ describe("clearGitHubCaches / clearPRCaches symmetry", () => {
     ["clearPRCaches", clearPRCaches],
   ] as const) {
     it(`${name} clears the PR list and required-status caches together`, () => {
-      // Key shape must match buildListCacheKey's
-      // `${type}:${owner}/${repo}:${state}:${search}:${sortOrder}:${cursor}` —
-      // a malformed key would still pass under a global clear but would give a
+      // Built through the real key builder rather than hand-written: a
+      // malformed key would still pass under a global clear but would give a
       // false green if clearing ever became prefix-scoped.
-      const listKey = buildListCacheKey("pr", "owner", "repo", "open", "", "created", "");
+      const listKey = buildListCacheKey({
+        type: "pr",
+        owner: "owner",
+        repo: "repo",
+        state: "open",
+        search: "",
+        sortOrder: "created",
+        direction: "desc",
+        perPage: 20,
+        cursor: "",
+      });
       forgePRListCache.set(listKey, {
         items: [],
         nextCursor: null,

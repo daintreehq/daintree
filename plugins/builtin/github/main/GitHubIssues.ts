@@ -18,105 +18,31 @@ import {
   getRepoListEpoch,
 } from "./GitHubCaches.js";
 import { GitHubStatsCache } from "./GitHubStatsCache.js";
-import { buildListCacheKey, updateRepoStatsCount } from "./GitHubPRs.js";
+import { buildListCacheKey, DEFAULT_LIST_PER_PAGE, updateRepoStatsCount } from "./GitHubPRs.js";
 import { truncateBody, isoToEpochMs } from "./GitHubCaches.js";
 import type {
   GitHubIssue,
   GitHubUser,
   GitHubListOptions,
   GitHubListResponse,
-  LinkedPRInfo,
 } from "../shared/types.js";
 import type { ForgeLabel, ForgeUser, IssueTooltipData } from "../../../../shared/types/forge.js";
 import type { RepoContext } from "./types.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { extractLinkedPR } from "./mappers.js";
 
-export function extractLinkedPR(
-  timelineItems:
-    | {
-        nodes?: Array<{
-          source?: {
-            number?: number;
-            state?: string;
-            merged?: boolean;
-            url?: string;
-            updatedAt?: string;
-          };
-          subject?: {
-            number?: number;
-            state?: string;
-            merged?: boolean;
-            url?: string;
-            updatedAt?: string;
-          };
-        }>;
-      }
-    | undefined
-): LinkedPRInfo | undefined {
-  if (!timelineItems?.nodes) return undefined;
-
-  const prs: LinkedPRInfo[] = [];
-  const seenPRNumbers = new Set<number>();
-
-  for (const node of timelineItems.nodes) {
-    const prData = node?.source ?? node?.subject;
-    if (prData?.number && prData?.url && !seenPRNumbers.has(prData.number)) {
-      seenPRNumbers.add(prData.number);
-      const state: "OPEN" | "CLOSED" | "MERGED" = prData.merged
-        ? "MERGED"
-        : (prData.state?.toUpperCase() as "OPEN" | "CLOSED") || "OPEN";
-      prs.push({
-        number: prData.number,
-        state,
-        url: prData.url,
-        ...(typeof prData.updatedAt === "string" ? { updatedAt: prData.updatedAt } : {}),
-      });
-    }
-  }
-
-  if (prs.length === 0) return undefined;
-
-  prs.sort(compareLinkedPRFreshness);
-  return prs[0];
-}
-
-function compareLinkedPRFreshness(a: LinkedPRInfo, b: LinkedPRInfo): number {
-  const aUpdatedAt = typeof a.updatedAt === "string" ? Date.parse(a.updatedAt) : 0;
-  const bUpdatedAt = typeof b.updatedAt === "string" ? Date.parse(b.updatedAt) : 0;
-  const aTime = Number.isFinite(aUpdatedAt) ? aUpdatedAt : 0;
-  const bTime = Number.isFinite(bUpdatedAt) ? bUpdatedAt : 0;
-  if (aTime !== bTime) return bTime - aTime;
-
-  return b.number - a.number;
-}
+// Re-exported from its new home in `mappers.ts` (#11527): both mapper families
+// need it, and `mappers.ts` is a leaf module, so the forge mapper can reach it
+// without importing this module's auth/cache/query machinery.
+export { extractLinkedPR };
 
 export function parseIssueNode(node: Record<string, unknown>): GitHubIssue {
   const author = node.author as { login?: string; avatarUrl?: string } | null;
   const assigneesData = node.assignees as { nodes?: Array<{ login?: string; avatarUrl?: string }> };
   const commentsData = node.comments as { totalCount?: number };
   const labelsData = node.labels as { nodes?: Array<{ name?: string; color?: string }> };
-  const timelineItems = node.timelineItems as
-    | {
-        nodes?: Array<{
-          source?: {
-            number?: number;
-            state?: string;
-            merged?: boolean;
-            url?: string;
-            updatedAt?: string;
-          };
-          subject?: {
-            number?: number;
-            state?: string;
-            merged?: boolean;
-            url?: string;
-            updatedAt?: string;
-          };
-        }>;
-      }
-    | undefined;
 
-  const linkedPR = extractLinkedPR(timelineItems);
+  const linkedPR = extractLinkedPR(node.timelineItems);
 
   return {
     number: node.number as number,
@@ -550,15 +476,19 @@ export async function listIssues(
   };
 
   return withRepoContextRetry(options.cwd, async (context) => {
-    const cacheKey = buildListCacheKey(
-      "issue",
-      context.owner,
-      context.repo,
-      options.state ?? "open",
-      options.search ?? "",
-      resolvedSortOrder,
-      options.cursor ?? ""
-    );
+    const cacheKey = buildListCacheKey({
+      type: "issue",
+      owner: context.owner,
+      repo: context.repo,
+      state: options.state ?? "open",
+      search: options.search ?? "",
+      sortOrder: resolvedSortOrder,
+      // This legacy path pins both: `orderBy.direction` is hardcoded DESC above
+      // and every query below requests `limit: 20`.
+      direction: "desc",
+      perPage: DEFAULT_LIST_PER_PAGE,
+      cursor: options.cursor ?? "",
+    });
 
     if (!options.search && !options.bypassCache) {
       const cached = issueListCache.get(cacheKey);

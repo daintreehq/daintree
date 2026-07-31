@@ -227,6 +227,12 @@ function listOptionsKey(opts: ListOptions): string {
     opts.sort ?? null,
     opts.direction ?? null,
     opts.search ?? null,
+    // `bypassCache` is part of the identity, not a modifier of it: a bypassing
+    // caller joined onto a concurrent cache-first flight would be handed that
+    // caller's payload and never reach the provider, silently defeating the
+    // only escape from a warm list cache. Normalized to `false` so an omitted
+    // flag and an explicit `false` share one slot and still collapse.
+    opts.bypassCache ?? false,
   ]);
 }
 
