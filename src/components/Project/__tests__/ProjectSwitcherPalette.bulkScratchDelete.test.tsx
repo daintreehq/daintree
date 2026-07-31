@@ -121,6 +121,7 @@ vi.mock("@/components/ui/ConfirmDialog", async () => {
       variant,
       typedNameTarget,
       restoreFocusTo,
+      confirmDisabled,
     }: {
       isOpen: boolean;
       title: React.ReactNode;
@@ -132,6 +133,7 @@ vi.mock("@/components/ui/ConfirmDialog", async () => {
       isConfirmLoading?: boolean;
       variant: string;
       typedNameTarget?: string;
+      confirmDisabled?: boolean;
       restoreFocusTo?: React.RefObject<HTMLElement | null> | (() => HTMLElement | null);
     }) => {
       // Resolved after mount, not during render: a ref handed down from the
@@ -150,6 +152,7 @@ vi.mock("@/components/ui/ConfirmDialog", async () => {
           data-loading={String(Boolean(isConfirmLoading))}
           data-dismissable={String(Boolean(onClose))}
           data-typed-name-target={typedNameTarget ?? ""}
+          data-confirm-disabled={String(Boolean(confirmDisabled))}
           data-restore-focus={restoreTarget}
         >
           <h2 data-testid="confirm-title">{title}</h2>
@@ -618,7 +621,7 @@ describe("Single scratch delete", () => {
     expect(props.onConfirmDeleteScratch).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses dismissal while the deletion is in flight", () => {
+  it("refuses dismissal from the first frame of the deletion", () => {
     renderPalette({
       scratchResults: [makeScratch(1)],
       deleteScratchConfirm: target(),
@@ -627,9 +630,39 @@ describe("Single scratch delete", () => {
       isDeletingScratch: true,
     });
 
-    const dialog = screen.getByTestId("confirm-dialog");
-    expect(dialog.getAttribute("data-dismissable")).toBe("false");
-    expect(dialog.getAttribute("data-loading")).toBe("true");
+    // Escaping mid-run would strand the user with no view of the outcome while
+    // the folder disappears underneath. Keyed on raw state, so there is no
+    // window where the run has started but the dialog is still dismissable.
+    expect(screen.getByTestId("confirm-dialog").getAttribute("data-dismissable")).toBe("false");
+  });
+
+  it("locks the button immediately but holds its spinner for the gate", () => {
+    vi.useFakeTimers();
+    try {
+      renderPalette({
+        scratchResults: [makeScratch(1)],
+        deleteScratchConfirm: target(),
+        onDismissDeleteScratchConfirm: vi.fn(),
+        onConfirmDeleteScratch: vi.fn(),
+        isDeletingScratch: true,
+      });
+
+      // Disabled from the first frame — gating the lock too would leave a window
+      // where a second press still went through — but no spinner yet, so a
+      // scratch that deletes in 80ms never flashes one.
+      const dialog = screen.getByTestId("confirm-dialog");
+      expect(dialog.getAttribute("data-confirm-disabled")).toBe("true");
+      expect(dialog.getAttribute("data-loading")).toBe("false");
+
+      act(() => {
+        vi.advanceTimersToNextTimer();
+      });
+
+      expect(dialog.getAttribute("data-loading")).toBe("true");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it("carries no progress region until the deletion starts", () => {

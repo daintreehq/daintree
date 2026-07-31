@@ -1674,8 +1674,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       // raising, but a deletion that lands while the window is blurred is dropped
       // rather than filed. `transient` is what drops it, and it stays because a
       // routine delete is not inbox-worthy — `closeAndAnnounce` above is the
-      // guaranteed signal. No `context`: pairing it with `transient` is the
-      // unsupported shape `notify()` DEV-warns about (no inbox to fall back to).
+      // guaranteed signal. No `context` for the same reason: suppression needs an
+      // inbox entry to fall back to, and a transient payload has none.
+      // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
       notify({
         type: "success",
         title,
@@ -1684,6 +1685,18 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         priority: "high",
       });
     } catch (error) {
+      // Another window may have deleted this scratch while our own call was in
+      // flight, which is how ours came to fail. The user asked for it gone and it
+      // is gone, so reconcile instead of reporting a failure — and close, because
+      // the error copy below leans on the dialog surviving as its retry surface,
+      // which the stale-target effect is about to take away.
+      const isAlreadyGone = !useScratchStore
+        .getState()
+        .scratches.some((scratch: Scratch) => scratch.id === target.id);
+      if (isAlreadyGone) {
+        closeAndAnnounce(() => setDeleteScratchConfirm(null), `Deleted '${target.name}'`);
+        return;
+      }
       // The dialog stays open and its button re-arms: that button is the retry
       // surface, so the toast needs no action of its own.
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok

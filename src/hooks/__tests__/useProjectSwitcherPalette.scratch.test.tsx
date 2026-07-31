@@ -195,18 +195,27 @@ function deletedIds(): string[] {
   return scratchState.removeScratch.mock.calls.map((call) => call[0]);
 }
 
-/** A removal that stays pending until the test releases it. */
-function deferRemovals(): { release: () => void } {
-  const resolvers: (() => void)[] = [];
+/**
+ * A removal that stays pending until the test releases it.
+ *
+ * `reject` settles the SAME pending promises `release` would: swapping the mock
+ * implementation mid-run only affects later calls, so a spec that wants the
+ * in-flight removal to fail has to reject the promise it is already waiting on.
+ */
+function deferRemovals(): { release: () => void; reject: (error: Error) => void } {
+  const settlers: { resolve: () => void; reject: (error: Error) => void }[] = [];
   scratchState.removeScratch.mockImplementation(
     () =>
-      new Promise<void>((resolve) => {
-        resolvers.push(resolve);
+      new Promise<void>((resolve, reject) => {
+        settlers.push({ resolve, reject });
       })
   );
   return {
     release: () => {
-      for (const resolve of resolvers) resolve();
+      for (const settler of settlers) settler.resolve();
+    },
+    reject: (error: Error) => {
+      for (const settler of settlers) settler.reject(error);
     },
   };
 }
@@ -925,9 +934,9 @@ describe("deleteScratch", () => {
     expect(result.current.deleteScratchConfirm).toBeNull();
   });
 
-  it("reconciles a target another window deleted when our own run then fails", async () => {
+  it("reconciles rather than reporting failure when another window won the race", async () => {
     const seeded = seedScratches(2);
-    const { release } = deferRemovals();
+    const { reject } = deferRemovals();
     const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
 
     act(() => result.current.requestDeleteScratch(seeded[0]!.id));
@@ -943,29 +952,48 @@ describe("deleteScratch", () => {
     rerender();
     expect(result.current.deleteScratchConfirm).not.toBeNull();
 
-    // Then OUR call fails — the path that deliberately keeps the dialog open as
-    // its retry surface. Nothing about `scratches` changes on the way out, so a
-    // guard keyed on the re-entrancy ref never re-runs and strands a dialog
-    // offering to retry a scratch that is already gone.
-    scratchState.removeScratch.mockImplementation(() => Promise.reject(new Error("EBUSY")));
+    // Then OUR in-flight call fails — losing that race is how it came to fail.
+    // Rejecting the pending promise, not swapping the mock: a new implementation
+    // would only affect the NEXT call and this run would resolve successfully,
+    // taking the success path and passing for the wrong reason.
     await act(async () => {
-      release();
+      reject(new Error("Scratch not found"));
       await run;
     });
 
+    // The user asked for it gone and it is gone: no failure toast, and the dialog
+    // is closed rather than left offering to retry a scratch that no longer
+    // exists — which is what the error copy's "no action needed" leans on.
+    expect(notifyMock).not.toHaveBeenCalled();
     expect(result.current.isDeletingScratch).toBe(false);
     expect(result.current.deleteScratchConfirm).toBeNull();
   });
 
-  it("closes the dialog before it settles the busy flag", async () => {
+  it("still reports a failure that left the scratch in place", async () => {
     const seeded = seedScratches(2);
-    // Probe the guard at helper-entry time rather than after the run: every
-    // outcome assertion reads final batched state, so clearing the busy flag
-    // BEFORE the announcement would look identical from the outside.
-    let dismissWasRefused = false;
+    scratchState.removeScratch.mockRejectedValue(new Error("EBUSY"));
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
+    await act(async () => {
+      await result.current.confirmDeleteScratch();
+    });
+
+    // Paired with the spec above: without it, reconciling every failure silently
+    // would look correct.
+    expect(lastNotification().type).toBe("error");
+    expect(result.current.deleteScratchConfirm?.id).toBe(seeded[0]!.id);
+  });
+
+  it("is still busy while the announcement is raised", async () => {
+    const seeded = seedScratches(2);
+    // Probed from inside the helper: every outcome assertion reads final batched
+    // state, so settling the busy flag BEFORE the announcement would look
+    // identical from the outside. A dismiss attempted at that instant must be
+    // refused — and the stub deliberately never calls the closer, so the dialog
+    // can only be gone if the dismiss went through.
     closeAndAnnounceSpy.mockImplementation(() => {
       result.current.dismissDeleteScratchConfirm();
-      dismissWasRefused = result.current.deleteScratchConfirm !== null;
     });
     const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -974,9 +1002,7 @@ describe("deleteScratch", () => {
       await result.current.confirmDeleteScratch();
     });
 
-    // The dialog is still busy while the announcement is raised, so a dismiss
-    // arriving at that moment is refused rather than racing the close.
-    expect(dismissWasRefused).toBe(true);
+    expect(result.current.deleteScratchConfirm?.id).toBe(seeded[0]!.id);
   });
 
   it("keeps the dialog open while a different scratch vanishes", () => {

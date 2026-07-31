@@ -1668,7 +1668,9 @@ function DropdownContent({
         focusRafRef.current = null;
       }
     };
-  }, [isOpen]);
+    // `inputRef` is a prop now that the search box is shared with the dialogs;
+    // it is a stable ref object, so this only satisfies the linter.
+  }, [isOpen, inputRef]);
 
   useEffect(() => {
     if (
@@ -1781,7 +1783,12 @@ function DeleteScratchConfirmDialog({
       confirmLabel="Delete scratch"
       cancelLabel="Cancel"
       onConfirm={onConfirm}
-      isConfirmLoading={isDeleting}
+      // Split on purpose: the button locks the instant it is pressed, but its
+      // spinner waits out the Doherty gate, so a scratch that deletes in 80ms
+      // never flashes one. Gating the lock too would leave a window where a
+      // second press still went through.
+      confirmDisabled={isDeleting}
+      isConfirmLoading={isDeleting && progress.isVisible}
       variant="destructive"
       // The row that opened this is gone by the time it closes, so the default
       // restore walks to the first tabbable node under #root — app chrome behind
@@ -1809,7 +1816,15 @@ function DeleteScratchConfirmDialog({
           >
             {progress.isVisible && (
               <>
-                Closing terminals and deleting files…
+                {/*
+                 * Names the operation, not a step. Main tears the terminals down
+                 * FIRST and only reaches the folder if that confirms — so a line
+                 * claiming both would be asserting file deletion during a
+                 * teardown that may yet fail and delete nothing. The steps are
+                 * named in the consequence copy above, where they are a statement
+                 * of intent rather than a claim about what is happening now.
+                 */}
+                Deleting scratch…
                 {progress.isStillWorking && (
                   <span className="block text-daintree-text/40">Still working…</span>
                 )}
