@@ -386,6 +386,21 @@ export class GrantCache {
   }
 
   /**
+   * Like {@link getActiveGrants} but returns only grants that are live by every
+   * condition {@link check} enforces — not past the sliding TTL and not past
+   * the hard wall-clock ceiling. Unlike `check`, it never evicts and never
+   * emits a lifecycle event, so a read-only caller (discovery filtering, status
+   * snapshots) cannot fire a spurious `grant.expired` push. `getActiveGrants`
+   * establishes no liveness at all, so it is the wrong read for those callers.
+   */
+  getLiveGrants(sessionId?: string): Array<{ sessionId: string; toolId: string } & GrantEntry> {
+    const now = this.now();
+    return this.getActiveGrants(sessionId).filter(
+      (entry) => now <= entry.expiresAt && now <= entry.issuedAt + this.maxLifetimeMs
+    );
+  }
+
+  /**
    * Mint a native session-scoped automation grant (#10648). Authorizes the
    * given `allowedTools` for the session for up to `maxUses` dispatches within
    * the sliding TTL (capped by the hard `maxLifetimeMs` ceiling). Returns the

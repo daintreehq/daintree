@@ -31,6 +31,7 @@ import {
   withResolvedWorkspace,
 } from "../shared.js";
 import { TOOL_RESULT_TEXT_MAX_BYTES } from "../toolCallResult.js";
+import { isTierPermitted, shouldExposeTool } from "../tierAuth.js";
 import { SessionBindingError, RendererBridgeUnavailableError } from "../rendererBridge.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
@@ -3237,5 +3238,278 @@ describe("resolved-workspace result metadata (#11536)", () => {
     expect(workspaceMetaOf(result)).toEqual(WORKSPACE);
     expect((result as { structuredContent?: unknown }).structuredContent).toEqual(payload);
     expect(JSON.parse(textOf(result))).toEqual(payload);
+  });
+});
+
+// #11525 — discovery must mirror dispatch authority. The renderer builds these
+// results with no idea which session called it, so main narrows them on the way
+// back out.
+describe("sessionServer introspection tier filtering", () => {
+  function introspectionDeps(
+    tier: "workbench" | "action" | "system" | "external",
+    result: unknown,
+    overrides?: Partial<SessionServerDeps>
+  ) {
+    return fakeDeps({
+      sessionStore: fakeSessionStore(tier),
+      dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result } }),
+      ...overrides,
+    });
+  }
+
+  function entry(id: string, overrides: Partial<ActionManifestEntry> = {}): ActionManifestEntry {
+    return { ...makeManifestEntry(id), ...overrides };
+  }
+
+  /**
+   * The tool result the model actually receives. Read from the text block
+   * because `structuredContent` is only built when the manifest lookup
+   * resolves an entry carrying an outputSchema, which most of these deps
+   * deliberately do not supply.
+   */
+  function payload<T>(res: { content: unknown }): T {
+    return JSON.parse((res.content as Array<{ text: string }>)[0]!.text) as T;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("drops actions.list entries the calling tier cannot dispatch", async () => {
+    // `git.push` is a system-tier tool; a workbench session can never call it,
+    // so advertising it in discovery only buys a TIER_NOT_PERMITTED round trip.
+    // Give the manifest lookup a real entry with an outputSchema so the
+    // handler also emits structuredContent — the two renderings of the result
+    // must agree, since they are one filtered value and not two filters.
+    const manifestEntry: ActionManifestEntry = {
+      ...makeManifestEntry("actions.list"),
+      outputSchema: { type: "object", properties: {} },
+    };
+    const deps = introspectionDeps(
+      "workbench",
+      { actions: [entry("actions.list"), entry("git.push"), entry("terminal.list")] },
+      { getCachedManifest: vi.fn(() => [manifestEntry]) }
+    );
+    const server = createSessionServer("s1", deps);
+    const res = await callTool(server, { name: "actions.list" });
+
+    const listed = payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id);
+    expect(listed).toContain("actions.list");
+    expect(listed).not.toContain("git.push");
+    expect(isTierPermitted("workbench", "git.push")).toBe(false);
+    const text = (res.content as Array<{ text: string }>)[0]!.text;
+    expect(text).not.toContain("git.push");
+    expect(res.structuredContent).toEqual(JSON.parse(text));
+  });
+
+  it("returns strictly more to a higher tier", async () => {
+    const manifest = { actions: [entry("actions.list"), entry("git.push")] };
+    const ids = async (tier: "workbench" | "system") => {
+      const server = createSessionServer("s1", introspectionDeps(tier, manifest));
+      const res = await callTool(server, { name: "actions.list" });
+      return payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id);
+    };
+    const workbench = await ids("workbench");
+    const system = await ids("system");
+    expect(system.length).toBeGreaterThan(workbench.length);
+    for (const id of workbench) expect(system).toContain(id);
+  });
+
+  it("keeps discoverable entries reachable through search (progressive disclosure)", async () => {
+    // These are exactly the entries eager tools/list omits, so search is their
+    // only route. Filtering discovery with shouldExposeTool would delete them.
+    const discoverable = entry("terminal.list", { mcpVisibility: "discoverable" });
+    // tools/list refuses to advertise it; search is the only way to reach it.
+    expect(shouldExposeTool(discoverable, "workbench")).toBe(false);
+    expect(isTierPermitted("workbench", "terminal.list")).toBe(true);
+
+    const deps = introspectionDeps("workbench", {
+      totalMatches: 2,
+      results: [discoverable, entry("git.push")],
+    });
+    const server = createSessionServer("s1", deps);
+    const res = await callTool(server, {
+      name: "actions.search",
+      arguments: { query: "terminal" },
+    });
+
+    const body = payload<{ totalMatches: number; results: ActionManifestEntry[] }>(res);
+    expect(body.results.map((r) => r.id)).toEqual(["terminal.list"]);
+    expect(body.totalMatches).toBe(1);
+  });
+
+  it("over-fetches the search page so denied top hits cannot starve it", async () => {
+    const denied = Array.from({ length: 40 }, (_, i) => entry(`git.denied${i}`));
+    const deps = introspectionDeps("workbench", {
+      totalMatches: 43,
+      results: [...denied, entry("actions.list"), entry("actions.search"), entry("terminal.list")],
+    });
+    const server = createSessionServer("s1", deps);
+    const res = await callTool(server, {
+      name: "actions.search",
+      arguments: { query: "anything", limit: 3 },
+    });
+
+    // Main asked the renderer for the schema maximum, not the caller's 3 —
+    // otherwise the 40 denied hits would consume the whole page.
+    const dispatched = (deps.dispatchAction as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect((dispatched[1] as { limit: number }).limit).toBe(100);
+
+    const body = payload<{ totalMatches: number; results: ActionManifestEntry[] }>(res);
+    expect(body.results).toHaveLength(3);
+    expect(body.totalMatches).toBe(3);
+  });
+
+  it("leaves an out-of-contract search limit for the renderer to reject", async () => {
+    const deps = introspectionDeps("workbench", { totalMatches: 0, results: [] });
+    const server = createSessionServer("s1", deps);
+    await callTool(server, {
+      name: "actions.search",
+      arguments: { query: "anything", limit: 5000 },
+    });
+
+    // The over-fetch must not rewrite an illegal limit into a legal one; the
+    // renderer's own validation stays the gate.
+    const dispatched = (deps.dispatchAction as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect((dispatched[1] as { limit: number }).limit).toBe(5000);
+  });
+
+  it("does not widen the limit for non-search introspection tools", async () => {
+    const deps = introspectionDeps("workbench", { actions: [] });
+    const server = createSessionServer("s1", deps);
+    await callTool(server, { name: "actions.list", arguments: { category: "git" } });
+
+    const dispatched = (deps.dispatchAction as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(dispatched[1]).toEqual({ category: "git" });
+  });
+
+  it("reports a tier-denied getSchema id as NOT_FOUND rather than advertising it", async () => {
+    const deps = introspectionDeps("workbench", { ok: true, entry: entry("git.push") });
+    const server = createSessionServer("s1", deps);
+    const res = await callTool(server, {
+      name: "actions.getSchema",
+      arguments: { actionId: "git.push" },
+    });
+
+    const body = payload<{ ok: boolean; error: { code: string } }>(res);
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("NOT_FOUND");
+  });
+
+  it("leaves non-introspection results untouched", async () => {
+    const result = { actions: [entry("git.push")], totalMatches: 99 };
+    const deps = introspectionDeps("workbench", result);
+    const server = createSessionServer("s1", deps);
+    const res = await callTool(server, { name: "terminal.list" });
+    expect(payload(res)).toEqual(result);
+  });
+
+  describe("live grants widen discovery", () => {
+    it("surfaces a per-tool grant's action in actions.list", async () => {
+      const deps = introspectionDeps("workbench", { actions: [entry("git.push")] });
+      const server = createSessionServer("s1", deps);
+
+      const before = await callTool(server, { name: "actions.list" });
+      expect(payload<{ actions: unknown[] }>(before).actions).toHaveLength(0);
+
+      deps.sessionStore.grantCache.issueGrant("s1", "git.push");
+      const after = await callTool(server, { name: "actions.list" });
+      expect(
+        payload<{ actions: ActionManifestEntry[] }>(after).actions.map((a) => a.id)
+      ).toEqual(["git.push"]);
+
+      deps.sessionStore.grantCache.dispose();
+    });
+
+    it("surfaces every tool a native automation grant pre-approved", async () => {
+      // Native grants (#10648) are issued up front with an explicit allowlist.
+      // If discovery ignored them the agent could never find the tools it was
+      // just approved for.
+      const deps = introspectionDeps("workbench", {
+        actions: [entry("git.push"), entry("git.commit"), entry("worktree.delete")],
+      });
+      const server = createSessionServer("s1", deps);
+      deps.sessionStore.grantCache.issueNativeGrant({
+        sessionId: "s1",
+        actorId: "test-actor",
+        actorType: "help-session",
+        allowedTools: ["git.push", "git.commit"],
+        maxUses: 5,
+      });
+
+      const res = await callTool(server, { name: "actions.list" });
+      expect(payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id)).toEqual([
+        "git.push",
+        "git.commit",
+      ]);
+
+      deps.sessionStore.grantCache.dispose();
+    });
+
+    it("does not consume a native grant use or emit lifecycle events while discovering", async () => {
+      const emitted: string[] = [];
+      const grantCache = new GrantCache({
+        sweepIntervalMs: 0,
+        emit: (_sessionId, payload) => emitted.push(payload.type),
+      });
+      const store = fakeSessionStore("workbench");
+      (store as unknown as { grantCache: GrantCache }).grantCache = grantCache;
+
+      const deps = fakeDeps({
+        sessionStore: store,
+        dispatchAction: vi.fn().mockResolvedValue({
+          result: { ok: true, result: { actions: [entry("git.push")] } },
+        }),
+      });
+      const server = createSessionServer("s1", deps);
+      const grant = grantCache.issueNativeGrant({
+        sessionId: "s1",
+        actorId: "test-actor",
+        actorType: "help-session",
+        allowedTools: ["git.push"],
+        maxUses: 1,
+      });
+      emitted.length = 0;
+
+      await callTool(server, { name: "actions.list" });
+      await callTool(server, { name: "actions.list" });
+
+      // Discovery is a read: the single use is still available for a real call.
+      expect(grantCache.getNativeGrant(grant.id)?.remainingUses).toBe(1);
+      expect(emitted).toEqual([]);
+
+      grantCache.dispose();
+    });
+
+    it("ignores a grant that has lapsed its TTL", async () => {
+      let now = 1000;
+      const grantCache = new GrantCache({ ttlMs: 100, sweepIntervalMs: 0, now: () => now });
+      const store = fakeSessionStore("workbench");
+      (store as unknown as { grantCache: GrantCache }).grantCache = grantCache;
+
+      const deps = fakeDeps({
+        sessionStore: store,
+        dispatchAction: vi.fn().mockResolvedValue({
+          result: { ok: true, result: { actions: [entry("git.push")] } },
+        }),
+      });
+      const server = createSessionServer("s1", deps);
+      grantCache.issueGrant("s1", "git.push");
+
+      now = 50_000;
+      const res = await callTool(server, { name: "actions.list" });
+      expect(payload<{ actions: unknown[] }>(res).actions).toHaveLength(0);
+
+      grantCache.dispose();
+    });
+  });
+
+  // Discovery results depend on tier and on live grants, both of which can
+  // change between calls. Caching them per (session, args) would serve a
+  // pre-revocation surface after an approval lapsed.
+  it("keeps introspection tools out of the mutation-only dedup allowlist", () => {
+    for (const id of ["actions.list", "actions.search", "actions.getSchema"]) {
+      expect(MCP_DEDUP_ALLOWLIST.has(id)).toBe(false);
+    }
   });
 });

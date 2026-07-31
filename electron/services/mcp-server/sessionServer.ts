@@ -69,6 +69,13 @@ import {
   buildToolOutputSchema,
   buildStructuredContent,
   parseToolArguments,
+  filterIntrospectionResultForSession,
+  getTierPermittedActionIds,
+  readSearchLimit,
+  INTROSPECTION_TOOL_IDS,
+  ACTIONS_SEARCH_TOOL_ID,
+  ACTIONS_SEARCH_MAX_LIMIT,
+  ACTIONS_SEARCH_DEFAULT_LIMIT,
 } from "./tierAuth.js";
 import { buildToolCallResult } from "./toolCallResult.js";
 
@@ -410,6 +417,46 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // records — receives this same value so one tool call can never split
     // across two turn groupings in the Assistant panel.
     const capturedTurnId: string | null = getCurrentTurnId?.() ?? null;
+
+    const searchLimit = actionId === ACTIONS_SEARCH_TOOL_ID ? readSearchLimit(args) : null;
+    // Discovery must mirror dispatch authority (#11525). The introspection
+    // tools enumerate the action registry from the renderer, which has no idea
+    // which session called it, so main computes the effective surface here and
+    // narrows the result on the way back.
+    //
+    // "Effective" is the static tier allowlist widened by every live grant —
+    // the same three sources the dispatch gate below consults. Native
+    // automation grants (#10648) matter most: they are issued up front with an
+    // explicit `allowedTools` set, so ignoring them would leave an agent unable
+    // to find the very tools it was just approved for. Reads go through the
+    // non-evicting `getLive*` snapshots; `grantCache.check` / `peekNativeGrant`
+    // would delete expired entries and push spurious `grant.expired` lifecycle
+    // events on every discovery call.
+    const introspectionSurface = INTROSPECTION_TOOL_IDS.has(actionId)
+      ? {
+          permittedActionIds: new Set<string>([
+            ...getTierPermittedActionIds(tier),
+            ...sessionStore.grantCache.getLiveGrants(sessionId).map((grant) => grant.toolId),
+            ...sessionStore.grantCache
+              .getLiveNativeGrants(sessionId)
+              .flatMap((grant) => [...grant.allowedTools]),
+          ]),
+          callerLimit: searchLimit ?? ACTIONS_SEARCH_DEFAULT_LIMIT,
+        }
+      : null;
+    // `actions.search` ranks and slices in the renderer, before main can see
+    // tier. Over-fetching the schema's maximum page makes that slice the
+    // complete match set for any query matching at most that many actions, so
+    // filtering it yields an exact count and a full page instead of a starved
+    // one. Only the forwarded copy is widened — `args` still feeds the audit
+    // record, which must report what the caller actually asked for. A `limit`
+    // the tool contract forbids yields a null `searchLimit` and is left alone,
+    // so the renderer's own validation still rejects it rather than having the
+    // over-fetch quietly rewrite it into a legal request.
+    const dispatchArgs =
+      searchLimit !== null && args && typeof args === "object" && !Array.isArray(args)
+        ? { ...(args as Record<string, unknown>), limit: ACTIONS_SEARCH_MAX_LIMIT }
+        : args;
 
     // Layered authorization (#8442):
     //   1. Static tier floor (`TIER_ALLOWLISTS`) — workbench/action/system
@@ -928,8 +975,24 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // leaves it undefined and stamps nothing.
         let dispatchedWorkspace: DispatchedWorkspaceRef | undefined;
         try {
-          const envelope = await dispatchAction(actionId, args, dispatchConfirmed);
-          outcome = { kind: "result", value: envelope.result };
+          const envelope = await dispatchAction(actionId, dispatchArgs, dispatchConfirmed);
+          // Narrow registry-enumerating results to this session's effective
+          // surface before anything downstream reads them (#11525). Placed
+          // ahead of the `outcome` assignment so the text content, the
+          // structuredContent block, and the audit record all observe one
+          // filtered value — and so both the pinned and unpinned dispatch
+          // paths, which converge on this call, are covered by the same gate.
+          outcome = {
+            kind: "result",
+            value: introspectionSurface
+              ? filterIntrospectionResultForSession(
+                  actionId,
+                  envelope.result,
+                  introspectionSurface.permittedActionIds,
+                  introspectionSurface.callerLimit
+                )
+              : envelope.result,
+          };
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
           dispatchedWorkspace = envelope.dispatchedWorkspace;
         } catch (err) {
