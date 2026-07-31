@@ -8,6 +8,7 @@ import {
   GIT_COMMIT_BODY_MAX_BYTES,
   GIT_FILE_DIFF_DEFAULT_MAX_BYTES,
   GIT_FILE_DIFF_MAX_BYTES,
+  GIT_LIST_COMMITS_LIMIT_DEFAULT,
   GIT_LIST_COMMITS_LIMIT_MAX,
   GIT_SUBJECT_MAX_BYTES,
   PULSE_RECENT_COMMITS_MAX,
@@ -374,10 +375,18 @@ describe("gitActions adversarial", () => {
     const { runParsed, git } = setupActions();
 
     await runParsed("git.listCommits", { worktreePath: "/canonical" }, {});
-    expect(git.listCommits).toHaveBeenLastCalledWith({ cwd: "/canonical" });
+    expect(git.listCommits).toHaveBeenLastCalledWith({
+      cwd: "/canonical",
+      skip: 0,
+      limit: GIT_LIST_COMMITS_LIMIT_DEFAULT,
+    });
 
     await runParsed("git.listCommits", { cwd: "/legacy" }, {});
-    expect(git.listCommits).toHaveBeenLastCalledWith({ cwd: "/legacy" });
+    expect(git.listCommits).toHaveBeenLastCalledWith({
+      cwd: "/legacy",
+      skip: 0,
+      limit: GIT_LIST_COMMITS_LIMIT_DEFAULT,
+    });
   });
 
   it("git.listCommits maps the legacy skip alias onto the offset it pages by", async () => {
@@ -407,7 +416,10 @@ describe("gitActions adversarial", () => {
       { worktreeId: "wt-1", filePath: "a.ts", status: "modified" },
       {}
     );
-    expect(git.getFileDiff).toHaveBeenLastCalledWith("/repo/one", "a.ts", "modified", undefined);
+    expect(git.getFileDiff).toHaveBeenLastCalledWith("/repo/one", "a.ts", "modified", undefined, {
+      offset: 0,
+      maxBytes: GIT_FILE_DIFF_DEFAULT_MAX_BYTES,
+    });
   });
 
   it("git.stageFile falls back to ctx.activeWorktreePath", async () => {
@@ -483,7 +495,7 @@ describe("gitActions bounded reads", () => {
     expect(result.items.length).toBeLessThanOrEqual(11);
   });
 
-  it("git.listCommits advances nextSkip by limit so a pinned hash match skips nothing", async () => {
+  it("git.listCommits advances nextCursor by limit so a pinned hash match skips nothing", async () => {
     const { run, git } = setupActions();
     // Shape produced by a hash-prefix search: the pinned match plus a full page.
     git.listCommits.mockResolvedValue({
@@ -499,12 +511,12 @@ describe("gitActions bounded reads", () => {
       "git.listCommits",
       { limit: 10 },
       { activeWorktreePath: "/repo" }
-    )) as { items: { hash: string }[]; nextSkip: number | null };
+    )) as { items: { hash: string }[]; nextCursor: string | null };
 
     // All ten message commits survive alongside the pin: cutting to `limit`
-    // would drop message commit 9, which nextSkip then steps over for good.
+    // would drop message commit 9, which the next cursor then steps over for good.
     expect(result.items.map((c) => c.hash)).toContain("hash-9");
-    expect(result.nextSkip).toBe(10);
+    expect(result.nextCursor).toBe("10");
   });
 
   it("git.listCommits clamps an over-ceiling limit instead of forwarding it", async () => {
@@ -519,14 +531,15 @@ describe("gitActions bounded reads", () => {
       "git.listCommits",
       { limit: 5000 },
       { activeWorktreePath: "/repo" }
-    )) as { items: unknown[]; limit: number };
+    )) as { items: unknown[]; nextCursor: string | null };
 
     expect(git.listCommits).toHaveBeenCalledWith(
       expect.objectContaining({ limit: GIT_LIST_COMMITS_LIMIT_MAX })
     );
     // limit + 1 leaves room for a pinned hash match alongside a full page.
     expect(result.items).toHaveLength(GIT_LIST_COMMITS_LIMIT_MAX + 1);
-    expect(result.limit).toBe(GIT_LIST_COMMITS_LIMIT_MAX);
+    // The cursor steps by the CLAMPED limit, never the 5000 that was asked for.
+    expect(result.nextCursor).toBe(String(GIT_LIST_COMMITS_LIMIT_MAX));
   });
 
   it("git.listCommits truncates each commit body and flags it", async () => {

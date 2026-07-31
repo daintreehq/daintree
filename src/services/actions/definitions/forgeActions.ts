@@ -408,7 +408,12 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         const resolvedCwd = requireWorktreePath(location, ctx);
         const assignees = await forgeClient.assignIssue(resolvedCwd, issueNumber, username);
         const result = ForgeAssigneesResultSchema.parse({ issueNumber, assignees });
-        syncAssigneeCache(assigneeCachePath(location, resolvedCwd), issueNumber, username, result.assignees);
+        syncAssigneeCache(
+          assigneeCachePath(location, resolvedCwd),
+          issueNumber,
+          username,
+          result.assignees
+        );
         return result;
       },
     })
@@ -435,7 +440,12 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         const resolvedCwd = requireWorktreePath(location, ctx);
         const assignees = await forgeClient.unassignIssue(resolvedCwd, issueNumber, username);
         const result = ForgeAssigneesResultSchema.parse({ issueNumber, assignees });
-        syncAssigneeCache(assigneeCachePath(location, resolvedCwd), issueNumber, username, result.assignees);
+        syncAssigneeCache(
+          assigneeCachePath(location, resolvedCwd),
+          issueNumber,
+          username,
+          result.assignees
+        );
         return result;
       },
     })

@@ -199,7 +199,9 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
           .int()
           .nonnegative()
           .optional()
-          .describe("Byte offset to start reading from — pass a previous `nextOffset` (default 0)."),
+          .describe(
+            "Byte offset to start reading from — pass a previous `nextOffset` (default 0)."
+          ),
         maxBytes: z
           .number()
           .int()
@@ -316,7 +318,11 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       // Clamped here as well as in argsSchema: dispatch paths that bypass schema
       // validation must not be able to request an unbounded page.
       const skip = Math.max(Math.trunc(start ?? 0) || 0, 0);
-      const limit = clamp(rawLimit ?? GIT_LIST_COMMITS_LIMIT_DEFAULT, 1, GIT_LIST_COMMITS_LIMIT_MAX);
+      const limit = clamp(
+        rawLimit ?? GIT_LIST_COMMITS_LIMIT_DEFAULT,
+        1,
+        GIT_LIST_COMMITS_LIMIT_MAX
+      );
       const result = await window.electron.git.listCommits({
         ...filters,
         cwd: resolvedCwd,
