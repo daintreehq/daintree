@@ -12,9 +12,13 @@ export function usePasteExtensions(cwd: string) {
   // `useEditorFactory` reads these extensions once, while building the initial
   // `EditorState`, under an effect keyed on `terminalId` alone — and no
   // compartment wraps them. A memo that rebuilt the extension when `cwd`
-  // changed would produce an object the editor never installs, so the handler
-  // has to reach the current cwd through a ref instead. Same latest-value ref
-  // pattern `useEditorDomHandlers` uses for its own installed-once handlers.
+  // changed would produce an object the editor never installs, so the file-
+  // drop handler has to reach the current cwd through a ref instead. React
+  // Compiler can't prove `createFilePasteHandler` defers invoking its
+  // callback, so it flags the ref read as unsafe — opting the hook out of
+  // compilation is the same fix `useEditorDomHandlers` uses for its own
+  // installed-once handlers.
+  "use no memo";
   const cwdRef = useRef(cwd);
   useEffect(() => {
     cwdRef.current = cwd;
