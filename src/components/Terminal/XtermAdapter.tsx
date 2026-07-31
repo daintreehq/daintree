@@ -167,6 +167,9 @@ export function XtermAdapter({
     terminalId,
     isInputLocked,
     onInput: stableOnInput,
+    // The same stable reader the instance service gets, so a drop relativizes
+    // its `@file` token against the cwd the terminal is in when it lands.
+    cwdProvider: stableCwdProvider,
     launchAgentId,
     detectedAgentId,
     agentState,

@@ -32,7 +32,9 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
+import type { EditorView } from "@codemirror/view";
 import { IMAGE_EXTENSIONS, useTerminalFileTransfer } from "../useTerminalFileTransfer";
+import { useDragDrop } from "../hooks/useDragDrop";
 import { formatAtFileToken } from "../hybridInputParsing";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -51,6 +53,9 @@ function lastWrittenPayload(): string {
   const calls = vi.mocked(terminalClient.write).mock.calls;
   return calls[calls.length - 1]![1];
 }
+
+/** A worktree root the fixture paths below sit inside. */
+const CWD = "/Users/test/proj";
 
 describe("IMAGE_EXTENSIONS", () => {
   it("matches common image formats", () => {
@@ -454,20 +459,129 @@ describe("useTerminalFileTransfer hook", () => {
   });
 
   it("quotes @ tokens for paths containing whitespace", () => {
-    renderFileTransferHook({ detectedAgentId: "claude" });
-    dropFiles([fileAt("my notes.md", "/Users/test/my notes.md")]);
+    renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+    dropFiles([fileAt("my notes.md", `${CWD}/my notes.md`)]);
 
     // Pinned to the literal wire format an agent CLI has to parse, rather than
     // re-deriving it from the same formatter the hook calls — an unquoted space
     // would split the reference into two arguments.
-    expect(lastWrittenPayload()).toBe('@"/Users/test/my notes.md" ');
+    expect(lastWrittenPayload()).toBe('@"my notes.md" ');
   });
 
   it("writes the plain @ wire format for a path needing no quoting", () => {
-    renderFileTransferHook({ detectedAgentId: "claude" });
-    dropFiles([fileAt("App.tsx", "/Users/test/src/App.tsx")]);
+    renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+    dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
 
-    expect(lastWrittenPayload()).toBe("@/Users/test/src/App.tsx ");
+    expect(lastWrittenPayload()).toBe("@src/App.tsx ");
+  });
+
+  // --- The @ token agrees with every other producer (#11575) ---
+
+  /**
+   * Runs the hybrid input bar's own drop handler over the same file and returns
+   * the `@file` token it inserted.
+   *
+   * Dropping a file on the terminal and dropping it on the input bar are one
+   * gesture to the user, so the two surfaces have to spell the reference
+   * identically. Comparing the producers is what catches a divergence: pinning
+   * either one to its own literal passes happily while they disagree.
+   */
+  async function hybridInputBarToken(
+    name: string,
+    absolutePath: string,
+    cwd: string
+  ): Promise<string> {
+    const dispatch = vi.fn<(transaction: { changes: { insert: string } }) => void>();
+    const viewRef = {
+      current: {
+        state: { selection: { main: { head: 0 } } },
+        dispatch,
+      } as unknown as EditorView,
+    };
+
+    const { result } = renderHook(() => useDragDrop(viewRef, cwd));
+
+    await act(async () => {
+      await result.current.handleDrop({
+        preventDefault: () => {},
+        stopPropagation: () => {},
+        dataTransfer: { files: [fileAt(name, absolutePath)], types: ["Files"] },
+      } as unknown as React.DragEvent);
+    });
+
+    return dispatch.mock.calls[0]![0].changes.insert.trimEnd();
+  }
+
+  it("spells a dropped file exactly as the hybrid input bar does", async () => {
+    const absolute = `${CWD}/src/App.tsx`;
+    renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+    dropFiles([fileAt("App.tsx", absolute)]);
+
+    const terminalToken = lastWrittenPayload().trimEnd();
+    expect(terminalToken).toBe(await hybridInputBarToken("App.tsx", absolute, CWD));
+    // …and both are the relativized spelling, not both surfaces staying absolute.
+    expect(terminalToken).not.toContain(CWD);
+  });
+
+  it("spells a whitespace-bearing path exactly as the hybrid input bar does", async () => {
+    const absolute = `${CWD}/src/my notes.md`;
+    renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+    dropFiles([fileAt("my notes.md", absolute)]);
+
+    expect(lastWrittenPayload().trimEnd()).toBe(
+      await hybridInputBarToken("my notes.md", absolute, CWD)
+    );
+  });
+
+  it("keeps a file dropped from outside the worktree absolute, like the input bar", async () => {
+    const outside = "/etc/hosts.ts";
+    renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+    dropFiles([fileAt("hosts.ts", outside)]);
+
+    const terminalToken = lastWrittenPayload().trimEnd();
+    expect(terminalToken).toBe(await hybridInputBarToken("hosts.ts", outside, CWD));
+    // Relative would not resolve out there — absolute is the only usable form.
+    expect(terminalToken).toContain(outside);
+  });
+
+  // The live PTY cwd moves as the user cd's, so the provider handed to the pane
+  // on the latest commit is the one a drop has to consult — not the closure the
+  // DOM listeners were registered with.
+  it("relativizes against the cwd provider current at drop time", async () => {
+    const absolute = `${CWD}/src/App.tsx`;
+    const { rerender } = renderFileTransferHook({
+      detectedAgentId: "claude",
+      cwdProvider: () => "/somewhere/else",
+    });
+
+    rerender({ detectedAgentId: "claude", cwdProvider: () => CWD });
+    dropFiles([fileAt("App.tsx", absolute)]);
+
+    expect(lastWrittenPayload().trimEnd()).toBe(
+      await hybridInputBarToken("App.tsx", absolute, CWD)
+    );
+  });
+
+  it("leaves the shell form absolute even for a file inside the cwd", () => {
+    const absolute = `${CWD}/src/App.tsx`;
+    renderFileTransferHook({ cwdProvider: () => CWD });
+    dropFiles([fileAt("App.tsx", absolute)]);
+
+    // A shell resolves a relative path against its own cwd, which the pane only
+    // observes — it has no way to know the two still agree.
+    expect(lastWrittenPayload()).toBe(`${escapeShellArgOptional(absolute)} `);
+  });
+
+  it("relativizes a pasted image saved inside the worktree", async () => {
+    vi.mocked(window.electron.clipboard.saveImage).mockResolvedValue({
+      filePath: `${CWD}/.daintree/clipboard/shot.png`,
+      thumbnailDataUrl: "",
+    });
+
+    renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+    await pasteImage();
+
+    expect(lastWrittenPayload()).toBe("@.daintree/clipboard/shot.png ");
   });
 
   it("switches format when the detected agent changes, without re-registering listeners", () => {

@@ -5,7 +5,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { escapeShellArgOptional } from "@shared/utils/shellEscape.js";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol.js";
-import { formatAtFileToken } from "./hybridInputParsing";
+import { formatAtFileTokenForCwd } from "./hybridInputParsing";
 
 /**
  * Image file extension pattern shared with HybridInputBar.
@@ -56,6 +56,13 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
   terminalId: string;
   isInputLocked?: boolean;
   onInput?: (data: string) => void;
+  /**
+   * Reads the terminal's live cwd, called at gesture time so a `cd` between
+   * mount and drop relativizes against where the terminal actually is.
+   * Omitted (or empty) leaves every path absolute, which is what
+   * `formatAtFileTokenForCwd` already does for an out-of-tree file.
+   */
+  cwdProvider?: () => string;
 }
 
 /**
@@ -71,8 +78,11 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
  *
  * - **Content** follows the terminal's runtime identity. An agent CLI gets the
  *   same `@path` token every other attach surface produces (`@` autocomplete,
- *   hybrid-input paste/drop, voice "link to"); a plain shell keeps a
- *   shell-escaped path, which is what a shell can actually consume.
+ *   hybrid-input paste/drop, voice "link to") — including its cwd-relative
+ *   spelling (#11575), so dropping a file on the terminal and dropping it on
+ *   the input bar cannot disagree about what the reference looks like. A plain
+ *   shell keeps an absolute shell-escaped path, which is what a shell can
+ *   actually consume.
  * - **Delivery** follows the live xterm bracketed-paste mode. Agent CLIs read
  *   raw stdin and cannot distinguish an injected byte from a typed one, so an
  *   unwrapped `@` would drive their own interactive file picker character by
@@ -92,6 +102,7 @@ export function useTerminalFileTransfer(
     terminalId,
     isInputLocked,
     onInput,
+    cwdProvider,
     launchAgentId,
     detectedAgentId,
     agentState,
@@ -117,11 +128,13 @@ export function useTerminalFileTransfer(
     agentState,
   });
   const isInputLockedRef = useRef(isInputLocked);
+  const cwdProviderRef = useRef(cwdProvider);
   const isMountedRef = useRef(true);
 
   useLayoutEffect(() => {
     identityRef.current = { launchAgentId, detectedAgentId, agentState };
     isInputLockedRef.current = isInputLocked;
+    cwdProviderRef.current = cwdProvider;
   });
 
   useLayoutEffect(() => {
@@ -139,8 +152,14 @@ export function useTerminalFileTransfer(
 
     const isAgentTerminal = (): boolean => deriveTerminalChrome(identityRef.current).isAgent;
 
+    // The OS hands drop and clipboard-save an absolute path, so the agent
+    // branch relativizes exactly like the hybrid input's drop and paste do —
+    // same helper, cwd read at gesture time. The shell branch stays absolute:
+    // a relative path only resolves if the shell's own cwd still matches.
     const formatPath = (filePath: string, isAgent: boolean): string =>
-      isAgent ? formatAtFileToken(filePath) : escapeShellArgOptional(filePath);
+      isAgent
+        ? formatAtFileTokenForCwd(filePath, cwdProviderRef.current?.() ?? "")
+        : escapeShellArgOptional(filePath);
 
     /**
      * Writes one already-formatted batch as a single insertion, wrapping it in
