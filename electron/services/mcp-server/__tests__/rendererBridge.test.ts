@@ -483,15 +483,23 @@ describe("rendererBridge — requesting-bearer identity passthrough (#9157)", ()
    * that carries `callerInfo`.
    */
   function makeActiveBridge(wc: FakeWebContents) {
-    const registry = {
-      all: () => [
-        {
-          browserWindow: { isDestroyed: () => false },
-          services: {
-            projectViewManager: { getActiveView: () => ({ webContents: wc }) },
+    const contexts = [
+      {
+        browserWindow: { isDestroyed: () => false },
+        services: {
+          projectViewManager: {
+            getActiveView: () => ({ webContents: wc }),
+            // Present but empty, so these tests exercise the real "no workspace
+            // registered" path rather than a missing-method error path.
+            getWorkspaceRefForWebContents: () => null,
           },
         },
-      ],
+      },
+    ];
+    const registry = {
+      all: () => contexts,
+      focusOrder: () => contexts,
+      getByWebContentsId: (id: number) => (id === wc.id ? contexts[0] : undefined),
     };
     const bridge = createRendererBridge(
       pendingManifests,
@@ -574,5 +582,426 @@ describe("rendererBridge — requesting-bearer identity passthrough (#9157)", ()
 
     expect(sentPayload).toBeDefined();
     expect(sentPayload?.callerInfo).toBeUndefined();
+  });
+});
+
+describe("rendererBridge — unpinned routing follows focus order (#11536)", () => {
+  let pendingManifests: Map<string, PendingRequest<ActionManifestEntry[]>>;
+  let pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>;
+
+  beforeEach(() => {
+    mockIpcMain.removeAllListeners();
+    mockWebContentsRegistry.clear();
+    pendingManifests = new Map();
+    pendingDispatches = new Map();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  interface FakeContextOptions {
+    windowDestroyed?: boolean;
+    /** Omitted entirely for a window with no active project view. */
+    activeWebContents?: FakeWebContents | null;
+    workspaceRef?: {
+      kind: "project" | "scratch";
+      workspaceId: string;
+      workspacePath: string;
+    } | null;
+    /** Simulates a host whose manager predates getWorkspaceRefForWebContents. */
+    omitWorkspaceRefAccessor?: boolean;
+    /** Simulates a torn-down view whose accessor throws rather than returning. */
+    throwFromWorkspaceRefAccessor?: boolean;
+    /** Simulates the window lookup itself throwing, before any accessor call. */
+    throwFromServices?: boolean;
+  }
+
+  function makeContext(options: FakeContextOptions) {
+    const { windowDestroyed = false, activeWebContents = null, workspaceRef = null } = options;
+    const getActiveView = () => (activeWebContents ? { webContents: activeWebContents } : null);
+    // Spied so a test can assert the lookup happened per-sender at response
+    // time, rather than eagerly at send time.
+    const getWorkspaceRefForWebContents = vi.fn((id: number) => {
+      if (options.throwFromWorkspaceRefAccessor) throw new Error("view torn down");
+      return workspaceRef && activeWebContents && activeWebContents.id === id ? workspaceRef : null;
+    });
+    const projectViewManager = options.omitWorkspaceRefAccessor
+      ? { getActiveView }
+      : { getActiveView, getWorkspaceRefForWebContents };
+    // Routing reads `projectViewManager` first, then response-time resolution
+    // reads it again. Throwing only on the later reads models a window torn
+    // down mid-dispatch, without breaking the routing that must happen first.
+    let serviceReads = 0;
+    const services = options.throwFromServices
+      ? {
+          get projectViewManager() {
+            serviceReads += 1;
+            if (serviceReads > 1) throw new Error("window torn down");
+            return projectViewManager;
+          },
+        }
+      : { projectViewManager };
+    return {
+      browserWindow: { isDestroyed: () => windowDestroyed },
+      services,
+      activeWebContentsId: activeWebContents?.id ?? null,
+      /** Test-only handle on the spy — production reads it via `services`. */
+      workspaceRefSpy: getWorkspaceRefForWebContents,
+    };
+  }
+
+  /**
+   * Registry double whose `all()` and `focusOrder()` deliberately disagree, so a
+   * test that passes under either ordering proves nothing. `focusOrder` reads a
+   * mutable ref to model focus moving between calls.
+   */
+  function makeRegistry(
+    registrationOrder: ReturnType<typeof makeContext>[],
+    focusRef: { current: ReturnType<typeof makeContext>[] }
+  ) {
+    return {
+      all: () => registrationOrder,
+      focusOrder: () => focusRef.current,
+      getByWebContentsId: (id: number) =>
+        registrationOrder.find((ctx) => ctx.activeWebContentsId === id),
+    };
+  }
+
+  /** Auto-replies to a dispatch request as `wc`, so the promise settles. */
+  function autoRespond(wc: FakeWebContents, senderId = wc.id) {
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: senderId } },
+          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
+        );
+      });
+    });
+  }
+
+  it("dispatches to the most-recently-focused window, not the first registered", async () => {
+    const wcFirst = makeWebContents(901);
+    const wcFocused = makeWebContents(902);
+    const ctxFirst = makeContext({ activeWebContents: wcFirst });
+    const ctxFocused = makeContext({ activeWebContents: wcFocused });
+    autoRespond(wcFirst);
+    autoRespond(wcFocused);
+
+    // Registered first-to-last as [first, focused]; focus says the opposite.
+    const focusRef = { current: [ctxFocused, ctxFirst] };
+    const bridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => makeRegistry([ctxFirst, ctxFocused], focusRef) as never
+    );
+    bridge.setupListeners([]);
+
+    await bridge.dispatchAction("actions.list", {}, false);
+
+    expect(wcFocused.send).toHaveBeenCalled();
+    expect(wcFirst.send).not.toHaveBeenCalled();
+  });
+
+  it("re-resolves focus on every call, so a mid-session focus change retargets", async () => {
+    const wcA = makeWebContents(911);
+    const wcB = makeWebContents(912);
+    const ctxA = makeContext({ activeWebContents: wcA });
+    const ctxB = makeContext({ activeWebContents: wcB });
+    autoRespond(wcA);
+    autoRespond(wcB);
+
+    const focusRef = { current: [ctxB, ctxA] };
+    const bridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => makeRegistry([ctxA, ctxB], focusRef) as never
+    );
+    bridge.setupListeners([]);
+
+    await bridge.dispatchAction("actions.list", {}, false);
+    expect(wcB.send).toHaveBeenCalledTimes(1);
+    expect(wcA.send).not.toHaveBeenCalled();
+
+    // User switches windows between calls.
+    focusRef.current = [ctxA, ctxB];
+    await bridge.dispatchAction("actions.list", {}, false);
+    expect(wcA.send).toHaveBeenCalledTimes(1);
+    expect(wcB.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips destroyed windows and view-less windows ahead of a live one in focus order", async () => {
+    const wcLive = makeWebContents(921);
+    const wcInDestroyedWindow = makeWebContents(922);
+    const wcDestroyedView = makeWebContents(923);
+    wcDestroyedView.isDestroyed.mockReturnValue(true);
+    autoRespond(wcLive);
+
+    const ctxDestroyedWindow = makeContext({
+      windowDestroyed: true,
+      activeWebContents: wcInDestroyedWindow,
+    });
+    const ctxNoView = makeContext({ activeWebContents: null });
+    const ctxDestroyedView = makeContext({ activeWebContents: wcDestroyedView });
+    const ctxLive = makeContext({ activeWebContents: wcLive });
+
+    const focusRef = {
+      current: [ctxDestroyedWindow, ctxNoView, ctxDestroyedView, ctxLive],
+    };
+    const bridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => makeRegistry([ctxLive], focusRef) as never
+    );
+    bridge.setupListeners([]);
+
+    await bridge.dispatchAction("actions.list", {}, false);
+
+    expect(wcLive.send).toHaveBeenCalled();
+    expect(wcInDestroyedWindow.send).not.toHaveBeenCalled();
+    expect(wcDestroyedView.send).not.toHaveBeenCalled();
+  });
+
+  it("manifest requests follow focus order too", async () => {
+    const wcFirst = makeWebContents(931);
+    const wcFocused = makeWebContents(932);
+    const ctxFirst = makeContext({ activeWebContents: wcFirst });
+    const ctxFocused = makeContext({ activeWebContents: wcFocused });
+    wcFocused.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_GET_MANIFEST_REQUEST) return;
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE,
+          { sender: { id: 932 } },
+          { requestId: payload.requestId, manifest: [] }
+        );
+      });
+    });
+
+    const focusRef = { current: [ctxFocused, ctxFirst] };
+    const bridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => makeRegistry([ctxFirst, ctxFocused], focusRef) as never
+    );
+    bridge.setupListeners([]);
+
+    await bridge.requestManifest();
+
+    expect(wcFocused.send).toHaveBeenCalled();
+    expect(wcFirst.send).not.toHaveBeenCalled();
+  });
+
+  it("stamps the dispatched workspace on the envelope, resolved from the responding sender", async () => {
+    const wcA = makeWebContents(941);
+    const wcB = makeWebContents(942);
+    const refA = { kind: "project" as const, workspaceId: "proj-a", workspacePath: "/repos/a" };
+    // A scratch is a legitimate target and carries no Project row, so the
+    // stamp has to say so rather than labelling it a project.
+    const refB = { kind: "scratch" as const, workspaceId: "scr-b", workspacePath: "/scratch/b" };
+    const ctxA = makeContext({ activeWebContents: wcA, workspaceRef: refA });
+    const ctxB = makeContext({ activeWebContents: wcB, workspaceRef: refB });
+    autoRespond(wcA);
+    autoRespond(wcB);
+
+    const focusRef = { current: [ctxB, ctxA] };
+    const bridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => makeRegistry([ctxA, ctxB], focusRef) as never
+    );
+    bridge.setupListeners([]);
+
+    const focusedEnvelope = await bridge.dispatchAction("actions.list", {}, false);
+    expect(focusedEnvelope.dispatchedWorkspace).toEqual(refB);
+
+    // Focus moves — the stamp must follow the window the call actually hit.
+    focusRef.current = [ctxA, ctxB];
+    const retargetedEnvelope = await bridge.dispatchAction("actions.list", {}, false);
+    expect(retargetedEnvelope.dispatchedWorkspace).toEqual(refA);
+  });
+
+  it("resolves the workspace at response time, from the responding sender — not at send time", async () => {
+    // Guards the seam: resolving when the request is SENT, or from whatever is
+    // focused when the response arrives, would both pass the tests above.
+    // Here two dispatches are in flight at once and settle in reverse order,
+    // with focus moved in between — only per-sender, response-time resolution
+    // gives each its own workspace.
+    const wcA = makeWebContents(971);
+    const wcB = makeWebContents(972);
+    const refA = { kind: "project" as const, workspaceId: "proj-a", workspacePath: "/repos/a" };
+    const refB = { kind: "project" as const, workspaceId: "proj-b", workspacePath: "/repos/b" };
+    const ctxA = makeContext({ activeWebContents: wcA, workspaceRef: refA });
+    const ctxB = makeContext({ activeWebContents: wcB, workspaceRef: refB });
+
+    const pending: Array<{ id: number; requestId: string }> = [];
+    for (const [wc, id] of [
+      [wcB, 972],
+      [wcA, 971],
+    ] as const) {
+      wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+        if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+        pending.push({ id, requestId: payload.requestId });
+      });
+    }
+
+    const focusRef = { current: [ctxB, ctxA] };
+    const bridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => makeRegistry([ctxA, ctxB], focusRef) as never
+    );
+    bridge.setupListeners([]);
+
+    // First call targets B (focused). Its response is deliberately withheld.
+    const bCall = bridge.dispatchAction("actions.list", {}, false);
+    // Focus moves; the second call targets A while B is still in flight.
+    focusRef.current = [ctxA, ctxB];
+    const aCall = bridge.dispatchAction("actions.list", {}, false);
+
+    expect(pending).toHaveLength(2);
+    const bRequest = pending[0];
+    const aRequest = pending[1];
+    expect(bRequest.id).toBe(972);
+    expect(aRequest.id).toBe(971);
+
+    // A spoofed response from the wrong sender must be ignored outright.
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 971 } },
+      { requestId: bRequest.requestId, result: { ok: true, result: "spoofed" } }
+    );
+    expect(ctxB.workspaceRefSpy).not.toHaveBeenCalled();
+    expect(ctxA.workspaceRefSpy).not.toHaveBeenCalled();
+
+    // Settle in reverse order: A (sent last) first, then B.
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 971 } },
+      { requestId: aRequest.requestId, result: { ok: true, result: "from-a" } }
+    );
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 972 } },
+      { requestId: bRequest.requestId, result: { ok: true, result: "from-b" } }
+    );
+
+    // Each envelope reports its OWN sender's workspace, despite the focus
+    // change and the out-of-order settlement.
+    await expect(aCall).resolves.toMatchObject({
+      result: { ok: true, result: "from-a" },
+      dispatchedWorkspace: refA,
+    });
+    await expect(bCall).resolves.toMatchObject({
+      result: { ok: true, result: "from-b" },
+      dispatchedWorkspace: refB,
+    });
+  });
+
+  it("omits dispatchedWorkspace when the sender has no registered workspace", async () => {
+    const wc = makeWebContents(951);
+    const ctx = makeContext({ activeWebContents: wc, workspaceRef: null });
+    autoRespond(wc);
+
+    const focusRef = { current: [ctx] };
+    const bridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => makeRegistry([ctx], focusRef) as never
+    );
+    bridge.setupListeners([]);
+
+    const envelope = await bridge.dispatchAction("actions.list", {}, false);
+
+    expect(envelope.result).toEqual({ ok: true, result: "ok" });
+    expect(envelope.dispatchedWorkspace).toBeUndefined();
+    expect("dispatchedWorkspace" in envelope).toBe(false);
+  });
+
+  it("omits the stamp, without logging, when the host manager has no accessor", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const wc = makeWebContents(961);
+      const ctx = makeContext({ activeWebContents: wc, omitWorkspaceRefAccessor: true });
+      autoRespond(wc);
+
+      const focusRef = { current: [ctx] };
+      const bridge = createRendererBridge(
+        pendingManifests,
+        pendingDispatches,
+        () => makeRegistry([ctx], focusRef) as never
+      );
+      bridge.setupListeners([]);
+
+      const envelope = await bridge.dispatchAction("actions.list", {}, false);
+
+      expect(envelope.result).toEqual({ ok: true, result: "ok" });
+      expect(envelope.dispatchedWorkspace).toBeUndefined();
+      // An older/partial manager is an expected shape, not a failure.
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("settles the action and warns once when the workspace accessor throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const wc = makeWebContents(981);
+      const ctx = makeContext({ activeWebContents: wc, throwFromWorkspaceRefAccessor: true });
+      autoRespond(wc);
+
+      const focusRef = { current: [ctx] };
+      const bridge = createRendererBridge(
+        pendingManifests,
+        pendingDispatches,
+        () => makeRegistry([ctx], focusRef) as never
+      );
+      bridge.setupListeners([]);
+
+      // The action must still complete — identity is decoration, and the
+      // pending entry's timer is already cleared by the time this runs, so an
+      // escaping throw would strand the promise instead of losing the stamp.
+      const first = await bridge.dispatchAction("actions.list", {}, false);
+      expect(first.result).toEqual({ ok: true, result: "ok" });
+      expect(first.dispatchedWorkspace).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      // Latched: a persistently broken lookup must not log on every dispatch.
+      const second = await bridge.dispatchAction("actions.list", {}, false);
+      expect(second.result).toEqual({ ok: true, result: "ok" });
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("settles the action when the window lookup itself throws mid-dispatch", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const wc = makeWebContents(991);
+      // The window is torn down between routing and the response, so reading
+      // `services.projectViewManager` throws — outside any accessor call.
+      const ctx = makeContext({ activeWebContents: wc, throwFromServices: true });
+      autoRespond(wc);
+
+      const focusRef = { current: [ctx] };
+      const bridge = createRendererBridge(
+        pendingManifests,
+        pendingDispatches,
+        () => makeRegistry([ctx], focusRef) as never
+      );
+      bridge.setupListeners([]);
+
+      const envelope = await bridge.dispatchAction("actions.list", {}, false);
+
+      expect(envelope.result).toEqual({ ok: true, result: "ok" });
+      expect(envelope.dispatchedWorkspace).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

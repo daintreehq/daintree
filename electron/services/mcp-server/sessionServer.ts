@@ -47,6 +47,8 @@ import {
   INVALID_URL_CODE,
   buildToolError,
   buildMcpErrorPayload,
+  withResolvedWorkspace,
+  type DispatchedWorkspaceRef,
 } from "./shared.js";
 import {
   INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
@@ -856,10 +858,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // host-issued native grant (`nativeGrantId`) pre-authorizes a dispatch.
         emitToolCallStarted(entry?.danger === "confirm");
 
+        // The workspace the dispatch actually landed on, resolved renderer-side
+        // at response time (#11536). Only ever set from a completed dispatch, so
+        // every failure path below (no window, session binding gone, throw)
+        // leaves it undefined and stamps nothing.
+        let dispatchedWorkspace: DispatchedWorkspaceRef | undefined;
         try {
           const envelope = await dispatchAction(actionId, args, dispatchConfirmed);
           outcome = { kind: "result", value: envelope.result };
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
+          dispatchedWorkspace = envelope.dispatchedWorkspace;
         } catch (err) {
           outcome = { kind: "throw", error: err };
           if (err instanceof SessionBindingError) {
@@ -948,28 +956,39 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           if (actionId === BROWSER_CAPTURE_SCREENSHOT_TOOL) {
             const shot = asScreenshotResult(outcome.value.result);
             if (shot) {
-              return {
-                content: [
-                  { type: "image" as const, data: shot.pngBase64, mimeType: "image/png" },
-                  {
-                    type: "text" as const,
-                    text: `Screenshot captured (${shot.width}×${shot.height})`,
-                  },
-                ],
-              };
+              return withResolvedWorkspace(
+                {
+                  content: [
+                    { type: "image" as const, data: shot.pngBase64, mimeType: "image/png" },
+                    {
+                      type: "text" as const,
+                      text: `Screenshot captured (${shot.width}×${shot.height})`,
+                    },
+                  ],
+                },
+                dispatchedWorkspace
+              );
             }
           }
           const structuredContent = buildStructuredContent(entry, outcome.value.result);
-          return buildToolCallResult(outcome.value.result, {
-            ...(structuredContent ? { structuredContent } : {}),
-          });
+          return withResolvedWorkspace(
+            buildToolCallResult(outcome.value.result, {
+              ...(structuredContent ? { structuredContent } : {}),
+            }),
+            dispatchedWorkspace
+          );
         }
 
-        return buildToolError({
-          code: outcome.value.error.code,
-          message: outcome.value.error.message,
-          details: outcome.value.error.details,
-        });
+        // A renderer was reached and reported a failure, so the target is known
+        // and worth reporting — unlike the pre-dispatch errors above.
+        return withResolvedWorkspace(
+          buildToolError({
+            code: outcome.value.error.code,
+            message: outcome.value.error.message,
+            details: outcome.value.error.details,
+          }),
+          dispatchedWorkspace
+        );
       } finally {
         const settledOutcome = outcome ?? { kind: "throw" as const, error: new Error("unknown") };
         // Compute the duration once so the audit record and the live strip

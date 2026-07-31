@@ -27,6 +27,8 @@ import {
   MCP_DEDUP_ALLOWLIST,
   minimumPermittingTier,
   unwrapDispatchResult,
+  RESOLVED_WORKSPACE_META_KEY,
+  withResolvedWorkspace,
 } from "../shared.js";
 import { TOOL_RESULT_TEXT_MAX_BYTES } from "../toolCallResult.js";
 import { SessionBindingError, RendererBridgeUnavailableError } from "../rendererBridge.js";
@@ -2875,5 +2877,242 @@ describe("structuredContent for terminal query actions (#10676)", () => {
       );
       expect(structuredOf(result)).toBeUndefined();
     });
+  });
+});
+
+describe("resolved-workspace result metadata (#11536)", () => {
+  const WORKSPACE = {
+    kind: "project" as const,
+    workspaceId: "proj-a",
+    workspacePath: "/repos/a",
+  };
+
+  const manifest = [
+    {
+      id: "files.search",
+      title: "Files: search",
+      description: "Search files",
+      category: "files",
+      danger: "safe" as const,
+      source: ["agent"] as const,
+    },
+  ] as unknown as ActionManifestEntry[];
+
+  function metaOf(result: unknown): Record<string, unknown> | undefined {
+    return (result as { _meta?: Record<string, unknown> })._meta;
+  }
+
+  function workspaceMetaOf(result: unknown): unknown {
+    return metaOf(result)?.[RESOLVED_WORKSPACE_META_KEY];
+  }
+
+  function textOf(result: unknown): string {
+    return (result as { content: { type: string; text: string }[] }).content[0].text;
+  }
+
+  function depsFor(dispatch: unknown) {
+    return fakeDeps({
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+      dispatchAction: vi.fn().mockResolvedValue(dispatch),
+    });
+  }
+
+  it("stamps the dispatched workspace on a successful result", async () => {
+    const server = createSessionServer(
+      "rp-ok",
+      depsFor({ result: { ok: true, result: { hits: [] } }, dispatchedWorkspace: WORKSPACE })
+    );
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "files.search", arguments: {} });
+
+    expect(workspaceMetaOf(result)).toEqual(WORKSPACE);
+  });
+
+  it("reports a scratch workspace as a scratch", async () => {
+    const scratch = {
+      kind: "scratch" as const,
+      workspaceId: "6f1c9d2e-4a7b-4c3d-9e8f-1a2b3c4d5e6f",
+      workspacePath: "/scratch/one",
+    };
+    const server = createSessionServer(
+      "rp-scratch",
+      depsFor({ result: { ok: true, result: "ok" }, dispatchedWorkspace: scratch })
+    );
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "files.search", arguments: {} });
+
+    expect(workspaceMetaOf(result)).toEqual(scratch);
+  });
+
+  it("merges into an existing _meta without clobbering sibling keys or mutating the input", () => {
+    const original = {
+      content: [{ type: "text" as const, text: "ok" }],
+      _meta: { "vendor.other/trace": "abc" },
+    };
+
+    const stamped = withResolvedWorkspace(original, WORKSPACE);
+
+    expect(stamped._meta).toEqual({
+      "vendor.other/trace": "abc",
+      [RESOLVED_WORKSPACE_META_KEY]: WORKSPACE,
+    });
+    // Additive, never destructive: the caller's object is untouched.
+    expect(original._meta).toEqual({ "vendor.other/trace": "abc" });
+  });
+
+  it("returns the result untouched when the workspace is unknown", () => {
+    const original = { content: [{ type: "text" as const, text: "ok" }] };
+
+    expect(withResolvedWorkspace(original, undefined)).toBe(original);
+  });
+
+  it("stamps the dispatched workspace on a renderer-returned action error", async () => {
+    const server = createSessionServer(
+      "rp-err",
+      depsFor({
+        result: {
+          ok: false,
+          error: { code: "VALIDATION_ERROR", message: "nope", details: { field: "query" } },
+        },
+        dispatchedWorkspace: WORKSPACE,
+      })
+    );
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "files.search",
+      arguments: {},
+    })) as { isError: boolean };
+
+    // A renderer was reached, so the target is known and worth reporting —
+    // and the error payload itself must survive the stamp untouched.
+    expect(result.isError).toBe(true);
+    expect(workspaceMetaOf(result)).toEqual(WORKSPACE);
+    const parsed = JSON.parse(textOf(result));
+    expect(parsed.code).toBe("VALIDATION_ERROR");
+    expect(parsed.message).toBe("nope");
+    expect(parsed.details).toEqual({ field: "query" });
+  });
+
+  it("stamps the screenshot image result, which returns before the generic path", async () => {
+    // browser.captureScreenshot short-circuits into an image content block, so
+    // it needs its own stamp — the generic success return never runs for it.
+    const shotEntry = [
+      {
+        id: "browser.captureScreenshot",
+        name: "browser.captureScreenshot",
+        title: "Capture Browser Screenshot",
+        description: "Capture the focused browser panel as a PNG",
+        category: "browser",
+        kind: "command",
+        danger: "safe",
+        enabled: true,
+        requiresArgs: false,
+      },
+    ] as unknown as ActionManifestEntry[];
+    const server = createSessionServer(
+      "rp-shot",
+      fakeDeps({
+        sessionStore: fakeSessionStore("action"),
+        requestManifest: vi.fn().mockResolvedValue(shotEntry),
+        getCachedManifest: vi.fn(() => shotEntry),
+        dispatchAction: vi.fn().mockResolvedValue({
+          result: { ok: true, result: { pngBase64: "aGVsbG8=", width: 1024, height: 768 } },
+          dispatchedWorkspace: WORKSPACE,
+        }),
+      })
+    );
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "browser.captureScreenshot",
+      arguments: {},
+    })) as { content: Array<Record<string, unknown>>; isError?: boolean };
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0]).toMatchObject({ type: "image", data: "aGVsbG8=" });
+    expect(workspaceMetaOf(result)).toEqual(WORKSPACE);
+  });
+
+  it("omits the key entirely when the dispatch reported no workspace", async () => {
+    const server = createSessionServer("rp-none", depsFor({ result: { ok: true, result: "ok" } }));
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "files.search", arguments: {} });
+
+    // Absent, not null — "unknown" must not be confusable with "no workspace".
+    expect(workspaceMetaOf(result)).toBeUndefined();
+    expect(metaOf(result) === undefined || !(RESOLVED_WORKSPACE_META_KEY in metaOf(result)!)).toBe(
+      true
+    );
+  });
+
+  it("does not stamp a pre-dispatch failure, where no renderer was reached", async () => {
+    const dispatchAction = vi.fn().mockRejectedValue(new RendererBridgeUnavailableError());
+    const deps = fakeDeps({
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+      dispatchAction,
+    });
+    const server = createSessionServer("rp-nowindow", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "files.search",
+      arguments: {},
+    })) as { isError: boolean };
+
+    // Prove it really took the no-window dispatch path rather than bailing out
+    // earlier for an unrelated reason.
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(textOf(result)).code).toBe(EXECUTION_ERROR_CODE);
+    expect(workspaceMetaOf(result)).toBeUndefined();
+  });
+
+  it("preserves structuredContent alongside the stamp", async () => {
+    const payload = { terminals: [{ id: "t-1", kind: "terminal", isFocused: true }] };
+    const entry: ActionManifestEntry = {
+      ...({
+        id: "terminal.list",
+        name: "terminal.list",
+        title: "Terminal: list",
+        description: "List terminals",
+        category: "terminal",
+        kind: "query",
+        danger: "safe",
+        enabled: true,
+        requiresArgs: false,
+      } as unknown as ActionManifestEntry),
+      outputSchema: {
+        type: "object",
+        properties: { terminals: { type: "array" } },
+      },
+    };
+    const server = createSessionServer(
+      "rp-structured",
+      fakeDeps({
+        // `terminal.list` is on the curated external allowlist, so the external
+        // tier reaches it on the allowlist alone (#11537 deleted the widening opt-in).
+        sessionStore: fakeSessionStore("external"),
+        requestManifest: vi.fn().mockResolvedValue([entry]),
+        getCachedManifest: vi.fn(() => [entry]),
+        dispatchAction: vi.fn().mockResolvedValue({
+          result: { ok: true, result: payload },
+          dispatchedWorkspace: WORKSPACE,
+        }),
+      })
+    );
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+    // The stamp must not displace structuredContent — both ride the same result.
+    expect(workspaceMetaOf(result)).toEqual(WORKSPACE);
+    expect((result as { structuredContent?: unknown }).structuredContent).toEqual(payload);
+    expect(JSON.parse(textOf(result))).toEqual(payload);
   });
 });

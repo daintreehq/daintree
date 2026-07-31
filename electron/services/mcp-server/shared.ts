@@ -311,6 +311,38 @@ export function buildToolError(input: {
   return buildToolCallTextResult(JSON.stringify(payload), { isError: true });
 }
 
+/**
+ * `_meta` key carrying the workspace a tool call actually ran against (#11536).
+ * Namespaced per the MCP `_meta` convention so it can't collide with keys from
+ * other servers in an aggregating client. This string is an external contract:
+ * MCP clients read it by name, so changing it is a breaking change.
+ */
+export const RESOLVED_WORKSPACE_META_KEY = "org.daintree/resolved-workspace";
+
+/**
+ * Stamp the resolved workspace onto a tool result (#11536).
+ *
+ * Top-level `_meta` rather than `structuredContent`, so it never has to satisfy
+ * (or violate) an action's declared output schema. Returns the result untouched
+ * when identity couldn't be resolved — the key's absence means "unknown", and
+ * failing to resolve it must never alter the action's own outcome. Other
+ * `_meta` keys are preserved; only Daintree's own key is overwritten, so a
+ * value already sitting there can't spoof the authoritative stamp.
+ */
+export function withResolvedWorkspace<T extends CallToolResult>(
+  result: T,
+  workspace: DispatchedWorkspaceRef | undefined
+): T {
+  if (!workspace) return result;
+  return {
+    ...result,
+    _meta: {
+      ...(result._meta ?? {}),
+      [RESOLVED_WORKSPACE_META_KEY]: { ...workspace },
+    },
+  };
+}
+
 export type McpTier = "workbench" | "action" | "system" | "external";
 
 // Tier tool lists live in `shared/config/helpAssistantTierAllowlists.ts`
@@ -835,9 +867,37 @@ export interface PendingRequest<T> {
   destroyedCleanup?: () => void;
 }
 
+/**
+ * The workspace a dispatch actually landed on, resolved from the responding
+ * renderer at response time (#11536). Unpinned external sessions follow window
+ * focus on every call, so a long-running agent's calls can retarget mid-session
+ * when the user switches workspace. Reporting the resolved workspace makes that
+ * drift observable to the caller instead of silent.
+ *
+ * "Workspace" because a renderer view can be backed by a project or by a
+ * scratch, which has no Project row; `kind` tells the caller which, so it never
+ * has to guess whether the id is resolvable through project APIs. Structurally
+ * mirrors `WorkspaceRef` in `electron/window/ProjectViewManager.ts` — the wire
+ * contract is declared here so this module stays free of window-layer imports,
+ * and rendererBridge assigning one to the other keeps the two in lockstep.
+ */
+export interface DispatchedWorkspaceRef {
+  kind: "project" | "scratch";
+  workspaceId: string;
+  workspacePath: string;
+}
+
 export interface DispatchEnvelope {
   result: ActionDispatchResult;
   confirmationDecision?: McpConfirmationDecision;
+  /**
+   * Absent when identity could not be resolved (view torn down between
+   * dispatch and response, or a webContents with no registered workspace).
+   * Deliberately optional rather than nullable: "unknown" must not be
+   * confusable with "no workspace", and a failed lookup never downgrades an
+   * otherwise successful action result.
+   */
+  dispatchedWorkspace?: DispatchedWorkspaceRef;
 }
 
 export interface McpSseSession {

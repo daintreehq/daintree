@@ -195,6 +195,7 @@ type DispatchRequest = {
 type TextToolResult = {
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
+  _meta?: Record<string, unknown>;
 };
 
 function createManifestEntry(entry: {
@@ -241,6 +242,8 @@ function createMockWindow(options?: {
       };
   senderIdOverride?: number;
   hostShellWebContentsId?: number;
+  /** Workspace this window's view belongs to, for the #11536 result stamp. */
+  workspaceRef?: { kind: "project" | "scratch"; workspaceId: string; workspacePath: string };
 }) {
   const getManifest = options?.getManifest ?? (() => []);
   const dispatchAction =
@@ -337,6 +340,9 @@ function createMockWindow(options?: {
 
   const projectViewManager = {
     getActiveView: vi.fn((): { webContents: typeof webContents } | null => ({ webContents })),
+    getWorkspaceRefForWebContents: vi.fn((id: number) =>
+      options?.workspaceRef && id === projectViewWcId ? options.workspaceRef : null
+    ),
   };
 
   const windowContext = {
@@ -351,6 +357,7 @@ function createMockWindow(options?: {
 
   const registry = {
     all: () => [windowContext],
+    focusOrder: () => [windowContext],
     getPrimary: () => windowContext,
     getByWindowId: () => windowContext,
     getByWebContentsId: () => windowContext,
@@ -931,6 +938,16 @@ describe("McpServerService", () => {
     // pinning, both sessions would dispatch into whatever the shared
     // `getActiveProjectWebContents()` returns first; with the fix, each
     // session routes to the WebContents that minted it.
+    const pinnedRefA = {
+      kind: "project" as const,
+      workspaceId: "proj-a",
+      workspacePath: "/repos/a",
+    };
+    const pinnedRefB = {
+      kind: "project" as const,
+      workspaceId: "proj-b",
+      workspacePath: "/repos/b",
+    };
     const winA = createMockWindow({
       getManifest: () => [
         createManifestEntry({
@@ -941,6 +958,7 @@ describe("McpServerService", () => {
         }),
       ],
       dispatchAction: () => ({ ok: true, result: "from-window-A" }),
+      workspaceRef: pinnedRefA,
     });
     const winB = createMockWindow({
       getManifest: () => [
@@ -952,13 +970,21 @@ describe("McpServerService", () => {
         }),
       ],
       dispatchAction: () => ({ ok: true, result: "from-window-B" }),
+      workspaceRef: pinnedRefB,
     });
 
+    // Indexed by id rather than always answering window A, so each pinned
+    // session's stamp is resolved through its OWN window's manager.
+    const pinnedContextByWcId = new Map([
+      [winA.webContents.id, winA.windowContext],
+      [winB.webContents.id, winB.windowContext],
+    ]);
     const combinedRegistry = {
       all: () => [winA.windowContext, winB.windowContext],
+      focusOrder: () => [winA.windowContext, winB.windowContext],
       getPrimary: () => winA.windowContext,
       getByWindowId: () => winA.windowContext,
-      getByWebContentsId: () => winA.windowContext,
+      getByWebContentsId: (id: number) => pinnedContextByWcId.get(id),
       size: 2,
     } as never;
 
@@ -982,6 +1008,12 @@ describe("McpServerService", () => {
     expect(resA.content[0].text).toBe('"from-window-A"');
     expect(resB.content[0].text).toBe('"from-window-B"');
 
+    // Each pinned result reports its own window's workspace (#11536) — the
+    // stamp is resolved from the responding sender, so it is right on the
+    // pinned path too, not just the focus-following external one.
+    expect(resA._meta?.["org.daintree/resolved-workspace"]).toEqual(pinnedRefA);
+    expect(resB._meta?.["org.daintree/resolved-workspace"]).toEqual(pinnedRefB);
+
     // Both windows' WebContents.send must have been invoked — and only for
     // the dispatch belonging to that window. (Each window also receives one
     // `CHANNELS.MCP_SERVER_GET_MANIFEST_REQUEST` per session — that is fine because pinned
@@ -996,6 +1028,67 @@ describe("McpServerService", () => {
     expect(sendsToB).toHaveLength(1);
   });
 
+  it("routes an unpinned external session by focus order and reports the workspace it landed on (#11536)", async () => {
+    // Registration order is [A, B]; focus order is the opposite. Before the
+    // fix the bridge walked `all()` (Map insertion order) and every external
+    // call landed on A — whichever window happened to register first —
+    // regardless of what the user was actually looking at.
+    const manifest = () => [
+      createManifestEntry({
+        id: "actions.list",
+        title: "List Actions",
+        description: "Read the action registry",
+        kind: "query",
+      }),
+    ];
+    const refA = { kind: "project" as const, workspaceId: "proj-a", workspacePath: "/repos/a" };
+    const refB = { kind: "project" as const, workspaceId: "proj-b", workspacePath: "/repos/b" };
+    const winA = createMockWindow({
+      getManifest: manifest,
+      dispatchAction: () => ({ ok: true, result: "from-window-A" }),
+      workspaceRef: refA,
+    });
+    const winB = createMockWindow({
+      getManifest: manifest,
+      dispatchAction: () => ({ ok: true, result: "from-window-B" }),
+      workspaceRef: refB,
+    });
+
+    const focus = { current: [winB.windowContext, winA.windowContext] };
+    const contextByWcId = new Map([
+      [winA.webContents.id, winA.windowContext],
+      [winB.webContents.id, winB.windowContext],
+    ]);
+    const combinedRegistry = {
+      all: () => [winA.windowContext, winB.windowContext],
+      focusOrder: () => focus.current,
+      getPrimary: () => winA.windowContext,
+      getByWindowId: () => winA.windowContext,
+      getByWebContentsId: (id: number) => contextByWcId.get(id),
+      size: 2,
+    } as never;
+
+    await service.start(combinedRegistry);
+
+    // No help token — an api-key bearer, i.e. the unpinned external path.
+    const external = await connectClient(service.currentPort!);
+    transports.push(external.transport);
+
+    const first = await external.client.callTool({ name: "actions.list", arguments: {} });
+    expect(getTextResult(first).content[0].text).toBe('"from-window-B"');
+    // Read by literal key, as a real external client would: this string is the
+    // wire contract, so renaming it must fail here even if the constant moves.
+    expect(first._meta?.["org.daintree/resolved-workspace"]).toEqual(refB);
+
+    // The user switches windows mid-session. The session stays unpinned by
+    // design (#7003), so the next call follows focus — and says so.
+    focus.current = [winA.windowContext, winB.windowContext];
+
+    const second = await external.client.callTool({ name: "actions.list", arguments: {} });
+    expect(getTextResult(second).content[0].text).toBe('"from-window-A"');
+    expect(second._meta?.["org.daintree/resolved-workspace"]).toEqual(refA);
+  });
+
   it("fails closed when the pinned WebContents has been destroyed (#7002 — never silently re-routes)", async () => {
     const winA = createMockWindow({
       dispatchAction: () => ({ ok: true, result: "from-A" }),
@@ -1006,6 +1099,7 @@ describe("McpServerService", () => {
 
     const combinedRegistry = {
       all: () => [winA.windowContext, winB.windowContext],
+      focusOrder: () => [winA.windowContext, winB.windowContext],
       getPrimary: () => winA.windowContext,
       getByWindowId: () => winA.windowContext,
       getByWebContentsId: () => winA.windowContext,
@@ -1113,6 +1207,7 @@ describe("McpServerService", () => {
 
     const combinedRegistry = {
       all: () => [winA.windowContext, winB.windowContext],
+      focusOrder: () => [winA.windowContext, winB.windowContext],
       getPrimary: () => winA.windowContext,
       getByWindowId: () => winA.windowContext,
       getByWebContentsId: () => winA.windowContext,
