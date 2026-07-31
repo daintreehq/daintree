@@ -42,7 +42,9 @@ function computeRequiresArgs(schema: z.ZodType): boolean {
 
 describe("withWorktreeLocation", () => {
   it("advertises canonical selectors and only the legacy aliases the tool opted into", () => {
-    const props = properties(withWorktreeLocation({ search: z.string().optional() }, { legacy: ["cwd"] }));
+    const props = properties(
+      withWorktreeLocation({ search: z.string().optional() }, { legacy: ["cwd"] })
+    );
 
     expect(Object.keys(props).sort()).toEqual(["cwd", "search", "worktreeId", "worktreePath"]);
     // An alias must point the caller at the canonical name it stands in for,
@@ -133,11 +135,7 @@ describe("withProjectLocation", () => {
   it("stays extendable, unlike the transformed worktree builder", () => {
     // Nothing needs folding for projects, so this must not become a ZodPipe.
     const extended = withProjectLocation({}).extend({ extra: z.string().optional() });
-    expect(Object.keys(properties(extended)).sort()).toEqual([
-      "extra",
-      "projectId",
-      "projectPath",
-    ]);
+    expect(Object.keys(properties(extended)).sort()).toEqual(["extra", "projectId", "projectPath"]);
   });
 
   it("rejects an empty selector rather than treating it as absent", () => {
@@ -198,8 +196,9 @@ describe("resolveWorktreeLocation", () => {
   });
 
   it("prefers an explicit id over an explicit path and fills the missing half", () => {
-    expect(resolveWorktreeLocation({ worktreeId: "wt-1", worktreePath: "/repo/other" }, emptyContext))
-      .toEqual({ worktreeId: "wt-1", worktreePath: "/repo/one" });
+    expect(
+      resolveWorktreeLocation({ worktreeId: "wt-1", worktreePath: "/repo/other" }, emptyContext)
+    ).toEqual({ worktreeId: "wt-1", worktreePath: "/repo/one" });
   });
 
   it("reverse-resolves an id from a known path", () => {

@@ -144,7 +144,9 @@ export function paginationShape(options: PaginationOptions = {}): Record<string,
     shape.cursor = z
       .string()
       .optional()
-      .describe("Opaque cursor — pass the previous response's `nextCursor` to fetch the next page.");
+      .describe(
+        "Opaque cursor — pass the previous response's `nextCursor` to fetch the next page."
+      );
   }
   for (const alias of legacy) {
     shape[alias] = z
@@ -204,10 +206,7 @@ export function decodeIndexCursor(cursor: string | undefined): number | undefine
   return parsed;
 }
 
-export function withPagination<T extends z.ZodRawShape>(
-  extra: T,
-  options: PaginationOptions = {}
-) {
+export function withPagination<T extends z.ZodRawShape>(extra: T, options: PaginationOptions = {}) {
   return z.object({ ...paginationShape(options), ...extra }).transform((value, ctx) => {
     const folded = foldPagination(value as Record<string, unknown>, ctx, options.legacy ?? []);
     if (folded === z.NEVER) return z.NEVER;

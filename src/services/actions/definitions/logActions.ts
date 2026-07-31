@@ -337,8 +337,11 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     argsSchema: withPagination({}, { legacy: ["skip"], cursor: true, maxLimit: 500 }).optional(),
     resultSchema: PaginatedResultSchema(z.unknown()),
     run: async (args: unknown) => {
-      const { limit = 50, offset, cursor } =
-        (args as { limit?: number; offset?: number; cursor?: string } | undefined) ?? {};
+      const {
+        limit = 50,
+        offset,
+        cursor,
+      } = (args as { limit?: number; offset?: number; cursor?: string } | undefined) ?? {};
       // This source pages by index over an in-memory array, so its cursor IS
       // the next offset; an explicit `offset`/`skip` still wins.
       const start = offset ?? decodeIndexCursor(cursor) ?? 0;

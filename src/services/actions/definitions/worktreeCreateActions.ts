@@ -53,34 +53,34 @@ export function registerWorktreeCreateActions(
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: withWorktreeLocation({
-        options: z
-          .object({
-            baseBranch: z.string().describe("Branch to base the worktree on"),
-            newBranch: z.string().describe("Name for the new branch"),
-            path: z.string().describe("Filesystem path for the new worktree"),
-            fromRemote: z.boolean().optional().describe("Whether baseBranch is a remote branch"),
-            useExistingBranch: z
-              .boolean()
-              .optional()
-              .describe("Use an existing branch instead of creating a new one"),
-            provisionResource: z
-              .boolean()
-              .optional()
-              .describe("Run resource.provision after setup"),
-            worktreeMode: z
-              .string()
-              .optional()
-              .describe('Worktree environment mode ("local" or an environment key)'),
-          })
-          .describe("Worktree creation options"),
-      }, { legacy: ["rootPath"] }),
+      argsSchema: withWorktreeLocation(
+        {
+          options: z
+            .object({
+              baseBranch: z.string().describe("Branch to base the worktree on"),
+              newBranch: z.string().describe("Name for the new branch"),
+              path: z.string().describe("Filesystem path for the new worktree"),
+              fromRemote: z.boolean().optional().describe("Whether baseBranch is a remote branch"),
+              useExistingBranch: z
+                .boolean()
+                .optional()
+                .describe("Use an existing branch instead of creating a new one"),
+              provisionResource: z
+                .boolean()
+                .optional()
+                .describe("Run resource.provision after setup"),
+              worktreeMode: z
+                .string()
+                .optional()
+                .describe('Worktree environment mode ("local" or an environment key)'),
+            })
+            .describe("Worktree creation options"),
+        },
+        { legacy: ["rootPath"] }
+      ),
       resultSchema: z.string(),
       run: async ({ options, ...location }, ctx) => {
-        const worktreeId = await worktreeClient.create(
-          options,
-          requireWorktreePath(location, ctx)
-        );
+        const worktreeId = await worktreeClient.create(options, requireWorktreePath(location, ctx));
         if (!worktreeId) {
           throw new Error("Failed to create worktree: no worktreeId returned from backend");
         }

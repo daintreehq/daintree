@@ -173,7 +173,6 @@ function collapseWorktreePath(
   return worktreePath === undefined ? rest : { ...rest, worktreePath };
 }
 
-
 /**
  * Build a worktree-scoped `argsSchema`: the canonical selectors, any legacy
  * aliases this tool already accepted, plus the tool's own fields.
@@ -203,26 +202,23 @@ export function withWorktreeLocation<T extends z.ZodRawShape>(
   }
   if (pagination) Object.assign(shape, paginationShape(pagination));
 
-  return z
-    .object({ ...shape, ...extra })
-    .transform((value, ctx) => {
-      const collapsed = collapseWorktreePath(value as Record<string, unknown>, ctx, legacy);
-      if (collapsed === z.NEVER) return z.NEVER;
-      const paged = pagination
-        ? foldPagination(collapsed, ctx, pagination.legacy ?? [])
-        : collapsed;
-      if (paged === z.NEVER) return z.NEVER;
-      const located = paged as Record<string, unknown> & WorktreeLocationArgs;
-      if (requireSelector && !located.worktreeId && !located.worktreePath) {
-        ctx.addIssue({
-          code: "custom",
-          message: "Supply `worktreeId` or `worktreePath` — this action has no active-worktree default.",
-        });
-        return z.NEVER;
-      }
-      return located as Omit<z.core.output<z.ZodObject<T>>, keyof WorktreeLocationArgs> &
-        WorktreeLocationArgs;
-    });
+  return z.object({ ...shape, ...extra }).transform((value, ctx) => {
+    const collapsed = collapseWorktreePath(value as Record<string, unknown>, ctx, legacy);
+    if (collapsed === z.NEVER) return z.NEVER;
+    const paged = pagination ? foldPagination(collapsed, ctx, pagination.legacy ?? []) : collapsed;
+    if (paged === z.NEVER) return z.NEVER;
+    const located = paged as Record<string, unknown> & WorktreeLocationArgs;
+    if (requireSelector && !located.worktreeId && !located.worktreePath) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "Supply `worktreeId` or `worktreePath` — this action has no active-worktree default.",
+      });
+      return z.NEVER;
+    }
+    return located as Omit<z.core.output<z.ZodObject<T>>, keyof WorktreeLocationArgs> &
+      WorktreeLocationArgs;
+  });
 }
 
 /**

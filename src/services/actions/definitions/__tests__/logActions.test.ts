@@ -414,11 +414,11 @@ describe("eventInspector.getEvents pagination", () => {
 
     // Falling back to offset 0 would look like a legitimate first page; a
     // negative offset would slice from the end of the array.
-    await expect(
-      runParsed(actions, "eventInspector.getEvents", { cursor: "abc" })
-    ).rejects.toThrow(/Invalid cursor/);
-    await expect(
-      runParsed(actions, "eventInspector.getEvents", { cursor: "-1" })
-    ).rejects.toThrow(/Invalid cursor/);
+    await expect(runParsed(actions, "eventInspector.getEvents", { cursor: "abc" })).rejects.toThrow(
+      /Invalid cursor/
+    );
+    await expect(runParsed(actions, "eventInspector.getEvents", { cursor: "-1" })).rejects.toThrow(
+      /Invalid cursor/
+    );
   });
 });

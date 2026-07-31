@@ -338,9 +338,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         // Throwing routes it through EXECUTION_ERROR, which the bridge reports
         // as a tool error. Everything else passes through untouched.
         const failure =
-          result && typeof result === "object"
-            ? (result as { error?: string }).error
-            : undefined;
+          result && typeof result === "object" ? (result as { error?: string }).error : undefined;
         if (failure) throw new Error(failure);
         return result;
       },
