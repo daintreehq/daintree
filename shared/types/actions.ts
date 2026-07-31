@@ -242,11 +242,16 @@ export interface ActionDefinition<
    */
   mcpOutputSchema?: boolean;
   /**
-   * MCP progressive-disclosure visibility. `core` tools always appear on
-   * `tools/list`; `discoverable` tools are reachable via `actions.search` +
-   * `actions.getSchema` but omitted from the default list; `hidden` tools
-   * never surface in discovery. Unset (undefined) preserves pre-existing
-   * behavior (tool appears on `tools/list` when tier-permitted).
+   * MCP progressive-disclosure visibility. Eager listing is opt-in: `core`
+   * tools appear on `tools/list` when tier-permitted, and nothing else does.
+   * Unset (the default) and `discoverable` behave identically for listing —
+   * both are omitted from `tools/list` and reached via `actions.search` +
+   * `actions.getSchema` — and `discoverable` exists to record that the
+   * deferral was a deliberate call rather than an unclassified action.
+   * `hidden` tools never surface in discovery at all.
+   *
+   * Visibility is never an access control: `tools/call` is gated solely by the
+   * tier allowlists, so a deferred tool stays fully dispatchable (#11540).
    */
   mcpVisibility?: McpVisibility;
 }

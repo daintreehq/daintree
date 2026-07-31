@@ -42,6 +42,9 @@ const waitUntilIdleManifestEntry = (): ActionManifestEntry => ({
   outputSchema: WAIT_UNTIL_IDLE_OUTPUT_SCHEMA,
   enabled: true,
   requiresArgs: true,
+  // Mirrors the shipped definition: both wait primitives are eagerly-listed
+  // core orchestration tools (#11540).
+  mcpVisibility: "core",
   mcpAnnotations: {
     readOnlyHint: true,
     idempotentHint: false,
@@ -70,6 +73,7 @@ const waitUntilIdleBatchManifestEntry = (): ActionManifestEntry => ({
   outputSchema: WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
   enabled: true,
   requiresArgs: true,
+  mcpVisibility: "core",
   mcpAnnotations: {
     readOnlyHint: true,
     idempotentHint: false,
@@ -269,6 +273,7 @@ function createManifestEntry(entry: {
   disabledReason?: string;
   requiresArgs?: boolean;
   mcpAnnotations?: ActionManifestEntry["mcpAnnotations"];
+  mcpVisibility?: ActionManifestEntry["mcpVisibility"];
 }): ActionManifestEntry {
   return {
     id: entry.id as ActionId,
@@ -283,6 +288,10 @@ function createManifestEntry(entry: {
     enabled: entry.enabled ?? true,
     disabledReason: entry.disabledReason,
     requiresArgs: entry.requiresArgs ?? false,
+    // Eager listing is opt-in since #11540, and these suites assert what a
+    // tier advertises. Default the fixtures to `core` so they keep measuring
+    // the tier gate rather than silently emptying every tools/list response.
+    mcpVisibility: entry.mcpVisibility ?? "core",
     ...(entry.mcpAnnotations ? { mcpAnnotations: entry.mcpAnnotations } : {}),
   };
 }

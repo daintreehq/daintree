@@ -44,6 +44,7 @@ export function registerWorkflowCreationActions(
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      mcpVisibility: "core",
       // Headless/MCP tool: every field is optional but run() requires either a
       // branchName or a pullRequestNumber, so dispatching it from the palette
       // with {} throws. Redirect palette picks to the New Worktree dialog (which

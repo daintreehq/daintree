@@ -202,7 +202,10 @@ async function listTools(server: ReturnType<typeof createSessionServer>) {
   ) as Promise<{ tools: Array<{ name: string }> }>;
 }
 
-function makeManifestEntry(id: string): ActionManifestEntry {
+function makeManifestEntry(
+  id: string,
+  overrides: Partial<ActionManifestEntry> = {}
+): ActionManifestEntry {
   return {
     id: id as ActionId,
     name: id,
@@ -214,6 +217,11 @@ function makeManifestEntry(id: string): ActionManifestEntry {
     enabled: true,
     requiresArgs: false,
     inputSchema: { type: "object", properties: {} },
+    // Eager listing is opt-in since #11540. The manifest-plumbing tests below
+    // are about live/cache/fail-closed paths, so entries default to `core` and
+    // stay visible; the visibility gate has its own coverage.
+    mcpVisibility: "core",
+    ...overrides,
   };
 }
 
@@ -281,6 +289,30 @@ describe("sessionServer tools/list handler", () => {
 
     // shouldExposeTool drops restricted entries even on the cache path.
     expect(result.tools.map((t) => t.name)).toEqual(["actions.list"]);
+  });
+
+  // The whole point of #11540: tier-permitted is no longer enough to be
+  // advertised. Every id here is in the external allowlist and stays fully
+  // dispatchable — only the one that opted in with `core` is downloaded.
+  it("advertises only core entries, withholding permitted unset and discoverable ones", async () => {
+    const deps = externalDeps({
+      requestManifest: vi
+        .fn()
+        .mockResolvedValue([
+          makeManifestEntry("actions.list"),
+          makeManifestEntry("git.commit", { mcpVisibility: undefined }),
+          makeManifestEntry("terminal.rename", { mcpVisibility: "discoverable" }),
+        ]),
+    });
+    const server = createSessionServer("tools-list-core-only", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await listTools(server);
+
+    expect(result.tools.map((t) => t.name)).toEqual(["actions.list"]);
+    // Withheld, not denied — dispatch reads the tier allowlist alone.
+    expect(isTierPermitted("external", "git.commit")).toBe(true);
+    expect(isTierPermitted("external", "terminal.rename")).toBe(true);
   });
 
   it("fails closed with an McpError when requestManifest rejects and no cache exists", async () => {
@@ -3313,28 +3345,38 @@ describe("sessionServer introspection tier filtering", () => {
     expect(await ids("system")).toEqual(["actions.list", "git.push"]);
   });
 
-  it("keeps discoverable entries reachable through search (progressive disclosure)", async () => {
-    // These are exactly the entries eager tools/list omits, so search is their
-    // only route. Filtering discovery with shouldExposeTool would delete them.
-    const discoverable = entry("terminal.list", { mcpVisibility: "discoverable" });
-    // tools/list refuses to advertise it; search is the only way to reach it.
-    expect(shouldExposeTool(discoverable, "workbench")).toBe(false);
-    expect(isTierPermitted("workbench", "terminal.list")).toBe(true);
+  // Both deferred classes — explicitly `discoverable` and simply unclassified,
+  // which is the default for most of the registry since #11540 — are exactly
+  // the entries eager tools/list omits, so search is their only route.
+  // Filtering discovery with shouldExposeTool would delete them.
+  const DEFERRED_VISIBILITIES: Array<[string, ActionManifestEntry["mcpVisibility"]]> = [
+    ["discoverable", "discoverable"],
+    ["unclassified", undefined],
+  ];
 
-    const deps = introspectionDeps("workbench", {
-      totalMatches: 2,
-      results: [discoverable, entry("git.push")],
-    });
-    const server = createSessionServer("s1", deps);
-    const res = await callTool(server, {
-      name: "actions.search",
-      arguments: { query: "terminal" },
-    });
+  it.each(DEFERRED_VISIBILITIES)(
+    "keeps %s entries reachable through search (progressive disclosure)",
+    async (_label, vis) => {
+      const deferred = entry("terminal.list", { mcpVisibility: vis });
+      // tools/list refuses to advertise it; search is the only way to reach it.
+      expect(shouldExposeTool(deferred, "workbench")).toBe(false);
+      expect(isTierPermitted("workbench", "terminal.list")).toBe(true);
 
-    const body = payload<{ totalMatches: number; results: ActionManifestEntry[] }>(res);
-    expect(body.results.map((r) => r.id)).toEqual(["terminal.list"]);
-    expect(body.totalMatches).toBe(1);
-  });
+      const deps = introspectionDeps("workbench", {
+        totalMatches: 2,
+        results: [deferred, entry("git.push")],
+      });
+      const server = createSessionServer("s1", deps);
+      const res = await callTool(server, {
+        name: "actions.search",
+        arguments: { query: "terminal" },
+      });
+
+      const body = payload<{ totalMatches: number; results: ActionManifestEntry[] }>(res);
+      expect(body.results.map((r) => r.id)).toEqual(["terminal.list"]);
+      expect(body.totalMatches).toBe(1);
+    }
+  );
 
   it("over-fetches the search page so denied top hits cannot starve it", async () => {
     // 40 denied hits outrank the permitted ones. A renderer honouring the

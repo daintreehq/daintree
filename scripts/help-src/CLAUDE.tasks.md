@@ -55,6 +55,6 @@ Action tier exposes several spawn/send tools that look similar. Pick by what you
 - **Inject project context into a terminal** → `terminal.inject({ terminalId })` — dumps the project's prepared CopyTree context into the named terminal. Pass an explicit `terminalId` (panel UUID from `terminal.list`); agent/MCP dispatch **requires** it and errors without it, so a focus shift can't route the dump into the wrong terminal. Use only when the user explicitly asks to inject context — not a general-purpose prompt sender.
 - **Inject context into a specific terminal** → `copyTree.injectToTerminal({ terminalId })`. Same as above, targeted.
 
-If the right tool isn't in this list, you probably need a higher tier — explain that to the user rather than improvising.
+If the right tool isn't in this list, search for it with `actions.search` before concluding anything — most of the surface is callable but unlisted. Only a `TIER_NOT_PERMITTED` rejection means you need a higher tier; say so then rather than improvising.
 
 For sustained monitoring loops over many agents (stuck-state detection, `ScheduleWakeup` pacing across rounds), see the **Watching Multiple Agent Terminals** section below.

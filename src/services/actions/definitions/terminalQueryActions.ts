@@ -34,6 +34,7 @@ export function registerTerminalQueryActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
     argsSchema: z
       .object({
         worktreeId: z.string().optional(),
@@ -96,6 +97,7 @@ export function registerTerminalQueryActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
     argsSchema: z.object({
       terminalId: z
         .string()
@@ -186,6 +188,7 @@ export function registerTerminalQueryActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
     argsSchema: z
       .object({
         terminalIds: z
@@ -398,6 +401,7 @@ export function registerTerminalQueryActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
     argsSchema: z.object({
       terminalId: z
         .string()
@@ -437,6 +441,7 @@ export function registerTerminalQueryActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
     argsSchema: z.object({
       terminalIds: z
         .array(z.string().min(1))
@@ -487,6 +492,7 @@ export function registerTerminalQueryActions(
     // capability through this ungated `safe` action (#10558).
     denyPluginDispatch: true,
     scope: "renderer",
+    mcpVisibility: "core",
     argsSchema: z.object({
       terminalId: z.string().min(1).describe("Terminal instance ID from terminal.list"),
       command: z

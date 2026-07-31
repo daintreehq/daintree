@@ -5,10 +5,14 @@ import type { WorktreeViewStore, WorktreeViewStoreApi } from "@/store/createWork
 import type { WorktreeSnapshot } from "@shared/types";
 import { KEY_ACTION_VALUES } from "@shared/types/keymap";
 import { BUILT_IN_ACTION_IDS, DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/config/actionIds";
-import type { ActionId } from "@shared/types/actions";
+import type { ActionDanger, ActionId } from "@shared/types/actions";
 import type { ActionRegistry, ActionCallbacks } from "../actionTypes";
 import { DEFAULT_KEYBINDINGS } from "../../defaultKeybindings";
-import { WORKBENCH_TIER_TOOLS } from "@shared/config/helpAssistantTierAllowlists";
+import {
+  ACTION_TIER_ADDONS,
+  SYSTEM_TIER_ADDONS,
+  WORKBENCH_TIER_TOOLS,
+} from "@shared/config/helpAssistantTierAllowlists";
 
 /**
  * Action IDs that exist in BuiltInKeyAction but are intentionally NOT in the
@@ -275,6 +279,94 @@ describe("definition invariants", () => {
       );
     }
     // TODO(#8431): Promote to hard assert once all workbench-tier actions have examples.
+  });
+});
+
+/**
+ * The eager `tools/list` envelope, guarded against silent re-bloat (#11540).
+ *
+ * `shouldExposeTool` advertises an action only when it opts in with
+ * `mcpVisibility: "core"`, so the eager surface is exactly this cohort
+ * intersected with the caller's tier allowlist. Everything else stays
+ * dispatchable and reachable through `actions.search` / `actions.getSchema`.
+ *
+ * These assertions read the real registry rather than a fixture — the cohort is
+ * derived from the definitions, never restated, so adding a `core` annotation
+ * anywhere lands here without the test being edited to match.
+ */
+describe("MCP core tool surface", () => {
+  /**
+   * The product budget from #11540: small enough that every session can afford
+   * to download it, large enough to cover Daintree's orchestration verbs. This
+   * is a policy ceiling, not a copy of any implementation constant — growing
+   * the core past it is the decision the guard exists to force into review.
+   */
+  const CORE_BUDGET_MIN = 15;
+  const CORE_BUDGET_MAX = 25;
+
+  /**
+   * The tools an agent needs before it knows what to search for. Without these
+   * on `tools/list`, the deferred surface is unreachable — a caller cannot
+   * search for the search tool.
+   */
+  const DISCOVERY_ENTRY_POINTS = ["actions.list", "actions.search", "actions.getSchema"];
+
+  async function collectCoreActions(): Promise<Array<{ id: string; danger: ActionDanger }>> {
+    const { registry } = await createRegistryWithAudit();
+    const core: Array<{ id: string; danger: ActionDanger }> = [];
+    for (const [key, factory] of registry) {
+      const def = factory();
+      if (def.mcpVisibility === "core") {
+        core.push({ id: key, danger: def.danger });
+      }
+    }
+    return core;
+  }
+
+  it("keeps the eager core inside its budget", async () => {
+    const core = await collectCoreActions();
+    const ids = core.map((entry) => entry.id).sort();
+
+    expect(ids.length).toBeGreaterThanOrEqual(CORE_BUDGET_MIN);
+    expect(
+      ids.length,
+      `Eager tools/list core grew to ${ids.length} actions (budget ${CORE_BUDGET_MAX}):\n` +
+        ids.map((id) => `  - ${id}`).join("\n")
+    ).toBeLessThanOrEqual(CORE_BUDGET_MAX);
+  });
+
+  it("only marks core actions some tier can actually dispatch", async () => {
+    const core = await collectCoreActions();
+
+    // Exposure defers to the tier allowlists, so a core action outside every
+    // allowlist is advertised to nobody — dead weight in the manifest at best,
+    // and a tool the dispatcher would reject at worst (#7155).
+    const dispatchable = new Set<string>([
+      ...(WORKBENCH_TIER_TOOLS as readonly string[]),
+      ...(ACTION_TIER_ADDONS as readonly string[]),
+      ...(SYSTEM_TIER_ADDONS as readonly string[]),
+    ]);
+
+    const unreachable = core.map((entry) => entry.id).filter((id) => !dispatchable.has(id));
+    expect(unreachable.sort()).toEqual([]);
+  });
+
+  it("never marks a restricted action core", async () => {
+    const core = await collectCoreActions();
+
+    // `shouldExposeTool` drops restricted entries before it reads visibility,
+    // so a restricted core action is a contradiction the author should resolve
+    // rather than a silently ignored annotation.
+    const restricted = core.filter((entry) => entry.danger === "restricted").map((e) => e.id);
+    expect(restricted.sort()).toEqual([]);
+  });
+
+  it("keeps every discovery entry point core", async () => {
+    const core = await collectCoreActions();
+    const ids = new Set(core.map((entry) => entry.id));
+
+    const missing = DISCOVERY_ENTRY_POINTS.filter((id) => !ids.has(id));
+    expect(missing).toEqual([]);
   });
 });
 

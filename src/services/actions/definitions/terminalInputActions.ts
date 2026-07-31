@@ -24,6 +24,7 @@ export function registerTerminalInputActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
     argsSchema: z.object({ terminalId: z.string().min(1).optional() }).optional(),
     run: async (args: { terminalId?: string } | undefined, ctx) => {
       const terminalId = args?.terminalId;

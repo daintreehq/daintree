@@ -21,6 +21,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       kind: "query",
       danger: "safe",
       scope: "renderer",
+      mcpVisibility: "core",
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
       resultSchema: z.object({
         recipes: z.array(RecipeSummarySchema),
@@ -59,6 +60,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       kind: "command",
       danger: "confirm",
       scope: "renderer",
+      mcpVisibility: "core",
       dangerRationale:
         "Spawns the recipe's terminals, each running shell commands or launching agents. " +
         "Agent-initiated runs are confirmation-gated so a single dispatch can't open many terminals unprompted.",

@@ -46,6 +46,9 @@ const waitUntilIdleManifestEntry = (): ActionManifestEntry => ({
   outputSchema: WAIT_UNTIL_IDLE_OUTPUT_SCHEMA,
   enabled: true,
   requiresArgs: true,
+  // Mirrors the shipped definition: `terminal.waitUntilIdle` is one of the
+  // eagerly-listed core orchestration tools (#11540).
+  mcpVisibility: "core",
   mcpAnnotations: {
     readOnlyHint: true,
     idempotentHint: false,

@@ -320,9 +320,13 @@ describe("shouldExposeTool", () => {
     expect(shouldExposeTool(entry, "workbench")).toBe(false);
   });
 
-  it("exposes unclassified entries (no mcpVisibility) for back-compat", () => {
+  // #11540 flipped the default: eager listing is opt-in, so an action that never
+  // classifies itself is deferred rather than advertised. It stays dispatchable
+  // and searchable — this is the listing gate, not an access gate.
+  it("withholds unclassified entries (no mcpVisibility) from tools/list", () => {
     const entry = makeEntry({ id: "actions.list" });
-    expect(shouldExposeTool(entry, "workbench")).toBe(true);
+    expect(shouldExposeTool(entry, "workbench")).toBe(false);
+    expect(isTierPermitted("workbench", entry.id)).toBe(true);
   });
 
   it("still excludes core entries outside the tier allowlist (tier is the authority gate)", () => {
@@ -413,7 +417,7 @@ describe("external tool surface invariants (#10701, #11537)", () => {
   });
 
   it("still reaches curated-allowlist tools", () => {
-    const entry = makeEntry({ id: "actions.list" });
+    const entry = makeEntry({ id: "actions.list", mcpVisibility: "core" });
     expect(shouldExposeTool(entry, "external")).toBe(true);
     expect(isTierPermitted("external", "actions.list")).toBe(true);
   });
@@ -423,9 +427,13 @@ describe("external tool surface invariants (#10701, #11537)", () => {
   // and none inside it may be withheld. The four sentinels above only sample
   // the complement — the historical bypass leaked 335 ids at once, so the
   // upper bound is the assertion that actually catches that class.
+  // Entries are built `core` so this measures *membership* — the property the
+  // two gates must agree on. Visibility is the orthogonal advertisement filter
+  // and has its own truth table above; holding it constant here keeps a core
+  // reclassification (#11540) from masking an allowlist drift.
   it("reaches exactly the curated allowlist across every built-in action", () => {
     const exposed = BUILT_IN_ACTION_IDS.filter((id) =>
-      shouldExposeTool(makeEntry({ id }), "external")
+      shouldExposeTool(makeEntry({ id, mcpVisibility: "core" }), "external")
     );
     const permitted = BUILT_IN_ACTION_IDS.filter((id) => isTierPermitted("external", id));
     const expected = BUILT_IN_ACTION_IDS.filter((id) => TIER_ALLOWLISTS.external.has(id));
@@ -465,7 +473,12 @@ describe("forge tool exposure across the two curated allowlists", () => {
   // passes if this id is dropped from both lists, which would silently undo
   // the feature — an agent could post a comment but not read the thread again.
   it("permits forge.listIssueComments at both the workbench and external tiers", () => {
-    const entry = makeEntry({ id: "forge.listIssueComments", kind: "query", danger: "safe" });
+    const entry = makeEntry({
+      id: "forge.listIssueComments",
+      kind: "query",
+      danger: "safe",
+      mcpVisibility: "core",
+    });
     for (const tier of ["workbench", "external"] as const) {
       expect(isTierPermitted(tier, "forge.listIssueComments")).toBe(true);
       expect(shouldExposeTool(entry, tier)).toBe(true);

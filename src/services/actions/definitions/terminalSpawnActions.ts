@@ -31,6 +31,7 @@ export function registerTerminalSpawnActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
     argsSchema: z
       .object({
         spawnedBy: TerminalSpawnSourceSchema.optional(),

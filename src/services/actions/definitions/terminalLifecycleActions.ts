@@ -41,6 +41,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
     keywords: ["trash", "hide", "dismiss", "remove"],
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown, ctx) => {

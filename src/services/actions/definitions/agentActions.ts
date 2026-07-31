@@ -175,6 +175,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
     argsSchema: z.object({
       agentId: AgentIdSchema,
       location: LaunchLocationSchema.optional(),

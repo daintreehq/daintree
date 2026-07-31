@@ -21,6 +21,7 @@ export function registerWorktreeQueryActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
     resultSchema: z.object({ worktrees: z.array(WorktreeSummarySchema) }),
     run: async () => {
       const worktrees = callbacks.getWorktrees();
@@ -54,6 +55,7 @@ export function registerWorktreeQueryActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
     resultSchema: z.object({ worktree: WorktreeSummarySchema.nullable() }),
     run: async () => {
       const activeWorktreeId = callbacks.getActiveWorktreeId();

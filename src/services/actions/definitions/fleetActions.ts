@@ -569,6 +569,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "core",
     resultSchema: fleetRunStatusResultSchema,
     mcpOutputSchema: true,
     mcpAnnotations: {

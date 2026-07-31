@@ -146,6 +146,7 @@ export function registerWorktreeServiceActions(
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      mcpVisibility: "core",
       argsSchema: z.object({ worktreeId: z.string() }),
       run: async ({ worktreeId }) => {
         await worktreeClient.setActive(worktreeId);

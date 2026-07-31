@@ -90,19 +90,23 @@ export function resolveTokenTier(
 }
 
 /**
- * `tools/list` gate. The manifest-metadata exclusions are advertisement-only
- * filters layered on top of the tier floor; membership itself defers to
- * {@link isTierPermitted} so exposure and dispatch can never drift apart and
- * advertise a tool the dispatcher then rejects (#7155).
+ * `tools/list` gate. Eager listing is an explicit opt-in: only
+ * `mcpVisibility: "core"` is advertised, and only then when the tier permits it
+ * — the metadata check is an advertisement-only filter layered on top of the
+ * tier floor, so exposure and dispatch can never drift apart and advertise a
+ * tool the dispatcher then rejects (#7155).
+ *
+ * Everything else — unset, `discoverable`, `hidden` — is deferred, and stays
+ * dispatchable and (except `hidden`) findable through `actions.search` /
+ * `actions.getSchema`. Defaulting to deferred is what keeps the eager envelope
+ * small by construction: a tool added to a tier allowlist widens what the
+ * session may *call*, never what every session must *download* (#11540).
  */
 export function shouldExposeTool(entry: ActionManifestEntry, tier: McpTier): boolean {
   if (entry.danger === "restricted") {
     return false;
   }
-  if (entry.mcpVisibility === "hidden") {
-    return false;
-  }
-  if (entry.mcpVisibility === "discoverable") {
+  if (entry.mcpVisibility !== "core") {
     return false;
   }
   return isTierPermitted(tier, entry.id);
@@ -207,10 +211,12 @@ function readEntryId(entry: unknown): string | null {
  * here even though the renderer already enforces them: this is the host-side
  * authorization boundary, and it does not take the renderer's word for it.
  *
- * `mcpVisibility: "discoverable"` is deliberately allowed through — that
- * visibility exists precisely so `actions.search` / `actions.getSchema` can
- * surface non-core actions that eager `tools/list` omits (#8502). Reusing
- * {@link shouldExposeTool} here would silently defeat progressive disclosure.
+ * Everything that is not `core` — unset and `mcpVisibility: "discoverable"`
+ * alike — is deliberately allowed through: deferring an action from eager
+ * `tools/list` exists precisely so `actions.search` / `actions.getSchema` can
+ * surface it on demand (#8502, #11540). Reusing {@link shouldExposeTool} here
+ * would silently defeat progressive disclosure and strand the whole deferred
+ * surface behind a list it was removed from.
  */
 function isDiscoverableForSession(
   entry: unknown,

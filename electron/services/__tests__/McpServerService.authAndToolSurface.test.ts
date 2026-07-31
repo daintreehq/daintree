@@ -212,6 +212,7 @@ function createManifestEntry(entry: {
   disabledReason?: string;
   requiresArgs?: boolean;
   mcpAnnotations?: ActionManifestEntry["mcpAnnotations"];
+  mcpVisibility?: ActionManifestEntry["mcpVisibility"];
 }): ActionManifestEntry {
   return {
     id: entry.id as ActionId,
@@ -226,6 +227,10 @@ function createManifestEntry(entry: {
     enabled: entry.enabled ?? true,
     disabledReason: entry.disabledReason,
     requiresArgs: entry.requiresArgs ?? false,
+    // Eager listing is opt-in since #11540, and these suites assert what a
+    // tier advertises. Default the fixtures to `core` so they keep measuring
+    // the tier gate rather than silently emptying every tools/list response.
+    mcpVisibility: entry.mcpVisibility ?? "core",
     ...(entry.mcpAnnotations ? { mcpAnnotations: entry.mcpAnnotations } : {}),
   };
 }
