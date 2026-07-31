@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { render, screen, within, fireEvent } from "@testing-library/react";
+import { render, screen, within, fireEvent, act } from "@testing-library/react";
 
 const originalScrollIntoView = Element.prototype.scrollIntoView;
 beforeAll(() => {
@@ -127,6 +127,7 @@ import type {
   ProjectSwitcherProjectRow,
   ProjectSwitcherScratchRow,
   SearchableProject,
+  SearchableScratch,
 } from "@/hooks/useProjectSwitcherPalette";
 import { SCRATCH_CLEANUP_TTL_MS } from "@shared/config/scratchCleanup";
 
@@ -861,7 +862,7 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
     processCount: 0,
   };
 
-  function rankedProps(overrides: Partial<typeof scratchBase>) {
+  function rankedProps(overrides: Partial<SearchableScratch>) {
     return {
       ...dropdownProps,
       query: "spike",
@@ -871,7 +872,7 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
     };
   }
 
-  function browseProps(overrides: Partial<typeof scratchBase>) {
+  function browseProps(overrides: Partial<SearchableScratch>) {
     return {
       ...dropdownProps,
       query: "",
@@ -898,9 +899,13 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
   it("keeps the scratch origin legible in search once status takes the line", () => {
     render(<ProjectSwitcherPalette {...rankedProps({ activeAgentCount: 1 })} />);
 
-    const row = screen.getByRole("option", { name: /Spike notes/ });
-    expect(row.textContent).toContain("Agent running");
-    expect(row.textContent).toContain("Scratch");
+    const line = screen.getByText("Agent running").parentElement!;
+    // Order matters: the origin trails the status, and the separator is what
+    // keeps them one readable line rather than two adjacent labels.
+    expect(Array.from(line.children).map((el) => el.textContent!.trim())).toEqual([
+      "Agent running",
+      "· Scratch",
+    ]);
   });
 
   it("keeps the cleanup countdown beside the status line", () => {
@@ -926,6 +931,31 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
     render(<ProjectSwitcherPalette {...browseProps({ lastOpened: Date.now() - 2 * 3600_000 })} />);
 
     expect(screen.getByText(/^Opened /)).toBeTruthy();
+  });
+
+  // The tick lives at the palette level, not inside the project list. Moved
+  // back down, the pinned section — a sibling of that list — would never
+  // re-render, and a wait age there would read "just now" forever.
+  it("advances a pinned scratch's wait age without any prop change", async () => {
+    vi.useFakeTimers();
+    try {
+      const waitingSince = Date.now() - 60_000;
+      render(
+        <ProjectSwitcherPalette
+          {...browseProps({ waitingAgentCount: 1, oldestWaitingSince: waitingSince })}
+        />
+      );
+
+      expect(screen.getByText("Agent needs input · waiting 1m")).toBeTruthy();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(screen.getByText("Agent needs input · waiting 2m")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // Placement is explicitly unchanged by #11518: the section stays below the

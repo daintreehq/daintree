@@ -968,6 +968,64 @@ describe("scratch agent-status join", () => {
     await waitFor(() => expect(projectClient.getBulkStats).toHaveBeenCalledWith(["scratch-1"]));
   });
 
+  // Both loads are independent: `Promise.all` here would let either store's IPC
+  // failure cost the OTHER kind of row its status seed entirely.
+  it("still hydrates scratches when the project load rejects", async () => {
+    seedScratches(1);
+    useProjectStoreMock.getState().loadProjects.mockRejectedValueOnce(new Error("projects down"));
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() =>
+      expect(projectClient.getBulkStats).toHaveBeenCalledWith(expect.arrayContaining(["scratch-1"]))
+    );
+  });
+
+  it("still pulls when the scratch load rejects", async () => {
+    seedScratches(1);
+    scratchState.loadScratches.mockRejectedValueOnce(new Error("scratches down"));
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    // The rows already in the store are still worth hydrating.
+    await waitFor(() => expect(projectClient.getBulkStats).toHaveBeenCalled());
+  });
+
+  it("carries the optional completion timestamps through the join", async () => {
+    seedScratches(1);
+    projectStatsState.stats = {
+      "scratch-1": {
+        activeAgentCount: 0,
+        waitingAgentCount: 0,
+        completedAgentCount: 3,
+        unacknowledgedCompletedAgentCount: 2,
+        oldestUnacknowledgedCompletionAt: 111,
+        latestUnacknowledgedCompletionAt: 222,
+        latestCompletionAt: 333,
+        processCount: 0,
+      } as (typeof projectStatsState.stats)[string],
+    };
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    await waitFor(() => expect(result.current.scratchResults).toHaveLength(1));
+
+    // Distinct sentinels: dropping any single assignment must not be maskable
+    // by another timestamp happening to hold the same value.
+    const row = scratchRow(result, "scratch-1");
+    expect(row.oldestUnacknowledgedCompletionAt).toBe(111);
+    expect(row.latestUnacknowledgedCompletionAt).toBe(222);
+    expect(row.latestCompletionAt).toBe(333);
+  });
+
   it("makes no request when there are neither projects nor scratches", async () => {
     const { result } = renderHook(() => useProjectSwitcherPalette());
 

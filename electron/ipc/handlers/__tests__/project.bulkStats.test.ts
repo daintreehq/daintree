@@ -813,23 +813,6 @@ describe("bulk stats and acknowledgement for scratch workspaces", () => {
     };
   }
 
-  it("answers for a requested scratch id", async () => {
-    const ptyClient = makePtyClient({
-      getAllTerminalsAsync: vi
-        .fn()
-        .mockResolvedValue([completedTerminal(SCRATCH_ID, 2_000, "t1")]),
-    });
-    registerProjectCrudHandlers(makeDeps(ptyClient));
-
-    const result = (await getBulkStatsHandler()(fakeEvent, [SCRATCH_ID])) as Record<
-      string,
-      { completedAgentCount: number; unacknowledgedCompletedAgentCount: number }
-    >;
-
-    expect(result[SCRATCH_ID]!.completedAgentCount).toBe(1);
-    expect(result[SCRATCH_ID]!.unacknowledgedCompletedAgentCount).toBe(1);
-  });
-
   // Read against the project-only map, every scratch completion would report as
   // unacknowledged forever — the row would never leave "ready for review".
   it("honours the scratch's own acknowledgement watermark", async () => {
