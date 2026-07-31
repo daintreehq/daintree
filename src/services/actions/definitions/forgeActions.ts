@@ -251,6 +251,16 @@ const ForgePRDraftStateResultSchema = z.object({
   isDraft: z.boolean(),
 });
 
+// One page of an issue's comment thread, from the read action. Reuses the
+// single-comment shape so the read and write halves describe a comment
+// identically, plus the author the write action doesn't echo back.
+const ForgeCommentPageResultSchema = z.object({
+  items: z.array(ForgeCommentResultSchema.extend({ author: z.unknown().optional() })),
+  nextCursor: z.string().nullable(),
+  hasMore: z.boolean(),
+  totalCount: z.number().optional(),
+});
+
 // Provider-agnostic forge action surface. Each action calls forgeClient (the
 // provider-agnostic IPC wrapper); provider routing is resolved at the IPC
 // layer in electron/ipc/handlers/forge.ts, so these run() bodies stay
@@ -765,6 +775,52 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
         return await forgeClient.getIssue(resolvedCwd, issueNumber);
+      },
+    })
+  );
+
+  actions.set("forge.listIssueComments", () =>
+    defineAction({
+      id: "forge.listIssueComments",
+      title: "List Issue Comments",
+      description:
+        "Read one page of an issue's comment thread via the active forge provider — the read counterpart to `forge.addIssueComment`. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `cursor` (optional) from a previous response's `nextCursor`; `perPage` (optional, 1-100, default 20). Comments come back OLDEST-FIRST — to read the latest reply, page until `hasMore` is false and take the last item. Returns { items: [{ id, body, url, author, createdAt }], nextCursor, hasMore, totalCount }. An empty `items` means nobody has commented — a missing issue or a provider that can't read comments errors instead, so you never mistake one for silence. Errors when `cwd` is omitted and no worktree is active. Use `forge.getIssue` for the issue itself — it reports `commentCount` but no comment bodies.",
+      category: "forge",
+      kind: "query",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: cwdArg,
+        issueNumber: z.number().int().positive().describe("Issue number whose comments to read"),
+        cursor: z
+          .string()
+          .optional()
+          .describe(
+            "Opaque pagination cursor — pass the previous response's `nextCursor` to fetch the next page."
+          ),
+        perPage: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("Comments per page (1-100, default 20)"),
+      }),
+      examples: [
+        {
+          args: { issueNumber: 42 },
+          description: "Read the first page of comments on issue #42",
+        },
+        {
+          args: { issueNumber: 42, cursor: "Y3Vyc29yOnYyOpHOAAAAAQ==", perPage: 50 },
+          description: "Read the next 50 comments after a previous page's `nextCursor`",
+        },
+      ],
+      resultSchema: ForgeCommentPageResultSchema,
+      run: async ({ cwd, issueNumber, cursor, perPage }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.listIssueComments(resolvedCwd, issueNumber, { cursor, perPage });
       },
     })
   );

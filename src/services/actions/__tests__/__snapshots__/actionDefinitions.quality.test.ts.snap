@@ -1892,6 +1892,33 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "Read one page of an issue's comment thread via the active forge provider — the read counterpart to \`forge.addIssueComment\`. Args: \`cwd\` (optional) — git repo working directory, defaults to the active worktree path; \`issueNumber\` (required, positive int); \`cursor\` (optional) from a previous response's \`nextCursor\`; \`perPage\` (optional, 1-100, default 20). Comments come back OLDEST-FIRST — to read the latest reply, page until \`hasMore\` is false and take the last item. Returns { items: [{ id, body, url, author, createdAt }], nextCursor, hasMore, totalCount }. An empty \`items\` means nobody has commented — a missing issue or a provider that can't read comments errors instead, so you never mistake one for silence. Errors when \`cwd\` is omitted and no worktree is active. Use \`forge.getIssue\` for the issue itself — it reports \`commentCount\` but no comment bodies.",
+    "examples": [
+      {
+        "args": {
+          "issueNumber": 42,
+        },
+        "description": "Read the first page of comments on issue #42",
+      },
+      {
+        "args": {
+          "cursor": "Y3Vyc29yOnYyOpHOAAAAAQ==",
+          "issueNumber": 42,
+          "perPage": 50,
+        },
+        "description": "Read the next 50 comments after a previous page's \`nextCursor\`",
+      },
+    ],
+    "id": "forge.listIssueComments",
+    "keywords": undefined,
+    "kind": "query",
+    "requiresArgs": true,
+    "title": "List Issue Comments",
+  },
+  {
+    "category": "forge",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "List repository issues via the active forge provider (paginated). Args (all optional): \`cwd\` (repo dir, defaults to the active worktree path); \`state\` ('open'|'closed'|'all', default 'open'); \`perPage\` (1-100, default 20); \`sort\` ('created'|'updated'); \`direction\` ('asc'|'desc'); \`cursor\` from a previous response's \`nextCursor\`; \`view\` ('summary' default — drops body and raw provider payload — or 'full'); \`bypassCache\` to force a fresh fetch when the list may have changed outside this app; \`search\`, a query fragment in the active provider's issue-search dialect passed through verbatim (e.g. 'no:assignee -label:human-review'). Unknown args are rejected, not ignored. Returns { items, nextCursor, hasMore }; summary rows carry number, title, state, url, author, assignees, labels, commentCount, linkedPR and timestamps. Errors when \`cwd\` is omitted and no worktree is active. Do NOT use this for pull requests — call \`forge.listPRs\`.",
     "examples": undefined,
     "id": "forge.listIssues",

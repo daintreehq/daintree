@@ -431,6 +431,42 @@ describe("external tool surface invariants (#10701, #11537)", () => {
   });
 });
 
+// The two forge tool surfaces are curated by hand in separate files —
+// WORKBENCH_TIER_TOOLS in shared/config/helpAssistantTierAllowlists.ts and
+// MCP_TOOL_ALLOWLIST_ENTRIES here in mcp-server/shared.ts — with nothing
+// linking them. Adding a read to only one has shipped a tool invisible to the
+// other caller class before (#10696, #11545).
+//
+// The subset check below is one-directional by necessity: the two lists
+// diverge deliberately in the other direction (external carries forge writes
+// the workbench tier withholds, and `forge.validateToken` is external-only),
+// so equality would be wrong. It catches the workbench-only direction — the
+// one that has actually bitten — but says nothing about a tool absent from
+// both, hence the per-tool sentinel that follows it.
+describe("forge tool exposure across the two curated allowlists", () => {
+  it("every forge tool at the workbench tier is also reachable externally", () => {
+    const workbenchForgeTools = [...TIER_ALLOWLISTS.workbench].filter((id) =>
+      id.startsWith("forge.")
+    );
+
+    // Guard the guard: an empty cohort would make this vacuously pass.
+    expect(workbenchForgeTools.length).toBeGreaterThan(0);
+
+    expect(workbenchForgeTools.filter((id) => !TIER_ALLOWLISTS.external.has(id))).toEqual([]);
+  });
+
+  // Sentinel for the read added in #11545. The subset invariant above still
+  // passes if this id is dropped from both lists, which would silently undo
+  // the feature — an agent could post a comment but not read the thread again.
+  it("permits forge.listIssueComments at both the workbench and external tiers", () => {
+    const entry = makeEntry({ id: "forge.listIssueComments", kind: "query", danger: "safe" });
+    for (const tier of ["workbench", "external"] as const) {
+      expect(isTierPermitted(tier, "forge.listIssueComments")).toBe(true);
+      expect(shouldExposeTool(entry, tier)).toBe(true);
+    }
+  });
+});
+
 describe("buildAnnotations", () => {
   it("safe command → destructiveHint: false", () => {
     const entry = makeEntry({ kind: "command", danger: "safe" });

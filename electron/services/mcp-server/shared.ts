@@ -403,6 +403,7 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "forge.listIssues",
   "forge.listPRs",
   "forge.getIssue",
+  "forge.listIssueComments",
   "forge.getPR",
   "forge.getCIStatus",
   "forge.openIssues",

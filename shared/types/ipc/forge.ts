@@ -251,6 +251,7 @@ export type ForgeProviderMethodName =
   | "getIssue"
   | "getPR"
   | "getCIStatus"
+  | "listIssueComments"
   | "getRepoMetadata"
   | "createIssue"
   | "assignIssue"

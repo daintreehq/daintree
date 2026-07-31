@@ -16,8 +16,10 @@ import type {
   ForgeRepoCounts,
   ForgeTokenHealthState,
   Issue,
+  IssueComment,
   IssueTooltipData,
   ListOptions,
+  Page,
   PR,
   PRTooltipData,
   RateLimitDetails,
@@ -785,6 +787,63 @@ async function handleForgeGetPRReviewThreads(payload: {
   return impl.reviews.getReviewThreads(repoRef, payload.prNumber);
 }
 
+/**
+ * Narrow the loosely-typed `opts` an untrusted renderer can put on the wire
+ * down to the fields this read honors. The MCP action validates its own args,
+ * but `window.electron.forge.listIssueComments` is callable directly, so a
+ * `perPage: NaN` or a non-string cursor would otherwise reach the provider.
+ */
+function normalizeCommentListOptions(value: unknown): ListOptions {
+  if (!value || typeof value !== "object") return {};
+  const raw = value as Record<string, unknown>;
+  return {
+    ...(typeof raw.cursor === "string" && raw.cursor.trim() ? { cursor: raw.cursor } : {}),
+    ...(typeof raw.perPage === "number" && Number.isFinite(raw.perPage)
+      ? { perPage: raw.perPage }
+      : {}),
+    ...(raw.bypassCache === true ? { bypassCache: true } : {}),
+  };
+}
+
+/**
+ * Paged read of an issue's comment thread (#11545).
+ *
+ * Throws when the provider can't serve comments, rather than returning an
+ * empty page. The neutral-empty convention belongs to best-effort ambient
+ * reads — a tooltip that fails just doesn't render (`handleForgeGetIssueTooltip`
+ * above) — but this answers an explicit "has anyone replied?" from an agent,
+ * and an empty page is a wrong answer to that question, not a missing one.
+ * The optional `repoStats` read throws for the same reason.
+ */
+async function handleForgeListIssueComments(payload: {
+  cwd: string;
+  issueNumber: number;
+  opts?: ListOptions;
+}): Promise<Page<IssueComment>> {
+  checkRateLimit(CHANNELS.FORGE_LIST_ISSUE_COMMENTS, 10, 10_000);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  const cwd = requireCwd(payload.cwd);
+  const issueNumber = requirePositiveInt(payload.issueNumber, "issue number");
+  const opts = normalizeCommentListOptions(payload.opts);
+  const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+  const capability = impl.issueComments;
+  if (!capability) {
+    throw new Error("The active forge provider does not support reading issue comments");
+  }
+  return auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "listIssueComments",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("listIssueComments", { issueNumber, ...opts }),
+    },
+    () => capability.listIssueComments(repoRef, issueNumber, opts)
+  );
+}
+
 async function handleForgeResolveAuthorAvatar(payload: {
   cwd: string;
   email: string;
@@ -835,6 +894,7 @@ export const forgeCapabilityDataNamespace = defineIpcNamespace({
     getIssuesByNumbers: op(CHANNELS.FORGE_GET_ISSUES_BY_NUMBERS, handleForgeGetIssuesByNumbers),
     getPRsByNumbers: op(CHANNELS.FORGE_GET_PRS_BY_NUMBERS, handleForgeGetPRsByNumbers),
     getPRReviewThreads: op(CHANNELS.FORGE_GET_PR_REVIEW_THREADS, handleForgeGetPRReviewThreads),
+    listIssueComments: op(CHANNELS.FORGE_LIST_ISSUE_COMMENTS, handleForgeListIssueComments),
     resolveAuthorAvatar: op(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, handleForgeResolveAuthorAvatar),
     getTokenHealth: op(CHANNELS.FORGE_GET_TOKEN_HEALTH, handleForgeGetTokenHealth),
     getRateLimitDetails: op(CHANNELS.FORGE_GET_RATE_LIMIT_DETAILS, handleForgeGetRateLimitDetails),

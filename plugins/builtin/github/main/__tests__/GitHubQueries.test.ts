@@ -7,6 +7,7 @@ import {
   buildBatchRequiredChecksQuery,
   buildBatchIssuesQuery,
   buildBatchPRsQuery,
+  LIST_ISSUE_COMMENTS_QUERY,
   LIST_PRS_QUERY,
   REPO_STATS_AND_PAGE_QUERY,
   SEARCH_QUERY,
@@ -173,6 +174,58 @@ describe("REPO_STATS_AND_PAGE_QUERY", () => {
     );
     expect(prsBlock).toContain("author { login avatarUrl }");
     expect(prsBlock).toContain("isDraft");
+  });
+});
+
+describe("LIST_ISSUE_COMMENTS_QUERY", () => {
+  it("selects raw markdown body, not the bodyText projection", () => {
+    // The REST write path returns raw markdown; a bodyText read would strip
+    // formatting on the way back and break round-trip fidelity.
+    const commentSelection = /nodes\s*\{([^}]*)\}/.exec(LIST_ISSUE_COMMENTS_QUERY)?.[1] ?? "";
+    expect(commentSelection).toContain("body");
+    expect(commentSelection).not.toContain("bodyText");
+  });
+
+  it("selects every comment field the mapper projects", () => {
+    // Scoped to the node selection: a global toContain would pass even if one
+    // of these moved to the wrong level of the query.
+    const commentSelection = /nodes\s*\{([^}]*)\}/.exec(LIST_ISSUE_COMMENTS_QUERY)?.[1] ?? "";
+    for (const field of ["id", "databaseId", "body", "url", "createdAt", "author"]) {
+      expect(commentSelection).toContain(field);
+    }
+  });
+
+  it("selects the author's login and avatar, not a bare actor node", () => {
+    const authorSelection = /author\s*\{([^}]*)\}/.exec(LIST_ISSUE_COMMENTS_QUERY)?.[1] ?? "";
+    expect(authorSelection).toContain("login");
+    expect(authorSelection).toContain("avatarUrl");
+  });
+
+  it("pages forward with first/after and returns pageInfo plus totalCount", () => {
+    expect(LIST_ISSUE_COMMENTS_QUERY).toContain("comments(first: $limit, after: $cursor)");
+    expect(LIST_ISSUE_COMMENTS_QUERY).toContain("hasNextPage");
+    expect(LIST_ISSUE_COMMENTS_QUERY).toContain("endCursor");
+    expect(LIST_ISSUE_COMMENTS_QUERY).toContain("totalCount");
+  });
+
+  it("does not order the connection (IssueCommentOrderField has no CREATED_AT)", () => {
+    expect(LIST_ISSUE_COMMENTS_QUERY).not.toContain("orderBy");
+  });
+
+  it("includes the rateLimit fields the accounting service reads", () => {
+    const rateLimitSelection = /rateLimit\s*\{([^}]*)\}/.exec(LIST_ISSUE_COMMENTS_QUERY)?.[1] ?? "";
+    for (const field of ["cost", "remaining", "resetAt", "limit"]) {
+      expect(rateLimitSelection).toContain(field);
+    }
+  });
+
+  it("declares every variable it interpolates", () => {
+    const declared =
+      /query ListIssueComments\(([^)]*)\)/.exec(LIST_ISSUE_COMMENTS_QUERY)?.[1] ?? "";
+    const used = new Set(LIST_ISSUE_COMMENTS_QUERY.match(/\$\w+/g) ?? []);
+    for (const variable of used) {
+      expect(declared).toContain(variable);
+    }
   });
 });
 

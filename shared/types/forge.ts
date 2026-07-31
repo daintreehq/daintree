@@ -354,8 +354,9 @@ export interface EditIssueInput {
 }
 
 /**
- * Normalized projection of a comment created via
- * {@link ForgeProviderImpl.addIssueComment}. Mirrors the lowest common
+ * Normalized projection of an issue comment — both the one created via
+ * {@link ForgeProviderImpl.addIssueComment} and the ones read back via
+ * {@link IssueCommentCapability.listIssueComments}. Mirrors the lowest common
  * denominator across forges.
  */
 export interface IssueComment {
@@ -569,6 +570,37 @@ export interface ReviewCapability {
     prNumber: number,
     reviewers: ReviewerRequest
   ): Promise<RequestReviewersResult>;
+}
+
+/**
+ * Optional paged read of an issue's comment thread — the read half of
+ * {@link ForgeProviderImpl.addIssueComment}, which posts without any way to
+ * see the thread it posts into (#11545). Separate from `getIssue` because a
+ * thread is unbounded: `getIssue` reports `commentCount` and stays one cheap
+ * round-trip, while the comments themselves page.
+ *
+ * Comments come back oldest-first, the natural reading order of a thread and
+ * the only order either GitHub API reliably serves (its per-issue REST
+ * endpoint silently ignores `sort`/`direction`, and GraphQL's
+ * `IssueCommentOrderField` has no `CREATED_AT`). A caller wanting the newest
+ * comment must therefore page to the end and take the last item — never ask
+ * for one descending item.
+ *
+ * Throws when the issue doesn't exist, rather than returning an empty page.
+ * The consumer here is an agent deciding whether anyone replied, and "no such
+ * issue", "this provider can't read comments" and "nobody has replied yet"
+ * lead it to opposite conclusions — so only the last of the three may present
+ * as an empty page. The host applies the same rule to capability absence
+ * (`ForgeProviderImpl.issueComments` missing throws, matching `repoStats`),
+ * which is why this capability is not modeled as best-effort the way
+ * {@link TooltipCapability} is.
+ */
+export interface IssueCommentCapability {
+  listIssueComments(
+    repo: RepoRef,
+    issueNumber: number,
+    opts: ListOptions
+  ): Promise<Page<IssueComment>>;
 }
 
 export interface ApprovalCapability {
@@ -1150,6 +1182,7 @@ export interface ForgeProviderImpl {
 
   // Optional capabilities — host checks presence via a truthiness guard (see above).
   reviews?: ReviewCapability;
+  issueComments?: IssueCommentCapability;
   approvals?: ApprovalCapability;
   releases?: ReleaseCapability;
   projectBoards?: ProjectBoardCapability;

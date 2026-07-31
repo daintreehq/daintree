@@ -904,6 +904,7 @@ export const CHANNELS = {
   FORGE_GET_ISSUES_BY_NUMBERS: "forge:get-issues-by-numbers",
   FORGE_GET_PRS_BY_NUMBERS: "forge:get-prs-by-numbers",
   FORGE_GET_PR_REVIEW_THREADS: "forge:get-pr-review-threads",
+  FORGE_LIST_ISSUE_COMMENTS: "forge:list-issue-comments",
   FORGE_RESOLVE_AUTHOR_AVATAR: "forge:resolve-author-avatar",
   FORGE_GET_TOKEN_HEALTH: "forge:get-token-health",
   FORGE_GET_RATE_LIMIT_DETAILS: "forge:get-rate-limit-details",

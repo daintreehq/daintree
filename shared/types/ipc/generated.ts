@@ -509,6 +509,16 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { providerId: string }];
     result: import("../forge.js").ForgeTokenHealthState | null;
   };
+  "forge:list-issue-comments": {
+    args: [
+      payload: {
+        cwd: string;
+        issueNumber: number;
+        opts?: import("../forge.js").ListOptions | undefined;
+      },
+    ];
+    result: import("../forge.js").Page<import("../forge.js").IssueComment>;
+  };
   "forge:mark-pr-ready-for-review": {
     args: [payload: { cwd: string; prNumber: number }];
     result: import("../forge.js").PRDraftStateResult;

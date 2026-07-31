@@ -118,8 +118,8 @@ describe("registerForgeDataHandlers", () => {
 
   it("registers the core and capability IPC handlers", () => {
     const cleanup = registerForgeDataHandlers();
-    // 6 core data handlers + the 12-op forgeCapabilityData namespace.
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(18);
+    // 6 core data handlers + the 13-op forgeCapabilityData namespace.
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(19);
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-issues", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-prs", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-issue", expect.any(Function));
@@ -154,6 +154,10 @@ describe("registerForgeDataHandlers", () => {
     );
     expect(ipcMainMock.handle).toHaveBeenCalledWith(
       "forge:get-pr-review-threads",
+      expect.any(Function)
+    );
+    expect(ipcMainMock.handle).toHaveBeenCalledWith(
+      "forge:list-issue-comments",
       expect.any(Function)
     );
     expect(ipcMainMock.handle).toHaveBeenCalledWith(
@@ -513,6 +517,129 @@ describe("registerForgeDataHandlers", () => {
     const result = await findHandler("forge:get-current-user")(null, { cwd: "/repo" });
 
     expect(result).toBeNull();
+  });
+
+  describe("listIssueComments", () => {
+    const comment = {
+      id: "101",
+      body: "any progress here?",
+      url: "https://fake.test/acme/widgets/issues/7#comment-101",
+      createdAt: 1,
+      rawData: null,
+    };
+
+    function implWithComments(listIssueComments: ReturnType<typeof vi.fn>) {
+      return { ...fakeImpl, issueComments: { listIssueComments } };
+    }
+
+    it("delegates to the capability and returns its page verbatim", async () => {
+      const page = { items: [comment], nextCursor: "c2", hasMore: true, totalCount: 9 };
+      const listIssueComments = vi.fn().mockResolvedValue(page);
+      resolveForCwdMock.mockResolvedValue({
+        namespaceId: "fake.provider",
+        repoRef,
+        impl: implWithComments(listIssueComments) as unknown as ForgeProviderImpl,
+      });
+      registerForgeDataHandlers();
+
+      const result = await findHandler("forge:list-issue-comments")(null, {
+        cwd: "/repo",
+        issueNumber: 7,
+        opts: { cursor: "c1", perPage: 50 },
+      });
+
+      expect(listIssueComments).toHaveBeenCalledWith(repoRef, 7, { cursor: "c1", perPage: 50 });
+      expect(result).toEqual(page);
+    });
+
+    it("defaults opts to an empty object when omitted", async () => {
+      const listIssueComments = vi
+        .fn()
+        .mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+      resolveForCwdMock.mockResolvedValue({
+        namespaceId: "fake.provider",
+        repoRef,
+        impl: implWithComments(listIssueComments) as unknown as ForgeProviderImpl,
+      });
+      registerForgeDataHandlers();
+
+      await findHandler("forge:list-issue-comments")(null, { cwd: "/repo", issueNumber: 7 });
+
+      expect(listIssueComments).toHaveBeenCalledWith(repoRef, 7, {});
+    });
+
+    it("throws when the provider lacks the capability, so silence is never faked", async () => {
+      // `fakeImpl` has no `issueComments` field. An empty page here would tell
+      // an agent "nobody replied" when the truth is "nobody could look".
+      registerForgeDataHandlers();
+
+      await expect(
+        findHandler("forge:list-issue-comments")(null, { cwd: "/repo", issueNumber: 7 })
+      ).rejects.toThrow(/does not support reading issue comments/i);
+    });
+
+    it("strips option fields the read does not honor and drops malformed ones", async () => {
+      // The preload types `opts` loosely, so a direct renderer call can put
+      // anything here — only the action's zod schema guards agent callers.
+      const listIssueComments = vi
+        .fn()
+        .mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+      resolveForCwdMock.mockResolvedValue({
+        namespaceId: "fake.provider",
+        repoRef,
+        impl: implWithComments(listIssueComments) as unknown as ForgeProviderImpl,
+      });
+      registerForgeDataHandlers();
+
+      await findHandler("forge:list-issue-comments")(null, {
+        cwd: "/repo",
+        issueNumber: 7,
+        opts: {
+          perPage: Number.NaN,
+          cursor: 42,
+          bypassCache: "yes",
+          state: "closed",
+          search: "drop me",
+        },
+      });
+
+      expect(listIssueComments).toHaveBeenCalledWith(repoRef, 7, {});
+    });
+
+    it("rejects a non-positive or non-integer issue number before resolving a provider", async () => {
+      registerForgeDataHandlers();
+      const handler = findHandler("forge:list-issue-comments");
+
+      for (const issueNumber of [0, -1, 1.5, "7", null, undefined]) {
+        await expect(handler(null, { cwd: "/repo", issueNumber })).rejects.toThrow(
+          /invalid issue number/i
+        );
+      }
+      expect(resolveForCwdMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects a blank cwd", async () => {
+      registerForgeDataHandlers();
+
+      await expect(
+        findHandler("forge:list-issue-comments")(null, { cwd: "   ", issueNumber: 7 })
+      ).rejects.toThrow(/invalid working directory/i);
+      expect(resolveForCwdMock).not.toHaveBeenCalled();
+    });
+
+    it("propagates a capability failure instead of masking it as an empty thread", async () => {
+      const listIssueComments = vi.fn().mockRejectedValue(new Error("Bad credentials"));
+      resolveForCwdMock.mockResolvedValue({
+        namespaceId: "fake.provider",
+        repoRef,
+        impl: implWithComments(listIssueComments) as unknown as ForgeProviderImpl,
+      });
+      registerForgeDataHandlers();
+
+      await expect(
+        findHandler("forge:list-issue-comments")(null, { cwd: "/repo", issueNumber: 7 })
+      ).rejects.toThrow(/bad credentials/i);
+    });
   });
 
   it("getCurrentUser does not write an audit record (read probe, matches getRateLimit)", async () => {

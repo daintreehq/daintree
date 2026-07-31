@@ -2,6 +2,7 @@ import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import type {
   CIStatus,
   Issue,
+  IssueComment,
   IssueTooltipData,
   ListOptions,
   Page,
@@ -18,6 +19,7 @@ import type {
 import { GitHubAuth } from "./GitHubAuth.js";
 import {
   LIST_ISSUES_QUERY,
+  LIST_ISSUE_COMMENTS_QUERY,
   LIST_PRS_QUERY,
   SEARCH_QUERY,
   GET_ISSUE_QUERY,
@@ -35,6 +37,7 @@ import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import {
   forgeIssueListCache,
   forgePRListCache,
+  getIssueCommentsEpoch,
   getRepoListEpoch,
   issueTooltipCache,
   prRequiredStatusCache,
@@ -59,6 +62,7 @@ import {
   mapIssueGraphQLStates,
   mapPRGraphQLStates,
   toForgeIssue,
+  toForgeIssueComment,
   toForgePR,
   gitHubIssueToForgeIssue,
 } from "./mappers.js";
@@ -66,6 +70,7 @@ import {
   dedupe,
   runQuery,
   listIssuesInflight,
+  listIssueCommentsInflight,
   listPRsInflight,
   getIssueInflight,
   getPRInflight,
@@ -897,6 +902,104 @@ export async function getReviewThreadsImpl(
     break;
   }
   return threads;
+}
+
+/** GitHub caps a GraphQL connection's `first:` at 100. */
+const MAX_ISSUE_COMMENTS_PER_PAGE = 100;
+const DEFAULT_ISSUE_COMMENTS_PER_PAGE = 20;
+
+/**
+ * Clamp a caller-supplied page size into GitHub's `first:` window. The IPC
+ * boundary types `opts` loosely and only the MCP action validates it, so a
+ * direct renderer call can land here with `NaN`/`Infinity` — which would sail
+ * through a bare `Math.trunc` clamp and reach GraphQL as an invalid `Int!`.
+ */
+function clampCommentsPerPage(perPage: number | undefined): number {
+  if (typeof perPage !== "number" || !Number.isFinite(perPage)) {
+    return DEFAULT_ISSUE_COMMENTS_PER_PAGE;
+  }
+  return Math.min(Math.max(Math.trunc(perPage), 1), MAX_ISSUE_COMMENTS_PER_PAGE);
+}
+
+/**
+ * Paged read of an issue's comment thread (#11545) — the read half of
+ * `addIssueComment`.
+ *
+ * Deliberately bypasses `runQuery`'s 60-second raw-response cache: the calling
+ * agent has often just posted into this very thread, or is polling for a human
+ * reply, so a minute of staleness reads as "nobody answered" and defeats the
+ * point. The call-site `dedupe` below still collapses concurrent identical
+ * reads, so bypassing costs nothing under fan-out.
+ *
+ * The dedupe key carries the auth token version and the issue's comment epoch
+ * so coalescing can't span a credential switch (joining a request made with
+ * someone else's token) or a write (a read issued after `addIssueComment`
+ * joining one issued before it, and so missing the comment just posted).
+ *
+ * Order is GitHub's own: oldest-first. `opts.sort`/`opts.direction` are
+ * advisory and ignored — neither GitHub API honors them on a comment thread
+ * (see {@link IssueCommentCapability}), so accepting them would be a lie.
+ */
+export async function listIssueCommentsImpl(
+  repo: RepoRef,
+  issueNumber: number,
+  opts: ListOptions
+): Promise<Page<IssueComment>> {
+  const bypass = opts.bypassCache === true;
+  const limit = clampCommentsPerPage(opts.perPage);
+  // A blank cursor is not the first page under a different name — treating it
+  // as `null` keeps it from colliding with the real first page's dedupe slot.
+  const cursor = opts.cursor?.trim() ? opts.cursor : null;
+  const dedupeKey = JSON.stringify([
+    GitHubAuth.getTokenVersion(),
+    repo.owner,
+    repo.repo,
+    issueNumber,
+    getIssueCommentsEpoch(repo.owner, repo.repo),
+    cursor,
+    limit,
+  ]);
+
+  return dedupe(listIssueCommentsInflight, dedupeKey, bypass, async () => {
+    const response = await runQuery(
+      LIST_ISSUE_COMMENTS_QUERY,
+      { owner: repo.owner, repo: repo.repo, number: issueNumber, cursor, limit },
+      "LIST_ISSUE_COMMENTS_QUERY",
+      true
+    );
+
+    const issue = (response?.repository as Record<string, unknown> | undefined)?.issue as
+      | {
+          comments?: {
+            nodes?: unknown[];
+            pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+            totalCount?: number;
+          };
+        }
+      | null
+      | undefined;
+
+    // An empty page must mean "nobody has commented", never "no such issue" —
+    // an agent checking for a reply would read the latter as the former.
+    if (!issue) {
+      throw new Error(`Issue #${issueNumber} not found in ${repo.owner}/${repo.repo}`);
+    }
+
+    const comments = issue.comments;
+    const nodes = (comments?.nodes ?? []) as Array<Record<string, unknown>>;
+    const endCursor = comments?.pageInfo?.endCursor ?? null;
+    // Relay connections keep returning the last edge's cursor after the final
+    // page, but `Page.nextCursor` is contractually null once nothing follows —
+    // and a cursor with no page behind it makes a caller fetch one more time.
+    // A `hasNextPage` with no cursor to follow is likewise not "more".
+    const hasMore = (comments?.pageInfo?.hasNextPage ?? false) && endCursor !== null;
+    return {
+      items: nodes.filter(Boolean).map(toForgeIssueComment),
+      nextCursor: hasMore ? endCursor : null,
+      hasMore,
+      ...(typeof comments?.totalCount === "number" ? { totalCount: comments.totalCount } : {}),
+    };
+  });
 }
 
 export function getRateLimitImpl(): Promise<RateLimitInfo> {

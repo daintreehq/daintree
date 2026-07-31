@@ -15,6 +15,9 @@ vi.mock("../GitHubAuth.js", () => ({
   GitHubAuth: {
     getToken: vi.fn(() => "test-token"),
     createClient: vi.fn(() => mockGraphQLClient),
+    // Read paths that must not coalesce across a credential switch fold the
+    // token version into their single-flight key.
+    getTokenVersion: vi.fn(() => 0),
   },
   GITHUB_API_TIMEOUT_MS: 5000,
 }));
@@ -1879,6 +1882,320 @@ describe("getReviewThreads", () => {
   });
 });
 
+describe("listIssueComments", () => {
+  beforeEach(() => {
+    mockGraphQLClient.mockReset();
+  });
+
+  function makeCommentNode(databaseId: number, body: string) {
+    return {
+      id: `MDEyOklzc3VlQ29tbWVudD${databaseId}`,
+      databaseId,
+      body,
+      url: `https://github.com/owner/repo/issues/7#issuecomment-${databaseId}`,
+      createdAt: "2025-03-01T12:00:00Z",
+      author: { login: "octocat", avatarUrl: "https://avatars/u" },
+    };
+  }
+
+  function makePageResponse(
+    nodes: unknown[],
+    {
+      hasNextPage = false,
+      endCursor = null as string | null,
+      totalCount = nodes.length as number | undefined,
+    } = {}
+  ) {
+    return {
+      repository: {
+        issue: {
+          comments: {
+            ...(totalCount !== undefined ? { totalCount } : {}),
+            pageInfo: { hasNextPage, endCursor },
+            nodes,
+          },
+        },
+      },
+    };
+  }
+
+  it("normalizes GraphQL comment nodes onto the forge shape", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(101, "First **reply**")])
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]).toMatchObject({
+      id: "101",
+      body: "First **reply**",
+      url: "https://github.com/owner/repo/issues/7#issuecomment-101",
+      author: { login: "octocat" },
+    });
+    expect(page.items[0].createdAt).toBe(Date.parse("2025-03-01T12:00:00Z"));
+    expect(page.items[0].rawData).toEqual(makeCommentNode(101, "First **reply**"));
+  });
+
+  it("stringifies databaseId so read ids match what addIssueComment returns", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(makePageResponse([makeCommentNode(12345, "hi")]));
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page.items[0].id).toBe("12345");
+  });
+
+  it("falls back to the node id when databaseId is absent or not finite", async () => {
+    const base = makeCommentNode(1, "a");
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([
+        { ...base, id: "NODE_A", databaseId: undefined },
+        { ...base, id: "NODE_B", databaseId: null },
+        { ...base, id: "NODE_C", databaseId: NaN },
+        { ...base, id: "NODE_D", databaseId: "77" },
+      ])
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    // Distinct ids, not four colliding empty strings.
+    expect(page.items.map((c) => c.id)).toEqual(["NODE_A", "NODE_B", "NODE_C", "NODE_D"]);
+  });
+
+  it("omits author entirely for a deleted account (GraphQL returns author: null)", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([{ ...makeCommentNode(1, "ghost"), author: null }])
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page.items[0].body).toBe("ghost");
+    expect("author" in page.items[0]).toBe(false);
+  });
+
+  it("drops null nodes without disturbing the surrounding order", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(1, "first"), null, makeCommentNode(3, "third")])
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page.items.map((c) => c.body)).toEqual(["first", "third"]);
+  });
+
+  it("omits totalCount when the connection does not report one", async () => {
+    // Built inline rather than through makePageResponse: its `totalCount`
+    // default fires on `undefined`, so the helper can't express "absent".
+    mockGraphQLClient.mockResolvedValueOnce({
+      repository: {
+        issue: {
+          comments: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [makeCommentNode(1, "a")],
+          },
+        },
+      },
+    });
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page.items).toHaveLength(1);
+    expect("totalCount" in page).toBe(false);
+  });
+
+  it("preserves the thread's oldest-first order", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([
+        makeCommentNode(1, "oldest"),
+        makeCommentNode(2, "middle"),
+        makeCommentNode(3, "newest"),
+      ])
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page.items.map((c) => c.body)).toEqual(["oldest", "middle", "newest"]);
+  });
+
+  it("maps pageInfo onto nextCursor/hasMore and threads a cursor back through", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(1, "a")], {
+        hasNextPage: true,
+        endCursor: "cursor-2",
+        totalCount: 40,
+      })
+    );
+
+    const first = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+    expect(first).toMatchObject({ nextCursor: "cursor-2", hasMore: true, totalCount: 40 });
+
+    mockGraphQLClient.mockResolvedValueOnce(makePageResponse([makeCommentNode(2, "b")]));
+    await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {
+      cursor: first.nextCursor,
+    });
+
+    const [, vars] = mockGraphQLClient.mock.calls[1] as [string, Record<string, unknown>];
+    expect(vars.cursor).toBe("cursor-2");
+    expect(vars.number).toBe(7);
+  });
+
+  it("defaults perPage to 20 and clamps out-of-range values into GitHub's 1-100 window", async () => {
+    // NaN/Infinity reach here from a direct renderer IPC call, which the MCP
+    // action's schema never sees; unguarded they'd hit GraphQL's `Int!`.
+    const requested = [undefined, 50, 0, -5, 250, 7.9, NaN, Infinity, -Infinity];
+    const expected = [20, 50, 1, 1, 100, 7, 20, 20, 20];
+
+    for (const perPage of requested) {
+      mockGraphQLClient.mockResolvedValueOnce(makePageResponse([]));
+      await githubForgeProvider.issueComments!.listIssueComments(repo, 7, { perPage });
+    }
+
+    const limits = mockGraphQLClient.mock.calls.map(
+      (call) => (call[1] as Record<string, unknown>).limit
+    );
+    expect(limits).toEqual(expected);
+  });
+
+  it("re-fetches on a repeat read so a reply posted meanwhile is visible", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(makePageResponse([makeCommentNode(1, "question")]));
+    const before = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(1, "question"), makeCommentNode(2, "answer")])
+    );
+    const after = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(before.items).toHaveLength(1);
+    expect(after.items.map((c) => c.body)).toEqual(["question", "answer"]);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces concurrent identical reads into one request", async () => {
+    mockGraphQLClient.mockResolvedValue(makePageResponse([makeCommentNode(1, "a")]));
+
+    const [a, b] = await Promise.all([
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, {}),
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, {}),
+    ]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    expect(a).toEqual(b);
+  });
+
+  it("does not coalesce reads that differ by issue, cursor or page size", async () => {
+    mockGraphQLClient.mockResolvedValue(makePageResponse([]));
+
+    await Promise.all([
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, {}),
+      githubForgeProvider.issueComments!.listIssueComments(repo, 8, {}),
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, { cursor: "c" }),
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, { perPage: 50 }),
+    ]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(4);
+    // Each request carried its own variables — four calls with identical args
+    // would satisfy the count above while still being the same query.
+    const variants = mockGraphQLClient.mock.calls.map((call) => {
+      const vars = call[1] as Record<string, unknown>;
+      return `${String(vars.number)}:${String(vars.cursor)}:${String(vars.limit)}`;
+    });
+    expect(new Set(variants).size).toBe(4);
+  });
+
+  it("treats a blank cursor as the first page rather than a distinct slot", async () => {
+    mockGraphQLClient.mockResolvedValue(makePageResponse([]));
+
+    await Promise.all([
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, {}),
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, { cursor: "" }),
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, { cursor: "   " }),
+    ]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    const [, vars] = mockGraphQLClient.mock.calls[0] as [string, Record<string, unknown>];
+    expect(vars.cursor).toBeNull();
+  });
+
+  it("does not let a read issued after addIssueComment join one issued before it", async () => {
+    // The post-then-poll sequence an agent runs: a read already in flight must
+    // not be reused for a read that starts after the comment landed.
+    let releaseFirst: ((value: unknown) => void) | undefined;
+    mockGraphQLClient.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseFirst = resolve;
+        })
+    );
+    const inFlight = githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+    await Promise.resolve();
+
+    (globalThis as unknown as { fetch: unknown }).fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: vi.fn().mockResolvedValue({
+        id: 2,
+        body: "answer",
+        html_url: "https://github.com/owner/repo/issues/7#issuecomment-2",
+        created_at: "2025-03-01T13:00:00Z",
+      }),
+    });
+    await githubForgeProvider.addIssueComment(repo, 7, "answer");
+
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(1, "question"), makeCommentNode(2, "answer")])
+    );
+    const afterWrite = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    releaseFirst?.(makePageResponse([makeCommentNode(1, "question")]));
+    await inFlight;
+
+    expect(afterWrite.items.map((c) => c.body)).toEqual(["question", "answer"]);
+  });
+
+  it("throws for a missing issue rather than passing it off as an empty thread", async () => {
+    // An agent asking "did anyone reply?" must not read "no such issue" as "no".
+    mockGraphQLClient.mockResolvedValueOnce({ repository: { issue: null } });
+
+    await expect(
+      githubForgeProvider.issueComments!.listIssueComments(repo, 999, {})
+    ).rejects.toThrow(/#999 not found/);
+  });
+
+  it("nulls nextCursor on the terminal page even when GitHub still returns endCursor", async () => {
+    // Relay connections keep echoing the last edge's cursor; Page.nextCursor is
+    // contractually null once nothing follows, or callers fetch one page too many.
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(1, "a")], {
+        hasNextPage: false,
+        endCursor: "terminal-cursor",
+      })
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page).toMatchObject({ hasMore: false, nextCursor: null });
+  });
+
+  it("reports no more pages when hasNextPage is set but no cursor follows it", async () => {
+    // hasMore:true with nextCursor:null would strand a caller mid-thread.
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(1, "a")], { hasNextPage: true, endCursor: null })
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page).toMatchObject({ hasMore: false, nextCursor: null });
+  });
+
+  it("propagates provider failures rather than reporting an empty thread", async () => {
+    mockGraphQLClient.mockRejectedValueOnce(new Error("Bad credentials"));
+
+    await expect(githubForgeProvider.issueComments!.listIssueComments(repo, 7, {})).rejects.toThrow(
+      /bad credentials/i
+    );
+  });
+});
+
 describe("createIssue", () => {
   const restIssueResponse = {
     number: 7,
@@ -2637,6 +2954,21 @@ describe("issue write mutations (close/reopen/edit/comment/labels)", () => {
         /comment body is required/i
       );
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("still invalidates when a 201 carries an unusable body — the comment exists", async () => {
+      // Past the ok check the comment is on GitHub whatever the payload says.
+      // Leaving stale reads behind would tell a caller checking whether the
+      // post landed that it didn't, and invite a duplicate.
+      mockJsonOk({ id: "not-a-number" }, 201);
+      const invalidateSpy = vi.spyOn(issueTooltipCache, "invalidate");
+
+      await expect(githubForgeProvider.addIssueComment(repo, 7, "hi")).rejects.toThrow(
+        /missing comment id or URL/i
+      );
+
+      expect(invalidateSpy).toHaveBeenCalledWith("owner/repo:7");
+      invalidateSpy.mockRestore();
     });
   });
 

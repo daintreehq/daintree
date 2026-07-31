@@ -3,6 +3,7 @@ import type {
   ForgeLabel,
   ForgeUser,
   Issue,
+  IssueComment,
   LinkedPRSummary,
   ListOptions,
   NormalizedIssueState,
@@ -185,6 +186,33 @@ export function toForgeIssue(node: Record<string, unknown>): Issue {
     createdAt: isoToMs(node.createdAt ?? node.updatedAt),
     updatedAt: isoToMs(node.updatedAt),
     closedAt: isoToMsOrNull(node.closedAt),
+    rawData: node,
+  };
+}
+
+/**
+ * GraphQL `IssueComment` node → normalized {@link IssueComment}. `databaseId`
+ * is GitHub's REST numeric id, stringified so it matches what the REST write
+ * path (`addIssueCommentImpl`) returns for the same comment — the two ids stay
+ * interchangeable for any later edit/delete.
+ *
+ * Falls back to the GraphQL node id when `databaseId` is missing or not a
+ * finite number, so `id` is always something that identifies the comment. An
+ * empty-string id would silently collide across every degraded node and make
+ * two different comments look like one.
+ */
+export function toForgeIssueComment(node: Record<string, unknown>): IssueComment {
+  const author = toForgeUser(node.author);
+  const databaseId =
+    typeof node.databaseId === "number" && Number.isFinite(node.databaseId)
+      ? String(node.databaseId)
+      : undefined;
+  return {
+    id: databaseId ?? (typeof node.id === "string" ? node.id : ""),
+    body: typeof node.body === "string" ? node.body : "",
+    url: typeof node.url === "string" ? node.url : "",
+    ...(author ? { author } : {}),
+    createdAt: isoToMs(node.createdAt),
     rawData: node,
   };
 }
