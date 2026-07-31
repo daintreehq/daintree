@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { IFuseOptions } from "fuse.js";
-import { getPanelKindIds, getPanelKindConfig } from "@shared/config/panelKindRegistry";
-import { getPanelKindDefinition } from "@/registry";
+import { getSpawnablePanelKinds } from "@/registry";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import {
   subscribeToPluginAgentRegistry,
@@ -117,27 +116,15 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     // Referenced so this memo re-derives when plugins load/unload mid-session;
     // getEffectiveAgentIds/Config below read the merged (incl. plugin) registry (#9879).
     void pluginAgentRegistry;
-    const panelKinds = getPanelKindIds()
-      .filter((kindId) => {
-        if (kindId === "agent") return false;
-        const config = getPanelKindConfig(kindId);
-        if (!config) return false;
-        if (config.showInPalette === false) return false;
-        if (!getPanelKindDefinition(kindId)) return false;
-        return true;
-      })
-      .map((kindId) => {
-        const config = getPanelKindConfig(kindId)!;
-        return {
-          id: kindId,
-          name: config.name,
-          iconId: config.iconId,
-          color: config.color,
-          description: config.shortcut,
-          searchAliases: config.searchAliases,
-          category: "tool" as const,
-        };
-      });
+    const panelKinds = getSpawnablePanelKinds().map((config) => ({
+      id: config.id,
+      name: config.name,
+      iconId: config.iconId,
+      color: config.color,
+      description: config.shortcut,
+      searchAliases: config.searchAliases,
+      category: "tool" as const,
+    }));
 
     const isAgentHidden = (agentId: string): boolean => {
       // Assistant-only agents are never launchable from the palette — they

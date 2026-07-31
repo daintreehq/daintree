@@ -49,7 +49,6 @@ import {
 } from "@shared/config/panelKindRegistry";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useHorizontalScrollControls } from "@/hooks";
-import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
@@ -156,8 +155,6 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const agentAvailability = useCliAvailabilityStore((s) => s.availability);
   const leftButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.leftButtons));
   const setDockDensity = usePreferencesStore((s) => s.setDockDensity);
-  const { settings: projectSettings } = useProjectSettings();
-  const hasDevPreview = Boolean(projectSettings?.devServerCommand?.trim());
 
   // Narrow dock subscriptions (#10908). Subscribing to the whole `panelsById`
   // re-rendered the dock on every panel's rAF status-buffer flush — including
@@ -523,7 +520,6 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             <DockLaunchButton
               agents={launchAgents}
               pinnedCount={pinnedCount}
-              hasDevPreview={hasDevPreview}
               onLaunchAgent={(agentId) => void handleAddTerminal(agentId, "menu")}
               activeWorktreeId={activeWorktreeId}
               cwd={cwd}
@@ -667,11 +663,11 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           components={CONTEXT_MENU_COMPONENTS}
           agents={launchAgents}
           pinnedCount={pinnedCount}
-          hasDevPreview={hasDevPreview}
           activeWorktreeId={activeWorktreeId}
           cwd={cwd}
           recipeContext={recipeContext}
           onLaunchAgent={(agentId) => void handleAddTerminal(agentId, "context-menu")}
+          surface="dock"
           settingsSource="context-menu"
         />
         <ContextMenuSeparator />

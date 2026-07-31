@@ -127,6 +127,10 @@ const DURABLE_ALLOWLIST = new Set([
   // PanelPalette selected-row left-edge accent stripe (single primary anchor per active focus region)
   "src/components/PanelPalette/PanelPalette.tsx",
 
+  // Dock launcher filtered-result selected-row left-edge accent stripe (single
+  // primary anchor per active focus region)
+  "src/components/Layout/DockLaunchMenuItems.tsx",
+
   // ResumeSessionsPalette selected-row left-edge accent stripe (single primary anchor per active focus region)
   "src/components/Terminal/ResumeSessionsPalette.tsx",
 
