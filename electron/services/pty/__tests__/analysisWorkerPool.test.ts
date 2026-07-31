@@ -141,7 +141,9 @@ describe("AnalysisWorkerPool", () => {
       terminalId: "t1",
       result: "SNAPSHOT",
     });
-    await expect(promise).resolves.toBe("SNAPSHOT");
+    // The backend stamps the grid it was about to serialize at onto the worker's
+    // payload, so a replay can size to it (#11552).
+    await expect(promise).resolves.toEqual({ data: "SNAPSHOT", cols: 80, rows: 24 });
   });
 
   it("routes worker events to the owning backend", () => {
@@ -203,7 +205,7 @@ describe("AnalysisWorkerPool", () => {
       terminalId: "t1",
       result: "PERSISTED",
     });
-    await expect(persistReq).resolves.toBe("PERSISTED");
+    await expect(persistReq).resolves.toEqual({ data: "PERSISTED", cols: 80, rows: 24 });
     vi.useRealTimers();
   });
 
@@ -355,7 +357,7 @@ describe("AnalysisWorkerPool", () => {
     backend.feedChunk("MARKER-held-bytes\r\n", { agentLive: false }); // held host-side
 
     const result = await backend.serializeForPersistence();
-    expect(result).toContain("MARKER-held-bytes");
+    expect(result?.data).toContain("MARKER-held-bytes");
 
     e2ePool.dispose();
   });
@@ -400,7 +402,7 @@ describe("AnalysisWorkerPool", () => {
       result: "FRESH",
       generation: 2,
     });
-    await expect(promise).resolves.toBe("FRESH");
+    await expect(promise).resolves.toEqual({ data: "FRESH", cols: 80, rows: 24 });
     vi.useRealTimers();
   });
 

@@ -17,15 +17,26 @@ import {
   getHibernatedMarkerPath,
 } from "../terminalSessionPersistence.js";
 
-function createMockHeadless(bufferType: "normal" | "alternate" = "normal") {
+function createMockHeadless(bufferType: "normal" | "alternate" = "normal", cols = 80, rows = 24) {
   let currentType = bufferType;
   let markerLine = 0;
-  const writeFn = vi.fn().mockImplementation((data: string) => {
-    if (data === "\x1b[?1049l") currentType = "normal";
-    const newlines = (data.match(/\r\n/g) || []).length;
-    markerLine += newlines;
-  });
-  return {
+  const pendingWriteCallbacks: Array<() => void> = [];
+  const writeFn = vi
+    .fn()
+    .mockImplementation((data: string, callback?: () => void) => {
+      if (data === "\x1b[?1049l") currentType = "normal";
+      const newlines = (data.match(/\r\n/g) || []).length;
+      markerLine += newlines;
+      if (callback) pendingWriteCallbacks.push(callback);
+    });
+  const headless = {
+    cols,
+    rows,
+    options: { reflowCursorLine: false } as { reflowCursorLine?: boolean },
+    resize: vi.fn().mockImplementation((nextCols: number, nextRows: number) => {
+      headless.cols = nextCols;
+      headless.rows = nextRows;
+    }),
     write: writeFn,
     buffer: {
       get active() {
@@ -37,7 +48,18 @@ function createMockHeadless(bufferType: "normal" | "alternate" = "normal") {
       line: markerLine,
       dispose: vi.fn(),
     })),
+    /**
+     * Drain the queued write callbacks the way xterm's parser would, then let
+     * the microtask the restore defers its reflow into actually run.
+     */
+    drainWrites: async () => {
+      const callbacks = pendingWriteCallbacks.splice(0, pendingWriteCallbacks.length);
+      callbacks.forEach((cb) => cb());
+      await Promise.resolve();
+      await Promise.resolve();
+    },
   };
+  return headless;
 }
 
 describe("terminalSessionPersistence", () => {
@@ -66,8 +88,8 @@ describe("terminalSessionPersistence", () => {
     const oversized = "x".repeat(SESSION_SNAPSHOT_MAX_BYTES + 1);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    persistSessionSnapshotSync("term-sync", oversized);
-    await persistSessionSnapshotAsync("term-async", oversized);
+    persistSessionSnapshotSync("term-sync", { data: oversized, cols: 80, rows: 24 });
+    await persistSessionSnapshotAsync("term-async", { data: oversized, cols: 80, rows: 24 });
 
     const syncPath = path.join(userDataDir, "terminal-sessions", "term-sync.restore");
     const asyncPath = path.join(userDataDir, "terminal-sessions", "term-async.restore");
@@ -86,8 +108,12 @@ describe("terminalSessionPersistence", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
 
   posixIt("writes the session directory, snapshots, and marker owner-only", async () => {
-    persistSessionSnapshotSync("term-perm-sync", "sync payload");
-    await persistSessionSnapshotAsync("term-perm-async", "async payload");
+    persistSessionSnapshotSync("term-perm-sync", { data: "sync payload", cols: 80, rows: 24 });
+    await persistSessionSnapshotAsync("term-perm-async", {
+      data: "async payload",
+      cols: 80,
+      rows: 24,
+    });
     writeHibernatedMarker("term-perm-sync");
 
     const sessionDir = path.join(userDataDir, "terminal-sessions");
@@ -102,7 +128,7 @@ describe("terminalSessionPersistence", () => {
     fs.mkdirSync(sessionDir, { recursive: true });
     fs.chmodSync(sessionDir, 0o755);
 
-    await persistSessionSnapshotAsync("term-upgrade", "payload");
+    await persistSessionSnapshotAsync("term-upgrade", { data: "payload", cols: 80, rows: 24 });
 
     expect(fs.statSync(sessionDir).mode & 0o777).toBe(0o700);
   });
@@ -112,21 +138,28 @@ describe("terminalSessionPersistence", () => {
     fs.mkdirSync(sessionDir, { recursive: true });
     fs.chmodSync(sessionDir, 0o755);
 
-    persistSessionSnapshotSync("term-upgrade-sync", "payload");
+    persistSessionSnapshotSync("term-upgrade-sync", { data: "payload", cols: 80, rows: 24 });
 
     expect(fs.statSync(sessionDir).mode & 0o777).toBe(0o700);
   });
 
   it("persists and restores snapshots via the atomic write helpers", async () => {
-    persistSessionSnapshotSync("term-rt-sync", "sync payload");
-    await persistSessionSnapshotAsync("term-rt-async", "async payload");
+    persistSessionSnapshotSync("term-rt-sync", { data: "sync payload", cols: 80, rows: 24 });
+    await persistSessionSnapshotAsync("term-rt-async", {
+      data: "async payload",
+      cols: 132,
+      rows: 43,
+    });
 
     const sessionDir = path.join(userDataDir, "terminal-sessions");
     const syncPath = path.join(sessionDir, "term-rt-sync.restore");
     const asyncPath = path.join(sessionDir, "term-rt-async.restore");
 
-    expect(fs.readFileSync(syncPath, "utf8")).toBe("DAINTREE_SESSION_v1\nsync payload");
-    expect(fs.readFileSync(asyncPath, "utf8")).toBe("DAINTREE_SESSION_v1\nasync payload");
+    // The capture grid rides in the header so replay can size to it (#11552).
+    expect(fs.readFileSync(syncPath, "utf8")).toBe("DAINTREE_SESSION_v2\n80x24\nsync payload");
+    expect(fs.readFileSync(asyncPath, "utf8")).toBe(
+      "DAINTREE_SESSION_v2\n132x43\nasync payload"
+    );
 
     // The atomic helpers must not leave temp files behind
     const stragglers = fs.readdirSync(sessionDir).filter((name) => name.endsWith(".tmp"));
@@ -160,7 +193,7 @@ describe("terminalSessionPersistence", () => {
     await fsp.mkdir(sessionDir, { recursive: true });
 
     const futurePath = path.join(sessionDir, "term-future.restore");
-    await fsp.writeFile(futurePath, "DAINTREE_SESSION_v2\ncontent", "utf8");
+    await fsp.writeFile(futurePath, "DAINTREE_SESSION_v9\ncontent", "utf8");
 
     const headless = createMockHeadless();
     const result = restoreSessionFromFile(headless as never, "term-future");
@@ -181,6 +214,94 @@ describe("terminalSessionPersistence", () => {
 
     expect(result.restored).toBe(false);
     expect(headless.write).not.toHaveBeenCalled();
+  });
+
+  describe("capture-geometry round-trip (#11552)", () => {
+    // A session file is replayed into a mirror built at the NEW spawn size, so
+    // the width the payload was written at has to travel with it. Without that,
+    // SerializeAddon's wrap encoding decodes against the wrong grid and commits
+    // broken line breaks into the buffer before any output has even arrived.
+    async function writeSessionFile(id: string, contents: string): Promise<void> {
+      const sessionDir = path.join(userDataDir, "terminal-sessions");
+      await fsp.mkdir(sessionDir, { recursive: true });
+      await fsp.writeFile(path.join(sessionDir, `${id}.restore`), contents, "utf8");
+    }
+
+    it("replays at the capture grid and reflows back to the spawn grid", async () => {
+      persistSessionSnapshotSync("term-geo", { data: "captured payload", cols: 80, rows: 24 });
+
+      // The process respawned wider than the session was captured at.
+      const headless = createMockHeadless("normal", 170, 40);
+      const result = restoreSessionFromFile(headless as never, "term-geo");
+
+      expect(result.restored).toBe(true);
+      // Alignment must precede the writes: xterm parses asynchronously, so a
+      // grid corrected afterwards would arrive too late to affect the layout.
+      expect(headless.resize).toHaveBeenNthCalledWith(1, 80, 24);
+      expect(headless.resize.mock.invocationCallOrder[0]).toBeLessThan(
+        headless.write.mock.invocationCallOrder[0]
+      );
+      expect(headless.cols).toBe(80);
+
+      // The reflow home is queued behind the replay, not fired eagerly.
+      expect(headless.resize).toHaveBeenCalledTimes(1);
+      await headless.drainWrites();
+      expect(headless.resize).toHaveBeenNthCalledWith(2, 170, 40);
+      expect(headless.cols).toBe(170);
+      expect(headless.rows).toBe(40);
+      expect(headless.options.reflowCursorLine).toBe(false);
+    });
+
+    it("leaves the grid alone when the spawn size matches the capture", async () => {
+      persistSessionSnapshotSync("term-geo-same", { data: "payload", cols: 100, rows: 30 });
+
+      const headless = createMockHeadless("normal", 100, 30);
+      restoreSessionFromFile(headless as never, "term-geo-same");
+      await headless.drainWrites();
+
+      expect(headless.resize).not.toHaveBeenCalled();
+    });
+
+    it("replays a v1 file verbatim rather than dropping the session", async () => {
+      await writeSessionFile("term-v1", "DAINTREE_SESSION_v1\nlegacy payload");
+
+      const headless = createMockHeadless("normal", 170, 40);
+      const result = restoreSessionFromFile(headless as never, "term-v1");
+      await headless.drainWrites();
+
+      expect(result.restored).toBe(true);
+      expect(headless.write).toHaveBeenCalledWith("legacy payload");
+      expect(headless.resize).not.toHaveBeenCalled();
+    });
+
+    it("rejects a v2 file whose geometry line is unusable", async () => {
+      // v2 asserts the metadata is there, so a corrupt line means a corrupt
+      // file — sizing a real terminal from garbage is worse than skipping.
+      const cases: Record<string, string> = {
+        "term-v2-missing": "DAINTREE_SESSION_v2\npayload-with-no-geometry-line",
+        "term-v2-garbage": "DAINTREE_SESSION_v2\nnot-a-grid\npayload",
+        "term-v2-zero": "DAINTREE_SESSION_v2\n0x24\npayload",
+        "term-v2-huge": "DAINTREE_SESSION_v2\n9999x9999\npayload",
+      };
+      for (const [id, contents] of Object.entries(cases)) {
+        await writeSessionFile(id, contents);
+        const headless = createMockHeadless();
+        expect(restoreSessionFromFile(headless as never, id).restored).toBe(false);
+        expect(headless.write).not.toHaveBeenCalled();
+      }
+    });
+
+    it("still exits the alternate screen when the replay was width-aligned", async () => {
+      persistSessionSnapshotSync("term-geo-alt", { data: "alt payload", cols: 80, rows: 24 });
+
+      const headless = createMockHeadless("alternate", 170, 40);
+      const result = restoreSessionFromFile(headless as never, "term-geo-alt");
+      await headless.drainWrites();
+
+      expect(result.restored).toBe(true);
+      expect(headless.write).toHaveBeenCalledWith("\x1b[?1049l");
+      expect(headless.cols).toBe(170);
+    });
   });
 
   it("restores empty file as empty content", async () => {

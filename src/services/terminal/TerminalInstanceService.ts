@@ -45,6 +45,7 @@ import {
 import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackController";
 import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
 import { isPtyPanel } from "@shared/types/panel";
+import type { TerminalGeometry } from "@shared/types/terminal";
 import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
@@ -2650,20 +2651,36 @@ class TerminalInstanceService {
     this.restoreController.dispose();
   }
 
-  async restoreFetchedState(id: string, serializedState: string | null): Promise<boolean> {
-    return this.restoreController.restoreFetchedState(id, serializedState);
+  async restoreFetchedState(
+    id: string,
+    serializedState: string | null,
+    captureGeometry?: TerminalGeometry
+  ): Promise<boolean> {
+    return this.restoreController.restoreFetchedState(id, serializedState, captureGeometry);
   }
 
   async fetchAndRestore(id: string): Promise<boolean> {
     return this.restoreController.fetchAndRestore(id);
   }
 
-  restoreFromSerialized(id: string, serializedState: string): boolean {
-    return this.restoreController.restoreFromSerialized(id, serializedState);
+  restoreFromSerialized(
+    id: string,
+    serializedState: string,
+    captureGeometry?: TerminalGeometry
+  ): boolean {
+    return this.restoreController.restoreFromSerialized(id, serializedState, captureGeometry);
   }
 
-  restoreFromSerializedIncremental(id: string, serializedState: string): Promise<boolean> {
-    return this.restoreController.restoreFromSerializedIncremental(id, serializedState);
+  restoreFromSerializedIncremental(
+    id: string,
+    serializedState: string,
+    captureGeometry?: TerminalGeometry
+  ): Promise<boolean> {
+    return this.restoreController.restoreFromSerializedIncremental(
+      id,
+      serializedState,
+      captureGeometry
+    );
   }
 
   setInputLocked(id: string, locked: boolean): void {

@@ -1,6 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
 import { stripAnsiCodes } from "@shared/utils/artifactParser";
 
+/**
+ * Snapshots cross IPC with the grid they were captured at (#11552); this action
+ * only consumes the payload, so tests wrap their fixtures rather than restating
+ * the envelope at every call site.
+ */
+function snapshotOf(data: string | null): { data: string; cols: number; rows: number } | null {
+  return data === null ? null : { data, cols: 80, rows: 24 };
+}
+
 // Mock window.electron and window event listeners before any imports
 const mockGetSerializedState = vi.fn();
 const mockAddEventListener = vi.fn();
@@ -111,7 +120,7 @@ describe("terminal.getOutput action", () => {
 
   it("returns last N lines from terminal buffer", async () => {
     const mockBuffer = "line1\nline2\nline3\nline4\nline5";
-    mockGetSerializedState.mockResolvedValue(mockBuffer);
+    mockGetSerializedState.mockResolvedValue(snapshotOf(mockBuffer));
 
     const actions = await createRegistry();
     const actionFn = actions.get("terminal.getOutput");
@@ -130,7 +139,7 @@ describe("terminal.getOutput action", () => {
 
   it("returns all lines when buffer has fewer than maxLines", async () => {
     const mockBuffer = "line1\nline2\nline3";
-    mockGetSerializedState.mockResolvedValue(mockBuffer);
+    mockGetSerializedState.mockResolvedValue(snapshotOf(mockBuffer));
 
     const actions = await createRegistry();
     const actionFn = actions.get("terminal.getOutput");
@@ -150,7 +159,7 @@ describe("terminal.getOutput action", () => {
     // Generate 150 lines
     const lines = Array.from({ length: 150 }, (_, i) => `line${i + 1}`);
     const mockBuffer = lines.join("\n");
-    mockGetSerializedState.mockResolvedValue(mockBuffer);
+    mockGetSerializedState.mockResolvedValue(snapshotOf(mockBuffer));
 
     const actions = await createRegistry();
     const actionFn = actions.get("terminal.getOutput");
@@ -167,7 +176,7 @@ describe("terminal.getOutput action", () => {
 
   it("strips ANSI codes by default", async () => {
     const mockBuffer = "\x1b[32mgreen text\x1b[0m\n\x1b[31mred text\x1b[0m";
-    mockGetSerializedState.mockResolvedValue(mockBuffer);
+    mockGetSerializedState.mockResolvedValue(snapshotOf(mockBuffer));
 
     const actions = await createRegistry();
     const actionFn = actions.get("terminal.getOutput");
@@ -181,7 +190,7 @@ describe("terminal.getOutput action", () => {
 
   it("preserves ANSI codes when stripAnsi is false", async () => {
     const mockBuffer = "\x1b[32mgreen text\x1b[0m";
-    mockGetSerializedState.mockResolvedValue(mockBuffer);
+    mockGetSerializedState.mockResolvedValue(snapshotOf(mockBuffer));
 
     const actions = await createRegistry();
     const actionFn = actions.get("terminal.getOutput");
@@ -197,7 +206,7 @@ describe("terminal.getOutput action", () => {
   });
 
   it("returns null content for non-existent terminal", async () => {
-    mockGetSerializedState.mockResolvedValue(null);
+    mockGetSerializedState.mockResolvedValue(snapshotOf(null));
 
     const actions = await createRegistry();
     const actionFn = actions.get("terminal.getOutput");
@@ -213,7 +222,7 @@ describe("terminal.getOutput action", () => {
   });
 
   it("handles empty terminal buffer", async () => {
-    mockGetSerializedState.mockResolvedValue("");
+    mockGetSerializedState.mockResolvedValue(snapshotOf(""));
 
     const actions = await createRegistry();
     const actionFn = actions.get("terminal.getOutput");
@@ -230,7 +239,7 @@ describe("terminal.getOutput action", () => {
     // Generate 1500 lines
     const lines = Array.from({ length: 1500 }, (_, i) => `line${i + 1}`);
     const mockBuffer = lines.join("\n");
-    mockGetSerializedState.mockResolvedValue(mockBuffer);
+    mockGetSerializedState.mockResolvedValue(snapshotOf(mockBuffer));
 
     const actions = await createRegistry();
     const actionFn = actions.get("terminal.getOutput");
@@ -248,7 +257,7 @@ describe("terminal.getOutput action", () => {
 
   it("enforces maxLines lower bound of 1", async () => {
     const mockBuffer = "line1\nline2\nline3";
-    mockGetSerializedState.mockResolvedValue(mockBuffer);
+    mockGetSerializedState.mockResolvedValue(snapshotOf(mockBuffer));
 
     const actions = await createRegistry();
     const actionFn = actions.get("terminal.getOutput");
@@ -268,7 +277,7 @@ describe("terminal.getOutput action", () => {
     // and pads the bottom with bare-CR rows. A tail-before-normalize read of the
     // last 5 lines would return only blanks; normalize-then-tail must not.
     const mockBuffer = "agent answer line\nidle composer\r\n" + "\r\n".repeat(40);
-    mockGetSerializedState.mockResolvedValue(mockBuffer);
+    mockGetSerializedState.mockResolvedValue(snapshotOf(mockBuffer));
 
     const actions = await createRegistry();
     const action = actions.get("terminal.getOutput")!();
@@ -287,7 +296,7 @@ describe("terminal.getOutput action", () => {
   it("returns real content even for a single-line tail of a padded buffer", async () => {
     // N=1 boundary: padding must not occupy the only returned line.
     const mockBuffer = "the answer\r\n" + "\r\n".repeat(20);
-    mockGetSerializedState.mockResolvedValue(mockBuffer);
+    mockGetSerializedState.mockResolvedValue(snapshotOf(mockBuffer));
 
     const actions = await createRegistry();
     const action = actions.get("terminal.getOutput")!();
@@ -303,7 +312,7 @@ describe("terminal.getOutput action", () => {
 
   it("collapses interior blank runs and right-trims lines", async () => {
     const mockBuffer = "header   \n\n\n\nbody\t\n\n\nfooter";
-    mockGetSerializedState.mockResolvedValue(mockBuffer);
+    mockGetSerializedState.mockResolvedValue(snapshotOf(mockBuffer));
 
     const actions = await createRegistry();
     const action = actions.get("terminal.getOutput")!();
@@ -320,7 +329,7 @@ describe("terminal.getOutput action", () => {
 
   it("normalizes whitespace even when stripAnsi is false (padding still removed)", async () => {
     const mockBuffer = "\x1b[32mgreen\x1b[0m  \r\n\r\n\r\n\r\n";
-    mockGetSerializedState.mockResolvedValue(mockBuffer);
+    mockGetSerializedState.mockResolvedValue(snapshotOf(mockBuffer));
 
     const actions = await createRegistry();
     const action = actions.get("terminal.getOutput")!();

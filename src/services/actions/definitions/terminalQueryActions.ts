@@ -10,6 +10,7 @@ import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { TerminalCheckResult } from "@shared/types/checkResult";
+import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
@@ -162,7 +163,7 @@ export function registerTerminalQueryActions(
       // below their composer (#10763). truncated/lineCount track normalized
       // content, so trailing padding never reads as "output omitted".
       const { content, lineCount, truncated } = tailCapturedOutput(
-        serializedState,
+        serializedState.data,
         effectiveMaxLines,
         stripAnsi
       );
@@ -299,7 +300,7 @@ export function registerTerminalQueryActions(
         typeof linesArg === "number" ? Math.min(Math.max(Math.floor(linesArg), 1), 50) : 20;
       const stripAnsi = includeOutput?.stripAnsi ?? true;
 
-      let outputs: Record<string, string | null> | null = null;
+      let outputs: Record<string, SerializedTerminalSnapshot | null> | null = null;
       let outputError: string | undefined;
       if (includeOutput) {
         const idsToFetch = resolved.filter((r) => r.terminal !== undefined).map((r) => r.id);
@@ -367,7 +368,7 @@ export function registerTerminalQueryActions(
               // Without this, a bottom-padding TUI's blank rows fill the small
               // last-N window and recentOutput reads as empty even when idle.
               entry.recentOutput = tailCapturedOutput(
-                serialized,
+                serialized.data,
                 effectiveLines,
                 stripAnsi
               ).content;

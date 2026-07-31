@@ -10,6 +10,7 @@ import type {
   TerminalStatusPayload,
   BroadcastWriteResultPayload,
   SpawnResult,
+  SerializedTerminalSnapshot,
 } from "@shared/types";
 import type {
   PtyHostToRendererMessage,
@@ -755,7 +756,7 @@ export const terminalClient = {
    * Returns full terminal state including colors, formatting, cursor position.
    * Used for fast restoration on app reload.
    */
-  getSerializedState: (terminalId: string): Promise<string | null> => {
+  getSerializedState: (terminalId: string): Promise<SerializedTerminalSnapshot | null> => {
     return window.electron.terminal.getSerializedState(terminalId);
   },
 
@@ -763,7 +764,9 @@ export const terminalClient = {
    * Get serialized terminal states in a single round-trip.
    * Returns a map keyed by terminal ID with null for missing states.
    */
-  getSerializedStates: (panelIds: string[]): Promise<Record<string, string | null>> => {
+  getSerializedStates: (
+    panelIds: string[]
+  ): Promise<Record<string, SerializedTerminalSnapshot | null>> => {
     return window.electron.terminal.getSerializedStates(panelIds);
   },
 

@@ -188,17 +188,17 @@ describe("TerminalProcess.kill — session persistence", () => {
     // Spy on serializeForPersistence (banner-aware) — the kill path uses this
     // so a hibernate→restore→hibernate cycle doesn't bake the restore banner
     // into the snapshot.
-    vi.spyOn(terminal, "serializeForPersistence").mockReturnValue("scrollback-data");
+    vi.spyOn(terminal, "serializeForPersistence").mockReturnValue({ data: "scrollback-data", cols: 80, rows: 24 });
 
     terminal.kill("test");
 
-    expect(persistSyncMock).toHaveBeenCalledWith("t1", "scrollback-data");
+    expect(persistSyncMock).toHaveBeenCalledWith("t1", { data: "scrollback-data", cols: 80, rows: 24 });
   });
 
   it("does not persist session for agent terminals on kill", () => {
     const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
 
-    vi.spyOn(terminal, "serializeForPersistence").mockReturnValue("scrollback-data");
+    vi.spyOn(terminal, "serializeForPersistence").mockReturnValue({ data: "scrollback-data", cols: 80, rows: 24 });
 
     terminal.kill("test");
 

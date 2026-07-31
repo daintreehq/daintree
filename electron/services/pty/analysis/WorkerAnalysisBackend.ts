@@ -1,7 +1,12 @@
 import type { AgentState } from "../../../../shared/types/agent.js";
 import type { ActivityStateMetadata } from "../../ActivityMonitor.js";
 import type { PatternDetectionConfig } from "../AgentPatternDetector.js";
-import type { AnalysisBackend, MonitorStartOptions } from "./AnalysisBackend.js";
+import type {
+  AnalysisBackend,
+  AnalysisFinalCapture,
+  MonitorStartOptions,
+} from "./AnalysisBackend.js";
+import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
 import type {
   AnalysisChunkFlags,
   AnalysisFinalSnapshot,
@@ -293,26 +298,50 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     return this.cursorLine;
   }
 
-  async serialize(): Promise<string | null> {
+  /**
+   * The grid the worker's mirror will serialize at, sampled synchronously at
+   * the call site that is about to post the request (#11552).
+   *
+   * Correct without a worker round-trip because the ordering is total: this
+   * function and the `pool.request()` that follows run in one JS turn, every
+   * earlier `resize` post is already ahead of the request in the worker's FIFO,
+   * and any later resize necessarily queues behind it. Reading `lastCols` after
+   * the await would instead report a grid the payload was NOT produced at.
+   */
+  private captureGeometry(): { cols: number; rows: number } {
+    return { cols: this.lastCols, rows: this.lastRows };
+  }
+
+  async serialize(): Promise<SerializedTerminalSnapshot | null> {
     if (this.inactive()) return null;
     this.flushHeldFeed();
+    const geometry = this.captureGeometry();
     const result = await this.pool.request(this.spec.terminalId, "serialize");
-    return typeof result === "string" ? result : null;
+    return typeof result === "string" ? { data: result, ...geometry } : null;
   }
 
-  async serializeForPersistence(): Promise<string | null> {
+  async serializeForPersistence(): Promise<SerializedTerminalSnapshot | null> {
     if (this.inactive() || this.persistSuppressed) return null;
     this.flushHeldFeed();
+    const geometry = this.captureGeometry();
     const result = await this.pool.request(this.spec.terminalId, "serialize-persistence");
-    return typeof result === "string" ? result : null;
+    return typeof result === "string" ? { data: result, ...geometry } : null;
   }
 
-  async captureFinalSnapshot(): Promise<AnalysisFinalSnapshot> {
+  async captureFinalSnapshot(): Promise<AnalysisFinalCapture> {
     if (this.inactive()) return { snapshot: null, persistence: null };
     this.flushHeldFeed();
+    const geometry = this.captureGeometry();
     const result = await this.pool.request(this.spec.terminalId, "final-snapshot");
     if (result !== null && typeof result === "object") {
-      return this.persistSuppressed ? { ...result, persistence: null } : result;
+      const wire = result as AnalysisFinalSnapshot;
+      return {
+        snapshot: wire.snapshot === null ? null : { data: wire.snapshot, ...geometry },
+        persistence:
+          this.persistSuppressed || wire.persistence === null
+            ? null
+            : { data: wire.persistence, ...geometry },
+      };
     }
     return { snapshot: null, persistence: null };
   }

@@ -1,6 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TerminalRestoreController, safeChunkSlice } from "../TerminalRestoreController";
 import { INCREMENTAL_RESTORE_CONFIG, type ManagedTerminal } from "../types";
+import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
+
+/** Wrap a payload in the snapshot envelope the IPC now returns (#11552). */
+function snapshot(
+  data: string,
+  cols = 80,
+  rows = 24
+): SerializedTerminalSnapshot {
+  return { data, cols, rows };
+}
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -23,6 +33,9 @@ describe("TerminalRestoreController", () => {
   let writeCallId: number;
   let postTaskCallbacks: Array<() => void>;
   let yieldCallbacks: Array<() => void>;
+  // Standalone so a test can wrap `write` without reading the mock back out of
+  // itself — doing that re-enters the wrapper and recurses until the stack dies.
+  let baseWriteImpl: (data: string, callback?: () => void) => void;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -51,27 +64,35 @@ describe("TerminalRestoreController", () => {
       }),
     });
 
+    baseWriteImpl = (_data: string, callback?: () => void) => {
+      if (callback) {
+        const id = ++writeCallId;
+        writeCallbacks.set(id, callback);
+        queueMicrotask(() => {
+          const cb = writeCallbacks.get(id);
+          if (cb) {
+            cb();
+            writeCallbacks.delete(id);
+          }
+        });
+      }
+    };
+
     mockTerminal = {
       reset: vi.fn(),
-      write: vi.fn((_data: string, callback?: () => void) => {
-        if (callback) {
-          const id = ++writeCallId;
-          writeCallbacks.set(id, callback);
-          queueMicrotask(() => {
-            const cb = writeCallbacks.get(id);
-            if (cb) {
-              cb();
-              writeCallbacks.delete(id);
-            }
-          });
-        }
-      }),
+      write: vi.fn(baseWriteImpl),
       scrollToLine: vi.fn(),
       scrollToBottom: vi.fn(),
       buffer: {
         active: { baseY: 0, viewportY: 0, length: 100 },
       },
+      cols: 170,
       rows: 24,
+      options: { reflowCursorLine: false },
+      resize: vi.fn((cols: number, rows: number) => {
+        mockTerminal.cols = cols;
+        mockTerminal.rows = rows;
+      }),
     };
 
     instances = new Map();
@@ -435,7 +456,7 @@ describe("TerminalRestoreController", () => {
   describe("fetchAndRestore", () => {
     it("sets isSerializedRestoreInProgress before IPC fetch resolves", async () => {
       const { terminalClient } = await import("@/clients");
-      let resolveFetch!: (value: string | null) => void;
+      let resolveFetch!: (value: SerializedTerminalSnapshot | null) => void;
       vi.mocked(terminalClient.getSerializedState).mockImplementation(
         () =>
           new Promise((resolve) => {
@@ -452,14 +473,14 @@ describe("TerminalRestoreController", () => {
       // Flag should be set BEFORE the IPC call resolves
       expect(managed.isSerializedRestoreInProgress).toBe(true);
 
-      resolveFetch("small-state");
+      resolveFetch(snapshot("small-state"));
       await flushMicrotasks();
       await promise;
     });
 
     it("returns false and clears flag when terminal becomes stale during fetch", async () => {
       const { terminalClient } = await import("@/clients");
-      let resolveFetch!: (value: string | null) => void;
+      let resolveFetch!: (value: SerializedTerminalSnapshot | null) => void;
       vi.mocked(terminalClient.getSerializedState).mockImplementation(
         () =>
           new Promise((resolve) => {
@@ -476,7 +497,7 @@ describe("TerminalRestoreController", () => {
       // Simulate terminal being destroyed during fetch
       controller.destroy("t1");
 
-      resolveFetch("state-data");
+      resolveFetch(snapshot("state-data"));
       const result = await promise;
 
       expect(result).toBe(false);
@@ -489,7 +510,7 @@ describe("TerminalRestoreController", () => {
 
     it("clears isSerializedRestoreInProgress when serialized state is null", async () => {
       const { terminalClient } = await import("@/clients");
-      vi.mocked(terminalClient.getSerializedState).mockResolvedValue(null as unknown as string);
+      vi.mocked(terminalClient.getSerializedState).mockResolvedValue(null);
 
       const managed = makeManagedTerminal();
       instances.set("t1", managed);
@@ -506,7 +527,7 @@ describe("TerminalRestoreController", () => {
       // release them by replaying, or the ingest queue strands invisibly
       // (getStalledBytes reads inFlightBytes>0 as healthy).
       const { terminalClient } = await import("@/clients");
-      let resolveFetch!: (value: string | null) => void;
+      let resolveFetch!: (value: SerializedTerminalSnapshot | null) => void;
       vi.mocked(terminalClient.getSerializedState).mockImplementation(
         () =>
           new Promise((resolve) => {
@@ -605,6 +626,218 @@ describe("TerminalRestoreController", () => {
     });
   });
 
+
+  describe("capture-geometry alignment (#11552)", () => {
+    // SerializeAddon encodes wrap state that only decodes at the width it was
+    // captured on, and the damage a mismatched replay commits into cell data is
+    // not repairable by any later reflow. These tests pin the ordering that
+    // makes replay safe, not the fact that a resize happens.
+    const captureAt80 = { cols: 80, rows: 24 };
+
+    /** Ordered log of what happened to the grid, so ordering is assertable. */
+    function traceGrid() {
+      const trace: string[] = [];
+      mockTerminal.reset.mockImplementation(() => trace.push("reset"));
+      mockTerminal.resize.mockImplementation((cols: number, rows: number) => {
+        mockTerminal.cols = cols;
+        mockTerminal.rows = rows;
+        trace.push(`resize:${cols}x${rows}`);
+      });
+      mockTerminal.write.mockImplementation((data: string, callback?: () => void) => {
+        trace.push(`write:${data}`);
+        baseWriteImpl(data, callback);
+      });
+      return trace;
+    }
+
+    it("writes the payload at the capture grid, then reflows to the live grid", async () => {
+      const trace = traceGrid();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      controller.restoreFromSerialized("t1", "payload", captureAt80);
+      await flushMicrotasks();
+
+      // The resize must land between reset and write: xterm parses
+      // asynchronously, so a grid corrected after write() returns would arrive
+      // too late and the payload would lay out at the wrong width anyway.
+      expect(trace).toEqual(["reset", "resize:80x24", "write:payload", "resize:170x24"]);
+      expect(managed.terminal.cols).toBe(170);
+    });
+
+    it("leaves the grid untouched when the capture already matches", async () => {
+      traceGrid();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      controller.restoreFromSerialized("t1", "payload", { cols: 170, rows: 24 });
+      await flushMicrotasks();
+
+      expect(mockTerminal.resize).not.toHaveBeenCalled();
+    });
+
+    it("replays verbatim when the snapshot predates the geometry contract", async () => {
+      traceGrid();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      // An older pty host, or a preserved snapshot captured before #11552.
+      // Reproducing today's behaviour beats dropping the session outright.
+      controller.restoreFromSerialized("t1", "payload");
+      await flushMicrotasks();
+
+      expect(mockTerminal.resize).not.toHaveBeenCalled();
+      expect(mockTerminal.write).toHaveBeenCalledWith("payload", expect.any(Function));
+    });
+
+    it("refuses a geometry no terminal could have been captured at", async () => {
+      traceGrid();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      controller.restoreFromSerialized("t1", "payload", { cols: 0, rows: -4 });
+      await flushMicrotasks();
+
+      expect(mockTerminal.resize).not.toHaveBeenCalled();
+    });
+
+    it("normalizes to a resize that landed mid-replay, not the pre-replay grid", async () => {
+      const trace = traceGrid();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      controller.restoreFromSerialized("t1", "payload", captureAt80);
+      // A layout change while xterm is parked at the capture width. The resize
+      // controller parks it here rather than applying it; without that, the
+      // normalization below would reflow it straight back out.
+      managed.pendingRestoreGeometry = { cols: 120, rows: 30 };
+      await flushMicrotasks();
+
+      expect(trace.at(-1)).toBe("resize:120x30");
+      expect(managed.pendingRestoreGeometry).toBeUndefined();
+    });
+
+    it("keeps the live grid across a superseding restore instead of adopting the capture width", async () => {
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      // First restore parks the grid at 80 and never completes (its callback is
+      // dropped), leaving terminal.cols describing the payload, not the pane.
+      mockTerminal.write.mockImplementationOnce(() => {});
+      controller.restoreFromSerialized("t1", "first", captureAt80);
+      expect(managed.terminal.cols).toBe(80);
+
+      // The successor must normalize to 170 — the grid the pane actually has —
+      // not to the 80 it would read off terminal.cols right now.
+      controller.restoreFromSerialized("t1", "second", { cols: 100, rows: 24 });
+      await flushMicrotasks();
+
+      expect(managed.terminal.cols).toBe(170);
+    });
+
+    it("enables reflowCursorLine only for the corrective resize", async () => {
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+      const seenDuringResize: Array<boolean | undefined> = [];
+      mockTerminal.resize.mockImplementation((cols: number, rows: number) => {
+        mockTerminal.cols = cols;
+        mockTerminal.rows = rows;
+        seenDuringResize.push(mockTerminal.options.reflowCursorLine);
+      });
+
+      controller.restoreFromSerialized("t1", "payload", captureAt80);
+      await flushMicrotasks();
+
+      // xterm skips the cursor's own wrapped group unless this is on, which
+      // truncates that row when normalizing to a narrower grid.
+      expect(seenDuringResize).toEqual([false, true]);
+      expect(mockTerminal.options.reflowCursorLine).toBe(false);
+    });
+
+    it("restores the configured reflowCursorLine even when the resize throws", async () => {
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+      mockTerminal.options.reflowCursorLine = true;
+      mockTerminal.resize
+        .mockImplementationOnce((cols: number, rows: number) => {
+          mockTerminal.cols = cols;
+          mockTerminal.rows = rows;
+        })
+        .mockImplementationOnce(() => {
+          throw new Error("renderer gone");
+        });
+
+      controller.restoreFromSerialized("t1", "payload", captureAt80);
+      await flushMicrotasks();
+
+      expect(mockTerminal.options.reflowCursorLine).toBe(true);
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+    });
+
+    it("puts the pane back on its live grid before releasing deferred output", () => {
+      const trace = traceGrid();
+      const managed = makeManagedTerminal({
+        deferredOutput: [{ data: "held", chunkCount: 2 }],
+      });
+      instances.set("t1", managed);
+      mockTerminal.write.mockImplementationOnce(() => {
+        throw new Error("parser died");
+      });
+
+      const result = controller.restoreFromSerialized("t1", "payload", captureAt80);
+
+      // Held chunks were produced for the live grid — replaying them into a
+      // terminal still parked at the capture width would corrupt them too.
+      expect(result).toBe(false);
+      expect(trace.at(-1)).toBe("resize:170x24");
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "held", 2);
+    });
+
+    it("aligns the incremental path and normalizes once every chunk has parsed", async () => {
+      const trace = traceGrid();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+      const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2 + 10);
+
+      const promise = controller.restoreFromSerializedIncremental("t1", largeState, captureAt80);
+      for (let i = 0; i < 6; i++) {
+        await flushMicrotasks();
+        await flushScheduler();
+      }
+      await promise;
+
+      const resizes = trace.filter((entry) => entry.startsWith("resize:"));
+      expect(resizes).toEqual(["resize:80x24", "resize:170x24"]);
+      // The reflow must come after the last chunk, or it would only see part of
+      // the payload laid out at the capture width.
+      expect(trace.lastIndexOf("resize:170x24")).toBeGreaterThan(
+        trace.map((e) => e.startsWith("write:")).lastIndexOf(true)
+      );
+    });
+
+    it("leaves the grid to the successor when an incremental restore is superseded", async () => {
+      traceGrid();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+      const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2 + 10);
+
+      const promise = controller.restoreFromSerializedIncremental("t1", largeState, captureAt80);
+      await flushMicrotasks();
+      // A newer restore takes ownership mid-replay.
+      managed.restoreGeneration++;
+      for (let i = 0; i < 6; i++) {
+        await flushMicrotasks();
+        await flushScheduler();
+      }
+      await promise;
+
+      // The superseded attempt must not reflow: the successor is mid-replay at
+      // its own capture width and owns the grid.
+      expect(mockTerminal.resize).toHaveBeenCalledTimes(1);
+      expect(mockTerminal.cols).toBe(80);
+    });
+  });
+
   describe("destroy", () => {
     it("bumps restore generation and clears restore state", () => {
       const managed = makeManagedTerminal({
@@ -618,6 +851,7 @@ describe("TerminalRestoreController", () => {
 
       expect(managed.restoreGeneration).toBe(prevGen + 1);
       expect(managed.isSerializedRestoreInProgress).toBe(false);
+      expect(managed.pendingRestoreGeometry).toBeUndefined();
       expect(managed.deferredOutput).toHaveLength(0);
     });
   });

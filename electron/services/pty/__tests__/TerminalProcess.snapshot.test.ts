@@ -132,17 +132,17 @@ describe("TerminalProcess.flushEventDrivenSnapshot", () => {
 
   it("persists for agent terminals via async serialization (non-banner path)", async () => {
     const terminal = createTerminal();
-    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue("agent-scrollback");
+    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue({ data: "agent-scrollback", cols: 80, rows: 24 });
 
     terminal.flushEventDrivenSnapshot();
     await flushMicrotasks();
 
-    expect(persistAsyncMock).toHaveBeenCalledWith("t1", "agent-scrollback");
+    expect(persistAsyncMock).toHaveBeenCalledWith("t1", { data: "agent-scrollback", cols: 80, rows: 24 });
   });
 
   it("suppresses an immediate repeat with unchanged content", async () => {
     const terminal = createTerminal();
-    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue("data");
+    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue({ data: "data", cols: 80, rows: 24 });
 
     terminal.flushEventDrivenSnapshot();
     await flushMicrotasks();
@@ -166,7 +166,7 @@ describe("TerminalProcess.flushEventDrivenSnapshot", () => {
 
   it("does not flush when terminal is killed", async () => {
     const terminal = createTerminal();
-    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue("data");
+    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue({ data: "data", cols: 80, rows: 24 });
 
     terminal.kill("test");
 
@@ -206,10 +206,14 @@ describe("TerminalProcess — snapshot and dispose preserved exited terminals", 
     const info = terminal.getInfo();
     expect(info.isExited).toBe(true);
     expect(info.serializeAddon).toBeUndefined();
-    expect(info.preservedSnapshot).toContain("hello from agent");
+    expect(info.preservedSnapshot?.data).toContain("hello from agent");
+    // The mirror is disposed above, so the grid must have been captured with it.
+    expect(info.preservedSnapshot?.cols).toBeGreaterThan(0);
 
-    expect(terminal.getSerializedState()).toContain("hello from agent");
-    await expect(terminal.getSerializedStateAsync()).resolves.toContain("hello from agent");
+    expect(terminal.getSerializedState()?.data).toContain("hello from agent");
+    await expect(terminal.getSerializedStateAsync()).resolves.toMatchObject({
+      data: expect.stringContaining("hello from agent"),
+    });
   });
 
   it("drains pending headless writes before snapshotting (tail of output is captured)", async () => {
@@ -223,8 +227,8 @@ describe("TerminalProcess — snapshot and dispose preserved exited terminals", 
     await exitAndAwaitDispose(terminal, pty);
 
     const snapshot = terminal.getSerializedState();
-    expect(snapshot).toContain("early output");
-    expect(snapshot).toContain("final tail line");
+    expect(snapshot?.data).toContain("early output");
+    expect(snapshot?.data).toContain("final tail line");
   });
 
   it("keeps serving the snapshot after a post-exit resize (exit→resize→reattach)", async () => {
@@ -254,7 +258,7 @@ describe("TerminalProcess — snapshot and dispose preserved exited terminals", 
     expect(persistSyncMock).toHaveBeenCalledTimes(1);
     const [persistedId, persistedState] = persistSyncMock.mock.calls[0]!;
     expect(persistedId).toBe("t1");
-    expect(persistedState).toContain("promoted terminal output");
+    expect(persistedState.data).toContain("promoted terminal output");
   });
 
   it("does not write a crash-recovery snapshot for agent terminals", async () => {
@@ -265,7 +269,7 @@ describe("TerminalProcess — snapshot and dispose preserved exited terminals", 
     await exitAndAwaitDispose(terminal, pty);
 
     expect(persistSyncMock).not.toHaveBeenCalled();
-    expect(terminal.getSerializedState()).toContain("agent output");
+    expect(terminal.getSerializedState()?.data).toContain("agent output");
   });
 
   it("disposes headless without caching a snapshot on non-preserved (non-zero) exit", async () => {
@@ -311,7 +315,7 @@ describe("TerminalProcess — snapshot and dispose preserved exited terminals", 
     expect(info.headlessTerminal).toBeDefined();
     expect(info.serializeAddon).toBeDefined();
     // Subsequent reads serve the live buffer.
-    expect(terminal.getSerializedState()).toContain("still readable");
+    expect(terminal.getSerializedState()?.data).toContain("still readable");
   });
 
   it("serves the cached snapshot without re-serializing", async () => {

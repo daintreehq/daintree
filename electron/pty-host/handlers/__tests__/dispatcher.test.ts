@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createPtyHostMessageDispatcher } from "../index.js";
 import type { HostContext } from "../types.js";
+import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
 import { clearPluginAgentRegistryForTests } from "../../../../shared/config/pluginAgentRegistry.js";
 import { getEffectiveAgentConfig } from "../../../../shared/config/agentRegistry.js";
 
@@ -155,9 +156,9 @@ describe("createPtyHostMessageDispatcher", () => {
     // (returning undefined, not a Promise), so subsequent messages are not
     // blocked while serialization runs.
     const ctx = makeCtx();
-    let resolveSerialization: (value: string) => void = () => {};
+    let resolveSerialization: (value: SerializedTerminalSnapshot) => void = () => {};
     ctx.ptyManager.getSerializedStateAsync = vi.fn(
-      () => new Promise<string>((resolve) => (resolveSerialization = resolve))
+      () => new Promise<SerializedTerminalSnapshot>((resolve) => (resolveSerialization = resolve))
     );
 
     const dispatch = createPtyHostMessageDispatcher(ctx);
@@ -169,14 +170,14 @@ describe("createPtyHostMessageDispatcher", () => {
     // The send has not happened yet because serialization is still pending.
     expect(ctx.sendEvent).not.toHaveBeenCalled();
 
-    resolveSerialization("payload");
+    resolveSerialization({ data: "payload", cols: 80, rows: 24 });
     await new Promise((r) => setTimeout(r, 0));
 
     expect(ctx.sendEvent).toHaveBeenCalledWith({
       type: "serialized-state",
       requestId: 99,
       id: "term-1",
-      state: "payload",
+      state: { data: "payload", cols: 80, rows: 24 },
     });
   });
 

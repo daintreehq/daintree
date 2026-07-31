@@ -11,6 +11,11 @@ import {
 } from "../../utils/fs.js";
 import path from "node:path";
 import type { Terminal as HeadlessTerminalType, IMarker } from "@xterm/headless";
+import type {
+  SerializedTerminalSnapshot,
+  TerminalGeometry,
+} from "../../../shared/types/terminal.js";
+import { isValidTerminalGeometry } from "../../../shared/types/terminal.js";
 
 export interface RestoreResult {
   restored: boolean;
@@ -52,26 +57,78 @@ const STAT_CHUNK_SIZE = 10;
 // crash artifacts on the next eviction sweep.
 const TMP_ORPHAN_TTL_MS = 5 * 60 * 1000;
 
-const SESSION_HEADER = "DAINTREE_SESSION_v1\n";
+const SESSION_HEADER_V1 = "DAINTREE_SESSION_v1\n";
+const SESSION_HEADER = "DAINTREE_SESSION_v2\n";
 const SESSION_HEADER_BYTES = Buffer.byteLength(SESSION_HEADER, "utf8");
+// v2 adds a `<cols>x<rows>\n` line after the version line. Four digits per
+// dimension is well past MAX_TERMINAL_GRID_DIMENSION, so this bounds the whole
+// preamble for the size gate.
+const SESSION_GEOMETRY_LINE_MAX_BYTES = "9999x9999\n".length;
+const SESSION_PREAMBLE_MAX_BYTES = SESSION_HEADER_BYTES + SESSION_GEOMETRY_LINE_MAX_BYTES;
+const VERSION_PREFIX = "DAINTREE_SESSION_";
 
-function extractSessionContent(raw: string): string | null {
-  if (!raw) return raw;
+/**
+ * A parsed session file: the replayable payload plus the grid it was captured
+ * at, when the file records one (#11552).
+ *
+ * `geometry` is null for v1 and headerless legacy files — those predate the
+ * contract and are replayed verbatim, exactly as before. A *v2* file that
+ * fails to parse is rejected outright rather than downgraded: v2 asserts the
+ * metadata is present, so a malformed line means a corrupt file, and sizing a
+ * real xterm from garbage is worse than skipping the restore.
+ */
+interface ParsedSessionFile {
+  content: string;
+  geometry: TerminalGeometry | null;
+}
+
+function extractSessionContent(raw: string): ParsedSessionFile | null {
+  if (!raw) return { content: raw, geometry: null };
 
   if (raw.startsWith(SESSION_HEADER)) {
-    return raw.slice(SESSION_HEADER_BYTES);
+    const rest = raw.slice(SESSION_HEADER_BYTES);
+    const newlineIndex = rest.indexOf("\n");
+    if (newlineIndex === -1) {
+      console.warn(`[terminalSessionPersistence] v2 session file has no geometry line, rejecting`);
+      return null;
+    }
+    const geometry = parseGeometryLine(rest.slice(0, newlineIndex));
+    if (!geometry) {
+      console.warn(
+        `[terminalSessionPersistence] v2 session file has an unparseable geometry line, rejecting`
+      );
+      return null;
+    }
+    return { content: rest.slice(newlineIndex + 1), geometry };
   }
 
-  if (raw.startsWith("DAINTREE_SESSION_")) {
+  if (raw.startsWith(SESSION_HEADER_V1)) {
+    return { content: raw.slice(Buffer.byteLength(SESSION_HEADER_V1, "utf8")), geometry: null };
+  }
+
+  if (raw.startsWith(VERSION_PREFIX)) {
     console.warn(`[terminalSessionPersistence] Unknown session file version, rejecting restore`);
     return null;
   }
 
-  if (raw.length < SESSION_HEADER_BYTES && "DAINTREE_SESSION_".startsWith(raw)) {
+  // A truncated write that only got as far as a prefix of the version marker
+  // is not payload — reject rather than replaying "DAINTREE_SES" as content.
+  if (raw.length < VERSION_PREFIX.length && VERSION_PREFIX.startsWith(raw)) {
     return null;
   }
 
-  return raw;
+  return { content: raw, geometry: null };
+}
+
+function parseGeometryLine(line: string): TerminalGeometry | null {
+  const match = /^(\d{1,4})x(\d{1,4})$/.exec(line);
+  if (!match) return null;
+  const geometry = { cols: Number(match[1]), rows: Number(match[2]) };
+  return isValidTerminalGeometry(geometry) ? geometry : null;
+}
+
+function formatSessionFile(snapshot: SerializedTerminalSnapshot): string {
+  return `${SESSION_HEADER}${snapshot.cols}x${snapshot.rows}\n${snapshot.data}`;
 }
 
 export function getSessionDir(): string | null {
@@ -114,6 +171,63 @@ function formatRestoreTimestamp(mtimeMs: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+interface ReplayAlignment {
+  /** Queue the reflow back to the pre-replay grid behind the replay writes. */
+  scheduleRestore(): void;
+}
+
+const NO_ALIGNMENT: ReplayAlignment = { scheduleRestore: () => {} };
+
+/**
+ * Size `headlessTerminal` to the grid a snapshot was captured on, and hand back
+ * the means to reflow it home once the replay has parsed (#11552).
+ *
+ * A no-op when the snapshot carries no geometry (a v1/legacy file) or already
+ * matches — legacy payloads replay exactly as they did before, which is no
+ * worse than the status quo and strictly better than dropping the session.
+ */
+function alignForReplay(
+  headlessTerminal: HeadlessTerminalType,
+  captureGeometry: TerminalGeometry | null
+): ReplayAlignment {
+  if (!captureGeometry) return NO_ALIGNMENT;
+
+  const liveCols = headlessTerminal.cols;
+  const liveRows = headlessTerminal.rows;
+  if (captureGeometry.cols === liveCols && captureGeometry.rows === liveRows) {
+    return NO_ALIGNMENT;
+  }
+
+  headlessTerminal.resize(captureGeometry.cols, captureGeometry.rows);
+
+  return {
+    scheduleRestore: () => {
+      headlessTerminal.write("", () => {
+        // Hop out of the write callback before resizing: it runs inside xterm's
+        // parser drain, and changing the grid there re-applies the chunk being
+        // drained against the new geometry (a 4-cell write comes back as 8).
+        // A microtask lands after the drain and before any live PTY output.
+        queueMicrotask(() => {
+          // xterm leaves the cursor's own wrapped group unreflowed unless
+          // `reflowCursorLine` is on, so normalizing to a narrower grid would
+          // TRUNCATE that row's tail rather than wrap it. Enable it for this one
+          // corrective resize and put the configured value straight back — the
+          // option is a live-typing ergonomic, not something to change globally.
+          const previous = headlessTerminal.options.reflowCursorLine;
+          headlessTerminal.options.reflowCursorLine = true;
+          try {
+            headlessTerminal.resize(liveCols, liveRows);
+          } catch (error) {
+            console.warn(`[terminalSessionPersistence] Failed to restore session geometry:`, error);
+          } finally {
+            headlessTerminal.options.reflowCursorLine = previous;
+          }
+        });
+      });
+    },
+  };
+}
+
 export function restoreSessionFromFile(
   headlessTerminal: HeadlessTerminalType,
   terminalId: string
@@ -129,15 +243,16 @@ export function restoreSessionFromFile(
       if ((e as NodeJS.ErrnoException).code === "ENOENT") return NULL_RESTORE;
       throw e;
     }
-    if (stat.size > SESSION_SNAPSHOT_MAX_BYTES + SESSION_HEADER_BYTES) {
+    if (stat.size > SESSION_SNAPSHOT_MAX_BYTES + SESSION_PREAMBLE_MAX_BYTES) {
       console.warn(
         `[terminalSessionPersistence] Session snapshot too large for ${terminalId} (${stat.size} bytes), skipping restore`
       );
       return NULL_RESTORE;
     }
     const raw = readFileSync(sessionPath, "utf8");
-    const content = extractSessionContent(raw);
-    if (content === null) return NULL_RESTORE;
+    const parsed = extractSessionContent(raw);
+    if (parsed === null) return NULL_RESTORE;
+    const { content, geometry: captureGeometry } = parsed;
     if (Buffer.byteLength(content, "utf8") > SESSION_SNAPSHOT_MAX_BYTES) {
       // Belt-and-suspenders: file may have grown between statSync and readFileSync.
       console.warn(
@@ -146,6 +261,13 @@ export function restoreSessionFromFile(
       return NULL_RESTORE;
     }
     const sessionMtime: number = stat.mtimeMs;
+
+    // Replay at the grid the snapshot was captured on, then reflow to the grid
+    // this process actually spawned at (#11552). The mirror is brand new and
+    // empty here, so aligning it up front costs nothing — and it must happen
+    // BEFORE the writes, because xterm parses asynchronously: content queued
+    // now is laid out at whatever cols the terminal has when the parser drains.
+    const alignment = alignForReplay(headlessTerminal, captureGeometry);
 
     headlessTerminal.write(RESTORE_PARSER_RESET_PREAMBLE);
     headlessTerminal.write(content);
@@ -173,6 +295,11 @@ export function restoreSessionFromFile(
     headlessTerminal.write(`\x1b[2m\x1b[38;5;240m${label}\x1b[0m\r\n`);
     const bannerEndMarker = headlessTerminal.registerMarker(0) ?? null;
 
+    // Queued behind the replay so it runs once the parser has laid the content
+    // out at the capture grid. Live PTY output written after this point queues
+    // behind the callback and therefore parses at the restored geometry.
+    alignment.scheduleRestore();
+
     return { restored: true, bannerStartMarker, bannerEndMarker };
   } catch (error) {
     // Stat→read race: file vanished between size gate and read. Treat as the
@@ -186,11 +313,14 @@ export function restoreSessionFromFile(
   }
 }
 
-export function persistSessionSnapshotSync(terminalId: string, state: string): void {
+export function persistSessionSnapshotSync(
+  terminalId: string,
+  snapshot: SerializedTerminalSnapshot
+): void {
   const sessionPath = getSessionPath(terminalId);
   const dir = getSessionDir();
   if (!sessionPath || !dir) return;
-  const bytes = Buffer.byteLength(state, "utf8");
+  const bytes = Buffer.byteLength(snapshot.data, "utf8");
   if (bytes > SESSION_SNAPSHOT_MAX_BYTES) {
     console.warn(
       `[terminalSessionPersistence] Snapshot for ${terminalId} exceeds cap (${bytes} > ${SESSION_SNAPSHOT_MAX_BYTES} bytes); skipping persist`
@@ -200,19 +330,19 @@ export function persistSessionSnapshotSync(terminalId: string, state: string): v
 
   mkdirSync(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
   tightenDirPermissionsSync(dir);
-  resilientAtomicWriteFileSync(sessionPath, SESSION_HEADER + state, "utf8", {
+  resilientAtomicWriteFileSync(sessionPath, formatSessionFile(snapshot), "utf8", {
     mode: OWNER_RW_FILE_MODE,
   });
 }
 
 export async function persistSessionSnapshotAsync(
   terminalId: string,
-  state: string
+  snapshot: SerializedTerminalSnapshot
 ): Promise<void> {
   const sessionPath = getSessionPath(terminalId);
   const dir = getSessionDir();
   if (!sessionPath || !dir) return;
-  const bytes = Buffer.byteLength(state, "utf8");
+  const bytes = Buffer.byteLength(snapshot.data, "utf8");
   if (bytes > SESSION_SNAPSHOT_MAX_BYTES) {
     console.warn(
       `[terminalSessionPersistence] Snapshot for ${terminalId} exceeds cap (${bytes} > ${SESSION_SNAPSHOT_MAX_BYTES} bytes); skipping persist`
@@ -222,7 +352,7 @@ export async function persistSessionSnapshotAsync(
 
   await mkdir(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
   await tightenDirPermissions(dir);
-  await resilientAtomicWriteFile(sessionPath, SESSION_HEADER + state, "utf8", {
+  await resilientAtomicWriteFile(sessionPath, formatSessionFile(snapshot), "utf8", {
     mode: OWNER_RW_FILE_MODE,
   });
 }

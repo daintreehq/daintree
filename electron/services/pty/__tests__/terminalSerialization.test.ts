@@ -58,31 +58,43 @@ describe("terminalSerialization guards", () => {
 
   it("serializeTerminal stamps preservedSnapshotLastAccessedAt when serving a preserved snapshot", () => {
     const info = makeTerminalInfo({
-      preservedSnapshot: "cached",
+      preservedSnapshot: { data: "cached", cols: 80, rows: 24 },
       preservedSnapshotLastAccessedAt: 0,
     });
     const before = Date.now();
-    expect(serializeTerminal("t1", info)).toBe("cached");
+    expect(serializeTerminal("t1", info)).toEqual({ data: "cached", cols: 80, rows: 24 });
     expect(info.preservedSnapshotLastAccessedAt).toBeGreaterThanOrEqual(before);
   });
 
   it("serializeTerminalAsync stamps preservedSnapshotLastAccessedAt when serving a preserved snapshot", async () => {
     const info = makeTerminalInfo({
-      preservedSnapshot: "cached",
+      preservedSnapshot: { data: "cached", cols: 80, rows: 24 },
       preservedSnapshotLastAccessedAt: 0,
     });
     const before = Date.now();
-    await expect(serializeTerminalAsync("t1", info)).resolves.toBe("cached");
+    await expect(serializeTerminalAsync("t1", info)).resolves.toEqual({
+      data: "cached",
+      cols: 80,
+      rows: 24,
+    });
     expect(info.preservedSnapshotLastAccessedAt).toBeGreaterThanOrEqual(before);
   });
 
   it("does not stamp preservedSnapshotLastAccessedAt on the non-preserved path", () => {
     const info = makeTerminalInfo({
+      // The live mirror is the only source for the capture grid on this path,
+      // so serializing without one yields null rather than a geometry-less
+      // payload that would replay at whatever width it lands in (#11552).
+      headlessTerminal: {
+        cols: 120,
+        rows: 40,
+        buffer: { active: { length: 10 } },
+      } as unknown as TerminalInfo["headlessTerminal"],
       serializeAddon: makeAddon() as unknown as TerminalInfo["serializeAddon"],
       preservedSnapshot: undefined,
       preservedSnapshotLastAccessedAt: undefined,
     });
-    expect(serializeTerminal("t1", info)).toBe("snapshot");
+    expect(serializeTerminal("t1", info)).toEqual({ data: "snapshot", cols: 120, rows: 40 });
     expect(info.preservedSnapshotLastAccessedAt).toBeUndefined();
   });
 

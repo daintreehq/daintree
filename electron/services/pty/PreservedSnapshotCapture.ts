@@ -1,5 +1,6 @@
 import type { TerminalInfo } from "./types.js";
 import type { AnalysisBackend } from "./analysis/AnalysisBackend.js";
+import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import { headlessMirrorScheduler } from "./HeadlessMirrorScheduler.js";
 import {
   TERMINAL_SESSION_PERSISTENCE_ENABLED,
@@ -12,7 +13,7 @@ export interface PreservedSnapshotCaptureHost {
   readonly terminalInfo: TerminalInfo;
   readonly analysis: AnalysisBackend;
   readonly isDisposed: boolean;
-  serializeForPersistence(): string | null;
+  serializeForPersistence(): SerializedTerminalSnapshot | null;
   disposeHeadless(): void;
   onPreserved(): void;
 }
@@ -50,9 +51,16 @@ export class PreservedSnapshotCapture {
       if (terminal.headlessTerminal !== headless || !terminal.serializeAddon) {
         return;
       }
-      let snapshot: string;
+      let snapshot: SerializedTerminalSnapshot;
       try {
-        snapshot = terminal.serializeAddon.serialize();
+        // Geometry read in the same tick as the serialize: the headless mirror
+        // is disposed a few lines below, so this is the last moment the grid
+        // behind the payload is knowable (#11552).
+        snapshot = {
+          data: terminal.serializeAddon.serialize(),
+          cols: headless.cols,
+          rows: headless.rows,
+        };
       } catch (error) {
         console.error(
           `[TerminalProcess] Failed to snapshot preserved terminal ${this.host.id}:`,

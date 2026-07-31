@@ -201,7 +201,11 @@ describe("paint fabric construction seam", () => {
     await new Promise<void>((resolve) => managed.terminal.write("pre-move content", resolve));
 
     // The pty-host owns the canonical scrollback; the transfer restores it.
-    vi.mocked(terminalClient.getSerializedState).mockResolvedValue("restored-across-surfaces\r\n");
+    vi.mocked(terminalClient.getSerializedState).mockResolvedValue({
+      data: "restored-across-surfaces\r\n",
+      cols: 80,
+      rows: 24,
+    });
 
     const moved = await compositor.transferTerminal("move-me", "surface-aux-1");
     expect(moved).toBe(true);
