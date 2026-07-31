@@ -4,7 +4,7 @@ import {
   LaunchLocationSchema,
   TerminalSpawnSourceSchema,
   AddPanelFocusPolicySchema,
-  AgentSessionRecordSchema,
+  AgentFacingSessionRecordSchema,
 } from "./schemas";
 import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
@@ -24,6 +24,10 @@ import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import type { ActionContext, ActionId } from "@shared/types/actions";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
+import type {
+  AgentSessionBookmarkMetadata,
+  AgentSessionRecord,
+} from "@shared/types/ipc/agentSessionHistory";
 
 // Named so the bookmark actions can both declare `argsSchema` and `.parse()` in
 // run() for typed args without an unsafe `as` cast (#11288).
@@ -36,11 +40,107 @@ const BookmarkMutateArgsSchema = z.object({
   label: z.string().trim().min(1).max(120),
 });
 const BookmarkDeleteArgsSchema = z.object({ sessionId: z.string().min(1) });
+
+// Bounds for the two agent-facing session listings (#11530). Deliberately
+// tighter than the 50/500 used for log-shaped actions: a session record is an
+// order of magnitude heavier than a log line, and an MCP result is billed twice
+// (once as text, once as `structuredContent`). 20 matches RESUME_PAGE_SIZE, the
+// resume palette's own page size.
+const SESSION_LIST_DEFAULT_LIMIT = 20;
+const SESSION_LIST_MAX_LIMIT = 100;
+const SessionListLimitSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(SESSION_LIST_MAX_LIMIT)
+  .default(SESSION_LIST_DEFAULT_LIMIT)
+  .describe(
+    `Max records to return, newest-first (default: ${SESSION_LIST_DEFAULT_LIMIT}, max: ${SESSION_LIST_MAX_LIMIT}).`
+  );
+
+// Paired with the limit so a bounded page isn't a one-way door. Bookmarks are
+// exempt from every eviction rule, so a project can hold more of them than the
+// maximum limit — without an offset those records would be unreachable through
+// the action, and their sessionId is the only handle rename/delete accept.
+const SessionListOffsetSchema = z
+  .number()
+  .int()
+  .min(0)
+  .default(0)
+  .describe("Records to skip before the page, for reaching past the limit (default: 0).");
+
 const BookmarkListArgsSchema = z
   .object({
     projectId: z.string().min(1).optional(),
+    limit: SessionListLimitSchema,
+    offset: SessionListOffsetSchema,
   })
   .optional();
+
+const SessionHistoryListArgsSchema = z
+  .object({
+    // `.min(1)`: an empty string would fall through the bridge's `if
+    // (!worktreeId)` guard to an unfiltered listing — a surprising result for a
+    // caller that passed a (blank) id expecting a scoped one.
+    worktreeId: z.string().min(1).optional().describe("Restrict the listing to one worktree id."),
+    projectId: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Restrict the listing to one project id; combines with `worktreeId`."),
+    limit: SessionListLimitSchema,
+    offset: SessionListOffsetSchema,
+  })
+  .optional();
+
+/**
+ * Rebuild bookmark metadata as the lean shape an agent is given (#11530).
+ * Allowlist rather than omit/rest-destructuring: a pane-presentation field
+ * added to the record later must stay out of MCP output until someone
+ * deliberately opts it in here.
+ */
+function toAgentFacingBookmark(
+  bookmark: AgentSessionBookmarkMetadata
+): AgentSessionBookmarkMetadata {
+  return {
+    bookmarkedAt: bookmark.bookmarkedAt,
+    label: bookmark.label,
+    ...(bookmark.sourceLocation !== undefined && { sourceLocation: bookmark.sourceLocation }),
+    ...(bookmark.agentPresetId !== undefined && { agentPresetId: bookmark.agentPresetId }),
+    ...(bookmark.originalPresetId !== undefined && { originalPresetId: bookmark.originalPresetId }),
+    ...(bookmark.isInputLocked !== undefined && { isInputLocked: bookmark.isInputLocked }),
+  };
+}
+
+/**
+ * Rebuild a journal record as the agent-facing shape (#11530). Applied by BOTH
+ * list actions — a bookmarked record surfaces through session history too, so
+ * stripping in only one of them would leave the other as an open path for the
+ * same pane-presentation fields. `resultSchema`/`mcpOutputSchema` cannot do
+ * this: nothing parses an action's return value before main casts it into
+ * `structuredContent`, so the projection has to be real code.
+ */
+function toAgentFacingRecord(record: AgentSessionRecord): AgentSessionRecord {
+  return {
+    sessionId: record.sessionId,
+    agentId: record.agentId,
+    worktreeId: record.worktreeId,
+    title: record.title,
+    projectId: record.projectId,
+    savedAt: record.savedAt,
+    ...(record.agentLaunchFlags !== undefined && { agentLaunchFlags: record.agentLaunchFlags }),
+    ...(record.agentModelId !== undefined && { agentModelId: record.agentModelId }),
+    ...(record.cwd !== undefined && { cwd: record.cwd }),
+    ...(record.branch !== undefined && { branch: record.branch }),
+    // Truthiness, not `!== undefined`, only for the nested object: the journal
+    // is a plain JSON file on disk and `normalizeRecords` admits any object
+    // with a string sessionId, so a hand-edited `"bookmark": null` would reach
+    // this projection and throw — taking down a whole listing the journal is
+    // documented to survive. The scalar spreads above stay `!== undefined` on
+    // purpose so falsy-but-present values (`isInputLocked: false`) survive.
+    ...(record.bookmark ? { bookmark: toAgentFacingBookmark(record.bookmark) } : {}),
+  };
+}
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   const readAgentDiscoveryState = async () => {
     // These are the same normalized renderer stores the toolbar reads. Fall back to
@@ -504,40 +604,70 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agentSessionHistory.list",
     title: "List Resumable Sessions",
     description:
-      "List resumable agent sessions from the on-disk journal — the closed sessions the user can relaunch. This is a faithful record listing, NOT a summary of what happened in each session. Args: `worktreeId` (optional) — restrict to one worktree; omit to list every resumable session across all worktrees and projects (the default). Returns { sessions: [{ sessionId, agentId, worktreeId, title, projectId, savedAt (epoch ms; the list is newest-first), agentLaunchFlags?, agentModelId?, cwd?, branch? }] }, capped and pruned by the journal's retention policy. Never errors — returns { sessions: [] } when the journal is empty or unreadable. To relaunch a listed session, feed its `agentId`/`cwd`/`worktreeId`/`agentLaunchFlags`/`agentModelId` into `agent.launch`.",
+      "List resumable agent sessions from the on-disk journal — the closed sessions the user can relaunch. A faithful record listing, NOT a summary of what happened in each session. Requires a scope: pass `worktreeId` and/or `projectId` (they combine), else the caller's worktree and project context is used; with no resolvable scope this throws rather than listing every project. Args: `worktreeId`, `projectId`, `limit` (default 20, max 100), `offset` (default 0). Returns { sessions: [{ sessionId, agentId, worktreeId, title, projectId, savedAt (epoch ms; newest-first), agentLaunchFlags?, agentModelId?, cwd?, branch?, bookmark? }], total, hasMore } — `total` counts the scoped records before paging; when `hasMore` is true, advance `offset` for the next page. Pruned by the journal's retention policy. To relaunch a session, feed its `agentId`/`cwd`/`worktreeId`/`agentLaunchFlags`/`agentModelId` into `agent.launch`.",
     category: "agent",
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z
-      .object({
-        // `.min(1)`: an empty string would fall through the bridge's `if
-        // (!worktreeId)` guard to an unfiltered cross-project listing — a
-        // surprising result for a caller that passed a (blank) id expecting a
-        // scoped one. Reject it; omit the arg to list across all worktrees.
-        worktreeId: z
-          .string()
-          .min(1)
-          .optional()
-          .describe(
-            "Restrict the listing to one worktree id. Omit to list resumable sessions across all worktrees and projects."
-          ),
-      })
-      .optional(),
+    argsSchema: SessionHistoryListArgsSchema,
     examples: [
       {
-        args: {},
-        description: "List every resumable agent session across the whole workspace",
+        args: { worktreeId: "wt-1" },
+        description: "List the most recent resumable sessions for one worktree",
+      },
+      {
+        args: { projectId: "proj-1", limit: 50 },
+        description: "List up to 50 resumable sessions across one project",
       },
     ],
     resultSchema: z.object({
-      sessions: z.array(AgentSessionRecordSchema),
+      sessions: z.array(AgentFacingSessionRecordSchema),
+      total: z.number(),
+      hasMore: z.boolean(),
     }),
     mcpOutputSchema: true,
-    run: async (args: unknown) => {
-      const { worktreeId } = (args ?? {}) as { worktreeId?: string };
-      const sessions = await window.electron.agentSessionHistory.list(worktreeId);
-      return { sessions };
+    run: async (args: unknown, ctx: ActionContext) => {
+      // `args ?? {}` means zod always parses the object branch, so the schema
+      // defaults for limit/offset are always applied.
+      const { worktreeId, projectId, limit, offset } = SessionHistoryListArgsSchema.parse(
+        args ?? {}
+      ) ?? { limit: SESSION_LIST_DEFAULT_LIMIT, offset: 0 };
+      // Explicit args are honoured verbatim — never widened, and never silently
+      // narrowed with context the caller didn't ask for. Falling back to
+      // context contributes BOTH ids when it has them: a worktree id is a
+      // normalized absolute path, so the same worktree opened as its own
+      // project journals records under a different projectId. Scoping by
+      // worktree alone would surface that other project's sessions and could
+      // even fill the whole page with them.
+      let scopeWorktreeId: string | undefined;
+      let scopeProjectId: string | undefined;
+      if (worktreeId || projectId) {
+        scopeWorktreeId = worktreeId;
+        scopeProjectId = projectId;
+      } else if (ctx.activeWorktreeId || ctx.projectId || ctx.scratchId) {
+        scopeWorktreeId = ctx.activeWorktreeId;
+        // A scratch view has neither a project nor any git worktrees, but its
+        // terminals are journaled under the opaque scratch id as their
+        // ownership stamp (see the terminal.create handler). Without this the
+        // scope guard turns every scratch into a dead end (#11482 class).
+        scopeProjectId = ctx.projectId ?? ctx.scratchId;
+      } else {
+        // Throw rather than return empty: an empty list is indistinguishable
+        // from a valid scope that simply has no sessions, which would read as
+        // "nothing to resume" and send an agent down the wrong path.
+        throw new Error(
+          "No session history scope: pass worktreeId or projectId, or dispatch from an active worktree or project"
+        );
+      }
+      const sessions = await window.electron.agentSessionHistory.list(
+        scopeWorktreeId,
+        scopeProjectId
+      );
+      // The journal is already newest-first (main sorts by `savedAt` descending
+      // after eviction), so the window keeps the most recent records.
+      const total = sessions.length;
+      const page = sessions.slice(offset, offset + limit).map(toAgentFacingRecord);
+      return { sessions: page, total, hasMore: offset + page.length < total };
     },
   }));
 
@@ -650,27 +780,38 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "session.bookmarks.list",
     title: "List bookmarks",
     description:
-      "List the user's durable session bookmarks for one project, newest-first by bookmark time. Args: `projectId` (optional) — the project to scope to; when omitted the caller's project context is used. Bookmarks are project-scoped: with no explicit `projectId` and no project context this returns an empty list rather than leaking bookmarks across projects. Returns { bookmarks: [{ sessionId, agentId, worktreeId, title, projectId, savedAt, agentLaunchFlags?, agentModelId?, cwd?, branch?, bookmark: { bookmarkedAt, label, ... } }] }. Read-only metadata; NO transcript content. Never errors.",
+      "List the user's durable session bookmarks for one project, newest-first by bookmark time. Args: `projectId` (optional) — the project to scope to; when omitted the caller's project context is used. `limit` (default 20, max 100) and `offset` (default 0). Bookmarks are project-scoped: with no explicit `projectId` and no project context this returns an empty list rather than leaking bookmarks across projects. Returns { bookmarks: [{ sessionId, agentId, worktreeId, title, projectId, savedAt, agentLaunchFlags?, agentModelId?, cwd?, branch?, bookmark: { bookmarkedAt, label, ... } }], total, hasMore } — `total` counts the project's bookmarks before paging; bookmarks never expire, so advance `offset` while `hasMore` is true to reach them all. Read-only metadata; NO transcript content. Never errors.",
     category: "agent",
     kind: "query",
     danger: "safe",
     scope: "renderer",
     argsSchema: BookmarkListArgsSchema,
     resultSchema: z.object({
-      bookmarks: z.array(AgentSessionRecordSchema),
+      bookmarks: z.array(AgentFacingSessionRecordSchema),
+      total: z.number(),
+      hasMore: z.boolean(),
     }),
     mcpOutputSchema: true,
     run: async (args: unknown, ctx: ActionContext) => {
-      const projectId = BookmarkListArgsSchema.parse(args ?? {})?.projectId;
+      const { projectId, limit, offset } = BookmarkListArgsSchema.parse(args ?? {}) ?? {
+        limit: SESSION_LIST_DEFAULT_LIMIT,
+        offset: 0,
+      };
       // Bookmarks are project-scoped (privacy). Resolve the explicit arg, then the
       // caller's project context. With neither, DO NOT fall open to every project
       // — return empty; an all-project view is a deliberate future enhancement.
-      const scope = projectId ?? ctx.projectId;
-      if (!scope) return { bookmarks: [] };
+      const scope = projectId ?? ctx.projectId ?? ctx.scratchId;
+      if (!scope) return { bookmarks: [], total: 0, hasMore: false };
       const bookmarks = await window.electron.agentSessionHistory.listBookmarks({
         projectId: scope,
       });
-      return { bookmarks };
+      // Bookmarks are exempt from both the age window and the per-worktree cap,
+      // so this set grows without bound — the limit is the only thing holding
+      // the agent-facing payload down, and the offset is how a caller still
+      // reaches a bookmark that sits past it (#11530).
+      const total = bookmarks.length;
+      const page = bookmarks.slice(offset, offset + limit).map(toAgentFacingRecord);
+      return { bookmarks: page, total, hasMore: offset + page.length < total };
     },
   }));
 

@@ -1313,7 +1313,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
   };
   agentSessionHistory: {
-    list(worktreeId?: string): Promise<AgentSessionRecord[]>;
+    // Both filters are optional and additive; omitting both returns the whole
+    // retained journal (the resume palette depends on that unscoped read).
+    list(worktreeId?: string, projectId?: string): Promise<AgentSessionRecord[]>;
     clear(worktreeId?: string): Promise<void>;
     getRetentionDays(): Promise<AgentSessionRetentionDays>;
     setRetentionDays(days: AgentSessionRetentionDays): Promise<void>;

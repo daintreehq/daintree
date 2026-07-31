@@ -263,3 +263,27 @@ export const AgentSessionRecordSchema = z.object({
   // Present when the user has pinned this session as a durable bookmark (#11288).
   bookmark: AgentSessionBookmarkMetadataSchema.optional(),
 });
+
+// Agent-facing projection of the bookmark metadata (#11530). The full schema
+// above documents what main stores; this documents what the list actions
+// actually hand an agent. The pane-presentation hints an agent cannot act on
+// (`sourcePanelId`, `titleMode`, `agentPresetColor`, `isUsingFallback`,
+// `fallbackChainIndex`) are dropped — the retained fields are the ones that
+// identify the bookmark or feed a relaunch.
+export const AgentFacingBookmarkMetadataSchema = z.object({
+  bookmarkedAt: z.number(),
+  label: z.string(),
+  sourceLocation: z.enum(["grid", "dock"]).optional(),
+  agentPresetId: z.string().optional(),
+  originalPresetId: z.string().optional(),
+  isInputLocked: z.boolean().optional(),
+});
+
+// The record shape the MCP-exposed list actions return. Identical to
+// `AgentSessionRecordSchema` except for the leaner bookmark. Note this schema
+// does NOT enforce the projection at runtime — nothing parses an action's
+// return value (main casts it straight into `structuredContent`), so the
+// stripping is done by hand in each `run()`; this only documents the result.
+export const AgentFacingSessionRecordSchema = AgentSessionRecordSchema.extend({
+  bookmark: AgentFacingBookmarkMetadataSchema.optional(),
+});

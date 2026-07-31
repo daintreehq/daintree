@@ -2527,7 +2527,8 @@ function buildElectronApi(): ElectronAPI {
 
     // Agent Session History API
     agentSessionHistory: {
-      list: (worktreeId?: string) => _unwrappingInvoke(CHANNELS.AGENT_SESSION_LIST, { worktreeId }),
+      list: (worktreeId?: string, projectId?: string) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SESSION_LIST, { worktreeId, projectId }),
       clear: (worktreeId?: string) =>
         _unwrappingInvoke(CHANNELS.AGENT_SESSION_CLEAR, { worktreeId }),
       getRetentionDays: () => _unwrappingInvoke(CHANNELS.AGENT_SESSION_GET_RETENTION),

@@ -277,6 +277,47 @@ describe("agentSessionHistory", () => {
     expect(all).toHaveLength(2);
   });
 
+  // #11530 — project filtering runs in main so an agent-facing scoped read never
+  // ships every project's records across IPC.
+  it("listAgentSessions filters by projectId, and by both filters together", async () => {
+    await persistAgentSession(
+      { sessionId: "p1a", agentId: "claude", worktreeId: "wt-1", title: null, projectId: "p1" },
+      userDataDir
+    );
+    await persistAgentSession(
+      { sessionId: "p1b", agentId: "claude", worktreeId: "wt-2", title: null, projectId: "p1" },
+      userDataDir
+    );
+    await persistAgentSession(
+      { sessionId: "p2a", agentId: "gemini", worktreeId: "wt-3", title: null, projectId: "p2" },
+      userDataDir
+    );
+    // Legacy record predating project attribution.
+    await persistAgentSession(
+      { sessionId: "legacy", agentId: "codex", worktreeId: "wt-1", title: null, projectId: null },
+      userDataDir
+    );
+
+    const p1 = listAgentSessions(undefined, userDataDir, undefined, "p1");
+    expect(new Set(p1.map((r) => r.sessionId))).toEqual(new Set(["p1a", "p1b"]));
+
+    const p2 = listAgentSessions(undefined, userDataDir, undefined, "p2");
+    expect(p2.map((r) => r.sessionId)).toEqual(["p2a"]);
+
+    // A null-project (legacy) record is never attributed to a project, but is
+    // still reachable by its worktree — which is why worktree scope wins.
+    expect(listAgentSessions("wt-1", userDataDir).map((r) => r.sessionId)).toContain("legacy");
+
+    // Both filters intersect rather than one overriding the other.
+    expect(listAgentSessions("wt-1", userDataDir, undefined, "p1").map((r) => r.sessionId)).toEqual(
+      ["p1a"]
+    );
+    expect(listAgentSessions("wt-1", userDataDir, undefined, "p2")).toEqual([]);
+
+    // Unscoped stays unscoped — the resume palette depends on this.
+    expect(listAgentSessions(undefined, userDataDir)).toHaveLength(4);
+  });
+
   it("clearAgentSessions clears all sessions", async () => {
     await persistAgentSession(
       { sessionId: "s1", agentId: "claude", worktreeId: "wt-1", title: null, projectId: null },
