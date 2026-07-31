@@ -33,7 +33,6 @@ import {
   serializeResourcePayload,
   unwrapDispatchResult,
   truncateText,
-  safeSerializeToolResult,
   readStringField,
   RESOURCE_BACKING_ACTIONS,
   TIER_NOT_PERMITTED_CODE,
@@ -69,6 +68,7 @@ import {
   buildStructuredContent,
   parseToolArguments,
 } from "./tierAuth.js";
+import { buildToolCallResult } from "./toolCallResult.js";
 
 const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
 const TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL = "terminal.waitUntilIdleBatch";
@@ -680,10 +680,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 sessionStore.resetHttpIdleTimer(sessionId);
               }
             }
-            return {
-              content: [{ type: "text" as const, text: safeSerializeToolResult(result) }],
+            return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,
-            };
+            });
           } catch (err) {
             outcome = { kind: "throw", error: err };
             if (err instanceof McpError) {
@@ -721,10 +720,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 sessionStore.resetHttpIdleTimer(sessionId);
               }
             }
-            return {
-              content: [{ type: "text" as const, text: safeSerializeToolResult(result) }],
+            return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,
-            };
+            });
           } catch (err) {
             outcome = { kind: "throw", error: err };
             if (err instanceof McpError) {
@@ -750,10 +748,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             const result =
               actionId === SKILLS_SEARCH_TOOL ? handleSkillsSearch(args) : handleSkillsLoad(args);
             outcome = { kind: "result", value: { ok: true, result } };
-            return {
-              content: [{ type: "text" as const, text: safeSerializeToolResult(result) }],
+            return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,
-            };
+            });
           } catch (err) {
             outcome = { kind: "throw", error: err };
             if (err instanceof McpError) {
@@ -830,10 +827,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             }
             const result = { imageId, figureNumber, figureLabel };
             outcome = { kind: "result", value: { ok: true, result } };
-            return {
-              content: [{ type: "text" as const, text: safeSerializeToolResult(result) }],
+            return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,
-            };
+            });
           } catch (err) {
             outcome = { kind: "throw", error: err };
             if (err instanceof McpError) {
@@ -964,18 +960,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             }
           }
           const structuredContent = buildStructuredContent(entry, outcome.value.result);
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text:
-                  outcome.value.result !== undefined && outcome.value.result !== null
-                    ? safeSerializeToolResult(outcome.value.result)
-                    : "OK",
-              },
-            ],
+          return buildToolCallResult(outcome.value.result, {
             ...(structuredContent ? { structuredContent } : {}),
-          };
+          });
         }
 
         return buildToolError({

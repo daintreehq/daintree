@@ -29,6 +29,7 @@ import {
   WORKBENCH_TIER_TOOLS as WORKBENCH_TIER_TOOLS_LIST,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { safeSerializeToolResult } from "../../utils/safeSerializeToolResult.js";
+import { buildToolCallTextResult } from "./toolCallResult.js";
 
 // Re-exported for SDK-free consumers that historically imported from here.
 // `readinessProbe.ts` and `pluginMcpHash.ts` import from the standalone homes
@@ -304,10 +305,10 @@ export function buildToolError(input: {
   details?: unknown;
 }): CallToolResult {
   const payload = buildMcpErrorPayload(input);
-  return {
-    content: [{ type: "text", text: JSON.stringify(payload) }],
-    isError: true,
-  };
+  // Budgeted like a success body: `details` is renderer-supplied and unbounded,
+  // so without the cap the same oversized-result bug stays reachable through
+  // failures (#11526). `isError` survives — the call really did fail.
+  return buildToolCallTextResult(JSON.stringify(payload), { isError: true });
 }
 
 export type McpTier = "workbench" | "action" | "system" | "external";

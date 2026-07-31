@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { safeSerializeToolResult } from "../safeSerializeToolResult.js";
+import {
+  safeSerializeToolResult,
+  safeSerializeToolResultCompact,
+} from "../safeSerializeToolResult.js";
 
 describe("safeSerializeToolResult", () => {
   it("serializes plain JSON values losslessly", () => {
@@ -47,5 +50,44 @@ describe("safeSerializeToolResult", () => {
       },
     };
     expect(safeSerializeToolResult(hostile)).toBe("[object Object]");
+  });
+
+  it("keeps the indented byte layout that persisted hashes were computed over", () => {
+    // `pluginMcpHash.ts` digests these exact bytes for plugin schema
+    // fingerprints and audit argument hashes. Reformatting here silently
+    // rotates every stored fingerprint and forces spurious re-consent, so the
+    // whitespace is a contract rather than a style choice (#11526).
+    expect(safeSerializeToolResult({ a: 1, b: { c: 2 } })).toBe(
+      '{\n  "a": 1,\n  "b": {\n    "c": 2\n  }\n}'
+    );
+  });
+
+  it("stays uncapped — the size budget belongs to the MCP wire, not the hash input", () => {
+    const blob = "x".repeat(200_000);
+    expect(safeSerializeToolResult({ blob })).toContain(blob);
+  });
+});
+
+describe("safeSerializeToolResultCompact", () => {
+  it("drops the cosmetic whitespace no model reads", () => {
+    expect(safeSerializeToolResultCompact({ a: 1, b: { c: 2 } })).toBe('{"a":1,"b":{"c":2}}');
+  });
+
+  it("carries the same value semantics as the indented form", () => {
+    const value: Record<string, unknown> = {
+      big: 10n,
+      sym: Symbol("tag"),
+      fn: function namedFn() {},
+      err: new TypeError("boom"),
+    };
+    value.self = value;
+
+    const compact = JSON.parse(safeSerializeToolResultCompact(value));
+    expect(compact).toEqual(JSON.parse(safeSerializeToolResult(value)));
+    expect(compact.self).toBe("[Circular]");
+  });
+
+  it("shares the string-coercion fallbacks", () => {
+    expect(safeSerializeToolResultCompact(undefined)).toBe("undefined");
   });
 });

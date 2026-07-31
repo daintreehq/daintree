@@ -9,7 +9,7 @@
  * SDK's `types.js` (full zod schema construction at module init) — keeping the
  * serializer standalone keeps that cost off first paint.
  */
-export function safeSerializeToolResult(value: unknown): string {
+function serialize(value: unknown, indent: number): string {
   const seen = new WeakSet<object>();
 
   try {
@@ -40,7 +40,7 @@ export function safeSerializeToolResult(value: unknown): string {
         }
         return currentValue;
       },
-      2
+      indent
     );
 
     if (serialized !== undefined) {
@@ -55,4 +55,25 @@ export function safeSerializeToolResult(value: unknown): string {
   } catch {
     return Object.prototype.toString.call(value);
   }
+}
+
+/**
+ * The 2-space-indented form. This output is hashed by `pluginMcpHash.ts` for
+ * plugin schema fingerprints (TOFU consent pinning) and audit argument hashes,
+ * so its bytes are a persisted contract: changing the indent here silently
+ * rotates every stored fingerprint and forces spurious re-consent. Callers that
+ * only need the JSON on the wire want `safeSerializeToolResultCompact` instead.
+ */
+export function safeSerializeToolResult(value: unknown): string {
+  return serialize(value, 2);
+}
+
+/**
+ * The unindented form, for MCP `tools/call` payloads. Pretty-printing costs
+ * 25-46% of the response in whitespace no model reads (#11526), and the wire
+ * has no reader that needs the indent — but only the wire may use this, never
+ * a hash input.
+ */
+export function safeSerializeToolResultCompact(value: unknown): string {
+  return serialize(value, 0);
 }

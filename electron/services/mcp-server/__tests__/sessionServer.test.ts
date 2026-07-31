@@ -28,6 +28,7 @@ import {
   minimumPermittingTier,
   unwrapDispatchResult,
 } from "../shared.js";
+import { TOOL_RESULT_TEXT_MAX_BYTES } from "../toolCallResult.js";
 import { SessionBindingError, RendererBridgeUnavailableError } from "../rendererBridge.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
@@ -2737,5 +2738,70 @@ describe("structuredContent for terminal query actions (#10676)", () => {
 
     expect(structuredOf(result)).toBeUndefined();
     expect(JSON.parse(textOf(result))).toEqual(payload);
+  });
+
+  describe("oversized results are capped on the wire (#11526)", () => {
+    function oversizedPayload() {
+      return { terminals: [{ id: "t-1", content: "x".repeat(TOOL_RESULT_TEXT_MAX_BYTES * 2) }] };
+    }
+
+    it("truncates the text body of a dispatched result to the byte budget", async () => {
+      const server = createSessionServer(
+        "sc-oversized",
+        deps("terminal.getOutput", oversizedPayload())
+      );
+      const result = await callTool(server, {
+        name: "terminal.getOutput",
+        arguments: { terminalId: "t-1" },
+      });
+
+      expect(Buffer.byteLength(textOf(result), "utf8")).toBeLessThanOrEqual(
+        TOOL_RESULT_TEXT_MAX_BYTES
+      );
+      expect(textOf(result).startsWith("[Tool result truncated:")).toBe(true);
+    });
+
+    it("drops structuredContent above the cap so the duplicate cannot smuggle the payload", async () => {
+      const server = createSessionServer(
+        "sc-oversized-structured",
+        deps("terminal.list", oversizedPayload())
+      );
+      const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+      expect(structuredOf(result)).toBeUndefined();
+    });
+
+    it("does not report a capped result as a failed call", async () => {
+      const server = createSessionServer(
+        "sc-oversized-ok",
+        deps("terminal.list", oversizedPayload())
+      );
+      const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+      expect((result as { isError?: boolean }).isError).toBeUndefined();
+    });
+
+    it("caps a main-process short-circuit that attaches structuredContent unconditionally", async () => {
+      // skills.load never consults buildStructuredContent, so it needs the cap
+      // applied at its own return site rather than via the outputSchema gate.
+      const server = createSessionServer(
+        "sc-oversized-skills",
+        fakeDeps({
+          sessionStore: fakeSessionStore("external"),
+          getFullToolSurface: vi.fn(() => true),
+          requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("skills.load")]),
+          handleSkillsLoad: vi.fn(() => oversizedPayload()),
+        })
+      );
+      const result = await callTool(server, {
+        name: "skills.load",
+        arguments: { id: "s-1" },
+      });
+
+      expect(Buffer.byteLength(textOf(result), "utf8")).toBeLessThanOrEqual(
+        TOOL_RESULT_TEXT_MAX_BYTES
+      );
+      expect(structuredOf(result)).toBeUndefined();
+    });
   });
 });
