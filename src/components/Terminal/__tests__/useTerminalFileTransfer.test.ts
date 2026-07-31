@@ -15,7 +15,9 @@ const instanceState = vi.hoisted(() => ({
 
 vi.mock("@/clients", () => ({
   terminalClient: {
-    write: vi.fn(),
+    // Typed so call payloads read back as string without a cast — the lint
+    // ratchet counts `no-unsafe-type-assertion` per rule.
+    write: vi.fn<(terminalId: string, data: string) => void>(),
   },
 }));
 
@@ -44,7 +46,7 @@ import {
 /** The payload handed to `terminalClient.write` for the most recent call. */
 function lastWrittenPayload(): string {
   const calls = vi.mocked(terminalClient.write).mock.calls;
-  return calls[calls.length - 1]![1] as string;
+  return calls[calls.length - 1]![1];
 }
 
 describe("IMAGE_EXTENSIONS", () => {
@@ -221,7 +223,7 @@ describe("useTerminalFileTransfer hook", () => {
   });
 
   it("image paste with saveImage failure does not write to terminal", async () => {
-    (window.electron.clipboard.saveImage as ReturnType<typeof vi.fn>).mockRejectedValue(
+    vi.mocked(window.electron.clipboard.saveImage).mockRejectedValue(
       Object.assign(new Error("No image in clipboard"), {
         name: "AppError",
         code: "CLIPBOARD_EMPTY",
@@ -248,7 +250,7 @@ describe("useTerminalFileTransfer hook", () => {
   });
 
   it("image paste escapes paths with spaces", async () => {
-    (window.electron.clipboard.saveImage as ReturnType<typeof vi.fn>).mockResolvedValue({
+    vi.mocked(window.electron.clipboard.saveImage).mockResolvedValue({
       filePath: "/tmp/daintree clipboard/my screenshot.png",
       thumbnailDataUrl: "data:image/png;base64,abc",
     });
@@ -274,7 +276,7 @@ describe("useTerminalFileTransfer hook", () => {
 
   it("locking while the image is still saving suppresses the write", async () => {
     let releaseSave: (value: { filePath: string }) => void = () => {};
-    (window.electron.clipboard.saveImage as ReturnType<typeof vi.fn>).mockReturnValue(
+    vi.mocked(window.electron.clipboard.saveImage).mockReturnValue(
       new Promise<{ filePath: string }>((resolve) => {
         releaseSave = resolve;
       })
@@ -301,7 +303,7 @@ describe("useTerminalFileTransfer hook", () => {
 
   it("re-reads the agent identity across the save, not the one at paste time", async () => {
     let releaseSave: (value: { filePath: string }) => void = () => {};
-    (window.electron.clipboard.saveImage as ReturnType<typeof vi.fn>).mockReturnValue(
+    vi.mocked(window.electron.clipboard.saveImage).mockReturnValue(
       new Promise<{ filePath: string }>((resolve) => {
         releaseSave = resolve;
       })
@@ -328,7 +330,7 @@ describe("useTerminalFileTransfer hook", () => {
 
   it("unmounting while the image is still saving suppresses the write", async () => {
     let releaseSave: (value: { filePath: string }) => void = () => {};
-    (window.electron.clipboard.saveImage as ReturnType<typeof vi.fn>).mockReturnValue(
+    vi.mocked(window.electron.clipboard.saveImage).mockReturnValue(
       new Promise<{ filePath: string }>((resolve) => {
         releaseSave = resolve;
       })
@@ -561,12 +563,12 @@ describe("useTerminalFileTransfer hook", () => {
 
   it("hands onInput the logical text, never the bracket markers", () => {
     instanceState.bracketedPasteMode = true;
-    const onInput = vi.fn();
+    const onInput = vi.fn<(data: string) => void>();
     renderFileTransferHook({ onInput, detectedAgentId: "claude" });
 
     dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
 
-    const forwarded = onInput.mock.calls[0]![0] as string;
+    const forwarded = onInput.mock.calls[0]![0];
     expect(forwarded).toBe(`${formatAtFileToken("/Users/test/a.ts")} `);
     expect(forwarded).not.toContain(BRACKETED_PASTE_START);
     expect(forwarded).not.toContain(BRACKETED_PASTE_END);
