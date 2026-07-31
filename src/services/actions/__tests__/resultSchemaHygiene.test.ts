@@ -21,17 +21,62 @@ import { z } from "zod";
  * matching fails too, so entries cannot outlive the schema they excuse.
  */
 
+/**
+ * Keywords that actually narrow the set of accepted values. Deliberately an
+ * allowlist rather than a list of annotations to ignore: an unknown keyword is
+ * far more likely to be another annotation than a new constraint, and the
+ * denylist form silently passed a root `z.unknown()` because zod stamps
+ * `$schema` on the root node.
+ */
+const CONSTRAINING_KEYWORDS = new Set([
+  "type",
+  "enum",
+  "const",
+  "properties",
+  "required",
+  "additionalProperties",
+  "unevaluatedProperties",
+  "patternProperties",
+  "propertyNames",
+  "minProperties",
+  "maxProperties",
+  "dependentRequired",
+  "dependentSchemas",
+  "items",
+  "prefixItems",
+  "unevaluatedItems",
+  "contains",
+  "minItems",
+  "maxItems",
+  "uniqueItems",
+  "minLength",
+  "maxLength",
+  "pattern",
+  "format",
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "multipleOf",
+  "anyOf",
+  "oneOf",
+  "allOf",
+  "not",
+  "if",
+  "then",
+  "else",
+  "$ref",
+  "$dynamicRef",
+  // `contentSchema` narrows decoded content; `contentEncoding`/`contentMediaType`
+  // are annotations that restrict nothing on their own, so they stay out.
+  "contentSchema",
+]);
+
 /** A node that accepts any value: `true`, or a schema with no constraints. */
 function isPermissive(node: unknown): boolean {
   if (node === true) return true;
   if (node === null || typeof node !== "object" || Array.isArray(node)) return false;
-  const keys = Object.keys(node as Record<string, unknown>);
-  // Annotations describe but never constrain, so `{ description: "..." }` is
-  // just as open as `{}` — a `z.unknown().describe(...)` must not slip through.
-  const constraining = keys.filter(
-    (k) => !["description", "title", "examples", "deprecated", "readOnly", "$comment"].includes(k)
-  );
-  return constraining.length === 0;
+  return !Object.keys(node as Record<string, unknown>).some((k) => CONSTRAINING_KEYWORDS.has(k));
 }
 
 type Finding = { actionId: string; pointer: string };
@@ -53,13 +98,20 @@ const SCHEMA_VALUED = [
   "if",
   "then",
   "else",
+  "contentSchema",
 ] as const;
 
 /** Keywords whose value is an ARRAY of schemas. */
 const SCHEMA_ARRAY_VALUED = ["anyOf", "oneOf", "allOf", "prefixItems"] as const;
 
 /** Keywords whose value is a MAP of name to schema. */
-const SCHEMA_MAP_VALUED = ["properties", "patternProperties", "$defs", "definitions"] as const;
+const SCHEMA_MAP_VALUED = [
+  "properties",
+  "patternProperties",
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+] as const;
 
 /**
  * Recurse only through positions that actually hold schemas. A blanket walk
@@ -309,8 +361,10 @@ async function collectFindings(): Promise<Finding[]> {
         target: "draft-2020-12",
       });
     } catch {
-      // Mirrors zodSchemaToJsonSchema's own catch: an unconvertible schema
-      // publishes no outputSchema at all, so it leaks nothing structurally.
+      // Fails closed. A schema that cannot be rendered still governs dispatch's
+      // parse, so skipping it would hide a permissive node rather than clear
+      // it — and "we could not inspect this" is itself worth failing on.
+      findings.push({ actionId: actionId as string, pointer: "<unconvertible>" });
       continue;
     }
     walk(json, actionId as string, "", findings, new WeakSet());

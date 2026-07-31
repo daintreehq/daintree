@@ -2846,8 +2846,8 @@ describe("ActionService", () => {
     });
 
     it("never echoes the rejected value back in error details", async () => {
-      // The details field crosses IPC to the MCP client, and a rejected result
-      // can hold secrets. Only paths and issue codes may travel.
+      // details crosses IPC to the MCP client, and a rejected result can hold
+      // secrets. Only issue codes and structural depth may travel.
       service.register(
         makeAction("test.noEcho", z.object({ token: z.string() }), {
           token: { nested: "sk-live-SUPERSECRET" },
@@ -2859,7 +2859,37 @@ describe("ActionService", () => {
       expect(res.ok).toBe(false);
       if (res.ok) return;
       expect(JSON.stringify(res.error.details)).not.toContain("sk-live-SUPERSECRET");
-      expect(res.error.details).toEqual(["token: invalid_type"]);
+    });
+
+    it("never echoes a record KEY back in error details", async () => {
+      // Under z.record the issue path segment IS data, not a schema-declared
+      // field name — so a secret used as a key would ride out on the path.
+      service.register(
+        makeAction("test.recordKey", z.record(z.string(), z.string()), {
+          "sk-live-SUPERSECRET": 42,
+        })
+      );
+
+      const res = await service.dispatch("test.recordKey" as ActionId);
+
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe("RESULT_VALIDATION_ERROR");
+      expect(JSON.stringify(res.error.details)).not.toContain("sk-live-SUPERSECRET");
+    });
+
+    it("does not record a rejected dispatch as repeatable or emit a completion event", async () => {
+      // action:dispatched is a completion event and lastAction feeds
+      // action.repeatLast — a dispatch that returned an error is neither.
+      service.register(makeAction("test.notRepeatable", z.object({ id: z.string() }), { id: 1 }));
+
+      const before = service.getLastAction();
+      const res = await service.dispatch("test.notRepeatable" as ActionId, undefined, {
+        source: "user",
+      });
+
+      expect(res.ok).toBe(false);
+      expect(service.getLastAction()).toBe(before);
     });
 
     it("leaves the result untouched when no resultSchema is declared", async () => {

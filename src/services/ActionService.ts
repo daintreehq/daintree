@@ -117,21 +117,33 @@ function zodSchemaToJsonSchema(
 }
 
 /**
- * Summarize a result-validation failure as issue paths and codes ONLY.
+ * Cap on reported issues. A deeply wrong result can produce an issue per row;
+ * the first few identify the mismatch and the rest only inflate a payload that
+ * crosses IPC.
+ */
+const MAX_REPORTED_RESULT_ISSUES = 10;
+
+/**
+ * Summarize a result-validation failure as issue CODES and structural depth.
  *
- * Deliberately drops both the rejected value and zod's rendered message. A
- * result payload can carry secrets (decrypted env vars on project settings,
- * tokens on forge responses), and this summary travels two ways an agent can
- * read: into `ActionError.details`, which crosses IPC to the MCP client, and
- * into the renderer log buffer, which `logs.getAll` exposes as a tool. Echoing
- * the value would re-open the leak this validation exists to close, through a
- * different door. Paths and codes are enough to locate a schema/impl mismatch.
+ * Deliberately drops the rejected value, zod's rendered message, AND the issue
+ * path. Dropping the path is not over-caution: under `z.record(...)` the path
+ * segment IS a key from the data, so a result shaped
+ * `{ "sk-live-abc": 42 }` reports that key verbatim. This summary reaches two
+ * surfaces an agent can read — `ActionError.details`, which crosses IPC to the
+ * MCP client, and the renderer log buffer, which `logs.getAll` serves as a tool
+ * — so a leaked key would re-open the hole this validation exists to close.
+ *
+ * The action id plus code and depth locate the mismatch against a schema the
+ * developer already has. The full prettified error is available in DEV only.
  */
 function summarizeResultIssues(error: z.ZodError): string[] {
-  return error.issues.map((issue) => {
-    const path = issue.path.length > 0 ? issue.path.join(".") : "<root>";
-    return `${path}: ${issue.code}`;
-  });
+  const seen = new Set<string>();
+  for (const issue of error.issues) {
+    seen.add(`${issue.code} at depth ${issue.path.length}`);
+    if (seen.size >= MAX_REPORTED_RESULT_ISSUES) break;
+  }
+  return [...seen];
 }
 
 /**
@@ -517,12 +529,33 @@ export class ActionService {
       // Fails closed, mirroring the argsSchema gate above. A result that
       // violates its own schema means the action is wrong; passing the raw
       // value through would preserve the leak in exactly the case this exists
-      // to catch. The bookkeeping below still runs — `run()` completed and its
-      // side effects happened, so the dispatch is real even when the payload
-      // is not usable.
+      // to catch.
+      //
+      // Returns BEFORE the success-only bookkeeping below. `run()` did execute
+      // and its side effects stand, but `action:dispatched` is contractually a
+      // completion event and `lastAction` feeds `action.repeatLast` — recording
+      // a dispatch whose result was rejected would let a keybinding replay it
+      // and would log a success breadcrumb for a call that returned an error.
       const validatedResult = definition.resultSchema
         ? definition.resultSchema.safeParse(result)
         : undefined;
+      if (validatedResult && !validatedResult.success) {
+        const issues = summarizeResultIssues(validatedResult.error);
+        logWarn("Action result failed its own resultSchema", { actionId, issues });
+        if (import.meta.env.DEV) {
+          // Paths and values are safe on a developer's own machine, and the
+          // path is what actually locates the mismatch.
+          console.warn(
+            `[ActionService] ${actionId} result failed resultSchema:\n${z.prettifyError(validatedResult.error)}`
+          );
+        }
+        const error: ActionError = {
+          code: "RESULT_VALIDATION_ERROR",
+          message: `Action "${actionId}" returned a result that does not match its declared schema`,
+          details: issues,
+        };
+        return { ok: false, error };
+      }
       const durationMs =
         (typeof performance !== "undefined" ? performance.now() : Date.now()) - monotonicStartMs;
       if (
@@ -550,16 +583,6 @@ export class ActionService {
       });
       if (!definition.suppressShortcutHint)
         this.emitShortcutHint(actionId, source, overlayEpochBeforeRun);
-      if (validatedResult && !validatedResult.success) {
-        const issues = summarizeResultIssues(validatedResult.error);
-        logWarn("Action result failed its own resultSchema", { actionId, issues });
-        const error: ActionError = {
-          code: "RESULT_VALIDATION_ERROR",
-          message: `Action "${actionId}" returned a result that does not match its declared schema`,
-          details: issues,
-        };
-        return { ok: false, error };
-      }
       return { ok: true, result: (validatedResult ? validatedResult.data : result) as Result };
     } catch (err) {
       const error: ActionError = {

@@ -29,7 +29,9 @@ export function registerWorktreeQueryActions(
       const result = worktrees.map((w) => ({
         id: w.id,
         path: w.path,
-        branch: w.branch,
+        // `Worktree.branch` is undefined on a detached HEAD, and the summary
+        // shape declares `string | null` like every sibling field here.
+        branch: w.branch ?? null,
         isActive: w.id === activeWorktreeId,
         isMain: w.isMainWorktree ?? false,
         issueNumber: w.issueNumber ?? null,
@@ -69,7 +71,8 @@ export function registerWorktreeQueryActions(
       const result = {
         id: worktree.id,
         path: worktree.path,
-        branch: worktree.branch,
+        // Undefined on a detached HEAD; the summary shape declares `string | null`.
+        branch: worktree.branch ?? null,
         isActive: true,
         isMain: worktree.isMainWorktree ?? false,
         issueNumber: worktree.issueNumber ?? null,
