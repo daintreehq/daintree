@@ -168,7 +168,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
-| Toggle fleet overview | `⌘+⌥+O` | `Ctrl+Alt+O` |
+| View all agents | `⌘+⌥+O` | `Ctrl+Alt+O` |
 | Open project switcher | `⌘+⌥+P` | `Ctrl+Alt+P` |
 | Switch to last project | `⌘+⌥+=` | `Ctrl+Alt+=` |
 

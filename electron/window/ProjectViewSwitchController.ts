@@ -34,11 +34,12 @@ import { setupViewHandlers } from "./ProjectViewHandlers.js";
 import { evictStaleViews } from "./ProjectViewEvictionController.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
+import type { ProjectFocusOnActivateIntent } from "../../shared/types/ipc/project.js";
 
 function consumePendingFocusIntent(
   host: ProjectViewManager,
   projectId: string
-): "focus-next-waiting" | null {
+): ProjectFocusOnActivateIntent | null {
   const pending = host.pendingFocusIntent;
   if (!pending) return null;
   host.pendingFocusIntent = null;
@@ -46,10 +47,10 @@ function consumePendingFocusIntent(
   return pending.intent;
 }
 
-function deliverFocusIntent(view: WebContentsView, intent: "focus-next-waiting"): void {
+function deliverFocusIntent(view: WebContentsView, intent: ProjectFocusOnActivateIntent): void {
   if (view.webContents.isDestroyed()) return;
   // Targeted send to the specific incoming view — never broadcast (#4641, #5010).
-  view.webContents.send(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, { intent });
+  view.webContents.send(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, intent);
 }
 
 export async function performSwitch(

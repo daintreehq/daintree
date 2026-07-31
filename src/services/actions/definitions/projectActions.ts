@@ -6,6 +6,7 @@ import { z } from "zod";
 import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { usePilotStore } from "@/store/pilotStore";
+import { actionService } from "@/services/ActionService";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { notify, EVENT_KIND_TO_SETTING_KEY, EVENT_KIND_LABEL } from "@/lib/notify";
 import type { NotificationEventKind } from "@/lib/notify";
@@ -71,6 +72,8 @@ const agentVisibleProjectSettingsShape: Record<AgentVisibleProjectSettingsKey, z
   defaultWorktreeMode: z.string().optional(),
 };
 
+const openRunArgs = z.object({ runId: z.string(), workspaceId: z.string() });
+
 export function registerProjectActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("project.switcherPalette", () => ({
     id: "project.switcherPalette",
@@ -88,9 +91,9 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("pilot.toggle", () => ({
     id: "pilot.toggle",
-    title: "Toggle fleet overview",
+    title: "View all agents",
     description:
-      "Show every agent run across all projects and scratches, ordered by what needs you first",
+      "Open the overview of every agent running across all projects and scratches, grouped by project",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -98,6 +101,48 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     nonRepeatable: true,
     run: async () => {
       usePilotStore.getState().toggle();
+    },
+  }));
+
+  actions.set("pilot.openRun", () => ({
+    id: "pilot.openRun",
+    title: "Open run",
+    description:
+      "Go to a specific agent run, switching project first when it lives in another workspace",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: openRunArgs,
+    run: async (args: unknown) => {
+      // Parsed rather than asserted: this is the one action whose args arrive
+      // from a click payload, and a parse both narrows the type and rejects a
+      // malformed dispatch instead of trusting it.
+      const { runId, workspaceId } = openRunArgs.parse(args);
+      const projectState = useProjectStore.getState();
+      const currentId = projectState.currentProject?.id ?? null;
+
+      // Already here: focus directly. Going through a project switch would tear
+      // down and rebuild a view that is already the active one.
+      //
+      // Focus BEFORE closing, and only close on success. An agent can exit
+      // between the list rendering and the click, and `panel.focus` rejects on
+      // a panel that no longer exists — closing first would leave the user back
+      // where they started with the overview gone and nothing explaining why.
+      if (workspaceId === currentId) {
+        const result = await actionService.dispatch("panel.focus", { panelId: runId });
+        if (result.ok) usePilotStore.getState().close();
+        return;
+      }
+
+      // Elsewhere: the switch is the only way across, and this context dies
+      // with it — so the target rides along as a one-shot intent that the
+      // incoming view applies once its state has hydrated. Closing first is
+      // right here: the view holding this dialog is about to be replaced.
+      usePilotStore.getState().close();
+      await projectState.switchProject(workspaceId, {
+        focusIntent: { intent: "focus-panel", panelId: runId },
+      });
     },
   }));
 

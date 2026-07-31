@@ -242,6 +242,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- projectActions --
   "pilot.toggle",
+  "pilot.openRun",
   "project.getAll",
   "project.getCurrent",
   "project.add",

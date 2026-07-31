@@ -871,7 +871,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Alt+O",
     scope: "global",
     priority: 0,
-    description: "Toggle fleet overview",
+    description: "View all agents",
     category: "Project",
   },
   {

@@ -1290,7 +1290,7 @@ function ProjectSwitcherFooter({
           {...(pilotShortcut ? { "aria-keyshortcuts": pilotShortcut } : {})}
         >
           {pilotShortcut && <KbdChord shortcut={pilotShortcut} />}
-          <span className={pilotShortcut ? "ml-1.5" : undefined}>View everything</span>
+          <span className={pilotShortcut ? "ml-1.5" : undefined}>All agents</span>
         </button>
         {!isScratchSelected && <span className="text-daintree-text/50">Right-click for more</span>}
       </div>

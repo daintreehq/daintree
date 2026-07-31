@@ -25,8 +25,6 @@ export {
   History, // resume closed session / session history
   Layers, // worktree overview (multiple worktrees, stacked)
   LayoutPanelTop, // workspace plugin category (panels, notes)
-  MessageCircleQuestion, // run waiting on the user for an answer (Pilot's needs-you band)
-  OctagonAlert, // run blocked after a failure, where input may not unblock it
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
   Plug, // agent (integration that plugs into the host system)
   Radar, // the fleet overview itself — everything in flight, seen at once

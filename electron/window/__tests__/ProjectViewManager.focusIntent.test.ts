@@ -249,7 +249,7 @@ describe("ProjectViewManager — pending focus intent", () => {
     const incomingWc = createMockWebContents();
     wcQueue.push(incomingWc);
 
-    manager.setPendingFocusIntent("proj-b", "focus-next-waiting");
+    manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
     const switchPromise = manager.switchTo("proj-b", "/path/b");
     await Promise.resolve();
     await Promise.resolve();
@@ -270,7 +270,7 @@ describe("ProjectViewManager — pending focus intent", () => {
       const slowWc = createMockWebContents();
       wcQueue.push(slowWc);
 
-      manager.setPendingFocusIntent("proj-b", "focus-next-waiting");
+      manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
       const switchPromise = manager.switchTo("proj-b", "/path/b");
       await vi.advanceTimersByTimeAsync(0);
 
@@ -292,7 +292,7 @@ describe("ProjectViewManager — pending focus intent", () => {
     const failWc = createMockWebContents({ autoFinishLoad: false });
     wcQueue.push(failWc);
 
-    manager.setPendingFocusIntent("proj-b", "focus-next-waiting");
+    manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
     const switchPromise = manager.switchTo("proj-b", "/path/b").catch((err) => err);
     await Promise.resolve();
     failWc._fireOnce("did-fail-load", {}, -3, "ERR_FAILED");
@@ -324,7 +324,7 @@ describe("ProjectViewManager — pending focus intent", () => {
     // so the cached fast path fires — must deliver intent synchronously,
     // not via the paint gate (which the cached path skips).
     bWc.send.mockClear();
-    manager.setPendingFocusIntent("proj-b", "focus-next-waiting");
+    manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
     const switchBack = manager.switchTo("proj-b", "/path/b");
     await switchBack;
 
@@ -339,7 +339,7 @@ describe("ProjectViewManager — pending focus intent", () => {
     const incomingWc = createMockWebContents();
     wcQueue.push(incomingWc);
 
-    manager.setPendingFocusIntent("proj-b", "focus-next-waiting");
+    manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
     const switchPromise = manager.switchTo("proj-b", "/path/b");
     await Promise.resolve();
     await Promise.resolve();
@@ -376,7 +376,7 @@ describe("ProjectViewManager — pending focus intent", () => {
     // Same-project switchTo hits the early-return path. The renderer-side
     // action short-circuits before this point, but a race between two
     // concurrent switchTo calls can land here.
-    manager.setPendingFocusIntent("proj-a", "focus-next-waiting");
+    manager.setPendingFocusIntent("proj-a", { intent: "focus-next-waiting" });
     const result = await manager.switchTo("proj-a", "/path/a");
 
     expect(result.isNew).toBe(false);
@@ -401,7 +401,7 @@ describe("ProjectViewManager — pending focus intent", () => {
     // Intent is for "proj-c", but we switch to "proj-b". The intent must
     // not be delivered (different project), and must be cleared so a later
     // unrelated switch can't pick it up.
-    manager.setPendingFocusIntent("proj-c", "focus-next-waiting");
+    manager.setPendingFocusIntent("proj-c", { intent: "focus-next-waiting" });
     const switchPromise = manager.switchTo("proj-b", "/path/b");
     await Promise.resolve();
     await Promise.resolve();

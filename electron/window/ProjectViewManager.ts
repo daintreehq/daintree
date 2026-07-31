@@ -29,6 +29,7 @@ import * as EvictionController from "./ProjectViewEvictionController.js";
 import { hasActiveAgent, initAgentStateCache } from "./ProjectViewAgentStateCache.js";
 import type { PaintGate, PaintGateOutcome, ViewEntry } from "./ProjectViewManagerTypes.js";
 import type { MemoryPressurePolicy } from "../utils/cachedProjectViews.js";
+import type { ProjectFocusOnActivateIntent } from "../../shared/types/ipc/project.js";
 
 // Trailing-edge debounce on freeze entry: the lag-pressure path can flip
 // efficiency on/off without going through the 30 s downgrade hysteresis, so
@@ -258,7 +259,7 @@ export class ProjectViewManager {
   // re-trigger a stale focus jump (#4670 lesson).
   pendingFocusIntent: {
     projectId: string;
-    intent: "focus-next-waiting";
+    intent: ProjectFocusOnActivateIntent;
   } | null = null;
   disposed = false;
   private cachedMemoryTimerCleanup: (() => void) | null = null;
@@ -516,7 +517,7 @@ export class ProjectViewManager {
    * after a cached-view reactivation. Discarded on timeout/cancel/error so a
    * later unrelated switch can't trigger a stale focus jump.
    */
-  setPendingFocusIntent(projectId: string, intent: "focus-next-waiting"): void {
+  setPendingFocusIntent(projectId: string, intent: ProjectFocusOnActivateIntent): void {
     this.pendingFocusIntent = { projectId, intent };
   }
 

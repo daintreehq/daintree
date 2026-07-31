@@ -77,6 +77,7 @@ import type {
   ProjectSwitchPayload,
   ProjectSwitchOutgoingState,
   ProjectWorktreeLoadStatusPayload,
+  ProjectFocusOnActivateIntent,
 } from "./project.js";
 import type { FleetSnapshot } from "./fleet.js";
 import type {
@@ -608,7 +609,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { focusIntent?: "focus-next-waiting" },
+      options?: { focusIntent?: ProjectFocusOnActivateIntent },
     ];
     result: Project;
   };
@@ -1633,7 +1634,7 @@ export interface IpcEventMap {
   // Project events
   "project:on-switch": ProjectSwitchPayload;
   "project:worktree-load-status": ProjectWorktreeLoadStatusPayload;
-  "project:focus-on-activate": { intent: "focus-next-waiting" };
+  "project:focus-on-activate": ProjectFocusOnActivateIntent;
   "project:background-resize": { width: number; height: number };
   "project:stats-updated": ProjectStatusMap;
   "fleet:snapshot-updated": FleetSnapshot;

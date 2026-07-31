@@ -558,7 +558,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     switch(
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { focusIntent?: "focus-next-waiting" }
+      options?: { focusIntent?: import("./project.js").ProjectFocusOnActivateIntent }
     ): Promise<Project>;
     /**
      * Hover-prefetch trigger for the project switcher palette. Fire-and-forget:
@@ -580,7 +580,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: { projectId: string; worktreeLoadError: string | null }) => void
     ): () => void;
     onOpenGitInitDialog(callback: (payload: { directoryPath: string }) => void): () => void;
-    onFocusOnActivate(callback: (payload: { intent: "focus-next-waiting" }) => void): () => void;
+    onFocusOnActivate(
+      callback: (payload: import("./project.js").ProjectFocusOnActivateIntent) => void
+    ): () => void;
     onBackgroundResize(callback: (payload: { width: number; height: number }) => void): () => void;
     onUpdated(callback: (project: Project) => void): () => void;
     onRemoved(callback: (projectId: string) => void): () => void;

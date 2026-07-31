@@ -392,7 +392,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       const slowWc = createMockWebContents();
       wcQueue.push(slowWc);
 
-      manager.setPendingFocusIntent("proj-b", "focus-next-waiting");
+      manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
 
       const switchPromise = manager.switchTo("proj-b", "/path/b");
       await vi.advanceTimersByTimeAsync(0);
@@ -566,7 +566,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     // A pending focus intent forces the legacy "painted" gating: the focus IPC
     // listener isn't mounted until React commits, so the gate must wait for the
     // real paint rather than the bare pre-React skeleton (#4670).
-    manager.setPendingFocusIntent("proj-b", "focus-next-waiting");
+    manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
 
     const switchPromise = manager.switchTo("proj-b", "/path/b");
     await Promise.resolve();
@@ -613,7 +613,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     await Promise.resolve();
 
     // Intent set mid-flight (after the gate was armed for the skeleton channel).
-    manager.setPendingFocusIntent("proj-b", "focus-next-waiting");
+    manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
 
     incomingWc._emitIpcOnce(CHANNELS.APP_SKELETON_PARSED);
     await switchPromise;

@@ -1737,7 +1737,9 @@ function buildElectronApi(): ElectronAPI {
       switch: (
         projectId: string,
         outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState,
-        options?: { focusIntent?: "focus-next-waiting" }
+        options?: {
+          focusIntent?: import("../shared/types/ipc/project.js").ProjectFocusOnActivateIntent;
+        }
       ) => _unwrappingInvoke(CHANNELS.PROJECT_SWITCH, projectId, outgoingState, options),
 
       prefetchHydrate: (projectId: string) =>
@@ -1761,8 +1763,11 @@ function buildElectronApi(): ElectronAPI {
       onOpenGitInitDialog: (callback: (payload: { directoryPath: string }) => void) =>
         _typedOn(CHANNELS.PROJECT_OPEN_GIT_INIT_DIALOG, callback),
 
-      onFocusOnActivate: (callback: (payload: { intent: "focus-next-waiting" }) => void) =>
-        _typedOn(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, callback),
+      onFocusOnActivate: (
+        callback: (
+          payload: import("../shared/types/ipc/project.js").ProjectFocusOnActivateIntent
+        ) => void
+      ) => _typedOn(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, callback),
 
       onBackgroundResize: (callback: (payload: { width: number; height: number }) => void) =>
         _typedOn(CHANNELS.PROJECT_BACKGROUND_RESIZE, callback),
