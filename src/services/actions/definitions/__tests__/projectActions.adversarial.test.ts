@@ -106,6 +106,90 @@ describe("projectActions adversarial", () => {
       const { run } = setupActions();
       await expect(run("project.getSettings", undefined)).rejects.toThrow("No active project");
     });
+
+    // #11524: this action sits on every MCP tier's allowlist, and
+    // ProjectSettingsManager resolves secure storage into `environmentVariables`
+    // in plaintext before returning. Returning the client payload verbatim
+    // handed agents the user's API keys.
+    it("strips secrets and bulk data from the settings it returns", async () => {
+      projectClientMock.getSettings.mockResolvedValue({
+        runCommands: [{ id: "r1", label: "dev", command: "npm run dev" }],
+        worktreePathPattern: "../{project}-{branch}",
+        notificationOverrides: { completedEnabled: false },
+        terminalSettings: { shell: "/bin/zsh", scrollbackLines: 5000 },
+        environmentVariables: { OPENAI_API_KEY: "sk-live-secret", PUBLIC_URL: "https://x.test" },
+        secureEnvironmentVariables: ["OPENAI_API_KEY"],
+        insecureEnvironmentVariables: ["LEGACY_TOKEN"],
+        unresolvedSecureEnvironmentVariables: ["ROTATED_KEY"],
+        projectIconSvg: "<svg>...250KB...</svg>",
+      });
+      const { run } = setupActions();
+
+      const result = await run("project.getSettings", { projectId: "proj-1" });
+
+      // Exact equality rather than key-by-key absence checks: this also proves
+      // nothing unexpected rode along, and that the operational fields survive
+      // untouched.
+      expect(result).toEqual({
+        runCommands: [{ id: "r1", label: "dev", command: "npm run dev" }],
+        worktreePathPattern: "../{project}-{branch}",
+        notificationOverrides: { completedEnabled: false },
+        terminalSettings: { shell: "/bin/zsh", scrollbackLines: 5000 },
+      });
+      // The secret must be absent from the payload entirely, not merely
+      // relocated under another key — serialize and search.
+      expect(JSON.stringify(result)).not.toContain("sk-live-secret");
+    });
+
+    it("drops internal and unclassified fields rather than forwarding them", async () => {
+      projectClientMock.getSettings.mockResolvedValue({
+        runCommands: [],
+        daintreeMcpTier: "system",
+        resourceEnvironments: { prod: { connect: "ssh -i ~/.ssh/id_ed25519 deploy@prod" } },
+        commandOverrides: [{ id: "c1" }],
+        preferredEditor: { command: "code" },
+        fleetSavedScopes: [{ kind: "snapshot", id: "s1" }],
+        gitInitDefaults: { createInitialCommit: true },
+        githubRemote: "origin",
+        devServerDismissed: true,
+        // A field nobody has classified yet: the projection is driven by the
+        // exposure table, so anything new defaults to hidden.
+        someFutureSetting: "should-not-leak",
+      });
+      const { run } = setupActions();
+
+      const result = await run("project.getSettings", { projectId: "proj-1" });
+
+      // Everything above except `runCommands` is classified internal, and the
+      // unclassified key has no entry at all — the projection keeps none of it.
+      expect(result).toEqual({ runCommands: [] });
+      expect(JSON.stringify(result)).not.toContain("id_ed25519");
+    });
+
+    it("returns a fresh object so the client's cached settings stay intact", async () => {
+      const cached = {
+        runCommands: [],
+        environmentVariables: { API_KEY: "sk-live-secret" },
+        projectIconSvg: "<svg />",
+      };
+      projectClientMock.getSettings.mockResolvedValue(cached);
+      const { run } = setupActions();
+
+      const result = await run("project.getSettings", { projectId: "proj-1" });
+
+      expect(result).not.toBe(cached);
+      // projectClient caches and hands the same object to the settings UI, which
+      // needs the full payload — filtering in place would corrupt it.
+      expect(cached.environmentVariables).toEqual({ API_KEY: "sk-live-secret" });
+      expect(cached.projectIconSvg).toBe("<svg />");
+    });
+
+    it("projects an empty object when the project has no persisted settings", async () => {
+      projectClientMock.getSettings.mockResolvedValue(undefined);
+      const { run } = setupActions();
+
+      await expect(run("project.getSettings", { projectId: "proj-1" })).resolves.toEqual({});
+    });
   });
 
   describe("project.detectRunners", () => {

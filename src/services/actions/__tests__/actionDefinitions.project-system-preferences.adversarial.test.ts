@@ -454,15 +454,11 @@ describe("project action hardening", () => {
   });
 
   it("passes through project client queries and dispatches settings events", async () => {
-    mocks.projectClient.getSettings.mockResolvedValueOnce({ theme: "dark" });
     mocks.projectClient.detectRunners.mockResolvedValueOnce(["dev"]);
     mocks.projectClient.getStats.mockResolvedValueOnce({ files: 12 });
     const dispatchEvent = vi.spyOn(window, "dispatchEvent");
     const { service } = buildService(registerProjectActions);
 
-    await expect(
-      service.dispatch("project.getSettings", { projectId: "project-1" })
-    ).resolves.toEqual({ ok: true, result: { theme: "dark" } });
     await expect(
       service.dispatch("project.detectRunners", { projectId: "project-1" })
     ).resolves.toEqual({ ok: true, result: { runners: ["dev"] } });
@@ -474,6 +470,56 @@ describe("project action hardening", () => {
     expect(openSettings).toEqual({ ok: true, result: undefined });
     expect(dispatchEvent).toHaveBeenCalledWith(expect.any(CustomEvent));
     expect(dispatchEvent.mock.calls.at(-1)?.[0].type).toBe("daintree:open-settings-tab");
+  });
+
+  // #11524: project.getSettings is not a passthrough — it projects to an
+  // agent-safe field set. Dispatching through the real ActionService is the
+  // point: nothing between run() and the MCP wire filters the result.
+  it("project.getSettings does not dispatch decrypted secrets or the icon blob", async () => {
+    mocks.projectClient.getSettings.mockResolvedValueOnce({
+      runCommands: [{ id: "r1", label: "dev", command: "npm run dev" }],
+      devServerCommand: "npm run dev",
+      environmentVariables: { STRIPE_SECRET_KEY: "sk-live-secret" },
+      secureEnvironmentVariables: ["STRIPE_SECRET_KEY"],
+      projectIconSvg: "<svg />",
+    });
+    const { service } = buildService(registerProjectActions);
+
+    const result = await service.dispatch("project.getSettings", { projectId: "project-1" });
+
+    expect(result.ok).toBe(true);
+    expect(result).toEqual({
+      ok: true,
+      result: {
+        runCommands: [{ id: "r1", label: "dev", command: "npm run dev" }],
+        devServerCommand: "npm run dev",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("sk-live-secret");
+  });
+
+  it("advertises an MCP output schema that omits the sensitive fields", async () => {
+    const { service } = buildService(registerProjectActions);
+
+    const entry = service.get("project.getSettings");
+
+    // The schema is documentation, not enforcement — but a schema that still
+    // advertised these fields would mean the exposure table had drifted.
+    expect(entry?.outputSchema).toBeDefined();
+    for (const exposed of ["runCommands", "worktreePathPattern", "notificationOverrides"]) {
+      expect(entry?.outputSchema).toHaveProperty(["properties", exposed]);
+    }
+    for (const hidden of [
+      "environmentVariables",
+      "secureEnvironmentVariables",
+      "insecureEnvironmentVariables",
+      "unresolvedSecureEnvironmentVariables",
+      "projectIconSvg",
+      "resourceEnvironments",
+      "daintreeMcpTier",
+    ]) {
+      expect(entry?.outputSchema).not.toHaveProperty(["properties", hidden]);
+    }
   });
 
   it("project.saveSettings merges partial input over current settings", async () => {

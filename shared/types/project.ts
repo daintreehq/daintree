@@ -708,6 +708,119 @@ export const PROJECT_SETTINGS_SHAREABILITY = {
   exposeDaintreeMcpToAgents: "local",
 } as const satisfies Record<keyof ProjectSettings, FieldShareability>;
 
+/**
+ * Whether a `ProjectSettings` field may cross an agent-facing boundary (the
+ * `project.getSettings` action, which is reachable from every MCP tier).
+ *
+ * This is a disclosure policy and is deliberately separate from
+ * `PROJECT_SETTINGS_SHAREABILITY`, which is a persistence policy: `local` does
+ * not imply secret, and `shareable` does not imply safe to hand an agent.
+ */
+export type ProjectSettingsAgentExposure = "exposed" | "internal";
+
+/**
+ * Disclosure classification for each field of `ProjectSettings`.
+ *
+ * The `satisfies Record<keyof ProjectSettings, ...>` constraint makes adding a new
+ * `ProjectSettings` field without classifying it a compile-time error, so the agent
+ * surface cannot widen by accident. Classify new fields `internal` unless an agent
+ * can genuinely act on them.
+ *
+ * `internal` covers four kinds of field:
+ * - Secrets and bulk data: the environment-variable maps (`getProjectSettings` resolves
+ *   secure storage into `environmentVariables` in plaintext) and `projectIconSvg` (250KB
+ *   of markup). `resourceEnvironments` joins them because it stores raw provisioning and
+ *   `connect` shell strings that routinely embed credentials.
+ * - Access-control state: `daintreeMcpTier` (`project.saveSettings` already strips it from
+ *   writes to block self-elevation; it should not be readable either).
+ * - Renderer-only UI state: dismissal flags, editor/viewer preferences, saved fleet scopes.
+ * - Deprecated aliases normalized away on read.
+ */
+export const PROJECT_SETTINGS_AGENT_EXPOSURE = {
+  runCommands: "exposed",
+  environmentVariables: "internal",
+  secureEnvironmentVariables: "internal",
+  insecureEnvironmentVariables: "internal",
+  unresolvedSecureEnvironmentVariables: "internal",
+  excludedPaths: "exposed",
+  projectIconSvg: "internal",
+  defaultWorktreeRecipeId: "exposed",
+  devServerCommand: "exposed",
+  devServerDismissed: "internal",
+  devServerAutoDetected: "internal",
+  cloudSyncWarningDismissed: "internal",
+  devServerLoadTimeout: "exposed",
+  turbopackEnabled: "exposed",
+  copyTreeSettings: "exposed",
+  commandOverrides: "internal",
+  gitInitDefaults: "internal",
+  preferredEditor: "internal",
+  preferredImageViewer: "internal",
+  branchPrefixMode: "exposed",
+  branchPrefixCustom: "exposed",
+  forgeRemote: "exposed",
+  githubRemote: "internal",
+  forgeProviderOverride: "exposed",
+  worktreePathPattern: "exposed",
+  fleetSavedScopes: "internal",
+  terminalSettings: "exposed",
+  notificationOverrides: "exposed",
+  resourceEnvironment: "internal",
+  resourceEnvironments: "internal",
+  activeResourceEnvironment: "exposed",
+  defaultWorktreeMode: "exposed",
+  browserAllowedHosts: "exposed",
+  daintreeMcpTier: "internal",
+  exposeDaintreeMcpToAgents: "internal",
+} as const satisfies Record<keyof ProjectSettings, ProjectSettingsAgentExposure>;
+
+/**
+ * Keys of `ProjectSettings` classified `exposed` in `PROJECT_SETTINGS_AGENT_EXPOSURE`.
+ *
+ * The `-?` is load-bearing: most `ProjectSettings` fields are optional, and indexing a
+ * mapped type that preserves optionality would union `undefined` into the key type.
+ */
+export type AgentVisibleProjectSettingsKey = {
+  [K in keyof ProjectSettings]-?: (typeof PROJECT_SETTINGS_AGENT_EXPOSURE)[K] extends "exposed"
+    ? K
+    : never;
+}[keyof ProjectSettings];
+
+/** The subset of `ProjectSettings` an agent-facing surface may return. */
+export type AgentVisibleProjectSettings = Pick<ProjectSettings, AgentVisibleProjectSettingsKey>;
+
+/**
+ * Build a fresh, agent-safe view of a project's settings.
+ *
+ * Iterating the classification table rather than the input object is what makes this
+ * fail closed: a key present at runtime but absent from the table (a field added to the
+ * persisted payload, or anything a caller tacked on) is dropped rather than forwarded.
+ *
+ * Always returns a new object — callers hand this the renderer's cached settings value,
+ * so filtering in place would corrupt the cache every other consumer reads.
+ *
+ * The result is `Partial` rather than `AgentVisibleProjectSettings` because absent
+ * optional fields are omitted rather than emitted as `undefined`, and because a nullish
+ * payload (a project with nothing persisted yet) projects to an empty object rather
+ * than throwing.
+ */
+export function pickAgentVisibleProjectSettings(
+  settings: ProjectSettings | null | undefined
+): Partial<AgentVisibleProjectSettings> {
+  const visible: Partial<AgentVisibleProjectSettings> = {};
+  if (!settings) return visible;
+  for (const key of Object.keys(PROJECT_SETTINGS_AGENT_EXPOSURE) as Array<keyof ProjectSettings>) {
+    if (PROJECT_SETTINGS_AGENT_EXPOSURE[key] !== "exposed") continue;
+    const value = settings[key];
+    if (value === undefined) continue;
+    // Widening assignment: `value` came straight off `settings[key]`, so the key and
+    // value types line up per-iteration — the cast is the loop's genericity concession,
+    // matching `ProjectIdentityFiles.writeInRepoSettings`.
+    (visible as Record<keyof ProjectSettings, unknown>)[key] = value;
+  }
+  return visible;
+}
+
 /** Tier of Daintree MCP access exposed to agents in a project. */
 export type DaintreeMcpTier = "off" | "workbench" | "action" | "system";
 
