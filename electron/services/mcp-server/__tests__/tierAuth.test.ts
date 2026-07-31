@@ -634,6 +634,23 @@ describe("getTierPermittedActionIds", () => {
   it.each(TIERS)("resolves tier %s to a populated surface", (tier) => {
     expect(getTierPermittedActionIds(tier).size).toBeGreaterThan(0);
   });
+
+  it("keeps every tier surface distinct from every other tier's", () => {
+    const sameMembership = (a: ReadonlySet<string>, b: ReadonlySet<string>) =>
+      a.size === b.size && Array.from(a).every((id) => b.has(id));
+
+    const surfaces = TIERS.map((tier) => ({ tier, ids: getTierPermittedActionIds(tier) }));
+    const collapsed = surfaces.flatMap((left, i) =>
+      surfaces
+        .slice(i + 1)
+        .filter((right) => sameMembership(left.ids, right.ids))
+        .map((right) => `${left.tier}/${right.tier}`)
+    );
+
+    // Naming the collapsed pairs makes a regression point at the two tiers that
+    // merged rather than just reporting "not distinct".
+    expect(collapsed).toEqual([]);
+  });
 });
 
 describe("readSearchLimit", () => {

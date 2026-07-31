@@ -3439,7 +3439,7 @@ describe("sessionServer introspection tier filtering", () => {
     const early = ["actions.search", "actions.getSchema", "terminal.list"];
     const late = ["terminal.getOutput", "terminal.getStatus", "worktree.list"];
     for (const id of [...early, ...late]) {
-      expect(isTierPermitted("workbench", id, false)).toBe(true);
+      expect(isTierPermitted("workbench", id)).toBe(true);
     }
     const denied = (n: number, from: number) =>
       Array.from({ length: n }, (_, i) => entry(`git.denied${from + i}`));
