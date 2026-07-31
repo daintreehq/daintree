@@ -245,11 +245,13 @@ describe("registerForgeDataHandlers", () => {
       appendSpy = vi.spyOn(forgeAuditService, "appendRecord").mockImplementation(() => {});
     });
 
+    // Distinct sentinel counts: with duplicate values a swapped field mapping
+    // in projectCIStatus would still satisfy the assertions below.
     const fullStatus = {
       state: "failure" as const,
-      total: 4,
-      passed: 2,
-      failed: 1,
+      total: 9,
+      passed: 5,
+      failed: 3,
       pending: 1,
       requiredChecksPassing: false,
       freshnessToken: "etag-abc",
@@ -257,26 +259,26 @@ describe("registerForgeDataHandlers", () => {
       rawData: { checkRuns: [{ name: "build", conclusion: "failure" }] },
     };
 
-    it("strips provider transport fields so only the normalized roll-up crosses", async () => {
+    it("strips provider transport fields and maps each count to the same field", async () => {
       fakeImpl.getCIStatus.mockResolvedValue(fullStatus);
       registerForgeDataHandlers();
 
-      const result = (await findHandler("forge:get-ci-status")(null, {
+      const result = await findHandler("forge:get-ci-status")(null, {
         cwd: "/repo",
         prNumber: 900,
-      })) as Record<string, unknown>;
+      });
 
       expect(fakeImpl.getCIStatus).toHaveBeenCalledWith(repoRef, 900);
-      // The exact key set is the contract — an added provider field must not
-      // leak through by default.
-      expect(Object.keys(result).sort()).toEqual([
-        "failed",
-        "passed",
-        "pending",
-        "requiredChecksPassing",
-        "state",
-        "total",
-      ]);
+      // Exact object, not a key list: this pins both that no provider field
+      // leaks through and that no count is transposed on the way out.
+      expect(result).toStrictEqual({
+        state: "failure",
+        total: 9,
+        passed: 5,
+        failed: 3,
+        pending: 1,
+        requiredChecksPassing: false,
+      });
     });
 
     it("preserves requiredChecksPassing:false rather than dropping it as falsy", async () => {
@@ -344,6 +346,92 @@ describe("registerForgeDataHandlers", () => {
       ]);
 
       expect(fakeImpl.getCIStatus).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not share a slot across worktrees for the same PR number", async () => {
+      // The single-flight map is process-wide, so `cwd` in the key is the only
+      // thing keeping two checkouts of the same repo apart. Dropping it would
+      // serve one worktree's CI state for another.
+      fakeImpl.getCIStatus.mockResolvedValue(fullStatus);
+      registerForgeDataHandlers();
+      const handler = findHandler("forge:get-ci-status");
+
+      await Promise.all([
+        handler(null, { cwd: "/repo-a", prNumber: 907 }),
+        handler(null, { cwd: "/repo-b", prNumber: 907 }),
+      ]);
+
+      expect(fakeImpl.getCIStatus).toHaveBeenCalledTimes(2);
+    });
+
+    it("evicts a rejected lookup so the next caller retries and is audited as error", async () => {
+      fakeImpl.getCIStatus.mockRejectedValueOnce(new Error("rate limited"));
+      registerForgeDataHandlers();
+      const handler = findHandler("forge:get-ci-status");
+
+      await expect(handler(null, { cwd: "/repo", prNumber: 908 })).rejects.toThrow("rate limited");
+      expect(appendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          methodName: "getCIStatus",
+          result: "error",
+          errorMessage: "rate limited",
+        })
+      );
+
+      fakeImpl.getCIStatus.mockResolvedValue(fullStatus);
+      await handler(null, { cwd: "/repo", prNumber: 908 });
+      // A failed lookup must not be cached as the in-flight answer.
+      expect(fakeImpl.getCIStatus).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ["undefined", undefined],
+      ["a non-object", "green"],
+      ["an unknown state", { ...fullStatus, state: "banana" }],
+      ["a fractional count", { ...fullStatus, total: 1.5 }],
+      ["a negative count", { ...fullStatus, failed: -1 }],
+      ["a missing count", { state: "success", total: 1, passed: 1, failed: 0 }],
+    ])("rejects %s from the provider as an error, not a missing PR", async (_label, bad) => {
+      // Providers are plugin-supplied and this action is reachable by external
+      // API-key callers, so off-contract output must surface as an error rather
+      // than be laundered into "PR not found" or forwarded to a strict client.
+      fakeImpl.getCIStatus.mockResolvedValue(bad);
+      registerForgeDataHandlers();
+
+      await expect(
+        findHandler("forge:get-ci-status")(null, { cwd: `/repo-${String(_label)}`, prNumber: 909 })
+      ).rejects.toThrow(/malformed CI status/);
+      expect(appendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ methodName: "getCIStatus", result: "error" })
+      );
+    });
+
+    it("accepts a required-checks-free red PR (state failure with zero counts)", async () => {
+      // Real GitHub output: with no required checks configured the provider
+      // falls back to the raw rollup, so `state` can be 'failure' while every
+      // count is 0. The validator must not treat that as malformed.
+      fakeImpl.getCIStatus.mockResolvedValue({
+        state: "failure",
+        total: 0,
+        passed: 0,
+        failed: 0,
+        pending: 0,
+        rawData: null,
+      });
+      registerForgeDataHandlers();
+
+      const result = await findHandler("forge:get-ci-status")(null, {
+        cwd: "/repo",
+        prNumber: 910,
+      });
+
+      expect(result).toStrictEqual({
+        state: "failure",
+        total: 0,
+        passed: 0,
+        failed: 0,
+        pending: 0,
+      });
     });
 
     it("rejects a non-positive PR number before resolving a provider", async () => {

@@ -670,14 +670,60 @@ function projectCIStatus(status: CIStatus): ForgeCIStatusSummary {
   };
 }
 
+const CI_STATUS_STATES: ReadonlySet<string> = new Set([
+  "success",
+  "failure",
+  "pending",
+  "neutral",
+  "unknown",
+]);
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
 /**
- * Module-scope single-flight for CI status. Unlike the per-registration
- * coalescer in {@link registerForgeDataHandlers}, this one is shared process-wide
- * because CI status is polled from several surfaces at once (worktree dashboard,
- * MCP callers, the review-readiness roll-up) and each duplicate call would
- * otherwise write its own audit record. Holding it at module scope is safe:
- * entries self-evict {@link SINGLE_FLIGHT_TTL_MS} after they settle and
- * immediately on rejection, so nothing survives a project teardown.
+ * Narrow a provider's response to a well-formed {@link CIStatus}, throwing
+ * otherwise. Providers are plugin-supplied, and this action is reachable by
+ * external API-key MCP callers, so a malformed response must not be forwarded:
+ * the advertised MCP output schema is a closed object with a `state` enum, and
+ * a strict client would reject anything off-contract. Throwing here (inside the
+ * audited call) records the problem as an `error` rather than laundering it
+ * into a `not-found`, which is reserved for a literal `null`.
+ *
+ * Returns the narrowed value rather than asserting void so the caller must
+ * consume the result — a void assert is deletable with every test still green.
+ */
+function requireValidCIStatus(value: unknown, prNumber: number): CIStatus {
+  const s = value as Partial<CIStatus> | null | undefined;
+  if (
+    !s ||
+    typeof s !== "object" ||
+    typeof s.state !== "string" ||
+    !CI_STATUS_STATES.has(s.state) ||
+    !isCount(s.total) ||
+    !isCount(s.passed) ||
+    !isCount(s.failed) ||
+    !isCount(s.pending) ||
+    (s.requiredChecksPassing !== undefined && typeof s.requiredChecksPassing !== "boolean")
+  ) {
+    throw new Error(`Forge provider returned a malformed CI status for PR #${prNumber}`);
+  }
+  return s as CIStatus;
+}
+
+/**
+ * Single-flight for CI status, collapsing concurrent duplicate lookups so they
+ * share one provider call and write one audit record.
+ *
+ * Module-scoped because {@link handleForgeGetCIStatus} is registered through the
+ * module-level {@link forgeCapabilityDataNamespace} and so cannot close over the
+ * per-registration coalescer in {@link registerForgeDataHandlers}. In practice
+ * the lifetimes match: IPC handlers are registered once globally
+ * (`electron/window/windowServices.ts`), so that coalescer is already
+ * process-wide too. Keys carry `cwd`, so worktrees never share a slot, and an
+ * entry lives only for the provider call plus {@link SINGLE_FLIGHT_TTL_MS} after
+ * it settles (evicted immediately on rejection).
  */
 const ciStatusSingleFlight = createSingleFlight();
 
@@ -701,12 +747,16 @@ async function handleForgeGetCIStatus(payload: {
         repoName: repoRef.repo,
         argsSummary: summarizeForgeArgs("getCIStatus", prNumber),
       },
-      () => impl.getCIStatus(repoRef, prNumber),
-      // Truthiness, not `=== null`: the contract says `CIStatus | null`, but a
-      // third-party provider returning undefined must not crash the projection.
-      (value) => (value ? "success" : "not-found")
+      async () => {
+        const raw = await impl.getCIStatus(repoRef, prNumber);
+        // Only a literal `null` means "no such PR". Anything else must satisfy
+        // the contract or throw, so it is audited as an error rather than
+        // being reported to the caller as a missing PR.
+        return raw === null ? null : requireValidCIStatus(raw, prNumber);
+      },
+      (value) => (value === null ? "not-found" : "success")
     );
-    return status ? projectCIStatus(status) : null;
+    return status === null ? null : projectCIStatus(status);
   });
 }
 

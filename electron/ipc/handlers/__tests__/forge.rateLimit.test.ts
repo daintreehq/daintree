@@ -147,6 +147,10 @@ describe("forge handlers — rate limiting", () => {
       counts: { issueCount: 0, prCount: 0 },
       source: "memory-cache",
     });
+    // `null` (PR not found) is the only valid no-op CI response — the handler
+    // rejects an undefined provider result as malformed, so this stub must be
+    // explicit rather than relying on the bare mock's undefined.
+    fakeImpl.getCIStatus.mockResolvedValue(null);
     fakeImpl.assignIssue.mockResolvedValue(undefined);
     fakeImpl.unassignIssue.mockResolvedValue(undefined);
     const fakePR = {
@@ -525,9 +529,10 @@ describe("forge handlers — rate limiting", () => {
       {
         channel: CHANNELS.FORGE_GET_CI_STATUS,
         maxCalls: 25,
-        // Distinct PR number per invoke: the CI single-flight is module-scoped,
-        // so reusing one would collapse the guard-throws case into an earlier
-        // call's in-flight promise and skip checkRateLimit entirely.
+        // Safe to reuse one PR number across the spec loops even though the CI
+        // single-flight is module-scoped: checkRateLimit runs before the
+        // coalescer, so a collapsed lookup still exercises the guard. (If the
+        // guard is ever moved inside the single-flight, that stops holding.)
         invoke: (h) => h({}, { cwd, prNumber: 8101 }),
       },
       // token + mutation family: 5/10s (matches github:validate-token / assign-issue)

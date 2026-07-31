@@ -1562,6 +1562,32 @@ describe("McpServerService", () => {
       expect(ids).toContain("worktree.reviewReadiness");
     });
 
+    it.each(["forge.getCIStatus", "worktree.reviewReadiness"])(
+      "external tier can actually CALL %s, not merely list it (#11544)",
+      async (actionId) => {
+        // listTools and callTool authorize through different functions
+        // (shouldExposeTool vs isTierPermitted), so advertising a tool does not
+        // by itself prove an external caller can invoke it.
+        const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+          ok: true,
+          result: { dispatched: payload.actionId },
+        }));
+        const { window } = createMockWindow({
+          getManifest: tierManifest,
+          dispatchAction: dispatchMock,
+        });
+
+        await service.start(window);
+        const { client, transport } = await connectClient(service.currentPort!);
+        transports.push(transport);
+
+        const res = (await client.callTool({ name: actionId, arguments: {} })) as TextToolResult;
+
+        expect(res.isError).toBeFalsy();
+        expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({ actionId }));
+      }
+    );
+
     it("workbench tier also reaches forge.getCIStatus (it is a read)", async () => {
       paneTokenTiers.set("token-wb", "workbench");
       const { window } = createMockWindow({ getManifest: tierManifest });
