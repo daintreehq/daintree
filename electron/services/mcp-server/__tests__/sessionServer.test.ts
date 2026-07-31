@@ -28,6 +28,7 @@ import {
   minimumPermittingTier,
   unwrapDispatchResult,
 } from "../shared.js";
+import { TOOL_RESULT_TEXT_MAX_BYTES } from "../toolCallResult.js";
 import { SessionBindingError, RendererBridgeUnavailableError } from "../rendererBridge.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
@@ -2737,5 +2738,142 @@ describe("structuredContent for terminal query actions (#10676)", () => {
 
     expect(structuredOf(result)).toBeUndefined();
     expect(JSON.parse(textOf(result))).toEqual(payload);
+  });
+
+  describe("oversized results are capped on the wire (#11526)", () => {
+    function oversizedPayload() {
+      return { terminals: [{ id: "t-1", content: "x".repeat(TOOL_RESULT_TEXT_MAX_BYTES * 2) }] };
+    }
+
+    it("truncates the text body of a dispatched result to the byte budget", async () => {
+      const server = createSessionServer(
+        "sc-oversized",
+        deps("terminal.getOutput", oversizedPayload())
+      );
+      const result = await callTool(server, {
+        name: "terminal.getOutput",
+        arguments: { terminalId: "t-1" },
+      });
+
+      expect(Buffer.byteLength(textOf(result), "utf8")).toBeLessThanOrEqual(
+        TOOL_RESULT_TEXT_MAX_BYTES
+      );
+      expect(textOf(result).startsWith("[Tool result truncated:")).toBe(true);
+    });
+
+    it("drops structuredContent above the cap so the duplicate cannot smuggle the payload", async () => {
+      const server = createSessionServer(
+        "sc-oversized-structured",
+        deps("terminal.list", oversizedPayload())
+      );
+      const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+      expect(structuredOf(result)).toBeUndefined();
+    });
+
+    it("flags a capped result whose tool declares an output schema", async () => {
+      // structuredContent is present exactly when the entry declares an
+      // outputSchema, and a client with that schema rejects a response carrying
+      // neither it nor isError — the notice would never reach the agent.
+      const server = createSessionServer(
+        "sc-oversized-flagged",
+        deps("terminal.list", oversizedPayload())
+      );
+      const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+      expect((result as { isError?: boolean }).isError).toBe(true);
+      expect(textOf(result)).toContain("Tool result truncated");
+    });
+
+    it("leaves a capped result unflagged when the tool declares no output schema", async () => {
+      // Nothing was promised, so nothing is missing — a shortened body is still a
+      // successful call.
+      const server = createSessionServer(
+        "sc-oversized-ok",
+        deps("terminal.list", oversizedPayload(), false)
+      );
+      const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+      expect((result as { isError?: boolean }).isError).not.toBe(true);
+      expect(textOf(result)).toContain("Tool result truncated");
+    });
+
+    it("caps an error envelope whose renderer-supplied details is oversized", async () => {
+      // `details` crosses from the renderer unbounded, so failures reach the
+      // same oversized-response bug the success path just closed.
+      const server = createSessionServer(
+        "sc-oversized-error",
+        fakeDeps({
+          sessionStore: fakeSessionStore("external"),
+          requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list")]),
+          dispatchAction: vi.fn().mockResolvedValue({
+            result: {
+              ok: false,
+              error: {
+                code: "EXECUTION_ERROR",
+                message: "boom",
+                details: { trace: "x".repeat(TOOL_RESULT_TEXT_MAX_BYTES * 2) },
+              },
+            },
+          }),
+        })
+      );
+      const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+      expect((result as { isError?: boolean }).isError).toBe(true);
+      expect(Buffer.byteLength(textOf(result), "utf8")).toBeLessThanOrEqual(
+        TOOL_RESULT_TEXT_MAX_BYTES
+      );
+      expect(textOf(result).startsWith("[Tool result truncated:")).toBe(true);
+    });
+
+    it("keeps the batched-wait short-circuit intact below the cap", async () => {
+      // The only converted call site with no other result-path coverage.
+      const payload = { results: [{ terminalId: "t-1", idle: true }], timedOut: false };
+      const server = createSessionServer(
+        "sc-batch-wait",
+        fakeDeps({
+          sessionStore: fakeSessionStore("external"),
+          requestManifest: vi
+            .fn()
+            .mockResolvedValue([makeManifestEntry("terminal.waitUntilIdleBatch")]),
+          handleWaitUntilIdleBatch: vi.fn().mockResolvedValue(payload),
+        })
+      );
+      const result = await callTool(server, {
+        name: "terminal.waitUntilIdleBatch",
+        arguments: { terminalIds: ["t-1"] },
+      });
+
+      expect(JSON.parse(textOf(result))).toEqual(payload);
+      expect(structuredOf(result)).toEqual(payload);
+    });
+
+    it("caps a main-process short-circuit that attaches structuredContent unconditionally", async () => {
+      // skills.load never consults buildStructuredContent, so it needs the cap
+      // applied at its own return site rather than via the outputSchema gate.
+      const server = createSessionServer(
+        "sc-oversized-skills",
+        fakeDeps({
+          sessionStore: fakeSessionStore("external"),
+          requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("skills.load")]),
+          handleSkillsLoad: vi.fn(() => ({
+            id: "s-1",
+            name: "Oversized",
+            description: "A skill whose markdown body blows the budget",
+            body: "x".repeat(TOOL_RESULT_TEXT_MAX_BYTES * 2),
+          })),
+        })
+      );
+      const result = await callTool(server, {
+        name: "skills.load",
+        arguments: { id: "s-1" },
+      });
+
+      expect(Buffer.byteLength(textOf(result), "utf8")).toBeLessThanOrEqual(
+        TOOL_RESULT_TEXT_MAX_BYTES
+      );
+      expect(structuredOf(result)).toBeUndefined();
+    });
   });
 });

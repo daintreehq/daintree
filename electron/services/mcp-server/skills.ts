@@ -13,6 +13,9 @@ import type { SkillSearchResult, SkillLoadResult } from "../../../shared/types/s
  * unknown skill so the session server maps them to a clean tool error.
  */
 
+/** Longest unknown skill id echoed back in the "no skill found" error. */
+const MAX_ECHOED_SKILL_ID_LENGTH = 128;
+
 function asArgsObject(rawArgs: unknown): Record<string, unknown> {
   if (rawArgs === undefined || rawArgs === null) return {};
   if (typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
@@ -55,9 +58,15 @@ export function handleSkillsLoad(rawArgs: unknown): SkillLoadResult {
 
   const skill = loadPluginSkill(id);
   if (!skill) {
+    // Clamp the echoed id: this message becomes a JSON-RPC error, which bypasses
+    // the `tools/call` response budget entirely, so reflecting the argument
+    // verbatim would let a megabyte-long id produce a megabyte-long error
+    // (#11526). Real skill ids are far shorter than this.
+    const echoed =
+      id.length > MAX_ECHOED_SKILL_ID_LENGTH ? `${id.slice(0, MAX_ECHOED_SKILL_ID_LENGTH)}…` : id;
     throw new McpError(
       ErrorCode.InvalidParams,
-      `No skill found with id "${id}". Use skills.search to discover available skill ids.`
+      `No skill found with id "${echoed}". Use skills.search to discover available skill ids.`
     );
   }
   return skill;

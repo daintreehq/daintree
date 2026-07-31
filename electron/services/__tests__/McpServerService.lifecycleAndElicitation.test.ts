@@ -996,7 +996,7 @@ describe("McpServerService", () => {
       // The self-declared elicitation capability is never exercised.
       expect(onElicit).not.toHaveBeenCalled();
       expect(result.isError).not.toBe(true);
-      expect(result.content[0].text).toContain('"deleted": true');
+      expect(JSON.parse(result.content[0].text)).toEqual({ deleted: true });
       // Exactly one dispatch, sent UNCONFIRMED — the renderer owns the confirm.
       expect(dispatchMock).toHaveBeenCalledTimes(1);
       expect(dispatchMock).toHaveBeenNthCalledWith(

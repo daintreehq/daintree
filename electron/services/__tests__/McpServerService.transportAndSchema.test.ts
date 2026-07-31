@@ -552,7 +552,7 @@ describe("McpServerService", () => {
     );
 
     expect(result.isError).not.toBe(true);
-    expect(result.content[0].text).toContain('"self": "[Circular]"');
+    expect(JSON.parse(result.content[0].text)).toEqual({ ok: true, self: "[Circular]" });
   });
 
   it("routes IPC bounce to the active project view, not the host shell", async () => {
@@ -1051,7 +1051,7 @@ describe("McpServerService", () => {
       };
 
       expect(result.structuredContent).toBeUndefined();
-      expect(result.content[0]?.text).toContain('"foo": "bar"');
+      expect(JSON.parse(result.content[0]!.text)).toMatchObject({ foo: "bar" });
     });
 
     it("warms the manifest cache and emits structuredContent on a cold callTool (no prior listTools)", async () => {
@@ -1085,7 +1085,7 @@ describe("McpServerService", () => {
       };
 
       expect(result.structuredContent).toEqual({ count: 1, label: "cold" });
-      expect(result.content[0]?.text).toContain('"label": "cold"');
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ count: 1, label: "cold" });
     });
 
     it("does not emit structuredContent on failed tool calls", async () => {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { sha256Hex, stableArgsSha256 } from "../pluginMcpHash.js";
+import {
+  safeSerializeToolResult,
+  safeSerializeToolResultCompact,
+} from "../safeSerializeToolResult.js";
 
 describe("sha256Hex", () => {
   it("returns a 64-char lowercase hex digest", () => {
@@ -46,5 +50,16 @@ describe("stableArgsSha256", () => {
     const obj: Record<string, unknown> = { name: "x" };
     obj.self = obj;
     expect(() => stableArgsSha256(obj)).not.toThrow();
+  });
+
+  it("digests the indented serialization, not the compact wire form", () => {
+    // Digests are persisted (TOFU schema pins, audit records), so the byte
+    // layout they were computed over is a compatibility contract. Moving this
+    // to the compact serializer the MCP wire uses would rotate every stored
+    // fingerprint and force spurious re-consent (#11526).
+    const args = { name: "ada", role: "engineer" };
+
+    expect(stableArgsSha256(args)).toEqual(sha256Hex(safeSerializeToolResult(args)));
+    expect(stableArgsSha256(args)).not.toEqual(sha256Hex(safeSerializeToolResultCompact(args)));
   });
 });
