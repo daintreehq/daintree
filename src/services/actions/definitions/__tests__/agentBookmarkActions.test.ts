@@ -82,6 +82,19 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// A record that actually satisfies the service's AgentSessionRecord contract —
+// `{ sessionId }` alone would make the projection emit the required keys as
+// undefined, which `toEqual` hides.
+const VALID_RECORD = {
+  sessionId: "s1",
+  agentId: "claude",
+  worktreeId: "wt-1",
+  title: "T",
+  projectId: "p",
+  savedAt: 5,
+  bookmark: { bookmarkedAt: 9, label: "L" },
+};
+
 describe("session bookmark actions", () => {
   it("bookmarkAndClose captures the pane's metadata, then removes the pane without a second kill", async () => {
     const record = {
@@ -189,7 +202,7 @@ describe("session bookmark actions", () => {
   });
 
   it("list scopes to the explicit projectId, then the context project, and never leaks across projects", async () => {
-    agentSessionHistoryMock.listBookmarks.mockResolvedValue([{ sessionId: "s1" }]);
+    agentSessionHistoryMock.listBookmarks.mockResolvedValue([VALID_RECORD]);
     const actions = setupActions();
 
     // Explicit arg wins.
@@ -208,7 +221,9 @@ describe("session bookmark actions", () => {
       projectId: "ctx",
     });
     expect(agentSessionHistoryMock.listBookmarks).toHaveBeenLastCalledWith({ projectId: "ctx" });
-    expect(wrapped).toEqual({ bookmarks: [{ sessionId: "s1" }], total: 1, hasMore: false });
+    // Strict: the projection must not smuggle in required keys with undefined
+    // values, which `toEqual` would silently ignore.
+    expect(wrapped).toStrictEqual({ bookmarks: [VALID_RECORD], total: 1, hasMore: false });
 
     // No scope at all: returns empty WITHOUT querying — bookmarks stay project-scoped.
     agentSessionHistoryMock.listBookmarks.mockClear();
@@ -220,8 +235,17 @@ describe("session bookmark actions", () => {
   // #11530 — bookmarks are exempt from both the retention window and the
   // per-worktree cap, so the stored set grows without bound; `limit` is the only
   // thing keeping the agent-facing payload finite.
-  it("list truncates to the default limit and reports the untruncated total", async () => {
-    const many = Array.from({ length: 250 }, (_, i) => ({
+  function bookmarkDef(): AnyActionDefinition {
+    const def = setupActions().get("session.bookmarks.list")?.() as AnyActionDefinition | undefined;
+    if (!def) throw new Error("session.bookmarks.list not registered");
+    return def;
+  }
+
+  it("list truncates to exactly the default limit and reports the untruncated total", async () => {
+    // Read the declared default off the schema instead of copying the constant.
+    const { limit: defaultLimit } = bookmarkDef().argsSchema?.parse({}) as { limit: number };
+    const many = Array.from({ length: defaultLimit + 2 }, (_, i) => ({
+      ...VALID_RECORD,
       sessionId: `s${i}`,
       bookmark: { bookmarkedAt: i, label: `L${i}` },
     }));
@@ -229,14 +253,74 @@ describe("session bookmark actions", () => {
     const actions = setupActions();
     const result = (await callAction(actions, "session.bookmarks.list", undefined, {
       projectId: "p",
-    })) as { bookmarks: unknown[]; total: number; hasMore: boolean };
-    expect(result.bookmarks.length).toBeLessThan(many.length);
+    })) as { bookmarks: Array<{ sessionId: string }>; total: number; hasMore: boolean };
+    expect(result.bookmarks.map((b) => b.sessionId)).toEqual(
+      many.slice(0, defaultLimit).map((b) => b.sessionId)
+    );
     expect(result.total).toBe(many.length);
     expect(result.hasMore).toBe(true);
   });
 
+  it("list rejects an over-large limit without querying the journal", async () => {
+    const actions = setupActions();
+    await expect(
+      callAction(actions, "session.bookmarks.list", { limit: 100_000 }, { projectId: "p" })
+    ).rejects.toThrow();
+    expect(agentSessionHistoryMock.listBookmarks).not.toHaveBeenCalled();
+  });
+
+  // Bookmarks never expire, so a project can hold more than the maximum limit —
+  // without offset those sessionIds would be unreachable, and sessionId is the
+  // only handle rename/delete accept.
+  it("list pages past the limit with offset and ends with hasMore false", async () => {
+    const many = Array.from({ length: 5 }, (_, i) => ({
+      ...VALID_RECORD,
+      sessionId: `s${i}`,
+      bookmark: { bookmarkedAt: i, label: `L${i}` },
+    }));
+    agentSessionHistoryMock.listBookmarks.mockResolvedValue(many);
+    const actions = setupActions();
+
+    const page2 = (await callAction(
+      actions,
+      "session.bookmarks.list",
+      { limit: 2, offset: 2 },
+      { projectId: "p" }
+    )) as { bookmarks: Array<{ sessionId: string }>; total: number; hasMore: boolean };
+    expect(page2.bookmarks.map((b) => b.sessionId)).toEqual(["s2", "s3"]);
+    expect(page2).toMatchObject({ total: 5, hasMore: true });
+
+    const tail = (await callAction(
+      actions,
+      "session.bookmarks.list",
+      { limit: 2, offset: 4 },
+      { projectId: "p" }
+    )) as { bookmarks: Array<{ sessionId: string }>; hasMore: boolean };
+    expect(tail.bookmarks.map((b) => b.sessionId)).toEqual(["s4"]);
+    expect(tail.hasMore).toBe(false);
+  });
+
+  it("list reports hasMore false when the result exactly fills the limit", async () => {
+    const many = Array.from({ length: 3 }, (_, i) => ({
+      ...VALID_RECORD,
+      sessionId: `s${i}`,
+      bookmark: { bookmarkedAt: i, label: `L${i}` },
+    }));
+    agentSessionHistoryMock.listBookmarks.mockResolvedValue(many);
+    const actions = setupActions();
+    const exact = (await callAction(
+      actions,
+      "session.bookmarks.list",
+      { limit: many.length },
+      { projectId: "p" }
+    )) as { bookmarks: unknown[]; hasMore: boolean };
+    expect(exact.bookmarks).toHaveLength(many.length);
+    expect(exact.hasMore).toBe(false);
+  });
+
   it("list honours an explicit limit and keeps the newest-first order", async () => {
     const many = Array.from({ length: 8 }, (_, i) => ({
+      ...VALID_RECORD,
       sessionId: `s${i}`,
       bookmark: { bookmarkedAt: i, label: `L${i}` },
     }));

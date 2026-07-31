@@ -1201,13 +1201,13 @@ describe("agentSessionHistory.list (#10854)", () => {
     expect(listMock).toHaveBeenCalledWith(undefined, "proj-1");
   });
 
-  it("prefers an explicit worktreeId over an explicit projectId (narrower wins)", async () => {
+  it("combines an explicit worktreeId and projectId rather than dropping one", async () => {
     const actions = setupActions(makeCallbacks());
     await callAction(actions, "agentSessionHistory.list", {
       worktreeId: "wt-1",
       projectId: "proj-1",
     });
-    expect(listMock).toHaveBeenCalledWith("wt-1", undefined);
+    expect(listMock).toHaveBeenCalledWith("wt-1", "proj-1");
   });
 
   it("falls back to the context's active worktree when no scope arg is given", async () => {
@@ -1222,18 +1222,21 @@ describe("agentSessionHistory.list (#10854)", () => {
     expect(listMock).toHaveBeenCalledWith(undefined, "ctx-proj");
   });
 
-  it("prefers the context's active worktree over its project", async () => {
+  // A worktree id is a normalized absolute path, so the same worktree opened as
+  // its own project journals records under a different projectId. Scoping by the
+  // context's worktree alone would surface that other project's sessions.
+  it("carries BOTH context ids so a shared worktree path can't leak another project", async () => {
     const actions = setupActions(makeCallbacks());
     await callAction(
       actions,
       "agentSessionHistory.list",
       {},
-      { activeWorktreeId: "ctx-wt", projectId: "ctx-proj" }
+      { activeWorktreeId: "/repo/wt-feature", projectId: "ctx-proj" }
     );
-    expect(listMock).toHaveBeenCalledWith("ctx-wt", undefined);
+    expect(listMock).toHaveBeenCalledWith("/repo/wt-feature", "ctx-proj");
   });
 
-  it("prefers an explicit arg over the dispatch context", async () => {
+  it("uses an explicit worktreeId verbatim instead of narrowing it with context", async () => {
     const actions = setupActions(makeCallbacks());
     await callAction(
       actions,
@@ -1242,6 +1245,17 @@ describe("agentSessionHistory.list (#10854)", () => {
       { activeWorktreeId: "ctx-wt", projectId: "ctx-proj" }
     );
     expect(listMock).toHaveBeenCalledWith("arg-wt", undefined);
+  });
+
+  it("uses an explicit projectId verbatim even when the context has a worktree", async () => {
+    const actions = setupActions(makeCallbacks());
+    await callAction(
+      actions,
+      "agentSessionHistory.list",
+      { projectId: "arg-proj" },
+      { activeWorktreeId: "ctx-wt", projectId: "ctx-proj" }
+    );
+    expect(listMock).toHaveBeenCalledWith(undefined, "arg-proj");
   });
 
   it("throws without reading the journal when no scope can be resolved", async () => {
@@ -1259,8 +1273,19 @@ describe("agentSessionHistory.list (#10854)", () => {
     expect(result).toEqual({ sessions: [], total: 0, hasMore: false });
   });
 
-  it("truncates to the default limit and reports the untruncated total", async () => {
-    const many = Array.from({ length: 250 }, (_, i) => ({
+  // Read the declared default off the schema rather than copying the constant,
+  // so the assertion stays exact without pinning the product decision.
+  function declaredDefaults(): { limit: number; offset: number } {
+    const parsed = getDef().argsSchema?.parse({ worktreeId: "wt-1" }) as {
+      limit: number;
+      offset: number;
+    };
+    return parsed;
+  }
+
+  it("truncates to exactly the default limit and reports the untruncated total", async () => {
+    const { limit: defaultLimit } = declaredDefaults();
+    const many = Array.from({ length: defaultLimit + 2 }, (_, i) => ({
       ...SAMPLE_SESSIONS[0],
       sessionId: `sess-${i}`,
     }));
@@ -1268,12 +1293,70 @@ describe("agentSessionHistory.list (#10854)", () => {
     const actions = setupActions(makeCallbacks());
     const result = (await callAction(actions, "agentSessionHistory.list", {
       worktreeId: "wt-1",
-    })) as { sessions: unknown[]; total: number; hasMore: boolean };
-    // Assert the invariant, not the constant: the page is bounded well below
-    // what the bridge returned, and the caller can still see what it's missing.
-    expect(result.sessions.length).toBeLessThan(many.length);
+    })) as { sessions: Array<{ sessionId: string }>; total: number; hasMore: boolean };
+    // Exact prefix — a "return all but one" implementation would still grow
+    // linearly with the journal and must not pass.
+    expect(result.sessions.map((s) => s.sessionId)).toEqual(
+      many.slice(0, defaultLimit).map((s) => s.sessionId)
+    );
     expect(result.total).toBe(many.length);
     expect(result.hasMore).toBe(true);
+  });
+
+  it("reports hasMore false when the result exactly fills the limit", async () => {
+    const many = Array.from({ length: 4 }, (_, i) => ({
+      ...SAMPLE_SESSIONS[0],
+      sessionId: `sess-${i}`,
+    }));
+    listMock.mockResolvedValue(many);
+    const actions = setupActions(makeCallbacks());
+    const exact = (await callAction(actions, "agentSessionHistory.list", {
+      worktreeId: "wt-1",
+      limit: many.length,
+    })) as { sessions: unknown[]; total: number; hasMore: boolean };
+    // `hasMore: total >= limit` would wrongly claim another page exists.
+    expect(exact.sessions).toHaveLength(many.length);
+    expect(exact.hasMore).toBe(false);
+
+    // A limit past the end returns everything and still says there's no more.
+    const over = (await callAction(actions, "agentSessionHistory.list", {
+      worktreeId: "wt-1",
+      limit: many.length + 2,
+    })) as { sessions: unknown[]; hasMore: boolean };
+    expect(over.sessions).toHaveLength(many.length);
+    expect(over.hasMore).toBe(false);
+  });
+
+  it("pages past the limit with offset so no record is unreachable", async () => {
+    const many = Array.from({ length: 5 }, (_, i) => ({
+      ...SAMPLE_SESSIONS[0],
+      sessionId: `sess-${i}`,
+    }));
+    listMock.mockResolvedValue(many);
+    const actions = setupActions(makeCallbacks());
+    const page2 = (await callAction(actions, "agentSessionHistory.list", {
+      worktreeId: "wt-1",
+      limit: 2,
+      offset: 2,
+    })) as { sessions: Array<{ sessionId: string }>; total: number; hasMore: boolean };
+    expect(page2.sessions.map((s) => s.sessionId)).toEqual(["sess-2", "sess-3"]);
+    expect(page2).toMatchObject({ total: 5, hasMore: true });
+
+    // The final page reports no more even though it is shorter than the limit.
+    const tail = (await callAction(actions, "agentSessionHistory.list", {
+      worktreeId: "wt-1",
+      limit: 2,
+      offset: 4,
+    })) as { sessions: Array<{ sessionId: string }>; hasMore: boolean };
+    expect(tail.sessions.map((s) => s.sessionId)).toEqual(["sess-4"]);
+    expect(tail.hasMore).toBe(false);
+
+    // An offset past the end is empty, not an error.
+    const beyond = (await callAction(actions, "agentSessionHistory.list", {
+      worktreeId: "wt-1",
+      offset: 99,
+    })) as { sessions: unknown[]; total: number; hasMore: boolean };
+    expect(beyond).toEqual({ sessions: [], total: 5, hasMore: false });
   });
 
   it("honours an explicit limit and keeps the newest records (bridge order)", async () => {
@@ -1297,15 +1380,17 @@ describe("agentSessionHistory.list (#10854)", () => {
       bookmark: {
         bookmarkedAt: 1_700_000_000_001,
         label: "Pinned auth work",
-        sourceLocation: "grid",
-        agentPresetId: "preset-a",
-        originalPresetId: "preset-b",
+        // Distinct values throughout, and isInputLocked deliberately opposite
+        // to isUsingFallback, so a mis-wired projection can't coincidentally match.
+        sourceLocation: "dock",
+        agentPresetId: "preset-resolved",
+        originalPresetId: "preset-requested",
         isInputLocked: true,
         // Pane-presentation only — must not reach an agent (#11530).
         sourcePanelId: "panel-1",
         titleMode: "custom",
         agentPresetColor: "#ff0000",
-        isUsingFallback: true,
+        isUsingFallback: false,
         fallbackChainIndex: 2,
       },
     };
@@ -1315,16 +1400,44 @@ describe("agentSessionHistory.list (#10854)", () => {
       worktreeId: "wt-1",
     })) as { sessions: Array<{ bookmark?: Record<string, unknown> }> };
     const bookmark = result.sessions[0]?.bookmark ?? {};
-    expect(Object.keys(bookmark).sort()).toEqual([
-      "agentPresetId",
-      "bookmarkedAt",
-      "isInputLocked",
-      "label",
-      "originalPresetId",
-      "sourceLocation",
-    ]);
+    // Whole-object equality, with every retained value distinct and the two
+    // booleans opposite: a projection that swapped agentPresetId with
+    // originalPresetId, hardcoded "grid", or sourced isInputLocked from
+    // isUsingFallback would pass a key-set check but fails here.
+    expect(bookmark).toEqual({
+      bookmarkedAt: 1_700_000_000_001,
+      label: "Pinned auth work",
+      sourceLocation: "dock",
+      agentPresetId: "preset-resolved",
+      originalPresetId: "preset-requested",
+      isInputLocked: true,
+    });
     // The source record is shared with the cache in main — never mutate it.
     expect(bookmarked.bookmark.agentPresetColor).toBe("#ff0000");
+  });
+
+  it("keeps a minimal bookmark to just its required fields", async () => {
+    listMock.mockResolvedValue([
+      { ...SAMPLE_SESSIONS[0], bookmark: { bookmarkedAt: 7, label: "Bare" } },
+    ]);
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agentSessionHistory.list", {
+      worktreeId: "wt-1",
+    })) as { sessions: Array<{ bookmark?: Record<string, unknown> }> };
+    expect(result.sessions[0]?.bookmark).toEqual({ bookmarkedAt: 7, label: "Bare" });
+  });
+
+  it("survives a hand-edited record whose bookmark is null", async () => {
+    // The journal is a plain JSON file and normalizeRecords admits any object
+    // with a string sessionId, so `"bookmark": null` can reach the projection.
+    // It must not take down the whole listing.
+    listMock.mockResolvedValue([{ ...SAMPLE_SESSIONS[0], bookmark: null }]);
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agentSessionHistory.list", {
+      worktreeId: "wt-1",
+    })) as { sessions: Array<Record<string, unknown>> };
+    expect(result.sessions).toHaveLength(1);
+    expect("bookmark" in result.sessions[0]).toBe(false);
   });
 
   it("omits absent optional fields rather than emitting explicit undefined", async () => {
@@ -1369,11 +1482,33 @@ describe("agentSessionHistory.list (#10854)", () => {
     expect(parsed?.success).toBe(false);
   });
 
-  it("resultSchema documents the truncation metadata the action returns", () => {
-    // The schema is advertised as the MCP outputSchema, so omitting these would
-    // leave an agent unable to tell a full listing from a truncated one.
-    const parsed = getDef().resultSchema?.safeParse({ sessions: [] });
-    expect(parsed?.success).toBe(false);
+  it("resultSchema requires BOTH truncation metadata fields", () => {
+    // Advertised as the MCP outputSchema, so an agent reads it to learn whether
+    // a listing can be partial. Each field is checked on its own — asserting
+    // only `{ sessions: [] }` would pass if just one of them were dropped.
+    const schema = getDef().resultSchema;
+    expect(schema?.safeParse({ sessions: [], total: 0, hasMore: false }).success).toBe(true);
+    expect(schema?.safeParse({ sessions: [], hasMore: false }).success).toBe(false);
+    expect(schema?.safeParse({ sessions: [], total: 0 }).success).toBe(false);
+  });
+
+  it("resultSchema advertises the lean bookmark, not the stored one", () => {
+    // The schema doesn't enforce the projection (nothing parses the real
+    // return), but it IS the documentation an agent plans against — it must not
+    // promise fields run() strips.
+    const withStripped = getDef().resultSchema?.safeParse({
+      sessions: [
+        {
+          ...SAMPLE_SESSIONS[0],
+          bookmark: { bookmarkedAt: 1, label: "L", agentPresetColor: "#fff" },
+        },
+      ],
+      total: 1,
+      hasMore: false,
+    }) as { success: boolean; data?: { sessions: Array<{ bookmark?: Record<string, unknown> }> } };
+    // zod strips unknown keys, so a stripped field must not survive parsing.
+    expect(withStripped.success).toBe(true);
+    expect(withStripped.data?.sessions[0]?.bookmark).toEqual({ bookmarkedAt: 1, label: "L" });
   });
 
   it("argsSchema accepts an omitted scope and either scope arg", () => {

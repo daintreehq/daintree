@@ -378,6 +378,16 @@ describe("bookmark mutator handlers", () => {
     await list({}, { worktreeId: "wt-1", projectId: "proj-1" });
     expect(m.listAgentSessions).toHaveBeenLastCalledWith("wt-1", expect.any(String), 30, "proj-1");
 
+    // The ordinary worktree-scoped path: a handler that only forwarded
+    // worktreeId when projectId was also present would break this.
+    await list({}, { worktreeId: "wt-only" });
+    expect(m.listAgentSessions).toHaveBeenLastCalledWith(
+      "wt-only",
+      expect.any(String),
+      30,
+      undefined
+    );
+
     // A project-only scope must not accidentally land in the worktree slot.
     await list({}, { projectId: "proj-2" });
     expect(m.listAgentSessions).toHaveBeenLastCalledWith(
