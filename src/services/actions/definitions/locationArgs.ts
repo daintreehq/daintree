@@ -168,7 +168,7 @@ export function withWorktreeLocation<T extends z.ZodRawShape>(
 ) {
   const { legacy = [], requireSelector = false, pagination } = options;
 
-  const shape: z.ZodRawShape = {
+  const shape: Record<string, z.ZodTypeAny> = {
     worktreeId: worktreeIdField,
     worktreePath: worktreePathField,
   };
@@ -215,7 +215,7 @@ export function withProjectLocation<T extends z.ZodRawShape>(
 ) {
   const { allowPath = true, requireSelector = false } = options;
 
-  const shape: z.ZodRawShape = { projectId: projectIdField };
+  const shape: Record<string, z.ZodTypeAny> = { projectId: projectIdField };
   if (allowPath) shape.projectPath = projectPathField;
 
   return z

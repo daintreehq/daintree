@@ -42,8 +42,8 @@ describe("withWorktreeLocation", () => {
     const props = properties(withWorktreeLocation({ search: z.string().optional() }, { legacy: ["cwd"] }));
 
     expect(Object.keys(props).sort()).toEqual(["cwd", "search", "worktreeId", "worktreePath"]);
-    expect(props.cwd.description).toBe("Legacy alias for `worktreePath`; prefer `worktreePath`.");
-    expect(props.worktreeId.description).toContain("worktree.list");
+    expect(props.cwd?.description).toBe("Legacy alias for `worktreePath`; prefer `worktreePath`.");
+    expect(props.worktreeId?.description).toContain("worktree.list");
   });
 
   it("does not add legacy aliases to tools that never accepted them", () => {
@@ -204,7 +204,7 @@ describe("withPagination", () => {
   it("advertises limit and offset, plus opted-in cursor and legacy skip", () => {
     const props = properties(withPagination({}, { legacy: ["skip"], cursor: true }));
     expect(Object.keys(props).sort()).toEqual(["cursor", "limit", "offset", "skip"]);
-    expect(props.skip.description).toBe("Legacy alias for `offset`; prefer `offset`.");
+    expect(props.skip?.description).toBe("Legacy alias for `offset`; prefer `offset`.");
   });
 
   it("folds skip into offset and strips the alias", () => {

@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import { worktreeClient } from "@/clients";
+import { withWorktreeLocation, requireWorktreePath } from "./locationArgs";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import {
   captureWorktreeTerminalSnapshot,
@@ -46,13 +47,13 @@ export function registerWorktreeCreateActions(
     defineAction({
       id: "worktree.create",
       title: "Create Worktree",
-      description: "Create a new worktree",
+      description:
+        "Create a new worktree. Args: `worktreeId` or `worktreePath` (optional) — the repository to branch from, defaults to the active worktree (`rootPath` is accepted as a legacy alias for `worktreePath`); `options` (required) — baseBranch, newBranch, and the new worktree's path.",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        rootPath: z.string().describe("Root path of the git repository"),
+      argsSchema: withWorktreeLocation({
         options: z
           .object({
             baseBranch: z.string().describe("Branch to base the worktree on"),
@@ -73,10 +74,13 @@ export function registerWorktreeCreateActions(
               .describe('Worktree environment mode ("local" or an environment key)'),
           })
           .describe("Worktree creation options"),
-      }),
+      }, { legacy: ["rootPath"] }),
       resultSchema: z.string(),
-      run: async ({ rootPath, options }) => {
-        const worktreeId = await worktreeClient.create(options, rootPath);
+      run: async ({ options, ...location }, ctx) => {
+        const worktreeId = await worktreeClient.create(
+          options,
+          requireWorktreePath(location, ctx)
+        );
         if (!worktreeId) {
           throw new Error("Failed to create worktree: no worktreeId returned from backend");
         }

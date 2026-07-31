@@ -142,14 +142,14 @@ export interface PaginationOptions {
  * longer be `.extend()`ed, so a tool that paginates *and* takes a location has
  * to assemble one flat shape rather than chaining two builders.
  */
-export function paginationShape(options: PaginationOptions = {}): z.ZodRawShape {
+export function paginationShape(options: PaginationOptions = {}): Record<string, z.ZodTypeAny> {
   const { legacy = [], cursor = false, offset = true, maxLimit } = options;
 
   const limitField = maxLimit
     ? z.number().int().positive().max(maxLimit)
     : z.number().int().positive();
 
-  const shape: z.ZodRawShape = {
+  const shape: Record<string, z.ZodTypeAny> = {
     limit: limitField.optional().describe("Maximum number of items to return."),
   };
   if (offset) {

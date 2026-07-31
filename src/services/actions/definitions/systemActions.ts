@@ -2,6 +2,12 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { defineAction } from "../defineAction";
 import { CopyTreeOptionsSchema, FileSearchPayloadSchema, BuiltInAgentIdSchema } from "./schemas";
+import {
+  withWorktreeLocation,
+  withProjectLocation,
+  requireWorktreePath,
+  resolveProjectLocation,
+} from "./locationArgs";
 import { z } from "zod";
 import {
   artifactClient,
@@ -208,19 +214,16 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "slashCommands.list",
       title: "List Slash Commands",
       description:
-        "List the slash commands available for an agent CLI. Args (all optional): `agentId` — built-in agent id (e.g. 'claude', 'codex'), defaults to 'claude'; `projectPath` — project to scope project-local commands. Returns { commands } — each with id, label, description, scope, agentId, and optional sourcePath/kind. Never errors; returns an empty list when the agent has none.",
+        "List the slash commands available for an agent CLI. Args (all optional): `agentId` — built-in agent id (e.g. 'claude', 'codex'), defaults to 'claude'; `projectId` or `projectPath` — project to scope project-local commands, defaults to the active project. Returns { commands } — each with id, label, description, scope, agentId, and optional sourcePath/kind. Never errors; returns an empty list when the agent has none.",
       category: "agent",
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z
-        .object({
-          agentId: BuiltInAgentIdSchema.optional().describe(
-            "Agent ID. Defaults to 'claude' when omitted."
-          ),
-          projectPath: z.string().optional(),
-        })
-        .optional(),
+      argsSchema: withProjectLocation({
+        agentId: BuiltInAgentIdSchema.optional().describe(
+          "Agent ID. Defaults to 'claude' when omitted."
+        ),
+      }).optional(),
       resultSchema: z.object({
         commands: z.array(
           z.object({
@@ -234,11 +237,11 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           })
         ),
       }),
-      run: async (payload) => {
+      run: async (payload, ctx) => {
         const agentId = payload?.agentId ?? "claude";
         const result = await slashCommandsClient.list({
           agentId,
-          projectPath: payload?.projectPath,
+          projectPath: resolveProjectLocation(payload, ctx).projectPath,
         });
         return { commands: result };
       },
@@ -269,19 +272,20 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     defineAction({
       id: "artifact.applyPatch",
       title: "Apply Patch",
-      description: "Apply a unified diff patch to the filesystem",
+      description:
+        "Apply a unified diff patch to the filesystem. Args: `patchContent` (required); `worktreeId` or `worktreePath` (optional) — the worktree to apply into, defaults to the active one (`cwd` is accepted as a legacy alias for `worktreePath`).",
       category: "artifacts",
       kind: "command",
       danger: "confirm",
       dangerRationale:
         "Writes patch content directly into worktree files via git apply — a shared-state mutation with no automatic inverse; recovery is a manual git checkout of the touched files.",
       scope: "renderer",
-      argsSchema: z.object({
-        patchContent: z.string(),
-        cwd: z.string(),
-      }),
-      run: async (args) => {
-        return await artifactClient.applyPatch(args);
+      argsSchema: withWorktreeLocation({ patchContent: z.string() }, { legacy: ["cwd"] }),
+      run: async ({ patchContent, ...location }, ctx) => {
+        return await artifactClient.applyPatch({
+          patchContent,
+          cwd: requireWorktreePath(location, ctx),
+        });
       },
     })
   );
