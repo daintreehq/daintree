@@ -107,8 +107,7 @@ export function DockLaunchButton({
   // Whitespace alone doesn't filter, so it must not count as "has a query"
   // anywhere — including the two Escape checks, or a stray space would cost the
   // user an extra Escape to close a menu that looks unfiltered.
-  const hasQuery = query.trim().length > 0;
-  const isFiltering = hasQuery;
+  const isFiltering = query.trim().length > 0;
 
   // The content only mounts while open, so this fires exactly on open. Radix's
   // own mount autofocus lands on the first menu item synchronously; the rAF is
@@ -279,7 +278,20 @@ export function DockLaunchButton({
           }
         }}
       >
-        <div className="flex items-center gap-2 px-2 pb-1.5">
+        <div
+          className="flex items-center gap-2 px-2 pb-1.5"
+          // The icon, the gap and the padding are click targets that aren't the
+          // input, and Radix's focus scope wrapper is tabIndex={-1}, so clicking
+          // one parks focus on the menu content: typing then feeds Radix's
+          // typeahead and Escape dead-ends (the content vetoes the close while
+          // only the input clears the query). The input's own mousedown is left
+          // untouched so caret placement and drag-select still work.
+          onMouseDown={(e) => {
+            if (e.target === inputRef.current) return;
+            e.preventDefault();
+            inputRef.current?.focus({ preventScroll: true });
+          }}
+        >
           <Search className="w-3.5 h-3.5 shrink-0 text-text-muted" aria-hidden="true" />
           <input
             ref={inputRef}

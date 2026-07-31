@@ -91,7 +91,7 @@ vi.mock("@/services/ActionService", () => ({
 // Mock UI primitives so the test focuses on this component's behavior, not
 // Radix's pointer-event semantics inside jsdom. Mirrors AgentButton.test.tsx.
 // Radix's real focus/dismiss behaviour (pointer-move focus steal, document-level
-// Escape capture) is covered by e2e/full/panels/core-dock-launcher.spec.ts.
+// Escape capture) is covered by e2e/full/panels/core-dock-launcher-search.spec.ts.
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
   TooltipContent: ({ children }: { children: ReactNode }) => (
@@ -613,6 +613,25 @@ describe("DockLaunchButton", () => {
       // The focus is deferred a frame, so poll rather than racing it — a frame
       // awaited here would be scheduled before the effect's own.
       await waitFor(() => expect(document.activeElement).toBe(searchInput(container)));
+    });
+
+    it("keeps focus in the input when the search row itself is clicked", () => {
+      // Clicking the magnifier, the gap or the row padding used to park focus on
+      // Radix's tabIndex={-1} content, after which typing hit the typeahead and
+      // Escape became a no-op.
+      const { container } = renderButton();
+      const input = searchInput(container);
+      const row = input.parentElement!;
+
+      expect(fireEvent.mouseDown(row)).toBe(false);
+      expect(document.activeElement).toBe(input);
+    });
+
+    it("leaves the input's own mousedown alone so the caret can be placed", () => {
+      // The row handler sees the input's mousedown on the way up; cancelling it
+      // there would kill caret placement and drag-select inside the field.
+      const { container } = renderButton();
+      expect(fireEvent.mouseDown(searchInput(container))).toBe(true);
     });
 
     it("clears the query when the menu closes so the next open starts unfiltered", () => {
