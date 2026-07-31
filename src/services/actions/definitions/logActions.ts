@@ -1,7 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { errorsClient, eventInspectorClient, logsClient, telemetryPreviewClient } from "@/clients";
-import { withPagination, PaginatedResultSchema } from "./schemas";
+import { withPagination, PaginatedResultSchema, decodeIndexCursor } from "./schemas";
 import { useErrorStore } from "@/store/errorStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useEventStore } from "@/store/eventStore";
@@ -341,9 +341,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
         (args as { limit?: number; offset?: number; cursor?: string } | undefined) ?? {};
       // This source pages by index over an in-memory array, so its cursor IS
       // the next offset; an explicit `offset`/`skip` still wins.
-      const cursorOffset = cursor !== undefined ? Number(cursor) : undefined;
-      const start =
-        offset ?? (cursorOffset !== undefined && Number.isFinite(cursorOffset) ? cursorOffset : 0);
+      const start = offset ?? decodeIndexCursor(cursor) ?? 0;
       const allEvents = await eventInspectorClient.getEvents();
       const events = Array.isArray(allEvents) ? allEvents : [];
       const total = events.length;

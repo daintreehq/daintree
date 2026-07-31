@@ -349,7 +349,16 @@ export function resolveProjectLocation(
   ctx: ActionContext
 ): { projectId: string | undefined; projectPath: string | undefined } {
   if (args?.projectId) {
-    const path = getProjectPathIndex()?.get(args.projectId);
+    // Reject only when the index can PROVE the id is unknown. A null index means
+    // the project store has not registered its accessor (never imported in a
+    // unit test, or between a `destroyStoreOrchestrator()` and the next init) —
+    // failing hard there would break callers over a missing wiring rather than a
+    // bad argument, so degrade to the context project instead.
+    const index = getProjectPathIndex();
+    if (!index) {
+      return { projectId: args.projectId, projectPath: ctx.projectPath ?? undefined };
+    }
+    const path = index.get(args.projectId);
     if (!path) {
       throw new Error("Unknown project — no project with that id is open.");
     }

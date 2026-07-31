@@ -168,6 +168,18 @@ describe("resolveProjectLocation", () => {
     expect(() => resolveProjectLocation({ projectId: "nope" }, {})).toThrow(/Unknown project/);
   });
 
+  it("degrades to the context project when no index is registered at all", () => {
+    // A null index means missing wiring (store never imported, or between a
+    // store-orchestrator destroy and the next init) — not a bad argument. It
+    // must not reject an id it simply cannot check.
+    resetStoreAccessorsForTesting();
+    const ctx: ActionContext = { projectId: "proj-active", projectPath: "/projects/active" };
+    expect(resolveProjectLocation({ projectId: "proj-a" }, ctx)).toEqual({
+      projectId: "proj-a",
+      projectPath: "/projects/active",
+    });
+  });
+
   it("falls back to the context project when no selector is given", () => {
     const ctx: ActionContext = { projectId: "proj-active", projectPath: "/projects/active" };
     expect(resolveProjectLocation(undefined, ctx)).toEqual({

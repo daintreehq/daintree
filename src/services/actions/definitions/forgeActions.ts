@@ -26,18 +26,16 @@ import {
 /**
  * The cache keys on the PROJECT ROOT, but these actions resolve their forge
  * target from the caller's location argument — and a linked worktree path
- * matches no cache slot. So when the caller named no location at all, the
- * mutation went to the active worktree's repo, which is the active project:
- * patch that root. An explicitly named location is honored as resolved, since
- * it may point at another repo entirely; if it isn't a project root the patch
- * simply finds nothing.
+ * matches no cache slot.
+ *
+ * So only an explicit PATH is honored as given, because only a path can name a
+ * repo outside this project. Everything else — no location at all, or a
+ * `worktreeId`, which necessarily resolves inside the current project and yields
+ * a linked-worktree path — patches the current project root instead; otherwise
+ * the optimistic assign/unassign update is silently dropped. If an explicit path
+ * isn't a project root the patch simply finds nothing.
  */
 function assigneeCachePath(location: WorktreeLocationArgs, resolvedCwd: string): string | null {
-  // Only an explicit PATH can name a repo outside this project, so only a path
-  // is honored as given. A `worktreeId` necessarily resolves inside the current
-  // project, and resolving it yields a linked-worktree path that matches no
-  // cache slot — treat it like the no-location case and patch the project root,
-  // or the optimistic assign/unassign update is silently dropped.
   if (location.worktreePath || location.cwd) return resolvedCwd;
   return useProjectStore.getState().currentProject?.path ?? null;
 }
