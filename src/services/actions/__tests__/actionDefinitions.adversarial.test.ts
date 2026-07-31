@@ -472,9 +472,10 @@ describe("terminal action hardening", () => {
     expect(mocks.terminalInstanceService.wake).not.toHaveBeenCalled();
   });
 
-  // These three are reachable from the in-app assistant's action tier, so an
-  // unbound agent call would rearrange whatever the user was looking at
-  // (#11532). terminal.toggleDock previously had no terminalId at all.
+  // moveToDock, moveToGrid and toggleDock are reachable from the in-app
+  // assistant's action tier, so an unbound agent call would rearrange whatever
+  // the user was looking at (#11532); toggleDock previously had no terminalId
+  // at all. toggleMaximize is dormant and guarded as defense in depth.
   describe("terminal layout target binding (#11532)", () => {
     function seedGridPair() {
       usePanelStore.setState({
@@ -482,8 +483,11 @@ describe("terminal action hardening", () => {
           focused: createTerminal({ id: "focused" }),
           named: createTerminal({ id: "named" }),
         },
-        panelIds: ["focused", "named"],
+        // "named" leads so terminal.close-style "first visible panel" fallbacks
+        // cannot land on the focused panel by coincidence.
+        panelIds: ["named", "focused"],
         focusedId: "focused",
+        maximizedId: null,
         activeDockTerminalId: null,
       });
     }
@@ -508,6 +512,9 @@ describe("terminal action hardening", () => {
         );
 
         expect(usePanelStore.getState().panelsById.focused?.location).toBe(before);
+        // toggleMaximize moves maximizedId rather than location, so checking
+        // location alone would pass even if it had already run.
+        expect(usePanelStore.getState().maximizedId).toBeNull();
       }
     );
 
@@ -539,12 +546,23 @@ describe("terminal action hardening", () => {
       const actions = buildRegistry(registerTerminalActions);
       const toggleDock = actions.get("terminal.toggleDock")!();
       seedGridPair();
-      useLayoutUndoStore.setState({ undoStack: [], redoStack: [{ panels: [] }] } as never);
+      const pendingRedo = {
+        terminals: [],
+        tabGroups: new Map(),
+        focusedId: null,
+        maximizedId: null,
+        activeDockTerminalId: null,
+      };
+      useLayoutUndoStore.setState({ undoStack: [], redoStack: [pendingRedo] });
 
-      await toggleDock.run({ terminalId: "gone" } as never, { dispatchSource: "agent" } as never);
+      try {
+        await toggleDock.run({ terminalId: "gone" } as never, { dispatchSource: "agent" } as never);
 
-      expect(useLayoutUndoStore.getState().redoStack).toHaveLength(1);
-      expect(useLayoutUndoStore.getState().undoStack).toHaveLength(0);
+        expect(useLayoutUndoStore.getState().redoStack).toEqual([pendingRedo]);
+        expect(useLayoutUndoStore.getState().undoStack).toHaveLength(0);
+      } finally {
+        useLayoutUndoStore.setState({ undoStack: [], redoStack: [] });
+      }
     });
   });
 

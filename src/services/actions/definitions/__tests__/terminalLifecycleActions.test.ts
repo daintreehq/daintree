@@ -585,7 +585,10 @@ describe("agent dispatch target binding (#11532)", () => {
     };
     panelStoreMock.getState.mockImplementation(() => ({
       focusedId,
-      panelIds: ["focused-panel", "explicit-panel"],
+      // "explicit-panel" leads deliberately: terminal.close falls past focus to
+      // the first visible panel, so listing the focused one first would let its
+      // interactive assertion pass even with the focusedId leg removed.
+      panelIds: ["explicit-panel", "focused-panel"],
       panelsById: {
         "focused-panel": {
           id: "focused-panel",
@@ -766,8 +769,10 @@ describe("agent dispatch target binding (#11532)", () => {
   });
 
   it("treats an empty terminalId as naming nothing", async () => {
-    // The helper checks `!terminalId`, so "" has to fail the same way a missing
-    // one does — otherwise it would sail through and resolve from focus.
+    // The helper checks `!terminalId` rather than `== null`, so "" is rejected
+    // like a missing target. It would not retarget focus either way — "" is not
+    // nullish, so `??` keeps it — but it must be a clear error, not a silent
+    // no-op an agent cannot distinguish from success.
     const spies = setGuardState();
     const run = setupActions();
 

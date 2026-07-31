@@ -388,9 +388,10 @@ describe("terminalInputActions adversarial", () => {
       const { run, callbacks } = setupActions();
       (callbacks.getActiveWorktreeId as ReturnType<typeof vi.fn>).mockReturnValue("wt-1");
 
-      // Matched on the distinctive guard sentence, not a bare /terminalId/:
-      // an unguarded destructure would raise a TypeError that also names
-      // terminalId, and would pass a looser assertion without the guard.
+      // Matched on the distinctive guard sentence, not a bare /terminalId/, so
+      // this stays honest if inject's optional-chained read ever becomes a
+      // plain destructure — that raises a TypeError naming terminalId, which a
+      // looser matcher would accept as a guard hit.
       await expect(run("terminal.inject", undefined, { dispatchSource: "agent" })).rejects.toThrow(
         /requires an explicit `terminalId` when dispatched by an agent or MCP client/
       );
