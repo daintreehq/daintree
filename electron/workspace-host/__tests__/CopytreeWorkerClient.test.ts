@@ -63,6 +63,38 @@ describe("CopytreeWorkerClient", () => {
     expect(copyTreeService.generate).not.toHaveBeenCalled();
   });
 
+  it("carries the output destination to the worker", async () => {
+    const { client, worker } = makeClient();
+
+    void client.generate("/root", {}, undefined, "op-1", "/tmp/ctx/bundle.xml");
+
+    expect(worker.postMessage.mock.calls[0][0]).toMatchObject({
+      type: "generate",
+      outputPath: "/tmp/ctx/bundle.xml",
+    });
+  });
+
+  it("carries the output destination onto every in-thread fallback", async () => {
+    // The fallback runs the same service in the host thread. Dropping the
+    // destination here would silently restore the multi-MB string this
+    // parameter exists to avoid (#11528).
+    const worker = new FakeWorker();
+    worker.postMessage.mockImplementation(() => {
+      throw new Error("worker port closed");
+    });
+    const { client } = makeClient(worker);
+
+    await client.generate("/root", {}, undefined, "op-1", "/tmp/ctx/bundle.xml");
+
+    expect(copyTreeService.generate).toHaveBeenCalledWith(
+      "/root",
+      {},
+      undefined,
+      "op-1",
+      "/tmp/ctx/bundle.xml"
+    );
+  });
+
   it("relays worker progress to the caller's onProgress", async () => {
     const { client, worker } = makeClient();
     const onProgress = vi.fn();
@@ -102,7 +134,13 @@ describe("CopytreeWorkerClient", () => {
 
     await expect(client.generate("/root", {}, undefined, "op-1")).resolves.toEqual(inlineResult);
     expect(factory).not.toHaveBeenCalled();
-    expect(copyTreeService.generate).toHaveBeenCalledWith("/root", {}, undefined, "op-1");
+    expect(copyTreeService.generate).toHaveBeenCalledWith(
+      "/root",
+      {},
+      undefined,
+      "op-1",
+      undefined
+    );
   });
 
   it("falls back in-thread when the worker fails to spawn, and stays there", async () => {
@@ -317,7 +355,13 @@ describe("CopytreeWorkerClient", () => {
     const { client } = makeClient(worker);
 
     await expect(client.generate("/root", {}, undefined, "op-1")).resolves.toEqual(inlineResult);
-    expect(copyTreeService.generate).toHaveBeenCalledWith("/root", {}, undefined, "op-1");
+    expect(copyTreeService.generate).toHaveBeenCalledWith(
+      "/root",
+      {},
+      undefined,
+      "op-1",
+      undefined
+    );
 
     await expect(client.testConfig("/root", {}, "op-2")).resolves.toEqual(inlineTestResult);
     expect(copyTreeService.testConfig).toHaveBeenCalledWith("/root", {}, "op-2");

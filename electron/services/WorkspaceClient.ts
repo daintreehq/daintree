@@ -779,9 +779,10 @@ export class WorkspaceClient extends EventEmitter {
   async generateContext(
     rootPath: string,
     options?: CopyTreeOptions,
-    onProgress?: CopyTreeProgressCallback
+    onProgress?: CopyTreeProgressCallback,
+    outputPath?: string
   ): Promise<CopyTreeResult> {
-    return this.copyTree.generateContext(rootPath, options, onProgress);
+    return this.copyTree.generateContext(rootPath, options, onProgress, outputPath);
   }
 
   cancelContext(operationId: string): void {

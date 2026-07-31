@@ -494,6 +494,11 @@ export const CopyTreeOptionsSchema = z
 export const CopyTreeGeneratePayloadSchema = z.object({
   worktreeId: z.string().min(1),
   options: CopyTreeOptionsSchema,
+  // Response shape, not a generation setting — see CopyTreeGeneratePayload.
+  // Note there is deliberately no caller-supplied output path here or in
+  // CopyTreeOptionsSchema: the destination is chosen by the main process, so a
+  // tool call can never turn into an arbitrary file write.
+  includeContent: z.boolean().optional(),
 });
 
 export const CopyTreeGenerateAndCopyFilePayloadSchema = z.object({

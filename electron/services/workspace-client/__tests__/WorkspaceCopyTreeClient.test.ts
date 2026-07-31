@@ -45,6 +45,54 @@ describe("WorkspaceCopyTreeClient", () => {
     });
   });
 
+  describe("generateContext", () => {
+    it("carries the destination to the host so the bundle is written there, not returned", async () => {
+      const sendWithResponse = vi
+        .fn()
+        .mockResolvedValue({ result: { content: "", fileCount: 2, filePath: "/tmp/ctx/a.xml" } });
+      hostA = makeHost({ sendWithResponse });
+      entries[0] = makeEntry(hostA, "/project/a");
+
+      const result = await client.generateContext(
+        "/project/a",
+        { exclude: ["docs/**"] },
+        undefined,
+        "/tmp/ctx/a.xml"
+      );
+
+      expect(sendWithResponse.mock.calls[0][0]).toMatchObject({
+        type: "copytree:generate",
+        rootPath: "/project/a",
+        options: { exclude: ["docs/**"] },
+        outputPath: "/tmp/ctx/a.xml",
+      });
+      expect(result.filePath).toBe("/tmp/ctx/a.xml");
+    });
+
+    it("omits the destination when the caller wants the string back", async () => {
+      const sendWithResponse = vi
+        .fn()
+        .mockResolvedValue({ result: { content: "x", fileCount: 1 } });
+      hostA = makeHost({ sendWithResponse });
+      entries[0] = makeEntry(hostA, "/project/a");
+
+      await client.generateContext("/project/a");
+
+      expect(sendWithResponse.mock.calls[0][0].outputPath).toBeUndefined();
+    });
+
+    it("releases the operation once the generation settles", async () => {
+      const sendWithResponse = vi.fn().mockRejectedValue(new Error("host died"));
+      hostA = makeHost({ sendWithResponse });
+      entries[0] = makeEntry(hostA, "/project/a");
+
+      await expect(client.generateContext("/project/a")).rejects.toThrow("host died");
+
+      expect(client.activeCopyTreeOperations.size).toBe(0);
+      expect(client.copyTreeProgressCallbacks.size).toBe(0);
+    });
+  });
+
   describe("cancelContext", () => {
     it("routes cancel to the host that owns the operation", () => {
       client.activeCopyTreeOperations.set("op-1", "/project/a");
