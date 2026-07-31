@@ -84,9 +84,9 @@ describe("useFileDropGuard", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
-  // The two real destinations stop propagation, so their drops never reach
-  // this listener and the guard cannot cancel a drop that was accepted.
-  it("leaves a drop a destination already claimed alone", () => {
+  // The two real destinations stop propagation, so their events never reach
+  // this listener and the guard cannot countermand a drag they accepted.
+  it("leaves an in-app drag a destination already claimed alone", () => {
     renderHook(() => useFileDropGuard());
 
     const { event, dataTransfer } = createDragEvent("dragover", [FILE_DRAG_MIME]);

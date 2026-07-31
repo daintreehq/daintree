@@ -34,6 +34,28 @@ export function encodeFileDragPaths(paths: readonly string[]): string {
 }
 
 /**
+ * Does this path carry a C0 or C1 control character?
+ *
+ * A terminal's line discipline acts on these before any shell parses the
+ * command, so shell-escaping the argument does not defuse them: ETX reads as
+ * SIGINT whether or not it sits inside quotes. The terminal's own
+ * `isDeliverablePath` already refuses CR, LF and ESC, but the drop handlers are
+ * not the right place to hold this line — this type is settable by anything
+ * that can start a drag, including a page loaded in a Browser panel, so the
+ * payload is untrusted input and must not reach a formatter carrying one.
+ *
+ * A codepoint scan rather than a regex: a control-character class needs literal
+ * control bytes in the source, which `no-control-regex` rejects outright.
+ */
+function hasControlCharacter(path: string): boolean {
+  for (let i = 0; i < path.length; i++) {
+    const code = path.charCodeAt(i);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true;
+  }
+  return false;
+}
+
+/**
  * Reads the payload back at drop time, or `null` if it is not one we wrote.
  *
  * Nothing about a `DataTransfer` is trustworthy enough to skip this: the string
@@ -46,6 +68,11 @@ export function encodeFileDragPaths(paths: readonly string[]): string {
  * could open, since its cwd is not the file browser's base path. Order and
  * duplicates are preserved: dropping the same file twice is a thing a user can
  * mean, exactly as it is for the chip extensions.
+ *
+ * One bad entry rejects the whole list rather than filtering it. A partial drop
+ * is the one outcome a user cannot tell apart from a complete one, and every
+ * payload comes from a single gesture that either means all of its paths or is
+ * not ours at all.
  */
 export function decodeFileDragPaths(serialized: string): string[] | null {
   let parsed: unknown;
@@ -58,6 +85,7 @@ export function decodeFileDragPaths(serialized: string): string[] | null {
   const paths: string[] = [];
   for (const entry of parsed) {
     if (typeof entry !== "string" || entry === "" || !isAbsolute(entry)) return null;
+    if (hasControlCharacter(entry)) return null;
     paths.push(entry);
   }
   return paths;

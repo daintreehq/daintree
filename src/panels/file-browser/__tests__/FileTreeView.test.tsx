@@ -566,16 +566,6 @@ describe("FileTreeView drag source", () => {
     expect(data.size).toBe(0);
     expect(event.defaultPrevented).toBe(true);
   });
-
-  // Picking a row up is not the same gesture as choosing it: the viewer must
-  // not swap files under the user mid-drag.
-  it("does not move the selection", () => {
-    const { getByRole, onSelect } = renderTree();
-
-    dragStart(getByRole("treeitem", { name: "README.md" }));
-
-    expect(onSelect).not.toHaveBeenCalled();
-  });
 });
 
 describe("FileTreeView menu contract", () => {

@@ -298,6 +298,23 @@ describe("useDragDrop", () => {
     expect(insertedToken(dispatch)).toBe("@shot.png");
   });
 
+  // `IMAGE_EXTENSIONS` is anchored, so a real file called `shot.png ` is not an
+  // image. Classifying on the trimmed display name instead would promote it to
+  // a thumbnail chip — and would disagree with the same file dragged in-app,
+  // which has no OS-supplied name to trim.
+  it("does not treat a trailing-space name as an image", async () => {
+    pathForFile.mockReturnValue(`${CWD}/shot.png `);
+    const { dispatch, ref } = fakeView();
+    const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+    await act(async () => {
+      await result.current.handleDrop(dropEvent([fakeFile("shot.png ")]));
+    });
+
+    expect(thumbnailFromPath).not.toHaveBeenCalled();
+    expect(effectValues(dispatch)[0]?.fileName).toBe("shot.png");
+  });
+
   it("does not dispatch when every dropped file resolves to no path", async () => {
     pathForFile.mockReturnValue("");
     const { view, ref } = fakeView();
@@ -544,8 +561,73 @@ describe("useDragDrop", () => {
         await result.current.handleDrop(event);
       });
 
+      // One dispatch, not two: a handler that decoded the payload and then fell
+      // through to the files would satisfy a first-call-only assertion while
+      // inserting everything twice.
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(pathForFile).not.toHaveBeenCalled();
       expect(effectValues(dispatch)).toHaveLength(1);
       expect(insertedToken(dispatch)).toBe("@src/App.tsx");
+    });
+
+    // Crossing CodeMirror's child elements fires nested enter/leave pairs, so
+    // the overlay has to survive the inner leave and clear only on the outer.
+    it("keeps the overlay up across nested enters and clears it on the last leave", () => {
+      const { ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      act(() => {
+        result.current.handleDragEnter(dragEvent([FILE_DRAG_MIME]));
+        result.current.handleDragEnter(dragEvent([FILE_DRAG_MIME]));
+      });
+      expect(result.current.isDragOverFiles).toBe(true);
+
+      act(() => {
+        result.current.handleDragLeave(dragEvent([FILE_DRAG_MIME]));
+      });
+      expect(result.current.isDragOverFiles).toBe(true);
+
+      act(() => {
+        result.current.handleDragLeave(dragEvent([FILE_DRAG_MIME]));
+      });
+      expect(result.current.isDragOverFiles).toBe(false);
+    });
+
+    // Ranges are accumulated against the emitted spelling, and images emit a
+    // bare absolute path while files emit a shortened token. Interleaving them
+    // on this provenance is where an accumulator could drift independently of
+    // the OS branch's own coverage.
+    it("keeps ranges aligned when a dragged image sits between two files", async () => {
+      const { dispatch, ref, head } = fakeView(6);
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      await act(async () => {
+        await result.current.handleDrop(
+          internalDrop([`${CWD}/a.ts`, `${CWD}/shot.png`, `${CWD}/b.ts`])
+        );
+      });
+
+      expect(chipSpellings(dispatch, head).sort()).toEqual(
+        [`${CWD}/shot.png`, "@a.ts", "@b.ts"].sort()
+      );
+    });
+
+    // The pane can be torn down between the drag starting and the drop landing.
+    it("does nothing when the editor is already gone", async () => {
+      const ref = { current: null } as React.RefObject<EditorView | null>;
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+      const event = internalDrop([`${CWD}/src/App.tsx`]);
+
+      act(() => {
+        result.current.handleDragEnter(dragEvent([FILE_DRAG_MIME]));
+      });
+      await act(async () => {
+        await result.current.handleDrop(event);
+      });
+
+      expect(event.dataTransfer.getData).not.toHaveBeenCalled();
+      expect(thumbnailFromPath).not.toHaveBeenCalled();
+      expect(result.current.isDragOverFiles).toBe(false);
     });
   });
 });

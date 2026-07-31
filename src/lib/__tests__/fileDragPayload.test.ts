@@ -71,6 +71,37 @@ describe("fileDragPayload", () => {
     expect(roundTrip(["/repo/App.tsx", "src/App.tsx"])).toBeNull();
   });
 
+  // Nothing stops a page in a Browser panel from writing this type, and the
+  // terminal writes what it decodes straight to a PTY. A line discipline acts
+  // on these before any shell parses the command, so quoting cannot defuse
+  // them — ETX would raise SIGINT from inside a quoted argument.
+  it("rejects paths carrying terminal control characters", () => {
+    const control = (code: number) => `/repo/a${String.fromCharCode(code)}b.ts`;
+    // ETX (Ctrl-C), EOT (Ctrl-D), SUB (Ctrl-Z), BS, TAB, DEL.
+    for (const code of [0x03, 0x04, 0x1a, 0x08, 0x09, 0x7f]) {
+      expect(decodeFileDragPaths(encodeFileDragPaths([control(code)]))).toBeNull();
+    }
+  });
+
+  it("rejects the control characters the terminal already refused", () => {
+    for (const code of [0x0d, 0x0a, 0x1b]) {
+      const path = `/repo/a${String.fromCharCode(code)}b.ts`;
+      expect(decodeFileDragPaths(encodeFileDragPaths([path]))).toBeNull();
+    }
+  });
+
+  // One bad entry takes the whole list with it: a partial drop is the one
+  // outcome the user cannot tell apart from a complete one.
+  it("rejects the whole payload when only one entry is hostile", () => {
+    const hostile = `/repo/a${String.fromCharCode(0x03)}b.ts`;
+    expect(decodeFileDragPaths(encodeFileDragPaths(["/repo/fine.ts", hostile]))).toBeNull();
+  });
+
+  it("keeps ordinary punctuation and unicode in a path", () => {
+    const paths = ["/repo/naïve—file (v2).ts", "/repo/日本語.md"];
+    expect(roundTrip(paths)).toEqual(paths);
+  });
+
   describe("type gates", () => {
     it("recognizes an in-app drag", () => {
       expect(hasInternalFileDrag([FILE_DRAG_MIME])).toBe(true);

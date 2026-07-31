@@ -11,6 +11,18 @@ import { IMAGE_EXTENSIONS } from "../useTerminalFileTransfer";
 import { formatAtFileTokenForCwd } from "../hybridInputParsing";
 import { addImageChip, addFileDropChip } from "../inputEditorExtensions";
 
+/**
+ * A dropped entry, normalized across the two provenances before anything is
+ * resolved. `rawName` is the untrimmed name used to classify images; `fileName`
+ * is what the chip displays and can differ from it.
+ */
+interface DroppedEntry {
+  filePath: string;
+  rawName: string;
+  fileName: string;
+  fileSize: number | undefined;
+}
+
 export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>, cwd: string) {
   const dragDepthRef = useRef(0);
   const [isDragOverFiles, setIsDragOverFiles] = useState(false);
@@ -58,27 +70,30 @@ export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>, c
       //
       // The internal type wins when both are somehow present; decoding it and
       // then also draining `files` would insert every reference twice.
-      const dropped: { filePath: string; fileName: string; fileSize: number | undefined }[] =
-        hasInternalFileDrag(e.dataTransfer.types)
-          ? (decodeFileDragPaths(e.dataTransfer.getData(FILE_DRAG_MIME)) ?? []).map((filePath) => ({
+      const dropped: DroppedEntry[] = hasInternalFileDrag(e.dataTransfer.types)
+        ? (decodeFileDragPaths(e.dataTransfer.getData(FILE_DRAG_MIME)) ?? []).map((filePath) => {
+            const rawName = basename(filePath);
+            return {
               filePath,
-              fileName: basename(filePath) || filePath,
+              rawName,
+              fileName: rawName || filePath,
               fileSize: undefined,
+            };
+          })
+        : Array.from(e.dataTransfer.files)
+            .map((file) => ({
+              filePath: window.electron.webUtils.getPathForFile(file),
+              rawName: file.name,
+              fileSize: file.size,
             }))
-          : Array.from(e.dataTransfer.files)
-              .map((file) => ({
-                filePath: window.electron.webUtils.getPathForFile(file),
-                osName: file.name,
-                fileSize: file.size,
-              }))
-              // A file the OS declines to resolve to a path is not referenceable.
-              .filter((entry) => entry.filePath !== "")
-              .map(({ filePath, osName, fileSize }) => ({
-                filePath,
-                fileName:
-                  osName.trim() || filePath.split(/[/\\]/).filter(Boolean).pop() || filePath,
-                fileSize,
-              }));
+            // A file the OS declines to resolve to a path is not referenceable.
+            .filter((entry) => entry.filePath !== "")
+            .map(({ filePath, rawName, fileSize }) => ({
+              filePath,
+              rawName,
+              fileName: rawName.trim() || filePath.split(/[/\\]/).filter(Boolean).pop() || filePath,
+              fileSize,
+            }));
 
       if (dropped.length === 0) return;
 
@@ -93,11 +108,16 @@ export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>, c
 
       const resolved: ResolvedFile[] = [];
 
-      for (const { filePath, fileName, fileSize } of dropped) {
+      for (const { filePath, rawName, fileName, fileSize } of dropped) {
+        // Classified on the untrimmed name both provenances agree on, never on
+        // the display name: a real file called `shot.png ` is not an image, and
+        // trimming first would make the same file classify one way from Finder
+        // and the other way from the tree.
+        //
         // A dragged folder reaches this too. One whose name ends in an image
         // extension fails the thumbnail and falls back to the file chip, which
         // is the same recovery a corrupt image already takes.
-        if (IMAGE_EXTENSIONS.test(fileName)) {
+        if (IMAGE_EXTENSIONS.test(rawName)) {
           try {
             const { thumbnailDataUrl } =
               await window.electron.clipboard.thumbnailFromPath(filePath);

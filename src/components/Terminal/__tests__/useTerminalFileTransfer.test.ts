@@ -962,6 +962,46 @@ describe("useTerminalFileTransfer hook", () => {
       expect(lastWrittenPayload()).toBe("@src/App.tsx ");
     });
 
+    // The mode is read at drop time, not captured when the listeners were
+    // registered: a program that enables bracketed paste after the pane
+    // mounted must still get a wrapped batch.
+    it("reads the bracketed-paste mode live, not at mount", () => {
+      instanceState.bracketedPasteMode = false;
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      instanceState.bracketedPasteMode = true;
+      dropInternalPaths([`${CWD}/src/App.tsx`]);
+
+      expect(lastWrittenPayload()).toBe(formatWithBracketedPaste("@src/App.tsx "));
+    });
+
+    // Content and delivery are independent. A shell in bracketed-paste mode —
+    // readline enables it — must get a wrapped ABSOLUTE path, so an
+    // implementation that folded the two axes into one flag fails here.
+    it("wraps a shell's absolute path when the shell asked for bracketed paste", () => {
+      instanceState.bracketedPasteMode = true;
+      renderFileTransferHook({ cwdProvider: () => CWD });
+      dropInternalPaths([`${CWD}/src/App.tsx`]);
+
+      expect(lastWrittenPayload()).toBe(
+        formatWithBracketedPaste(`${escapeShellArgOptional(`${CWD}/src/App.tsx`)} `)
+      );
+    });
+
+    // With no managed instance the mode is unknown, so identity decides: an
+    // agent must never be fed raw `@` keystrokes, a shell must never see the
+    // delimiters as literal input.
+    it("falls back to identity when no managed instance answers", () => {
+      instanceState.hasManagedInstance = false;
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      expect(lastWrittenPayload()).toBe(formatWithBracketedPaste("@src/App.tsx "));
+
+      vi.mocked(terminalClient.write).mockClear();
+      renderFileTransferHook({ cwdProvider: () => CWD });
+      dropInternalPaths([`${CWD}/src/App.tsx`]);
+      expect(lastWrittenPayload()).toBe(`${escapeShellArgOptional(`${CWD}/src/App.tsx`)} `);
+    });
+
     it("references a dragged folder", () => {
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
       dropInternalPaths([`${CWD}/src/components`]);
@@ -986,13 +1026,25 @@ describe("useTerminalFileTransfer hook", () => {
       expect(onInput).toHaveBeenCalledWith("@src/App.tsx ");
     });
 
-    // A path carrying CR, LF or ESC has no sanitized form that still points at
-    // the same file, so it is skipped exactly as an OS-dropped one is.
-    it("skips a path that cannot be delivered as terminal input", () => {
+    // An OS drop skips only the undeliverable path and writes the rest,
+    // because its paths came from real files the user picked. This channel is
+    // writable by anything that can start a drag, so a control character is
+    // evidence the payload is not ours and the whole batch is refused — the
+    // terminal never gets the chance to write the "good" half of a forgery.
+    it("writes nothing when any path carries a terminal control character", () => {
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
       dropInternalPaths([`${CWD}/we${String.fromCharCode(10)}ird.ts`, `${CWD}/fine.ts`]);
 
-      expect(lastWrittenPayload().trimEnd()).toBe("@fine.ts");
+      expect(terminalClient.write).not.toHaveBeenCalled();
+    });
+
+    // ETX is the one that matters most: the line discipline raises SIGINT
+    // before any shell parses the argument, so shell-escaping cannot defuse it.
+    it("writes nothing for a path carrying ETX", () => {
+      renderFileTransferHook({ cwdProvider: () => CWD });
+      dropInternalPaths([`${CWD}/a${String.fromCharCode(3)}b.ts`]);
+
+      expect(terminalClient.write).not.toHaveBeenCalled();
     });
 
     it("writes nothing while input is locked", () => {
@@ -1016,6 +1068,26 @@ describe("useTerminalFileTransfer hook", () => {
       dropInternalPaths([`${CWD}/src/App.tsx`]);
 
       expect(window.electron.webUtils.getPathForFile).not.toHaveBeenCalled();
+    });
+
+    // Draining both sources would write every reference twice.
+    it("prefers the in-app payload when files ride along too", () => {
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      const event = new Event("drop", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "dataTransfer", {
+        value: {
+          files: [fileAt("from-os.ts", `${CWD}/from-os.ts`)],
+          types: ["Files", FILE_DRAG_MIME],
+          dropEffect: "none",
+          getData: () => encodeFileDragPaths([`${CWD}/src/App.tsx`]),
+        },
+      });
+      act(() => {
+        container.dispatchEvent(event);
+      });
+
+      expect(vi.mocked(terminalClient.write)).toHaveBeenCalledTimes(1);
+      expect(lastWrittenPayload().trimEnd()).toBe("@src/App.tsx");
     });
 
     it("shows the drop affordance for the in-app type", () => {
@@ -1044,10 +1116,14 @@ describe("useTerminalFileTransfer hook", () => {
     it("refuses the drop with the cursor while input is locked", () => {
       renderFileTransferHook({ isInputLocked: true });
       const { event, dataTransfer } = makeInternalDragEvent("dragover");
+      // Starts at "copy" so a handler that ignored the drag entirely would
+      // leave it there rather than passing by accident.
+      dataTransfer.dropEffect = "copy";
       act(() => {
         container.dispatchEvent(event);
       });
 
+      expect(event.defaultPrevented).toBe(true);
       expect(dataTransfer.dropEffect).toBe("none");
     });
   });
@@ -1063,6 +1139,22 @@ describe("useTerminalFileTransfer hook", () => {
     container.dispatchEvent(event);
 
     expect(window.electron.clipboard.saveImage).not.toHaveBeenCalled();
+    expect(terminalClient.write).not.toHaveBeenCalled();
+  });
+
+  // The paste case above cannot see the four drag listeners, so dropping every
+  // drag cleanup would still pass it.
+  it("removes the drag listeners on unmount", () => {
+    const { unmount } = renderFileTransferHook({ detectedAgentId: "claude" });
+    unmount();
+
+    const { event: over, dataTransfer } = makeInternalDragEvent("dragover");
+    dataTransfer.dropEffect = "copy";
+    container.dispatchEvent(over);
+    container.dispatchEvent(makeInternalDropEvent(encodeFileDragPaths([`${CWD}/src/App.tsx`])));
+
+    expect(over.defaultPrevented).toBe(false);
+    expect(dataTransfer.dropEffect).toBe("copy");
     expect(terminalClient.write).not.toHaveBeenCalled();
   });
 });

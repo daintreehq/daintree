@@ -1190,9 +1190,17 @@ describe("insert file reference", () => {
   });
 
   // The tree's rows are relative, so the drag source (#11576) needs the same
-  // absolute base the menu's own join uses. Passing the re-rooted folder here
-  // instead would double-prefix every dragged path.
+  // absolute base the menu's own join uses.
   it("hands the tree the base path its rows are relative to", () => {
+    renderPane();
+    expect(treeProps.basePath).toBe("/repo");
+  });
+
+  // `row.path` stays relative to the true source root after a re-root, so the
+  // base must not follow the tree down. Joining the two would spell
+  // `/repo/src/src/App.tsx` for every dragged row.
+  it("keeps the base at the source root when the tree is re-rooted", () => {
+    mockPanel.browserRootPath = "src";
     renderPane();
     expect(treeProps.basePath).toBe("/repo");
   });
