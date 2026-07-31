@@ -951,9 +951,9 @@ describe("McpServerService", () => {
     const winA = createMockWindow({
       getManifest: () => [
         createManifestEntry({
-          id: "actions.list",
-          title: "List Actions",
-          description: "Read the action registry",
+          id: "terminal.list",
+          title: "List Terminals",
+          description: "Read the terminal list",
           kind: "query",
         }),
       ],
@@ -963,9 +963,9 @@ describe("McpServerService", () => {
     const winB = createMockWindow({
       getManifest: () => [
         createManifestEntry({
-          id: "actions.list",
-          title: "List Actions",
-          description: "Read the action registry",
+          id: "terminal.list",
+          title: "List Terminals",
+          description: "Read the terminal list",
           kind: "query",
         }),
       ],
@@ -1002,8 +1002,8 @@ describe("McpServerService", () => {
     const b = await connectClient(service.currentPort!, { Authorization: "Bearer help-B" });
     transports.push(b.transport);
 
-    const resA = getTextResult(await a.client.callTool({ name: "actions.list", arguments: {} }));
-    const resB = getTextResult(await b.client.callTool({ name: "actions.list", arguments: {} }));
+    const resA = getTextResult(await a.client.callTool({ name: "terminal.list", arguments: {} }));
+    const resB = getTextResult(await b.client.callTool({ name: "terminal.list", arguments: {} }));
 
     expect(resA.content[0].text).toBe('"from-window-A"');
     expect(resB.content[0].text).toBe('"from-window-B"');
@@ -1228,7 +1228,7 @@ describe("McpServerService", () => {
     transports.push(ext.transport);
 
     const result = getTextResult(
-      await ext.client.callTool({ name: "actions.list", arguments: {} })
+      await ext.client.callTool({ name: "terminal.list", arguments: {} })
     );
 
     // Falls through to getActiveProjectWebContents which returns winA (first
