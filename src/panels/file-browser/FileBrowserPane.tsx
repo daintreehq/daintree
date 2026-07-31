@@ -669,8 +669,9 @@ export function FileBrowserPane({
   }, [rootAbsolutePath, copyRootPath]);
 
   // Hand a row to the agent the user was last talking to, without a drag
-  // (#11577). `basePath` is what makes the token absolute, matching what a
-  // Finder drop into the hybrid input produces.
+  // (#11577). `basePath` turns the tree's relative row into the absolute path
+  // the hook needs; the hook then relativizes it against the destination
+  // agent's cwd, exactly as a Finder drop into that agent's input would.
   const { canInsert: canInsertFileReference, insert: insertFileReference } =
     useInsertFileReference();
   const handleInsertFileReference = useCallback(

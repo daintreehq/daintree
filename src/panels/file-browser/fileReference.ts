@@ -1,4 +1,4 @@
-import { formatAtFileToken } from "@/components/Terminal/hybridInputParsing";
+import { formatAtFileTokenForCwd } from "@/components/Terminal/hybridInputParsing";
 
 /**
  * The file browser's "insert a file reference into an agent" gesture (#11577).
@@ -37,15 +37,21 @@ export function matchesInsertFileReferenceCombo(
  * Appends rather than inserting at a cursor: the gesture fires from the file
  * browser, which has no view of where the caret sits in a sibling panel's
  * editor. Mirrors the hybrid drop path (`useDragDrop`) otherwise — the same
- * `formatAtFileToken` token followed by a trailing space, so the next
+ * `formatAtFileTokenForCwd` token followed by a trailing space, so the next
  * reference or typed word never fuses onto it.
+ *
+ * `cwd` is the DESTINATION agent's, not the file browser's: relativizing
+ * against the terminal that has to open the path is what makes a reference
+ * into its own worktree short and a cross-worktree one fall back to absolute.
+ * `toWorktreeRelative` owns that fallback — a path outside `cwd`, or an empty
+ * `cwd`, passes through untouched.
  *
  * Duplicates are preserved. The chip extensions already handle a repeated
  * path deliberately, and swallowing the second insert would make the gesture
  * look broken when the user meant to reference a file twice.
  */
-export function appendFileReference(draft: string, absolutePath: string): string {
-  const token = formatAtFileToken(absolutePath);
+export function appendFileReference(draft: string, absolutePath: string, cwd: string): string {
+  const token = formatAtFileTokenForCwd(absolutePath, cwd);
   // Only add the separator the draft is missing: trailing whitespace the user
   // typed is theirs, and normalizing it would move their caret's worth of
   // spacing for no reason.

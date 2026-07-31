@@ -151,7 +151,16 @@ export function useInsertFileReference(): InsertFileReference {
     // (#11147).
     const projectId = useProjectStore.getState().currentProject?.id;
     const draft = inputStore.getDraftInput(resolvedId, projectId);
-    inputStore.setDraftInput(resolvedId, appendFileReference(draft, absolutePath), projectId);
+    // The token is relativized against the TARGET's cwd, not the browser's
+    // base path: that is what a drop into this agent would produce, and it is
+    // what makes a reference to another worktree stay absolute. `resolveInsertTargetId`
+    // already guarantees a pty panel; the narrow is for the type, not a case.
+    const targetCwd = isPtyPanel(target) ? (target.cwd ?? "") : "";
+    inputStore.setDraftInput(
+      resolvedId,
+      appendFileReference(draft, absolutePath, targetCwd),
+      projectId
+    );
     inputStore.bumpExternalDraftRevision();
     // Deliberately not `recordLastTypedAgentTarget`: this is not the user
     // typing into that agent, and recording it would let the file browser

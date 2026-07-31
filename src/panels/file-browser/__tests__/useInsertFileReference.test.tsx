@@ -108,7 +108,7 @@ describe("useInsertFileReference — target resolution", () => {
       result.current.insert("/repo/a.ts");
     });
 
-    expect(inputState.setDraftInput).toHaveBeenCalledWith("t-2", "@/repo/a.ts ", "proj-1");
+    expect(inputState.setDraftInput).toHaveBeenCalledWith("t-2", "@a.ts ", "proj-1");
   });
 
   it("falls back to the sole open agent when nothing was typed yet", () => {
@@ -116,7 +116,7 @@ describe("useInsertFileReference — target resolution", () => {
     act(() => {
       result.current.insert("/repo/a.ts");
     });
-    expect(inputState.setDraftInput).toHaveBeenCalledWith("t-1", "@/repo/a.ts ", "proj-1");
+    expect(inputState.setDraftInput).toHaveBeenCalledWith("t-1", "@a.ts ", "proj-1");
   });
 
   it("refuses rather than guessing between two agents with no history", () => {
@@ -205,7 +205,22 @@ describe("useInsertFileReference — writing", () => {
     act(() => {
       result.current.insert("/repo/a.ts");
     });
-    expect(inputState.setDraftInput).toHaveBeenCalledWith("t-1", "look at @/repo/a.ts ", "proj-1");
+    expect(inputState.setDraftInput).toHaveBeenCalledWith("t-1", "look at @a.ts ", "proj-1");
+  });
+
+  it("relativizes against the destination agent's cwd, not the browser's worktree", () => {
+    // Two agents in different worktrees: the token has to be readable from the
+    // one that receives it, which is the recorded target.
+    seedPanels(agentPanel("t-1"), agentPanel("t-2", { cwd: "/other" }));
+    inputState.lastTypedAgentTarget = { workspaceId: WORKSPACE_ID, terminalId: "t-2" };
+
+    const { result } = renderHook(() => useInsertFileReference());
+    act(() => {
+      result.current.insert("/repo/a.ts");
+    });
+    // Outside /other, so the absolute form survives — a relative token would
+    // name a file that agent cannot open.
+    expect(inputState.setDraftInput).toHaveBeenCalledWith("t-2", "@/repo/a.ts ", "proj-1");
   });
 
   it("bumps the external revision exactly once so the editor resyncs", () => {
