@@ -266,7 +266,7 @@ Three axes are independent — do not infer one from another:
 
 ### Forge reads (`workbench` tier)
 
-All six are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline) and in `MCP_TOOL_ALLOWLIST`, so they are reachable at every tier including `external`. All are `kind:"query"`, `danger:"safe"`, on the `standard` bucket, and not deduped.
+All seven are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline) and in `MCP_TOOL_ALLOWLIST`, so they are reachable at every tier including `external`. All are `kind:"query"`, `danger:"safe"`, on the `standard` bucket, and not deduped.
 
 | Action ID | Key args |
 | --- | --- |
@@ -274,6 +274,7 @@ All six are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline) and in `MCP_
 | `forge.listIssues` | `search?`, `state?`, `perPage?`, `sort?`, `direction?`, `cursor?`, `view?`, `bypassCache?`, `cwd?` |
 | `forge.listPRs` | `state?`, `perPage?`, `sort?`, `direction?`, `cursor?`, `view?`, `bypassCache?`, `cwd?` (no `search`) |
 | `forge.getIssue` | `issueNumber`, `cwd?` |
+| `forge.listIssueComments` | `issueNumber`, `cursor?`, `perPage?`, `cwd?` |
 | `forge.getPR` | `prNumber`, `cwd?` |
 | `forge.getCIStatus` | `prNumber`, `cwd?` |
 
