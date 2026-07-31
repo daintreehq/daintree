@@ -33,6 +33,7 @@ import { registerWorktreeActions } from "./definitions/worktreeActions";
 import { registerWorktreeSessionActions } from "./definitions/worktreeSessionActions";
 import { registerWorktreeBulkActions } from "./definitions/worktreeBulkActions";
 import { registerWorkflowActions } from "./definitions/workflowActions";
+import { registerProjectCheckActions } from "./definitions/projectCheckActions";
 import { registerSkillActions } from "./definitions/skillActions";
 
 export type { ActionCallbacks, ActionRegistry } from "./actionTypes";
@@ -62,6 +63,7 @@ export function createActionDefinitions(
   registerForgeActions(actions, callbacks);
   registerGitActions(actions, callbacks);
   registerSystemActions(actions, callbacks);
+  registerProjectCheckActions(actions, callbacks);
   registerSkillActions(actions, callbacks);
   registerWatchdogActions(actions);
   registerLogActions(actions, callbacks);

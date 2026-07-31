@@ -893,9 +893,14 @@ describe("McpServerService", () => {
       }),
       createManifestEntry({
         id: "workflow.prepBranchForReview" as ActionId,
-        title: "Prep Branch for Review",
+        title: "Inspect Branch for Review",
         description: "Macro: inspect staging status and detected runners",
         kind: "query",
+      }),
+      createManifestEntry({
+        id: "project.runCheck" as ActionId,
+        title: "Run Project Check",
+        description: "Run a detected runner and return its exit code",
       }),
       // Renderer-only primitives included in the manifest so the
       // NEVER_EXPOSED_VIA_MCP absence loops below catch regressions: a

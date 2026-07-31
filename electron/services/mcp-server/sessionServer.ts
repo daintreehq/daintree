@@ -78,6 +78,7 @@ const HELP_DISPLAY_IMAGE_TOOL = "help.displayImage";
 const BROWSER_CAPTURE_SCREENSHOT_TOOL = "browser.captureScreenshot";
 const SKILLS_SEARCH_TOOL = "skills.search";
 const SKILLS_LOAD_TOOL = "skills.load";
+const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
 
 /**
  * Narrow a `browser.captureScreenshot` result to its base64-PNG payload so the
@@ -181,6 +182,18 @@ export interface SessionServerDeps {
    * on invalid args or an unknown skill id.
    */
   handleSkillsLoad: (rawArgs: unknown) => import("../../../shared/types/skills.js").SkillLoadResult;
+  /**
+   * Execute `project.runCheck` in the main process (#11548). A check spawns a
+   * real child process and reports its exit code, so it needs main-process
+   * access, a cancellable `AbortSignal` (which cannot cross IPC), and a wait
+   * far longer than the 30s renderer-dispatch wall. Throws {@link McpError} on
+   * invalid args; throws for any reason the check could not start, and resolves
+   * with `passed: false` when it ran and failed.
+   */
+  handleProjectRunCheck: (
+    rawArgs: unknown,
+    signal: AbortSignal
+  ) => Promise<import("../../../shared/types/projectCheck.js").ProjectCheckRunResult>;
   appendAuditRecord: (input: {
     toolId: string;
     sessionId: string;
@@ -312,6 +325,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     handleWaitUntilIdleBatch: waitUntilIdleBatch,
     handleSkillsSearch,
     handleSkillsLoad,
+    handleProjectRunCheck,
     appendAuditRecord,
     getCachedManifest,
     notifyTierMismatch,
@@ -761,6 +775,56 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: EXECUTION_ERROR_CODE,
               message: formatErrorMessage(err, `${actionId} failed`),
+            });
+          }
+        }
+
+        // Short-circuit: project.runCheck runs entirely in the main process
+        // (#11548). The action manifest entry (renderer) carries schema, tier,
+        // and audit metadata, but execution must stay here because (a) it
+        // spawns a real child process and reads its exit code, (b) the MCP
+        // AbortSignal can't cross IPC — without it a runaway suite could never
+        // be cancelled — and (c) renderer dispatch has a 30s wall, shorter than
+        // almost any real test run. Same shape as the waitUntilIdle branch;
+        // audit + strip-settle unify via the shared `finally`.
+        if (actionId === PROJECT_RUN_CHECK_TOOL) {
+          // Never `danger: "confirm"` — the runner is one the project already
+          // declares, so the strip shows a plain in-flight row.
+          emitToolCallStarted(false);
+          try {
+            const result = await handleProjectRunCheck(args, extra.signal);
+            outcome = { kind: "result", value: { ok: true, result } };
+            // A check can outlive the 15-min grant window, so mirror the main
+            // path's post-dispatch grant refresh — otherwise a long suite
+            // silently ages the grant out mid-run (same reasoning as #8442).
+            if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
+              if (grantIssuedAt !== undefined) {
+                sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+              }
+              if (nativeGrantId !== undefined) {
+                sessionStore.grantCache.refreshNativeGrant(nativeGrantId);
+              }
+              if (sessionStore.sessions.has(sessionId)) {
+                sessionStore.resetIdleTimer(sessionId);
+              } else if (sessionStore.httpSessions.has(sessionId)) {
+                sessionStore.resetHttpIdleTimer(sessionId);
+              }
+            }
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) {
+              throw err;
+            }
+            // Reaching here means the check could not start at all (unknown
+            // runner, unusable cwd, busy target). A check that ran and failed
+            // resolved above with `passed: false` — the two must stay
+            // distinguishable to the caller.
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "project.runCheck failed"),
             });
           }
         }

@@ -71,6 +71,7 @@ function fakeDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
     handleWaitUntilIdleBatch: vi.fn(),
     handleSkillsSearch: vi.fn(() => ({ skills: [] })),
     handleSkillsLoad: vi.fn(),
+    handleProjectRunCheck: vi.fn(),
     appendAuditRecord: vi.fn(),
     getCachedManifest: vi.fn(() => null),
     ...overrides,
@@ -543,6 +544,123 @@ describe("skills.search / skills.load short-circuit (#10892)", () => {
     await expect(callTool(server, { name: "skills.load", arguments: { id: "x" } })).rejects.toThrow(
       /No skill found/
     );
+  });
+});
+
+describe("project.runCheck short-circuit (#11548)", () => {
+  const passingResult = {
+    projectId: "proj-1",
+    cwd: "/repo",
+    runnerId: "npm:test",
+    runnerName: "test",
+    passed: true,
+    exitCode: 0,
+    signalName: null,
+    durationMs: 4200,
+    timedOut: false,
+    aborted: false,
+    output: "42 passing\n",
+    outputTruncated: false,
+  };
+
+  it("runs in main and never reaches renderer dispatch", async () => {
+    const handleProjectRunCheck = vi.fn().mockResolvedValue(passingResult);
+    const dispatchAction = vi.fn();
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("action"),
+      handleProjectRunCheck,
+      dispatchAction,
+    });
+    const server = createSessionServer("session-run-check", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "project.runCheck",
+      arguments: { projectId: "proj-1", runnerId: "npm:test" },
+    });
+
+    // The 30s renderer-dispatch wall is exactly what this branch exists to
+    // avoid, so reaching dispatchAction at all would defeat the feature.
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toEqual(passingResult);
+  });
+
+  it("forwards the MCP abort signal so a runaway check can be cancelled", async () => {
+    const handleProjectRunCheck = vi.fn().mockResolvedValue(passingResult);
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("action"),
+      handleProjectRunCheck,
+    });
+    const server = createSessionServer("session-run-check-signal", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, {
+      name: "project.runCheck",
+      arguments: { projectId: "proj-1", runnerId: "npm:test" },
+    });
+
+    const signal = handleProjectRunCheck.mock.calls[0]?.[1];
+    expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("returns a failing check as a normal result, not a tool error", async () => {
+    const failing = { ...passingResult, passed: false, exitCode: 1, output: "1 failing\n" };
+    const handleProjectRunCheck = vi.fn().mockResolvedValue(failing);
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("action"),
+      handleProjectRunCheck,
+    });
+    const server = createSessionServer("session-run-check-fail", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "project.runCheck",
+      arguments: { projectId: "proj-1", runnerId: "npm:test" },
+    });
+
+    // "The check failed" and "the check could not run" must stay
+    // distinguishable — conflating them makes an agent retry the wrong thing.
+    expect(result.isError).not.toBe(true);
+    expect((result.structuredContent as { passed: boolean }).passed).toBe(false);
+  });
+
+  it("surfaces an inability to run as a tool error", async () => {
+    const handleProjectRunCheck = vi
+      .fn()
+      .mockRejectedValue(new Error('No runner "nope" detected in /repo.'));
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("action"),
+      handleProjectRunCheck,
+    });
+    const server = createSessionServer("session-run-check-unknown", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "project.runCheck",
+      arguments: { projectId: "proj-1", runnerId: "nope" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain("No runner");
+  });
+
+  it("denies a workbench-tier session — detecting runners is read-only, running them is not", async () => {
+    const handleProjectRunCheck = vi.fn().mockResolvedValue(passingResult);
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("workbench"),
+      handleProjectRunCheck,
+    });
+    const server = createSessionServer("session-run-check-workbench", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "project.runCheck",
+      arguments: { projectId: "proj-1", runnerId: "npm:test" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(handleProjectRunCheck).not.toHaveBeenCalled();
   });
 });
 

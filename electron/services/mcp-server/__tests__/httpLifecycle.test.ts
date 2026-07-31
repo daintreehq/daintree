@@ -127,6 +127,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
     handleWaitUntilIdle: vi.fn(),
     handleSkillsSearch: vi.fn(() => ({ skills: [] })),
     handleSkillsLoad: vi.fn(),
+    handleProjectRunCheck: vi.fn(),
     getCachedManifest: vi.fn(() => null),
     clearCachedManifest: vi.fn(),
     cleanupListeners: [],
