@@ -219,10 +219,10 @@ describe("systemActions adversarial", () => {
 
     it("returns the file handle and keeps the bundle off the result", async () => {
       const { run } = setupActions();
-      // The IPC layer answers with the full CopyTreeResult shape. Anything the
-      // success schema doesn't name has to be dropped here: `resultSchema` is
-      // manifest documentation and strips nothing (#10870), so a field left in
-      // reaches the wire regardless of what the schema advertises.
+      // The IPC layer answers with the full CopyTreeResult shape. `content` has
+      // to be dropped by this projection, not by the schema: dispatch parses
+      // results now (#11539), but a parse REJECTS a value it doesn't like rather
+      // than trimming it, so a bundle left in would fail the call, not shrink it.
       // A non-empty sentinel: an empty string would let a projection that
       // forwards `content` unconditionally pass this test anyway.
       copyTreeClientMock.generate.mockResolvedValueOnce({
@@ -231,16 +231,20 @@ describe("systemActions adversarial", () => {
         filePath: "/tmp/daintree-context/repo-main-x.xml",
         outputBytes: 31_457_280,
         outputFormatVersion: "copytree-xml@1",
-        stats: { totalSize: 4096, duration: 12, estimatedTokens: 7_500_063 },
+        stats: { totalSize: 4096, duration: 12, estimatedTokens: 7_500_063, truncated: true },
       });
 
+      // The budget scalars DO ride along: they are the only way a caller learns
+      // the bundle it is about to read is incomplete, and they cost bytes, not
+      // megabytes.
       await expect(
         run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" })
       ).resolves.toEqual({
         filePath: "/tmp/daintree-context/repo-main-x.xml",
         fileCount: 3,
         outputBytes: 31_457_280,
-        stats: { totalSize: 4096, duration: 12 },
+        outputFormatVersion: "copytree-xml@1",
+        stats: { totalSize: 4096, duration: 12, estimatedTokens: 7_500_063, truncated: true },
       });
     });
 

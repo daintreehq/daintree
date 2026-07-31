@@ -391,4 +391,24 @@ describe("session bookmark actions", () => {
     expect(bookmark.isInputLocked).toBe(false);
     expect(stored.bookmark.agentPresetColor).toBe("#00ff00");
   });
+
+  // The action's description ends "Never errors." — dispatch parses results
+  // against `resultSchema` now (#11539), and `listBookmarks` selects rows on
+  // `bookmark !== undefined`, so a hand-written `"bookmark": {}` reaches the
+  // projection carrying neither `bookmarkedAt` nor `label`. Dropping the row is
+  // what keeps that promise true.
+  it("list drops a bookmark row the advertised shape cannot carry", async () => {
+    agentSessionHistoryMock.listBookmarks.mockResolvedValue([
+      VALID_RECORD,
+      { ...VALID_RECORD, sessionId: "s2", bookmark: {} },
+      { sessionId: "s3" },
+    ]);
+    const actions = setupActions();
+    const result = (await callAction(actions, "session.bookmarks.list", undefined, {
+      projectId: "p",
+    })) as { bookmarks: Array<{ sessionId: string }>; total: number; hasMore: boolean };
+
+    expect(result.bookmarks.map((b) => b.sessionId)).toEqual(["s1"]);
+    expect(result).toMatchObject({ total: 3, hasMore: false });
+  });
 });

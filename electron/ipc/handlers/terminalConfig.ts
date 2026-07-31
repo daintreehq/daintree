@@ -13,6 +13,7 @@ import {
   terminalCustomSchemesWriteSchema,
   migrateCustomSchemes,
 } from "../../schemas/customSchemes.js";
+import { normalizeScrollbackLines } from "../../../shared/config/scrollback.js";
 
 function getTerminalConfigObject(): Record<string, unknown> {
   const config = store.get("terminalConfig");
@@ -58,6 +59,16 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
         }
         return {
           ...config,
+          // `TerminalConfig` types these two as required, but nothing on the
+          // read path guaranteed them: `getTerminalConfigObject` returns `{}`
+          // for a missing or non-object key, electron-store's defaults merge is
+          // shallow (a persisted partial `terminalConfig` replaces the default
+          // object wholesale), and every writer sets a single dot-path. So the
+          // cast below was a lie whenever the persisted object was partial.
+          // Backfilling here makes the declared type true for every consumer,
+          // including `terminalConfig.get`'s now-enforced `resultSchema`.
+          scrollbackLines: normalizeScrollbackLines(config.scrollbackLines),
+          performanceMode: config.performanceMode === true,
           customSchemes,
           cachedProjectViews: effectiveCachedProjectViews(config.cachedProjectViews),
         } as import("../../../shared/types/ipc/config.js").TerminalConfig;

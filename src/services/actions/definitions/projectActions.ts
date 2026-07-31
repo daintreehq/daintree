@@ -28,11 +28,15 @@ const agentVisibleProjectSettingsShape: Record<AgentVisibleProjectSettingsKey, z
   runCommands: z.array(
     z.object({
       id: z.string(),
-      // Only `id` and `command` are codec-guaranteed: `decode` in
-      // projectSettingsCodec admits any entry with those two as strings, and the
-      // projection copies through only the keys that are present. Advertising
-      // `name` as required would make a nameless persisted entry emit
-      // `structuredContent` that violates this schema.
+      // Every optional key here is typed rather than left open, which is only
+      // safe because `pickAgentVisibleRunCommand` now drops a value whose type
+      // doesn't match instead of forwarding it. Nothing below that projection
+      // guarantees these types: the codec admits any entry with a string
+      // `id`/`command` and copies the rest through verbatim, and the
+      // agent-callable `project.saveSettings` types runCommands as
+      // `z.array(z.unknown())`. Without the sanitize, one persisted
+      // `preferredLocation: "sidebar"` would make this action return
+      // RESULT_VALIDATION_ERROR for that project on every call, forever.
       name: z.string().optional(),
       command: z.string(),
       icon: z.string().optional(),

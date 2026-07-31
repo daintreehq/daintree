@@ -803,22 +803,37 @@ export type AgentVisibleProjectSettings = Pick<ProjectSettings, AgentVisibleProj
  * after checking only `id` and `command`, so an entry persisted with extra keys would
  * otherwise ride along inside an `exposed` field.
  */
-const AGENT_VISIBLE_RUN_COMMAND_KEYS = [
-  "id",
-  "name",
-  "command",
-  "icon",
-  "description",
-  "preferredLocation",
-  "preferredAutoRestart",
-  "isFrameworkDefault",
-] as const satisfies ReadonlyArray<keyof RunCommand>;
+const AGENT_VISIBLE_RUN_COMMAND_FIELDS = {
+  id: (v: unknown) => typeof v === "string",
+  name: (v: unknown) => typeof v === "string",
+  command: (v: unknown) => typeof v === "string",
+  icon: (v: unknown) => typeof v === "string",
+  description: (v: unknown) => typeof v === "string",
+  preferredLocation: (v: unknown) => v === "dock" || v === "grid",
+  preferredAutoRestart: (v: unknown) => typeof v === "boolean",
+  isFrameworkDefault: (v: unknown) => typeof v === "boolean",
+} as const satisfies Record<keyof RunCommand, (value: unknown) => boolean>;
 
+/**
+ * Project one run command, dropping any value whose type doesn't match.
+ *
+ * The type check is not belt-and-braces: nothing below this point enforces it.
+ * `decode` in `projectSettingsCodec` keeps an entry whole once `id` and
+ * `command` are strings, and the agent-callable `project.saveSettings` types
+ * `runCommands` as `z.array(z.unknown())`, so a persisted row can carry
+ * `preferredLocation: "sidebar"` or a numeric `name` from an agent write, a
+ * legacy file, or a hand edit. Since `ActionService.dispatch` parses results
+ * against `resultSchema` (#11539), forwarding one of those would fail
+ * `project.getSettings` outright for that project — permanently, since the bad
+ * value is on disk. Dropping the field degrades the row instead.
+ */
 function pickAgentVisibleRunCommand(command: RunCommand): RunCommand {
   const visible: Partial<Record<keyof RunCommand, unknown>> = {};
-  for (const key of AGENT_VISIBLE_RUN_COMMAND_KEYS) {
+  for (const [key, isValid] of Object.entries(AGENT_VISIBLE_RUN_COMMAND_FIELDS) as Array<
+    [keyof RunCommand, (value: unknown) => boolean]
+  >) {
     const value = command[key];
-    if (value === undefined) continue;
+    if (value === undefined || !isValid(value)) continue;
     visible[key] = value;
   }
   return visible as RunCommand;
@@ -853,7 +868,18 @@ export function pickAgentVisibleProjectSettings(
   }
   const runCommands = settings?.runCommands;
   visible.runCommands = Array.isArray(runCommands)
-    ? runCommands.map(pickAgentVisibleRunCommand)
+    ? runCommands
+        // `id` and `command` are the two fields the advertised shape requires,
+        // so a row missing either is dropped rather than emitted incomplete —
+        // one unusable row costs less than failing the whole read.
+        .filter(
+          (c) =>
+            c !== null &&
+            typeof c === "object" &&
+            typeof (c as RunCommand).id === "string" &&
+            typeof (c as RunCommand).command === "string"
+        )
+        .map(pickAgentVisibleRunCommand)
     : [];
   return visible as AgentVisibleProjectSettings;
 }

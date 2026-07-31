@@ -141,6 +141,25 @@ function toAgentFacingRecord(record: AgentSessionRecord): AgentSessionRecord {
     ...(record.bookmark ? { bookmark: toAgentFacingBookmark(record.bookmark) } : {}),
   };
 }
+
+/**
+ * Drop projected records the advertised shape cannot carry.
+ *
+ * `normalizeRecords` (electron/services/pty/agentSessionHistory.ts) deliberately
+ * admits any object with a string `sessionId` so a garbage, hand-edited, or
+ * newer-schema journal degrades gracefully instead of crashing reads that are
+ * documented never to error. Dispatch now parses results against `resultSchema`
+ * (#11539), which would turn one degraded row back into exactly that crash — for
+ * the whole page, not the row. Filtering here keeps the guarantee: the caller
+ * loses the unrepresentable record and nothing else. `session.bookmarks.list`
+ * needs this doubly, since it selects on `bookmark !== undefined` and so admits
+ * a hand-written `"bookmark": {}` that carries neither `bookmarkedAt` nor
+ * `label`.
+ */
+function keepRepresentableRecords(records: AgentSessionRecord[]): AgentSessionRecord[] {
+  return records.filter((record) => AgentFacingSessionRecordSchema.safeParse(record).success);
+}
+
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   const readAgentDiscoveryState = async () => {
     // These are the same normalized renderer stores the toolbar reads. Fall back to
@@ -700,8 +719,13 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       // The journal is already newest-first (main sorts by `savedAt` descending
       // after eviction), so the window keeps the most recent records.
       const total = sessions.length;
-      const page = sessions.slice(offset, offset + limit).map(toAgentFacingRecord);
-      return { sessions: page, total, hasMore: offset + page.length < total };
+      const scanned = sessions.slice(offset, offset + limit);
+      // `hasMore` is computed from the unfiltered slice: paging is over the
+      // journal's records, so a row dropped as unrepresentable must not read as
+      // "end of list" and strand the records behind it.
+      const hasMore = offset + scanned.length < total;
+      const page = keepRepresentableRecords(scanned.map(toAgentFacingRecord));
+      return { sessions: page, total, hasMore };
     },
   }));
 
@@ -844,8 +868,10 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       // the agent-facing payload down, and the offset is how a caller still
       // reaches a bookmark that sits past it (#11530).
       const total = bookmarks.length;
-      const page = bookmarks.slice(offset, offset + limit).map(toAgentFacingRecord);
-      return { bookmarks: page, total, hasMore: offset + page.length < total };
+      const scanned = bookmarks.slice(offset, offset + limit);
+      const hasMore = offset + scanned.length < total;
+      const page = keepRepresentableRecords(scanned.map(toAgentFacingRecord));
+      return { bookmarks: page, total, hasMore };
     },
   }));
 

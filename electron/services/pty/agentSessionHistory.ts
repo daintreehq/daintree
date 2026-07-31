@@ -179,10 +179,12 @@ function isCorruptionError(error: unknown): boolean {
  * Normalize parsed journal JSON into records, dropping the legacy `snapshot`
  * key. The exit-snapshot feature (#10850/#10855) was removed; journals written
  * while it was enabled still carry a `snapshot` tail on disk. Stripping it on
- * read means no consumer can resurface removed data — notably the MCP
- * `agentSessionHistory.list` action, whose raw result is serialized without
- * `resultSchema` parsing — and the next `persistAgentSession`/`pruneAgentSessions`
- * rewrite purges it from disk, so the file self-heals without a versioned migration.
+ * read means no consumer can resurface removed data — and the next
+ * `persistAgentSession`/`pruneAgentSessions` rewrite purges it from disk, so the
+ * file self-heals without a versioned migration. Stripping here rather than at the
+ * read surfaces is still what does the work: the MCP `agentSessionHistory.list`
+ * action projects and parses its own result (#11539), but every other consumer of
+ * this function gets the record verbatim.
  *
  * Throws {@link InvalidSessionHistoryShapeError} on a non-array root so the
  * caller can quarantine the corrupt file instead of silently overwriting it.

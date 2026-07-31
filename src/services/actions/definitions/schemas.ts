@@ -58,6 +58,11 @@ export const TerminalTypeSchema = z.enum(BUILT_IN_TERMINAL_TYPES);
 
 export const BuiltInAgentIdSchema = z.enum(BUILT_IN_AGENT_IDS);
 
+// Every member of the `GitStatus` union (shared/types/git.ts). `conflicted` is
+// unreachable through git.getStagingStatus today only because its loop skips the
+// conflicted set first — but `StagingFileEntry.status` is typed as the full
+// union, and since dispatch parses results (#11539) a missing member would fail
+// the whole action rather than one row.
 export const GitStatusSchema = z.enum([
   "modified",
   "added",
@@ -66,6 +71,7 @@ export const GitStatusSchema = z.enum([
   "ignored",
   "renamed",
   "copied",
+  "conflicted",
 ]);
 
 export const StagingFileEntrySchema = z.object({
@@ -309,7 +315,12 @@ export const TerminalSummarySchema = z.object({
   type: z.unknown().nullable().optional(),
   worktreeId: z.string().nullable(),
   title: z.string().nullable(),
-  location: z.enum(["grid", "dock", "trash", "background"]),
+  // All six members of `PanelLocation`. `dialog` is filtered out by
+  // isEphemeralPanel and `overlay` only incidentally — every overlay creation
+  // site happens to set `excludeFromPersistence`. One that doesn't would fail
+  // the enum and, since dispatch parses results (#11539), take down the whole
+  // listing instead of dropping a row.
+  location: z.enum(["grid", "dock", "overlay", "trash", "background", "dialog"]),
   agentId: z.string().nullable(),
   agentState: z.string().nullable(),
   isInputLocked: z.boolean(),
@@ -435,10 +446,11 @@ export const AgentFacingBookmarkMetadataSchema = z.object({
 });
 
 // The record shape the MCP-exposed list actions return. Identical to
-// `AgentSessionRecordSchema` except for the leaner bookmark. Note this schema
-// does NOT enforce the projection at runtime — nothing parses an action's
-// return value (main casts it straight into `structuredContent`), so the
-// stripping is done by hand in each `run()`; this only documents the result.
+// `AgentSessionRecordSchema` except for the leaner bookmark. Dispatch parses
+// results against this now (#11539), so it strips as well as documents — but the
+// hand projection in each `run()` stays: the journal admits degraded records, and
+// each list action filters them out against this schema before returning so one
+// bad row cannot reject the whole page.
 export const AgentFacingSessionRecordSchema = AgentSessionRecordSchema.extend({
   bookmark: AgentFacingBookmarkMetadataSchema.optional(),
 });
