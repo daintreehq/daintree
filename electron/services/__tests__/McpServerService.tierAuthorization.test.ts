@@ -654,7 +654,7 @@ describe("McpServerService", () => {
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
-    it("workbench tier: listTools advertises only the workbench surface", async () => {
+    it("workbench tier: listTools admits only workbench-permitted ids", async () => {
       const { window } = createMockWindow({
         getManifest: manifestForAllAllowlistedTools,
       });
@@ -1435,7 +1435,7 @@ describe("McpServerService", () => {
       }
     });
 
-    it("system tier exposes the full curated allowlist including irreversible mutations", async () => {
+    it("system tier admits the full curated allowlist including irreversible mutations", async () => {
       paneTokenTiers.set("token-sys", "system");
       const { window } = createMockWindow({ getManifest: tierManifest });
 

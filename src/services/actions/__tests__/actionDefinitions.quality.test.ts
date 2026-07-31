@@ -311,13 +311,23 @@ describe("MCP core tool surface", () => {
    */
   const DISCOVERY_ENTRY_POINTS = ["actions.list", "actions.search", "actions.getSchema"];
 
-  async function collectCoreActions(): Promise<Array<{ id: string; danger: ActionDanger }>> {
+  /**
+   * What the eager envelope actually costs is prose, not tool count: every
+   * core description ships on every `tools/list`. 24 KB leaves generous room
+   * for the current cohort while still failing before the envelope drifts back
+   * toward the ~128 KB this issue set out to cut.
+   */
+  const CORE_DESCRIPTION_BYTE_CEILING = 24_000;
+
+  async function collectCoreActions(): Promise<
+    Array<{ id: string; danger: ActionDanger; description: string }>
+  > {
     const { registry } = await createRegistryWithAudit();
-    const core: Array<{ id: string; danger: ActionDanger }> = [];
+    const core: Array<{ id: string; danger: ActionDanger; description: string }> = [];
     for (const [key, factory] of registry) {
       const def = factory();
       if (def.mcpVisibility === "core") {
-        core.push({ id: key, danger: def.danger });
+        core.push({ id: key, danger: def.danger, description: def.description ?? "" });
       }
     }
     return core;
@@ -335,12 +345,35 @@ describe("MCP core tool surface", () => {
     ).toBeLessThanOrEqual(CORE_BUDGET_MAX);
   });
 
+  // A count budget alone can't see the regression this issue is about: 22
+  // tools whose descriptions tripled would put the envelope right back where
+  // it started. Descriptions are the bulk of a tools/list entry, so they are
+  // the thing worth bounding.
+  it("keeps the eager descriptions inside their byte ceiling", async () => {
+    const core = await collectCoreActions();
+    const bytes = core.reduce((sum, entry) => sum + entry.description.length, 0);
+
+    const heaviest = [...core]
+      .sort((a, b) => b.description.length - a.description.length)
+      .slice(0, 3)
+      .map((entry) => `  - ${entry.id} (${entry.description.length} chars)`)
+      .join("\n");
+
+    expect(
+      bytes,
+      `Core tools/list descriptions total ${bytes} bytes (ceiling ${CORE_DESCRIPTION_BYTE_CEILING}).\nHeaviest:\n${heaviest}`
+    ).toBeLessThanOrEqual(CORE_DESCRIPTION_BYTE_CEILING);
+  });
+
   it("only marks core actions some tier can actually dispatch", async () => {
     const core = await collectCoreActions();
 
     // Exposure defers to the tier allowlists, so a core action outside every
     // allowlist is advertised to nobody — dead weight in the manifest at best,
-    // and a tool the dispatcher would reject at worst (#7155).
+    // and a tool the dispatcher would reject at worst (#7155). The external
+    // allowlist lives in electron/services/mcp-server/shared.ts and is a subset
+    // of these three; it is not imported here because that module value-imports
+    // the MCP SDK, which has no business on a renderer test's import graph.
     const dispatchable = new Set<string>([
       ...(WORKBENCH_TIER_TOOLS as readonly string[]),
       ...(ACTION_TIER_ADDONS as readonly string[]),

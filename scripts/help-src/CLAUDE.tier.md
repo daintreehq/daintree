@@ -1,6 +1,6 @@
 ## Tier Model
 
-The local `daintree` server defines three authorization tiers — `workbench`, `action`, `system` — selected by the user in Settings → Assistant → Daintree Assistant → Capability tier. The tier is enforced server-side: any call outside it returns `TIER_NOT_PERMITTED`. `ListTools` won't tell you your tier — it lists the same small core at every tier. Use the action lists below to guess, and treat `TIER_NOT_PERMITTED` on a real call as the only proof.
+The local `daintree` server defines three authorization tiers — `workbench`, `action`, `system` — selected by the user in Settings → Assistant → Daintree Assistant → Capability tier. The tier is enforced server-side: any call outside it returns `TIER_NOT_PERMITTED`. Don't read your tier off `ListTools` — it advertises only a small core, so most of what your tier permits never appears there. `actions.search` is the better signal: it returns only what your session can actually dispatch, so a tool it can't find is one your tier doesn't reach.
 
 Tier is independent of `bypassPermissions` (Claude's `--dangerously-skip-permissions`). Don't conflate them.
 

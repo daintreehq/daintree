@@ -250,8 +250,10 @@ export interface ActionDefinition<
    * deferral was a deliberate call rather than an unclassified action.
    * `hidden` tools never surface in discovery at all.
    *
-   * Visibility is never an access control: `tools/call` is gated solely by the
-   * tier allowlists, so a deferred tool stays fully dispatchable (#11540).
+   * Visibility is never an access control: `tools/call` never reads this field
+   * — it is gated by the tier allowlists (widened by live grants), with
+   * `danger` handled separately by `ActionService.dispatch`. Deferring a tool
+   * therefore costs it nothing at dispatch time (#11540).
    */
   mcpVisibility?: McpVisibility;
 }
