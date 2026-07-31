@@ -200,11 +200,12 @@ describe("closePR / reopenPR", () => {
 
     const pr = await githubForgeProvider.closePR(repo, 42);
 
-    // The result is derived from the response, not from the request — a stale
-    // "open" here would mean the caller is reading its own input back.
+    // Assert on fields the request never carried: a synthesized result built
+    // from {repo, prNumber, "closed"} could satisfy state/number/url alone.
     expect(pr.state).toBe("closed");
-    expect(pr.number).toBe(restPR.number);
-    expect(pr.url).toBe(restPR.html_url);
+    expect(pr.title).toBe(restPR.title);
+    expect(pr.headRef).toBe(restPR.head.ref);
+    expect(pr.baseRef).toBe(restPR.base.ref);
   });
 
   it("reopenPR returns the updated PR", async () => {
@@ -224,19 +225,36 @@ describe("closePR / reopenPR", () => {
     );
   });
 
-  it("still drops the PR caches when the close response is unusable", async () => {
-    // The PATCH landed even though the body is junk — a cache left intact would
-    // keep serving the pre-close state.
-    mockFetch({ ok: true, status: 200, body: { nonsense: true } });
+  it("still drops the PR caches when the response body can't even be read", async () => {
+    // The PATCH landed even though the body is unreadable — a cache left intact
+    // would keep serving the pre-close state. A rejecting json() (not merely a
+    // wrong-shaped one) is what pins the invalidation ahead of the parse: any
+    // ordering that reads the body first would leave the cache populated.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockRejectedValue(new SyntaxError("Unexpected token")),
+      text: vi.fn().mockResolvedValue(""),
+    });
+    (globalThis as unknown as { fetch: typeof fetchMock }).fetch = fetchMock;
     forgePRListCache.set("owner/repo:open", {
       items: [],
       nextCursor: null,
       hasMore: false,
     } as unknown as import("../../../../../shared/types/forge.js").Page<PR>);
+    expect(forgePRListCache.size()).toBeGreaterThan(0);
 
     await expect(githubForgeProvider.closePR(repo, 42)).rejects.toThrow();
 
     expect(forgePRListCache.size()).toBe(0);
+  });
+
+  it("rejects a top-level array body instead of reading every field as undefined", async () => {
+    mockFetch({ ok: true, status: 200, body: [] });
+
+    await expect(githubForgeProvider.closePR(repo, 42)).rejects.toThrow(
+      /missing pull request payload/i
+    );
   });
 
   it("reopenPR PATCHes state=open", async () => {
@@ -276,8 +294,10 @@ describe("mergePR", () => {
       message: mergedBody.message,
     });
     // No follow-up GET for the resulting PR: the merge has already landed, so a
-    // failing second read would report a completed merge as a failure.
+    // failing second read would report a completed merge as a failure. Both
+    // transports are pinned — a GraphQL enrichment would be just as wrong.
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(mockGraphQLClient).not.toHaveBeenCalled();
   });
 
   it("reports sha as null when the forge omits one", async () => {
@@ -289,12 +309,23 @@ describe("mergePR", () => {
     expect(result.merged).toBe(true);
   });
 
-  it("passes through a non-merged acknowledgement rather than inventing success", async () => {
+  it("honours an explicit merged:false rather than inventing success", async () => {
     mockFetch({ ok: true, status: 200, body: { sha: null, merged: false, message: "Not merged" } });
 
     const result = await githubForgeProvider.mergePR(repo, 42);
 
     expect(result.merged).toBe(false);
+  });
+
+  it("still reports merged when a 2xx body omits the flag", async () => {
+    // GitHub answers 405 for unmergeable and 409 for a stale head, so reaching
+    // here at all means the merge landed — reporting `merged: false` would send
+    // an agent back to retry a merge that already happened.
+    mockFetch({ ok: true, status: 200, body: { sha: "abc123" } });
+
+    const result = await githubForgeProvider.mergePR(repo, 42);
+
+    expect(result.merged).toBe(true);
   });
 
   it("PUTs to the merge endpoint with the chosen strategy", async () => {

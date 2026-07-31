@@ -102,7 +102,10 @@ async function readMutationJson(
   missing: string
 ): Promise<Record<string, unknown>> {
   const data = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-  if (!data || typeof data !== "object") {
+  // `typeof [] === "object"`, so arrays need their own rejection — none of
+  // these endpoints answers with one, and letting one through would read every
+  // field as undefined.
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new Error(`Unexpected response from GitHub: ${missing}.`);
   }
   return data;
@@ -295,6 +298,12 @@ export async function requestReviewersImpl(
   // The endpoint answers with the PR, whose requested-reviewer lists are the
   // resulting state — they include reviewers requested before this call and
   // omit any the forge refused, so they can differ from what was asked for.
+  // Both arrays are always present on a real PR payload; report a body without
+  // them as unusable rather than as an authoritative "nobody is requested",
+  // which would read as the mutation having done nothing.
+  if (!Array.isArray(data.requested_reviewers) && !Array.isArray(data.requested_teams)) {
+    throw new Error("Unexpected response from GitHub: missing requested reviewers.");
+  }
   return {
     prNumber,
     requestedUsers: pluckStrings(data.requested_reviewers, "login"),
@@ -476,7 +485,10 @@ export async function mergePRImpl(
   return {
     prNumber,
     sha: typeof data.sha === "string" && data.sha ? data.sha : null,
-    merged: data.merged === true,
+    // A 2xx from the merge endpoint means the merge landed — GitHub answers 405
+    // for unmergeable and 409 for a stale head. So only an explicit `false`
+    // denies it; a body missing the field must not read as "did not merge".
+    merged: data.merged !== false,
     message: typeof data.message === "string" ? data.message : "",
   };
 }

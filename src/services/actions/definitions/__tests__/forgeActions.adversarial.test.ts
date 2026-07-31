@@ -620,11 +620,29 @@ describe("forge.* write actions return the state they changed (#11546)", () => {
     ["forge.commentOnPR", { prNumber: 12, body: "hi" }],
     ["forge.assignIssue", { issueNumber: 42, username: "bob" }],
     ["forge.unassignIssue", { issueNumber: 42, username: "bob" }],
+    ["forge.mergePR", { prNumber: 12 }],
+    ["forge.convertPRToDraft", { prNumber: 12 }],
+    ["forge.markPRReadyForReview", { prNumber: 12 }],
+    ["forge.requestReviewers", { prNumber: 12, users: ["octocat"] }],
   ])("%s publishes no rawData, at any depth", async (id, args) => {
     const result = await run(id, args);
 
     expect(JSON.stringify(result)).not.toContain("rawData");
     expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it.each([
+    ["forge.mergePR", { prNumber: 12 }],
+    ["forge.convertPRToDraft", { prNumber: 12 }],
+    ["forge.requestReviewers", { prNumber: 12, users: ["octocat"] }],
+  ])("%s rejects a provider result that contradicts its published schema", async (id, args) => {
+    // The schema is what the MCP client is promised. A provider answering with
+    // the wrong scalar type must surface as an error, not ship a payload that
+    // contradicts the advertised contract.
+    const method = id.slice("forge.".length) as keyof typeof forgeClientMock;
+    forgeClientMock[method].mockResolvedValueOnce({ prNumber: "twelve", isDraft: "yes" });
+
+    await expect(runAction(id, { cwd: "/repo", ...args })).rejects.toThrow();
   });
 
   it("drops the provider's extra PR fields that the published schema doesn't name", async () => {
@@ -639,14 +657,23 @@ describe("forge.* write actions return the state they changed (#11546)", () => {
 
   it("still returns the result when the renderer cache patch throws", async () => {
     // The forge mutation already succeeded — a cache-layer failure must not
-    // turn a completed assignment into a failed action.
-    setCurrentProject(null);
+    // turn a completed assignment into a failed action. Seed a corrupt row so
+    // patchIssueAssigneeCache genuinely throws on `item.assignees.some(...)`:
+    // deleting the guard in syncAssigneeCache must fail this test.
+    resetForgeResourceCache();
+    const key = buildCacheKey("/repo", "issue", "open", "created");
+    setCache(key, {
+      items: [{ ...makeIssue(42, []), assignees: null }] as never,
+      nextCursor: null,
+      hasMore: false,
+      timestamp: 1,
+    });
 
-    const result = await runAction(
-      "forge.assignIssue",
-      { issueNumber: 42, username: "bob" },
-      { activeWorktreePath: "/repo/.worktrees/feature" }
-    );
+    const result = await runAction("forge.assignIssue", {
+      cwd: "/repo",
+      issueNumber: 42,
+      username: "bob",
+    });
 
     expect(result).toEqual({
       issueNumber: 42,

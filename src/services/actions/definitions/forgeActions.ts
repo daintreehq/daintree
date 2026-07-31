@@ -36,7 +36,7 @@ function syncAssigneeCache(
   projectPath: string | null,
   issueNumber: number,
   username: string,
-  assignees: ForgeUser[]
+  assignees: readonly Pick<ForgeUser, "login" | "avatarUrl">[]
 ): void {
   if (!projectPath) return;
   const match = username.trim().toLowerCase();
@@ -361,8 +361,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
         const assignees = await forgeClient.assignIssue(resolvedCwd, issueNumber, username);
-        syncAssigneeCache(assigneeCachePath(cwd), issueNumber, username, assignees);
-        return ForgeAssigneesResultSchema.parse({ issueNumber, assignees });
+        const result = ForgeAssigneesResultSchema.parse({ issueNumber, assignees });
+        syncAssigneeCache(assigneeCachePath(cwd), issueNumber, username, result.assignees);
+        return result;
       },
     })
   );
@@ -391,8 +392,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
         const assignees = await forgeClient.unassignIssue(resolvedCwd, issueNumber, username);
-        syncAssigneeCache(assigneeCachePath(cwd), issueNumber, username, assignees);
-        return ForgeAssigneesResultSchema.parse({ issueNumber, assignees });
+        const result = ForgeAssigneesResultSchema.parse({ issueNumber, assignees });
+        syncAssigneeCache(assigneeCachePath(cwd), issueNumber, username, result.assignees);
+        return result;
       },
     })
   );
@@ -531,7 +533,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       run: async ({ cwd, prNumber, users, teams }, ctx: ActionContext) => {
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
-        return await forgeClient.requestReviewers(resolvedCwd, prNumber, { users, teams });
+        return ForgeRequestedReviewersResultSchema.parse(
+          await forgeClient.requestReviewers(resolvedCwd, prNumber, { users, teams })
+        );
       },
     })
   );
@@ -857,11 +861,13 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       ) => {
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
-        return await forgeClient.mergePR(resolvedCwd, prNumber, {
-          mergeMethod,
-          commitTitle,
-          commitMessage,
-        });
+        return ForgeMergePRResultSchema.parse(
+          await forgeClient.mergePR(resolvedCwd, prNumber, {
+            mergeMethod,
+            commitTitle,
+            commitMessage,
+          })
+        );
       },
     })
   );
@@ -921,7 +927,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       run: async ({ cwd, prNumber }, ctx: ActionContext) => {
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
-        return await forgeClient.convertPRToDraft(resolvedCwd, prNumber);
+        return ForgePRDraftStateResultSchema.parse(
+          await forgeClient.convertPRToDraft(resolvedCwd, prNumber)
+        );
       },
     })
   );
@@ -979,7 +987,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       run: async ({ cwd, prNumber }, ctx: ActionContext) => {
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
-        return await forgeClient.markPRReadyForReview(resolvedCwd, prNumber);
+        return ForgePRDraftStateResultSchema.parse(
+          await forgeClient.markPRReadyForReview(resolvedCwd, prNumber)
+        );
       },
     })
   );

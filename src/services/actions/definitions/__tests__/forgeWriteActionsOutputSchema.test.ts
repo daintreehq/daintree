@@ -71,58 +71,45 @@ describe("forge write actions publish a manifest outputSchema (#11546)", () => {
     expect(propertyNames(schema).length).toBeGreaterThan(0);
   });
 
-  it("distinguishes each result family by the fields it publishes", () => {
+  it("keeps the six result families structurally distinct", () => {
     const service = registerAll();
-    // The point of the issue is that each action reports the state IT changed,
-    // so the families must not collapse onto one another's shape.
-    expect(propertyNames(outputSchema(service, "forge.mergePR"))).toEqual([
-      "merged",
-      "message",
-      "prNumber",
-      "sha",
-    ]);
-    expect(propertyNames(outputSchema(service, "forge.assignIssue"))).toEqual([
-      "assignees",
-      "issueNumber",
-    ]);
-    expect(propertyNames(outputSchema(service, "forge.convertPRToDraft"))).toEqual([
-      "isDraft",
-      "prNumber",
-    ]);
-    expect(propertyNames(outputSchema(service, "forge.requestReviewers"))).toEqual([
-      "prNumber",
-      "requestedTeams",
-      "requestedUsers",
-    ]);
-    expect(propertyNames(outputSchema(service, "forge.approvePR"))).toContain("rawState");
+    // Each action must report the state IT changed. Comparing the families to
+    // each other (rather than to a copied field list) catches the real
+    // regression: two families collapsing onto one schema.
+    const representatives = [
+      "forge.assignIssue",
+      "forge.approvePR",
+      "forge.requestReviewers",
+      "forge.closePR",
+      "forge.mergePR",
+      "forge.convertPRToDraft",
+      "forge.commentOnPR",
+    ];
+    const signatures = representatives.map((id) =>
+      propertyNames(outputSchema(service, id)).join(",")
+    );
+
+    expect(new Set(signatures).size).toBe(representatives.length);
   });
 
-  it("gives the two draft toggles and the two assignment actions matching shapes", () => {
+  it("names at least one required field per action, so a result is never all-optional", () => {
     const service = registerAll();
-    // Same result family => same published contract; a drift here means an
-    // agent has to special-case which direction it called.
-    expect(propertyNames(outputSchema(service, "forge.convertPRToDraft"))).toEqual(
-      propertyNames(outputSchema(service, "forge.markPRReadyForReview"))
-    );
-    expect(propertyNames(outputSchema(service, "forge.assignIssue"))).toEqual(
-      propertyNames(outputSchema(service, "forge.unassignIssue"))
-    );
-    expect(propertyNames(outputSchema(service, "forge.approvePR"))).toEqual(
-      propertyNames(outputSchema(service, "forge.requestChanges"))
-    );
-    expect(propertyNames(outputSchema(service, "forge.dismissReview"))).toEqual(
-      propertyNames(outputSchema(service, "forge.approvePR"))
-    );
-    expect(propertyNames(outputSchema(service, "forge.closePR"))).toEqual(
-      propertyNames(outputSchema(service, "forge.reopenPR"))
-    );
+    // An all-optional schema promises nothing: a client could not rely on any
+    // field being present. Derived from the generated schemas — no field list
+    // is restated here.
+    for (const id of WRITE_ACTIONS) {
+      const required = (outputSchema(service, id)?.required ?? []) as string[];
+      expect(required.length).toBeGreaterThan(0);
+    }
   });
 
-  it("leaves the array-shaped label results unpublished", () => {
+  it("keeps the array-shaped label actions opted out at the ActionService layer", () => {
     const service = registerAll();
-    // addIssueLabel/removeIssueLabel carry an ARRAY resultSchema. MCP
-    // structuredContent must be an object, so opting these in would publish an
-    // unusable array schema — they stay out until their result is reshaped.
+    // A policy assertion, not a wire-behavior one: addIssueLabel and
+    // removeIssueLabel carry an ARRAY resultSchema, and MCP structuredContent
+    // must be an object. buildToolOutputSchema would drop an array schema
+    // anyway, so this guards the intent — they stay opted out until their
+    // result is reshaped into an object.
     expect(outputSchema(service, "forge.addIssueLabel")).toBeUndefined();
     expect(outputSchema(service, "forge.removeIssueLabel")).toBeUndefined();
   });

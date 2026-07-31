@@ -2016,6 +2016,22 @@ describe("review write operations", () => {
       expect(review.commitId).toBe(restReview.commit_id);
     });
 
+    it.each([
+      ["APPROVED", "approved"],
+      ["CHANGES_REQUESTED", "changes_requested"],
+      ["COMMENTED", "commented"],
+      ["DISMISSED", "dismissed"],
+      ["PENDING", "pending"],
+      ["approved", "approved"],
+    ])("normalizes the %s verdict to %s", async (rawState, expected) => {
+      mockReviewFetchOk(200, { ...restReview, state: rawState });
+
+      const review = await githubForgeProvider.reviews!.approvePR!(repo, 3);
+
+      expect(review.state).toBe(expected);
+      expect(review.rawState).toBe(rawState);
+    });
+
     it("maps an unrecognized verdict to `unknown` without losing the raw value", async () => {
       mockReviewFetchOk(200, { ...restReview, state: "SOMETHING_NEW" });
 
@@ -2188,14 +2204,25 @@ describe("review write operations", () => {
       expect(result.requestedTeams).toEqual(["core-team"]);
     });
 
-    it("yields empty lists when the response carries no reviewer arrays", async () => {
+    it("rejects a body carrying neither reviewer array rather than claiming nobody is requested", async () => {
+      // Reporting empty lists here would tell the agent the request landed on
+      // nobody, which is indistinguishable from the mutation having done
+      // nothing — an unusable body must not read as authoritative emptiness.
       mockReviewFetchOk(201, { number: 6 });
+
+      await expect(
+        githubForgeProvider.reviews!.requestReviewers!(repo, 6, { users: ["octocat"] })
+      ).rejects.toThrow(/missing requested reviewers/i);
+    });
+
+    it("treats one present array and one absent as an empty side, not a failure", async () => {
+      mockReviewFetchOk(201, { number: 6, requested_reviewers: [{ login: "octocat" }] });
 
       const result = await githubForgeProvider.reviews!.requestReviewers!(repo, 6, {
         users: ["octocat"],
       });
 
-      expect(result.requestedUsers).toEqual([]);
+      expect(result.requestedUsers).toEqual(["octocat"]);
       expect(result.requestedTeams).toEqual([]);
     });
 
