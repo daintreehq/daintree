@@ -56,6 +56,7 @@ vi.mock("@/store/slices/panelRegistry", () => selectorMock);
   { electron: { git: { getStagingStatus: gitGetStagingStatusMock } } };
 
 import { registerWorkflowActions } from "../workflowActions";
+import { setPluginAgentRegistry } from "@shared/config/pluginAgentRegistry";
 import {
   buildCacheKey,
   getCache,
@@ -85,7 +86,16 @@ interface MockCallbacks {
 
 function makeCallbacks(): MockCallbacks & Pick<ActionCallbacks, "onLaunchAgent"> {
   return {
-    onLaunchAgent: vi.fn().mockResolvedValue({ terminalId: "term-1", location: "grid" }),
+    onLaunchAgent: vi.fn().mockResolvedValue({
+      terminalId: "term-1",
+      location: "grid",
+      // The launcher now reports where it landed (#11547); mirror the widened
+      // callback contract so the fixture can't drift from the real shape.
+      worktreeId: "wt-new",
+      worktreePath: "/repo/feature/issue-6609-add-tools",
+      branch: "feature/issue-6609-add-tools",
+      cwd: "/repo/feature/issue-6609-add-tools",
+    }),
   };
 }
 
@@ -664,6 +674,78 @@ describe("workflow.startWorkOnIssue", () => {
     await expect(def.run({ issueNumber: 6609, agentId: "claude" }, {} as never)).rejects.toThrow(
       /No active project/
     );
+  });
+
+  describe("agentId validation runs before any side effect (#11547)", () => {
+    /** Every observable effect `run()` can produce after validation. */
+    function expectNoSideEffects(callbacks: MockCallbacks) {
+      expect(forgeClientMock.getIssue).not.toHaveBeenCalled();
+      expect(worktreeClientMock.getAvailableBranch).not.toHaveBeenCalled();
+      expect(worktreeClientMock.getDefaultPath).not.toHaveBeenCalled();
+      expect(worktreeClientMock.create).not.toHaveBeenCalled();
+      expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+      expect(copyTreeClientMock.injectToTerminal).not.toHaveBeenCalled();
+    }
+
+    it("rejects an unregistered agentId without creating an orphan worktree", async () => {
+      forgeClientMock.getIssue.mockResolvedValue({ number: 1, title: "x", url: "u" });
+      const runRecipeWithResults = setRecipe("recipe-1");
+      const callbacks = makeCallbacks();
+      const def = setupActions(callbacks)("workflow.startWorkOnIssue");
+
+      // Before #11547 the id was only checked at line-of-spawn — by then the
+      // worktree existed and the recipe terminals had already started.
+      await expect(
+        def.run({ issueNumber: 1, agentId: "clyde-the-agent", recipeId: "recipe-1" }, {} as never)
+      ).rejects.toThrow(/Unknown agent ID 'clyde-the-agent'/);
+
+      expectNoSideEffects(callbacks);
+      expect(runRecipeWithResults).not.toHaveBeenCalled();
+    });
+
+    it.each(["browser", "dev-preview"])(
+      "rejects '%s' because it opens a panel with no PTY",
+      async (agentId) => {
+        forgeClientMock.getIssue.mockResolvedValue({ number: 1, title: "x", url: "u" });
+        const callbacks = makeCallbacks();
+        const def = setupActions(callbacks)("workflow.startWorkOnIssue");
+
+        // These reach their own non-PTY branches inside the launcher, so the
+        // workflow would "succeed" with a panel that can never receive the
+        // injected context the action promises.
+        await expect(def.run({ issueNumber: 1, agentId }, {} as never)).rejects.toThrow(/no PTY/);
+
+        expectNoSideEffects(callbacks);
+      }
+    );
+
+    it("accepts 'terminal', which is PTY-backed despite being unregistered", async () => {
+      forgeClientMock.getIssue.mockResolvedValue({ number: 1, title: "x", url: "u" });
+      const callbacks = makeCallbacks();
+      const def = setupActions(callbacks)("workflow.startWorkOnIssue");
+
+      await def.run({ issueNumber: 1, agentId: "terminal" }, {} as never);
+
+      expect(worktreeClientMock.create).toHaveBeenCalled();
+      expect(callbacks.onLaunchAgent).toHaveBeenCalledWith("terminal", expect.any(Object));
+    });
+
+    it("accepts a plugin-contributed agentId, so the gate is not a built-in enum", async () => {
+      forgeClientMock.getIssue.mockResolvedValue({ number: 1, title: "x", url: "u" });
+      const callbacks = makeCallbacks();
+      const def = setupActions(callbacks)("workflow.startWorkOnIssue");
+
+      setPluginAgentRegistry({
+        "acme-agent": { name: "Acme", command: "acme" } as never,
+      });
+      try {
+        await def.run({ issueNumber: 1, agentId: "acme-agent" }, {} as never);
+      } finally {
+        setPluginAgentRegistry({});
+      }
+
+      expect(callbacks.onLaunchAgent).toHaveBeenCalledWith("acme-agent", expect.any(Object));
+    });
   });
 
   it("throws when issue is not found", async () => {

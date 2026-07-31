@@ -44,28 +44,14 @@ import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
+import { resolveAgentLaunchKind, sanitizeTerminalName } from "@/utils/agentLaunchValidation";
 
 export { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
+// Re-exported so the hook stays the canonical import site for launch-path
+// callers; the action layer imports the pure module directly (#11547).
+export { resolveAgentLaunchKind } from "@/utils/agentLaunchValidation";
 
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
-
-/**
- * Sanitize an assistant-supplied terminal name for use as a panel title.
- * Strips ASCII control characters (an LLM could emit newlines, tabs, or ANSI
- * escape sequences), collapses internal whitespace, and trims. Returns "" when
- * nothing printable remains, which the caller treats as "no name" (falls back
- * to the default computed title with no `titleMode` pin).
- */
-function sanitizeTerminalName(raw: string): string {
-  let out = "";
-  for (const ch of raw) {
-    const code = ch.codePointAt(0) ?? 0;
-    // Drop C0 controls (0x00–0x1f) and DEL (0x7f); replace with a space so
-    // adjacent words don't fuse, then collapse the runs below.
-    out += code <= 0x1f || code === 0x7f ? " " : ch;
-  }
-  return out.replace(/\s+/g, " ").trim();
-}
 
 /**
  * Resolve the worktree a launch should target. When a `targetWorktreeId` is
@@ -91,41 +77,6 @@ export function resolveLaunchWorktree<T>(
     );
   }
   return targetWorktree ?? null;
-}
-
-/**
- * Classify a launch id, rejecting one that resolves to no agent. Without this,
- * an unregistered id left `isAgent` false and fell through to the generic
- * terminal branch, spawning a plain shell and reporting success — a typo'd id
- * from MCP looked identical to a launched agent (#11498). Throwing (rather than
- * returning null) is what makes it visible: `ActionService` serializes a
- * rejection as `ok:false`/`EXECUTION_ERROR`, while a resolved null reads as a
- * terminal-less success.
- *
- * Returns the kind rather than just asserting so the call site stays
- * load-bearing: deleting it breaks `isAgent` instead of quietly restoring the
- * fallback this fixes.
- *
- * `"terminal"` is the deliberate plain-shell launch, accepted unregistered
- * because no built-in agent claims that id. A plugin or user agent may still
- * register it, in which case it resolves as an agent — unchanged from before.
- * `"browser"` and `"dev-preview"` return from their own panel branches earlier
- * and never reach here, so they are not accepted: this stays correct standalone
- * and fails closed if either branch is ever bypassed.
- */
-export function resolveAgentLaunchKind(
-  agentId: string,
-  isRegistered: boolean
-): "agent" | "terminal" {
-  if (isRegistered) return "agent";
-  if (agentId === "terminal") return "terminal";
-  // The id can arrive from an LLM via MCP, so keep it printable and bounded —
-  // otherwise it can forge log lines or bloat the error crossing the boundary.
-  const safeId = sanitizeTerminalName(agentId).slice(0, 80);
-  throw new Error(
-    `Unknown agent ID '${safeId}'. Call agent.listAvailable for registered agent IDs, ` +
-      `then retry, or use terminal.new to open a plain terminal.`
-  );
 }
 
 export interface LaunchAgentOptions {
@@ -197,16 +148,32 @@ export interface LaunchAgentOptions {
   name?: string;
 }
 
+/**
+ * Where a launch actually landed. Resolved before the panel is created, so it
+ * accompanies every non-null launch result — a caller driving several launches
+ * at once can map a terminal back to its worktree without re-resolving the
+ * target itself and reconciling afterwards (#11547).
+ */
+export interface LaunchAgentIdentity {
+  /** Resolved target worktree, or null when the launch is outside one. */
+  worktreeId: string | null;
+  /** Absolute path of the resolved worktree; null when there is none. */
+  worktreePath: string | null;
+  /** Branch of the resolved worktree; null when detached or absent. */
+  branch: string | null;
+  /** Working directory the panel was actually spawned in. Always resolved. */
+  cwd: string;
+}
+
+export interface LaunchAgentResult extends LaunchAgentIdentity {
+  terminalId: string;
+  location: "grid" | "dock";
+  /** Atomic launch result: no PTY was started; a setup diagnostic panel was opened. */
+  spawnStatus?: "missing-cli";
+}
+
 export interface UseAgentLauncherReturn {
-  launchAgent: (
-    agentId: string,
-    options?: LaunchAgentOptions
-  ) => Promise<{
-    terminalId: string;
-    location: "grid" | "dock";
-    /** Atomic launch result: no PTY was started; a setup diagnostic panel was opened. */
-    spawnStatus?: "missing-cli";
-  } | null>;
+  launchAgent: (agentId: string, options?: LaunchAgentOptions) => Promise<LaunchAgentResult | null>;
   availability: CliAvailability;
   isCheckingAvailability: boolean;
   agentSettings: AgentSettings | null;
@@ -286,11 +253,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
     async (
       agentId: string,
       launchOptions?: LaunchAgentOptions
-    ): Promise<{
-      terminalId: string;
-      location: "grid" | "dock";
-      spawnStatus?: "missing-cli";
-    } | null> => {
+    ): Promise<LaunchAgentResult | null> => {
       if (!isElectronAvailable()) {
         console.warn("Electron API not available");
         return null;
@@ -318,6 +281,17 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             homeDir,
           });
 
+        // Resolved once, spread into every success return so a caller learns
+        // where the launch landed without re-deriving it. `|| null` matches the
+        // `targetWorktreeId || undefined` the panel options use — an empty
+        // string is not a worktree id.
+        const launchIdentity: LaunchAgentIdentity = {
+          worktreeId: targetWorktreeId || null,
+          worktreePath: targetWorktree?.path ?? null,
+          branch: targetWorktree?.branch ?? null,
+          cwd,
+        };
+
         // Handle browser pane specially
         if (agentId === "browser") {
           try {
@@ -332,7 +306,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             if (!terminalId) return null;
             const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";
             const location = rawLocation === "dock" ? "dock" : "grid";
-            return { terminalId, location };
+            return { terminalId, location, ...launchIdentity };
           } catch (error) {
             logError("Failed to launch browser pane", error);
             return null;
@@ -354,7 +328,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             if (!terminalId) return null;
             const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";
             const location = rawLocation === "dock" ? "dock" : "grid";
-            return { terminalId, location };
+            return { terminalId, location, ...launchIdentity };
           } catch (error) {
             logError("Failed to launch dev-preview pane", error);
             return null;
@@ -679,6 +653,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               terminalId: gateId,
               location: gatePanel.location === "dock" ? "dock" : "grid",
               spawnStatus: "missing-cli" as const,
+              ...launchIdentity,
             };
           }
         }
@@ -689,7 +664,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           if (!terminalId) return null;
           const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";
           const location = rawLocation === "dock" ? "dock" : "grid";
-          return { terminalId, location };
+          return { terminalId, location, ...launchIdentity };
         } catch (error) {
           logError(`Failed to launch ${agentId} agent`, error);
           return null;
