@@ -778,6 +778,24 @@ describe("forge.* query adversarial", () => {
     expect(issueOpts).not.toHaveProperty("view");
     expect(prOpts).not.toHaveProperty("view");
   });
+
+  it("forwards `bypassCache` to the provider — the only escape from a warm list cache", async () => {
+    forgeClientMock.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    forgeClientMock.listPRs.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    await runAction("forge.listIssues", { bypassCache: true }, { activeWorktreePath: "/repo" });
+    await runAction("forge.listPRs", { bypassCache: true }, { activeWorktreePath: "/repo" });
+    const [, issueOpts] = forgeClientMock.listIssues.mock.calls[0]!;
+    const [, prOpts] = forgeClientMock.listPRs.mock.calls[0]!;
+    expect(issueOpts).toMatchObject({ bypassCache: true });
+    expect(prOpts).toMatchObject({ bypassCache: true });
+  });
+
+  it("leaves `bypassCache` unset when omitted, so ordinary paging stays cache-first", async () => {
+    forgeClientMock.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    await runAction("forge.listIssues", { cursor: "c1" }, { activeWorktreePath: "/repo" });
+    const [, opts] = forgeClientMock.listIssues.mock.calls[0]!;
+    expect(opts.bypassCache).toBeUndefined();
+  });
 });
 
 /**
@@ -806,6 +824,12 @@ describe("forge list arg validation rejects rather than strips", () => {
 
   it("still accepts `search` on listIssues, where it is wired", () => {
     expect(parse("forge.listIssues", { search: "no:assignee" }).success).toBe(true);
+  });
+
+  it("admits `bypassCache` on both lists — strictness must not strand the freshness knob", () => {
+    expect(parse("forge.listIssues", { bypassCache: true }).success).toBe(true);
+    expect(parse("forge.listPRs", { bypassCache: true }).success).toBe(true);
+    expect(parse("forge.listIssues", { bypassCache: "yes" }).success).toBe(false);
   });
 
   it("bounds perPage to what the provider can request, inclusive of both ends", () => {
