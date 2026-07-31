@@ -4,7 +4,7 @@ import { deriveBand, BAND_OVERRIDES } from "../../../shared/utils/actionRiskBand
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import type { HelpTokenValidator } from "./shared.js";
-import { type McpTier, TIER_ALLOWLISTS, MCP_FULL_TOOL_SURFACE_ALLOWLIST } from "./shared.js";
+import { type McpTier, TIER_ALLOWLISTS } from "./shared.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -83,11 +83,13 @@ export function resolveTokenTier(
   return "workbench";
 }
 
-export function shouldExposeTool(
-  entry: ActionManifestEntry,
-  tier: McpTier,
-  fullToolSurface: boolean
-): boolean {
+/**
+ * `tools/list` gate. The manifest-metadata exclusions are advertisement-only
+ * filters layered on top of the tier floor; membership itself defers to
+ * {@link isTierPermitted} so exposure and dispatch can never drift apart and
+ * advertise a tool the dispatcher then rejects (#7155).
+ */
+export function shouldExposeTool(entry: ActionManifestEntry, tier: McpTier): boolean {
   if (entry.danger === "restricted") {
     return false;
   }
@@ -97,20 +99,10 @@ export function shouldExposeTool(
   if (entry.mcpVisibility === "discoverable") {
     return false;
   }
-  if (tier === "external" && fullToolSurface) {
-    return MCP_FULL_TOOL_SURFACE_ALLOWLIST.has(entry.id);
-  }
-  return TIER_ALLOWLISTS[tier].has(entry.id);
+  return isTierPermitted(tier, entry.id);
 }
 
-export function isTierPermitted(
-  tier: McpTier,
-  actionId: string,
-  fullToolSurface: boolean
-): boolean {
-  if (tier === "external" && fullToolSurface) {
-    return MCP_FULL_TOOL_SURFACE_ALLOWLIST.has(actionId);
-  }
+export function isTierPermitted(tier: McpTier, actionId: string): boolean {
   return TIER_ALLOWLISTS[tier].has(actionId);
 }
 

@@ -267,7 +267,6 @@ export interface StoreSchema {
     enabled: boolean;
     port: number | null;
     apiKey: string;
-    fullToolSurface: boolean;
     auditEnabled: boolean;
     auditMaxRecords: number;
     /** @deprecated Moved to the audit-logs store by migration022. Read-only carryover. */
@@ -633,7 +632,6 @@ const storeOptions = {
       enabled: false,
       port: 45454,
       apiKey: "",
-      fullToolSurface: false,
       auditEnabled: true,
       auditMaxRecords: MCP_AUDIT_DEFAULT_MAX_RECORDS,
       abusePolicyEnabled: false,

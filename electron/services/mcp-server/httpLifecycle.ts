@@ -1488,7 +1488,6 @@ export class HttpLifecycle {
         });
       },
       getCachedManifest,
-      getFullToolSurface: () => this.getConfig().fullToolSurface === true,
       notifyTierMismatch,
       recordDenial,
       notifySessionRevoked,

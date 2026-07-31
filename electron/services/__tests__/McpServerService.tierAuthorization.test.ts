@@ -135,7 +135,6 @@ const storeState = vi.hoisted(() => ({
     enabled: true,
     port: 0,
     apiKey: "",
-    fullToolSurface: false,
     auditEnabled: true,
     auditMaxRecords: 500,
   },
@@ -501,7 +500,6 @@ describe("McpServerService", () => {
       enabled: true,
       port: 0,
       apiKey: "",
-      fullToolSurface: false,
       auditEnabled: true,
       auditMaxRecords: 500,
     };
@@ -723,35 +721,6 @@ describe("McpServerService", () => {
       expect(denied?.errorCode).toBe("TIER_NOT_PERMITTED");
       expect(allowed?.tier).toBe("workbench");
       expect(allowed?.result).toBe("success");
-    });
-
-    it("fullToolSurface widens external tier only — workbench remains tightly scoped", async () => {
-      storeState.mcpServer.fullToolSurface = true;
-      const { window } = createMockWindow({
-        getManifest: () => [
-          createManifestEntry({
-            id: "actions.list" as ActionId,
-            title: "List Actions",
-            description: "Read the action registry",
-            kind: "query",
-          }),
-          createManifestEntry({
-            id: "panel.gridLayout.setStrategy" as ActionId,
-            title: "Set grid layout",
-            description: "UI plumbing",
-          }),
-        ],
-      });
-
-      await service.start(window);
-      const { client, transport } = await connectWorkbench(service.currentPort!);
-      transports.push(transport);
-
-      const ids = (await client.listTools()).tools.map((t) => t.name);
-      expect(ids).toContain("actions.list");
-      // panel.gridLayout.setStrategy is NOT in the workbench allowlist —
-      // fullToolSurface must not widen anything for non-external tiers.
-      expect(ids).not.toContain("panel.gridLayout.setStrategy");
     });
 
     it("Streamable HTTP transport stamps the resolved tier on the session", async () => {
@@ -1605,8 +1574,7 @@ describe("McpServerService", () => {
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
-    it("tier filtering takes precedence over fullToolSurface for pane-scoped sessions", async () => {
-      storeState.mcpServer.fullToolSurface = true;
+    it("filters listTools by the pane token's tier for pane-scoped sessions", async () => {
       paneTokenTiers.set("token-wb", "workbench");
       const { window } = createMockWindow({
         getManifest: () => [
@@ -1627,7 +1595,7 @@ describe("McpServerService", () => {
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
-      // workbench excludes these even with fullToolSurface enabled.
+      // Outside the workbench allowlist — the pane tier is the ceiling.
       expect(ids).not.toContain("worktree.create");
       expect(ids).not.toContain("git.commit");
       expect(ids).not.toContain("panel.gridLayout.setStrategy");

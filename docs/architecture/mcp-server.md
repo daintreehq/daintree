@@ -164,9 +164,9 @@ type McpTier = "workbench" | "action" | "system" | "external";
 | `workbench` | `WORKBENCH_TIER_TOOLS` — read-only / low-risk introspection (the help-assistant baseline). |
 | `action` | workbench ∪ `ACTION_TIER_ADDONS` (includes `terminal.waitUntilIdle`). |
 | `system` | workbench ∪ action ∪ `SYSTEM_TIER_ADDONS`. |
-| `external` | `MCP_TOOL_ALLOWLIST` — the full vetted tool set for API-key callers (when `fullToolSurface` is on, `external` uses `MCP_FULL_TOOL_SURFACE_ALLOWLIST` — an explicit, fail-closed superset of `MCP_TOOL_ALLOWLIST`, never a bypass). |
+| `external` | `MCP_TOOL_ALLOWLIST` — the full vetted tool set for API-key callers, and the only surface they can reach. Nothing widens it: adding an entry to that list is the sole way to expose a tool externally (#11537 removed the never-reachable `fullToolSurface` opt-in that used to promise otherwise). |
 
-`shouldExposeTool` (used by `tools/list`) and `isTierPermitted` (used by `tools/call`) are the two gates. Both **hard-deny `danger === "restricted"`** and any tool whose `mcpVisibility` is `hidden` or `discoverable` — `restricted` actions are never reachable over MCP regardless of tier.
+`shouldExposeTool` (used by `tools/list`) and `isTierPermitted` (used by `tools/call`) are the two gates, and they enforce different things. `isTierPermitted` owns tier membership and nothing else. `shouldExposeTool` layers the **advertisement-only** filters — `danger === "restricted"`, `mcpVisibility` `hidden` or `discoverable` — on top and then defers to `isTierPermitted`, so membership can never drift between the two. Those metadata filters keep a tool out of `tools/list` but do not by themselves block dispatch: a `discoverable` tool that is tier-permitted (e.g. `worktree.resource.teardown`) is deliberately callable once an agent finds it via the meta-tools. `restricted` actions are the exception that really is unreachable — `ActionService.dispatch` rejects them independently of tier.
 
 ### Risk bands and `danger`
 
@@ -174,7 +174,7 @@ type McpTier = "workbench" | "action" | "system" | "external";
 
 How `danger` interacts with tier gating:
 
-- `danger: "restricted"` — never exposed, never dispatchable over MCP (hard floor in `shouldExposeTool`/`isTierPermitted`).
+- `danger: "restricted"` — never exposed (hard floor in `shouldExposeTool`) and never dispatchable, the latter enforced by `ActionService.dispatch` rather than by the tier gate.
 - `danger: "confirm"` — _exposed and dispatchable_ if the tier permits, but the `CallTool` handler dispatches it **unconfirmed** so the human approves it host-side in the renderer's native `McpConfirmDialog` (via the renderer bridge) before the mutation fires. This is the MCP-side wiring of the same confirm gate documented in [`destructive-action-safeguards.md`](./destructive-action-safeguards.md): `danger:"confirm"` classifies the action; the host `ConfirmDialog` is the user-facing confirm. A client's self-declared `elicitation.form` capability is **never** treated as authorization — a headless/agentic client could otherwise answer its own in-band elicitation `accept` and self-approve a destructive call with no human in the loop (#11342). When no Daintree window is open to surface the dialog the call is refused with `CONFIRMATION_REQUIRED` (`confirmationChannel: "unavailable"`); only a host-issued native automation grant pre-authorizes a dispatch.
 
 ## Session lifecycle (`sessionStore.ts`, `httpLifecycle.ts`)
@@ -211,7 +211,7 @@ The `CallTool` handler is a fixed-order gate chain. Each gate that denies writes
 ```
 tools/call(actionId, args)
   │
-  ├─1 Tier floor: isTierPermitted(tier, actionId, fullToolSurface)?
+  ├─1 Tier floor: isTierPermitted(tier, actionId)?
   │      └─ no → grantCache.check(sessionId, actionId)
   │             ├─ granted → proceed (capture issuedAt for post-dispatch refresh)
   │             └─ denied  → incrementDenial → maybe notifyTierMismatch (banner,
@@ -262,7 +262,7 @@ Three axes are independent — do not infer one from another:
 
 - **`danger`** gates the user-facing confirm. `danger:"confirm"` dispatches the call unconfirmed so the human approves it host-side in the native `McpConfirmDialog` before the mutation fires (see [Risk bands and `danger`](#risk-bands-and-danger)); `danger:"safe"` does not. It says nothing about rate limit. `forge.createIssue` is `safe` while `forge.closeIssue` is `confirm`; `forge.approvePR` is `confirm` yet on the `standard` bucket while `forge.createPR` is `confirm` on `mutation`.
 - **Rate limit** is the token bucket (`standard` 30/min, `mutation` 10/min). It is set per-id in `RATE_LIMIT_TOOL_MAP`, not derived from `danger` or write-intent — the browser-open commands `forge.openIssue`/`forge.openPR` are `safe` but `mutation`-bucketed because an LLM retry would pop a duplicate browser tab.
-- **External** marks whether the action is in `MCP_TOOL_ALLOWLIST` and therefore reachable by `external` (API-key) callers. All writes require the `system` tier; the twelve marked `External: no` are reachable _only_ via a `system`-tier session (the in-app help assistant), not by an external API key (unless `fullToolSurface` is enabled, which switches `external` to `MCP_FULL_TOOL_SURFACE_ALLOWLIST` — a fail-closed superset of `MCP_TOOL_ALLOWLIST`, not a bypass — see [Tier model](#tier-model-sharedts)), even though they pass the `system` floor.
+- **External** marks whether the action is in `MCP_TOOL_ALLOWLIST` and therefore reachable by `external` (API-key) callers. All writes require the `system` tier; the twelve marked `External: no` are reachable _only_ via a `system`-tier session (the in-app help assistant), never by an external API key, even though they pass the `system` floor. There is no setting that changes this — see [Tier model](#tier-model-sharedts).
 
 ### Forge reads (`workbench` tier)
 
@@ -310,7 +310,7 @@ Every action below is in `SYSTEM_TIER_ADDONS` and requires the `system` tier (or
 | `forge.removeIssueLabel` | safe | standard | no | no | `issueNumber`, `label`, `cwd?` |
 | `forge.validateToken` | safe | standard | no | yes | `providerId`, `token` |
 
-The twelve `External: no` actions — `forge.unassignIssue`, `forge.approvePR`, `forge.requestChanges`, `forge.dismissReview`, `forge.requestReviewers`, `forge.createIssue`, `forge.closeIssue`, `forge.reopenIssue`, `forge.editIssue`, `forge.addIssueComment`, `forge.addIssueLabel`, `forge.removeIssueLabel` — are deliberately absent from `MCP_TOOL_ALLOWLIST`: the curated default-deny external surface (lesson #6318) is narrower than the full `system` addon set, so an API-key caller cannot reach them. Keep these three lists in lockstep when adding a forge action; the `forge.rateLimit` test and the tier snapshots guard against drift.
+The twelve `External: no` actions — `forge.unassignIssue`, `forge.approvePR`, `forge.requestChanges`, `forge.dismissReview`, `forge.requestReviewers`, `forge.createIssue`, `forge.closeIssue`, `forge.reopenIssue`, `forge.editIssue`, `forge.addIssueComment`, `forge.addIssueLabel`, `forge.removeIssueLabel` — are deliberately absent from `MCP_TOOL_ALLOWLIST`: the curated default-deny external surface (lesson #6318) is narrower than the full `system` addon set, so an API-key caller cannot reach them — and there is no opt-in that lifts that floor, so promoting one is an edit to `MCP_TOOL_ALLOWLIST_ENTRIES` and nothing else. Keep these three lists in lockstep when adding a forge action; the `forge.rateLimit` test and the tier snapshots guard against drift.
 
 ## Submitting input (`terminal.sendCommand`)
 

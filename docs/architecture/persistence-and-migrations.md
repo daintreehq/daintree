@@ -43,7 +43,7 @@ export interface Migration {
 }
 ```
 
-Migrations are individual files `NNN-name.ts` in `electron/services/migrations/`, each exporting `migrationNNN`, and registered (imported + listed) in `electron/services/migrations/index.ts`. `LATEST_SCHEMA_VERSION` (currently `21`) lives at the top of `StoreMigrations.ts` and must track the highest registered migration.
+Migrations are individual files `NNN-name.ts` in `electron/services/migrations/`, each exporting `migrationNNN`, and registered (imported + listed) in `electron/services/migrations/index.ts`. `LATEST_SCHEMA_VERSION` lives at the top of `StoreMigrations.ts` and must track the highest registered migration — a test asserts the two agree, so read the constant rather than trusting any number quoted here.
 
 **Current chain** (`index.ts`, verified against the tree):
 
@@ -69,6 +69,11 @@ Migrations are individual files `NNN-name.ts` in `electron/services/migrations/`
 |     019 | `019-remove-fleet-deck-open.ts`                                        |
 |     020 | `020-window-states-store.ts`                                           |
 |     021 | `021-merge-disabled-plugins.ts`                                        |
+|     022 | `022-audit-logs-store.ts`                                              |
+|     023 | `023-audit-rings-to-audit-logs-store.ts`                               |
+|     024 | `024-backfill-github-forge-credential.ts`                              |
+|     025 | `025-upgrade-voice-correction-model.ts`                                |
+|     026 | `026-remove-full-tool-surface.ts`                                      |
 
 There is no `001`; the chain starts at `002`. Migration files are numbered, not strictly contiguous — `006` is a permanent gap.
 

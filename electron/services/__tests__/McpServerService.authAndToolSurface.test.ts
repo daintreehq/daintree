@@ -77,7 +77,6 @@ const storeState = vi.hoisted(() => ({
     enabled: true,
     port: 0,
     apiKey: "",
-    fullToolSurface: false,
     auditEnabled: true,
     auditMaxRecords: 500,
   },
@@ -492,7 +491,6 @@ describe("McpServerService", () => {
       enabled: true,
       port: 0,
       apiKey: "",
-      fullToolSurface: false,
       auditEnabled: true,
       auditMaxRecords: 500,
     };
@@ -1166,7 +1164,9 @@ describe("McpServerService", () => {
     expect(webContents.send).not.toHaveBeenCalled();
   });
 
-  it("hides non-allowlisted tools by default (curated MCP surface)", async () => {
+  // The curated allowlist is the only external surface — nothing widens it
+  // (#10701, #11537). Non-allowlisted and restricted entries both stay off.
+  it("hides non-allowlisted and restricted tools (curated MCP surface)", async () => {
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
@@ -1180,39 +1180,13 @@ describe("McpServerService", () => {
           title: "Set grid layout",
           description: "UI plumbing — should not appear in curated surface",
         }),
-      ],
-    });
-
-    await service.start(window);
-    const { client, transport } = await connectClient(service.currentPort!);
-    transports.push(transport);
-
-    const result = await client.listTools();
-    const ids = result.tools.map((tool) => tool.name);
-
-    expect(ids).toContain("actions.list");
-    expect(ids).not.toContain("panel.gridLayout.setStrategy");
-  });
-
-  it("keeps non-allowlisted tools off the surface even when fullToolSurface is enabled (#10701)", async () => {
-    storeState.mcpServer.fullToolSurface = true;
-    const { window } = createMockWindow({
-      getManifest: () => [
+        // Allowlisted, so only the restricted filter can withhold it — using a
+        // non-allowlisted id here would pass even with that filter deleted.
         createManifestEntry({
-          id: "actions.list" as ActionId,
-          title: "List Actions",
-          description: "Read the action registry",
+          id: "actions.search" as ActionId,
+          title: "Search Actions",
+          description: "Restricted despite being allowlisted",
           kind: "query",
-        }),
-        createManifestEntry({
-          id: "panel.gridLayout.setStrategy" as ActionId,
-          title: "Set grid layout",
-          description: "Sensitive UI plumbing — not in the curated allowlist",
-        }),
-        createManifestEntry({
-          id: "internal.dangerous" as ActionId,
-          title: "Restricted",
-          description: "Should never be advertised",
           danger: "restricted",
         }),
       ],
@@ -1225,16 +1199,12 @@ describe("McpServerService", () => {
     const result = await client.listTools();
     const ids = result.tools.map((tool) => tool.name);
 
-    // fullToolSurface lifts the floor through the curated full-surface allowlist;
-    // it does not bypass it. Allowlisted tools stay reachable; non-allowlisted
-    // and restricted tools stay hidden.
     expect(ids).toContain("actions.list");
     expect(ids).not.toContain("panel.gridLayout.setStrategy");
-    expect(ids).not.toContain("internal.dangerous");
+    expect(ids).not.toContain("actions.search");
   });
 
-  it("denies dispatch of non-allowlisted tools even with fullToolSurface enabled (#10701)", async () => {
-    storeState.mcpServer.fullToolSurface = true;
+  it("denies dispatch of non-allowlisted tools for the external tier (#10701)", async () => {
     const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
       ok: true,
       result: { dispatched: payload.actionId },
@@ -1267,8 +1237,16 @@ describe("McpServerService", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it("treats non-true fullToolSurface values as curated (fail-closed)", async () => {
-    (storeState.mcpServer as { fullToolSurface: unknown }).fullToolSurface = "false";
+  // A store written before #11537 (or hand-edited since) can still carry
+  // `mcpServer.fullToolSurface: true` until migration 026 runs. It must be inert
+  // — this is the regression guard for reintroducing the #10701 config-gated
+  // bypass, which no other test would catch now that the flag is gone.
+  it("ignores a stale persisted fullToolSurface key (#11537)", async () => {
+    (storeState.mcpServer as Record<string, unknown>)["fullToolSurface"] = true;
+    const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+      ok: true,
+      result: { dispatched: payload.actionId },
+    }));
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
@@ -1277,12 +1255,16 @@ describe("McpServerService", () => {
           description: "Read the action registry",
           kind: "query",
         }),
+        // Real, currently-shipping danger:"safe" action with a genuine side
+        // effect that the curated allowlist deliberately excludes — one of the
+        // 335 the old flag leaked.
         createManifestEntry({
-          id: "panel.gridLayout.setStrategy" as ActionId,
-          title: "Set grid layout",
-          description: "UI plumbing",
+          id: "system.openExternal" as ActionId,
+          title: "Open External URL",
+          description: "Launches a URL in the OS browser",
         }),
       ],
+      dispatchAction: dispatchMock,
     });
 
     await service.start(window);
@@ -1291,7 +1273,15 @@ describe("McpServerService", () => {
 
     const ids = (await client.listTools()).tools.map((tool) => tool.name);
     expect(ids).toContain("actions.list");
-    expect(ids).not.toContain("panel.gridLayout.setStrategy");
+    expect(ids).not.toContain("system.openExternal");
+
+    const result = getTextResult(
+      await client.callTool({ name: "system.openExternal", arguments: { url: "https://x.test" } })
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("TIER_NOT_PERMITTED");
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("denies non-allowlisted actions for the external tier (dispatch never reached)", async () => {

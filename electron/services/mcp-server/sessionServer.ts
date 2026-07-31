@@ -198,7 +198,6 @@ export interface SessionServerDeps {
     capturedTurnId?: string | null;
   }) => void;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
-  getFullToolSurface: () => boolean;
   /**
    * Optional renderer notifier fired when a help-session tool call is denied
    * because the session tier doesn't permit it. Implemented by httpLifecycle
@@ -313,7 +312,6 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     handleSkillsLoad,
     appendAuditRecord,
     getCachedManifest,
-    getFullToolSurface,
     notifyTierMismatch,
     recordDenial,
     notifySessionRevoked,
@@ -366,9 +364,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       manifest = cachedFallback;
     }
     const tier = sessionStore.getTier(sessionId);
-    const fullToolSurface = getFullToolSurface();
     const tools = manifest
-      .filter((entry) => shouldExposeTool(entry, tier, fullToolSurface))
+      .filter((entry) => shouldExposeTool(entry, tier))
       .map((entry) => {
         const outputSchema = buildToolOutputSchema(entry);
         const _meta =
@@ -391,7 +388,6 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const { args, requestKey } = parseToolArguments(request.params.arguments);
     const startedAt = Date.now();
     const tier = sessionStore.getTier(sessionId);
-    const fullToolSurface = getFullToolSurface();
     // Snapshot the turn id once, at dispatch start, before any guard or await
     // can yield to an active→passive FSM transition that would clear it (#10067).
     // Every consumer below — the started/settled strip events and all audit
@@ -419,7 +415,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // grant's TTL window, and so the `danger: "confirm"` modal is bypassed —
     // a native grant is an explicit user approval of the tool's scope.
     let nativeGrantId: string | undefined;
-    if (!isTierPermitted(tier, actionId, fullToolSurface)) {
+    if (!isTierPermitted(tier, actionId)) {
       const grant = sessionStore.grantCache.check(sessionId, actionId);
       const native = grant.granted
         ? null
@@ -1371,12 +1367,7 @@ async function tryDispatchList(
 
 function isResourcePermitted(sessionId: string, deps: SessionServerDeps, kind: string): boolean {
   const tier = deps.sessionStore.getTier(sessionId);
-  const fullToolSurface = deps.getFullToolSurface();
-  return isTierPermitted(
-    tier,
-    (RESOURCE_BACKING_ACTIONS as Record<string, string>)[kind],
-    fullToolSurface
-  );
+  return isTierPermitted(tier, (RESOURCE_BACKING_ACTIONS as Record<string, string>)[kind]);
 }
 
 function subscribeResource(
