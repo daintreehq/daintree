@@ -215,7 +215,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "slashCommands.list",
       title: "List Slash Commands",
       description:
-        "List the slash commands available for an agent CLI. Args (all optional): `agentId` — built-in agent id (e.g. 'claude', 'codex'), defaults to 'claude'; `projectId` or `projectPath` — project to scope project-local commands, defaults to the active project. Returns { commands } — each with id, label, description, scope, agentId, and optional sourcePath/kind. Never errors; returns an empty list when the agent has none.",
+        "List the slash commands available for an agent CLI. Args (all optional): `agentId` — built-in agent id (e.g. 'claude', 'codex'), defaults to 'claude'; `projectId` or `projectPath` — project to scope project-local commands, defaults to the active project. Returns { commands } — each with id, label, description, scope, agentId, and optional sourcePath/kind, and an empty list when the agent has none. Errors when `projectId` names a project that is not open.",
       category: "agent",
       kind: "query",
       danger: "safe",
@@ -274,14 +274,17 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "artifact.applyPatch",
       title: "Apply Patch",
       description:
-        "Apply a unified diff patch to the filesystem. Args: `patchContent` (required); `worktreeId` or `worktreePath` (optional) — the worktree to apply into, defaults to the active one (`cwd` is accepted as a legacy alias for `worktreePath`).",
+        "Apply a unified diff patch to the filesystem. Args: `patchContent` (required); `worktreeId` or `worktreePath` (required) — the worktree to apply into (`cwd` is accepted as a legacy alias for `worktreePath`). Errors when either argument is missing. There is deliberately no active-worktree default: a destructive write must name its target rather than fall back to whatever happens to be active.",
       category: "artifacts",
       kind: "command",
       danger: "confirm",
       dangerRationale:
         "Writes patch content directly into worktree files via git apply — a shared-state mutation with no automatic inverse; recovery is a manual git checkout of the touched files.",
       scope: "renderer",
-      argsSchema: withWorktreeLocation({ patchContent: z.string() }, { legacy: ["cwd"] }),
+      argsSchema: withWorktreeLocation(
+        { patchContent: z.string() },
+        { legacy: ["cwd"], requireSelector: true }
+      ),
       run: async ({ patchContent, ...location }, ctx) => {
         return await artifactClient.applyPatch({
           patchContent,

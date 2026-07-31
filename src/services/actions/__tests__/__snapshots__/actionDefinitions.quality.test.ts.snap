@@ -693,7 +693,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "artifacts",
     "danger": "confirm",
     "dangerRationale": "Writes patch content directly into worktree files via git apply — a shared-state mutation with no automatic inverse; recovery is a manual git checkout of the touched files.",
-    "description": "Apply a unified diff patch to the filesystem. Args: \`patchContent\` (required); \`worktreeId\` or \`worktreePath\` (optional) — the worktree to apply into, defaults to the active one (\`cwd\` is accepted as a legacy alias for \`worktreePath\`).",
+    "description": "Apply a unified diff patch to the filesystem. Args: \`patchContent\` (required); \`worktreeId\` or \`worktreePath\` (required) — the worktree to apply into (\`cwd\` is accepted as a legacy alias for \`worktreePath\`). Errors when either argument is missing. There is deliberately no active-worktree default: a destructive write must name its target rather than fall back to whatever happens to be active.",
     "examples": undefined,
     "id": "artifact.applyPatch",
     "keywords": undefined,
@@ -3814,7 +3814,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List the slash commands available for an agent CLI. Args (all optional): \`agentId\` — built-in agent id (e.g. 'claude', 'codex'), defaults to 'claude'; \`projectId\` or \`projectPath\` — project to scope project-local commands, defaults to the active project. Returns { commands } — each with id, label, description, scope, agentId, and optional sourcePath/kind. Never errors; returns an empty list when the agent has none.",
+    "description": "List the slash commands available for an agent CLI. Args (all optional): \`agentId\` — built-in agent id (e.g. 'claude', 'codex'), defaults to 'claude'; \`projectId\` or \`projectPath\` — project to scope project-local commands, defaults to the active project. Returns { commands } — each with id, label, description, scope, agentId, and optional sourcePath/kind, and an empty list when the agent has none. Errors when \`projectId\` names a project that is not open.",
     "examples": undefined,
     "id": "slashCommands.list",
     "keywords": undefined,
@@ -5492,7 +5492,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Create a new worktree. Args: \`worktreeId\` or \`worktreePath\` (optional) — the repository to branch from, defaults to the active worktree (\`rootPath\` is accepted as a legacy alias for \`worktreePath\`); \`options\` (required) — baseBranch, newBranch, and the new worktree's path.",
+    "description": "Create a new worktree. Args: \`worktreeId\` or \`worktreePath\` (required) — the repository root to branch from (\`rootPath\` is accepted as a legacy alias for \`worktreePath\`); \`options\` (required) — baseBranch, newBranch, and the new worktree's path. Errors when either argument is missing. There is deliberately no active-worktree default: creation anchors on the repo root, and the active worktree is usually a linked one.",
     "examples": undefined,
     "id": "worktree.create",
     "keywords": undefined,
@@ -5613,7 +5613,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Compute the default filesystem path for a new worktree from the repo root, branch name, and the configured path pattern. Args: \`worktreeId\` or \`worktreePath\` (optional) — the repository, defaults to the active worktree (\`rootPath\` is accepted as a legacy alias for \`worktreePath\`); \`branchName\` (required) — the branch the worktree will track. Returns { path }. Errors when \`branchName\` is missing, or when no worktree is given and none is active.",
+    "description": "Compute the default filesystem path for a new worktree from the repo root, branch name, and the configured path pattern. Args: \`worktreeId\` or \`worktreePath\` (required) — the repository root to anchor the path on (\`rootPath\` is accepted as a legacy alias for \`worktreePath\`); \`branchName\` (required) — the branch the worktree will track. Returns { path }. Errors when either argument is missing. There is deliberately no active-worktree default: the active worktree is usually a linked worktree, and anchoring on one silently misses the project's configured path pattern and produces a path nested under that worktree.",
     "examples": [
       {
         "args": {

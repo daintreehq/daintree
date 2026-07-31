@@ -172,14 +172,14 @@ export function registerWorktreeQueryActions(
       id: "worktree.getDefaultPath",
       title: "Get Default Worktree Path",
       description:
-        "Compute the default filesystem path for a new worktree from the repo root, branch name, and the configured path pattern. Args: `worktreeId` or `worktreePath` (optional) — the repository, defaults to the active worktree (`rootPath` is accepted as a legacy alias for `worktreePath`); `branchName` (required) — the branch the worktree will track. Returns { path }. Errors when `branchName` is missing, or when no worktree is given and none is active.",
+        "Compute the default filesystem path for a new worktree from the repo root, branch name, and the configured path pattern. Args: `worktreeId` or `worktreePath` (required) — the repository root to anchor the path on (`rootPath` is accepted as a legacy alias for `worktreePath`); `branchName` (required) — the branch the worktree will track. Returns { path }. Errors when either argument is missing. There is deliberately no active-worktree default: the active worktree is usually a linked worktree, and anchoring on one silently misses the project's configured path pattern and produces a path nested under that worktree.",
       category: "worktree",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       argsSchema: withWorktreeLocation(
         { branchName: z.string().describe("Branch name the new worktree will track.") },
-        { legacy: ["rootPath"] }
+        { legacy: ["rootPath"], requireSelector: true }
       ),
       examples: [
         {

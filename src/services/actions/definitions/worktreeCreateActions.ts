@@ -48,7 +48,7 @@ export function registerWorktreeCreateActions(
       id: "worktree.create",
       title: "Create Worktree",
       description:
-        "Create a new worktree. Args: `worktreeId` or `worktreePath` (optional) — the repository to branch from, defaults to the active worktree (`rootPath` is accepted as a legacy alias for `worktreePath`); `options` (required) — baseBranch, newBranch, and the new worktree's path.",
+        "Create a new worktree. Args: `worktreeId` or `worktreePath` (required) — the repository root to branch from (`rootPath` is accepted as a legacy alias for `worktreePath`); `options` (required) — baseBranch, newBranch, and the new worktree's path. Errors when either argument is missing. There is deliberately no active-worktree default: creation anchors on the repo root, and the active worktree is usually a linked one.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -76,7 +76,7 @@ export function registerWorktreeCreateActions(
             })
             .describe("Worktree creation options"),
         },
-        { legacy: ["rootPath"] }
+        { legacy: ["rootPath"], requireSelector: true }
       ),
       resultSchema: z.string(),
       run: async ({ options, ...location }, ctx) => {

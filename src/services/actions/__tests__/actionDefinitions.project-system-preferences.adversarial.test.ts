@@ -699,6 +699,26 @@ describe("system action hardening", () => {
     expect(options.scopePaths).toEqual(["src/panels"]);
   });
 
+  it("refuses an artifact patch that names no worktree instead of falling back to the active one", async () => {
+    const { service } = buildService(registerSystemActions);
+
+    // A destructive submit must never silently substitute a default target
+    // (CLAUDE.md destructive tiers, rule 1 — the #7880 root cause). Both
+    // dispatch sites in useArtifacts.ts already refuse to dispatch without a
+    // cwd, so requiring it here costs no caller anything.
+    const result = await service.dispatch(
+      "artifact.applyPatch",
+      { patchContent: "--- a\n+++ b" },
+      { source: "user" }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("VALIDATION_ERROR");
+    }
+    expect(mocks.artifactClient.applyPatch).not.toHaveBeenCalled();
+  });
+
   it("blocks unconfirmed agent-driven artifact patches (danger:confirm — worktree mutation, #10020)", async () => {
     const { service } = buildService(registerSystemActions);
 
