@@ -732,9 +732,16 @@ export type ProjectSettingsAgentExposure = "exposed" | "internal";
  *   of markup). `resourceEnvironments` joins them because it stores raw provisioning and
  *   `connect` shell strings that routinely embed credentials.
  * - Access-control state: `daintreeMcpTier` (`project.saveSettings` already strips it from
- *   writes to block self-elevation; it should not be readable either).
+ *   writes to block self-elevation; it should not be readable either) and
+ *   `browserAllowedHosts`, which is the browser panel's approval list.
  * - Renderer-only UI state: dismissal flags, editor/viewer preferences, saved fleet scopes.
  * - Deprecated aliases normalized away on read.
+ *
+ * Accepted residual exposure: `runCommands`, `devServerCommand` and `terminalSettings`
+ * carry user-authored command strings, which a user *could* have inlined a credential
+ * into (`API_TOKEN=… npm run dev`). They stay `exposed` because they are the operational
+ * core of this surface — the "runner config" the action exists to report — and unlike
+ * `resourceEnvironments` they describe local repo commands rather than remote access.
  */
 export const PROJECT_SETTINGS_AGENT_EXPOSURE = {
   runCommands: "exposed",
@@ -769,7 +776,7 @@ export const PROJECT_SETTINGS_AGENT_EXPOSURE = {
   resourceEnvironments: "internal",
   activeResourceEnvironment: "exposed",
   defaultWorktreeMode: "exposed",
-  browserAllowedHosts: "exposed",
+  browserAllowedHosts: "internal",
   daintreeMcpTier: "internal",
   exposeDaintreeMcpToAgents: "internal",
 } as const satisfies Record<keyof ProjectSettings, ProjectSettingsAgentExposure>;
@@ -790,6 +797,34 @@ export type AgentVisibleProjectSettingsKey = {
 export type AgentVisibleProjectSettings = Pick<ProjectSettings, AgentVisibleProjectSettingsKey>;
 
 /**
+ * Fields of a `RunCommand` an agent-facing surface may see.
+ *
+ * `runCommands` needs its own pass because the settings codec keeps each entry whole
+ * after checking only `id` and `command`, so an entry persisted with extra keys would
+ * otherwise ride along inside an `exposed` field.
+ */
+const AGENT_VISIBLE_RUN_COMMAND_KEYS = [
+  "id",
+  "name",
+  "command",
+  "icon",
+  "description",
+  "preferredLocation",
+  "preferredAutoRestart",
+  "isFrameworkDefault",
+] as const satisfies ReadonlyArray<keyof RunCommand>;
+
+function pickAgentVisibleRunCommand(command: RunCommand): RunCommand {
+  const visible: Partial<Record<keyof RunCommand, unknown>> = {};
+  for (const key of AGENT_VISIBLE_RUN_COMMAND_KEYS) {
+    const value = command[key];
+    if (value === undefined) continue;
+    visible[key] = value;
+  }
+  return visible as RunCommand;
+}
+
+/**
  * Build a fresh, agent-safe view of a project's settings.
  *
  * Iterating the classification table rather than the input object is what makes this
@@ -799,26 +834,28 @@ export type AgentVisibleProjectSettings = Pick<ProjectSettings, AgentVisibleProj
  * Always returns a new object — callers hand this the renderer's cached settings value,
  * so filtering in place would corrupt the cache every other consumer reads.
  *
- * The result is `Partial` rather than `AgentVisibleProjectSettings` because absent
- * optional fields are omitted rather than emitted as `undefined`, and because a nullish
- * payload (a project with nothing persisted yet) projects to an empty object rather
- * than throwing.
+ * `runCommands` is always present, matching both `ProjectSettings` and the schema
+ * `project.getSettings` advertises; a nullish or malformed payload yields an empty list
+ * rather than an absent key.
  */
 export function pickAgentVisibleProjectSettings(
   settings: ProjectSettings | null | undefined
-): Partial<AgentVisibleProjectSettings> {
-  const visible: Partial<AgentVisibleProjectSettings> = {};
-  if (!settings) return visible;
+): AgentVisibleProjectSettings {
+  const visible: Partial<Record<keyof ProjectSettings, unknown>> = {};
   for (const key of Object.keys(PROJECT_SETTINGS_AGENT_EXPOSURE) as Array<keyof ProjectSettings>) {
     if (PROJECT_SETTINGS_AGENT_EXPOSURE[key] !== "exposed") continue;
-    const value = settings[key];
+    const value = settings?.[key];
     if (value === undefined) continue;
     // Widening assignment: `value` came straight off `settings[key]`, so the key and
     // value types line up per-iteration — the cast is the loop's genericity concession,
     // matching `ProjectIdentityFiles.writeInRepoSettings`.
-    (visible as Record<keyof ProjectSettings, unknown>)[key] = value;
+    visible[key] = value;
   }
-  return visible;
+  const runCommands = settings?.runCommands;
+  visible.runCommands = Array.isArray(runCommands)
+    ? runCommands.map(pickAgentVisibleRunCommand)
+    : [];
+  return visible as AgentVisibleProjectSettings;
 }
 
 /** Tier of Daintree MCP access exposed to agents in a project. */

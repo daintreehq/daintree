@@ -3511,7 +3511,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "project",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Read the operational subset of a project's persisted settings (run commands, dev server command, worktree path pattern, branch prefix, forge remote, notification overrides, terminal overrides, etc.). Args: \`projectId\` (optional) — a project id from \`project.getAll\` (the \`id\` field); defaults to the active project's id. Returns only that fixed field set: environment variables (including secure ones), the project icon SVG, resource environment definitions, the MCP access tier, and renderer-only UI preferences are deliberately omitted and cannot be read through this action. Errors when no projectId is given and no project is active.",
+    "description": "Read the operational subset of a project's persisted settings (run commands, dev server command, worktree path pattern, branch prefix, forge remote, notification overrides, terminal overrides, etc.). Args: \`projectId\` (optional) — a project id from \`project.getAll\` (the \`id\` field); defaults to the active project's id. Returns only that fixed field set: environment variables (including secure ones), the project icon SVG, resource environment definitions, access-control state (MCP tier, browser allow-list), and renderer-only UI preferences are deliberately omitted and cannot be read through this action. Errors when no projectId is given and no project is active.",
     "examples": undefined,
     "id": "project.getSettings",
     "keywords": undefined,

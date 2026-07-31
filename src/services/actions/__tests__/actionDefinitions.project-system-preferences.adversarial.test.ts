@@ -477,7 +477,7 @@ describe("project action hardening", () => {
   // point: nothing between run() and the MCP wire filters the result.
   it("project.getSettings does not dispatch decrypted secrets or the icon blob", async () => {
     mocks.projectClient.getSettings.mockResolvedValueOnce({
-      runCommands: [{ id: "r1", label: "dev", command: "npm run dev" }],
+      runCommands: [{ id: "r1", name: "dev", command: "npm run dev" }],
       devServerCommand: "npm run dev",
       environmentVariables: { STRIPE_SECRET_KEY: "sk-live-secret" },
       secureEnvironmentVariables: ["STRIPE_SECRET_KEY"],
@@ -491,7 +491,7 @@ describe("project action hardening", () => {
     expect(result).toEqual({
       ok: true,
       result: {
-        runCommands: [{ id: "r1", label: "dev", command: "npm run dev" }],
+        runCommands: [{ id: "r1", name: "dev", command: "npm run dev" }],
         devServerCommand: "npm run dev",
       },
     });
@@ -517,6 +517,7 @@ describe("project action hardening", () => {
       "projectIconSvg",
       "resourceEnvironments",
       "daintreeMcpTier",
+      "browserAllowedHosts",
     ]) {
       expect(entry?.outputSchema).not.toHaveProperty(["properties", hidden]);
     }

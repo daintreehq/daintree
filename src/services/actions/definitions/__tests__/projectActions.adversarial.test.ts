@@ -113,7 +113,7 @@ describe("projectActions adversarial", () => {
     // handed agents the user's API keys.
     it("strips secrets and bulk data from the settings it returns", async () => {
       projectClientMock.getSettings.mockResolvedValue({
-        runCommands: [{ id: "r1", label: "dev", command: "npm run dev" }],
+        runCommands: [{ id: "r1", name: "dev", command: "npm run dev" }],
         worktreePathPattern: "../{project}-{branch}",
         notificationOverrides: { completedEnabled: false },
         terminalSettings: { shell: "/bin/zsh", scrollbackLines: 5000 },
@@ -131,7 +131,7 @@ describe("projectActions adversarial", () => {
       // nothing unexpected rode along, and that the operational fields survive
       // untouched.
       expect(result).toEqual({
-        runCommands: [{ id: "r1", label: "dev", command: "npm run dev" }],
+        runCommands: [{ id: "r1", name: "dev", command: "npm run dev" }],
         worktreePathPattern: "../{project}-{branch}",
         notificationOverrides: { completedEnabled: false },
         terminalSettings: { shell: "/bin/zsh", scrollbackLines: 5000 },
@@ -152,6 +152,7 @@ describe("projectActions adversarial", () => {
         gitInitDefaults: { createInitialCommit: true },
         githubRemote: "origin",
         devServerDismissed: true,
+        browserAllowedHosts: ["internal.corp.test"],
         // A field nobody has classified yet: the projection is driven by the
         // exposure table, so anything new defaults to hidden.
         someFutureSetting: "should-not-leak",
@@ -164,6 +165,34 @@ describe("projectActions adversarial", () => {
       // unclassified key has no entry at all — the projection keeps none of it.
       expect(result).toEqual({ runCommands: [] });
       expect(JSON.stringify(result)).not.toContain("id_ed25519");
+      expect(JSON.stringify(result)).not.toContain("internal.corp.test");
+    });
+
+    // The codec keeps each run command whole after validating only `id` and
+    // `command`, so an entry carrying extra persisted keys would otherwise ride
+    // along inside an exposed field.
+    it("projects run command entries down to their known fields", async () => {
+      projectClientMock.getSettings.mockResolvedValue({
+        runCommands: [
+          {
+            id: "r1",
+            name: "deploy",
+            command: "npm run deploy",
+            preferredLocation: "dock",
+            deployToken: "sk-live-secret",
+          },
+        ],
+      });
+      const { run } = setupActions();
+
+      const result = await run("project.getSettings", { projectId: "proj-1" });
+
+      expect(result).toEqual({
+        runCommands: [
+          { id: "r1", name: "deploy", command: "npm run deploy", preferredLocation: "dock" },
+        ],
+      });
+      expect(JSON.stringify(result)).not.toContain("sk-live-secret");
     });
 
     it("returns a fresh object so the client's cached settings stay intact", async () => {
@@ -184,11 +213,16 @@ describe("projectActions adversarial", () => {
       expect(cached.projectIconSvg).toBe("<svg />");
     });
 
-    it("projects an empty object when the project has no persisted settings", async () => {
+    // runCommands is required by both ProjectSettings and the advertised output
+    // schema, so a missing payload must still satisfy it rather than yielding a
+    // result a validating MCP client would reject.
+    it("still satisfies the required runCommands field with no persisted settings", async () => {
       projectClientMock.getSettings.mockResolvedValue(undefined);
       const { run } = setupActions();
 
-      await expect(run("project.getSettings", { projectId: "proj-1" })).resolves.toEqual({});
+      await expect(run("project.getSettings", { projectId: "proj-1" })).resolves.toEqual({
+        runCommands: [],
+      });
     });
   });
 

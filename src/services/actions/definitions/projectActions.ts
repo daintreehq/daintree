@@ -22,7 +22,18 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
  * `pickAgentVisibleProjectSettings` in `run()`.
  */
 const agentVisibleProjectSettingsShape: Record<AgentVisibleProjectSettingsKey, z.ZodType> = {
-  runCommands: z.array(z.unknown()),
+  runCommands: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      command: z.string(),
+      icon: z.string().optional(),
+      description: z.string().optional(),
+      preferredLocation: z.enum(["dock", "grid"]).optional(),
+      preferredAutoRestart: z.boolean().optional(),
+      isFrameworkDefault: z.boolean().optional(),
+    })
+  ),
   excludedPaths: z.array(z.string()).optional(),
   defaultWorktreeRecipeId: z.string().optional(),
   devServerCommand: z.string().optional(),
@@ -45,7 +56,6 @@ const agentVisibleProjectSettingsShape: Record<AgentVisibleProjectSettingsKey, z
   notificationOverrides: z.record(z.string(), z.unknown()).optional(),
   activeResourceEnvironment: z.string().optional(),
   defaultWorktreeMode: z.string().optional(),
-  browserAllowedHosts: z.array(z.string()).optional(),
 };
 
 export function registerProjectActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
@@ -244,7 +254,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.getSettings",
     title: "Get Project Settings",
     description:
-      "Read the operational subset of a project's persisted settings (run commands, dev server command, worktree path pattern, branch prefix, forge remote, notification overrides, terminal overrides, etc.). Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project's id. Returns only that fixed field set: environment variables (including secure ones), the project icon SVG, resource environment definitions, the MCP access tier, and renderer-only UI preferences are deliberately omitted and cannot be read through this action. Errors when no projectId is given and no project is active.",
+      "Read the operational subset of a project's persisted settings (run commands, dev server command, worktree path pattern, branch prefix, forge remote, notification overrides, terminal overrides, etc.). Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project's id. Returns only that fixed field set: environment variables (including secure ones), the project icon SVG, resource environment definitions, access-control state (MCP tier, browser allow-list), and renderer-only UI preferences are deliberately omitted and cannot be read through this action. Errors when no projectId is given and no project is active.",
     category: "project",
     kind: "query",
     danger: "safe",
