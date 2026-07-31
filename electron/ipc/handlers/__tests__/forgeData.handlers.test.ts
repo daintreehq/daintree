@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type {
   ForgeProviderImpl,
   Issue,
+  ListOptions,
   PR,
   Page,
   RepoMetadata,
@@ -649,6 +650,51 @@ describe("registerForgeDataHandlers", () => {
     ]);
 
     expect(fakeImpl.listIssues).toHaveBeenCalledTimes(3);
+  });
+
+  it("never joins a bypassCache list call onto a concurrent cache-first flight", async () => {
+    // `bypassCache` is the only escape from a warm list cache. If the key
+    // omitted it, the bypassing caller would be handed the cache-first
+    // caller's payload and never reach the provider at all.
+    fakeImpl.listIssues.mockImplementation((_repo: RepoRef, opts: ListOptions) =>
+      Promise.resolve({
+        items: [makeIssue(opts.bypassCache ? 2 : 1)],
+        nextCursor: null,
+        hasMore: false,
+      })
+    );
+    registerForgeDataHandlers();
+    const handler = findHandler("forge:list-issues");
+
+    // The cache-first call registers its in-flight slot first; the bypassing
+    // one must open its own rather than joining it.
+    const [cacheFirst, bypassing] = await Promise.all([
+      handler(null, { cwd: "/repo", opts: { state: "open" } }),
+      handler(null, { cwd: "/repo", opts: { state: "open", bypassCache: true } }),
+    ]);
+
+    expect(fakeImpl.listIssues).toHaveBeenCalledTimes(2);
+    expect(fakeImpl.listIssues).toHaveBeenCalledWith(repoRef, {
+      state: "open",
+      bypassCache: true,
+    });
+    expect(bypassing).toMatchObject({ items: [{ number: 2 }] });
+    expect(cacheFirst).toMatchObject({ items: [{ number: 1 }] });
+  });
+
+  it("still collapses an omitted bypassCache with an explicit false", async () => {
+    fakeImpl.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    registerForgeDataHandlers();
+    const handler = findHandler("forge:list-issues");
+
+    // Same query, spelled two ways — normalizing to `false` keeps the mount
+    // burst collapsing instead of splitting into two provider calls.
+    await Promise.all([
+      handler(null, { cwd: "/repo", opts: { state: "open" } }),
+      handler(null, { cwd: "/repo", opts: { state: "open", bypassCache: false } }),
+    ]);
+
+    expect(fakeImpl.listIssues).toHaveBeenCalledTimes(1);
   });
 
   it("collapses repeat lookups within the TTL then re-runs after it elapses", async () => {
