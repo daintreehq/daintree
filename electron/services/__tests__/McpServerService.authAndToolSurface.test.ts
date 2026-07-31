@@ -1180,10 +1180,13 @@ describe("McpServerService", () => {
           title: "Set grid layout",
           description: "UI plumbing — should not appear in curated surface",
         }),
+        // Allowlisted, so only the restricted filter can withhold it — using a
+        // non-allowlisted id here would pass even with that filter deleted.
         createManifestEntry({
-          id: "internal.dangerous" as ActionId,
-          title: "Restricted",
-          description: "Should never be advertised",
+          id: "actions.search" as ActionId,
+          title: "Search Actions",
+          description: "Restricted despite being allowlisted",
+          kind: "query",
           danger: "restricted",
         }),
       ],
@@ -1198,7 +1201,7 @@ describe("McpServerService", () => {
 
     expect(ids).toContain("actions.list");
     expect(ids).not.toContain("panel.gridLayout.setStrategy");
-    expect(ids).not.toContain("internal.dangerous");
+    expect(ids).not.toContain("actions.search");
   });
 
   it("denies dispatch of non-allowlisted tools for the external tier (#10701)", async () => {
@@ -1231,6 +1234,53 @@ describe("McpServerService", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("TIER_NOT_PERMITTED");
     expect(result.content[0].text).toContain("panel.gridLayout.setStrategy");
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  // A store written before #11537 (or hand-edited since) can still carry
+  // `mcpServer.fullToolSurface: true` until migration 026 runs. It must be inert
+  // — this is the regression guard for reintroducing the #10701 config-gated
+  // bypass, which no other test would catch now that the flag is gone.
+  it("ignores a stale persisted fullToolSurface key (#11537)", async () => {
+    (storeState.mcpServer as Record<string, unknown>)["fullToolSurface"] = true;
+    const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+      ok: true,
+      result: { dispatched: payload.actionId },
+    }));
+    const { window } = createMockWindow({
+      getManifest: () => [
+        createManifestEntry({
+          id: "actions.list" as ActionId,
+          title: "List Actions",
+          description: "Read the action registry",
+          kind: "query",
+        }),
+        // Real, currently-shipping danger:"safe" action with a genuine side
+        // effect that the curated allowlist deliberately excludes — one of the
+        // 335 the old flag leaked.
+        createManifestEntry({
+          id: "system.openExternal" as ActionId,
+          title: "Open External URL",
+          description: "Launches a URL in the OS browser",
+        }),
+      ],
+      dispatchAction: dispatchMock,
+    });
+
+    await service.start(window);
+    const { client, transport } = await connectClient(service.currentPort!);
+    transports.push(transport);
+
+    const ids = (await client.listTools()).tools.map((tool) => tool.name);
+    expect(ids).toContain("actions.list");
+    expect(ids).not.toContain("system.openExternal");
+
+    const result = getTextResult(
+      await client.callTool({ name: "system.openExternal", arguments: { url: "https://x.test" } })
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("TIER_NOT_PERMITTED");
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 

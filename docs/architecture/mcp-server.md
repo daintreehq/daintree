@@ -166,7 +166,7 @@ type McpTier = "workbench" | "action" | "system" | "external";
 | `system` | workbench ∪ action ∪ `SYSTEM_TIER_ADDONS`. |
 | `external` | `MCP_TOOL_ALLOWLIST` — the full vetted tool set for API-key callers, and the only surface they can reach. Nothing widens it: adding an entry to that list is the sole way to expose a tool externally (#11537 removed the never-reachable `fullToolSurface` opt-in that used to promise otherwise). |
 
-`shouldExposeTool` (used by `tools/list`) and `isTierPermitted` (used by `tools/call`) are the two gates. `isTierPermitted` owns tier membership; `shouldExposeTool` layers the advertisement-only filters on top and then defers to it, so the two can never drift apart. Both paths **hard-deny `danger === "restricted"`** and any tool whose `mcpVisibility` is `hidden` or `discoverable` — `restricted` actions are never reachable over MCP regardless of tier.
+`shouldExposeTool` (used by `tools/list`) and `isTierPermitted` (used by `tools/call`) are the two gates, and they enforce different things. `isTierPermitted` owns tier membership and nothing else. `shouldExposeTool` layers the **advertisement-only** filters — `danger === "restricted"`, `mcpVisibility` `hidden` or `discoverable` — on top and then defers to `isTierPermitted`, so membership can never drift between the two. Those metadata filters keep a tool out of `tools/list` but do not by themselves block dispatch: a `discoverable` tool that is tier-permitted (e.g. `worktree.resource.teardown`) is deliberately callable once an agent finds it via the meta-tools. `restricted` actions are the exception that really is unreachable — `ActionService.dispatch` rejects them independently of tier.
 
 ### Risk bands and `danger`
 
@@ -174,7 +174,7 @@ type McpTier = "workbench" | "action" | "system" | "external";
 
 How `danger` interacts with tier gating:
 
-- `danger: "restricted"` — never exposed, never dispatchable over MCP (hard floor in `shouldExposeTool`/`isTierPermitted`).
+- `danger: "restricted"` — never exposed (hard floor in `shouldExposeTool`) and never dispatchable, the latter enforced by `ActionService.dispatch` rather than by the tier gate.
 - `danger: "confirm"` — _exposed and dispatchable_ if the tier permits, but the `CallTool` handler dispatches it **unconfirmed** so the human approves it host-side in the renderer's native `McpConfirmDialog` (via the renderer bridge) before the mutation fires. This is the MCP-side wiring of the same confirm gate documented in [`destructive-action-safeguards.md`](./destructive-action-safeguards.md): `danger:"confirm"` classifies the action; the host `ConfirmDialog` is the user-facing confirm. A client's self-declared `elicitation.form` capability is **never** treated as authorization — a headless/agentic client could otherwise answer its own in-band elicitation `accept` and self-approve a destructive call with no human in the loop (#11342). When no Daintree window is open to surface the dialog the call is refused with `CONFIRMATION_REQUIRED` (`confirmationChannel: "unavailable"`); only a host-issued native automation grant pre-authorizes a dispatch.
 
 ## Session lifecycle (`sessionStore.ts`, `httpLifecycle.ts`)

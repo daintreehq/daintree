@@ -43,7 +43,7 @@ export interface Migration {
 }
 ```
 
-Migrations are individual files `NNN-name.ts` in `electron/services/migrations/`, each exporting `migrationNNN`, and registered (imported + listed) in `electron/services/migrations/index.ts`. `LATEST_SCHEMA_VERSION` (currently `21`) lives at the top of `StoreMigrations.ts` and must track the highest registered migration.
+Migrations are individual files `NNN-name.ts` in `electron/services/migrations/`, each exporting `migrationNNN`, and registered (imported + listed) in `electron/services/migrations/index.ts`. `LATEST_SCHEMA_VERSION` lives at the top of `StoreMigrations.ts` and must track the highest registered migration — a test asserts the two agree, so read the constant rather than trusting any number quoted here.
 
 **Current chain** (`index.ts`, verified against the tree):
 

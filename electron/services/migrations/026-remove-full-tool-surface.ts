@@ -15,10 +15,9 @@ export const migration026: Migration = {
   up: (store) => {
     const mcpServer = store.get("mcpServer");
     if (!mcpServer || typeof mcpServer !== "object") return;
+    if (!("fullToolSurface" in mcpServer)) return;
 
     const next = { ...mcpServer } as Record<string, unknown>;
-    if (!("fullToolSurface" in next)) return;
-
     delete next["fullToolSurface"];
     store.set("mcpServer", next as typeof mcpServer);
   },

@@ -976,13 +976,14 @@ describe("MigrationRunner", () => {
       }
     );
 
-    it("is a no-op when mcpServer has no fullToolSurface key", () => {
+    it("writes nothing when mcpServer has no fullToolSurface key", () => {
       const store = createMockStore(storePath, {
         mcpServer: { enabled: false, port: 45454 },
       });
-      const before = store.data.mcpServer;
+      const setSpy = vi.spyOn(store, "set");
       migration026.up(store as never);
-      expect(store.data.mcpServer).toBe(before);
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(store.data.mcpServer).toEqual({ enabled: false, port: 45454 });
     });
 
     it("skips when mcpServer is absent or not an object", () => {
@@ -1014,7 +1015,7 @@ describe("MigrationRunner", () => {
 
       await runner.runMigrations(migrations);
 
-      expect(store.data._schemaVersion).toBe(migration026.version);
+      expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
       const after = store.data.mcpServer as Record<string, unknown>;
       expect("fullToolSurface" in after).toBe(false);
       expect(after.enabled).toBe(true);

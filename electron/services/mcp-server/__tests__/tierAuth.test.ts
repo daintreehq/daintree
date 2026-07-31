@@ -356,9 +356,10 @@ describe("shouldExposeTool", () => {
 // `danger` field as the ceiling, which exposed 335 of 426 actions; it was later
 // defanged into an empty-add-on union and removed entirely in #11537. Sensitive
 // side-effecting actions absent from the allowlist must stay blocked, and the
-// gates must agree across exposure (shouldExposeTool) and dispatch
-// (isTierPermitted) — a divergence would advertise a tool the dispatcher then
-// rejects, or vice versa (#7155).
+// two gates must agree on *membership* across exposure (shouldExposeTool) and
+// dispatch (isTierPermitted) — a divergence there would advertise a tool the
+// dispatcher then rejects (#7155). They deliberately differ on the metadata
+// filters, which withhold from tools/list without blocking dispatch.
 describe("external tool surface invariants (#10701, #11537)", () => {
   const builtInIds = new Set<string>(BUILT_IN_ACTION_IDS);
 
@@ -411,14 +412,22 @@ describe("external tool surface invariants (#10701, #11537)", () => {
     expect(isTierPermitted("external", "actions.list")).toBe(true);
   });
 
-  // Nothing in the curated allowlist may be withheld by the metadata filters
-  // when the manifest entry carries no opt-out. Catches an over-broad new early
-  // return in shouldExposeTool silently shrinking the advertised surface below
-  // what the dispatcher accepts.
-  it("advertises every curated-allowlist id whose manifest entry is unclassified", () => {
-    for (const id of TIER_ALLOWLISTS.external) {
-      expect(shouldExposeTool(makeEntry({ id }), "external"), id).toBe(true);
-    }
+  // Exact equality, both directions, over the whole action registry: no
+  // built-in outside the curated allowlist may be advertised or dispatchable,
+  // and none inside it may be withheld. The four sentinels above only sample
+  // the complement — the historical bypass leaked 335 ids at once, so the
+  // upper bound is the assertion that actually catches that class.
+  it("reaches exactly the curated allowlist across every built-in action", () => {
+    const exposed = BUILT_IN_ACTION_IDS.filter((id) =>
+      shouldExposeTool(makeEntry({ id }), "external")
+    );
+    const permitted = BUILT_IN_ACTION_IDS.filter((id) => isTierPermitted("external", id));
+    const expected = BUILT_IN_ACTION_IDS.filter((id) => TIER_ALLOWLISTS.external.has(id));
+
+    expect(new Set(exposed)).toEqual(new Set(expected));
+    expect(new Set(permitted)).toEqual(new Set(expected));
+    // The allowlist must not have drifted into naming ids that no longer exist.
+    expect(expected.length).toBe(TIER_ALLOWLISTS.external.size);
   });
 });
 
