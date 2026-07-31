@@ -1,7 +1,10 @@
 /**
  * @vitest-environment jsdom
  *
- * Bulk "delete all scratch workspaces" from the Scratch section header (#11086).
+ * Scratch deletion from the switcher palette: bulk "delete all" from the section
+ * header (#11086) and single delete from a row's context menu (#11522). Both
+ * share this harness because they share the surface — the section header and the
+ * rows under it — and splitting them would fork 150 lines of identical mocks.
  *
  * Uses the REAL context-menu primitives — the whole point of the feature is that a
  * right-click on the collapse toggle opens a menu instead of collapsing the section,
@@ -11,7 +14,7 @@
  * is which props the palette hands it.
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 
 const originalScrollIntoView = Element.prototype.scrollIntoView;
 beforeAll(() => {
@@ -103,51 +106,70 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 // Prop-rendering seam. Everything the palette decides — the counted title, the
 // verb-noun confirm label, whether dismissal is allowed mid-run — is visible here.
-vi.mock("@/components/ui/ConfirmDialog", () => ({
-  ConfirmDialog: ({
-    isOpen,
-    title,
-    children,
-    confirmLabel,
-    cancelLabel,
-    onConfirm,
-    onClose,
-    isConfirmLoading,
-    variant,
-    typedNameTarget,
-  }: {
-    isOpen: boolean;
-    title: React.ReactNode;
-    children?: React.ReactNode;
-    confirmLabel: string;
-    cancelLabel?: string;
-    onConfirm: () => void;
-    onClose?: () => void;
-    isConfirmLoading?: boolean;
-    variant: string;
-    typedNameTarget?: string;
-  }) =>
-    isOpen ? (
-      <div
-        data-testid="confirm-dialog"
-        data-variant={variant}
-        data-loading={String(Boolean(isConfirmLoading))}
-        data-dismissable={String(Boolean(onClose))}
-        data-typed-name-target={typedNameTarget ?? ""}
-      >
-        <h2 data-testid="confirm-title">{title}</h2>
-        <div data-testid="confirm-body">{children}</div>
-        {/* Addressed by role, not by label: pinning the locator to the exact copy
-            would make every interaction spec fail on a wording change. */}
-        <button type="button" data-testid="confirm-accept" onClick={onConfirm}>
-          {confirmLabel}
-        </button>
-        <button type="button" data-testid="confirm-cancel" onClick={onClose}>
-          {cancelLabel}
-        </button>
-      </div>
-    ) : null,
-}));
+vi.mock("@/components/ui/ConfirmDialog", async () => {
+  const { useEffect, useState } = await vi.importActual<typeof import("react")>("react");
+  return {
+    ConfirmDialog: ({
+      isOpen,
+      title,
+      children,
+      confirmLabel,
+      cancelLabel,
+      onConfirm,
+      onClose,
+      isConfirmLoading,
+      variant,
+      typedNameTarget,
+      restoreFocusTo,
+      confirmDisabled,
+    }: {
+      isOpen: boolean;
+      title: React.ReactNode;
+      children?: React.ReactNode;
+      confirmLabel: string;
+      cancelLabel?: string;
+      onConfirm: () => void;
+      onClose?: () => void;
+      isConfirmLoading?: boolean;
+      variant: string;
+      typedNameTarget?: string;
+      confirmDisabled?: boolean;
+      restoreFocusTo?: React.RefObject<HTMLElement | null> | (() => HTMLElement | null);
+    }) => {
+      // Resolved after mount, not during render: a ref handed down from the
+      // palette is still null while the dialog is rendering.
+      const [restoreTarget, setRestoreTarget] = useState("");
+      useEffect(() => {
+        if (!restoreFocusTo) return;
+        const el = typeof restoreFocusTo === "function" ? restoreFocusTo() : restoreFocusTo.current;
+        setRestoreTarget(el?.getAttribute("data-testid") ?? "");
+      }, [restoreFocusTo]);
+
+      return isOpen ? (
+        <div
+          data-testid="confirm-dialog"
+          data-variant={variant}
+          data-loading={String(Boolean(isConfirmLoading))}
+          data-dismissable={String(Boolean(onClose))}
+          data-typed-name-target={typedNameTarget ?? ""}
+          data-confirm-disabled={String(Boolean(confirmDisabled))}
+          data-restore-focus={restoreTarget}
+        >
+          <h2 data-testid="confirm-title">{title}</h2>
+          <div data-testid="confirm-body">{children}</div>
+          {/* Addressed by role, not by label: pinning the locator to the exact copy
+              would make every interaction spec fail on a wording change. */}
+          <button type="button" data-testid="confirm-accept" onClick={onConfirm}>
+            {confirmLabel}
+          </button>
+          <button type="button" data-testid="confirm-cancel" onClick={onClose}>
+            {cancelLabel}
+          </button>
+        </div>
+      ) : null;
+    },
+  };
+});
 
 vi.mock("@/hooks/useModifierKeys", () => ({
   useModifierKeys: () => ({ meta: false, alt: false }),
@@ -204,7 +226,9 @@ function baseProps() {
     onCreateScratch: vi.fn(),
     onRenameScratch: vi.fn(),
     onSelectScratch: vi.fn(),
-    onRemoveScratch: vi.fn(),
+    onRequestDeleteScratch: vi.fn(),
+    onDismissDeleteScratchConfirm: vi.fn(),
+    onConfirmDeleteScratch: vi.fn(),
     onRequestDeleteAllScratches: vi.fn(),
     onDismissDeleteAllScratchesConfirm: vi.fn(),
     onConfirmDeleteAllScratches: vi.fn(),
@@ -294,7 +318,7 @@ describe.each(["modal", "dropdown"] as const)("Scratch section header menu (%s)"
 
     // The palette never deletes anything itself — it requests the confirm.
     expect(props.onRequestDeleteAllScratches).toHaveBeenCalledTimes(1);
-    expect(props.onRemoveScratch).not.toHaveBeenCalled();
+    expect(props.onRequestDeleteScratch).not.toHaveBeenCalled();
   });
 
   it("hides the bulk delete when the host wires no handler, but shows it when wired", () => {
@@ -450,5 +474,255 @@ describe("Bulk delete confirmation", () => {
     // folders keep disappearing underneath.
     expect(dialog.getAttribute("data-dismissable")).toBe("false");
     expect(dialog.getAttribute("data-loading")).toBe("true");
+  });
+});
+
+/**
+ * Single-scratch delete from the row's own context menu (#11522).
+ *
+ * Previously fired straight into the store with no confirm and no busy state.
+ * Shares the bulk suite's prop-rendering seam, so what these specs pin is what
+ * the palette decides: that the menu only ever *requests*, and that the dialog
+ * it opens narrates the run rather than sitting mute on a spinner.
+ */
+describe("Single scratch delete", () => {
+  /** The row menu's delete item, addressed by role so wording changes don't break specs. */
+  function deleteItem(): HTMLElement {
+    const items = screen.getAllByRole("menuitem");
+    const item = items.at(-1);
+    if (!item) throw new Error("No context-menu items rendered");
+    return item;
+  }
+
+  function target(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "scratch-1",
+      name: "Spike 1",
+      path: "/tmp/scratches/scratch-1",
+      ...overrides,
+    };
+  }
+
+  /** The run's live region, addressed by its role rather than a test id. */
+  function progressText(): string {
+    return screen.getByRole("status").textContent ?? "";
+  }
+
+  /**
+   * A scratch row's context-menu trigger, found in the DOM rather than through
+   * the a11y tree. An open Radix menu marks the rest of the page aria-hidden, so
+   * a paired spec that reopens the menu can no longer reach the row by role.
+   */
+  function scratchRow(): HTMLElement {
+    const row = document.querySelector<HTMLElement>('[role="option"]');
+    if (!row) throw new Error("Scratch row not found");
+    return row;
+  }
+
+  // Both hosts forward scratch props through separate branches, so a modal-only
+  // suite stays green while the dropdown loses the action.
+  describe.each(["modal", "dropdown"] as const)("row menu (%s)", (mode) => {
+    it("requests the confirmation instead of deleting from the menu", () => {
+      const { props } = renderPalette({ mode, scratchResults: [makeScratch(1)] });
+
+      fireEvent.contextMenu(screen.getByRole("option", { name: /Spike 1/ }));
+      fireEvent.click(deleteItem());
+
+      expect(props.onRequestDeleteScratch).toHaveBeenCalledWith("scratch-1");
+    });
+
+    it("hides the delete when the host wires no handler, but shows it when wired", () => {
+      const { view } = renderPalette({
+        mode,
+        scratchResults: [makeScratch(1)],
+        onRequestDeleteScratch: undefined,
+      });
+
+      fireEvent.contextMenu(scratchRow());
+      // Paired with the positive case: "absent when unwired" is only meaningful
+      // next to "present when wired".
+      expect(screen.queryByText(/Delete scratch/)).toBeNull();
+
+      view.rerender(
+        <ProjectSwitcherPalette
+          {...baseProps()}
+          mode={mode}
+          scratchResults={[makeScratch(1)]}
+          onRequestDeleteScratch={vi.fn()}
+        />
+      );
+      fireEvent.contextMenu(scratchRow());
+
+      expect(screen.queryByText(/Delete scratch/)).not.toBeNull();
+    });
+  });
+
+  it("opens only once a target is pending, and closes when it clears", () => {
+    const { view } = renderPalette({
+      scratchResults: [makeScratch(1)],
+      deleteScratchConfirm: target(),
+    });
+    expect(screen.queryByTestId("confirm-dialog")).not.toBeNull();
+
+    view.rerender(
+      <ProjectSwitcherPalette
+        {...baseProps()}
+        scratchResults={[makeScratch(1)]}
+        deleteScratchConfirm={null}
+      />
+    );
+
+    expect(screen.queryByTestId("confirm-dialog")).toBeNull();
+  });
+
+  it("names the frozen target rather than the live row", () => {
+    renderPalette({
+      // The row has already drained away as the removal lands; the dialog must
+      // keep naming what the user agreed to.
+      scratchResults: [],
+      deleteScratchConfirm: target({ name: "Retry queue spike" }),
+    });
+
+    expect(screen.getByTestId("confirm-title").textContent).toContain("Retry queue spike");
+    expect(screen.getByTestId("confirm-body").textContent).toContain("/tmp/scratches/scratch-1");
+  });
+
+  it("gates the delete behind a destructive dialog with no typed-name step", () => {
+    renderPalette({
+      scratchResults: [makeScratch(1)],
+      deleteScratchConfirm: target(),
+    });
+
+    const dialog = screen.getByTestId("confirm-dialog");
+    expect(dialog.getAttribute("data-variant")).toBe("destructive");
+    // D1: a scratch is a local throwaway workspace, so naming it carries the
+    // consent — a typed-name gate would be friction without a payoff.
+    expect(dialog.getAttribute("data-typed-name-target")).toBe("");
+  });
+
+  it("routes confirm and cancel to their own handlers", () => {
+    const { props } = renderPalette({
+      scratchResults: [makeScratch(1)],
+      deleteScratchConfirm: target(),
+    });
+
+    fireEvent.click(screen.getByTestId("confirm-accept"));
+    expect(props.onConfirmDeleteScratch).toHaveBeenCalledTimes(1);
+    expect(props.onDismissDeleteScratchConfirm).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("confirm-cancel"));
+    expect(props.onDismissDeleteScratchConfirm).toHaveBeenCalledTimes(1);
+    expect(props.onConfirmDeleteScratch).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses dismissal from the first frame of the deletion", () => {
+    renderPalette({
+      scratchResults: [makeScratch(1)],
+      deleteScratchConfirm: target(),
+      isDeletingScratch: true,
+    });
+
+    // Escaping mid-run would strand the user with no view of the outcome while
+    // the folder disappears underneath. Keyed on raw state, so there is no
+    // window where the run has started but the dialog is still dismissable.
+    expect(screen.getByTestId("confirm-dialog").getAttribute("data-dismissable")).toBe("false");
+  });
+
+  it("locks the button immediately but holds its spinner for the gate", () => {
+    vi.useFakeTimers();
+    try {
+      renderPalette({
+        scratchResults: [makeScratch(1)],
+        deleteScratchConfirm: target(),
+        isDeletingScratch: true,
+      });
+
+      // Disabled from the first frame — gating the lock too would leave a window
+      // where a second press still went through — but no spinner yet, so a
+      // scratch that deletes in 80ms never flashes one.
+      const dialog = screen.getByTestId("confirm-dialog");
+      expect(dialog.getAttribute("data-confirm-disabled")).toBe("true");
+      expect(dialog.getAttribute("data-loading")).toBe("false");
+
+      act(() => {
+        vi.advanceTimersToNextTimer();
+      });
+
+      expect(dialog.getAttribute("data-loading")).toBe("true");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("carries no progress region until the deletion starts", () => {
+    renderPalette({
+      scratchResults: [makeScratch(1)],
+      deleteScratchConfirm: target(),
+    });
+
+    // Reading the dialog is not the operation: a region present here would be
+    // narrating a run that has not begun.
+    expect(screen.queryByTestId("delete-scratch-progress")).toBeNull();
+  });
+
+  it("mounts a live region for the run, gated empty at first", () => {
+    renderPalette({
+      scratchResults: [makeScratch(1)],
+      deleteScratchConfirm: target(),
+      isDeletingScratch: true,
+    });
+
+    // Present from the first frame so the long-wait line is an update to one
+    // announcer, but empty until the Doherty gate clears so a fast delete never
+    // flashes.
+    expect(screen.getByRole("status")).toBeTruthy();
+    expect(progressText()).toBe("");
+  });
+
+  it("narrates the run once the gate clears, then escalates on a long wait", () => {
+    vi.useFakeTimers();
+    try {
+      renderPalette({
+        scratchResults: [makeScratch(1)],
+        deleteScratchConfirm: target(),
+        isDeletingScratch: true,
+      });
+
+      // Without this the whole feature could be deleted — an always-empty region
+      // satisfies the gate spec above on its own.
+      const beforeGate = progressText();
+      act(() => {
+        vi.advanceTimersToNextTimer();
+      });
+      const afterGate = progressText();
+      act(() => {
+        vi.advanceTimersToNextTimer();
+      });
+      const afterLongWait = progressText();
+
+      expect(beforeGate).toBe("");
+      expect(afterGate).not.toBe("");
+      // The escalation adds to the narration rather than replacing it, so the
+      // user never loses sight of what is running.
+      expect(afterLongWait.startsWith(afterGate)).toBe(true);
+      expect(afterLongWait.length).toBeGreaterThan(afterGate.length);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("hands focus back inside the palette, not to the row it just deleted", () => {
+    renderPalette({
+      scratchResults: [makeScratch(1)],
+      deleteScratchConfirm: target(),
+    });
+
+    // The trigger row is gone once the delete lands, so without a named successor
+    // the dialog's restore walks to app chrome behind a still-`aria-modal`
+    // palette. The resolved target has to be the palette's own search box.
+    const restored = screen.getByTestId("confirm-dialog").getAttribute("data-restore-focus");
+    expect(restored).toBe("palette-input");
   });
 });

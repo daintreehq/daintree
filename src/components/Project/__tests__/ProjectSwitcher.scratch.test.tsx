@@ -30,9 +30,13 @@ vi.mock("@/hooks/useKeybinding", () => ({
 
 const openDropdown = vi.fn();
 
-// Mutable so a spec can model a bulk-delete confirm being open across a render.
-const paletteState: { deleteAllScratchesConfirm: { id: string; name: string }[] | null } = {
+// Mutable so a spec can model a delete confirm being open across a render.
+const paletteState: {
+  deleteAllScratchesConfirm: { id: string; name: string }[] | null;
+  deleteScratchConfirm: { id: string; name: string } | null;
+} = {
   deleteAllScratchesConfirm: null,
+  deleteScratchConfirm: null,
 };
 
 vi.mock("@/hooks", async () => {
@@ -74,7 +78,11 @@ vi.mock("@/hooks", async () => {
       scratchResults: [],
       createScratch: vi.fn(),
       selectScratch: vi.fn(),
-      removeScratchAction: vi.fn(),
+      requestDeleteScratch: vi.fn(),
+      deleteScratchConfirm: paletteState.deleteScratchConfirm,
+      dismissDeleteScratchConfirm: vi.fn(),
+      confirmDeleteScratch: vi.fn(),
+      isDeletingScratch: false,
       deleteAllScratchesConfirm: paletteState.deleteAllScratchesConfirm,
       requestDeleteAllScratches: vi.fn(),
       dismissDeleteAllScratchesConfirm: vi.fn(),
@@ -119,13 +127,16 @@ vi.mock("@/components/Project/ProjectSwitcherPalette", () => ({
   ProjectSwitcherPalette: ({
     children,
     deleteAllScratchesConfirm,
+    deleteScratchConfirm,
   }: {
     children: React.ReactNode;
     deleteAllScratchesConfirm?: unknown;
+    deleteScratchConfirm?: unknown;
   }) => (
     <div data-testid="project-switcher-palette">
       {children}
       {deleteAllScratchesConfirm ? <div data-testid="bulk-scratch-confirm" /> : null}
+      {deleteScratchConfirm ? <div data-testid="single-scratch-confirm" /> : null}
     </div>
   ),
 }));
@@ -177,6 +188,7 @@ beforeEach(() => {
   projectStoreState.currentProject = null;
   scratchStoreState.currentScratch = null;
   paletteState.deleteAllScratchesConfirm = null;
+  paletteState.deleteScratchConfirm = null;
 });
 
 describe("ProjectSwitcher with an active scratch", () => {
@@ -251,6 +263,21 @@ describe("ProjectSwitcher with an active scratch", () => {
     render(<ProjectSwitcher />);
 
     expect(screen.queryByTestId("project-switcher-palette")).toBeNull();
+  });
+
+  it("keeps the palette and its pending confirm mounted through a single scratch delete", () => {
+    // Same unmount trap as the bulk case: deleting the ONE remaining scratch
+    // nulls `currentScratch` mid-run, and the guard has to cover this branch too
+    // or the progress dialog vanishes at the moment it matters most.
+    scratchStoreState.currentScratch = makeScratch(uniqueName("Doomed"));
+    const { rerender } = render(<ProjectSwitcher />);
+
+    paletteState.deleteScratchConfirm = { id: "scratch-1", name: "Spike" };
+    scratchStoreState.currentScratch = null;
+    rerender(<ProjectSwitcher />);
+
+    expect(screen.getByTestId("project-switcher-palette")).toBeTruthy();
+    expect(screen.getByTestId("single-scratch-confirm")).toBeTruthy();
   });
 
   it("prefers an open project over a lingering scratch pointer", () => {

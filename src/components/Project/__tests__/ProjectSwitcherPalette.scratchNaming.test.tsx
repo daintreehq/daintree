@@ -193,7 +193,7 @@ function baseProps() {
     onCreateScratch: vi.fn(),
     onRenameScratch: vi.fn(),
     onSelectScratch: vi.fn(),
-    onRemoveScratch: vi.fn(),
+    onRequestDeleteScratch: vi.fn(),
   };
 }
 

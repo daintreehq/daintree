@@ -50,6 +50,7 @@ import {
 } from "@/lib/projectRowStatus";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
+import { useScratchDeletionProgress } from "@/hooks/useScratchDeletionProgress";
 import { useOverlayClaim } from "@/hooks";
 // Leaf import, not the `@/hooks` barrel: several palette suites mock that barrel
 // and would throw on an export they don't list.
@@ -57,6 +58,7 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { defaultScratchName } from "@shared/utils/scratchName";
 import type {
   DeleteAllScratchesSnapshot,
+  DeleteScratchTarget,
   ProjectSectionKey,
   ProjectSwitcherMode,
   ProjectSwitcherProjectRow,
@@ -146,8 +148,16 @@ export interface ProjectSwitcherPaletteProps {
   onCreateScratch?: (name?: string) => void;
   /** Callback to switch to an existing scratch. */
   onSelectScratch?: (scratch: SearchableScratch) => void;
-  /** Callback to remove a scratch. */
-  onRemoveScratch?: (scratchId: string) => void;
+  /** Opens the single-scratch delete confirmation from the row's context menu. */
+  onRequestDeleteScratch?: (scratchId: string) => void;
+  /**
+   * Target of a pending single-scratch delete confirmation, frozen when it
+   * opened. Surfaced as a top-level ConfirmDialog above the palette.
+   */
+  deleteScratchConfirm?: DeleteScratchTarget | null;
+  onDismissDeleteScratchConfirm?: () => void;
+  onConfirmDeleteScratch?: () => void;
+  isDeletingScratch?: boolean;
   /** Opens the "delete every scratch" confirmation from the section header's context menu. */
   onRequestDeleteAllScratches?: () => void;
   /**
@@ -461,8 +471,7 @@ function ProjectListItem({
  *
  * Action-free on purpose. Rename, save-as-project and delete are browse-mode
  * management — an inline rename editor would have to live inside the array the
- * arrow keys walk, and scratch delete has no confirm, which is the last thing
- * that should sit one keystroke away from a highlighted row.
+ * arrow keys walk, and search is for reaching a scratch, not administering one.
  */
 function ScratchListItem({
   scratch,
@@ -952,7 +961,7 @@ interface ScratchSectionProps {
   isSearching: boolean;
   onCreate?: (name?: string) => void;
   onSelect?: (scratch: SearchableScratch) => void;
-  onRemove?: (scratchId: string) => void;
+  onRequestDelete?: (scratchId: string) => void;
   onDeleteAll?: () => void;
   onRename?: (scratchId: string, name: string) => void;
   onSaveAsProject?: (scratchId: string) => void;
@@ -972,7 +981,7 @@ function ScratchSection({
   isSearching,
   onCreate,
   onSelect,
-  onRemove,
+  onRequestDelete,
   onDeleteAll,
   onRename,
   onSaveAsProject,
@@ -1107,7 +1116,7 @@ function ScratchSection({
 
                 const countdown = formatScratchCleanupCountdown(scratch.lastOpened, now);
                 const status = getScratchRowStatus(scratch, now);
-                const hasContextActions = Boolean(onRemove || onSaveAsProject || onRename);
+                const hasContextActions = Boolean(onRequestDelete || onSaveAsProject || onRename);
                 return (
                   <ContextMenu key={scratch.id}>
                     <ContextMenuTrigger asChild>
@@ -1180,11 +1189,13 @@ function ScratchSection({
                             Save as project…
                           </ContextMenuItem>
                         )}
-                        {(onSaveAsProject || onRename) && onRemove && <ContextMenuSeparator />}
-                        {onRemove && (
-                          <ContextMenuItem destructive onSelect={() => onRemove(scratch.id)}>
+                        {(onSaveAsProject || onRename) && onRequestDelete && (
+                          <ContextMenuSeparator />
+                        )}
+                        {onRequestDelete && (
+                          <ContextMenuItem destructive onSelect={() => onRequestDelete(scratch.id)}>
                             <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                            Delete scratch
+                            Delete scratch…
                           </ContextMenuItem>
                         )}
                       </ContextMenuContent>
@@ -1304,7 +1315,7 @@ interface ProjectPaletteInnerProps {
   scratchResults?: SearchableScratch[];
   onCreateScratch?: (name?: string) => void;
   onSelectScratch?: (scratch: SearchableScratch) => void;
-  onRemoveScratch?: (scratchId: string) => void;
+  onRequestDeleteScratch?: (scratchId: string) => void;
   onRequestDeleteAllScratches?: () => void;
   onRenameScratch?: (scratchId: string, name: string) => void;
   onSaveAsProject?: (scratchId: string) => void;
@@ -1340,7 +1351,7 @@ function ProjectPaletteInner({
   scratchResults,
   onCreateScratch,
   onSelectScratch,
-  onRemoveScratch,
+  onRequestDeleteScratch,
   onRequestDeleteAllScratches,
   onRenameScratch,
   onSaveAsProject,
@@ -1397,9 +1408,9 @@ function ProjectPaletteInner({
           onClose();
           break;
         case "Backspace": {
-          // Projects only. Removing a project opens a confirm; deleting a
-          // scratch does not, so wiring this to a highlighted scratch row would
-          // put an unconfirmed destructive action one chord away.
+          // Projects only. Both paths confirm now, but the chord means "close
+          // the project" — pointing it at a scratch row would overload one key
+          // with a reversible close and an irreversible delete.
           const target = results[selectedIndex];
           if ((e.metaKey || e.ctrlKey) && onCloseProject && target?.kind === "project") {
             e.preventDefault();
@@ -1489,7 +1500,7 @@ function ProjectPaletteInner({
               isSearching={isRankedSearch}
               onCreate={onCreateScratch}
               onSelect={onSelectScratch}
-              onRemove={onRemoveScratch}
+              onRequestDelete={onRequestDeleteScratch}
               onDeleteAll={onRequestDeleteAllScratches}
               onRename={onRenameScratch}
               onSaveAsProject={onSaveAsProject}
@@ -1565,14 +1576,23 @@ function ProjectPaletteInner({
   );
 }
 
+/**
+ * The palette's search box, lifted out of the two content hosts so the dialogs
+ * rendered beside them can name it as a focus successor. Only the mounted host
+ * attaches, so one ref serves both.
+ */
+interface PaletteInputRefProp {
+  paletteInputRef: React.RefObject<HTMLInputElement | null>;
+}
+
 function ModalContent({
   isOpen,
   onClose,
   mode,
+  paletteInputRef: inputRef,
   ...innerProps
-}: Omit<ProjectSwitcherPaletteProps, "children" | "dropdownAlign">) {
+}: Omit<ProjectSwitcherPaletteProps, "children" | "dropdownAlign"> & PaletteInputRefProp) {
   useOverlayClaim("project-switcher", isOpen);
-  const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   return (
@@ -1612,7 +1632,7 @@ function ModalContent({
         scratchResults={innerProps.scratchResults}
         onCreateScratch={innerProps.onCreateScratch}
         onSelectScratch={innerProps.onSelectScratch}
-        onRemoveScratch={innerProps.onRemoveScratch}
+        onRequestDeleteScratch={innerProps.onRequestDeleteScratch}
         onRequestDeleteAllScratches={innerProps.onRequestDeleteAllScratches}
         onRenameScratch={innerProps.onRenameScratch}
         onSaveAsProject={innerProps.onSaveAsProject}
@@ -1628,9 +1648,9 @@ function DropdownContent({
   children,
   mode,
   onDropdownCloseAutoFocus,
+  paletteInputRef: inputRef,
   ...innerProps
-}: ProjectSwitcherPaletteProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
+}: ProjectSwitcherPaletteProps & PaletteInputRefProp) {
   const listRef = useRef<HTMLDivElement>(null);
   const overlayStackLength = useUIStore((state) => state.overlayStack.length);
   const prevOverlayStackLengthRef = useRef<number>(overlayStackLength);
@@ -1648,7 +1668,9 @@ function DropdownContent({
         focusRafRef.current = null;
       }
     };
-  }, [isOpen]);
+    // `inputRef` is a prop now that the search box is shared with the dialogs;
+    // it is a stable ref object, so this only satisfies the linter.
+  }, [isOpen, inputRef]);
 
   useEffect(() => {
     if (
@@ -1720,13 +1742,98 @@ function DropdownContent({
           scratchResults={innerProps.scratchResults}
           onCreateScratch={innerProps.onCreateScratch}
           onSelectScratch={innerProps.onSelectScratch}
-          onRemoveScratch={innerProps.onRemoveScratch}
+          onRequestDeleteScratch={innerProps.onRequestDeleteScratch}
           onRequestDeleteAllScratches={innerProps.onRequestDeleteAllScratches}
           onRenameScratch={innerProps.onRenameScratch}
           onSaveAsProject={innerProps.onSaveAsProject}
         />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * Single-scratch delete confirmation (#11522).
+ *
+ * Its own component so the progress clocks mount and unmount with the dialog —
+ * the palette body would otherwise carry timers outliving every confirm it ever
+ * opened.
+ */
+function DeleteScratchConfirmDialog({
+  target,
+  onDismiss,
+  onConfirm,
+  isDeleting,
+  restoreFocusTo,
+}: {
+  target: DeleteScratchTarget;
+  onDismiss: () => void;
+  onConfirm: () => void;
+  isDeleting: boolean;
+  restoreFocusTo: React.RefObject<HTMLElement | null>;
+}) {
+  const progress = useScratchDeletionProgress(isDeleting);
+
+  return (
+    <ConfirmDialog
+      isOpen={true}
+      onClose={isDeleting ? undefined : onDismiss}
+      title={`Delete '${target.name}'?`}
+      zIndex="nested"
+      confirmLabel="Delete scratch"
+      cancelLabel="Cancel"
+      onConfirm={onConfirm}
+      // Split on purpose: the button locks the instant it is pressed, but its
+      // spinner waits out the Doherty gate, so a scratch that deletes in 80ms
+      // never flashes one. Gating the lock too would leave a window where a
+      // second press still went through.
+      confirmDisabled={isDeleting}
+      isConfirmLoading={isDeleting && progress.isVisible}
+      variant="destructive"
+      // The row that opened this is gone by the time it closes, so the default
+      // restore walks to the first tabbable node under #root — app chrome behind
+      // a palette that is still `aria-modal`. Hand focus back to the search box
+      // instead, which survives the delete and keeps it inside the palette.
+      restoreFocusTo={restoreFocusTo}
+    >
+      <div className="space-y-3">
+        <div className="text-sm text-daintree-text/70">
+          Its terminals will be closed and its folder deleted from disk.
+        </div>
+        <div className="text-xs text-daintree-text/50 font-mono break-all">{target.path}</div>
+        {/*
+         * Raw `isDeleting` decides whether the live region exists; the Doherty
+         * gate only decides whether it has anything to say, so a scratch that
+         * deletes inside the gate never flashes it (lesson #10083). The region
+         * stays mounted for the whole run so the long-wait line is an update to
+         * one announcer rather than a second one.
+         */}
+        {isDeleting && (
+          <div
+            role="status"
+            className="min-h-4 text-xs text-daintree-text/60"
+            data-testid="delete-scratch-progress"
+          >
+            {progress.isVisible && (
+              <>
+                {/*
+                 * Names the operation, not a step. Main tears the terminals down
+                 * FIRST and only reaches the folder if that confirms — so a line
+                 * claiming both would be asserting file deletion during a
+                 * teardown that may yet fail and delete nothing. The steps are
+                 * named in the consequence copy above, where they are a statement
+                 * of intent rather than a claim about what is happening now.
+                 */}
+                Deleting scratch…
+                {progress.isStillWorking && (
+                  <span className="block text-daintree-text/40">Still working…</span>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </ConfirmDialog>
   );
 }
 
@@ -1770,7 +1877,11 @@ export function ProjectSwitcherPalette({
   scratchResults,
   onCreateScratch,
   onSelectScratch,
-  onRemoveScratch,
+  onRequestDeleteScratch,
+  deleteScratchConfirm,
+  onDismissDeleteScratchConfirm,
+  onConfirmDeleteScratch,
+  isDeletingScratch = false,
   onRequestDeleteAllScratches,
   deleteAllScratchesConfirm,
   onDismissDeleteAllScratchesConfirm,
@@ -1783,6 +1894,8 @@ export function ProjectSwitcherPalette({
   onConfirmDeleteOriginalScratch,
   isDeletingOriginalScratch = false,
 }: ProjectSwitcherPaletteProps) {
+  const paletteInputRef = useRef<HTMLInputElement>(null);
+
   const hasRunningProcesses = removeConfirmProject
     ? removeConfirmProject.processCount > 0 ||
       removeConfirmProject.activeAgentCount > 0 ||
@@ -1792,6 +1905,7 @@ export function ProjectSwitcherPalette({
   const content =
     mode === "dropdown" ? (
       <DropdownContent
+        paletteInputRef={paletteInputRef}
         isOpen={isOpen}
         query={query}
         results={results}
@@ -1822,7 +1936,7 @@ export function ProjectSwitcherPalette({
         scratchResults={scratchResults}
         onCreateScratch={onCreateScratch}
         onSelectScratch={onSelectScratch}
-        onRemoveScratch={onRemoveScratch}
+        onRequestDeleteScratch={onRequestDeleteScratch}
         onRequestDeleteAllScratches={onRequestDeleteAllScratches}
         onRenameScratch={onRenameScratch}
         onSaveAsProject={onSaveAsProject}
@@ -1831,6 +1945,7 @@ export function ProjectSwitcherPalette({
       </DropdownContent>
     ) : (
       <ModalContent
+        paletteInputRef={paletteInputRef}
         isOpen={isOpen}
         query={query}
         results={results}
@@ -1859,7 +1974,7 @@ export function ProjectSwitcherPalette({
         scratchResults={scratchResults}
         onCreateScratch={onCreateScratch}
         onSelectScratch={onSelectScratch}
-        onRemoveScratch={onRemoveScratch}
+        onRequestDeleteScratch={onRequestDeleteScratch}
         onRequestDeleteAllScratches={onRequestDeleteAllScratches}
         onRenameScratch={onRenameScratch}
         onSaveAsProject={onSaveAsProject}
@@ -1973,6 +2088,15 @@ export function ProjectSwitcherPalette({
             </div>
           </div>
         </ConfirmDialog>
+      )}
+      {deleteScratchConfirm && onDismissDeleteScratchConfirm && onConfirmDeleteScratch && (
+        <DeleteScratchConfirmDialog
+          target={deleteScratchConfirm}
+          restoreFocusTo={paletteInputRef}
+          onDismiss={onDismissDeleteScratchConfirm}
+          onConfirm={onConfirmDeleteScratch}
+          isDeleting={isDeletingScratch}
+        />
       )}
       {deleteAllScratchesConfirm &&
         onDismissDeleteAllScratchesConfirm &&

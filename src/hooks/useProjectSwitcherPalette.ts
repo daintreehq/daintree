@@ -73,6 +73,16 @@ export type DeleteAllScratchesSnapshot = ReadonlyArray<
 >;
 
 /**
+ * Target of a pending single-scratch delete, frozen when the user opened the
+ * confirmation.
+ *
+ * Frozen for the same reason as the bulk snapshot: the row can be removed under
+ * the open dialog by a `scratch:removed` push from another window, and the run
+ * still has to name what the user agreed to.
+ */
+export type DeleteScratchTarget = Readonly<Pick<SearchableScratch, "id" | "name" | "path">>;
+
+/**
  * Band a project renders under in browse. Ordered exactly as the sections
  * appear, so the flat `results` array can be sorted by section index and the
  * component can emit a header wherever the key changes — sections stay a *view*
@@ -296,8 +306,17 @@ export interface UseProjectSwitcherPaletteReturn {
   createScratch: (name?: string) => Promise<void>;
   /** Switch to an existing scratch. Closes the palette on success. */
   selectScratch: (scratch: SearchableScratch) => Promise<void>;
-  /** Remove a scratch (deletes folder + DB row). Used by context menu. */
-  removeScratchAction: (scratchId: string) => Promise<void>;
+  /**
+   * Target of a pending single-scratch delete confirmation, frozen when the
+   * user opened it, or null when no confirm is open.
+   */
+  deleteScratchConfirm: DeleteScratchTarget | null;
+  /** Open the single-scratch delete confirmation. A no-op for an unknown id. */
+  requestDeleteScratch: (scratchId: string) => void;
+  dismissDeleteScratchConfirm: () => void;
+  /** Delete the frozen target (folder + DB row). Announces the outcome. */
+  confirmDeleteScratch: () => Promise<void>;
+  isDeletingScratch: boolean;
   /**
    * Targets of a pending "delete all scratches" confirmation, frozen when the
    * user opened it, or null when no confirm is open.
@@ -583,6 +602,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // Rapid double-Enter on the confirm button lands twice before React re-renders
   // the disabled state, so the gate has to be synchronous (lesson #4024).
   const isDeletingAllScratchesRef = useRef(false);
+  const [deleteScratchConfirm, setDeleteScratchConfirm] = useState<DeleteScratchTarget | null>(
+    null
+  );
+  const [isDeletingScratch, setIsDeletingScratch] = useState(false);
+  const isDeletingScratchRef = useRef(false);
   const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prefetchInFlightRef = useRef<Set<string>>(new Set());
   const prefetchLastAtRef = useRef<Map<string, number>>(new Map());
@@ -1594,21 +1618,98 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     [renameScratchActionStore]
   );
 
-  const removeScratchAction = useCallback(
-    async (scratchId: string) => {
-      try {
-        await removeScratchActionStore(scratchId);
-      } catch (error) {
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "error",
-          title: "Couldn't remove scratch",
-          message: formatErrorMessage(error, "Couldn't remove scratch workspace"),
-        });
-      }
+  const requestDeleteScratch = useCallback(
+    (scratchId: string) => {
+      if (isDeletingScratchRef.current || deleteScratchConfirm) return;
+      const target = scratchResults.find((scratch) => scratch.id === scratchId);
+      // No fallback target: a miss means the row went away between the menu
+      // opening and the choice landing, and guessing which scratch the user
+      // meant is exactly the silent default a destructive path must not have.
+      if (!target) return;
+      setDeleteScratchConfirm({ id: target.id, name: target.name, path: target.path });
     },
-    [removeScratchActionStore]
+    [scratchResults, deleteScratchConfirm]
   );
+
+  const dismissDeleteScratchConfirm = useCallback(() => {
+    if (isDeletingScratchRef.current) return;
+    setDeleteScratchConfirm(null);
+  }, []);
+
+  // A `scratch:removed` push from another window can retire the target under an
+  // open dialog. Skipped while our own run is in flight, or the removal we just
+  // performed would tear the dialog down before the outcome is announced.
+  //
+  // Gated on the STATE, not the ref that guards re-entrancy: a ref settling in
+  // `finally` re-runs nothing. Another window deleting the target mid-run would
+  // then be consumed by a skipped pass, and if our own call went on to reject —
+  // which leaves the dialog open as its own retry surface — nothing would ever
+  // reconcile it, stranding a dialog that retries a scratch already gone.
+  useEffect(() => {
+    if (!deleteScratchConfirm || isDeletingScratch) return;
+    if (scratches.some((scratch: Scratch) => scratch.id === deleteScratchConfirm.id)) return;
+    setDeleteScratchConfirm(null);
+  }, [deleteScratchConfirm, scratches, isDeletingScratch]);
+
+  const confirmDeleteScratch = useCallback(async () => {
+    if (isDeletingScratchRef.current) return;
+    const target = deleteScratchConfirm;
+    if (!target) return;
+
+    isDeletingScratchRef.current = true;
+    setIsDeletingScratch(true);
+
+    try {
+      await removeScratchActionStore(target.id);
+      const title = `Deleted '${target.name}'`;
+      // Close before announcing: VoiceOver drops live-region updates raised from
+      // outside a focused `aria-modal` subtree (lesson #9434).
+      closeAndAnnounce(() => setDeleteScratchConfirm(null), title);
+      // Reports the terminals, not the folder: main tombstones the row and then
+      // treats `fs.rm` as best-effort, so a resolved call proves the workspace is
+      // gone from the app, not that the directory is gone from disk.
+      //
+      // A focused-window receipt, deliberately best-effort: the row leaving is
+      // only visible if the palette is still open on it, so a toast is worth
+      // raising, but a deletion that lands while the window is blurred is dropped
+      // rather than filed. `transient` is what drops it, and it stays because a
+      // routine delete is not inbox-worthy — `closeAndAnnounce` above is the
+      // guaranteed signal. No `context` for the same reason: suppression needs an
+      // inbox entry to fall back to, and a transient payload has none.
+      // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
+      notify({
+        type: "success",
+        title,
+        message: "Its terminals were closed.",
+        transient: true,
+        priority: "high",
+      });
+    } catch (error) {
+      // Another window may have deleted this scratch while our own call was in
+      // flight, which is how ours came to fail. The user asked for it gone and it
+      // is gone, so reconcile instead of reporting a failure — and close, because
+      // the error copy below leans on the dialog surviving as its retry surface,
+      // which the stale-target effect is about to take away.
+      const isAlreadyGone = !useScratchStore
+        .getState()
+        .scratches.some((scratch: Scratch) => scratch.id === target.id);
+      if (isAlreadyGone) {
+        closeAndAnnounce(() => setDeleteScratchConfirm(null), `Deleted '${target.name}'`);
+        return;
+      }
+      // The dialog stays open and its button re-arms: that button is the retry
+      // surface, so the toast needs no action of its own.
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+      notify({
+        type: "error",
+        title: "Couldn't delete scratch",
+        message: formatErrorMessage(error, "Couldn't remove scratch workspace"),
+      });
+    } finally {
+      isDeletingScratchRef.current = false;
+      setIsDeletingScratch(false);
+    }
+  }, [deleteScratchConfirm, removeScratchActionStore]);
 
   const requestDeleteAllScratches = useCallback(() => {
     if (isDeletingAllScratchesRef.current || deleteAllScratchesConfirm) return;
@@ -1869,7 +1970,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     scratchResults,
     createScratch,
     selectScratch,
-    removeScratchAction,
+    deleteScratchConfirm,
+    requestDeleteScratch,
+    dismissDeleteScratchConfirm,
+    confirmDeleteScratch,
+    isDeletingScratch,
     deleteAllScratchesConfirm,
     requestDeleteAllScratches,
     dismissDeleteAllScratchesConfirm,
