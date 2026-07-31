@@ -3095,8 +3095,9 @@ describe("resolved-workspace result metadata (#11536)", () => {
     const server = createSessionServer(
       "rp-structured",
       fakeDeps({
+        // `terminal.list` is on the curated external allowlist, so the external
+        // tier reaches it on the allowlist alone (#11537 deleted the widening opt-in).
         sessionStore: fakeSessionStore("external"),
-        getFullToolSurface: vi.fn(() => true),
         requestManifest: vi.fn().mockResolvedValue([entry]),
         getCachedManifest: vi.fn(() => [entry]),
         dispatchAction: vi.fn().mockResolvedValue({
