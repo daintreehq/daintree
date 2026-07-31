@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const broadcastMock = vi.hoisted(() => vi.fn());
 const projectStoreMock = vi.hoisted(() => ({
-  getAllProjects: vi.fn<() => Array<{ id: string }>>(() => []),
+  getAllProjects: vi.fn<() => Array<{ id: string; lastCompletionSeenAt?: number }>>(() => []),
+}));
+const scratchStoreMock = vi.hoisted(() => ({
+  getAllScratches: vi.fn<() => Array<{ id: string; lastCompletionSeenAt?: number }>>(() => []),
 }));
 
 const eventEmitter = vi.hoisted(() => {
@@ -30,6 +33,7 @@ vi.mock("../../ipc/utils.js", () => ({
 
 vi.mock("../events.js", () => ({ events: eventEmitter }));
 vi.mock("../ProjectStore.js", () => ({ projectStore: projectStoreMock }));
+vi.mock("../ScratchStore.js", () => ({ scratchStore: scratchStoreMock }));
 vi.mock("../AgentAvailabilityStore.js", () => ({
   getAgentAvailabilityStore: () => availabilityMock,
 }));
@@ -64,6 +68,7 @@ beforeEach(() => {
   vi.setSystemTime(1_830_001);
   eventEmitter._reset();
   projectStoreMock.getAllProjects.mockReturnValue([]);
+  scratchStoreMock.getAllScratches.mockReturnValue([]);
   availabilityMock.isHelpTerminal.mockReset();
   availabilityMock.isHelpTerminal.mockReturnValue(false);
 });
@@ -774,5 +779,115 @@ describe("ProjectStatsService adversarial", () => {
     await Promise.resolve();
 
     expect(broadcastMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Scratch workspaces join the status map (#11518).
+ *
+ * A scratch terminal already carries the scratch id as its `projectId`, so the
+ * only thing standing between scratches and a status row was the id list this
+ * service builds. The counting helper treats ids as opaque, so these specs are
+ * about the merge — that scratch ids reach it, and that neither kind's entry
+ * displaces the other's.
+ */
+describe("ProjectStatsService scratch workspaces", () => {
+  const SCRATCH_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+  function agentTerminal(workspaceId: string, agentState: string, extra: object = {}) {
+    return {
+      projectId: workspaceId,
+      kind: "terminal",
+      launchAgentId: "x",
+      agentState,
+      ...extra,
+    };
+  }
+
+  it("gives a scratch its own entry alongside a project", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    scratchStoreMock.getAllScratches.mockReturnValue([{ id: SCRATCH_ID }]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      agentTerminal("p1", "working"),
+      agentTerminal(SCRATCH_ID, "waiting"),
+      agentTerminal(SCRATCH_ID, "waiting"),
+    ]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const [, payload] = broadcastMock.mock.calls.at(-1) as [
+      string,
+      Record<string, { activeAgentCount: number; waitingAgentCount: number }>,
+    ];
+    expect(Object.keys(payload).sort()).toEqual([SCRATCH_ID, "p1"].sort());
+    expect(payload[SCRATCH_ID]!.waitingAgentCount).toBe(2);
+    expect(payload[SCRATCH_ID]!.activeAgentCount).toBe(0);
+    expect(payload.p1!.activeAgentCount).toBe(1);
+  });
+
+  // The empty-list short circuit keyed off projects alone. A user whose only
+  // workspaces are scratches would have broadcast an empty map forever.
+  it("computes for a scratch-only fleet instead of short-circuiting", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([]);
+    scratchStoreMock.getAllScratches.mockReturnValue([{ id: SCRATCH_ID }]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([agentTerminal(SCRATCH_ID, "working")]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const [, payload] = broadcastMock.mock.calls.at(-1) as [
+      string,
+      Record<string, { activeAgentCount: number }>,
+    ];
+    expect(payload[SCRATCH_ID]!.activeAgentCount).toBe(1);
+  });
+
+  it("splits completed from unacknowledged using the scratch's own watermark", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([]);
+    scratchStoreMock.getAllScratches.mockReturnValue([
+      { id: SCRATCH_ID, lastCompletionSeenAt: 1_000 },
+    ]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      agentTerminal(SCRATCH_ID, "completed", { lastStateChange: 500 }),
+      agentTerminal(SCRATCH_ID, "completed", { lastStateChange: 2_000 }),
+    ]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const [, payload] = broadcastMock.mock.calls.at(-1) as [
+      string,
+      Record<string, { completedAgentCount: number; unacknowledgedCompletedAgentCount: number }>,
+    ];
+    // Both finished; only the one after the watermark is still unseen.
+    expect(payload[SCRATCH_ID]!.completedAgentCount).toBe(2);
+    expect(payload[SCRATCH_ID]!.unacknowledgedCompletedAgentCount).toBe(1);
+  });
+
+  it("drops a deleted scratch's entry on the next compute", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    scratchStoreMock.getAllScratches.mockReturnValue([{ id: SCRATCH_ID }]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([agentTerminal(SCRATCH_ID, "working")]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(broadcastMock.mock.calls.at(-1)![1]).toHaveProperty(SCRATCH_ID);
+
+    scratchStoreMock.getAllScratches.mockReturnValue([]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([]);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(broadcastMock.mock.calls.at(-1)![1]).not.toHaveProperty(SCRATCH_ID);
+    svc.stop();
   });
 });

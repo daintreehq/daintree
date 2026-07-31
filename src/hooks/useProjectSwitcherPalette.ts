@@ -21,8 +21,36 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export type ProjectSwitcherMode = "modal" | "dropdown";
 
+/**
+ * The agent-activity fields a switcher row's status line is derived from —
+ * exactly the subset both kinds of workspace share.
+ *
+ * Extracted so `getWorkspaceActivityStatus` can serve projects and scratches
+ * without either widening to the other's shape: a structural parameter keeps
+ * the two view-models disjoint while letting one formatter read both (#11518).
+ */
+export interface WorkspaceRowStatusFields {
+  activeAgentCount: number;
+  waitingAgentCount: number;
+  /** Waiting agents blocked on an error — a subset of `waitingAgentCount`. */
+  blockedAgentCount: number;
+  /** Epoch ms the oldest current wait began, absent when nothing is waiting. */
+  oldestWaitingSince?: number;
+  /** Agents settled in `completed` — finished work awaiting review. */
+  completedAgentCount: number;
+  /** Completions the user hasn't seen yet — a subset of `completedAgentCount`. */
+  unacknowledgedCompletedAgentCount: number;
+  /** Earliest unseen completion, absent when everything was seen. */
+  oldestUnacknowledgedCompletionAt?: number;
+  /** Latest unseen completion, absent when everything was seen. */
+  latestUnacknowledgedCompletionAt?: number;
+  /** Latest completion regardless of acknowledgement, absent when none. */
+  latestCompletionAt?: number;
+  processCount: number;
+}
+
 /** Lightweight searchable scratch view-model for the palette section. */
-export interface SearchableScratch {
+export interface SearchableScratch extends WorkspaceRowStatusFields {
   id: string;
   name: string;
   path: string;
@@ -89,7 +117,7 @@ export const PROJECT_SECTION_LABELS: Record<ProjectSectionKey, string | null> = 
  */
 export const OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS = 4;
 
-export interface SearchableProject {
+export interface SearchableProject extends WorkspaceRowStatusFields {
   id: string;
   name: string;
   path: string;
@@ -108,25 +136,11 @@ export interface SearchableProject {
    * per list build — never the raw persisted snapshot.
    */
   frecencyScore: number;
-  activeAgentCount: number;
-  waitingAgentCount: number;
-  /** Waiting agents blocked on an error — a subset of `waitingAgentCount`. */
-  blockedAgentCount: number;
-  /** Epoch ms the oldest current wait began, absent when nothing is waiting. */
-  oldestWaitingSince?: number;
-  /** Agents settled in `completed` — finished work awaiting review. */
-  completedAgentCount: number;
-  /** Completions the user hasn't seen yet — a subset of `completedAgentCount`. */
-  unacknowledgedCompletedAgentCount: number;
-  /** Earliest unseen completion, absent when everything was seen. */
-  oldestUnacknowledgedCompletionAt?: number;
-  /** Latest unseen completion, absent when everything was seen. */
-  latestUnacknowledgedCompletionAt?: number;
-  /** Latest completion regardless of acknowledgement, absent when none. */
-  latestCompletionAt?: number;
-  /** Latest transition into `working`, absent when nothing is working. */
+  /**
+   * Latest transition into `working`, absent when nothing is working. Project
+   * only: it orders rows inside the Running band, which scratches never enter.
+   */
   latestWorkingSince?: number;
-  processCount: number;
   displayPath: string;
   /** Browse band. Not meaningful while searching, where rank order wins. */
   section: ProjectSectionKey;
@@ -597,13 +611,24 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   useEffect(() => {
     if (!isOpen) return;
-    void loadScratches();
     // Pull a fresh agent-status snapshot on open so rows show live status
     // immediately instead of waiting for the next passive broadcast, which
     // would otherwise leave them falling back to a stale relative timestamp.
-    void loadProjects()
+    //
+    // Both stores are awaited because the pull covers scratch rows too (#11518)
+    // — the push channel is best-effort, so this is the only guaranteed
+    // hydration path for a view that has never received a broadcast.
+    //
+    // Settled, not `all`: the two loads are independent, and letting either
+    // rejection short-circuit the pair would mean one store's IPC failure
+    // silently costs the OTHER kind of row its status line. Whichever list did
+    // load still gets hydrated from the ids it has.
+    void Promise.allSettled([loadProjects(), loadScratches()])
       .then(() => {
-        const ids = useProjectStore.getState().projects.map((p) => p.id);
+        const ids = [
+          ...useProjectStore.getState().projects.map((p) => p.id),
+          ...useScratchStore.getState().scratches.map((s) => s.id),
+        ];
         if (ids.length === 0) return;
         return projectClient.getBulkStats(ids).then((bulk) => {
           // Seed only — never overwrite.
@@ -948,17 +973,33 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // this same list but re-ranks it against the query (#11466), so it has to be
   // built before `results` rather than beside the other scratch callbacks below.
   const scratchResults = useMemo<SearchableScratch[]>(() => {
-    const list: SearchableScratch[] = scratches.map((s: Scratch) => ({
-      id: s.id,
-      name: s.name,
-      path: s.path,
-      createdAt: s.createdAt,
-      lastOpened: s.lastOpened,
-      isActive: currentScratch?.id === s.id,
-    }));
+    const list: SearchableScratch[] = scratches.map((s: Scratch) => {
+      // Scratch terminals carry the scratch id as their `projectId`, so the one
+      // status map covers both kinds and the join is the same lookup projects
+      // do (#11518).
+      const stats = projectStats[s.id];
+      return {
+        id: s.id,
+        name: s.name,
+        path: s.path,
+        createdAt: s.createdAt,
+        lastOpened: s.lastOpened,
+        isActive: currentScratch?.id === s.id,
+        activeAgentCount: stats?.activeAgentCount ?? 0,
+        waitingAgentCount: stats?.waitingAgentCount ?? 0,
+        blockedAgentCount: stats?.blockedAgentCount ?? 0,
+        oldestWaitingSince: stats?.oldestWaitingSince,
+        completedAgentCount: stats?.completedAgentCount ?? 0,
+        unacknowledgedCompletedAgentCount: stats?.unacknowledgedCompletedAgentCount ?? 0,
+        oldestUnacknowledgedCompletionAt: stats?.oldestUnacknowledgedCompletionAt,
+        latestUnacknowledgedCompletionAt: stats?.latestUnacknowledgedCompletionAt,
+        latestCompletionAt: stats?.latestCompletionAt,
+        processCount: stats?.processCount ?? 0,
+      };
+    });
     list.sort((a, b) => b.lastOpened - a.lastOpened);
     return list;
-  }, [scratches, currentScratch?.id]);
+  }, [scratches, currentScratch?.id, projectStats]);
 
   // Clearing the box reverts to browse immediately rather than holding the
   // deferred ranking for a commit — otherwise browse would flash the stale

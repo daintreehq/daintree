@@ -118,6 +118,7 @@ function row(overrides: Partial<ScratchRow> & Pick<ScratchRow, "id" | "path">): 
     createdAt: overrides.createdAt ?? 0,
     lastOpened: overrides.lastOpened ?? 0,
     deletedAt: overrides.deletedAt ?? null,
+    lastCompletionSeenAt: overrides.lastCompletionSeenAt ?? null,
   };
 }
 

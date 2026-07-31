@@ -455,6 +455,12 @@ describe("ProjectSwitcherPalette keyboard on a scratch row", () => {
     createdAt: 0,
     lastOpened: 0,
     isActive: false,
+    activeAgentCount: 0,
+    waitingAgentCount: 0,
+    blockedAgentCount: 0,
+    completedAgentCount: 0,
+    unacknowledgedCompletedAgentCount: 0,
+    processCount: 0,
   };
 
   const scratchProps = {

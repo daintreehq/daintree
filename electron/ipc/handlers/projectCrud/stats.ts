@@ -7,6 +7,8 @@ import { ProjectStatsService } from "../../../services/ProjectStatsService.js";
 import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
 import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import { scratchStore } from "../../../services/ScratchStore.js";
+import { isValidScratchId } from "../../../services/scratchStorePaths.js";
 import { CompletionAcknowledgementService } from "../../../services/CompletionAcknowledgementService.js";
 import { getWindowRegistry } from "../../../window/windowRef.js";
 import { BrowserWindow } from "electron";
@@ -60,8 +62,16 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       return ctx.services.projectViewManager?.getActiveProjectId() ?? null;
     },
     getStatusMap: () => projectStatsService.getLastBroadcast(),
-    markSeen: (projectId, seenUpTo) => {
-      projectStore.updateProject(projectId, { lastCompletionSeenAt: seenUpTo });
+    // The observed id is whatever the focused view has active, which is the
+    // scratch UUID while a scratch is open (#11518). Both kinds now carry
+    // status entries, so the stamp has to land in the store that owns the row —
+    // routing on the id format, since the two are disjoint by construction.
+    markSeen: (workspaceId, seenUpTo) => {
+      if (isValidScratchId(workspaceId)) {
+        scratchStore.markCompletionSeen(workspaceId, seenUpTo);
+        return;
+      }
+      projectStore.updateProject(workspaceId, { lastCompletionSeenAt: seenUpTo });
     },
     onAcknowledged: () => projectStatsService.refresh(),
   });
@@ -126,11 +136,14 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       }
     }
 
-    const agentCounts = computeProjectAgentCounts(
-      uniqueIds,
-      allTerminals,
-      projectStore.getLastCompletionSeenMap()
-    );
+    // Requested ids may name either kind, so both watermark sources have to be
+    // in play — a scratch read against the project-only map would report every
+    // completion as unacknowledged.
+    const seenMap = new Map([
+      ...projectStore.getLastCompletionSeenMap(),
+      ...scratchStore.getLastCompletionSeenMap(),
+    ]);
+    const agentCounts = computeProjectAgentCounts(uniqueIds, allTerminals, seenMap);
 
     const result: BulkProjectStats = {};
     for (const entry of statsResults) {

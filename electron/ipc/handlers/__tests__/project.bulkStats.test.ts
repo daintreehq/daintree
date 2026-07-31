@@ -74,6 +74,29 @@ vi.mock("../../../services/ProjectStore.js", () => ({
   },
 }));
 
+const ackDepsCapture = vi.hoisted(() => ({ current: null as null | Record<string, unknown> }));
+
+// Captured rather than exercised on its timer: the routing decision inside
+// `markSeen` is the whole point, and driving the real 1s sampler to reach it
+// would test the dwell clock instead.
+vi.mock("../../../services/CompletionAcknowledgementService.js", () => ({
+  CompletionAcknowledgementService: class {
+    constructor(deps: Record<string, unknown>) {
+      ackDepsCapture.current = deps;
+    }
+    start() {}
+    stop() {}
+  },
+}));
+
+vi.mock("../../../services/ScratchStore.js", () => ({
+  scratchStore: {
+    getAllScratches: vi.fn(() => []),
+    getLastCompletionSeenMap: vi.fn(() => new Map<string, number>()),
+    markCompletionSeen: vi.fn(),
+  },
+}));
+
 vi.mock("../../../services/ProjectSwitchService.js", () => ({
   ProjectSwitchService: class MockProjectSwitchService {
     onSwitch = vi.fn();
@@ -104,6 +127,7 @@ import { registerProjectCrudHandlers } from "../projectCrud/index.js";
 import type { HandlerDependencies } from "../../types.js";
 import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import { scratchStore } from "../../../services/ScratchStore.js";
 
 function makePtyClient(overrides: Record<string, unknown> = {}) {
   return {
@@ -750,5 +774,103 @@ describe("registerProjectStatsHandlers — deferred initial compute", () => {
     await Promise.resolve();
 
     expect(ptyClient.getAllTerminalsAsync).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Scratch workspaces in the bulk pull and the acknowledgement loop (#11518).
+ *
+ * The palette's open-time pull is the guaranteed hydration path — the push
+ * channel is best-effort — so it has to answer for scratch ids too. And once a
+ * scratch carries a status entry, the dwell that clears "ready for review" is
+ * reachable with a scratch id, which `projectStore` has no row for.
+ */
+describe("bulk stats and acknowledgement for scratch workspaces", () => {
+  const SCRATCH_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ackDepsCapture.current = null;
+    (scratchStore.getLastCompletionSeenMap as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Map<string, number>()
+    );
+    (projectStore.getLastCompletionSeenMap as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Map<string, number>()
+    );
+  });
+
+  function completedTerminal(workspaceId: string, at: number, id: string) {
+    return {
+      id,
+      projectId: workspaceId,
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentState: "completed",
+      hasPty: true,
+      cwd: "/tmp",
+      spawnedAt: 0,
+      lastStateChange: at,
+    };
+  }
+
+  it("answers for a requested scratch id", async () => {
+    const ptyClient = makePtyClient({
+      getAllTerminalsAsync: vi
+        .fn()
+        .mockResolvedValue([completedTerminal(SCRATCH_ID, 2_000, "t1")]),
+    });
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+
+    const result = (await getBulkStatsHandler()(fakeEvent, [SCRATCH_ID])) as Record<
+      string,
+      { completedAgentCount: number; unacknowledgedCompletedAgentCount: number }
+    >;
+
+    expect(result[SCRATCH_ID]!.completedAgentCount).toBe(1);
+    expect(result[SCRATCH_ID]!.unacknowledgedCompletedAgentCount).toBe(1);
+  });
+
+  // Read against the project-only map, every scratch completion would report as
+  // unacknowledged forever — the row would never leave "ready for review".
+  it("honours the scratch's own acknowledgement watermark", async () => {
+    (scratchStore.getLastCompletionSeenMap as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Map([[SCRATCH_ID, 5_000]])
+    );
+    const ptyClient = makePtyClient({
+      getAllTerminalsAsync: vi
+        .fn()
+        .mockResolvedValue([completedTerminal(SCRATCH_ID, 2_000, "t1")]),
+    });
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+
+    const result = (await getBulkStatsHandler()(fakeEvent, [SCRATCH_ID])) as Record<
+      string,
+      { completedAgentCount: number; unacknowledgedCompletedAgentCount: number }
+    >;
+
+    expect(result[SCRATCH_ID]!.completedAgentCount).toBe(1);
+    expect(result[SCRATCH_ID]!.unacknowledgedCompletedAgentCount).toBe(0);
+  });
+
+  it("stamps a scratch acknowledgement on the scratch store, never the project store", () => {
+    registerProjectCrudHandlers(makeDeps(makePtyClient()));
+    const markSeen = ackDepsCapture.current!.markSeen as (id: string, seen: number) => void;
+
+    markSeen(SCRATCH_ID, 7_000);
+
+    expect(scratchStore.markCompletionSeen).toHaveBeenCalledWith(SCRATCH_ID, 7_000);
+    expect(projectStore.updateProject).not.toHaveBeenCalled();
+  });
+
+  it("leaves the project path untouched", () => {
+    registerProjectCrudHandlers(makeDeps(makePtyClient()));
+    const markSeen = ackDepsCapture.current!.markSeen as (id: string, seen: number) => void;
+
+    markSeen("a".repeat(64), 7_000);
+
+    expect(projectStore.updateProject).toHaveBeenCalledWith("a".repeat(64), {
+      lastCompletionSeenAt: 7_000,
+    });
+    expect(scratchStore.markCompletionSeen).not.toHaveBeenCalled();
   });
 });

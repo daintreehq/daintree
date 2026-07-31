@@ -90,9 +90,26 @@ const {
     vi.fn((selector: (state: typeof projectState) => unknown) => selector(projectState)),
     { getState: () => projectState }
   );
+  // Reactive like the real zustand store it stands in for. A plain selector
+  // stub only ever reflects what was seeded before the first render, so any
+  // spec covering the open-time bulk seed would depend on some unrelated store
+  // happening to re-render the hook afterwards.
+  const statsListeners = new Set<() => void>();
   const useProjectStatsStoreMock = Object.assign(
     vi.fn((selector: (state: typeof projectStatsState) => unknown) => selector(projectStatsState)),
-    { getState: () => ({ stats: projectStatsState.stats, setStats: setStatsMock }) }
+    {
+      getState: () => ({
+        stats: projectStatsState.stats,
+        setStats: (stats: typeof projectStatsState.stats) => {
+          setStatsMock(stats);
+          for (const listener of statsListeners) listener();
+        },
+      }),
+      subscribe: (listener: () => void) => {
+        statsListeners.add(listener);
+        return () => statsListeners.delete(listener);
+      },
+    }
   );
   const notifyMock = vi.fn().mockReturnValue("");
 
@@ -120,9 +137,21 @@ vi.mock("@/store/projectStore", () => ({
   useProjectStore: useProjectStoreMock,
 }));
 
-vi.mock("@/store/projectStatsStore", () => ({
-  useProjectStatsStore: useProjectStatsStoreMock,
-}));
+vi.mock("@/store/projectStatsStore", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useProjectStatsStore: Object.assign(
+      (selector: (state: typeof projectStatsState) => unknown) => {
+        useSyncExternalStore(
+          useProjectStatsStoreMock.subscribe,
+          () => projectStatsState.stats
+        );
+        return useProjectStatsStoreMock(selector);
+      },
+      { getState: useProjectStatsStoreMock.getState }
+    ),
+  };
+});
 
 vi.mock("@/lib/notify", () => ({
   notify: notifyMock,

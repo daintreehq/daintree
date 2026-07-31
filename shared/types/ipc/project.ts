@@ -201,5 +201,9 @@ export interface ProjectHistoryTarget {
   projectId: string;
 }
 
-/** Project status map pushed from main process, keyed by project ID */
+/**
+ * Workspace status map pushed from the main process, keyed by workspace ID —
+ * project ids and scratch ids alike (#11518). The two formats are disjoint
+ * (64-char hex vs UUID), so one map can carry both without collision.
+ */
 export type ProjectStatusMap = Record<string, ProjectStatusEntry>;
