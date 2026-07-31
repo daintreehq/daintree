@@ -23,6 +23,7 @@ let _getPanelStoreState: (() => PanelStoreSnapshot) | null = null;
 let _getWorktreeSelectionState: (() => WorktreeSelectionSnapshot) | null = null;
 let _getWorktreeIdSet: (() => Set<string> | null) | null = null;
 let _getWorktreeGitDirById: ((worktreeId: string) => string | undefined) | null = null;
+let _getWorktreePathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
 let _clearPanelStoreForSwitch: (() => void) | null = null;
 let _clearFleetArming: (() => void) | null = null;
 let _getFleetArmedIds: (() => Set<string>) | null = null;
@@ -72,6 +73,22 @@ export function getWorktreeGitDirById(worktreeId: string): string | undefined {
   return _getWorktreeGitDirById?.(worktreeId);
 }
 
+export function setWorktreePathIndexAccessor(
+  getter: () => ReadonlyMap<string, string> | null
+): void {
+  _getWorktreePathIndex = getter;
+}
+
+/**
+ * Worktree id → absolute worktree path for the current project view, or `null`
+ * when no view store is mounted. Backs the shared location-argument resolver
+ * (#11543) so an action can accept either `worktreeId` or `worktreePath` and
+ * hand its IPC whichever half that call actually needs.
+ */
+export function getWorktreePathIndex(): ReadonlyMap<string, string> | null {
+  return _getWorktreePathIndex?.() ?? null;
+}
+
 export function setPanelStoreClearForSwitchAccessor(callback: () => void): void {
   _clearPanelStoreForSwitch = callback;
 }
@@ -109,6 +126,7 @@ export function resetStoreAccessorsForTesting(): void {
   _getWorktreeSelectionState = null;
   _getWorktreeIdSet = null;
   _getWorktreeGitDirById = null;
+  _getWorktreePathIndex = null;
   _clearPanelStoreForSwitch = null;
   _clearFleetArming = null;
   _getFleetArmedIds = null;
