@@ -5,6 +5,7 @@ import { forwardRef } from "react";
 import type { ReactNode } from "react";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { ContextMenuItem } from "@/components/ui/context-menu";
+import { FILE_DRAG_MIME, decodeFileDragPaths } from "@/lib/fileDragPayload";
 import { FileTreeView } from "../FileTreeView";
 import type { FlatTreeRow } from "../fileBrowserTree";
 
@@ -50,6 +51,9 @@ function row(path: string, isDirectory = false): FlatTreeRow {
 
 const ROWS = [row("src", true), row("README.md")];
 
+/** Absolute root the rows hang off, so a drag can name a real file. */
+const BASE_PATH = "/repo";
+
 // One test flips to Ctrl; without this reset it would leak into the rest.
 beforeEach(() => {
   isMacMock.mockReturnValue(true);
@@ -64,6 +68,7 @@ function renderTree(overrides: Partial<Parameters<typeof FileTreeView>[0]> = {})
       onSelect={onSelect}
       onToggleExpanded={vi.fn()}
       rowContextMenu={() => <div />}
+      basePath={BASE_PATH}
       label="Files"
       {...overrides}
     />
@@ -86,6 +91,7 @@ describe("FileTreeView context-menu interactions", () => {
         onSelect={onSelect}
         onToggleExpanded={vi.fn()}
         rowContextMenu={(clicked) => <ContextMenuItem>Act on {clicked.name}</ContextMenuItem>}
+        basePath={BASE_PATH}
         label="Files"
       />
     );
@@ -206,6 +212,7 @@ describe("FileTreeView context-menu interactions", () => {
         rowContextMenu={() => <div />}
         onInsertFileReference={onInsertFileReference}
         canInsertFileReference
+        basePath={BASE_PATH}
         label="Files"
       />
     );
@@ -224,6 +231,7 @@ describe("FileTreeView context-menu interactions", () => {
         rowContextMenu={() => <div />}
         onInsertFileReference={onInsertFileReference}
         canInsertFileReference={false}
+        basePath={BASE_PATH}
         label="Files"
       />
     );
@@ -286,6 +294,7 @@ describe("FileTreeView context-menu interactions", () => {
         rowContextMenu={(clicked) => <ContextMenuItem>Act on {clicked.name}</ContextMenuItem>}
         onInsertFileReference={onInsertFileReference}
         canInsertFileReference
+        basePath={BASE_PATH}
         label="Files"
       />
     );
@@ -310,6 +319,7 @@ describe("FileTreeView context-menu interactions", () => {
         onToggleExpanded={vi.fn()}
         onInsertFileReference={vi.fn()}
         canInsertFileReference
+        basePath={BASE_PATH}
         label="Files"
       />
     );
@@ -323,6 +333,7 @@ describe("FileTreeView context-menu interactions", () => {
         onToggleExpanded={vi.fn()}
         onInsertFileReference={vi.fn()}
         canInsertFileReference={false}
+        basePath={BASE_PATH}
         label="Files"
       />
     );
@@ -451,6 +462,7 @@ describe("FileTreeView folder-load spinner", () => {
         selectedPath={null}
         onSelect={vi.fn()}
         onToggleExpanded={vi.fn()}
+        basePath={BASE_PATH}
         label="Files"
       />
     );
@@ -459,6 +471,110 @@ describe("FileTreeView folder-load spinner", () => {
     });
 
     expect(queryByRole("status")).toBeNull();
+  });
+});
+
+describe("FileTreeView drag source", () => {
+  /**
+   * jsdom ships no `DataTransfer`, and the real one has a read-only `types`
+   * anyway. A Map-backed stand-in records exactly what the source wrote, which
+   * is the contract the two drop handlers read back.
+   */
+  function dragStart(element: Element) {
+    const data = new Map<string, string>();
+    const dataTransfer = {
+      setData: (type: string, value: string) => {
+        data.set(type, value);
+      },
+      setDragImage: vi.fn(),
+      effectAllowed: "uninitialized",
+    };
+    const event = new Event("dragstart", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+    fireEvent(element, event);
+    return { data, dataTransfer, event };
+  }
+
+  it("carries the row's absolute path as a list", () => {
+    const { getByRole } = renderTree();
+
+    const { data } = dragStart(getByRole("treeitem", { name: "README.md" }));
+
+    expect(decodeFileDragPaths(data.get(FILE_DRAG_MIME)!)).toEqual(["/repo/README.md"]);
+  });
+
+  // Rows are relative to the base path, so a drag that skipped the join would
+  // hand the agent a path resolving against its own cwd instead of the file's.
+  it("joins nested rows onto the base path", () => {
+    const { getByRole } = renderTree({ rows: [row("src/components/App.tsx")] });
+
+    const { data } = dragStart(getByRole("treeitem", { name: "App.tsx" }));
+
+    expect(decodeFileDragPaths(data.get(FILE_DRAG_MIME)!)).toEqual([
+      "/repo/src/components/App.tsx",
+    ]);
+  });
+
+  // Directory references are meaningful to the agents, so folders drag on
+  // exactly the same terms as files.
+  it("drags folders too", () => {
+    const { getByRole } = renderTree();
+    const folder = getByRole("treeitem", { name: "src" });
+
+    expect(folder.getAttribute("draggable")).toBe("true");
+    const { data } = dragStart(folder);
+
+    expect(decodeFileDragPaths(data.get(FILE_DRAG_MIME)!)).toEqual(["/repo/src"]);
+  });
+
+  // A `text/plain` twin would be inserted a second time by CodeMirror's own
+  // drop handler, which sits inside the element carrying the hybrid input's,
+  // and would put the drag beyond the app-wide invalid-target guard.
+  it("carries no other type alongside the payload", () => {
+    const { getByRole } = renderTree();
+
+    const { data } = dragStart(getByRole("treeitem", { name: "README.md" }));
+
+    expect([...data.keys()]).toEqual([FILE_DRAG_MIME]);
+  });
+
+  it("advertises a copy and previews the row itself", () => {
+    const { getByRole } = renderTree();
+    const rowElement = getByRole("treeitem", { name: "README.md" });
+
+    const { dataTransfer } = dragStart(rowElement);
+
+    // Referencing a file never moves or removes it.
+    expect(dataTransfer.effectAllowed).toBe("copy");
+    expect(dataTransfer.setDragImage).toHaveBeenCalledWith(
+      rowElement,
+      expect.any(Number),
+      expect.any(Number)
+    );
+  });
+
+  // With no base path the row cannot name an absolute file, so there is
+  // nothing to drag — and a drag carrying no data is one no target can accept,
+  // which reads as broken rather than absent.
+  it("does not drag when no base path resolves", () => {
+    const { getByRole } = renderTree({ basePath: "" });
+    const rowElement = getByRole("treeitem", { name: "README.md" });
+
+    expect(rowElement.getAttribute("draggable")).toBe("false");
+
+    const { data, event } = dragStart(rowElement);
+    expect(data.size).toBe(0);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  // Picking a row up is not the same gesture as choosing it: the viewer must
+  // not swap files under the user mid-drag.
+  it("does not move the selection", () => {
+    const { getByRole, onSelect } = renderTree();
+
+    dragStart(getByRole("treeitem", { name: "README.md" }));
+
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });
 
@@ -477,6 +593,7 @@ describe("FileTreeView menu contract", () => {
         selectedPath={null}
         onSelect={vi.fn()}
         onToggleExpanded={vi.fn()}
+        basePath={BASE_PATH}
         label="Files"
       />
     );

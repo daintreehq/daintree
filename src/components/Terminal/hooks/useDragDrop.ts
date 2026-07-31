@@ -1,5 +1,12 @@
 import { useCallback, useRef, useState } from "react";
 import type { EditorView } from "@codemirror/view";
+import { basename } from "@shared/utils/path";
+import {
+  FILE_DRAG_MIME,
+  decodeFileDragPaths,
+  hasFileDrag,
+  hasInternalFileDrag,
+} from "@/lib/fileDragPayload";
 import { IMAGE_EXTENSIONS } from "../useTerminalFileTransfer";
 import { formatAtFileTokenForCwd } from "../hybridInputParsing";
 import { addImageChip, addFileDropChip } from "../inputEditorExtensions";
@@ -9,7 +16,7 @@ export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>, c
   const [isDragOverFiles, setIsDragOverFiles] = useState(false);
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes("Files")) return;
+    if (!hasFileDrag(e.dataTransfer.types)) return;
     e.preventDefault();
     e.stopPropagation();
     dragDepthRef.current++;
@@ -17,7 +24,7 @@ export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>, c
   }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes("Files")) return;
+    if (!hasFileDrag(e.dataTransfer.types)) return;
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = "copy";
@@ -40,29 +47,66 @@ export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>, c
       setIsDragOverFiles(false);
 
       const view = editorViewRef.current;
-      if (!view || !e.dataTransfer.files.length) return;
+      if (!view) return;
+
+      // Both provenances reduce to the same three fields before anything is
+      // resolved, so an in-app drag (#11576) and an OS drop cannot disagree
+      // about what they insert. An in-app drag has no `File` behind it: the
+      // name comes from the path and there is no size, which the chip already
+      // treats as optional — the tooltip just omits the size line rather than
+      // this reaching for a stat over IPC.
+      //
+      // The internal type wins when both are somehow present; decoding it and
+      // then also draining `files` would insert every reference twice.
+      const dropped: { filePath: string; fileName: string; fileSize: number | undefined }[] =
+        hasInternalFileDrag(e.dataTransfer.types)
+          ? (decodeFileDragPaths(e.dataTransfer.getData(FILE_DRAG_MIME)) ?? []).map((filePath) => ({
+              filePath,
+              fileName: basename(filePath) || filePath,
+              fileSize: undefined,
+            }))
+          : Array.from(e.dataTransfer.files)
+              .map((file) => ({
+                filePath: window.electron.webUtils.getPathForFile(file),
+                osName: file.name,
+                fileSize: file.size,
+              }))
+              // A file the OS declines to resolve to a path is not referenceable.
+              .filter((entry) => entry.filePath !== "")
+              .map(({ filePath, osName, fileSize }) => ({
+                filePath,
+                fileName:
+                  osName.trim() || filePath.split(/[/\\]/).filter(Boolean).pop() || filePath,
+                fileSize,
+              }));
+
+      if (dropped.length === 0) return;
 
       type ResolvedFile =
         | { type: "image"; filePath: string; thumbnailDataUrl: string }
-        | { type: "file"; filePath: string; fileName: string; fileSize: number };
+        | {
+            type: "file";
+            filePath: string;
+            fileName: string;
+            fileSize: number | undefined;
+          };
 
       const resolved: ResolvedFile[] = [];
 
-      for (const file of Array.from(e.dataTransfer.files)) {
-        const filePath = window.electron.webUtils.getPathForFile(file);
-        if (!filePath) continue;
-        const name = file.name.trim() || filePath.split(/[/\\]/).filter(Boolean).pop() || filePath;
-
-        if (IMAGE_EXTENSIONS.test(file.name)) {
+      for (const { filePath, fileName, fileSize } of dropped) {
+        // A dragged folder reaches this too. One whose name ends in an image
+        // extension fails the thumbnail and falls back to the file chip, which
+        // is the same recovery a corrupt image already takes.
+        if (IMAGE_EXTENSIONS.test(fileName)) {
           try {
             const { thumbnailDataUrl } =
               await window.electron.clipboard.thumbnailFromPath(filePath);
             resolved.push({ type: "image", filePath, thumbnailDataUrl });
           } catch {
-            resolved.push({ type: "file", filePath, fileName: name, fileSize: file.size });
+            resolved.push({ type: "file", filePath, fileName, fileSize });
           }
         } else {
-          resolved.push({ type: "file", filePath, fileName: name, fileSize: file.size });
+          resolved.push({ type: "file", filePath, fileName, fileSize });
         }
       }
 

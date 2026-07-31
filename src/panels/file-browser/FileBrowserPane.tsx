@@ -1149,6 +1149,9 @@ export function FileBrowserPane({
           rowContextMenu={rowContextMenu}
           onInsertFileReference={handleInsertFileReference}
           canInsertFileReference={canInsertFileReference}
+          // Turns a dragged row's relative path absolute (#11576), the same
+          // join the insert-reference and copy-path handlers above use.
+          basePath={basePath}
           label={`Files in ${title}`}
         />
         {/* Below the tree, never above: the strip unmounts the instant a
