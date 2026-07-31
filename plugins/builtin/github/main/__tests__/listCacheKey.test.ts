@@ -14,7 +14,12 @@ import {
 
 beforeEach(() => clearGitHubCaches());
 
-const base = {
+// Typed from the builder rather than `as const`: a const-asserted fixture
+// freezes every field to its literal, so an override of a different value
+// stops type-checking.
+type ListKeyParams = Parameters<typeof buildListCacheKey>[0];
+
+const base: ListKeyParams = {
   type: "issue",
   owner: "daintreehq",
   repo: "daintree",
@@ -24,9 +29,10 @@ const base = {
   direction: "desc",
   perPage: 20,
   cursor: "",
-} as const;
+};
 
-const keyWith = (overrides: Partial<typeof base>) => buildListCacheKey({ ...base, ...overrides });
+const keyWith = (overrides: Partial<ListKeyParams> = {}) =>
+  buildListCacheKey({ ...base, ...overrides });
 
 describe("list cache identity", () => {
   /**

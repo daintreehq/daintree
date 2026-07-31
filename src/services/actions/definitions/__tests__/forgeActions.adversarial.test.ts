@@ -730,7 +730,7 @@ describe("forge.* query adversarial", () => {
       { state: "all", cursor: "c1" },
       { activeWorktreePath: "/repo" }
     );
-    const [, opts] = forgeClientMock.listPRs.mock.calls[0];
+    const [, opts] = forgeClientMock.listPRs.mock.calls[0]!;
     expect(opts).toMatchObject({ state: "all", cursor: "c1" });
   });
 
@@ -747,7 +747,7 @@ describe("forge.* query adversarial", () => {
       },
       { activeWorktreePath: "/repo" }
     );
-    const [, opts] = forgeClientMock.listIssues.mock.calls[0];
+    const [, opts] = forgeClientMock.listIssues.mock.calls[0]!;
     expect(opts).toMatchObject({
       search: "no:assignee -label:human-review",
       state: "open",
@@ -764,7 +764,7 @@ describe("forge.* query adversarial", () => {
       { perPage: 5, sort: "updated", direction: "asc" },
       { activeWorktreePath: "/repo" }
     );
-    const [, opts] = forgeClientMock.listPRs.mock.calls[0];
+    const [, opts] = forgeClientMock.listPRs.mock.calls[0]!;
     expect(opts).toMatchObject({ perPage: 5, sort: "updated", direction: "asc" });
   });
 
@@ -773,8 +773,8 @@ describe("forge.* query adversarial", () => {
     forgeClientMock.listPRs.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
     await runAction("forge.listIssues", { view: "full" }, { activeWorktreePath: "/repo" });
     await runAction("forge.listPRs", { view: "full" }, { activeWorktreePath: "/repo" });
-    const [, issueOpts] = forgeClientMock.listIssues.mock.calls[0];
-    const [, prOpts] = forgeClientMock.listPRs.mock.calls[0];
+    const [, issueOpts] = forgeClientMock.listIssues.mock.calls[0]!;
+    const [, prOpts] = forgeClientMock.listPRs.mock.calls[0]!;
     expect(issueOpts).not.toHaveProperty("view");
     expect(prOpts).not.toHaveProperty("view");
   });
@@ -842,7 +842,7 @@ describe("forge list arg validation rejects rather than strips", () => {
     const def = setupActions()("forge.listIssues");
     await def.run(parsed.success ? parsed.data : args, { activeWorktreePath: "/repo" } as never);
 
-    const [, opts] = forgeClientMock.listIssues.mock.calls[0];
+    const [, opts] = forgeClientMock.listIssues.mock.calls[0]!;
     expect(opts).toMatchObject(args);
   });
 });
