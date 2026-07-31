@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import crypto from "crypto";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
@@ -31,6 +32,20 @@ async function writeAged(filePath: string, contents: string, ageMs: number): Pro
   await fs.writeFile(filePath, contents, "utf8");
   const when = new Date(Date.now() - ageMs);
   await fs.utimes(filePath, when, when);
+}
+
+/**
+ * A name shaped like one this module hands out. Pruning only touches its own
+ * naming scheme, so a fixture named `stale.xml` would simply be ignored and the
+ * test would prove nothing.
+ */
+function bundleName(label: string, extension = "xml"): string {
+  return buildContextFileName({
+    projectName: label,
+    branch: "main",
+    extension,
+    timestamp: "2026-07-31T00-00-00-000Z",
+  });
 }
 
 describe("copyTreeOutputFile", () => {
@@ -110,6 +125,33 @@ describe("copyTreeOutputFile", () => {
       expect(stats.mode & 0o777).toBe(0o700);
     });
 
+    it("refuses a context directory that is a symlink", async () => {
+      if (process.platform === "win32") return;
+      // A symlink on this predictable name would redirect the write AND the
+      // prune sweep into whatever it points at — on a shared /tmp, someone
+      // else's choice.
+      const target = path.join(root, "victim");
+      await fs.mkdir(target);
+      const sentinel = path.join(target, "keepme.txt");
+      await fs.writeFile(sentinel, "private", "utf8");
+      await fs.symlink(target, contextDir());
+
+      await expect(
+        reserveContextFilePath({ worktreePath: "/repos/x", extension: "xml" })
+      ).rejects.toThrow();
+
+      await expect(fs.access(sentinel)).resolves.toBeUndefined();
+      expect(await fs.readdir(target)).toEqual(["keepme.txt"]);
+    });
+
+    it("refuses a context directory that is a plain file", async () => {
+      await fs.writeFile(contextDir(), "not a directory", "utf8");
+
+      await expect(
+        reserveContextFilePath({ worktreePath: "/repos/x", extension: "xml" })
+      ).rejects.toThrow();
+    });
+
     it("hands out a distinct path per call", async () => {
       const paths = await Promise.all(
         Array.from({ length: 5 }, () =>
@@ -123,8 +165,8 @@ describe("copyTreeOutputFile", () => {
   describe("pruneContextDir", () => {
     it("removes bundles past the age ceiling and keeps fresh ones", async () => {
       await fs.mkdir(contextDir(), { recursive: true });
-      const stale = path.join(contextDir(), "stale.xml");
-      const fresh = path.join(contextDir(), "fresh.xml");
+      const stale = path.join(contextDir(), bundleName("stale"));
+      const fresh = path.join(contextDir(), bundleName("fresh"));
       await writeAged(stale, "old", 48 * 60 * 60 * 1000);
       await writeAged(fresh, "new", 60 * 1000);
 
@@ -134,10 +176,25 @@ describe("copyTreeOutputFile", () => {
       await expect(fs.access(fresh)).resolves.toBeUndefined();
     });
 
+    it("never deletes a file it did not write, however old", async () => {
+      await fs.mkdir(contextDir(), { recursive: true });
+      // This directory sits at a predictable path under the temp dir. If it were
+      // ever redirected onto somewhere holding real files, the sweep must still
+      // only touch its own naming scheme.
+      const bystanders = ["notes.txt", "id_rsa", "budget.xlsx", "bundle.xml", "archive.xml.part"];
+      for (const name of bystanders) {
+        await writeAged(path.join(contextDir(), name), "not ours", 90 * 24 * 60 * 60 * 1000);
+      }
+
+      await pruneContextDir();
+
+      expect((await fs.readdir(contextDir())).sort()).toEqual([...bystanders].sort());
+    });
+
     it("expires a partial far sooner than a finished bundle of the same age", async () => {
       await fs.mkdir(contextDir(), { recursive: true });
-      const partial = path.join(contextDir(), "run.xml.abc.part");
-      const finished = path.join(contextDir(), "run.xml");
+      const finished = path.join(contextDir(), bundleName("run"));
+      const partial = `${finished}.${crypto.randomUUID()}.part`;
       const age = 3 * 60 * 60 * 1000;
       await writeAged(partial, "half", age);
       await writeAged(finished, "whole", age);
@@ -151,21 +208,22 @@ describe("copyTreeOutputFile", () => {
     it("trims to the retention count, dropping the oldest first", async () => {
       await fs.mkdir(contextDir(), { recursive: true });
       const total = MAX_RETAINED_FILES + 4;
+      const names: string[] = [];
       for (let i = 0; i < total; i += 1) {
+        const name = bundleName(`bundle${i}`);
+        names.push(name);
         // Age descends with the index, so the highest indices are the newest.
-        await writeAged(
-          path.join(contextDir(), `bundle-${i}.xml`),
-          `body-${i}`,
-          (total - i) * 1000
-        );
+        await writeAged(path.join(contextDir(), name), `body-${i}`, (total - i) * 1000);
       }
 
       await pruneContextDir();
 
-      const remaining = (await fs.readdir(contextDir())).sort();
-      expect(remaining).toHaveLength(MAX_RETAINED_FILES);
-      const survivorIndices = remaining.map((name) => Number(/bundle-(\d+)\.xml/.exec(name)![1]));
-      expect(Math.min(...survivorIndices)).toBe(total - MAX_RETAINED_FILES);
+      const remaining = new Set(await fs.readdir(contextDir()));
+      expect(remaining.size).toBe(MAX_RETAINED_FILES);
+      // The newest MAX_RETAINED_FILES survive; everything older is gone.
+      for (const [index, name] of names.entries()) {
+        expect(remaining.has(name)).toBe(index >= total - MAX_RETAINED_FILES);
+      }
     });
 
     it("spares a reserved bundle and its in-flight partial that age alone would sweep", async () => {
@@ -176,7 +234,7 @@ describe("copyTreeOutputFile", () => {
       });
       // Both are old enough for their own ceiling — 48h for a finished bundle,
       // 5h for a partial — so only the reservation keeps them.
-      const partial = `${reserved}.deadbeef.part`;
+      const partial = `${reserved}.${crypto.randomUUID()}.part`;
       await writeAged(reserved, "published", 48 * 60 * 60 * 1000);
       await writeAged(partial, "in flight", 5 * 60 * 60 * 1000);
 
@@ -191,7 +249,7 @@ describe("copyTreeOutputFile", () => {
         worktreePath: "/repos/x",
         extension: "xml",
       });
-      const partial = `${reserved}.deadbeef.part`;
+      const partial = `${reserved}.${crypto.randomUUID()}.part`;
       await writeAged(reserved, "done", 48 * 60 * 60 * 1000);
       await writeAged(partial, "half", 5 * 60 * 60 * 1000);
 
@@ -236,6 +294,30 @@ describe("copyTreeOutputFile", () => {
 
       expect(preview.truncated).toBe(true);
       expect(Buffer.byteLength(preview.content, "utf8")).toBeLessThanOrEqual(512);
+    });
+
+    it.each([
+      [511, false],
+      [512, false],
+      [513, true],
+    ])("reports a %i-byte file against a 512-byte cap as truncated=%s", async (size, truncated) => {
+      // The boundary case is the interesting one: a file of exactly the cap
+      // fills the window with nothing left over, and measuring only the window
+      // would report a complete read as cut.
+      const filePath = path.join(root, `exact-${size}.xml`);
+      await fs.writeFile(filePath, "a".repeat(size), "utf8");
+
+      const preview = await readContentPreview(filePath, 512);
+
+      expect(preview.truncated).toBe(truncated);
+      expect(preview.content).toHaveLength(Math.min(size, 512));
+    });
+
+    it("returns nothing for a zero-byte window without claiming the file was whole", async () => {
+      const filePath = path.join(root, "zero.xml");
+      await fs.writeFile(filePath, "abc", "utf8");
+
+      expect(await readContentPreview(filePath, 0)).toEqual({ content: "", truncated: true });
     });
 
     it("never decodes a partial code point at the cut", async () => {
@@ -319,11 +401,37 @@ describe("copyTreeOutputFile", () => {
       expect(serializedSize(fitted.result)).toBeLessThanOrEqual(1024);
     });
 
-    it("drops content entirely rather than exceed a budget the metadata alone fills", () => {
-      const fitted = fitContentToResultBudget("some content", build, false, 40);
+    it("drops content entirely when the budget only just clears the metadata", () => {
+      const metadataOnly = serializedSize(build("", true));
+
+      const fitted = fitContentToResultBudget("some content", build, false, metadataOnly);
 
       expect(fitted.content).toBe("");
       expect(fitted.truncated).toBe(true);
+      expect(serializedSize(fitted.result)).toBeLessThanOrEqual(metadataOnly);
+    });
+
+    it("returns the smallest result it can build when even the metadata overflows", () => {
+      // Nothing can be cut to make this fit, so the helper must still return the
+      // minimum rather than silently hand back an over-budget result.
+      const fitted = fitContentToResultBudget("some content", build, false, 10);
+
+      expect(fitted.content).toBe("");
+      expect(fitted.truncated).toBe(true);
+      expect(fitted.result.content).toBe("");
+    });
+
+    it("does not claim truncation when nothing was actually cut", () => {
+      // `"contentTruncated":true` serializes one byte shorter than `false`, so a
+      // budget that only the `true` rendering clears must not be met by
+      // relabelling the untouched string.
+      const content = "x";
+      const withFlagOff = serializedSize(build(content, false));
+
+      const fitted = fitContentToResultBudget(content, build, false, withFlagOff - 1);
+
+      expect(fitted.truncated === false || fitted.content.length < content.length).toBe(true);
+      expect(serializedSize(fitted.result)).toBeLessThanOrEqual(withFlagOff - 1);
     });
   });
 });

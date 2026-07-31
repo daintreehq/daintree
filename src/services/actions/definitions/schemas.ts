@@ -249,6 +249,12 @@ export const CopyTreeOptionsSchema = z.object({
   maxFileCount: z.number().int().positive().optional(),
   withLineNumbers: z.boolean().optional(),
   charLimit: z.number().int().positive().optional(),
+  // These actions validate against their own copy of the options schema, so a
+  // field only the IPC schema knows about is stripped before the request ever
+  // leaves the renderer. `sort` was missing here while `CopyTreeOptions` and the
+  // IPC schema both accepted it, so an MCP caller asking for a sort order
+  // silently got the default one.
+  sort: z.enum(["path", "size", "modified", "name", "extension", "depth"]).optional(),
 });
 
 export const AgentPresetSchema = z.object({

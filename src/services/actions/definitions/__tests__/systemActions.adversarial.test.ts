@@ -223,8 +223,10 @@ describe("systemActions adversarial", () => {
       // success schema doesn't name has to be dropped here: `resultSchema` is
       // manifest documentation and strips nothing (#10870), so a field left in
       // reaches the wire regardless of what the schema advertises.
+      // A non-empty sentinel: an empty string would let a projection that
+      // forwards `content` unconditionally pass this test anyway.
       copyTreeClientMock.generate.mockResolvedValueOnce({
-        content: "",
+        content: "LEAKED BUNDLE".repeat(1000),
         fileCount: 3,
         filePath: "/tmp/daintree-context/repo-main-x.xml",
         outputBytes: 31_457_280,
@@ -240,6 +242,21 @@ describe("systemActions adversarial", () => {
         outputBytes: 31_457_280,
         stats: { totalSize: 4096, duration: 12 },
       });
+    });
+
+    it("reports a head that was not truncated as such", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.generate.mockResolvedValueOnce({
+        content: "<files>whole</files>",
+        contentTruncated: false,
+        fileCount: 1,
+        filePath: "/tmp/daintree-context/repo-main-x.xml",
+        outputBytes: 20,
+      });
+
+      await expect(
+        run("copyTree.generate", { includeContent: true }, { activeWorktreeId: "wt-active" })
+      ).resolves.toMatchObject({ content: "<files>whole</files>", contentTruncated: false });
     });
 
     it("carries the head and its truncation flag only when one came back", async () => {

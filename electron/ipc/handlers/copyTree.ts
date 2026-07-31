@@ -272,13 +272,21 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     options: CopyTreeOptions,
     onProgress: (progress: CopyTreeProgress) => void
   ): Promise<CopyTreeResult> => {
-    const filePath = await reserveContextFilePath({
-      worktreePath: worktree.path,
-      branch: worktree.branch,
-      // The merged options, not the caller's: project settings decide the
-      // format too, and the extension has to match what actually gets written.
-      extension: getExtensionForFormat(options.format),
-    });
+    let filePath: string;
+    try {
+      filePath = await reserveContextFilePath({
+        worktreePath: worktree.path,
+        branch: worktree.branch,
+        // The merged options, not the caller's: project settings decide the
+        // format too, and the extension has to match what actually gets written.
+        extension: getExtensionForFormat(options.format),
+      });
+    } catch (error) {
+      // A raw fs rejection carries absolute paths, and this result is published
+      // to MCP callers verbatim — so only the static message crosses.
+      console.error("[CopyTree] Failed to reserve a context file:", error);
+      return { content: "", fileCount: 0, error: "Can't write the context file" };
+    }
 
     try {
       const result = await deps.worktreeService!.generateContext(
@@ -288,10 +296,11 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         filePath
       );
       if (result.error) return result;
-      if (result.filePath !== filePath) {
-        // A successful generation names the file we reserved. Anything else is
-        // a result that outlived its operation, and publishing its path would
-        // hand this caller another run's bundle.
+      // A successful generation names the file we reserved and reports its
+      // size. Anything else is a result that outlived its operation: publishing
+      // its path would hand this caller another run's bundle, and the missing
+      // size would break the shape the tool advertises.
+      if (result.filePath !== filePath || typeof result.outputBytes !== "number") {
         return { content: "", fileCount: 0, error: "Failed to generate context" };
       }
       return result;

@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import os from "os";
 import path from "path";
-import { chmod, mkdir, open, readdir, rm, stat } from "fs/promises";
+import { chmod, lstat, mkdir, open, readdir, rm, stat } from "fs/promises";
 import { logWarn } from "../utils/logger.js";
 
 /**
@@ -58,6 +58,23 @@ const MAX_PARTIAL_AGE_MS = 60 * 60 * 1000;
 const PARTIAL_SUFFIX = ".part";
 
 /**
+ * Names this module generates, and only those.
+ *
+ * Pruning deletes files, so it must never act on something it did not write.
+ * The directory sits at a predictable path under `os.tmpdir()`, and on a shared
+ * `/tmp` its name can be claimed by another user before Daintree gets there —
+ * `ensureContextDir` rejects a symlink sitting on the name, but a sweep
+ * restricted to this shape cannot delete a bystander's file even if that check
+ * were ever defeated.
+ *
+ * Matches `<project>-<branch>-<timestamp>-<uuid8>.<ext>` plus the
+ * `.<uuid>.part` suffix a partial carries. The `uuid8` group is optional so
+ * bundles written by the pre-#11528 clipboard path are still swept.
+ */
+const BUNDLE_NAME_PATTERN =
+  /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z(-[0-9a-f]{8})?\.[a-z]+(\.[0-9a-f-]{36}\.part)?$/;
+
+/**
  * Paths handed out but not yet finished. Pruning runs while other generations
  * are in flight, and deleting the file one of them is about to publish (or is
  * writing right now) would fail that run for no reason.
@@ -100,6 +117,17 @@ export function buildContextFileName(options: {
  * on Windows.
  */
 async function ensureContextDir(dir: string): Promise<void> {
+  // `lstat` rather than `stat`, and before `mkdir`: a symlink sitting on this
+  // name would be followed by mkdir, by the writes, and by the prune sweep,
+  // redirecting all three into whatever it points at. On a shared `/tmp` that
+  // target is another user's choice. This cannot close the replace-after-check
+  // race on its own, which is why pruning is also restricted to names this
+  // module generates.
+  const existing = await lstat(dir).catch(() => null);
+  if (existing && !existing.isDirectory()) {
+    throw new Error("Context directory is not a directory");
+  }
+
   await mkdir(dir, { recursive: true, mode: 0o700 });
   if (process.platform !== "win32") {
     try {
@@ -170,6 +198,8 @@ export async function pruneContextDir(): Promise<void> {
     // it points at be deleted, and recursing would take the sweep somewhere it
     // has no business being.
     if (!entry.isFile()) continue;
+    // Anything this module did not write is none of the sweep's business.
+    if (!BUNDLE_NAME_PATTERN.test(entry.name)) continue;
     const filePath = path.join(dir, entry.name);
     if (isProtected(filePath)) continue;
 
@@ -255,17 +285,21 @@ export async function readContentPreview(
 ): Promise<{ content: string; truncated: boolean }> {
   const handle = await open(filePath, "r");
   try {
-    const buffer = Buffer.alloc(maxBytes);
+    // One byte past the window: a file of exactly `maxBytes` fills the window
+    // without anything being left over, and measuring only the window would
+    // report it truncated when nothing was dropped.
+    const buffer = Buffer.alloc(maxBytes + 1);
     let read = 0;
-    while (read < maxBytes) {
-      const { bytesRead } = await handle.read(buffer, read, maxBytes - read, read);
+    while (read <= maxBytes) {
+      const { bytesRead } = await handle.read(buffer, read, maxBytes + 1 - read, read);
       if (bytesRead === 0) break;
       read += bytesRead;
     }
 
-    // A short read means the file ended, so what was read is already complete.
-    const truncated = read === maxBytes;
-    const end = truncated ? trimToUtf8Boundary(buffer, read) : read;
+    const truncated = read > maxBytes;
+    const limit = Math.min(read, maxBytes);
+    // Only a cut can land mid-sequence; a file that ended on its own is whole.
+    const end = truncated ? trimToUtf8Boundary(buffer, limit) : limit;
     return { content: buffer.subarray(0, end).toString("utf8"), truncated };
   } finally {
     await handle.close();
@@ -314,26 +348,52 @@ export function fitContentToResultBudget<T>(
   alreadyTruncated: boolean,
   maxBytes: number = CONTENT_RESULT_MAX_BYTES
 ): { result: T; content: string; truncated: boolean } {
-  const fits = (candidate: string, truncated: boolean) =>
-    Buffer.byteLength(JSON.stringify(buildResult(candidate, truncated)), "utf8") <= maxBytes;
+  /**
+   * A candidate and the flag it would actually ship with.
+   *
+   * The flag has to be derived here rather than passed in: `contentTruncated`
+   * is itself part of the measured JSON (`true` renders one byte shorter than
+   * `false`), so measuring a candidate under a flag it would not be sent with
+   * lets the search accept the untouched string and then label it truncated.
+   */
+  const evaluate = (end: number) => {
+    const slice = content.slice(0, safeEnd(content, end));
+    const truncated = alreadyTruncated || slice.length < content.length;
+    const result = buildResult(slice, truncated);
+    return {
+      slice,
+      truncated,
+      result,
+      ok: Buffer.byteLength(JSON.stringify(result), "utf8") <= maxBytes,
+    };
+  };
 
-  if (fits(content, alreadyTruncated)) {
-    return { result: buildResult(content, alreadyTruncated), content, truncated: alreadyTruncated };
+  const whole = evaluate(content.length);
+  if (whole.ok) {
+    return { result: whole.result, content: whole.slice, truncated: whole.truncated };
+  }
+
+  // The metadata alone overflows, so no amount of cutting helps. Ship the
+  // smallest thing this helper can build and let the transport cap — which
+  // measures the real envelope — be the backstop.
+  const empty = evaluate(0);
+  if (!empty.ok) {
+    return { result: buildResult("", true), content: "", truncated: true };
   }
 
   let low = 0;
   let high = content.length;
   while (low < high) {
     const mid = Math.ceil((low + high) / 2);
-    if (fits(content.slice(0, safeEnd(content, mid)), true)) {
+    if (evaluate(mid).ok) {
       low = mid;
     } else {
       high = mid - 1;
     }
   }
 
-  const fitted = content.slice(0, safeEnd(content, low));
-  return { result: buildResult(fitted, true), content: fitted, truncated: true };
+  const best = evaluate(low);
+  return { result: best.result, content: best.slice, truncated: best.truncated };
 }
 
 /** Back off an index that would leave a high surrogate without its pair. */

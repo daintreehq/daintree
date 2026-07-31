@@ -399,8 +399,12 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           filePath: result.filePath,
           fileCount: result.fileCount,
           outputBytes: result.outputBytes,
-          ...(result.content ? { content: result.content } : {}),
-          ...(result.contentTruncated ? { contentTruncated: true } : {}),
+          // Gated on what was ASKED for, not on what came back: keying off the
+          // response would forward a bundle to a caller who never opted in if
+          // the layer below ever returned one.
+          ...(args?.includeContent
+            ? { content: result.content, contentTruncated: result.contentTruncated === true }
+            : {}),
           ...(result.stats ? { stats: projectCopyTreeStats(result.stats) } : {}),
         };
       },
