@@ -49,6 +49,9 @@ import type { RollupContextNode } from "./prRequiredCIStatus.js";
 import { getIssuesByNumbersForContext } from "./GitHubIssues.js";
 import {
   buildListCacheKey,
+  normalizeListDirection,
+  normalizeListPerPage,
+  normalizeListSortOrder,
   parseBatchRequiredChecksResponse,
   updateRepoStatsCount,
 } from "./GitHubPRs.js";
@@ -200,14 +203,17 @@ async function searchIssuesImpl(
 ): Promise<Page<Issue>> {
   const state = listCacheState(opts);
   const bypass = opts.bypassCache === true;
-  const limit = opts.perPage ?? 20;
+  const limit = normalizeListPerPage(opts.perPage);
   // Free text is appended unquoted — GitHub search tokenizes it as keywords,
   // matching what its own search box does (see findPRByBranchImpl, which only
   // quotes because branch refs must not parse as separate operators). GitHub
   // caps search queries at 256 chars, so the term is truncated to the budget
   // left after the qualifiers rather than letting the whole query be rejected.
   const stateQualifier = state === "all" ? "" : ` state:${state}`;
-  const sortQualifier = opts.sort === "updated" ? "sort:updated-desc" : "sort:created-desc";
+  // Both halves of the order come from the caller. This path used to pin
+  // `-desc` and silently drop an `asc` request (#11527) — harmless while
+  // `direction` was unreachable, wrong the moment the action exposed it.
+  const sortQualifier = `sort:${normalizeListSortOrder(opts.sort)}-${normalizeListDirection(opts.direction)}`;
   const prefix = `repo:${repo.owner}/${repo.repo} is:issue${stateQualifier} ${sortQualifier} `;
   const available = 256 - prefix.length;
   const searchQuery = `${prefix}${available > 0 ? search.slice(0, available) : ""}`.trim();
@@ -248,19 +254,23 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
   if (searchTerm) return searchIssuesImpl(repo, searchTerm, opts);
 
   const state = listCacheState(opts);
-  const sortOrder = opts.sort === "updated" ? "updated" : "created";
+  const sortOrder = normalizeListSortOrder(opts.sort);
+  const direction = normalizeListDirection(opts.direction);
+  const limit = normalizeListPerPage(opts.perPage);
   const bypass = opts.bypassCache === true;
   // The unfiltered list path keeps `search` out of the cache key — search
   // routes through `searchIssuesImpl` above and never touches this cache.
-  const cacheKey = buildListCacheKey(
-    "issue",
-    repo.owner,
-    repo.repo,
+  const cacheKey = buildListCacheKey({
+    type: "issue",
+    owner: repo.owner,
+    repo: repo.repo,
     state,
-    "",
+    search: "",
     sortOrder,
-    opts.cursor ?? ""
-  );
+    direction,
+    perPage: limit,
+    cursor: opts.cursor ?? "",
+  });
 
   if (!bypass) {
     const cached = forgeIssueListCache.get(cacheKey);
@@ -268,7 +278,6 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
   }
 
   return dedupe(listIssuesInflight, cacheKey, bypass, async (isCurrent) => {
-    const limit = opts.perPage ?? 20;
     const orderBy = buildOrderBy(opts);
     // Captured before the network call: if the count-as-cache-buster bumps
     // the epoch mid-flight, this page predates the observed change and must
@@ -395,20 +404,24 @@ async function enrichPRPageWithRequiredStatus(repo: RepoRef, items: PR[]): Promi
 
 export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> {
   const state = listCacheState(opts);
-  const sortOrder = opts.sort === "updated" ? "updated" : "created";
+  const sortOrder = normalizeListSortOrder(opts.sort);
+  const direction = normalizeListDirection(opts.direction);
+  const limit = normalizeListPerPage(opts.perPage);
   const bypass = opts.bypassCache === true;
   // The PR list query ignores `opts.search` (advisory — see ListOptions), so
   // it's kept out of the cache key. Wiring it would mean routing to
   // SEARCH_QUERY like `searchIssuesImpl` does for issues.
-  const cacheKey = buildListCacheKey(
-    "pr",
-    repo.owner,
-    repo.repo,
+  const cacheKey = buildListCacheKey({
+    type: "pr",
+    owner: repo.owner,
+    repo: repo.repo,
     state,
-    "",
+    search: "",
     sortOrder,
-    opts.cursor ?? ""
-  );
+    direction,
+    perPage: limit,
+    cursor: opts.cursor ?? "",
+  });
 
   if (!bypass) {
     const cached = forgePRListCache.get(cacheKey);
@@ -416,7 +429,6 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
   }
 
   return dedupe(listPRsInflight, cacheKey, bypass, async (isCurrent) => {
-    const limit = opts.perPage ?? 20;
     const orderBy = buildOrderBy(opts);
     // Same mid-flight count-buster guard as the issues list above.
     const epochAtStart = getRepoListEpoch("pr", repo.owner, repo.repo);

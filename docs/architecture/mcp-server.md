@@ -268,14 +268,20 @@ Three axes are independent — do not infer one from another:
 
 All six are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline) and in `MCP_TOOL_ALLOWLIST`, so they are reachable at every tier including `external`. All are `kind:"query"`, `danger:"safe"`, on the `standard` bucket, and not deduped.
 
-| Action ID            | Key args                               |
-| -------------------- | -------------------------------------- |
-| `forge.getRepoStats` | `bypassCache?`, `cwd?`                 |
-| `forge.listIssues`   | `search?`, `state?`, `cursor?`, `cwd?` |
-| `forge.listPRs`      | `search?`, `state?`, `cursor?`, `cwd?` |
-| `forge.getIssue`     | `issueNumber`, `cwd?`                  |
-| `forge.getPR`        | `prNumber`, `cwd?`                     |
-| `forge.getCIStatus`  | `prNumber`, `cwd?`                     |
+| Action ID | Key args |
+| --- | --- |
+| `forge.getRepoStats` | `bypassCache?`, `cwd?` |
+| `forge.listIssues` | `search?`, `state?`, `perPage?`, `sort?`, `direction?`, `cursor?`, `view?`, `cwd?` |
+| `forge.listPRs` | `state?`, `perPage?`, `sort?`, `direction?`, `cursor?`, `view?`, `cwd?` (no `search`) |
+| `forge.getIssue` | `issueNumber`, `cwd?` |
+| `forge.getPR` | `prNumber`, `cwd?` |
+| `forge.getCIStatus` | `prNumber`, `cwd?` |
+
+The two list actions are the only **strict** action schemas in the codebase (#11527): an unrecognized arg is a validation error, not a silently stripped key. That is deliberate — Zod's default strip meant `labels: [...]` or `limit: 10` came back as a confidently _unfiltered_ page, which an agent would then act on.
+
+- **`search` is a provider-native query passed through verbatim**, not a plain-text filter. On GitHub it is issue-search syntax, so negation works where the structured `ListOptions` fields cannot express it: `search: "no:assignee -label:human-review"`. It routes through the provider's search API, which has its own depth and rate ceilings. `forge.listPRs` has no `search` at all — the GitHub provider's `pullRequests` connection cannot filter by label or assignee, so accepting the key would return an unfiltered page.
+- **`view` defaults to `summary`**, which drops each row's `body` and `rawData` (the verbatim provider node) and flattens actors and labels to their names, keeping what is needed to choose an item — including `linkedPR`, which answers whether a PR is already working the issue. Pass `view: "full"` for the complete provider object. This is a runtime projection built in `run()`, not a schema effect: `resultSchema` is manifest documentation only — `dispatch()` never parses it, so a field stops being sent only when `run()` stops building it.
+- `perPage` is 1-100 (default 20), `sort` is `created`|`updated`, `direction` is `asc`|`desc`. Structured `labels`/`assignee` filtering is not yet wired provider-side; use `search`.
 
 `forge.getCIStatus` is the only forge read that sets `mcpOutputSchema: true`, so it is also the only one advertising an MCP `outputSchema` and returning `structuredContent`. Its result is wrapped as `{ ciStatus }` rather than returned bare: `buildToolOutputSchema` forwards only object-typed schemas, so a top-level nullable would silently advertise nothing. The handler projects the provider's `CIStatus` down to the roll-up fields and drops `rawData`/`freshnessToken`/`notModified` — `rawData` in particular is populated on a network fetch but `null` on a cache hit, so forwarding it would make the response depend on cache state.
 

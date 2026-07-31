@@ -7,6 +7,14 @@ import { forgeClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
 import { logError } from "@/utils/logger";
+import {
+  ForgeIssuePageResultSchema,
+  ForgeListViewSchema,
+  ForgePRPageResultSchema,
+  projectForgePage,
+  projectIssueSummary,
+  projectPRSummary,
+} from "./forgeListProjection";
 
 /**
  * The cache keys on the PROJECT ROOT, but these actions resolve their forge
@@ -53,36 +61,58 @@ function syncAssigneeCache(
   }
 }
 
-const ForgeListOptionsSchema = z.object({
+/**
+ * Paging and ordering shared by both list actions. `.strict()` is deliberate
+ * and, as of #11527, the only strict action schema in the codebase: these are
+ * `danger: "safe"` queries whose worst failure is silent — Zod's default strip
+ * meant `labels: [...]` or `limit: 10` returned a confidently UNFILTERED page,
+ * and an agent then acted on the wrong set. A validation error naming the bad
+ * key is strictly more useful than a wrong answer.
+ */
+const ForgeListPagingSchema = z.object({
   cwd: z
     .string()
     .optional()
     .describe("Working directory of the git repo. Defaults to the active worktree path."),
-  search: z.string().optional().describe("Search query"),
-  state: z.enum(["open", "closed", "all"]).optional().describe("State filter (default: open)"),
   cursor: z
     .string()
     .optional()
     .describe(
       "Opaque pagination cursor — pass the previous response's `nextCursor` to fetch the next page."
     ),
+  perPage: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("Rows per page, 1-100 (default: 20)."),
+  sort: z.enum(["created", "updated"]).optional().describe("Sort field (default: created)."),
+  direction: z.enum(["asc", "desc"]).optional().describe("Sort direction (default: desc)."),
+  view: ForgeListViewSchema,
 });
 
+const ForgeListOptionsSchema = ForgeListPagingSchema.extend({
+  state: z.enum(["open", "closed", "all"]).optional().describe("State filter (default: open)"),
+  search: z
+    .string()
+    .optional()
+    .describe(
+      "Provider-native query, passed through verbatim — NOT a plain-text filter. On GitHub this is issue-search syntax, so negations work: 'no:assignee -label:human-review'. Routes via the provider's search API, which may cap result depth."
+    ),
+}).strict();
+
 // PR listing adds `merged` to the state filter — pull requests have a merged
-// state that issues don't.
-const ForgePRListOptionsSchema = ForgeListOptionsSchema.extend({
+// state that issues don't. `search` is absent on purpose: the GitHub provider
+// has no PR search path (its `pullRequests` connection cannot filter by label
+// or assignee at all), so accepting the key would silently return an
+// unfiltered page. Strict mode turns that into an error instead.
+const ForgePRListOptionsSchema = ForgeListPagingSchema.extend({
   state: z
     .enum(["open", "closed", "merged", "all"])
     .optional()
     .describe("State filter (default: open)"),
-});
-
-const ForgePageResultSchema = z.object({
-  items: z.array(z.unknown()),
-  nextCursor: z.string().nullable(),
-  hasMore: z.boolean(),
-  totalCount: z.number().optional(),
-});
+}).strict();
 
 // Normalized PR shape returned by getPR/createPR/editPR. Kept loose (provider
 // payload passes through `rawData`) — only the cross-provider fields are typed.
@@ -612,17 +642,30 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listIssues",
       title: "List Issues",
       description:
-        "List repository issues via the active forge provider (paginated). Args (all optional): `cwd` (repo dir, defaults to the active worktree path); `search`; `state` ('open'|'closed'|'all', default 'open'); `cursor` from a previous response's `nextCursor`. Returns { items, nextCursor, hasMore }. Errors when `cwd` is omitted and no worktree is active. Do NOT use this for pull requests — call `forge.listPRs`.",
+        "List repository issues via the active forge provider (paginated). Args (all optional): `cwd` (repo dir, defaults to the active worktree path); `state` ('open'|'closed'|'all', default 'open'); `perPage` (1-100, default 20); `sort` ('created'|'updated'); `direction` ('asc'|'desc'); `cursor` from a previous response's `nextCursor`; `view` ('summary' default — drops body and raw provider payload — or 'full'); `search`, a provider-native query passed through verbatim (GitHub issue-search syntax, e.g. 'no:assignee -label:human-review'). Unknown args are rejected, not ignored. Returns { items, nextCursor, hasMore }; summary rows carry number, title, state, url, author, assignees, labels, commentCount, linkedPR and timestamps. Errors when `cwd` is omitted and no worktree is active. Do NOT use this for pull requests — call `forge.listPRs`.",
       category: "forge",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       argsSchema: ForgeListOptionsSchema,
-      resultSchema: ForgePageResultSchema,
-      run: async ({ cwd, search, state, cursor }, ctx: ActionContext) => {
+      resultSchema: ForgeIssuePageResultSchema,
+      run: async (
+        { cwd, search, state, cursor, perPage, sort, direction, view },
+        ctx: ActionContext
+      ) => {
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
-        return await forgeClient.listIssues(resolvedCwd, { search, state, cursor });
+        const page = await forgeClient.listIssues(resolvedCwd, {
+          search,
+          state,
+          cursor,
+          perPage,
+          sort,
+          direction,
+        });
+        // `view` is action-local presentation: it never reaches the provider,
+        // so it must not participate in provider cache identity either.
+        return projectForgePage(page, view ?? "summary", projectIssueSummary);
       },
     })
   );
@@ -632,17 +675,24 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listPRs",
       title: "List Pull Requests",
       description:
-        "List repository pull requests via the active forge provider (paginated). Args (all optional): `cwd` (repo dir, defaults to the active worktree path); `search`; `state` ('open'|'closed'|'merged'|'all', default 'open'); `cursor` from a previous response's `nextCursor`. Returns { items, nextCursor, hasMore }. Errors when `cwd` is omitted and no worktree is active. Do NOT use this for issues — call `forge.listIssues`.",
+        "List repository pull requests via the active forge provider (paginated). Args (all optional): `cwd` (repo dir, defaults to the active worktree path); `state` ('open'|'closed'|'merged'|'all', default 'open'); `perPage` (1-100, default 20); `sort` ('created'|'updated'); `direction` ('asc'|'desc'); `cursor` from a previous response's `nextCursor`; `view` ('summary' default — drops body and raw provider payload — or 'full'). There is no `search` here: the GitHub provider cannot query PRs, so passing it is rejected rather than silently returning an unfiltered page. Unknown args are rejected too. Returns { items, nextCursor, hasMore }. Errors when `cwd` is omitted and no worktree is active. Do NOT use this for issues — call `forge.listIssues`.",
       category: "forge",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       argsSchema: ForgePRListOptionsSchema,
-      resultSchema: ForgePageResultSchema,
-      run: async ({ cwd, search, state, cursor }, ctx: ActionContext) => {
+      resultSchema: ForgePRPageResultSchema,
+      run: async ({ cwd, state, cursor, perPage, sort, direction, view }, ctx: ActionContext) => {
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
-        return await forgeClient.listPRs(resolvedCwd, { search, state, cursor });
+        const page = await forgeClient.listPRs(resolvedCwd, {
+          state,
+          cursor,
+          perPage,
+          sort,
+          direction,
+        });
+        return projectForgePage(page, view ?? "summary", projectPRSummary);
       },
     })
   );
