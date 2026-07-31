@@ -250,7 +250,7 @@ Gate order is load-bearing: rate-limit is charged **after** the tier/grant check
 ### Rate limits and dedup
 
 - **Rate limits** (`RATE_LIMIT_TIERS`, `RATE_LIMIT_TOOL_MAP`): per-`(session, toolId)` token bucket. `highFreqRead` (60/min) for cheap polling, `standard` (30/min) default, `mutation` (10/min) for side-effecting tools (commit, push, issue/PR, worktree.delete).
-- **Dedup** (`MCP_DEDUP_ALLOWLIST`): only creation/destructive tools where an LLM retry would produce a visible duplicate (orphan terminal, duplicate commit, duplicate PR). Keyed by a caller-supplied `requestKey` (prefixed with `actionId`, capped at `MAX_REQUEST_KEY_LENGTH`) or an auto canonical args hash, with an args-hash collision guard (#8429). TTL `MCP_DEDUP_TTL_MS` (120s), FIFO-capped at `MCP_DEDUP_MAX_ENTRIES_PER_SESSION` (256).
+- **Dedup** (`MCP_DEDUP_ALLOWLIST`): creation tools only, admitted on one of two distinct grounds — either an LLM retry leaves a duplicate artifact (an orphan terminal, a second agent, a duplicate issue/comment/review), or the retry creates nothing and the cached success is preferable to the error a redundant redispatch would raise (`worktree.delete`, `forge.createPR`, `forge.mergePR`, which 422s a duplicate PR and PUTs a merge). Keyed by a caller-supplied `requestKey` (prefixed with `actionId`, capped at `MAX_REQUEST_KEY_LENGTH`) or an auto canonical args hash, with an args-hash collision guard (#8429). TTL `MCP_DEDUP_TTL_MS` (120s), FIFO-capped at `MCP_DEDUP_MAX_ENTRIES_PER_SESSION` (256). Deliberately **out** (#11534): navigation (`forge.open*`) and idempotent state-sets (assign/unassign, close/reopen/edit, labels), which create no duplicate to suppress and whose cached 120s no-op breaks the legitimate repeat — reopening a URL the user closed, or re-assigning after an unassign — plus `git.commit`/`git.push`, whose arguments a legitimate repeat reuses unchanged, so deduping them would report success for a commit or push that never happened.
 
 ## Forge action surface (`forgeActions.ts`)
 
@@ -285,12 +285,12 @@ Every action below is in `SYSTEM_TIER_ADDONS` and requires the `system` tier (or
 | `forge.openIssues` | safe | standard | no | yes | `projectPath?`, `query?`, `state?` |
 | `forge.openPRs` | safe | standard | no | yes | `projectPath?`, `query?`, `state?` |
 | `forge.openCommits` | safe | standard | no | yes | `projectPath?`, `branch?` |
-| `forge.openIssue` | safe | mutation | yes | yes | `issueNumber`, `cwd?` |
-| `forge.openPR` | safe | mutation | yes | yes | `prNumber`, `cwd?` |
-| `forge.assignIssue` | safe | mutation | yes | yes | `issueNumber`, `username`, `cwd?` |
+| `forge.openIssue` | safe | mutation | no | yes | `issueNumber`, `cwd?` |
+| `forge.openPR` | safe | mutation | no | yes | `prNumber`, `cwd?` |
+| `forge.assignIssue` | safe | mutation | no | yes | `issueNumber`, `username`, `cwd?` |
 | `forge.unassignIssue` | safe | standard | no | no | `issueNumber`, `username`, `cwd?` |
-| `forge.approvePR` | confirm | standard | no | no | `prNumber`, `body?`, `cwd?` |
-| `forge.requestChanges` | confirm | standard | no | no | `prNumber`, `body`, `cwd?` |
+| `forge.approvePR` | confirm | standard | yes | no | `prNumber`, `body?`, `cwd?` |
+| `forge.requestChanges` | confirm | standard | yes | no | `prNumber`, `body`, `cwd?` |
 | `forge.dismissReview` | confirm | standard | no | no | `prNumber`, `reviewId`, `message`, `cwd?` |
 | `forge.requestReviewers` | confirm | standard | no | no | `prNumber`, `users?`, `teams?` (at least one), `cwd?` |
 | `forge.createPR` | confirm | mutation | yes | yes | `head`, `base`, `title`, `body?`, `draft?`, `cwd?` |
@@ -301,11 +301,11 @@ Every action below is in `SYSTEM_TIER_ADDONS` and requires the `system` tier (or
 | `forge.markPRReadyForReview` | confirm | mutation | no | yes | `prNumber`, `cwd?` |
 | `forge.commentOnPR` | confirm | mutation | yes | yes | `prNumber`, `body`, `cwd?` |
 | `forge.editPR` | confirm | mutation | no | yes | `prNumber`, `title?`, `body?` (at least one), `cwd?` |
-| `forge.createIssue` | safe | standard | no | no | `title`, `body?`, `labels?`, `cwd?` |
+| `forge.createIssue` | safe | standard | yes | no | `title`, `body?`, `labels?`, `cwd?` |
 | `forge.closeIssue` | confirm | standard | no | no | `issueNumber`, `stateReason?`, `cwd?` |
 | `forge.reopenIssue` | safe | standard | no | no | `issueNumber`, `cwd?` |
 | `forge.editIssue` | confirm | standard | no | no | `issueNumber`, `title?`, `body?` (at least one), `cwd?` |
-| `forge.addIssueComment` | safe | standard | no | no | `issueNumber`, `body`, `cwd?` |
+| `forge.addIssueComment` | safe | standard | yes | no | `issueNumber`, `body`, `cwd?` |
 | `forge.addIssueLabel` | safe | standard | no | no | `issueNumber`, `label`, `cwd?` |
 | `forge.removeIssueLabel` | safe | standard | no | no | `issueNumber`, `label`, `cwd?` |
 | `forge.validateToken` | safe | standard | no | yes | `providerId`, `token` |

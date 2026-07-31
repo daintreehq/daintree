@@ -477,43 +477,83 @@ export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
  * instead of redispatching, with an args-hash guard rejecting same-key
  * different-args replays as a collision (#8429).
  *
- * Inclusion criterion: a mutation tool belongs here when (a) an LLM
- * retrying after a transient error or reconnect is realistic, and (b) a
- * duplicate dispatch has an immediately user-visible side effect — an
- * orphaned terminal, a redundant agent, a duplicate commit/push, or a
- * duplicate issue/PR. The seed cohort (`terminal.new`,
- * `worktree.createWithRecipe`, `agent.launch`, `recipe.run`) is widened
- * to the git/forge mutations (`git.commit`, `git.push`, `forge.openIssue`,
- * `forge.openPR`) now that the args-hash collision guard (#8429) is in
- * place to make the widening safe. Widened further (#9156) to the remaining
- * destructive mutations — `worktree.delete`, `forge.assignIssue` — so every
- * side-effecting tool that an LLM might retry is covered.
+ * A tool belongs here only when all three hold: (a) an LLM retrying after a
+ * transient error or reconnect is realistic, (b) the repeat leaves a durable
+ * or immediately user-visible artifact — an orphaned terminal, a redundant
+ * agent, a duplicate issue/PR/comment/review — and (c) an intentional
+ * same-argument repeat inside the TTL is not a normal use case.
  *
- * Deliberately bounded: blanket-applying dedup to all mutations would mask
- * legitimate "do it again" cases (re-running the same git command, etc.).
+ * (c) is what bounds the list. Navigation (`forge.open*`, portal/browser
+ * opens) is out: reopening a URL the user closed must dispatch again, and a
+ * silent 120s no-op reads as a broken tool. Repeatable commands
+ * (`terminal.sendCommand`, `git.stage*`) are out for the same reason. So are
+ * idempotent state-sets (close/reopen/draft/edit, label and assignee
+ * add/remove, resource pause/resume/teardown): they create no duplicate to
+ * suppress, so caching buys nothing and costs correctness — in a set → unset
+ * → set sequence the third call matches the first, the cached success
+ * returns, and the state stays unset (#11534 dropped `forge.assignIssue` for
+ * exactly this).
+ *
+ * An entry that *does* have an inverse is kept only when the replay it
+ * absorbs outweighs the suppression it risks, on one of two grounds.
+ * `forge.approvePR`/`forge.requestChanges` POST a genuinely new record each
+ * call, so a replay leaves a visible second artifact — unlike assignment,
+ * which leaves none, so that trade lands the other way. `worktree.delete`,
+ * `forge.createPR` and `forge.mergePR` create nothing on a replay; they are
+ * here to return the original success instead of the error a redundant
+ * redispatch would raise, which is a different justification from the
+ * duplicate-artifact one and should not be confused with it.
+ *
+ * `git.commit` and `git.push` are the tempting case that still fails (c), so
+ * #11534 dropped them. Neither takes an argument a legitimate repeat varies:
+ * `git.push` gets only `{cwd, setUpstream}`, and `git.commit` commits
+ * whatever the index holds, so a second push after a new commit — or a
+ * repeated `wip` message — is same-argument and would be swallowed as a
+ * cached success for work that never happened. The replay they would absorb
+ * is cheap by comparison: a redundant push prints "Everything up-to-date"
+ * and a redundant commit errors visibly on an empty index. The trade only
+ * flips with state-aware keying (HEAD for push, index identity for commit).
+ *
+ * History: seeded by #7554, made safe to widen by the args-hash collision
+ * guard (#8429), widened again in #9156, then corrected against the criterion
+ * above in #11534 — which added the creation tools that were missing and
+ * dropped the navigation, idempotent and git-write entries that never met it.
  */
-export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set([
+const MCP_DEDUP_ALLOWLIST_ENTRIES = [
+  // Panel/agent spawns — a replay leaves an orphaned terminal or a second
+  // agent. `agent.terminal` spawns exactly like `terminal.new` (#11534).
   "terminal.new",
-  "worktree.createWithRecipe",
+  "agent.terminal",
   "agent.launch",
   "recipe.run",
-  "git.commit",
-  "git.push",
-  "forge.openIssue",
-  "forge.openPR",
-  "worktree.delete",
-  // Provisioning spins up a remote/cloud resource — an LLM retry after a
-  // transient failure could spawn a second one. Pause/resume/teardown are
-  // idempotent enough (or intentionally re-runnable) to stay out.
+
+  // Worktree/workflow creation. `workflow.startWorkOnIssue` is a creation
+  // superset of the two below it — a replay duplicates the entire work setup
+  // (worktree + branch + agent + injected context) (#11534). Provisioning
+  // spins up a remote/cloud resource a retry could double.
+  "worktree.createWithRecipe",
+  "workflow.startWorkOnIssue",
   "worktree.resource.provision",
-  "forge.assignIssue",
-  // PR writes where an LLM retry within the dispatch window leaves a visible
-  // duplicate: a second open PR, a re-merge attempt, or a duplicate comment
-  // (lesson #7554). Idempotent state-sets (close/reopen/draft/edit) are omitted.
+  "worktree.delete",
+
+  // Forge writes worth absorbing a replay for. `createIssue`,
+  // `addIssueComment`, `commentOnPR`, `approvePR` and `requestChanges` each
+  // POST a new record every call — a duplicate issue, a duplicate comment
+  // (lesson #7554), or a second review entry, since both verdicts POST to
+  // `/pulls/{n}/reviews` (#11534). `createPR` and `mergePR` create nothing on
+  // a replay (GitHub 422s a duplicate PR; merge is a PUT) — they are here to
+  // replay the original success rather than surface that error to a caller
+  // that is only retrying.
   "forge.createPR",
   "forge.mergePR",
   "forge.commentOnPR",
-]);
+  "forge.createIssue",
+  "forge.addIssueComment",
+  "forge.approvePR",
+  "forge.requestChanges",
+] as const satisfies readonly BuiltInActionId[];
+
+export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set(MCP_DEDUP_ALLOWLIST_ENTRIES);
 
 /**
  * Dedup window for the creation-tool allowlist. Sized to cover the MCP

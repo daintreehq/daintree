@@ -2234,28 +2234,51 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 });
 
-describe("MCP_DEDUP_ALLOWLIST widening (#8468)", () => {
-  it("retains the original creation-tool cohort", () => {
-    for (const tool of [
-      "terminal.new",
-      "worktree.createWithRecipe",
-      "agent.launch",
-      "recipe.run",
-    ]) {
-      expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(true);
-    }
+describe("MCP_DEDUP_ALLOWLIST exclusion boundary (#8468)", () => {
+  // Membership `.has()` spot-checks were dropped in #11534: they restated the
+  // allowlist literal, so they stayed green even if sessionServer stopped
+  // consulting the set. Both directions are proven by dispatch behaviour
+  // instead. (The forge half of the original cohort — `forge.openIssue` /
+  // `forge.openPR` — was removed in #11534; see the block below.)
+  const twoDistinctDispatches = () =>
+    vi
+      .fn()
+      .mockResolvedValueOnce({ result: { ok: true, result: "first" } })
+      .mockResolvedValueOnce({ result: { ok: true, result: "second" } });
+
+  // The #8468 git cohort was dropped in #11534: `git.push` takes only
+  // `{cwd, setUpstream}` and `git.commit` commits whatever the index holds, so
+  // a second push after a new commit — or a repeated `wip` message — is
+  // same-argument, and caching it would report success for work that never
+  // happened. Restoring either entry must fail here.
+  it.each(["git.commit", "git.push"])("redispatches a repeated %s", async (tool) => {
+    const dispatchAction = twoDistinctDispatches();
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+    const server = createSessionServer(`git-8468-${tool}`, deps);
+
+    const args = { target: "x" };
+    await callTool(server, { name: tool, arguments: args });
+    const second = await callTool(server, { name: tool, arguments: args });
+
+    expect(dispatchAction).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(second)).toContain("second");
   });
 
-  it("adds the git/forge mutation cohort", () => {
-    for (const tool of ["git.commit", "git.push", "forge.openIssue", "forge.openPR"]) {
-      expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(true);
-    }
-  });
+  it.each(["git.stageAll", "terminal.sendCommand"])(
+    "stays bounded — redispatches unlisted mutation %s",
+    async (tool) => {
+      const dispatchAction = twoDistinctDispatches();
+      const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+      const server = createSessionServer(`bounded-8468-${tool}`, deps);
 
-  it("stays bounded — does not blanket every mutation", () => {
-    expect(MCP_DEDUP_ALLOWLIST.has("git.stageAll")).toBe(false);
-    expect(MCP_DEDUP_ALLOWLIST.has("terminal.sendCommand")).toBe(false);
-  });
+      const args = { target: "x" };
+      await callTool(server, { name: tool, arguments: args });
+      const second = await callTool(server, { name: tool, arguments: args });
+
+      expect(dispatchAction).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(second)).toContain("second");
+    }
+  );
 });
 
 describe("worktree resource lifecycle dedup (#10683)", () => {
@@ -2285,22 +2308,21 @@ describe("worktree resource lifecycle dedup (#10683)", () => {
 });
 
 describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
-  const NEW_MUTATIONS = ["worktree.delete", "forge.assignIssue"];
-
-  it("adds the remaining destructive-mutation cohort", () => {
-    for (const tool of NEW_MUTATIONS) {
-      expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(true);
-    }
-  });
-
-  it("stays bounded — adjacent read-only tools remain excluded", () => {
-    expect(MCP_DEDUP_ALLOWLIST.has("git.getStagingStatus")).toBe(false);
-  });
+  // `forge.assignIssue` shipped in this cohort but was dropped in #11534 —
+  // assignment is provider-idempotent, and caching it broke assign → unassign
+  // → reassign. See the #11534 block below.
+  const NEW_MUTATIONS = ["worktree.delete"];
 
   it.each(NEW_MUTATIONS)(
     "dedups a post-completion duplicate of newly-allowlisted %s",
     async (tool) => {
-      const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+      // Distinct per-call payloads so the replay assertion has teeth: with a
+      // single mockResolvedValue both dispatches return equal results and
+      // `second === first` would hold even with dedup switched off.
+      const dispatchAction = vi
+        .fn()
+        .mockResolvedValueOnce({ result: { ok: true, result: "first" } })
+        .mockResolvedValueOnce({ result: { ok: true, result: "second" } });
       const deps = fakeDeps({
         sessionStore: fakeSessionStore("system"),
         dispatchAction,
@@ -2313,16 +2335,141 @@ describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
 
       expect(dispatchAction).toHaveBeenCalledTimes(1);
       expect(second).toEqual(first);
+      expect(JSON.stringify(second)).not.toContain("second");
     }
   );
+});
+
+describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
+  // Creation tools whose replay leaves a durable or immediately visible
+  // artifact. Each has a structural twin that was already deduped, which is
+  // exactly why the omission was invisible: the same retry was safe through
+  // one id and duplicated through the other.
+  const NEWLY_DEDUPED = [
+    "agent.terminal",
+    "workflow.startWorkOnIssue",
+    "forge.createIssue",
+    "forge.addIssueComment",
+    "forge.approvePR",
+    "forge.requestChanges",
+  ];
+
+  // Navigation and idempotent state-sets. Caching these suppresses a call the
+  // caller legitimately meant to repeat — reopening a URL the user closed, or
+  // re-assigning after an unassign — so they must always redispatch. #11534
+  // dropped `git.commit`/`git.push` for the same reason; the #8468 block above
+  // covers them.
+  const MUST_REDISPATCH = [
+    "forge.openIssue",
+    "forge.openPR",
+    "forge.openIssues",
+    "forge.openPRs",
+    "forge.openCommits",
+    "forge.assignIssue",
+  ];
+
+  // Distinct per-call payloads throughout: with a single mockResolvedValue
+  // both dispatches return equal results, so `second === first` would hold
+  // even with dedup switched off and only the call count would have teeth.
+  const twoDistinctDispatches = () =>
+    vi
+      .fn()
+      .mockResolvedValueOnce({ result: { ok: true, result: "first" } })
+      .mockResolvedValueOnce({ result: { ok: true, result: "second" } });
+
+  it.each(NEWLY_DEDUPED)("dedups a post-completion duplicate of %s", async (tool) => {
+    const dispatchAction = twoDistinctDispatches();
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+    const server = createSessionServer(`dedup-11534-${tool}`, deps);
+
+    const args = { target: "x" };
+    const first = await callTool(server, { name: tool, arguments: args });
+    const second = await callTool(server, { name: tool, arguments: args });
+
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+    // The replay is the *cached* result, not a fresh dispatch that merely
+    // looks alike — the second mock payload must never surface.
+    expect(JSON.stringify(second)).not.toContain("second");
+  });
+
+  it.each(NEWLY_DEDUPED)(
+    "shares one dispatch between concurrent duplicates of %s",
+    async (tool) => {
+      // The singleflight window, not the result cache: both calls are in flight
+      // before either resolves, which is the reconnect-replay shape.
+      const dispatchAction = twoDistinctDispatches();
+      const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+      const server = createSessionServer(`dedup-11534-inflight-${tool}`, deps);
+
+      const args = { target: "x" };
+      const [first, second] = await Promise.all([
+        callTool(server, { name: tool, arguments: args }),
+        callTool(server, { name: tool, arguments: args }),
+      ]);
+
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+      expect(second).toEqual(first);
+      expect(JSON.stringify(second)).not.toContain("second");
+    }
+  );
+
+  it("gives agent.terminal and terminal.new the same retry outcome", async () => {
+    // The issue's core complaint: "the same retry is safe through one id and
+    // duplicates through the other." Assert the parity directly, so a future
+    // membership edit that reintroduces the asymmetry fails here.
+    const dispatchCounts = await Promise.all(
+      ["terminal.new", "agent.terminal"].map(async (tool) => {
+        const dispatchAction = twoDistinctDispatches();
+        const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+        const server = createSessionServer(`parity-11534-${tool}`, deps);
+
+        const args = { spawnedBy: "agent" };
+        await callTool(server, { name: tool, arguments: args });
+        await callTool(server, { name: tool, arguments: args });
+        return dispatchAction.mock.calls.length;
+      })
+    );
+
+    // Both spawn a terminal the same way, so both must collapse the retry.
+    expect(dispatchCounts).toEqual([1, 1]);
+  });
+
+  it.each(MUST_REDISPATCH)(
+    "redispatches a repeated %s instead of returning a cached result",
+    async (tool) => {
+      const dispatchAction = twoDistinctDispatches();
+      const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+      const server = createSessionServer(`nodedup-11534-${tool}`, deps);
+
+      const args = { target: "x" };
+      await callTool(server, { name: tool, arguments: args });
+      const second = await callTool(server, { name: tool, arguments: args });
+
+      expect(dispatchAction).toHaveBeenCalledTimes(2);
+      // The caller sees the *second* dispatch, not a replay of the first.
+      expect(JSON.stringify(second)).toContain("second");
+    }
+  );
+
+  it("keeps every deduped tool reachable from a help-session tier", () => {
+    // A dedup entry for a tool no tier exposes is dead weight that reads as
+    // coverage. Catches an id that survives the compile-time BuiltInActionId
+    // check but has drifted off every tier allowlist. `minimumPermittingTier`
+    // spans workbench/action/system only, so an external-only entry would
+    // need this widened rather than the entry excused.
+    expect(MCP_DEDUP_ALLOWLIST.size).toBeGreaterThan(0);
+    for (const tool of MCP_DEDUP_ALLOWLIST) {
+      expect(minimumPermittingTier(tool)).not.toBeNull();
+    }
+  });
 });
 
 describe("CallTool rate limiter removal (#10764)", () => {
   it("dispatches a burst of mutation calls without ever rejecting with MCP_RATE_LIMITED", async () => {
     // The mutation tier used to cap git.commit at 10/min — a burst past the
     // cap returned MCP_RATE_LIMITED before dispatch. With the limiter gone,
-    // every call must reach dispatch. Distinct args sidestep dedup so each is
-    // a genuine dispatch, not a cached hit.
+    // every call must reach dispatch.
     const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
     const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
     const server = createSessionServer("rl-removed", deps);
