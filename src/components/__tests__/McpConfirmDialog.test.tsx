@@ -42,6 +42,9 @@ function enqueue(
     danger?: ActionDanger;
     callerInfo?: McpBearerIdentity;
     dangerRationale?: string;
+    preview?: string[];
+    previewTitle?: string;
+    previewPending?: boolean;
   } = {}
 ) {
   return requestMcpConfirmation({
@@ -53,6 +56,9 @@ function enqueue(
     danger: overrides.danger ?? "confirm",
     callerInfo: overrides.callerInfo,
     ...(overrides.dangerRationale ? { dangerRationale: overrides.dangerRationale } : {}),
+    ...(overrides.preview ? { preview: overrides.preview } : {}),
+    ...(overrides.previewTitle ? { previewTitle: overrides.previewTitle } : {}),
+    ...(overrides.previewPending ? { previewPending: overrides.previewPending } : {}),
   });
 }
 
@@ -92,6 +98,36 @@ describe("McpConfirmDialog", () => {
 
     expect(screen.getByRole("button", { name: "Delete worktree" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^run action$/i })).toBeNull();
+  });
+
+  // #11538: a git.push preview is a commit list, not working-tree changes, so
+  // the heading travels with the lines instead of being hardcoded.
+  it("renders the preview under its own heading when one is supplied", () => {
+    void enqueue({
+      preview: ["Branch: feature/x", "  abcdef1 Fix the thing — Ada"],
+      previewTitle: "Branch and local commits",
+    });
+    render(<McpConfirmDialog />);
+
+    expect(screen.getByText("Branch and local commits")).toBeTruthy();
+    expect(screen.queryByText("Working tree changes")).toBeNull();
+    expect(screen.getByText(/Fix the thing/)).toBeTruthy();
+  });
+
+  it("keeps the original working-tree heading when no preview title is supplied", () => {
+    void enqueue({ preview: ["No uncommitted changes."] });
+    render(<McpConfirmDialog />);
+
+    expect(screen.getByText("Working tree changes")).toBeTruthy();
+  });
+
+  it("blocks approval while a preview is still loading", () => {
+    void enqueue({ previewPending: true });
+    render(<McpConfirmDialog />);
+
+    const confirm = screen.getByRole("button", { name: "Delete worktree" });
+    expect(confirm.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText(/Checking current changes/)).toBeTruthy();
   });
 
   it("shows the requesting-bearer identity for external dispatches (#9157)", () => {

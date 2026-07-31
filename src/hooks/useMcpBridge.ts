@@ -7,7 +7,11 @@ import {
   buildWorktreeDeletePreview,
   formatWorktreeDeletePreviewLines,
 } from "@/components/Worktree/worktreeDeletePreview";
-import type { ActionDispatchResult, ActionId } from "@shared/types/actions";
+import {
+  buildGitRemoteOperationPreview,
+  formatGitRemoteOperationPreviewLines,
+} from "@/components/Git/gitRemoteOperationPreview";
+import type { ActionContext, ActionDispatchResult, ActionId } from "@shared/types/actions";
 import type { McpConfirmationDecision } from "@shared/types/ipc/mcpServer";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
@@ -42,46 +46,114 @@ function shouldTagMcpSpawn(actionId: string): boolean {
 }
 
 /**
- * The worktree id a `worktree.delete` dispatch targets, or undefined when the
- * action isn't a worktree delete or carries no usable id. Determines whether a
- * fresh changed-file preview should be fetched for the confirm modal (#11343).
+ * What a confirm modal should preview, resolved once per dispatch. Raw args
+ * ({worktreeId, force} / {cwd, setUpstream}) tell an approver nothing about
+ * what the dispatch would actually affect, so each kind names a live fetch to
+ * run instead. Actions with no meaningful preview resolve to `undefined` and
+ * the modal just shows args as before.
  */
-function worktreeDeleteTargetId(actionId: string, args: unknown): string | undefined {
-  if (actionId !== "worktree.delete") return undefined;
-  if (args === null || typeof args !== "object" || !("worktreeId" in args)) return undefined;
-  // `in` narrows `args.worktreeId` to `unknown` — no cast needed (and no
+export type McpConfirmPreviewTarget =
+  | { kind: "worktreeDelete"; worktreeId: string }
+  | { kind: "gitPush"; cwd: string }
+  | { kind: "gitPullRebase"; cwd: string };
+
+/** Section heading rendered above each kind's preview lines. */
+const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
+  worktreeDelete: "Working tree changes",
+  gitPush: "Branch and local commits",
+  gitPullRebase: "Branch and local commits",
+};
+
+export function mcpConfirmPreviewTitle(target: McpConfirmPreviewTarget): string {
+  return PREVIEW_TITLES[target.kind];
+}
+
+/** Read a non-empty string property off unknown args without a cast. */
+function stringArg(args: unknown, key: string): string | undefined {
+  if (args === null || typeof args !== "object" || !(key in args)) return undefined;
+  // `in` narrows the property to `unknown` — no cast needed (and no
   // no-unsafe-type-assertion warning).
-  const worktreeId = args.worktreeId;
-  return typeof worktreeId === "string" && worktreeId.length > 0 ? worktreeId : undefined;
+  const value = (args as Record<string, unknown>)[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 /**
- * Build a fresh changed-file preview for confirm surfaces that discard content
- * (#11343). Today only `worktree.delete` qualifies: its raw args ({worktreeId,
- * force}) tell the approver nothing about what a force-delete would destroy, so
- * we fetch live git status and surface the actual file list. Fails closed — a
- * fetch error yields the "couldn't verify" note rather than an empty preview
- * that would imply a clean tree. Returns `undefined` for actions with no
- * preview so the dialog just shows args as before.
+ * Resolve what this dispatch should preview, or `undefined` when it has no
+ * preview. Called ONCE per dispatch: the result drives `previewPending`, the
+ * fetch, the modal heading, and — for git — the cwd the approved dispatch is
+ * pinned to, so all four can never disagree.
  *
  * Exported for unit tests; the bridge is the only production caller.
  */
-export async function buildMcpConfirmPreview(
+export function resolveMcpConfirmPreviewTarget(
   actionId: string,
-  args: unknown
-): Promise<string[] | undefined> {
-  const worktreeId = worktreeDeleteTargetId(actionId, args);
-  if (worktreeId === undefined) return undefined;
-  try {
-    const preview = await buildWorktreeDeletePreview(worktreeId);
-    // Monitor gone / already removed → nothing meaningful to preview.
-    if (!preview) return undefined;
-    return formatWorktreeDeletePreviewLines(preview);
-  } catch {
-    // Fetch failed → fail closed: surface that we couldn't verify rather than
-    // an empty preview that would imply a clean tree.
-    return formatWorktreeDeletePreviewLines(null);
+  args: unknown,
+  context: ActionContext | undefined
+): McpConfirmPreviewTarget | undefined {
+  if (actionId === "worktree.delete") {
+    const worktreeId = stringArg(args, "worktreeId");
+    return worktreeId === undefined ? undefined : { kind: "worktreeDelete", worktreeId };
   }
+  if (actionId === "git.push" || actionId === "git.pullRebase") {
+    // Mirror the action's own `cwd ?? ctx.activeWorktreePath` resolution, and
+    // mirror ActionService's WHOLE-OBJECT `contextOverride ?? live` precedence
+    // (ActionService.ts:349). A per-field fallback would diverge: a pinned
+    // context that carries no worktree path must NOT borrow the live one.
+    const cwd = stringArg(args, "cwd") ?? (context ?? actionService.getContext()).activeWorktreePath;
+    if (cwd === undefined || cwd.length === 0) return undefined;
+    return actionId === "git.push" ? { kind: "gitPush", cwd } : { kind: "gitPullRebase", cwd };
+  }
+  return undefined;
+}
+
+/**
+ * Build fresh preview lines for a resolved target (#11343, #11538).
+ *
+ * Never rejects: a fetch failure yields the kind's "couldn't verify" note
+ * rather than an empty preview that would imply a clean tree / nothing to push.
+ * That keeps approval available with the human explicitly warned — blocking it
+ * instead would strand the dispatch until the modal's 28s timeout.
+ *
+ * Exported for unit tests; the bridge is the only production caller.
+ */
+export async function buildMcpConfirmPreview(target: McpConfirmPreviewTarget): Promise<string[]> {
+  if (target.kind === "worktreeDelete") {
+    try {
+      const preview = await buildWorktreeDeletePreview(target.worktreeId);
+      // Monitor gone / already removed → nothing meaningful to preview.
+      if (!preview) return [];
+      return formatWorktreeDeletePreviewLines(preview);
+    } catch {
+      return formatWorktreeDeletePreviewLines(null);
+    }
+  }
+  try {
+    const preview = await buildGitRemoteOperationPreview(target.cwd);
+    return formatGitRemoteOperationPreviewLines(
+      preview,
+      target.kind === "gitPush"
+        ? "No local commits found on this branch."
+        : "No local commits to replay."
+    );
+  } catch {
+    return formatGitRemoteOperationPreviewLines(null, "");
+  }
+}
+
+/**
+ * Pin an approved git dispatch to the cwd the human actually previewed.
+ *
+ * The preview resolves cwd when the modal opens; `ActionService.dispatch` would
+ * otherwise re-resolve live context AFTER the wait, so switching worktrees
+ * mid-modal could push a different repository than the one just approved
+ * (#8725). Non-git targets are untouched — only these two carry a cwd.
+ */
+function withPreviewedGitCwd(args: unknown, target: McpConfirmPreviewTarget | undefined): unknown {
+  if (target === undefined || target.kind === "worktreeDelete") return args;
+  if (args && typeof args === "object" && !Array.isArray(args)) {
+    return { ...(args as Record<string, unknown>), cwd: target.cwd };
+  }
+  return { cwd: target.cwd };
 }
 
 /**
@@ -136,6 +208,10 @@ export function useMcpBridge(): void {
     const cleanupDispatch = window.electron.mcpBridge.onDispatchActionRequest(
       async ({ requestId, actionId, args, confirmed, context, callerInfo }) => {
         let confirmationDecision: McpConfirmationDecision | undefined;
+        // Declared outside the confirm block so the approved dispatch can pin
+        // itself to the previewed cwd. Stays undefined for pre-granted
+        // dispatches, which show no modal and so previewed nothing to pin to.
+        let previewTarget: McpConfirmPreviewTarget | undefined;
         try {
           let effectiveConfirmed = confirmed;
 
@@ -143,20 +219,30 @@ export function useMcpBridge(): void {
             const definition = actionService.getDispatchMeta(actionId as ActionId);
             if (definition?.danger === "confirm") {
               inFlightConfirms.add(requestId);
-              // Fetch the fresh changed-file preview OFF the critical path so
-              // the modal appears immediately (never blocked on a git status)
-              // and the confirm queue isn't reordered by fetch latency (#11343).
-              // While it's in flight the modal keeps approval disabled
+              // Fetch the fresh preview OFF the critical path so the modal
+              // appears immediately (never blocked on a git read) and the
+              // confirm queue isn't reordered by fetch latency (#11343). While
+              // it's in flight the modal keeps approval disabled
               // (previewPending) so the approver can't confirm a destructive
               // dispatch before seeing what it affects. `setPreview` patches the
               // item and re-enables approval when the fetch lands (empty lines
               // when there's nothing to show); a no-op if already resolved.
-              const previewPending = worktreeDeleteTargetId(actionId, args) !== undefined;
-              if (previewPending) {
-                void buildMcpConfirmPreview(actionId, args).then((preview) => {
-                  if (disposed) return;
-                  useMcpConfirmStore.getState().setPreview(requestId, preview ?? []);
-                });
+              previewTarget = resolveMcpConfirmPreviewTarget(actionId, args, context);
+              const previewPending = previewTarget !== undefined;
+              if (previewTarget !== undefined) {
+                void buildMcpConfirmPreview(previewTarget)
+                  .then((preview) => {
+                    if (disposed) return;
+                    useMcpConfirmStore.getState().setPreview(requestId, preview);
+                  })
+                  // The builder already fails soft, but a rejection escaping it
+                  // would leave previewPending stuck true and the modal
+                  // unapprovable — the exact stall class #11538 removes. Clear
+                  // it unconditionally.
+                  .catch(() => {
+                    if (disposed) return;
+                    useMcpConfirmStore.getState().setPreview(requestId, []);
+                  });
               }
               let decision: McpConfirmationDecision;
               try {
@@ -179,6 +265,9 @@ export function useMcpBridge(): void {
                   // "Requested by" row when set, stays provenance-free when not.
                   callerInfo,
                   previewPending,
+                  ...(previewTarget
+                    ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) }
+                    : {}),
                 });
               } finally {
                 inFlightConfirms.delete(requestId);
@@ -205,7 +294,10 @@ export function useMcpBridge(): void {
             }
           }
 
-          const dispatchArgs = tagMcpSpawnSource(actionId, args);
+          const dispatchArgs = tagMcpSpawnSource(
+            actionId,
+            withPreviewedGitCwd(args, previewTarget)
+          );
           const result = await runWithMcpSpawnFocusSuppressed(
             () =>
               actionService.dispatch(actionId as ActionId, dispatchArgs, {

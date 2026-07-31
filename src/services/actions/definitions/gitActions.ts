@@ -279,12 +279,18 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       const { cwd, setUpstream } = (args ?? {}) as { cwd?: string; setUpstream?: boolean };
       const resolvedCwd = cwd ?? ctx.activeWorktreePath;
       if (!resolvedCwd) throw new Error("No active worktree");
-      // Agent sources are gated by ActionService before run() is reached;
-      // palette/keybinding/user sources reach here directly, so enforce the
-      // D2 push preview here (#8242). The dialog shows the target branch and
-      // the commits that would be pushed before the IPC fires.
-      const confirmed = await useGitPushConfirmStore.getState().requestConfirmation(resolvedCwd);
-      if (!confirmed) return;
+      // Palette/keybinding/user sources reach run() ungated, so enforce the D2
+      // push preview here (#8242) — the dialog shows the target branch and the
+      // commits that would be pushed before the IPC fires. An agent dispatch
+      // that reaches run() has ALREADY cleared ActionService's host-attested
+      // confirm gate via the MCP bridge, which surfaces the same fresh
+      // branch/commit preview in its own modal. Re-requesting here would
+      // double-prompt, and this store resolves only from a renderer dialog no
+      // headless MCP client can click — so the push would hang forever (#11538).
+      if (ctx.dispatchSource !== "agent") {
+        const confirmed = await useGitPushConfirmStore.getState().requestConfirmation(resolvedCwd);
+        if (!confirmed) return;
+      }
       return await window.electron.git.push(resolvedCwd, setUpstream);
     },
   }));
@@ -304,15 +310,19 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       const { cwd } = (args ?? {}) as { cwd?: string };
       const resolvedCwd = cwd ?? ctx.activeWorktreePath;
       if (!resolvedCwd) throw new Error("No active worktree");
-      // Agent sources are gated by ActionService before run(); palette,
-      // keybinding, and the terminal push-error recovery banner reach here
-      // directly, so enforce the rebase confirm here (#8242). The ReviewHub
-      // CTA calls the IPC directly and is gated by its own in-component
-      // dialog, so it never goes through this action path.
-      const confirmed = await useGitPullRebaseConfirmStore
-        .getState()
-        .requestConfirmation(resolvedCwd);
-      if (!confirmed) return;
+      // Palette, keybinding, and the terminal push-error recovery banner reach
+      // run() ungated, so enforce the rebase confirm here (#8242). The ReviewHub
+      // CTA calls the IPC directly and is gated by its own in-component dialog,
+      // so it never goes through this action path. Agent dispatch is skipped for
+      // the same reason as `git.push`: ActionService already cleared it against
+      // the MCP bridge's own confirm, and this deferred store can only be
+      // resolved by a renderer dialog a headless client cannot reach (#11538).
+      if (ctx.dispatchSource !== "agent") {
+        const confirmed = await useGitPullRebaseConfirmStore
+          .getState()
+          .requestConfirmation(resolvedCwd);
+        if (!confirmed) return;
+      }
       await window.electron.git.pullRebase(resolvedCwd);
     },
   }));

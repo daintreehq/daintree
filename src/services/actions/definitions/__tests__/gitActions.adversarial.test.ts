@@ -163,6 +163,49 @@ describe("gitActions adversarial", () => {
     expect(git.pullRebase).not.toHaveBeenCalled();
   });
 
+  // #11538: an agent dispatch reaching run() already cleared ActionService's
+  // host-attested confirm gate against the MCP bridge's own modal. The deferred
+  // store here resolves only from a renderer dialog, which a headless MCP client
+  // can never click — so awaiting it again hangs the push forever.
+  it("git.push skips the renderer confirm store entirely for agent dispatch", async () => {
+    const { run, git } = setupActions();
+    await run("git.push", { cwd: "/repo" }, { dispatchSource: "agent" });
+    expect(git.push).toHaveBeenCalledWith("/repo", undefined);
+    expect(useGitPushConfirmStore.getState().pendingConfirm).toBeNull();
+  });
+
+  it("git.pullRebase skips the renderer confirm store entirely for agent dispatch", async () => {
+    const { run, git } = setupActions();
+    await run("git.pullRebase", { cwd: "/repo" }, { dispatchSource: "agent" });
+    expect(git.pullRebase).toHaveBeenCalledWith("/repo");
+    expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).toBeNull();
+  });
+
+  it("git.push carries setUpstream through the agent bypass unchanged", async () => {
+    const { run, git } = setupActions();
+    await run("git.push", { cwd: "/repo", setUpstream: false }, { dispatchSource: "agent" });
+    expect(git.push).toHaveBeenCalledWith("/repo", false);
+  });
+
+  // The bypass is keyed to "agent" alone — no other source has been through the
+  // MCP confirm, so widening this to any non-foreground source would let plugin
+  // dispatch push with no confirmation at all.
+  it("git.push still gates plugin dispatch on the confirm store", async () => {
+    const { run, git } = setupActions();
+    const p = run("git.push", { cwd: "/repo" }, { dispatchSource: "plugin" });
+    await resolvePushConfirm(false);
+    await p;
+    expect(git.push).not.toHaveBeenCalled();
+  });
+
+  it("git.pullRebase still gates user dispatch on the confirm store", async () => {
+    const { run, git } = setupActions();
+    const p = run("git.pullRebase", { cwd: "/repo" }, { dispatchSource: "user" });
+    await resolvePullRebaseConfirm(true);
+    await p;
+    expect(git.pullRebase).toHaveBeenCalledWith("/repo");
+  });
+
   it("git.pullRebase falls back to ctx.activeWorktreePath when no cwd arg is given", async () => {
     const { run, git } = setupActions();
     const p = run("git.pullRebase", undefined, { activeWorktreePath: "/repo" });
