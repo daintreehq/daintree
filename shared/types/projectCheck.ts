@@ -61,9 +61,19 @@ export interface ProjectCheckRunResult {
   runnerId: string;
   /** Human-readable runner name, e.g. "test" or "lint". */
   runnerName: string;
+  /**
+   * The shell command that ran. Echoed back so a caller can reproduce the run
+   * in a visible terminal when the captured tail isn't enough to diagnose it.
+   * Not a disclosure: `project.detectRunners` already returns these verbatim.
+   */
+  command: string;
   /** True only on a clean exit code 0 that neither timed out nor was aborted. */
   passed: boolean;
-  /** Exit code from `close`; null when the process died on a signal. */
+  /**
+   * Exit code as reported by the child's `close` event — or by `exit` when a
+   * descendant held the pipe open past the drain window. Null when the process
+   * died on a signal, or when a failed kill forced settlement with no event.
+   */
   exitCode: number | null;
   /** OS signal name when killed, else null. */
   signalName: string | null;

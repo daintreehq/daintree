@@ -10,10 +10,17 @@
  * the precedent: register the manifest entry in the renderer, execute here.
  *
  * Security boundary: callers name a `runnerId`, never a command. The command
- * is re-resolved here against a fresh detection in the target directory, so
+ * text is looked up here from the detector's view of the target directory, so
  * the MCP surface is "run something this project already declares", not
  * "run arbitrary shell". `cwd` is likewise validated against the repo's
  * registered worktrees rather than trusted.
+ *
+ * Two known limits of that boundary, both accepted: `RunCommandDetector`
+ * caches for 60s, so a runner the user just deleted stays runnable for up to a
+ * minute; and the cwd is validated by path, so a local process that can rename
+ * the directory between the check and the spawn could redirect it. Closing
+ * either needs an uncached detect path and handle-based execution
+ * respectively — neither is in scope for #11548.
  *
  * Process handling is ported from `AgentVersionService.runVersionProbe` —
  * close-first settlement with an exit-grace timer, a single-settle guard, and
@@ -44,6 +51,12 @@ const EXIT_DRAIN_MS = 2_000;
 
 /** Delay before escalating SIGTERM to SIGKILL on a POSIX process group. */
 const KILL_ESCALATION_MS = 5_000;
+
+/**
+ * Extra headroom after the SIGKILL escalation before the run is force-settled
+ * without an OS event. Only reached when the kill itself failed to reap.
+ */
+const FORCE_SETTLE_MARGIN_MS = 2_000;
 
 /**
  * Thrown when a check could not be started at all — unknown project, unknown
@@ -95,13 +108,39 @@ class OutputTail {
   }
 
   /**
-   * Byte-accurate slicing can cut a multi-byte codepoint, yielding a leading
-   * U+FFFD. Accepted — the alternative is a cap that silently over- or
-   * under-shoots the documented byte limit.
+   * Decode the retained tail, dropping any partial first line.
+   *
+   * Dropping that line is a security requirement, not cosmetics. The byte cap
+   * cuts at an arbitrary offset, and `scrubSecrets` recognizes a credential by
+   * its sigil (`ghp_`, `sk-`, …). If the cut lands just after the sigil, the
+   * retained bytes are the token's body with nothing left for the scrubber to
+   * match — a redaction bypass that hands the caller a reconstructable secret.
+   * Realigning the front edge to a line start means a straddling token is
+   * either wholly retained (and therefore scrubbed) or wholly dropped.
+   *
+   * A tail with no newline at all cannot be realigned; it is passed through so
+   * a single enormous line still yields output. Slicing may also cut a
+   * multi-byte codepoint, leaving a leading U+FFFD.
    */
   toText(): string {
-    return Buffer.concat(this.chunks).toString("utf-8");
+    const text = Buffer.concat(this.chunks).toString("utf-8");
+    if (!this.truncated) return text;
+    const firstBreak = text.indexOf("\n");
+    return firstBreak === -1 ? text : text.slice(firstBreak + 1);
   }
+}
+
+/**
+ * Final byte cap, applied after scrubbing so `[REDACTED]` expansion and U+FFFD
+ * replacement characters cannot push the payload past the documented limit.
+ * Keeps the tail, matching what the type promises.
+ */
+function capTail(text: string, maxBytes: number): { text: string; truncated: boolean } {
+  const buf = Buffer.from(text, "utf8");
+  if (buf.length <= maxBytes) return { text, truncated: false };
+  const marker = "[truncated]\n";
+  const budget = Math.max(0, maxBytes - Buffer.byteLength(marker, "utf8"));
+  return { text: marker + buf.subarray(buf.length - budget).toString("utf-8"), truncated: true };
 }
 
 /**
@@ -111,7 +150,13 @@ class OutputTail {
  */
 interface ActiveSlot {
   runnerName: string;
+  /** Cooperative cancel: marks the run aborted, then SIGTERM → SIGKILL. */
   abort: () => void;
+  /**
+   * Shutdown cancel: same, but SIGKILLs immediately. The escalation timer is
+   * useless during quit — the process exits before it could fire.
+   */
+  abortNow: () => void;
 }
 
 interface SpawnOutcome {
@@ -195,6 +240,14 @@ export class ProjectCheckService {
       throw new ProjectCheckError("Cancelled before the check started.");
     }
 
+    // Re-checked after every await above: `dispose()` may have run while this
+    // call sat in resolveCwd/detect, and it only aborts what is already in the
+    // active map. Without this, a check would spawn detached AFTER shutdown
+    // reaped everything — exactly the orphan the shutdown hook exists to stop.
+    if (this.disposed) {
+      throw new ProjectCheckError("Daintree is shutting down; no new checks can start.");
+    }
+
     const existing = this.active.get(cwd);
     if (existing) {
       throw new ProjectCheckError(
@@ -207,7 +260,7 @@ export class ProjectCheckService {
 
     // Claim the slot synchronously, before the first await inside spawnCheck,
     // so a second concurrent caller for this cwd sees it as busy.
-    const slot: ActiveSlot = { runnerName: runner.name, abort: () => {} };
+    const slot: ActiveSlot = { runnerName: runner.name, abort: () => {}, abortNow: () => {} };
     this.active.set(cwd, slot);
 
     let outcome: SpawnOutcome;
@@ -217,7 +270,10 @@ export class ProjectCheckService {
         slot,
       });
     } finally {
-      this.active.delete(cwd);
+      // Identity-checked: `dispose()` clears the map wholesale, so a later run
+      // can already own this key by the time this settles. An unconditional
+      // delete would free a directory that is still busy.
+      if (this.active.get(cwd) === slot) this.active.delete(cwd);
     }
 
     return {
@@ -225,6 +281,7 @@ export class ProjectCheckService {
       cwd,
       runnerId: runner.id,
       runnerName: runner.name,
+      command: runner.command,
       passed: outcome.exitCode === 0 && !outcome.timedOut && !outcome.aborted,
       exitCode: outcome.exitCode,
       signalName: outcome.signalName,
@@ -236,12 +293,17 @@ export class ProjectCheckService {
     };
   }
 
-  /** Abort every in-flight check. Used by the app shutdown chain. */
+  /**
+   * Kill every in-flight check. Called from the app shutdown chain: POSIX
+   * children are spawned detached, so an unreaped `npm test` outlives the app.
+   * Synchronous by design — it issues signals and returns rather than awaiting
+   * settlement, so it adds no await to the bounded shutdown chain.
+   */
   dispose(): void {
     this.disposed = true;
     for (const entry of this.active.values()) {
       try {
-        entry.abort();
+        entry.abortNow();
       } catch (err) {
         console.warn(
           "[ProjectCheckService] abort during dispose failed:",
@@ -340,10 +402,15 @@ export class ProjectCheckService {
       let settled = false;
       let timedOut = false;
       let aborted = false;
+      // Set the moment the OS reports the process gone. Once it is, the run has
+      // a real terminal cause, so a deadline or an abort landing during the
+      // stdio drain must not relabel a check that already finished on its own.
+      let exited = false;
       let escalationTimer: ReturnType<typeof setTimeout> | null = null;
       let exitGraceTimer: ReturnType<typeof setTimeout> | null = null;
+      let forceSettleTimer: ReturnType<typeof setTimeout> | null = null;
 
-      const killTree = (): void => {
+      const killTree = (force = false): void => {
         const pid = child.pid;
         if (typeof pid !== "number") {
           child.kill();
@@ -375,6 +442,13 @@ export class ProjectCheckService {
           return;
         }
 
+        // `force` skips the polite phase: the caller is settling now and will
+        // stop watching, so there is no later event to escalate on.
+        if (force) {
+          signalGroup(pid, "SIGKILL");
+          return;
+        }
+
         // Negative pid signals the whole group, so a test runner's worker pool
         // dies with it. SIGTERM first to let the runner clean up, SIGKILL after
         // a grace period for anything that ignores it.
@@ -387,8 +461,13 @@ export class ProjectCheckService {
 
       const cleanup = (): void => {
         clearTimeout(timeoutTimer);
-        if (escalationTimer) clearTimeout(escalationTimer);
+        // The escalation timer is deliberately NOT cleared. Settling means the
+        // foreground process is done, not that its group is — a descendant that
+        // ignored SIGTERM still needs the SIGKILL. The timer is unref'd, and
+        // signalGroup swallows ESRCH, so letting it fire on an already-dead
+        // group is free.
         if (exitGraceTimer) clearTimeout(exitGraceTimer);
+        if (forceSettleTimer) clearTimeout(forceSettleTimer);
         signal?.removeEventListener("abort", onAbort);
         // Drop only `data` so a late chunk can't re-enter finish(), but keep
         // the `error` sinks below alive — destroy() can surface a pending
@@ -404,34 +483,61 @@ export class ProjectCheckService {
         if (settled) return;
         settled = true;
         cleanup();
+        // Scrub BEFORE the final cap: the scrubber's own contract is that
+        // callers truncate downstream of it, because a cut inside a token
+        // hides the sigil it matches on.
+        const capped = capTail(scrubSecrets(tail.toText()), PROJECT_CHECK_MAX_OUTPUT_BYTES);
         resolve({
           exitCode,
           signalName,
           timedOut,
           aborted,
-          output: scrubSecrets(tail.toText()),
-          outputTruncated: tail.truncated,
+          output: capped.text,
+          outputTruncated: tail.truncated || capped.truncated,
         });
       };
 
-      const onAbort = (): void => {
-        if (settled || aborted || timedOut) return;
-        aborted = true;
-        killTree();
+      /**
+       * Kill escalation cannot be assumed to work — a process wedged in
+       * uninterruptible I/O, or a failed Windows `taskkill`, emits neither
+       * `exit` nor `close`. Without this the promise (and the cwd's
+       * concurrency slot) would stay pending past the advertised ceiling
+       * forever. Settles with a null exit code, which `passed` already treats
+       * as a failure.
+       */
+      const armForceSettle = (): void => {
+        if (forceSettleTimer !== null) return;
+        forceSettleTimer = setTimeout(() => {
+          killTree(true);
+          finish(null, null);
+        }, KILL_ESCALATION_MS + FORCE_SETTLE_MARGIN_MS);
+        forceSettleTimer.unref?.();
       };
 
-      // First terminal cause wins: an abort that lands after the deadline
-      // already fired must not relabel a timeout as a cancellation, and vice
-      // versa — the agent's retry decision differs between the two.
+      // First terminal cause wins. `exited` participates: once the process is
+      // gone, a deadline that elapses while stdio is still draining describes
+      // the drain, not the run, and must not mark a finished check timed out.
+      const onAbort = (): void => {
+        if (settled || aborted || timedOut || exited) return;
+        aborted = true;
+        killTree();
+        armForceSettle();
+      };
+
       const timeoutTimer = setTimeout(() => {
-        if (settled || timedOut || aborted) return;
+        if (settled || timedOut || aborted || exited) return;
         timedOut = true;
         killTree();
+        armForceSettle();
       }, timeoutMs);
       timeoutTimer.unref?.();
 
       signal?.addEventListener("abort", onAbort, { once: true });
       slot.abort = onAbort;
+      slot.abortNow = () => {
+        onAbort();
+        killTree(true);
+      };
 
       // Unhandled stream `error` is fatal in main; these sinks must outlive
       // cleanup()'s destroy(), which is why cleanup only removes `data`.
@@ -448,9 +554,14 @@ export class ProjectCheckService {
       // a daemon grandchild holding the pipe would keep the promise pending
       // until the timeout, reporting a spurious timedOut on a passing check.
       child.on("exit", (code, exitSignal) => {
+        // Claim the terminal cause even when a grace timer is already armed —
+        // the process is gone either way, and the deadline must stop competing.
+        exited = true;
         if (settled || exitGraceTimer) return;
         exitGraceTimer = setTimeout(() => {
-          killTree();
+          // `close` never came, so a descendant still holds the pipe. SIGKILL
+          // it outright: nothing is left watching for it to wind down politely.
+          killTree(true);
           finish(code ?? null, exitSignal ?? null);
         }, EXIT_DRAIN_MS);
         exitGraceTimer.unref?.();

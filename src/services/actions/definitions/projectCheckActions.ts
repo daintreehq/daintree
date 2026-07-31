@@ -25,7 +25,7 @@ export function registerProjectCheckActions(
       id: "project.runCheck",
       title: "Run Project Check",
       description:
-        "Run one of a project's detected runners (test, lint, build) as a real child process and return its authoritative exit code. Prefer this over reading a terminal: `terminal.getStatus` only parses scrollback, while this reports the real exit code. Args: `projectId` (from `project.getAll`), `runnerId` (an `id` from `project.detectRunners`), `cwd` (optional — the project root or one of its worktrees; defaults to the project root), `timeoutMs` (optional, default 10min, max 1h). Returns { projectId, cwd, runnerId, runnerName, passed, exitCode, signalName, durationMs, timedOut, aborted, output, outputTruncated }; `output` is the scrubbed tail of stdout+stderr. A failing check is a normal result with `passed: false` — it does NOT error. Errors only when nothing could run: unknown project or runner, a `cwd` outside the project, or a check already running there. Do NOT use for long-lived runners such as a dev server; those hold the call open until the timeout.",
+        "Run a project's detected runner (test, lint, build, etc.) as a child process and return the exit code. Args: `projectId`, `runnerId` (e.g. `npm-test` from `project.detectRunners`), `cwd` (optional, defaults to project root), `timeoutMs` (default 10min, max 1h). Returns { exitCode, output, durationMs, timedOut, aborted, … }. A failing check returns `passed: false` — not an error. `project.detectRunners` lists ALL detected runners (npm scripts, Make targets, Procfile, etc.), not just checks — always verify `command` before running unfamiliar ids. Do NOT use for long-lived servers; they block until timeout.",
       category: "project",
       kind: "command",
       danger: "safe",
@@ -40,7 +40,7 @@ export function registerProjectCheckActions(
         runnerId: z
           .string()
           .min(1)
-          .describe("Runner `id` from `project.detectRunners`, e.g. `npm:test`."),
+          .describe("Runner `id` from `project.detectRunners`, e.g. `npm-test` or `make-lint`."),
         cwd: z
           .string()
           .min(1)
@@ -63,6 +63,7 @@ export function registerProjectCheckActions(
         cwd: z.string(),
         runnerId: z.string(),
         runnerName: z.string(),
+        command: z.string(),
         passed: z.boolean(),
         exitCode: z.number().nullable(),
         signalName: z.string().nullable(),

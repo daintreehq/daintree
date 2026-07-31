@@ -551,8 +551,9 @@ describe("project.runCheck short-circuit (#11548)", () => {
   const passingResult = {
     projectId: "proj-1",
     cwd: "/repo",
-    runnerId: "npm:test",
+    runnerId: "npm-test",
     runnerName: "test",
+    command: "npm run test",
     passed: true,
     exitCode: 0,
     signalName: null,
@@ -576,12 +577,16 @@ describe("project.runCheck short-circuit (#11548)", () => {
 
     const result = await callTool(server, {
       name: "project.runCheck",
-      arguments: { projectId: "proj-1", runnerId: "npm:test" },
+      arguments: { projectId: "proj-1", runnerId: "npm-test" },
     });
 
     // The 30s renderer-dispatch wall is exactly what this branch exists to
     // avoid, so reaching dispatchAction at all would defeat the feature.
     expect(dispatchAction).not.toHaveBeenCalled();
+    expect(handleProjectRunCheck.mock.calls[0]?.[0]).toEqual({
+      projectId: "proj-1",
+      runnerId: "npm-test",
+    });
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent).toEqual(passingResult);
   });
@@ -597,7 +602,7 @@ describe("project.runCheck short-circuit (#11548)", () => {
 
     await callTool(server, {
       name: "project.runCheck",
-      arguments: { projectId: "proj-1", runnerId: "npm:test" },
+      arguments: { projectId: "proj-1", runnerId: "npm-test" },
     });
 
     const signal = handleProjectRunCheck.mock.calls[0]?.[1];
@@ -616,7 +621,7 @@ describe("project.runCheck short-circuit (#11548)", () => {
 
     const result = await callTool(server, {
       name: "project.runCheck",
-      arguments: { projectId: "proj-1", runnerId: "npm:test" },
+      arguments: { projectId: "proj-1", runnerId: "npm-test" },
     });
 
     // "The check failed" and "the check could not run" must stay
@@ -656,7 +661,7 @@ describe("project.runCheck short-circuit (#11548)", () => {
 
     const result = await callTool(server, {
       name: "project.runCheck",
-      arguments: { projectId: "proj-1", runnerId: "npm:test" },
+      arguments: { projectId: "proj-1", runnerId: "npm-test" },
     });
 
     expect(result.isError).toBe(true);

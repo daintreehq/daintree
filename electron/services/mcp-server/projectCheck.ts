@@ -58,15 +58,18 @@ function optionalString(args: Record<string, unknown>, key: string): string | un
 function optionalTimeout(args: Record<string, unknown>): number | undefined {
   const value = args["timeoutMs"];
   if (value === undefined || value === null) return undefined;
+  // Integer-only, matching the action's advertised zod schema. That schema is
+  // never executed on this path, so any divergence here would silently make
+  // the documented contract a lie.
   if (
     typeof value !== "number" ||
-    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
     value < PROJECT_CHECK_MIN_TIMEOUT_MS ||
     value > PROJECT_CHECK_MAX_TIMEOUT_MS
   ) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      `project.runCheck \`timeoutMs\` must be a number between ${PROJECT_CHECK_MIN_TIMEOUT_MS} and ${PROJECT_CHECK_MAX_TIMEOUT_MS}.`
+      `project.runCheck \`timeoutMs\` must be an integer between ${PROJECT_CHECK_MIN_TIMEOUT_MS} and ${PROJECT_CHECK_MAX_TIMEOUT_MS}.`
     );
   }
   return value;
@@ -88,6 +91,8 @@ export async function handleProjectRunCheck(
     { signal }
   );
 
+  const cappedOutput = truncateText(result.output, PROJECT_CHECK_MAX_OUTPUT_BYTES);
+
   // Built field by field rather than spread: `resultSchema` on the action is
   // manifest documentation, never runtime validation, so this projection is the
   // only thing standing between the service's internals and the wire (#10870).
@@ -98,13 +103,16 @@ export async function handleProjectRunCheck(
     cwd: result.cwd,
     runnerId: result.runnerId,
     runnerName: result.runnerName,
+    command: result.command,
     passed: result.passed,
     exitCode: result.exitCode,
     signalName: result.signalName,
     durationMs: result.durationMs,
     timedOut: result.timedOut,
     aborted: result.aborted,
-    output: truncateText(result.output, PROJECT_CHECK_MAX_OUTPUT_BYTES),
-    outputTruncated: result.outputTruncated,
+    output: cappedOutput,
+    // OR'd, never forwarded blind: a `false` flag next to clipped text would
+    // tell the caller it is looking at the complete failure output.
+    outputTruncated: result.outputTruncated || cappedOutput !== result.output,
   };
 }

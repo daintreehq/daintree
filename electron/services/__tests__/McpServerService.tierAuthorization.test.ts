@@ -589,6 +589,9 @@ describe("McpServerService", () => {
         "recipe.run",
         "git.commit",
         "agent.getState",
+        // Without this entry, dropping project.runCheck from
+        // MCP_TOOL_ALLOWLIST_ENTRIES would leave the external-tier test green.
+        "project.runCheck",
       ];
       return ids.map((id) =>
         createManifestEntry({
