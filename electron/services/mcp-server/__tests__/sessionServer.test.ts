@@ -2234,7 +2234,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 });
 
-describe("MCP_DEDUP_ALLOWLIST git cohort and exclusion boundary (#8468)", () => {
+describe("MCP_DEDUP_ALLOWLIST exclusion boundary (#8468)", () => {
   // Membership `.has()` spot-checks were dropped in #11534: they restated the
   // allowlist literal, so they stayed green even if sessionServer stopped
   // consulting the set. Both directions are proven by dispatch behaviour
@@ -2246,7 +2246,12 @@ describe("MCP_DEDUP_ALLOWLIST git cohort and exclusion boundary (#8468)", () => 
       .mockResolvedValueOnce({ result: { ok: true, result: "first" } })
       .mockResolvedValueOnce({ result: { ok: true, result: "second" } });
 
-  it.each(["git.commit", "git.push"])("dedups a repeated %s", async (tool) => {
+  // The #8468 git cohort was dropped in #11534: `git.push` takes only
+  // `{cwd, setUpstream}` and `git.commit` commits whatever the index holds, so
+  // a second push after a new commit — or a repeated `wip` message — is
+  // same-argument, and caching it would report success for work that never
+  // happened. Restoring either entry must fail here.
+  it.each(["git.commit", "git.push"])("redispatches a repeated %s", async (tool) => {
     const dispatchAction = twoDistinctDispatches();
     const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
     const server = createSessionServer(`git-8468-${tool}`, deps);
@@ -2255,8 +2260,8 @@ describe("MCP_DEDUP_ALLOWLIST git cohort and exclusion boundary (#8468)", () => 
     await callTool(server, { name: tool, arguments: args });
     const second = await callTool(server, { name: tool, arguments: args });
 
-    expect(dispatchAction).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(second)).not.toContain("second");
+    expect(dispatchAction).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(second)).toContain("second");
   });
 
   it.each(["git.stageAll", "terminal.sendCommand"])(
@@ -2351,7 +2356,9 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
 
   // Navigation and idempotent state-sets. Caching these suppresses a call the
   // caller legitimately meant to repeat — reopening a URL the user closed, or
-  // re-assigning after an unassign — so they must always redispatch.
+  // re-assigning after an unassign — so they must always redispatch. #11534
+  // dropped `git.commit`/`git.push` for the same reason; the #8468 block above
+  // covers them.
   const MUST_REDISPATCH = [
     "forge.openIssue",
     "forge.openPR",
@@ -2462,8 +2469,7 @@ describe("CallTool rate limiter removal (#10764)", () => {
   it("dispatches a burst of mutation calls without ever rejecting with MCP_RATE_LIMITED", async () => {
     // The mutation tier used to cap git.commit at 10/min — a burst past the
     // cap returned MCP_RATE_LIMITED before dispatch. With the limiter gone,
-    // every call must reach dispatch. Distinct args sidestep dedup so each is
-    // a genuine dispatch, not a cached hit.
+    // every call must reach dispatch.
     const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
     const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
     const server = createSessionServer("rl-removed", deps);

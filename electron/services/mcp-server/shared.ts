@@ -480,8 +480,8 @@ export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
  * A tool belongs here only when all three hold: (a) an LLM retrying after a
  * transient error or reconnect is realistic, (b) the repeat leaves a durable
  * or immediately user-visible artifact — an orphaned terminal, a redundant
- * agent, a duplicate commit/push/issue/PR/comment/review — and (c) an
- * intentional same-argument repeat inside the TTL is not a normal use case.
+ * agent, a duplicate issue/PR/comment/review — and (c) an intentional
+ * same-argument repeat inside the TTL is not a normal use case.
  *
  * (c) is what bounds the list. Navigation (`forge.open*`, portal/browser
  * opens) is out: reopening a URL the user closed must dispatch again, and a
@@ -504,17 +504,20 @@ export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
  * redispatch would raise, which is a different justification from the
  * duplicate-artifact one and should not be confused with it.
  *
- * Known gap, retained deliberately rather than silently: `git.push` takes
- * only `{cwd, setUpstream}`, so a legitimate second push after a new commit
- * is same-argument and gets suppressed — it reports success for work that
- * did not happen. `git.commit` has the same shape when a message repeats.
- * Both predate this criterion and fail (c); the fix is state-aware keying
- * (HEAD for push, index identity for commit), not a membership change.
+ * `git.commit` and `git.push` are the tempting case that still fails (c), so
+ * #11534 dropped them. Neither takes an argument a legitimate repeat varies:
+ * `git.push` gets only `{cwd, setUpstream}`, and `git.commit` commits
+ * whatever the index holds, so a second push after a new commit — or a
+ * repeated `wip` message — is same-argument and would be swallowed as a
+ * cached success for work that never happened. The replay they would absorb
+ * is cheap by comparison: a redundant push prints "Everything up-to-date"
+ * and a redundant commit errors visibly on an empty index. The trade only
+ * flips with state-aware keying (HEAD for push, index identity for commit).
  *
  * History: seeded by #7554, made safe to widen by the args-hash collision
  * guard (#8429), widened again in #9156, then corrected against the criterion
  * above in #11534 — which added the creation tools that were missing and
- * dropped the navigation/idempotent entries that never met it.
+ * dropped the navigation, idempotent and git-write entries that never met it.
  */
 const MCP_DEDUP_ALLOWLIST_ENTRIES = [
   // Panel/agent spawns — a replay leaves an orphaned terminal or a second
@@ -533,13 +536,10 @@ const MCP_DEDUP_ALLOWLIST_ENTRIES = [
   "worktree.resource.provision",
   "worktree.delete",
 
-  "git.commit",
-  "git.push",
-
   // Forge writes worth absorbing a replay for. `createIssue`,
-  // `addIssueComment`, `approvePR` and `requestChanges` each POST a new
-  // record every call — a duplicate issue, a duplicate comment (lesson
-  // #7554), or a second review entry, since both verdicts POST to
+  // `addIssueComment`, `commentOnPR`, `approvePR` and `requestChanges` each
+  // POST a new record every call — a duplicate issue, a duplicate comment
+  // (lesson #7554), or a second review entry, since both verdicts POST to
   // `/pulls/{n}/reviews` (#11534). `createPR` and `mergePR` create nothing on
   // a replay (GitHub 422s a duplicate PR; merge is a PUT) — they are here to
   // replay the original success rather than surface that error to a caller
