@@ -14,6 +14,79 @@ Do not confuse this with the two outbound MCP concepts in the plugin docs:
 
 This server is **security-load-bearing**: it accepts network connections (loopback only) and turns them into privileged IDE mutations (commit, push, delete worktree, launch agents). The auth ladder, tier model, per-tool grants, rate limits, and abuse policy below are the gates that keep an agent from doing more than the user authorized. The whole subsystem is ~7.5K LOC across `electron/services/mcp-server/` plus the `McpServerService` orchestrator.
 
+## Connecting an external client
+
+Turn the server on in **Settings → MCP server**. The Connection section then shows the URL to connect to, a client picker, and a **Copy MCP config** button that copies the config in that client's own format. The config blocks below are what that button produces; the CLI commands are equivalents you can run instead. The settings tab is the source of truth for the live port and key, so prefer copying from it over transcribing these examples.
+
+Always connect to `/mcp` (Streamable HTTP). The server also still answers `/sse`, but that transport was deprecated by the MCP spec in revision 2025-03-26, and client support for attaching the `Authorization` header to its separate POST leg is inconsistent (see the `McpPaneConfigService` comments for the client bugs we've hit). Config generation lives in [`shared/config/mcpClientConfigs.ts`](../../shared/config/mcpClientConfigs.ts), which derives the URL and the snippet together so a surface cannot advertise one endpoint while handing out another. Copying re-reads the server status first, so the snippet carries the current key even if it was rotated from another tab.
+
+The port is whatever the server bound (default `45454`, incremented on collision) and the key is the one shown under **API key** in the same tab. Both appear in the examples below as `<port>` and `<api-key>`.
+
+### Claude Code
+
+Verified against Claude Code 2.1.220. Either run the CLI:
+
+```bash
+claude mcp add --transport http daintree "http://127.0.0.1:<port>/mcp" --header "Authorization: Bearer <api-key>"
+```
+
+That writes to the local (per-project) scope; add `--scope user` to make it available everywhere instead. Or paste the copied JSON into `.mcp.json` in your project, or `~/.claude.json` for a user-scoped server:
+
+```json
+{
+  "mcpServers": {
+    "daintree": {
+      "type": "http",
+      "url": "http://127.0.0.1:<port>/mcp",
+      "headers": {
+        "Authorization": "Bearer <api-key>"
+      }
+    }
+  }
+}
+```
+
+### Codex
+
+Verified against Codex CLI 0.146.0. Paste the copied TOML into `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.daintree]
+url = "http://127.0.0.1:<port>/mcp"
+http_headers = { Authorization = "Bearer <api-key>" }
+```
+
+`codex mcp get daintree` should report `transport: streamable_http` and an `http_headers` entry. Codex also accepts a `bearer_token_env_var` indirection instead, which keeps the key out of the config file at the cost of having to export the variable before every Codex launch and re-export it after each rotation:
+
+```bash
+export DAINTREE_MCP_TOKEN="<api-key>"
+codex mcp add daintree --url "http://127.0.0.1:<port>/mcp" --bearer-token-env-var DAINTREE_MCP_TOKEN
+```
+
+### Any other client
+
+Pick **Other client** in the picker for the transport-level details, which any Streamable HTTP client can be configured from by hand:
+
+```text
+Transport: Streamable HTTP
+URL: http://127.0.0.1:<port>/mcp
+Header: Authorization: Bearer <api-key>
+```
+
+Editors such as Cursor and VS Code read their own config files; their exact schemas aren't verified here, so use the values above rather than assuming the Claude Code JSON is portable to them.
+
+### Keeping a connection working
+
+The copied config embeds the key verbatim, so treat any file holding it as a secret and keep it out of commits. Rotating the key (**Rotate API key** in the same tab) is the revoke-all primitive: it immediately invalidates every client still presenting the old key, and each one has to be re-pasted. Changing the configured port likewise invalidates the URL every client holds.
+
+Connected clients show up under **External clients** in the Connection section. Entries are keyed by the hash of the bearer they present, so every client configured from this tab shares one entry — disconnecting it drops every session using that key, and does not stop a client from reconnecting with the same key. Rotate the key to lock one out for good.
+
+Troubleshooting the failures worth naming:
+
+- **401** — the `Authorization` header is missing, malformed, or carries a rotated-away key. Re-copy the config. A client that doesn't attach the header to `/sse` POSTs lands here too, which is one reason to stay on `/mcp`.
+- **403** — the request never reached the auth gate: its `Host` didn't match the loopback address and port exactly, or it sent an `Origin` that isn't the loopback one. Relevant mainly if a proxy rewrites either header. A _missing_ `Origin` is fine and expected — non-browser MCP clients don't send one.
+- **A tool call that returns an error rather than a failed request** — the tool is above the session's tier, or its per-tool grant hasn't been approved; the error carries `TIER_NOT_PERMITTED`. Note that a plain API-key session has no pinned renderer to prompt for a grant. See [Auth ladder](#auth-ladder-tierauthts--httplifecyclehandlerequest) and [Tier model](#tier-model-sharedts) below.
+
 ## File map
 
 | File | LOC | Role |

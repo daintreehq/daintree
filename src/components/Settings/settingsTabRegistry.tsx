@@ -1371,8 +1371,20 @@ export const SETTINGS_REGISTRY = [
         section: "Connection",
         title: "Copy MCP config",
         description:
-          "Copy the MCP server config snippet (JSON) to paste into your MCP client configuration",
-        keywords: ["mcp", "config", "copy", "snippet", "json", "client", "cursor", "claude"],
+          "Copy the MCP server config for your client — JSON for Claude Code, TOML for Codex, or raw connection details",
+        keywords: [
+          "mcp",
+          "config",
+          "copy",
+          "snippet",
+          "json",
+          "toml",
+          "client",
+          "cursor",
+          "claude",
+          "codex",
+          "connect",
+        ],
         requiresEnabled: MCP_REQUIRES_ENABLED,
       },
       {

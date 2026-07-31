@@ -43,6 +43,7 @@ import type { SessionStore } from "./sessionStore.js";
 import type { AuditService } from "./auditLog.js";
 import { classifyMcpDispatchResult } from "./auditLog.js";
 import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js";
+import { buildMcpClientConfig } from "../../../shared/config/mcpClientConfigs.js";
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
 import type { AbusePolicy } from "./abusePolicy.js";
 import {
@@ -54,7 +55,6 @@ import {
   RESTART_JITTER_MS,
   RESTART_STABLE_RESET_MS,
   MCP_STOP_DRAIN_TIMEOUT_MS,
-  MCP_SERVER_KEY,
   MCP_TIER_ELEVATION_TTL_MS,
   MCP_GRANT_MAX_LIFETIME_MS,
   MCP_NATIVE_GRANT_DEFAULT_MAX_USES,
@@ -1811,12 +1811,14 @@ export class HttpLifecycle {
     };
   }
 
+  /**
+   * The Claude Code shape, kept as the zero-argument IPC contract. Per-client
+   * variants are built in the renderer from the same shared builder (#11535).
+   */
   getConfigSnippet(): string {
-    const url = this.port ? `http://127.0.0.1:${this.port}/mcp` : "http://127.0.0.1:<port>/mcp";
-    const entry: Record<string, unknown> = { type: "http", url };
-    if (this.apiKey) {
-      entry.headers = { Authorization: `Bearer ${this.apiKey}` };
-    }
-    return JSON.stringify({ mcpServers: { [MCP_SERVER_KEY]: entry } }, null, 2);
+    return buildMcpClientConfig("claude-code", {
+      port: this.port,
+      apiKey: this.apiKey ?? null,
+    }).snippet;
   }
 }

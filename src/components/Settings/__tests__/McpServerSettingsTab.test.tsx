@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { parse as parseToml } from "smol-toml";
 import { McpServerSettingsTab } from "../McpServerSettingsTab";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
+import { MCP_CLIENT_CONFIGS } from "@shared/config/mcpClientConfigs";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -82,7 +84,9 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
     setEnabled: vi.fn(),
     setPort: vi.fn(),
     listActiveClients: vi.fn().mockResolvedValue([]),
-    getConfigSnippet: vi.fn().mockResolvedValue("http://127.0.0.1:9020/sse"),
+    // This tab builds its own per-client snippets; the IPC method is only
+    // still consumed by the assistant tab.
+    getConfigSnippet: vi.fn().mockResolvedValue("<config-snippet>"),
     rotateApiKey: vi.fn().mockResolvedValue("dnt-key-rotated789"),
     getLogRecords: vi.fn().mockResolvedValue([]),
     getAuditConfig: vi.fn().mockResolvedValue({ enabled: true, maxRecords: 500 }),
@@ -132,6 +136,15 @@ describe("McpServerSettingsTab", () => {
     });
     installMcpApi();
   });
+
+  // The connection box is the only select-all region holding a URL (the other
+  // is the masked API key).
+  const readDisplayedUrl = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll(".select-all"))
+      .map((el) => el.textContent?.trim() ?? "")
+      .find((text) => text.startsWith("http://"));
+
+  const lastCopiedText = () => String(writeText.mock.calls.at(-1)?.[0] ?? "");
 
   const waitForContent = (container: HTMLElement, text: string) =>
     waitFor(
@@ -1397,8 +1410,157 @@ describe("McpServerSettingsTab", () => {
       );
       await waitForContent(container, "API key active");
       expect(container.textContent).toContain("Running on port 9020");
-      expect(container.textContent).toContain("http://127.0.0.1:9020/sse");
+      // Regression (#11535): the box advertised the legacy /sse transport.
+      expect(readDisplayedUrl(container)).toBe("http://127.0.0.1:9020/mcp");
       expect(screen.getByRole("button", { name: /copy mcp config/i })).toBeTruthy();
+    });
+
+    it("displays the same url it copies", async () => {
+      // #11535: the box used to render /sse beside a button copying /mcp.
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+
+      const shownUrl = readDisplayedUrl(container);
+      expect(shownUrl).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalled();
+      });
+
+      // Compare the field the client actually reads, not just a substring.
+      const copied: unknown = JSON.parse(lastCopiedText());
+      expect(copied).toMatchObject({ mcpServers: { daintree: { url: shownUrl } } });
+    });
+
+    it("offers a client picker defaulting to Claude Code", async () => {
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+
+      const group = screen.getByRole("radiogroup", { name: /client/i });
+      const choices = Array.from(group.querySelectorAll('[role="radio"]'));
+      expect(choices.map((c) => c.textContent)).toEqual([
+        expect.stringContaining("Claude Code"),
+        expect.stringContaining("Codex"),
+        expect.stringContaining("Other client"),
+      ]);
+
+      const checked = choices.filter((c) => c.getAttribute("aria-checked") === "true");
+      expect(checked).toHaveLength(1);
+      expect(checked[0]?.textContent).toContain("Claude Code");
+    });
+
+    it("shows each client's destination only on its own card", async () => {
+      // The helper copy under the copy button used to repeat the selected
+      // client's destination verbatim, ~40px below the card that already said it.
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+
+      const text = container.textContent ?? "";
+      for (const entry of MCP_CLIENT_CONFIGS) {
+        const occurrences = text.split(entry.destination).length - 1;
+        expect({ id: entry.id, occurrences }).toEqual({ id: entry.id, occurrences: 1 });
+      }
+    });
+
+    it("copies generic connection details when Other client is selected", async () => {
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+
+      fireEvent.click(screen.getByRole("radio", { name: /other client/i }));
+      fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalled();
+      });
+
+      const shownUrl = readDisplayedUrl(container);
+      expect(shownUrl).toBeTruthy();
+
+      const copied = lastCopiedText();
+      expect(copied).toContain("Streamable HTTP");
+      expect(copied).toContain(shownUrl);
+      expect(copied).toContain("Bearer dnt-key-abc123");
+    });
+
+    it("copies the rotated key rather than the one cached at mount", async () => {
+      // Rotation elsewhere doesn't broadcast, so the copy path re-reads status.
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+
+      vi.mocked(window.electron.mcpServer.getStatus).mockResolvedValue({
+        enabled: true,
+        port: 9020,
+        configuredPort: 9020,
+        apiKey: "dnt-key-rotated789",
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalled();
+      });
+      expect(lastCopiedText()).toContain("dnt-key-rotated789");
+    });
+
+    it("copies Codex TOML carrying the live port and key when Codex is selected", async () => {
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+
+      fireEvent.click(screen.getByRole("radio", { name: /codex/i }));
+      fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalled();
+      });
+
+      const parsed: unknown = parseToml(lastCopiedText());
+      expect(parsed).toMatchObject({
+        mcp_servers: {
+          daintree: {
+            url: "http://127.0.0.1:9020/mcp",
+            http_headers: { Authorization: "Bearer dnt-key-abc123" },
+          },
+        },
+      });
+    });
+
+    it("clears stale copied feedback when the client changes", async () => {
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+
+      fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /copied/i })).toBeTruthy();
+      });
+
+      fireEvent.click(screen.getByRole("radio", { name: /codex/i }));
+      expect(screen.queryByRole("button", { name: /copied/i })).toBeNull();
     });
 
     it("uses the runtime snapshot port when it diverges from the slower getStatus refetch", async () => {
@@ -1427,7 +1589,7 @@ describe("McpServerSettingsTab", () => {
       );
       await waitForContent(container, "API key active");
       expect(container.textContent).toContain("Running on port 9020");
-      expect(container.textContent).toContain("http://127.0.0.1:9020/sse");
+      expect(container.textContent).toContain("http://127.0.0.1:9020/mcp");
     });
 
     it("renders the starting copy and hides the URL block when state is starting", async () => {

@@ -34,7 +34,7 @@ From there, follow the architecture doc nearest the surface you're changing. Eac
 | [store-init-order.md](./architecture/store-init-order.md) | Cross-store accessor module and the ESM init ordering that avoids TDZ cycles. |
 | [ipc-services.md](./architecture/ipc-services.md) | The backend/bridge surface — services, IPC handlers, `window.electron` namespaces, clients. |
 | [action-system.md](./architecture/action-system.md) | Central typed dispatch for menus, keybindings, context menus, and agent automation. |
-| [mcp-server.md](./architecture/mcp-server.md) | The local MCP HTTP server that lets agents drive the IDE via built-in actions. |
+| [mcp-server.md](./architecture/mcp-server.md) | The local MCP HTTP server that lets agents drive the IDE via built-in actions — including how to connect an external client. |
 | [notification-system.md](./architecture/notification-system.md) | How a runtime signal reaches the user — the five-surface taxonomy and routing machinery. |
 | [destructive-action-safeguards.md](./architecture/destructive-action-safeguards.md) | Living per-action audit and rubric for destructive UI surfaces. |
 | [dev-preview-event-routing.md](./architecture/dev-preview-event-routing.md) | Per-event routing audit for dev-preview lifecycle signals. |
