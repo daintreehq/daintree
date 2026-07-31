@@ -27,6 +27,7 @@ import {
   MCP_DEDUP_ALLOWLIST,
   minimumPermittingTier,
   unwrapDispatchResult,
+  RESOLVED_PROJECT_META_KEY,
 } from "../shared.js";
 import { TOOL_RESULT_TEXT_MAX_BYTES } from "../toolCallResult.js";
 import { SessionBindingError, RendererBridgeUnavailableError } from "../rendererBridge.js";
@@ -2875,5 +2876,146 @@ describe("structuredContent for terminal query actions (#10676)", () => {
       );
       expect(structuredOf(result)).toBeUndefined();
     });
+  });
+});
+
+describe("resolved-project result metadata (#11536)", () => {
+  const PROJECT = { projectId: "proj-a", projectPath: "/repos/a" };
+
+  const manifest = [
+    {
+      id: "files.search",
+      title: "Files: search",
+      description: "Search files",
+      category: "files",
+      danger: "safe" as const,
+      source: ["agent"] as const,
+    },
+  ] as unknown as ActionManifestEntry[];
+
+  function metaOf(result: unknown): Record<string, unknown> | undefined {
+    return (result as { _meta?: Record<string, unknown> })._meta;
+  }
+
+  function projectMetaOf(result: unknown): unknown {
+    return metaOf(result)?.[RESOLVED_PROJECT_META_KEY];
+  }
+
+  function textOf(result: unknown): string {
+    return (result as { content: { type: string; text: string }[] }).content[0].text;
+  }
+
+  function depsFor(dispatch: unknown) {
+    return fakeDeps({
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+      dispatchAction: vi.fn().mockResolvedValue(dispatch),
+    });
+  }
+
+  it("stamps the dispatched project on a successful result", async () => {
+    const server = createSessionServer(
+      "rp-ok",
+      depsFor({ result: { ok: true, result: { hits: [] } }, dispatchedProject: PROJECT })
+    );
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "files.search", arguments: {} });
+
+    expect(projectMetaOf(result)).toEqual(PROJECT);
+  });
+
+  it("stamps the dispatched project on a renderer-returned action error", async () => {
+    const server = createSessionServer(
+      "rp-err",
+      depsFor({
+        result: { ok: false, error: { code: "VALIDATION_ERROR", message: "nope" } },
+        dispatchedProject: PROJECT,
+      })
+    );
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "files.search",
+      arguments: {},
+    })) as { isError: boolean };
+
+    // A renderer was reached, so the target is known and worth reporting —
+    // and the error payload itself must survive the stamp untouched.
+    expect(result.isError).toBe(true);
+    expect(projectMetaOf(result)).toEqual(PROJECT);
+    expect(JSON.parse(textOf(result)).code).toBe("VALIDATION_ERROR");
+  });
+
+  it("omits the key entirely when the dispatch reported no project", async () => {
+    const server = createSessionServer("rp-none", depsFor({ result: { ok: true, result: "ok" } }));
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "files.search", arguments: {} });
+
+    // Absent, not null — "unknown" must not be confusable with "no project".
+    expect(projectMetaOf(result)).toBeUndefined();
+    expect(metaOf(result) === undefined || !(RESOLVED_PROJECT_META_KEY in metaOf(result)!)).toBe(
+      true
+    );
+  });
+
+  it("does not stamp a pre-dispatch failure, where no renderer was reached", async () => {
+    const deps = fakeDeps({
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+      dispatchAction: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+    });
+    const server = createSessionServer("rp-nowindow", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "files.search",
+      arguments: {},
+    })) as { isError: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(projectMetaOf(result)).toBeUndefined();
+  });
+
+  it("preserves structuredContent alongside the stamp", async () => {
+    const payload = { terminals: [] };
+    const server = createSessionServer(
+      "rp-structured",
+      fakeDeps({
+        requestManifest: vi.fn().mockResolvedValue([
+          {
+            id: "terminal.list",
+            title: "Terminal: list",
+            description: "List terminals",
+            category: "terminal",
+            danger: "safe" as const,
+            source: ["agent"] as const,
+          },
+        ] as unknown as ActionManifestEntry[]),
+        getCachedManifest: vi.fn(
+          () =>
+            [
+              {
+                id: "terminal.list",
+                title: "Terminal: list",
+                description: "List terminals",
+                category: "terminal",
+                danger: "safe" as const,
+                source: ["agent"] as const,
+              },
+            ] as unknown as ActionManifestEntry[]
+        ),
+        dispatchAction: vi
+          .fn()
+          .mockResolvedValue({ result: { ok: true, result: payload }, dispatchedProject: PROJECT }),
+      })
+    );
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+    expect(projectMetaOf(result)).toEqual(PROJECT);
+    expect(JSON.parse(textOf(result))).toEqual(payload);
   });
 });

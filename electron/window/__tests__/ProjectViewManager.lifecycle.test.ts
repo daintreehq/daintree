@@ -849,4 +849,68 @@ describe("ProjectViewManager — lifecycle invariants", () => {
       setupTwo.ledger.assertNoPortsForDeadViews(setupTwo.manager as never);
     });
   });
+
+  describe("getProjectRefForWebContents (#11536)", () => {
+    it("reports the id and path of the project a view belongs to", async () => {
+      const setup = createManager();
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+
+      expect(setup.manager.getProjectRefForWebContents(bWc.id)).toEqual({
+        projectId: "proj-b",
+        projectPath: "/b",
+      });
+    });
+
+    it("reports a cached (deactivated) view's own project, not the active one", async () => {
+      const setup = createManager();
+      // Switching away leaves proj-a's view cached but still registered — an
+      // in-flight MCP dispatch can settle against it after the user moves on.
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+
+      expect(setup.manager.getActiveProjectId()).toBe("proj-b");
+      expect(setup.manager.getProjectRefForWebContents(setup.initialWc.id)).toEqual({
+        projectId: "proj-a",
+        projectPath: "/a",
+      });
+      expect(setup.manager.getProjectRefForWebContents(bWc.id)).toEqual({
+        projectId: "proj-b",
+        projectPath: "/b",
+      });
+    });
+
+    it("reflects a rebound path rather than the registration-time one", async () => {
+      const setup = createManager();
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+
+      await setup.manager.rebindProjectPath("proj-b", "/moved/b");
+
+      expect(setup.manager.getProjectRefForWebContents(bWc.id)).toEqual({
+        projectId: "proj-b",
+        projectPath: "/moved/b",
+      });
+    });
+
+    it("returns null for an unknown id, a foreign window's view, and after teardown", async () => {
+      const setup = createManager();
+      const other = createManager();
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+
+      expect(setup.manager.getProjectRefForWebContents(999_999)).toBeNull();
+      // Sender-scoped: one window's manager must not answer for another's view.
+      expect(other.manager.getProjectRefForWebContents(bWc.id)).toBeNull();
+
+      setup.manager.dispose();
+      expect(setup.manager.getProjectRefForWebContents(bWc.id)).toBeNull();
+    });
+
+    it("returns null once the view's webContents is destroyed", async () => {
+      const setup = createManager();
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+      expect(setup.manager.getProjectRefForWebContents(bWc.id)).not.toBeNull();
+
+      bWc.isDestroyed.mockReturnValue(true);
+
+      expect(setup.manager.getProjectRefForWebContents(bWc.id)).toBeNull();
+    });
+  });
 });

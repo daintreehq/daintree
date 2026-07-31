@@ -183,6 +183,7 @@ vi.mock("../SystemSleepService.js", () => ({
 }));
 
 import { McpServerService } from "../McpServerService.js";
+import { RESOLVED_PROJECT_META_KEY } from "../mcp-server/shared.js";
 
 type DispatchRequest = {
   requestId: string;
@@ -241,6 +242,8 @@ function createMockWindow(options?: {
       };
   senderIdOverride?: number;
   hostShellWebContentsId?: number;
+  /** Project this window's view belongs to, for the #11536 result stamp. */
+  projectRef?: { projectId: string; projectPath: string };
 }) {
   const getManifest = options?.getManifest ?? (() => []);
   const dispatchAction =
@@ -337,6 +340,9 @@ function createMockWindow(options?: {
 
   const projectViewManager = {
     getActiveView: vi.fn((): { webContents: typeof webContents } | null => ({ webContents })),
+    getProjectRefForWebContents: vi.fn((id: number) =>
+      options?.projectRef && id === projectViewWcId ? options.projectRef : null
+    ),
   };
 
   const windowContext = {
@@ -351,6 +357,7 @@ function createMockWindow(options?: {
 
   const registry = {
     all: () => [windowContext],
+    focusOrder: () => [windowContext],
     getPrimary: () => windowContext,
     getByWindowId: () => windowContext,
     getByWebContentsId: () => windowContext,
@@ -956,6 +963,7 @@ describe("McpServerService", () => {
 
     const combinedRegistry = {
       all: () => [winA.windowContext, winB.windowContext],
+      focusOrder: () => [winA.windowContext, winB.windowContext],
       getPrimary: () => winA.windowContext,
       getByWindowId: () => winA.windowContext,
       getByWebContentsId: () => winA.windowContext,
@@ -996,6 +1004,69 @@ describe("McpServerService", () => {
     expect(sendsToB).toHaveLength(1);
   });
 
+  it("routes an unpinned external session by focus order and reports the project it landed on (#11536)", async () => {
+    // Registration order is [A, B]; focus order is the opposite. Before the
+    // fix the bridge walked `all()` (Map insertion order) and every external
+    // call landed on A — whichever window happened to register first —
+    // regardless of what the user was actually looking at.
+    const manifest = () => [
+      createManifestEntry({
+        id: "actions.list",
+        title: "List Actions",
+        description: "Read the action registry",
+        kind: "query",
+      }),
+    ];
+    const winA = createMockWindow({
+      getManifest: manifest,
+      dispatchAction: () => ({ ok: true, result: "from-window-A" }),
+      projectRef: { projectId: "proj-a", projectPath: "/repos/a" },
+    });
+    const winB = createMockWindow({
+      getManifest: manifest,
+      dispatchAction: () => ({ ok: true, result: "from-window-B" }),
+      projectRef: { projectId: "proj-b", projectPath: "/repos/b" },
+    });
+
+    const focus = { current: [winB.windowContext, winA.windowContext] };
+    const contextByWcId = new Map([
+      [winA.webContents.id, winA.windowContext],
+      [winB.webContents.id, winB.windowContext],
+    ]);
+    const combinedRegistry = {
+      all: () => [winA.windowContext, winB.windowContext],
+      focusOrder: () => focus.current,
+      getPrimary: () => winA.windowContext,
+      getByWindowId: () => winA.windowContext,
+      getByWebContentsId: (id: number) => contextByWcId.get(id),
+      size: 2,
+    } as never;
+
+    await service.start(combinedRegistry);
+
+    // No help token — an api-key bearer, i.e. the unpinned external path.
+    const external = await connectClient(service.currentPort!);
+    transports.push(external.transport);
+
+    const first = await external.client.callTool({ name: "actions.list", arguments: {} });
+    expect(getTextResult(first).content[0].text).toBe('"from-window-B"');
+    expect(first._meta?.[RESOLVED_PROJECT_META_KEY]).toEqual({
+      projectId: "proj-b",
+      projectPath: "/repos/b",
+    });
+
+    // The user switches windows mid-session. The session stays unpinned by
+    // design (#7003), so the next call follows focus — and says so.
+    focus.current = [winA.windowContext, winB.windowContext];
+
+    const second = await external.client.callTool({ name: "actions.list", arguments: {} });
+    expect(getTextResult(second).content[0].text).toBe('"from-window-A"');
+    expect(second._meta?.[RESOLVED_PROJECT_META_KEY]).toEqual({
+      projectId: "proj-a",
+      projectPath: "/repos/a",
+    });
+  });
+
   it("fails closed when the pinned WebContents has been destroyed (#7002 — never silently re-routes)", async () => {
     const winA = createMockWindow({
       dispatchAction: () => ({ ok: true, result: "from-A" }),
@@ -1006,6 +1077,7 @@ describe("McpServerService", () => {
 
     const combinedRegistry = {
       all: () => [winA.windowContext, winB.windowContext],
+      focusOrder: () => [winA.windowContext, winB.windowContext],
       getPrimary: () => winA.windowContext,
       getByWindowId: () => winA.windowContext,
       getByWebContentsId: () => winA.windowContext,
@@ -1113,6 +1185,7 @@ describe("McpServerService", () => {
 
     const combinedRegistry = {
       all: () => [winA.windowContext, winB.windowContext],
+      focusOrder: () => [winA.windowContext, winB.windowContext],
       getPrimary: () => winA.windowContext,
       getByWindowId: () => winA.windowContext,
       getByWebContentsId: () => winA.windowContext,

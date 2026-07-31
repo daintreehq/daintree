@@ -311,6 +311,35 @@ export function buildToolError(input: {
   return buildToolCallTextResult(JSON.stringify(payload), { isError: true });
 }
 
+/**
+ * `_meta` key carrying the project a tool call actually ran against (#11536).
+ * Namespaced per the MCP `_meta` convention so it can't collide with keys from
+ * other servers in an aggregating client.
+ */
+export const RESOLVED_PROJECT_META_KEY = "org.daintree/resolved-project";
+
+/**
+ * Stamp the resolved project onto a tool result (#11536).
+ *
+ * Top-level `_meta` rather than `structuredContent`, so it never has to satisfy
+ * (or violate) an action's declared output schema. Returns the result untouched
+ * when identity couldn't be resolved — the key's absence means "unknown", and
+ * failing to resolve it must never alter the action's own outcome.
+ */
+export function withResolvedProject<T extends CallToolResult>(
+  result: T,
+  project: DispatchedProjectRef | undefined
+): T {
+  if (!project) return result;
+  return {
+    ...result,
+    _meta: {
+      ...(result._meta ?? {}),
+      [RESOLVED_PROJECT_META_KEY]: { ...project },
+    },
+  };
+}
+
 export type McpTier = "workbench" | "action" | "system" | "external";
 
 // Tier tool lists live in `shared/config/helpAssistantTierAllowlists.ts`
@@ -835,9 +864,29 @@ export interface PendingRequest<T> {
   destroyedCleanup?: () => void;
 }
 
+/**
+ * The project a dispatch actually landed on, resolved from the responding
+ * renderer at response time (#11536). Unpinned external sessions follow window
+ * focus on every call, so a long-running agent's calls can retarget mid-session
+ * when the user switches project. Reporting the resolved project makes that
+ * drift observable to the caller instead of silent.
+ */
+export interface DispatchedProjectRef {
+  projectId: string;
+  projectPath: string;
+}
+
 export interface DispatchEnvelope {
   result: ActionDispatchResult;
   confirmationDecision?: McpConfirmationDecision;
+  /**
+   * Absent when identity could not be resolved (view torn down between
+   * dispatch and response, or a webContents with no registered project).
+   * Deliberately optional rather than nullable: "unknown" must not be
+   * confusable with "no project", and a failed lookup never downgrades an
+   * otherwise successful action result.
+   */
+  dispatchedProject?: DispatchedProjectRef;
 }
 
 export interface McpSseSession {

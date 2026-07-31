@@ -542,6 +542,36 @@ export class ProjectViewManager {
   }
 
   /**
+   * Live `{ projectId, projectPath }` for a view's webContents, or `null` when
+   * the id is unknown to this manager (#11536). Sender-scoped by construction —
+   * it walks this manager's own reverse mapping, never `activeProjectId` or the
+   * global current-project, so a dispatch that landed on a cached (deactivated)
+   * view still reports the project that view actually belongs to.
+   *
+   * Reads `projectPath` off the live `ViewEntry` rather than a registration-time
+   * copy, so a `rebindProjectPath()` (project moved on disk) is reflected. Fails
+   * closed to `null` if the entry no longer owns the requested webContents or
+   * the view has been torn down — callers treat that as "identity unknown" and
+   * omit the field rather than reporting a stale project.
+   */
+  getProjectRefForWebContents(
+    webContentsId: number
+  ): { projectId: string; projectPath: string } | null {
+    const projectId = this.webContentsToProject.get(webContentsId);
+    if (projectId === undefined) return null;
+    const entry = this.views.get(projectId);
+    if (!entry) return null;
+    try {
+      const wc = entry.view.webContents;
+      if (wc.isDestroyed() || wc.id !== webContentsId) return null;
+    } catch {
+      // View torn down mid-read — identity is unknowable, not stale.
+      return null;
+    }
+    return { projectId: entry.projectId, projectPath: entry.projectPath };
+  }
+
+  /**
    * Record the cold-start preload evaluation cost for a view, keyed by its
    * webContents id (#9770). Called from the perf IPC handler when a view's
    * preload flushes its `preload.eval` span. First-write semantics: the cost is
