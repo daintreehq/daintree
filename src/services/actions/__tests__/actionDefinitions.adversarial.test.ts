@@ -998,6 +998,25 @@ describe("worktree action hardening", () => {
     await expect(select.run(undefined, {} as never)).rejects.toThrow("No worktree selected");
   });
 
+  it.each([
+    ["worktree.getDefaultPath", { branchName: "feature/login" }],
+    [
+      "worktree.create",
+      { options: { baseBranch: "main", newBranch: "feature/login", path: "/repo-wt/login" } },
+    ],
+  ])("%s refuses to fall back to the active worktree", (id, args) => {
+    const actions = buildRegistry(registerWorktreeActions);
+    const schema = actions.get(id)!().argsSchema!;
+
+    // Both anchor on the REPO ROOT, and the active worktree is usually a LINKED
+    // worktree — a silent fallback misses the project's configured
+    // worktreePathPattern and answers about the wrong directory instead of
+    // erroring. The dialog dispatching worktree.create always passes rootPath.
+    expect(schema.safeParse(args).success).toBe(false);
+    expect(schema.safeParse({ ...args, rootPath: "/repo" }).success).toBe(true);
+    expect(schema.safeParse({ ...args, worktreeId: "wt-1" }).success).toBe(true);
+  });
+
   it("maps empty modified-copy results to a user-facing error", async () => {
     const actions = buildRegistry(registerWorktreeActions);
     const copyTree = actions.get("worktree.copyTree")!();

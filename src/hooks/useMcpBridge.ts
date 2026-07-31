@@ -11,6 +11,10 @@ import {
   buildGitRemoteOperationPreview,
   formatGitRemoteOperationPreviewLines,
 } from "@/components/Git/gitRemoteOperationPreview";
+import {
+  resolveWorktreeLocation,
+  type WorktreeLocationArgs,
+} from "@/services/actions/definitions/locationArgs";
 import type { ActionContext, ActionDispatchResult, ActionId } from "@shared/types/actions";
 import type { McpConfirmationDecision } from "@shared/types/ipc/mcpServer";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -81,25 +85,40 @@ function worktreeIdArg(args: unknown): string | undefined {
 }
 
 /**
- * How a git dispatch supplied its `cwd`, which is NOT the same question as
- * "what is the cwd".
+ * How a git dispatch NAMED its target worktree, which is NOT the same question
+ * as "which worktree is it".
  *
- * `"omitted"` means the caller deferred to context — the action itself falls
- * back to `ctx.activeWorktreePath`, so previewing and pinning that path is
- * faithful. `"invalid"` means the caller DID name a cwd but not a usable one
- * (`""`, `null`, a number). Those must never be silently replaced with the
- * active worktree: the dispatch would stop failing validation and start pushing
- * a repository the caller never asked for — precisely the #7880 no-silent-
- * fallback rule for destructive submissions.
+ * `"omitted"` means the caller named no selector at all and deferred to context
+ * — the action itself falls back to `ctx.activeWorktreePath`, so previewing and
+ * pinning that path is faithful. `"named"` means the caller did name one.
+ * `"invalid"` means it named one but not a usable one (`""`, `null`, a number).
+ * Those must never be silently replaced with the active worktree: the dispatch
+ * would stop failing validation and start pushing a repository the caller never
+ * asked for — precisely the #7880 no-silent-fallback rule for destructive
+ * submissions.
+ *
+ * All three spellings are read, not just `cwd`: since #11543 the git actions
+ * accept `worktreeId` and `worktreePath` as well, and previewing the active
+ * worktree while `run()` resolved a `worktreeId` to a different one would attest
+ * to a repository the approver never saw.
  */
-type GitCwdArg = { state: "omitted" } | { state: "invalid" } | { state: "supplied"; cwd: string };
+type GitLocationArg =
+  { state: "omitted" } | { state: "invalid" } | { state: "named"; location: WorktreeLocationArgs };
 
-function readGitCwdArg(args: unknown): GitCwdArg {
-  if (args === null || typeof args !== "object" || !("cwd" in args)) return { state: "omitted" };
-  const cwd = args.cwd;
-  if (cwd === undefined) return { state: "omitted" };
-  if (typeof cwd !== "string" || cwd.length === 0) return { state: "invalid" };
-  return { state: "supplied", cwd };
+const GIT_LOCATION_KEYS = ["worktreeId", "worktreePath", "cwd"] as const;
+
+function readGitLocationArg(args: unknown): GitLocationArg {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return { state: "omitted" };
+  const record = args as Record<string, unknown>;
+  const named = GIT_LOCATION_KEYS.filter((key) => record[key] !== undefined);
+  if (named.length === 0) return { state: "omitted" };
+  if (named.some((key) => typeof record[key] !== "string" || record[key] === "")) {
+    return { state: "invalid" };
+  }
+  return {
+    state: "named",
+    location: Object.fromEntries(named.map((key) => [key, record[key]])) as WorktreeLocationArgs,
+  };
 }
 
 /**
@@ -120,18 +139,28 @@ export function resolveMcpConfirmPreviewTarget(
     return worktreeId === undefined ? undefined : { kind: "worktreeDelete", worktreeId };
   }
   if (actionId === "git.push" || actionId === "git.pullRebase") {
-    const cwdArg = readGitCwdArg(args);
-    // A named-but-unusable cwd gets no preview and no pinning — it falls
+    const named = readGitLocationArg(args);
+    // A named-but-unusable selector gets no preview and no pinning — it falls
     // through to schema/`run()` validation and fails, as it did before #11538.
-    if (cwdArg.state === "invalid") return undefined;
-    // Mirror the action's own `cwd ?? ctx.activeWorktreePath` resolution, and
-    // mirror ActionService's WHOLE-OBJECT `contextOverride ?? live` precedence
-    // (ActionService.ts:349). A per-field fallback would diverge: a pinned
-    // context that carries no worktree path must NOT borrow the live one.
-    const cwd =
-      cwdArg.state === "supplied"
-        ? cwdArg.cwd
-        : (context ?? actionService.getContext()).activeWorktreePath;
+    if (named.state === "invalid") return undefined;
+    // Run the action's OWN resolver (`worktreeId` wins, then a path spelling,
+    // then the active worktree) so the previewed repository is byte-for-byte the
+    // one `run()` will push. And mirror ActionService's WHOLE-OBJECT
+    // `contextOverride ?? live` precedence (ActionService.ts:349): a per-field
+    // fallback would diverge, because a pinned context that carries no worktree
+    // path must NOT borrow the live one.
+    const effectiveContext = context ?? actionService.getContext();
+    let cwd: string | undefined;
+    try {
+      cwd = resolveWorktreeLocation(
+        named.state === "named" ? named.location : undefined,
+        effectiveContext
+      ).worktreePath;
+    } catch {
+      // Contradictory path spellings, which `argsSchema` rejects anyway.
+      // Previewing either one would attest to a dispatch that never runs.
+      return undefined;
+    }
     if (cwd === undefined || cwd.length === 0) return undefined;
     return actionId === "git.push" ? { kind: "gitPush", cwd } : { kind: "gitPullRebase", cwd };
   }
@@ -180,10 +209,13 @@ export async function buildMcpConfirmPreview(target: McpConfirmPreviewTarget): P
  * mid-modal could push a different repository than the one just approved
  * (#8725). Non-git targets are untouched — only these two carry a cwd.
  *
- * Only ever fills in an ABSENT cwd. A target only exists when the caller
- * omitted `cwd` or gave a usable one, so this can never overwrite a caller's
- * value with a different path, and malformed args are passed through untouched
- * for validation to reject rather than being repaired into a valid push.
+ * A target only exists when the caller named no worktree or named a resolvable
+ * one, and `target.cwd` is what that action's own resolver returned — so writing
+ * it back can never point the dispatch somewhere the approver did not see.
+ * Where the caller named a `worktreeId`, that id still wins in `run()` and
+ * resolves to this same path; where it named a path, this is that path. Malformed
+ * args produce no target and pass through untouched, for validation to reject
+ * rather than being repaired into a valid push.
  */
 function withPreviewedGitCwd(args: unknown, target: McpConfirmPreviewTarget | undefined): unknown {
   if (target === undefined || target.kind === "worktreeDelete") return args;

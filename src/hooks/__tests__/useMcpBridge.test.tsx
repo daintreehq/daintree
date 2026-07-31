@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionManifestEntry } from "@shared/types/actions";
 import { __resetMcpConfirmStoreForTesting, useMcpConfirmStore } from "@/store/mcpConfirmStore";
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
+import {
+  resetStoreAccessorsForTesting,
+  setWorktreePathIndexAccessor,
+} from "@/store/storeAccessors";
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(() => [] as ActionManifestEntry[]),
@@ -1045,6 +1049,67 @@ describe("resolveMcpConfirmPreviewTarget (#11538)", () => {
   it("does not borrow the live worktree path per-field when a bound context lacks one", () => {
     mocks.getContext.mockReturnValue({ activeWorktreePath: "/live" });
     expect(resolveMcpConfirmPreviewTarget("git.push", {}, { projectId: "p-1" })).toBeUndefined();
+  });
+
+  // Since #11543 the git actions also accept `worktreeId`/`worktreePath`.
+  // Reading only `cwd` would report "omitted" for those, preview the ACTIVE
+  // worktree, and then pin a dispatch that `run()` resolves somewhere else —
+  // the approver attesting to a repository they never saw, which is the whole
+  // point of the preview (#8725) and a D2 no-silent-fallback violation (#7880).
+  describe("with the shared location vocabulary (#11543)", () => {
+    beforeEach(() => {
+      setWorktreePathIndexAccessor(
+        () =>
+          new Map([
+            ["wt-1", "/repo/one"],
+            ["wt-2", "/repo/two"],
+          ])
+      );
+    });
+
+    afterEach(() => {
+      resetStoreAccessorsForTesting();
+    });
+
+    it("previews the worktree a worktreeId names rather than the active one", () => {
+      expect(
+        resolveMcpConfirmPreviewTarget(
+          "git.push",
+          { worktreeId: "wt-2" },
+          { activeWorktreePath: "/repo/one" }
+        )
+      ).toEqual({ kind: "gitPush", cwd: "/repo/two" });
+    });
+
+    it("previews an explicit worktreePath rather than the active worktree", () => {
+      expect(
+        resolveMcpConfirmPreviewTarget(
+          "git.pullRebase",
+          { worktreePath: "/repo/two" },
+          { activeWorktreePath: "/repo/one" }
+        )
+      ).toEqual({ kind: "gitPullRebase", cwd: "/repo/two" });
+    });
+
+    it("refuses to preview a worktreeId no open worktree matches", () => {
+      expect(
+        resolveMcpConfirmPreviewTarget(
+          "git.push",
+          { worktreeId: "wt-gone" },
+          { activeWorktreePath: "/repo/one" }
+        )
+      ).toBeUndefined();
+    });
+
+    it("refuses to preview contradictory path spellings the schema will reject", () => {
+      expect(
+        resolveMcpConfirmPreviewTarget(
+          "git.push",
+          { worktreePath: "/repo/one", cwd: "/repo/two" },
+          { activeWorktreePath: "/repo/one" }
+        )
+      ).toBeUndefined();
+    });
   });
 });
 

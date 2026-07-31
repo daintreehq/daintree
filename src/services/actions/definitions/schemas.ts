@@ -97,6 +97,142 @@ export const FileSearchPayloadSchema = z.object({
   limit: z.number().int().positive().optional().describe("Max results to return"),
 });
 
+/**
+ * Canonical pagination arguments (#11543). Four schemes existed before —
+ * `skip`/`limit`, `limit`/`offset`, an opaque `cursor`, and none at all. The
+ * documented shape is now `limit` plus a positional selector: `cursor` for
+ * sources that issue one, `offset` for sources that page by index. `skip` stays
+ * accepted as a legacy alias for `offset`.
+ *
+ * Ceiling values are deliberately left to each action (issue #11531 owns
+ * choosing them); this only converges the shape.
+ */
+export type LegacyPaginationAlias = "skip";
+
+export interface PaginationOptions {
+  legacy?: readonly LegacyPaginationAlias[];
+  cursor?: boolean;
+  offset?: boolean;
+  maxLimit?: number;
+}
+
+/**
+ * The pagination fields on their own, so they can be merged into a larger object
+ * BEFORE it is transformed. A transformed schema is a `ZodPipe` and can no
+ * longer be `.extend()`ed, so a tool that paginates *and* takes a location has
+ * to assemble one flat shape rather than chaining two builders.
+ */
+export function paginationShape(options: PaginationOptions = {}): Record<string, z.ZodTypeAny> {
+  const { legacy = [], cursor = false, offset = true, maxLimit } = options;
+
+  const limitField = maxLimit
+    ? z.number().int().positive().max(maxLimit)
+    : z.number().int().positive();
+
+  const shape: Record<string, z.ZodTypeAny> = {
+    limit: limitField.optional().describe("Maximum number of items to return."),
+  };
+  if (offset) {
+    shape.offset = z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe("Number of items to skip before collecting results.");
+  }
+  if (cursor) {
+    shape.cursor = z
+      .string()
+      .optional()
+      .describe(
+        "Opaque cursor — pass the previous response's `nextCursor` to fetch the next page."
+      );
+  }
+  for (const alias of legacy) {
+    shape[alias] = z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe("Legacy alias for `offset`; prefer `offset`.");
+  }
+  return shape;
+}
+
+/**
+ * Collapse the legacy `skip` spelling into `offset`. See {@link paginationShape}.
+ * Only consumes `skip` when the tool opted into it, so a tool with its own
+ * unrelated `skip` field keeps it.
+ */
+export function foldPagination(
+  value: Record<string, unknown>,
+  ctx: z.RefinementCtx,
+  legacy: readonly LegacyPaginationAlias[] = []
+): Record<string, unknown> | typeof z.NEVER {
+  if (!legacy.includes("skip")) return value;
+
+  const { skip, ...rest } = value as { skip?: number; offset?: number } & Record<string, unknown>;
+  const supplied = [rest.offset, skip].filter(
+    (candidate): candidate is number => candidate !== undefined
+  );
+  if (new Set(supplied).size > 1) {
+    ctx.addIssue({
+      code: "custom",
+      message: "`offset` and `skip` are aliases for the same value — supply only one.",
+    });
+    return z.NEVER;
+  }
+  const resolved = supplied[0];
+  return resolved === undefined ? rest : { ...rest, offset: resolved };
+}
+
+/**
+ * Decode a cursor issued by an index-paged source back into its offset.
+ *
+ * Those sources emit `String(nextOffset)` as their `nextCursor`, so decoding is
+ * the inverse. It is strict on purpose: a garbage cursor silently restarting at
+ * page zero would look like a successful re-read of the first page, and a
+ * negative one would reach `git log --skip`. Throws a static message — the
+ * rejected value is never echoed back.
+ */
+export function decodeIndexCursor(cursor: string | undefined): number | undefined {
+  if (cursor === undefined) return undefined;
+  // `Number("")` and `Number(" ")` are 0, so an empty cursor would read as a
+  // valid "start from the top" rather than the caller error it is.
+  const parsed = cursor.trim() === "" ? Number.NaN : Number(cursor);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error("Invalid cursor — pass back the `nextCursor` from the previous response.");
+  }
+  return parsed;
+}
+
+export function withPagination<T extends z.ZodRawShape>(extra: T, options: PaginationOptions = {}) {
+  return z.object({ ...paginationShape(options), ...extra }).transform((value, ctx) => {
+    const folded = foldPagination(value as Record<string, unknown>, ctx, options.legacy ?? []);
+    if (folded === z.NEVER) return z.NEVER;
+    return folded as Omit<z.core.output<z.ZodObject<T>>, "offset" | "skip"> & {
+      limit?: number;
+      offset?: number;
+      cursor?: string;
+    };
+  });
+}
+
+/**
+ * Canonical list-result envelope (#11543). Every paginated tool returns the same
+ * four keys so a caller writes its paging loop once: `items`, `hasMore`, a
+ * `nextCursor` that is null at the end of the list, and `total` only where an
+ * exact count is already cheap to produce.
+ */
+export function PaginatedResultSchema<T extends z.ZodTypeAny>(item: T) {
+  return z.object({
+    items: z.array(item),
+    hasMore: z.boolean(),
+    nextCursor: z.string().nullable(),
+    total: z.number().optional(),
+  });
+}
+
 export const CopyTreeOptionsSchema = z.object({
   format: z.enum(["xml", "json", "markdown", "tree", "ndjson", "sarif"]).optional(),
   filter: z.union([z.string(), z.array(z.string())]).optional(),

@@ -2,6 +2,13 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { defineAction } from "../defineAction";
 import { CopyTreeOptionsSchema, FileSearchPayloadSchema, BuiltInAgentIdSchema } from "./schemas";
+import {
+  withWorktreeLocation,
+  withProjectLocation,
+  requireWorktreePath,
+  requireWorktreeId,
+  resolveProjectLocation,
+} from "./locationArgs";
 import { z } from "zod";
 import {
   artifactClient,
@@ -208,19 +215,16 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "slashCommands.list",
       title: "List Slash Commands",
       description:
-        "List the slash commands available for an agent CLI. Args (all optional): `agentId` — built-in agent id (e.g. 'claude', 'codex'), defaults to 'claude'; `projectPath` — project to scope project-local commands. Returns { commands } — each with id, label, description, scope, agentId, and optional sourcePath/kind. Never errors; returns an empty list when the agent has none.",
+        "List the slash commands available for an agent CLI. Args (all optional): `agentId` — built-in agent id (e.g. 'claude', 'codex'), defaults to 'claude'; `projectId` or `projectPath` — project to scope project-local commands, defaults to the active project. Returns { commands } — each with id, label, description, scope, agentId, and optional sourcePath/kind, and an empty list when the agent has none. Errors when `projectId` names a project that is not open.",
       category: "agent",
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z
-        .object({
-          agentId: BuiltInAgentIdSchema.optional().describe(
-            "Agent ID. Defaults to 'claude' when omitted."
-          ),
-          projectPath: z.string().optional(),
-        })
-        .optional(),
+      argsSchema: withProjectLocation({
+        agentId: BuiltInAgentIdSchema.optional().describe(
+          "Agent ID. Defaults to 'claude' when omitted."
+        ),
+      }).optional(),
       resultSchema: z.object({
         commands: z.array(
           z.object({
@@ -234,11 +238,11 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           })
         ),
       }),
-      run: async (payload) => {
+      run: async (payload, ctx) => {
         const agentId = payload?.agentId ?? "claude";
         const result = await slashCommandsClient.list({
           agentId,
-          projectPath: payload?.projectPath,
+          projectPath: resolveProjectLocation(payload, ctx).projectPath,
         });
         return { commands: result };
       },
@@ -269,19 +273,23 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     defineAction({
       id: "artifact.applyPatch",
       title: "Apply Patch",
-      description: "Apply a unified diff patch to the filesystem",
+      description:
+        "Apply a unified diff patch to the filesystem. Args: `patchContent` (required); `worktreeId` or `worktreePath` (required) — the worktree to apply into (`cwd` is accepted as a legacy alias for `worktreePath`). Errors when either argument is missing. There is deliberately no active-worktree default: a destructive write must name its target rather than fall back to whatever happens to be active.",
       category: "artifacts",
       kind: "command",
       danger: "confirm",
       dangerRationale:
         "Writes patch content directly into worktree files via git apply — a shared-state mutation with no automatic inverse; recovery is a manual git checkout of the touched files.",
       scope: "renderer",
-      argsSchema: z.object({
-        patchContent: z.string(),
-        cwd: z.string(),
-      }),
-      run: async (args) => {
-        return await artifactClient.applyPatch(args);
+      argsSchema: withWorktreeLocation(
+        { patchContent: z.string() },
+        { legacy: ["cwd"], requireSelector: true }
+      ),
+      run: async ({ patchContent, ...location }, ctx) => {
+        return await artifactClient.applyPatch({
+          patchContent,
+          cwd: requireWorktreePath(location, ctx),
+        });
       },
     })
   );
@@ -306,25 +314,18 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generate",
       title: "Generate CopyTree Context",
       description:
-        "Generate a CopyTree context dump (file tree plus selected file contents) for a worktree and return it as a string. Args (all optional): `worktreeId` — a worktree id from `worktree.list`, defaults to the active worktree; `options` — CopyTree include/exclude options. Returns { content, fileCount, optional stats:{ totalSize, duration }, optional error }. A generation failure is reported in the `error` field; throws only when no worktree is active. Do NOT use this to inject context into a terminal — use `copyTree.injectToTerminal`.",
+        "Generate a CopyTree context dump (file tree plus selected file contents) for a worktree and return it as a string. Args (all optional): `worktreeId` or `worktreePath` — the worktree, defaults to the active one; `options` — CopyTree include/exclude options. Returns { content, fileCount, optional stats:{ totalSize, duration } }. Throws when generation fails or when no worktree is given and none is active. Do NOT use this to inject context into a terminal — use `copyTree.injectToTerminal`.",
       category: "copyTree",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       keywords: ["context", "dump", "snapshot", "tree"],
-      argsSchema: z
-        .object({
-          worktreeId: z
-            .string()
-            .optional()
-            .describe("Worktree ID. Defaults to the active worktree."),
-          options: CopyTreeOptionsSchema.optional(),
-        })
-        .optional(),
+      argsSchema: withWorktreeLocation({
+        options: CopyTreeOptionsSchema.optional(),
+      }).optional(),
       resultSchema: z.object({
         content: z.string(),
         fileCount: z.number(),
-        error: z.string().optional(),
         stats: z
           .object({
             totalSize: z.number(),
@@ -333,9 +334,16 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           .optional(),
       }),
       run: async (args, ctx: ActionContext) => {
-        const worktreeId = args?.worktreeId ?? ctx.activeWorktreeId;
-        if (!worktreeId) throw new Error("No active worktree");
-        return await copyTreeClient.generate(worktreeId, args?.options);
+        const result = await copyTreeClient.generate(requireWorktreeId(args, ctx), args?.options);
+        // A generation failure used to ride back in an `error` field beside an
+        // empty dump. The MCP bridge serializes a returned value as a SUCCESSFUL
+        // tool result, so an agent checking `isError` never saw it (#11543).
+        // Throwing routes it through EXECUTION_ERROR, which the bridge reports
+        // as a tool error. Everything else passes through untouched.
+        const failure =
+          result && typeof result === "object" ? (result as { error?: string }).error : undefined;
+        if (failure) throw new Error(failure);
+        return result;
       },
     })
   );

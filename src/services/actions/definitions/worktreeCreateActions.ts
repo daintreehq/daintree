@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import { worktreeClient } from "@/clients";
+import { withWorktreeLocation, requireWorktreePath } from "./locationArgs";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import {
   captureWorktreeTerminalSnapshot,
@@ -46,37 +47,40 @@ export function registerWorktreeCreateActions(
     defineAction({
       id: "worktree.create",
       title: "Create Worktree",
-      description: "Create a new worktree",
+      description:
+        "Create a new worktree. Args: `worktreeId` or `worktreePath` (required) — the repository root to branch from (`rootPath` is accepted as a legacy alias for `worktreePath`); `options` (required) — baseBranch, newBranch, and the new worktree's path. Errors when either argument is missing. There is deliberately no active-worktree default: creation anchors on the repo root, and the active worktree is usually a linked one.",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        rootPath: z.string().describe("Root path of the git repository"),
-        options: z
-          .object({
-            baseBranch: z.string().describe("Branch to base the worktree on"),
-            newBranch: z.string().describe("Name for the new branch"),
-            path: z.string().describe("Filesystem path for the new worktree"),
-            fromRemote: z.boolean().optional().describe("Whether baseBranch is a remote branch"),
-            useExistingBranch: z
-              .boolean()
-              .optional()
-              .describe("Use an existing branch instead of creating a new one"),
-            provisionResource: z
-              .boolean()
-              .optional()
-              .describe("Run resource.provision after setup"),
-            worktreeMode: z
-              .string()
-              .optional()
-              .describe('Worktree environment mode ("local" or an environment key)'),
-          })
-          .describe("Worktree creation options"),
-      }),
+      argsSchema: withWorktreeLocation(
+        {
+          options: z
+            .object({
+              baseBranch: z.string().describe("Branch to base the worktree on"),
+              newBranch: z.string().describe("Name for the new branch"),
+              path: z.string().describe("Filesystem path for the new worktree"),
+              fromRemote: z.boolean().optional().describe("Whether baseBranch is a remote branch"),
+              useExistingBranch: z
+                .boolean()
+                .optional()
+                .describe("Use an existing branch instead of creating a new one"),
+              provisionResource: z
+                .boolean()
+                .optional()
+                .describe("Run resource.provision after setup"),
+              worktreeMode: z
+                .string()
+                .optional()
+                .describe('Worktree environment mode ("local" or an environment key)'),
+            })
+            .describe("Worktree creation options"),
+        },
+        { legacy: ["rootPath"], requireSelector: true }
+      ),
       resultSchema: z.string(),
-      run: async ({ rootPath, options }) => {
-        const worktreeId = await worktreeClient.create(options, rootPath);
+      run: async ({ options, ...location }, ctx) => {
+        const worktreeId = await worktreeClient.create(options, requireWorktreePath(location, ctx));
         if (!worktreeId) {
           throw new Error("Failed to create worktree: no worktreeId returned from backend");
         }

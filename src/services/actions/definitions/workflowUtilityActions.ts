@@ -3,6 +3,7 @@ import { defineAction } from "../defineAction";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { projectClient } from "@/clients";
+import { withWorktreeLocation, requireWorktreePath } from "./locationArgs";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
@@ -19,23 +20,22 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
       // status and detected runners and changes nothing (#11548).
       title: "Inspect Branch for Review",
       description:
-        "Inspect a worktree's working tree and detected runners and return a typed go/no-go verdict for starting review checks. Read-only: it prepares nothing and runs nothing — use `project.runCheck` to actually run a detected runner. Args (all optional): `cwd` — worktree path, defaults to the active worktree path; `projectId` — for runner detection, defaults to the current project (pass explicitly when `cwd` is in another project). Returns verdict ('ready'|'blocked_uncommitted_changes'|'blocked_merge_conflicts'|'blocked_repo_busy'|'no_runners_detected'), the uncommitted/conflict flags, staged/unstaged counts, currentBranch, repoState, and detectedRunners. Errors when `cwd` is omitted and no worktree is active.",
+        "Inspect a worktree's working tree and detected runners and return a typed go/no-go verdict for starting review checks. Read-only: it prepares nothing and runs nothing — use `project.runCheck` to actually run a detected runner. Args (all optional): `worktreeId` or `worktreePath` — the worktree to inspect, defaults to the active one (`cwd` is accepted as a legacy alias for `worktreePath`); `projectId` — for runner detection, defaults to the current project (pass explicitly when the worktree is in another project). Returns verdict ('ready'|'blocked_uncommitted_changes'|'blocked_merge_conflicts'|'blocked_repo_busy'|'no_runners_detected'), the uncommitted/conflict flags, staged/unstaged counts, currentBranch, repoState, and detectedRunners. Errors when no worktree is given and none is active.",
       category: "worktree",
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Worktree path to inspect. Defaults to the active worktree path when omitted."),
-        projectId: z
-          .string()
-          .optional()
-          .describe(
-            "Project ID for runner detection. Defaults to the current project. Pass explicitly when `cwd` belongs to a different project."
-          ),
-      }),
+      argsSchema: withWorktreeLocation(
+        {
+          projectId: z
+            .string()
+            .optional()
+            .describe(
+              "Project ID for runner detection. Defaults to the current project. Pass explicitly when the worktree belongs to a different project."
+            ),
+        },
+        { legacy: ["cwd"] }
+      ),
       resultSchema: z.object({
         verdict: z.enum([
           "ready",
@@ -58,9 +58,8 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
           })
         ),
       }),
-      run: async ({ cwd, projectId }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      run: async ({ projectId, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         const resolvedProjectId =
           projectId ?? ctx.projectId ?? useProjectStore.getState().currentProject?.id ?? null;
 

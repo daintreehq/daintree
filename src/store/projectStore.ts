@@ -9,6 +9,7 @@ import type {
 import { projectClient, worktreeClient } from "@/clients";
 import type { NonGitFolderStep } from "@/components/Project/NonGitFolderDialog";
 import { notify } from "@/lib/notify";
+import { setProjectPathIndexAccessor } from "@/store/storeAccessors";
 import { actionService } from "@/services/ActionService";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { logDebug } from "@/utils/logger";
@@ -1154,6 +1155,18 @@ registerPersistedStore({
   storeId: "projectStore",
   store: useProjectStore,
   persistedStateType: "{ projects: Project[] }",
+});
+
+// Registered here rather than in `rendererStoreOrchestrator` so the accessor
+// wiring never forces an eager import of this store singleton into the
+// orchestrator's module graph. The closure resolves `getState()` lazily, so it
+// always reads the live project list.
+setProjectPathIndexAccessor(() => {
+  const index = new Map<string, string>();
+  for (const project of useProjectStore.getState().projects) {
+    if (project.path) index.set(project.id, project.path);
+  }
+  return index;
 });
 
 // Break circular dependency by injecting project ID getter. Falls back to the
