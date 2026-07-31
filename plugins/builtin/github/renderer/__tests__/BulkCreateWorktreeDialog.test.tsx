@@ -1244,7 +1244,7 @@ describe("BulkCreateWorktreeDialog", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    const stillRunning = resolvers.length - 1;
+    const stillCreating = resolvers.length - 1;
 
     await act(async () => {
       const cancelBtn = screen
@@ -1254,14 +1254,19 @@ describe("BulkCreateWorktreeDialog", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    const call = vi.mocked(mockNotify).mock.calls.at(-1)?.[0] as {
-      type: string;
-      title: string;
-      message: string;
-    };
-    expect(call.type).toBe("warning");
-    expect(call.message).toContain(`1 of ${props.selectedIssues.length} worktrees created`);
-    expect(call.message).toContain(`${stillRunning} already started`);
+    expect(mockNotify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "warning",
+        message: expect.stringContaining(
+          `1 of ${props.selectedIssues.length} worktrees created`
+        ) as unknown as string,
+      })
+    );
+    expect(mockNotify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining(`${stillCreating} already underway`) as unknown as string,
+      })
+    );
 
     await act(async () => {
       resolvers.slice(1).forEach((resolve, i) => resolve(`wt-${i + 2}`));
@@ -1269,21 +1274,50 @@ describe("BulkCreateWorktreeDialog", () => {
     });
   });
 
-  it("stays silent when a cancel lands before anything started", async () => {
+  it("stays silent when a cancel lands before any worktree is underway", async () => {
     const { notify: mockNotify } = await import("@/lib/notify");
     vi.mocked(mockNotify).mockClear();
 
-    const props = { ...defaultProps, selectedIssues: [makeIssue(1)] };
+    // Stall the batch in its pre-query phase: the queue callbacks are running,
+    // so PQueue.pending is non-zero, but no worktree has been requested yet.
+    let releasePrequery: (value: string) => void = () => {};
+    mockGetAvailableBranch.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          releasePrequery = resolve;
+        })
+    );
+
+    const props = { ...defaultProps, selectedIssues: [makeIssue(1), makeIssue(2)] };
     render(<BulkCreateWorktreeDialog {...props} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // Confirm the run really is executing, or the guard under test never runs.
+    expect((screen.getByTestId("bulk-create-confirm-button") as HTMLButtonElement).disabled).toBe(
+      true
+    );
+    expect(mockWorktreeCreate).not.toHaveBeenCalled();
 
     await act(async () => {
       const cancelBtn = screen
         .getAllByRole("button")
         .find((b) => b.textContent === "Cancel") as HTMLButtonElement;
       cancelBtn.click();
+      await vi.advanceTimersByTimeAsync(0);
     });
 
+    // Nothing escaped, so the close is its own confirmation — no toast.
     expect(mockNotify).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releasePrequery("feature/issue-1");
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(mockWorktreeCreate).not.toHaveBeenCalled();
   });
 
   it("stops the batch when the dialog unmounts without going through Cancel", async () => {
@@ -1297,7 +1331,12 @@ describe("BulkCreateWorktreeDialog", () => {
         })
     );
 
-    const props = { ...defaultProps, selectedIssues: [makeIssue(1), makeIssue(2)] };
+    // Four items against concurrency 3 leaves one in the backlog, so the
+    // unmount has to both stop the running items and drop the queued one.
+    const props = {
+      ...defaultProps,
+      selectedIssues: [makeIssue(1), makeIssue(2), makeIssue(3), makeIssue(4)],
+    };
     const { unmount } = render(<BulkCreateWorktreeDialog {...props} />);
 
     await act(async () => {
@@ -1305,6 +1344,8 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     const startedCreates = mockWorktreeCreate.mock.calls.length;
+    expect(startedCreates).toBeGreaterThan(0);
+    expect(startedCreates).toBeLessThan(props.selectedIssues.length);
 
     // The parent drops the dialog (SidebarContent renders it only while open),
     // bypassing handleClose entirely.
@@ -1322,6 +1363,94 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(startedCreates);
   });
 
+  it("does not focus a clone-layout panel spawned into a cancelled run", async () => {
+    mockSelectedRecipeId = "__clone_layout__";
+    mockGenerateRecipeFromActiveTerminals.mockReturnValue([
+      { type: "terminal", title: "Shell", location: "grid" },
+    ]);
+    // Hold the spawn open so Cancel lands while panels are still committing.
+    let releasePanel: (value: string) => void = () => {};
+    mockAddPanel.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          releasePanel = resolve;
+        })
+    );
+
+    const props = { ...defaultProps, selectedIssues: [makeIssue(1)] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(mockAddPanel).toHaveBeenCalled();
+
+    await act(async () => {
+      const cancelBtn = screen
+        .getAllByRole("button")
+        .find((b) => b.textContent === "Cancel") as HTMLButtonElement;
+      cancelBtn.click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    await act(async () => {
+      releasePanel("clone-terminal-id");
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    // The panel can't be recalled, but the run's AbortSignal must stop it from
+    // yanking focus into the worktree the user just cancelled.
+    expect(mockSetFocused).not.toHaveBeenCalled();
+  });
+
+  it("does not assign or select for a recipe that resolves after cancel", async () => {
+    mockSelectedRecipeId = "test-recipe";
+    prefsHolder.assignWorktreeToSelf = true;
+    viewerHolder.user = { login: "octocat" };
+    // The worktree is already made and the recipe is mid-flight when Cancel lands.
+    let releaseRecipe: (value: {
+      spawned: Array<{ terminalId: string }>;
+      failed: [];
+    }) => void = () => {};
+    mockRunRecipeWithResults.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseRecipe = resolve;
+        })
+    );
+
+    const props = { ...defaultProps, selectedIssues: [makeIssue(1)] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      const cancelBtn = screen
+        .getAllByRole("button")
+        .find((b) => b.textContent === "Cancel") as HTMLButtonElement;
+      cancelBtn.click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    await act(async () => {
+      releaseRecipe({ spawned: [{ terminalId: "t-1" }], failed: [] });
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    // The recipe's own terminals are out of reach — this pins the end state
+    // instead: an item cancelled mid-recipe is never assigned and never becomes
+    // the selected worktree.
+    expect(mockAssignIssue).not.toHaveBeenCalled();
+    expect(mockSelectWorktree).not.toHaveBeenCalled();
+  });
+
   it("fails the batch instead of stranding it when the project path is missing", async () => {
     projectHolder.currentProject = { id: "test-project" };
 
@@ -1337,8 +1466,26 @@ describe("BulkCreateWorktreeDialog", () => {
     // X and blocked Escape used to persist forever.
     expect(screen.getByTestId("bulk-create-done-button")).toBeTruthy();
     expect(screen.getByTestId("bulk-create-retry-button")).toBeTruthy();
-    expect(screen.getByTestId("bulk-create-worktree-dialog").dataset.dismissible).toBe("true");
+    // Every item must carry the failure, not just the one that tripped it.
+    expect(screen.getByText(/0 of 2 created/)).toBeTruthy();
+    expect(screen.getByText(/2 failed/)).toBeTruthy();
     expect(mockWorktreeCreate).not.toHaveBeenCalled();
+
+    // Dismissal is unblocked again, so the user isn't trapped.
+    const onCloseSpy = vi.fn();
+    cleanup();
+    render(<BulkCreateWorktreeDialog {...props} onClose={onCloseSpy} />);
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      screen
+        .getByTestId("bulk-create-worktree-dialog")
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(onCloseSpy).toHaveBeenCalled();
   });
 
   it("keeps the primary action in place while executing", async () => {

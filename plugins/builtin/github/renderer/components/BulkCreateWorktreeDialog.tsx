@@ -106,11 +106,13 @@ export function BulkCreateWorktreeDialog({
   const isExecutingRef = useRef(false);
   const prevIsOpenRef = useRef(false);
   // The batch currently executing. `controller` reaches the one callee that can
-  // stop mid-flight (spawnPanelsFromRecipe); `created` counts worktrees this run
-  // actually made, so a cancel can report what survived it.
+  // stop mid-flight (spawnPanelsFromRecipe); `created`/`creating` count worktrees
+  // this run made and calls still outstanding, so a cancel can report what
+  // survived it.
   const activeRunRef = useRef<{
     controller: AbortController;
     created: number;
+    creating: number;
     total: number;
   } | null>(null);
 
@@ -277,6 +279,7 @@ export function BulkCreateWorktreeDialog({
       const activeRun = {
         controller: new AbortController(),
         created: 0,
+        creating: 0,
         total: toCreate.length,
       };
       activeRunRef.current = activeRun;
@@ -300,6 +303,18 @@ export function BulkCreateWorktreeDialog({
         activeRunRef.current = null;
         return;
       }
+
+      // Counts create() calls that haven't settled. PQueue.pending counts whole
+      // queue callbacks — which may be fetching branches, running a recipe, or
+      // sleeping in backoff — so it can't stand in for "worktrees still coming".
+      const createWorktree = async (options: Parameters<typeof worktreeClient.create>[0]) => {
+        activeRun.creating++;
+        try {
+          return await worktreeClient.create(options, rootPath);
+        } finally {
+          activeRun.creating--;
+        }
+      };
 
       const tracking = batchTrackingRef.current;
 
@@ -536,16 +551,13 @@ export function BulkCreateWorktreeDialog({
                   // keep a cancelled item from putting a worktree on disk.
                   if (runIdRef.current !== currentRunId) return;
 
-                  const createdId = await worktreeClient.create(
-                    {
-                      baseBranch: createBaseBranch,
-                      newBranch: planned.headRefName,
-                      path,
-                      fromRemote: createFromRemote,
-                      useExistingBranch: createUseExisting,
-                    },
-                    rootPath
-                  );
+                  const createdId = await createWorktree({
+                    baseBranch: createBaseBranch,
+                    newBranch: planned.headRefName,
+                    path,
+                    fromRemote: createFromRemote,
+                    useExistingBranch: createUseExisting,
+                  });
 
                   if (!createdId) throw new Error("Failed to create worktree: no ID returned");
                   activeRun.created++;
@@ -576,16 +588,13 @@ export function BulkCreateWorktreeDialog({
                   // keep a cancelled item from putting a worktree on disk.
                   if (runIdRef.current !== currentRunId) return;
 
-                  const createdId = await worktreeClient.create(
-                    {
-                      baseBranch,
-                      newBranch: availableBranch,
-                      path,
-                      fromRemote: false,
-                      useExistingBranch: false,
-                    },
-                    rootPath
-                  );
+                  const createdId = await createWorktree({
+                    baseBranch,
+                    newBranch: availableBranch,
+                    path,
+                    fromRemote: false,
+                    useExistingBranch: false,
+                  });
 
                   if (!createdId) throw new Error("Failed to create worktree: no ID returned");
                   activeRun.created++;
@@ -730,8 +739,10 @@ export function BulkCreateWorktreeDialog({
                       }
                     );
 
-                  // runRecipeWithResults can't be interrupted, but a cancelled
-                  // run must not carry its result on to assignment or success.
+                  // Defence in depth: the assignment and success gates below
+                  // already stop a cancelled run, but returning here keeps a
+                  // dead run from writing tracking and reducer state on its way
+                  // out, matching every other checkpoint in this loop.
                   if (runIdRef.current !== currentRunId) return;
 
                   const updatedTracked = tracking.get(itemNumber);
@@ -1021,22 +1032,24 @@ export function BulkCreateWorktreeDialog({
     // the same selection cleanup as the Done button — otherwise the bulk
     // bar stays visible with the now-stale selection.
     if (isExecuting) {
-      // Snapshot first: invalidating empties the queue and drops the run record.
+      // Snapshot first: invalidating drops the run record.
       const activeRun = activeRunRef.current;
       const created = activeRun?.created ?? 0;
+      const creating = activeRun?.creating ?? 0;
       const total = activeRun?.total ?? progress.total;
-      const inFlight = queueRef.current?.pending ?? 0;
 
       invalidateActiveRun();
 
       // Cancelling can't unwind an item already past its last checkpoint, and
       // the dialog is gone before those settle — so report what survived it.
-      if (created > 0 || inFlight > 0) {
+      // Silent when nothing was created and nothing is mid-creation: closing the
+      // dialog is its own confirmation that no work escaped.
+      if (created > 0 || creating > 0) {
         notify({
           type: "warning",
           title: "Worktree creation cancelled",
           message: `${created} of ${total} worktree${total !== 1 ? "s" : ""} created.${
-            inFlight > 0 ? ` ${inFlight} already started and will finish.` : ""
+            creating > 0 ? ` ${creating} already underway may still land.` : ""
           }`,
         });
       }
