@@ -1298,6 +1298,8 @@ export function HelpPanel({
                   <XtermAdapter
                     terminalId={terminalId}
                     launchAgentId={agentId ?? undefined}
+                    detectedAgentId={terminalPty?.detectedAgentId}
+                    agentState={terminalPty?.agentState}
                     getRefreshTier={getRefreshTier}
                     cwd={terminalPty?.cwd}
                     hasBottomBar={showHybridInputBar}

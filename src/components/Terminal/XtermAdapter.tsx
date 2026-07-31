@@ -1,7 +1,14 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useEffect, useState } from "react";
 import type { ITerminalOptions } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import type { AgentState } from "@shared/types/agent";
 import { cn } from "@/lib/utils";
+import {
+  UI_ENTER_DURATION,
+  UI_EXIT_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
 import { isMac } from "@/lib/platform";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -28,6 +35,10 @@ export interface XtermAdapterProps {
   /** Runtime-detected agent identity. Drives agent-specific input protocol
    *  (soft-newline sequences, bracketed paste) when a live agent is running. */
   detectedAgentId?: string;
+  /** Live agent lifecycle state. Needed alongside the two agent ids so an
+   *  exited agent stops being treated as one — `launchAgentId` is durable and
+   *  outlives the process it launched. */
+  agentState?: AgentState;
   isInputLocked?: boolean;
   onReady?: () => void;
   onExit?: (exitCode: number) => void;
@@ -53,6 +64,7 @@ export function XtermAdapter({
   terminalId,
   launchAgentId,
   detectedAgentId,
+  agentState,
   isInputLocked,
   onReady,
   onExit,
@@ -143,8 +155,20 @@ export function XtermAdapter({
     terminalInstanceService.getAltBufferState(terminalId)
   );
 
-  // Attach image paste and file drag-and-drop handlers to the xterm container
-  useTerminalFileTransfer(containerRef, { terminalId, isInputLocked, onInput: stableOnInput });
+  // Attach image paste and file drag-and-drop handlers to the xterm container.
+  // The agent identity decides whether a dropped path arrives as an `@` token
+  // or a shell-escaped path (#11574).
+  const isDragOverFiles = useTerminalFileTransfer(containerRef, {
+    terminalId,
+    isInputLocked,
+    onInput: stableOnInput,
+    launchAgentId,
+    detectedAgentId,
+    agentState,
+  });
+  // The hook already withholds the state while locked; this keeps the render
+  // side honest if that ever changes.
+  const showFileDropOverlay = isDragOverFiles && !isInputLocked;
 
   const hasVisibleBufferContent = useCallback(() => {
     const managed = terminalInstanceService.get(terminalId);
@@ -802,6 +826,28 @@ export function XtermAdapter({
         aria-keyshortcuts="F6 Shift+F6"
         role="application"
       />
+      {/* Drop-target confirmation. Stays mounted so the exit fade can play, and
+          is pointer-transparent so it never becomes a drag boundary of its own.
+          Decorative: the drag itself is the announcement, and a live region
+          inside a role="application" terminal would just be noise. The wrapper's
+          `contain: strict` supplies the containing block. */}
+      <div
+        aria-hidden="true"
+        data-visible={showFileDropOverlay ? "true" : "false"}
+        className={cn(
+          "pointer-events-none absolute inset-0 z-10 flex select-none items-center justify-center",
+          "border border-border-strong bg-surface-panel/90",
+          "opacity-0 transition-opacity data-[visible=true]:opacity-100"
+        )}
+        style={{
+          transitionDuration: `${showFileDropOverlay ? UI_ENTER_DURATION : UI_EXIT_DURATION}ms`,
+          transitionTimingFunction: showFileDropOverlay ? UI_ENTER_EASING : UI_EXIT_EASING,
+        }}
+      >
+        <span className="rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-3 py-1.5 text-xs font-medium text-text-primary">
+          Drop to insert
+        </span>
+      </div>
     </div>
   );
 }
