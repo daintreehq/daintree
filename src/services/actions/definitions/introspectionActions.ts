@@ -24,7 +24,7 @@ export function registerIntrospectionActions(
     id: "actions.list",
     title: "List Actions",
     description:
-      "List lightweight action manifest entries without inputSchema/outputSchema, filtered and paginated. Args (all optional): `category` filters by exact domain (e.g. terminal, worktree, forge, git, portal); `search` substring-matches id/title/description; `enabledOnly` drops disabled actions; `limit` sets the page size (1-100, default 50); `offset` skips matching actions (default 0). Returns { actions, total, limit, offset, hasMore } where `total` counts matches after filtering but before pagination, so `hasMore` tells you whether another page remains. Errors when `limit` falls outside 1-100 or `offset` is negative; filters that match nothing, or an offset past the end, return an empty `actions` array. Use `actions.search` for ranked discovery and `actions.getSchema` to fetch one action's schemas.",
+      "List lightweight action manifest entries without inputSchema/outputSchema, filtered and paginated. Args (all optional): `category` filters by exact domain (e.g. terminal, worktree, forge, git, portal); `search` substring-matches id/title/description; `enabledOnly` drops disabled actions; `limit` sets the page size (1-100, default 50); `offset` skips matching actions (default 0). Returns { actions, total, limit, offset, hasMore } with `actions` sorted by id so paging stays stable, and `total` counting matches after filtering but before pagination, so `hasMore` tells you whether another page remains. Errors when `limit` isn't an integer in 1-100 or `offset` isn't a non-negative integer; filters that match nothing, or an offset past the end, return an empty `actions` array. Use `actions.search` for ranked discovery and `actions.getSchema` to fetch one action's schemas.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -103,6 +103,11 @@ export function registerIntrospectionActions(
       // Count after filtering but before paging so `total`/`hasMore` describe
       // the whole match set, not the slice the caller happens to be holding.
       const total = manifest.length;
+      // Sort before slicing: the registry is a Map, and re-registering a plugin
+      // action (usePluginActions replaces any whose descriptor changed) moves it
+      // to the end of insertion order. An offset walk over that order could
+      // repeat one entry and skip another. Same id tiebreak actions.search uses.
+      manifest.sort((a, b) => a.id.localeCompare(b.id));
       const page = manifest.slice(offset, offset + limit);
 
       return {
