@@ -698,12 +698,12 @@ describe("forge handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all forge channels (45 rate-limited + 2 unrated probes)", () => {
-      expect(specs).toHaveLength(45);
+    it("registers all forge channels (46 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(46);
       // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
       // unrated replay/identity probes with no checkRateLimit, so they register
       // handlers but stay out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(47);
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(48);
     });
 
     it.each(specs)(

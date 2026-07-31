@@ -118,8 +118,8 @@ describe("registerForgeDataHandlers", () => {
 
   it("registers the core and capability IPC handlers", () => {
     const cleanup = registerForgeDataHandlers();
-    // 6 core data handlers + the 12-op forgeCapabilityData namespace.
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(18);
+    // 6 core data handlers + the 13-op forgeCapabilityData namespace.
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(19);
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-issues", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-prs", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-issue", expect.any(Function));
