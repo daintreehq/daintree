@@ -264,10 +264,11 @@ export function registerTerminalLayoutActions(
     // an agent/MCP caller had no way to name a terminal at all, so the binding
     // guard below could only ever reject it (#11532).
     argsSchema: z.object({ terminalId: z.string().optional() }),
-    run: async (args: unknown, ctx) => {
-      // Tolerates absent args: this action took none until #11532, and its
-      // keybinding still dispatches without any.
-      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+    // Types the parameter instead of casting `unknown`, the way terminal.inject
+    // does. Reads optionally because this action took no args until #11532 and
+    // its keybinding still dispatches without any.
+    run: async (args: { terminalId?: string } | undefined, ctx) => {
+      const terminalId = args?.terminalId;
       requireExplicitTerminalIdForAgentDispatch("terminal.toggleDock", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
