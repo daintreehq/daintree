@@ -42,6 +42,11 @@ describe("useAgentSessionRecords", () => {
     });
     expect(result.current.sessions.map((s) => s.sessionId)).toEqual(["a"]);
     expect(listMock).toHaveBeenCalledTimes(1);
+    // The resume palette deliberately fetches the journal UNSCOPED and filters
+    // client-side by the current project. #11530 bounded the agent-facing
+    // action, not this bridge call — passing a scope here would silently drop
+    // sessions from the palette.
+    expect(listMock).toHaveBeenCalledWith();
   });
 
   it("does nothing while disabled", () => {

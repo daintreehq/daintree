@@ -812,12 +812,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     ptyClient.manualRestart();
   };
 
-  const handleAgentSessionList = async (payload: { worktreeId?: string }) => {
+  const handleAgentSessionList = async (payload: { worktreeId?: string; projectId?: string }) => {
     const { app } = await import("electron");
     return listAgentSessions(
       payload?.worktreeId,
       app.getPath("userData"),
-      getAgentSessionRetentionDays()
+      getAgentSessionRetentionDays(),
+      payload?.projectId
     );
   };
 

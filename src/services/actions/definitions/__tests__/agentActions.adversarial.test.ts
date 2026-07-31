@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
+import type { ActionContext } from "@shared/types/actions";
 
 const panelStoreMock = vi.hoisted(() => ({
   getState: vi.fn(),
@@ -86,11 +87,16 @@ function setupActions(callbacks: ActionCallbacks) {
   return actions;
 }
 
-function callAction(actions: ActionRegistry, id: string, args?: unknown): Promise<unknown> {
+function callAction(
+  actions: ActionRegistry,
+  id: string,
+  args?: unknown,
+  ctx: Partial<ActionContext> = {}
+): Promise<unknown> {
   const factory = actions.get(id);
   if (!factory) throw new Error(`missing ${id}`);
   const def = factory() as AnyActionDefinition;
-  return def.run(args, {} as never);
+  return def.run(args, ctx as never);
 }
 
 function setPanelState(
@@ -1183,27 +1189,158 @@ describe("agentSessionHistory.list (#10854)", () => {
   it("forwards the worktreeId arg to the bridge and wraps the result in { sessions }", async () => {
     const actions = setupActions(makeCallbacks());
     const result = await callAction(actions, "agentSessionHistory.list", { worktreeId: "wt-1" });
-    expect(listMock).toHaveBeenCalledWith("wt-1");
-    expect(result).toEqual({ sessions: SAMPLE_SESSIONS });
+    expect(listMock).toHaveBeenCalledWith("wt-1", undefined);
+    expect(result).toEqual({ sessions: SAMPLE_SESSIONS, total: 2, hasMore: false });
   });
 
-  it("passes undefined (cross-project) when no worktreeId is given", async () => {
+  // #11530 — the action used to fall open to every worktree of every project
+  // when no scope was given. Scope is now resolved args-first, then context.
+  it("scopes to an explicit projectId when no worktreeId is given", async () => {
     const actions = setupActions(makeCallbacks());
-    await callAction(actions, "agentSessionHistory.list");
-    expect(listMock).toHaveBeenCalledWith(undefined);
+    await callAction(actions, "agentSessionHistory.list", { projectId: "proj-1" });
+    expect(listMock).toHaveBeenCalledWith(undefined, "proj-1");
   });
 
-  it("passes undefined when called with an empty args object", async () => {
+  it("prefers an explicit worktreeId over an explicit projectId (narrower wins)", async () => {
     const actions = setupActions(makeCallbacks());
-    await callAction(actions, "agentSessionHistory.list", {});
-    expect(listMock).toHaveBeenCalledWith(undefined);
+    await callAction(actions, "agentSessionHistory.list", {
+      worktreeId: "wt-1",
+      projectId: "proj-1",
+    });
+    expect(listMock).toHaveBeenCalledWith("wt-1", undefined);
   });
 
-  it("returns the bridge's empty array verbatim (never throws on empty journal)", async () => {
+  it("falls back to the context's active worktree when no scope arg is given", async () => {
+    const actions = setupActions(makeCallbacks());
+    await callAction(actions, "agentSessionHistory.list", {}, { activeWorktreeId: "ctx-wt" });
+    expect(listMock).toHaveBeenCalledWith("ctx-wt", undefined);
+  });
+
+  it("falls back to the context's project when there is no active worktree", async () => {
+    const actions = setupActions(makeCallbacks());
+    await callAction(actions, "agentSessionHistory.list", {}, { projectId: "ctx-proj" });
+    expect(listMock).toHaveBeenCalledWith(undefined, "ctx-proj");
+  });
+
+  it("prefers the context's active worktree over its project", async () => {
+    const actions = setupActions(makeCallbacks());
+    await callAction(
+      actions,
+      "agentSessionHistory.list",
+      {},
+      { activeWorktreeId: "ctx-wt", projectId: "ctx-proj" }
+    );
+    expect(listMock).toHaveBeenCalledWith("ctx-wt", undefined);
+  });
+
+  it("prefers an explicit arg over the dispatch context", async () => {
+    const actions = setupActions(makeCallbacks());
+    await callAction(
+      actions,
+      "agentSessionHistory.list",
+      { worktreeId: "arg-wt" },
+      { activeWorktreeId: "ctx-wt", projectId: "ctx-proj" }
+    );
+    expect(listMock).toHaveBeenCalledWith("arg-wt", undefined);
+  });
+
+  it("throws without reading the journal when no scope can be resolved", async () => {
+    const actions = setupActions(makeCallbacks());
+    await expect(callAction(actions, "agentSessionHistory.list", {})).rejects.toThrow(/scope/i);
+    // The point of the guard is not shipping the cross-project payload at all —
+    // an empty return would still have paid for the read.
+    expect(listMock).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty page for a scoped but empty journal (never throws)", async () => {
     listMock.mockResolvedValue([]);
     const actions = setupActions(makeCallbacks());
-    const result = await callAction(actions, "agentSessionHistory.list", {});
-    expect(result).toEqual({ sessions: [] });
+    const result = await callAction(actions, "agentSessionHistory.list", { worktreeId: "wt-1" });
+    expect(result).toEqual({ sessions: [], total: 0, hasMore: false });
+  });
+
+  it("truncates to the default limit and reports the untruncated total", async () => {
+    const many = Array.from({ length: 250 }, (_, i) => ({
+      ...SAMPLE_SESSIONS[0],
+      sessionId: `sess-${i}`,
+    }));
+    listMock.mockResolvedValue(many);
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agentSessionHistory.list", {
+      worktreeId: "wt-1",
+    })) as { sessions: unknown[]; total: number; hasMore: boolean };
+    // Assert the invariant, not the constant: the page is bounded well below
+    // what the bridge returned, and the caller can still see what it's missing.
+    expect(result.sessions.length).toBeLessThan(many.length);
+    expect(result.total).toBe(many.length);
+    expect(result.hasMore).toBe(true);
+  });
+
+  it("honours an explicit limit and keeps the newest records (bridge order)", async () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({
+      ...SAMPLE_SESSIONS[0],
+      sessionId: `sess-${i}`,
+    }));
+    listMock.mockResolvedValue(many);
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agentSessionHistory.list", {
+      worktreeId: "wt-1",
+      limit: 3,
+    })) as { sessions: Array<{ sessionId: string }>; total: number; hasMore: boolean };
+    expect(result.sessions.map((s) => s.sessionId)).toEqual(["sess-0", "sess-1", "sess-2"]);
+    expect(result).toMatchObject({ total: 10, hasMore: true });
+  });
+
+  it("strips pane-presentation bookmark fields while keeping the actionable ones", async () => {
+    const bookmarked = {
+      ...SAMPLE_SESSIONS[0],
+      bookmark: {
+        bookmarkedAt: 1_700_000_000_001,
+        label: "Pinned auth work",
+        sourceLocation: "grid",
+        agentPresetId: "preset-a",
+        originalPresetId: "preset-b",
+        isInputLocked: true,
+        // Pane-presentation only — must not reach an agent (#11530).
+        sourcePanelId: "panel-1",
+        titleMode: "custom",
+        agentPresetColor: "#ff0000",
+        isUsingFallback: true,
+        fallbackChainIndex: 2,
+      },
+    };
+    listMock.mockResolvedValue([bookmarked]);
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agentSessionHistory.list", {
+      worktreeId: "wt-1",
+    })) as { sessions: Array<{ bookmark?: Record<string, unknown> }> };
+    const bookmark = result.sessions[0]?.bookmark ?? {};
+    expect(Object.keys(bookmark).sort()).toEqual([
+      "agentPresetId",
+      "bookmarkedAt",
+      "isInputLocked",
+      "label",
+      "originalPresetId",
+      "sourceLocation",
+    ]);
+    // The source record is shared with the cache in main — never mutate it.
+    expect(bookmarked.bookmark.agentPresetColor).toBe("#ff0000");
+  });
+
+  it("omits absent optional fields rather than emitting explicit undefined", async () => {
+    listMock.mockResolvedValue([SAMPLE_SESSIONS[1]]);
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agentSessionHistory.list", {
+      worktreeId: "wt-1",
+    })) as { sessions: Array<Record<string, unknown>> };
+    expect(Object.keys(result.sessions[0]).sort()).toEqual([
+      "agentId",
+      "projectId",
+      "savedAt",
+      "sessionId",
+      "title",
+      "worktreeId",
+    ]);
   });
 
   it("registers as a read-only query action advertising an MCP output schema", () => {
@@ -1215,25 +1352,51 @@ describe("agentSessionHistory.list (#10854)", () => {
   });
 
   it("resultSchema accepts both a full record and a null/absent-optional record", () => {
-    const parsed = getDef().resultSchema?.safeParse({ sessions: SAMPLE_SESSIONS });
+    const parsed = getDef().resultSchema?.safeParse({
+      sessions: SAMPLE_SESSIONS,
+      total: SAMPLE_SESSIONS.length,
+      hasMore: false,
+    });
     expect(parsed?.success).toBe(true);
   });
 
   it("resultSchema rejects a session missing the required sessionId", () => {
     const parsed = getDef().resultSchema?.safeParse({
       sessions: [{ agentId: "claude", worktreeId: null, title: null, projectId: null, savedAt: 1 }],
+      total: 1,
+      hasMore: false,
     });
     expect(parsed?.success).toBe(false);
   });
 
-  it("argsSchema accepts an omitted worktreeId and a non-empty one", () => {
+  it("resultSchema documents the truncation metadata the action returns", () => {
+    // The schema is advertised as the MCP outputSchema, so omitting these would
+    // leave an agent unable to tell a full listing from a truncated one.
+    const parsed = getDef().resultSchema?.safeParse({ sessions: [] });
+    expect(parsed?.success).toBe(false);
+  });
+
+  it("argsSchema accepts an omitted scope and either scope arg", () => {
     const schema = getDef().argsSchema;
+    // `{}` still parses — the scope requirement is enforced in run(), where the
+    // dispatch context (which the schema cannot see) gets its chance to supply one.
     expect(schema?.safeParse(undefined).success).toBe(true);
     expect(schema?.safeParse({}).success).toBe(true);
     expect(schema?.safeParse({ worktreeId: "wt-1" }).success).toBe(true);
+    expect(schema?.safeParse({ projectId: "proj-1" }).success).toBe(true);
   });
 
-  it("argsSchema rejects an empty worktreeId (would silently unfilter to cross-project)", () => {
+  it("argsSchema rejects an empty scope id (would silently unfilter the listing)", () => {
     expect(getDef().argsSchema?.safeParse({ worktreeId: "" }).success).toBe(false);
+    expect(getDef().argsSchema?.safeParse({ projectId: "" }).success).toBe(false);
+  });
+
+  it("argsSchema bounds limit to a positive integer under a ceiling", () => {
+    const schema = getDef().argsSchema;
+    expect(schema?.safeParse({ worktreeId: "wt-1", limit: 1 }).success).toBe(true);
+    expect(schema?.safeParse({ worktreeId: "wt-1", limit: 0 }).success).toBe(false);
+    expect(schema?.safeParse({ worktreeId: "wt-1", limit: -5 }).success).toBe(false);
+    expect(schema?.safeParse({ worktreeId: "wt-1", limit: 2.5 }).success).toBe(false);
+    expect(schema?.safeParse({ worktreeId: "wt-1", limit: 100_000 }).success).toBe(false);
   });
 });

@@ -45,7 +45,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./agentSessionHistory.js").AgentSessionRetentionDays;
   };
   "agent-session:list": {
-    args: [payload: { worktreeId?: string | undefined }];
+    args: [payload: { worktreeId?: string | undefined; projectId?: string | undefined }];
     result: import("./agentSessionHistory.js").AgentSessionRecord[];
   };
   "agent-session:list-bookmarks": {

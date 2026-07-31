@@ -451,17 +451,27 @@ export async function persistAgentSession(
   });
 }
 
+/**
+ * List retained sessions, newest-first. Both filters are optional and additive:
+ * omitting BOTH returns the whole retained journal, which the resume palette
+ * deliberately relies on (`useAgentSessionRecords` fetches unscoped and filters
+ * client-side). `projectId` was added for #11530 so an agent-facing scoped read
+ * is narrowed in main rather than shipping every project's records across IPC.
+ */
 export function listAgentSessions(
   worktreeId?: string,
   userData?: string,
-  retentionDays?: AgentSessionRetentionDays
+  retentionDays?: AgentSessionRetentionDays,
+  projectId?: string
 ): AgentSessionRecord[] {
   const records = readSessionHistorySync(userData);
   const now = Date.now();
   const fresh = evictRecords(records, now, retentionDaysToMs(retentionDays));
 
-  if (!worktreeId) return fresh;
-  return fresh.filter((r) => r.worktreeId === worktreeId);
+  if (!worktreeId && !projectId) return fresh;
+  return fresh.filter(
+    (r) => (!worktreeId || r.worktreeId === worktreeId) && (!projectId || r.projectId === projectId)
+  );
 }
 
 /**

@@ -208,12 +208,91 @@ describe("session bookmark actions", () => {
       projectId: "ctx",
     });
     expect(agentSessionHistoryMock.listBookmarks).toHaveBeenLastCalledWith({ projectId: "ctx" });
-    expect(wrapped).toEqual({ bookmarks: [{ sessionId: "s1" }] });
+    expect(wrapped).toEqual({ bookmarks: [{ sessionId: "s1" }], total: 1, hasMore: false });
 
     // No scope at all: returns empty WITHOUT querying — bookmarks stay project-scoped.
     agentSessionHistoryMock.listBookmarks.mockClear();
     const empty = await callAction(actions, "session.bookmarks.list", undefined, {});
-    expect(empty).toEqual({ bookmarks: [] });
+    expect(empty).toEqual({ bookmarks: [], total: 0, hasMore: false });
     expect(agentSessionHistoryMock.listBookmarks).not.toHaveBeenCalled();
+  });
+
+  // #11530 — bookmarks are exempt from both the retention window and the
+  // per-worktree cap, so the stored set grows without bound; `limit` is the only
+  // thing keeping the agent-facing payload finite.
+  it("list truncates to the default limit and reports the untruncated total", async () => {
+    const many = Array.from({ length: 250 }, (_, i) => ({
+      sessionId: `s${i}`,
+      bookmark: { bookmarkedAt: i, label: `L${i}` },
+    }));
+    agentSessionHistoryMock.listBookmarks.mockResolvedValue(many);
+    const actions = setupActions();
+    const result = (await callAction(actions, "session.bookmarks.list", undefined, {
+      projectId: "p",
+    })) as { bookmarks: unknown[]; total: number; hasMore: boolean };
+    expect(result.bookmarks.length).toBeLessThan(many.length);
+    expect(result.total).toBe(many.length);
+    expect(result.hasMore).toBe(true);
+  });
+
+  it("list honours an explicit limit and keeps the newest-first order", async () => {
+    const many = Array.from({ length: 8 }, (_, i) => ({
+      sessionId: `s${i}`,
+      bookmark: { bookmarkedAt: i, label: `L${i}` },
+    }));
+    agentSessionHistoryMock.listBookmarks.mockResolvedValue(many);
+    const actions = setupActions();
+    const result = (await callAction(
+      actions,
+      "session.bookmarks.list",
+      { limit: 2 },
+      {
+        projectId: "p",
+      }
+    )) as { bookmarks: Array<{ sessionId: string }>; total: number; hasMore: boolean };
+    expect(result.bookmarks.map((b) => b.sessionId)).toEqual(["s0", "s1"]);
+    expect(result).toMatchObject({ total: 8, hasMore: true });
+  });
+
+  it("list strips pane-presentation bookmark fields an agent cannot act on", async () => {
+    const stored = {
+      sessionId: "s1",
+      agentId: "claude",
+      worktreeId: "wt-1",
+      title: "T",
+      projectId: "p",
+      savedAt: 5,
+      bookmark: {
+        bookmarkedAt: 9,
+        label: "Pinned",
+        sourceLocation: "dock",
+        agentPresetId: "preset-a",
+        originalPresetId: "preset-b",
+        isInputLocked: false,
+        sourcePanelId: "panel-1",
+        titleMode: "user",
+        agentPresetColor: "#00ff00",
+        isUsingFallback: false,
+        fallbackChainIndex: 1,
+      },
+    };
+    agentSessionHistoryMock.listBookmarks.mockResolvedValue([stored]);
+    const actions = setupActions();
+    const result = (await callAction(actions, "session.bookmarks.list", undefined, {
+      projectId: "p",
+    })) as { bookmarks: Array<{ bookmark?: Record<string, unknown> }> };
+    const bookmark = result.bookmarks[0]?.bookmark ?? {};
+    expect(Object.keys(bookmark).sort()).toEqual([
+      "agentPresetId",
+      "bookmarkedAt",
+      "isInputLocked",
+      "label",
+      "originalPresetId",
+      "sourceLocation",
+    ]);
+    // Retained fields keep their values, and the stored record is untouched.
+    expect(bookmark.label).toBe("Pinned");
+    expect(bookmark.isInputLocked).toBe(false);
+    expect(stored.bookmark.agentPresetColor).toBe("#00ff00");
   });
 });
