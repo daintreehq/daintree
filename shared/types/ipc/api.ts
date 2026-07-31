@@ -766,6 +766,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     locate(projectId: string): Promise<Project | null>;
   };
+  fleet: {
+    /**
+     * Subscribe to the fleet-wide run snapshot: every agent run across every
+     * project and scratch, including workspaces whose renderer view has been
+     * evicted. Pushed on a 5s aligned poll and debounced on agent state
+     * changes, with unchanged payloads suppressed.
+     */
+    onSnapshotUpdated(callback: (snapshot: import("./fleet.js").FleetSnapshot) => void): () => void;
+  };
   scratch: {
     getAll(): Promise<import("../scratch.js").Scratch[]>;
     getCurrent(): Promise<import("../scratch.js").Scratch | null>;

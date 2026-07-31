@@ -78,6 +78,7 @@ import type {
   ProjectSwitchOutgoingState,
   ProjectWorktreeLoadStatusPayload,
 } from "./project.js";
+import type { FleetSnapshot } from "./fleet.js";
 import type {
   GitGetFileDiffPayload,
   GitFileDiffResult,
@@ -1635,6 +1636,7 @@ export interface IpcEventMap {
   "project:focus-on-activate": { intent: "focus-next-waiting" };
   "project:background-resize": { width: number; height: number };
   "project:stats-updated": ProjectStatusMap;
+  "fleet:snapshot-updated": FleetSnapshot;
   "project:updated": Project;
   "project:removed": string;
   // Main asks the renderer to open the guided git-init dialog for a folder the

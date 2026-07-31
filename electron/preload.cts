@@ -1908,6 +1908,15 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.PROJECT_LOCATE, projectId),
     },
 
+    // Fleet-wide run snapshot — every agent run across every workspace, pushed
+    // from main. Read-only and broadcast-only: main is the only process that
+    // can see past a project view's own V8 context.
+    fleet: {
+      onSnapshotUpdated: (
+        callback: (snapshot: import("../shared/types/ipc/fleet.js").FleetSnapshot) => void
+      ) => _typedOn(CHANNELS.FLEET_SNAPSHOT_UPDATED, callback),
+    },
+
     // Scratch (one-off agent workspace) API
     scratch: {
       ...buildScratchPreloadBindings(_unwrappingInvoke),

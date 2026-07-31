@@ -2004,17 +2004,50 @@ export class PtyClient extends EventEmitter {
 
   /** Get all terminals, across all shards */
   async getAllTerminalsAsync(): Promise<TerminalInfoResponse[]> {
+    return (await this.getAllTerminalsWithCompletenessAsync()).terminals;
+  }
+
+  /**
+   * Get all terminals plus whether every shard actually answered.
+   *
+   * {@link getAllTerminalsAsync} substitutes `[]` for a failed shard, so a
+   * total pty-host outage is indistinguishable from a machine with no
+   * terminals — both resolve to an empty array with no rejection. That is
+   * tolerable for a count that will self-correct on the next poll, but not for
+   * a caller whose contract says "empty means genuinely nothing running":
+   * reporting a fleet as clear because the host stopped answering is the one
+   * wrong answer such a caller must never give.
+   *
+   * `degraded` is true when at least one shard failed, so callers can retain
+   * their last known-good view instead of publishing a false zero.
+   */
+  async getAllTerminalsWithCompletenessAsync(): Promise<{
+    terminals: TerminalInfoResponse[];
+    degraded: boolean;
+    shardsTotal: number;
+    shardsFailed: number;
+  }> {
+    const shards = this.fanOutShards();
     const results = await Promise.all(
-      this.fanOutShards().map((shard) => {
+      shards.map((shard) => {
         const promise = sendPtyHostRpc<TerminalInfoResponse[]>(
           shard,
           "all-terminals",
           (requestId) => ({ type: "get-all-terminals", requestId })
         );
-        return promise.catch(() => [] as TerminalInfoResponse[]);
+        return promise.then(
+          (terminals) => ({ terminals, ok: true }),
+          () => ({ terminals: [] as TerminalInfoResponse[], ok: false })
+        );
       })
     );
-    return results.flat();
+    const shardsFailed = results.filter((r) => !r.ok).length;
+    return {
+      terminals: results.flatMap((r) => r.terminals),
+      degraded: shardsFailed > 0,
+      shardsTotal: shards.length,
+      shardsFailed,
+    };
   }
 
   /**

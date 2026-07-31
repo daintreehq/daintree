@@ -63,7 +63,10 @@ import { wireUpdateMenuState } from "../menu.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import type { WindowRegistry } from "./WindowRegistry.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
-import { getProjectStatsService } from "../ipc/handlers/projectCrud/index.js";
+import {
+  getProjectStatsService,
+  getFleetSnapshotService,
+} from "../ipc/handlers/projectCrud/index.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { setPluginDirResolver } from "../setup/protocols.js";
@@ -860,6 +863,7 @@ export async function initGlobalServices(
             .map((wCtx) => wCtx.services.projectViewManager)
             .filter((pvm): pvm is ProjectViewManager => pvm !== undefined) ?? [],
         getProjectStatsService: () => getProjectStatsService(),
+        getFleetSnapshotService: () => getFleetSnapshotService(),
         getUserCachedViewLimit: () =>
           effectiveCachedProjectViews(store.get("terminalConfig")?.cachedProjectViews),
         hasSustainedRendererSaturation: () => hasSustainedRendererSaturation(),
