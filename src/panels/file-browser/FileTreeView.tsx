@@ -6,7 +6,10 @@ import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { Spinner } from "@/components/ui/Spinner";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import { resolveTreeKey, type FlatTreeRow } from "./fileBrowserTree";
+import { INSERT_FILE_REFERENCE_COMBO, matchesInsertFileReferenceCombo } from "./fileReference";
 
 export interface FileTreeViewProps {
   // Mutable rather than `readonly`: this is exactly what the tree hook returns,
@@ -30,6 +33,14 @@ export interface FileTreeViewProps {
    * what the items do.
    */
   rowContextMenu?: (row: FlatTreeRow) => React.ReactNode;
+  /**
+   * Send the selected row to the last agent the user typed to (#11577). Fired
+   * by the tree-local Cmd+I, which only exists while a row is selected and a
+   * target actually resolves — `canInsertFileReference` is what the tree knows
+   * about the latter.
+   */
+  onInsertFileReference?: (path: string) => void;
+  canInsertFileReference?: boolean;
   /** Accessible name for the tree, since the panel header isn't part of it. */
   label: string;
 }
@@ -60,6 +71,8 @@ export function FileTreeView({
   onActivate,
   onRootFolder,
   rowContextMenu,
+  onInsertFileReference,
+  canInsertFileReference = false,
   label,
 }: FileTreeViewProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -105,6 +118,22 @@ export function FileTreeView({
         }
       }
 
+      // Handed to the agent the user was last talking to, without a drag. Sits
+      // ahead of `resolveTreeKey` only for ordering clarity — that resolver is
+      // a bare switch over the navigation keys and never claims a letter, so
+      // plain `I` (and any future typeahead) stays untouched.
+      if (
+        onInsertFileReference &&
+        canInsertFileReference &&
+        selectedPath !== null &&
+        matchesInsertFileReferenceCombo(event.nativeEvent, isMac())
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        onInsertFileReference(selectedPath);
+        return;
+      }
+
       const intent = resolveTreeKey(event.key, rows, selectedPath);
       if (!intent) return;
       event.preventDefault();
@@ -124,7 +153,17 @@ export function FileTreeView({
           break;
       }
     },
-    [rows, selectedPath, onSelect, onToggleExpanded, onActivate, rowContextMenu, instanceId]
+    [
+      rows,
+      selectedPath,
+      onSelect,
+      onToggleExpanded,
+      onActivate,
+      rowContextMenu,
+      onInsertFileReference,
+      canInsertFileReference,
+      instanceId,
+    ]
   );
 
   const selectedIndex = useMemo(
@@ -185,12 +224,20 @@ export function FileTreeView({
   const activeDescendant =
     selectedPath !== null && selectedIndex >= 0 ? rowDomId(instanceId, selectedPath) : undefined;
 
+  // Only advertised while the shortcut would actually do something — a tree
+  // with no reachable agent announcing Cmd+I would be promising a no-op.
+  const insertKeyshortcuts =
+    onInsertFileReference && canInsertFileReference
+      ? comboToAriaKeyshortcuts(INSERT_FILE_REFERENCE_COMBO, isMac())
+      : undefined;
+
   return (
     <div
       ref={containerRef}
       role="tree"
       aria-label={label}
       aria-activedescendant={activeDescendant}
+      {...(insertKeyshortcuts ? { "aria-keyshortcuts": insertKeyshortcuts } : {})}
       tabIndex={0}
       // Tells the global Shift+F10/ContextMenu-key handler to stand down: this
       // surface routes those keys to the selected row's own menu.

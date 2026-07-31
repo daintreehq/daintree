@@ -10,9 +10,11 @@ import {
   PanelRightOpen,
   RefreshCw,
 } from "lucide-react";
-import { FolderOpen, Folders } from "@/components/icons";
+import { AtSign, FolderOpen, Folders } from "@/components/icons";
 import { basename, join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
+import { isMac } from "@/lib/platform";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -20,7 +22,11 @@ import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
-import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
+import {
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+} from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
@@ -35,6 +41,8 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { FileTreeView } from "./FileTreeView";
 import { FileBrowserViewer } from "./FileBrowserViewer";
 import { useFileBrowserTree } from "./useFileBrowserTree";
+import { useInsertFileReference } from "./useInsertFileReference";
+import { INSERT_FILE_REFERENCE_COMBO } from "./fileReference";
 import {
   FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH,
   FILE_BROWSER_SIDEBAR_MAX_WIDTH,
@@ -660,6 +668,25 @@ export function FileBrowserPane({
     attempt();
   }, [rootAbsolutePath, copyRootPath]);
 
+  // Hand a row to the agent the user was last talking to, without a drag
+  // (#11577). `basePath` is what makes the token absolute, matching what a
+  // Finder drop into the hybrid input produces.
+  const { canInsert: canInsertFileReference, insert: insertFileReference } =
+    useInsertFileReference();
+  const handleInsertFileReference = useCallback(
+    (path: string) => {
+      // Same guard as the copy handlers: a relative token would name nothing
+      // the agent can open. Unreachable through the UI — the pane shows its
+      // placeholder rather than a tree when no base resolves — but the
+      // handlers are what own the invariant.
+      if (!basePath) return;
+      insertFileReference(join(basePath, path));
+    },
+    [basePath, insertFileReference]
+  );
+  const insertShortcutHint = isMac() ? "⌘I" : "Ctrl+I";
+  const insertAriaKeyshortcuts = comboToAriaKeyshortcuts(INSERT_FILE_REFERENCE_COMBO, isMac());
+
   const reveal = useMemo(() => revealCopy(), []);
   const handleReveal = useCallback(
     (path: string) => {
@@ -711,6 +738,20 @@ export function FileBrowserPane({
             <ContextMenuSeparator />
           </>
         )}
+        {/* Disabled rather than hidden when nothing resolves: the gesture is
+            the point of the menu entry, and a row that silently drops it would
+            read as broken. The agent is resolved from typing history, so this
+            is off until the user has actually talked to one. */}
+        <ContextMenuItem
+          onSelect={() => handleInsertFileReference(row.path)}
+          disabled={!canInsertFileReference}
+          {...(canInsertFileReference ? { "aria-keyshortcuts": insertAriaKeyshortcuts } : {})}
+        >
+          <AtSign className="w-3.5 h-3.5 mr-2" />
+          Insert file reference
+          <ContextMenuShortcut>{insertShortcutHint}</ContextMenuShortcut>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => handleCopyFullPath(row.path)}>
           <Copy className="w-3.5 h-3.5 mr-2" />
           Copy full path
@@ -734,6 +775,10 @@ export function FileBrowserPane({
       isWorktreeSource,
       handleSetRoot,
       handleCopyFolderContext,
+      handleInsertFileReference,
+      canInsertFileReference,
+      insertShortcutHint,
+      insertAriaKeyshortcuts,
       handleCopyFullPath,
       handleCopyRelativePath,
       handleCopyFileName,
@@ -1101,6 +1146,8 @@ export function FileBrowserPane({
           onActivate={handleActivate}
           onRootFolder={handleSetRoot}
           rowContextMenu={rowContextMenu}
+          onInsertFileReference={handleInsertFileReference}
+          canInsertFileReference={canInsertFileReference}
           label={`Files in ${title}`}
         />
         {/* Below the tree, never above: the strip unmounts the instant a

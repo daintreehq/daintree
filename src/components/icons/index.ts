@@ -10,6 +10,7 @@ export * from "./brands";
 export {
   Activity, // project pulse / live activity heartbeat
   ArrowDownAZ, // alphabetical sort order (A to Z)
+  AtSign, // @file reference handed to an agent's prompt
   BellDot, // watch alert / notify on completion
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
   Clock, // recency sort order (most recently opened first)
