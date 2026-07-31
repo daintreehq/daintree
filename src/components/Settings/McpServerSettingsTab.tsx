@@ -662,11 +662,12 @@ export function McpServerSettingsTab() {
                   {copied ? "Copied!" : "Copy MCP config"}
                 </button>
 
-                <p className="text-xs text-daintree-text/50 leading-relaxed select-text">
-                  {clientConfig.destination}.
-                  {status.apiKey &&
-                    " It carries your API key, so treat it like a password — rotating the key below cuts off any client still holding an older copy."}
-                </p>
+                {status.apiKey ? (
+                  <p className="text-xs text-daintree-text/50 leading-relaxed select-text">
+                    The copied config carries your API key, so treat it like a password — rotating
+                    the key below cuts off any client still holding an older copy.
+                  </p>
+                ) : null}
 
                 {activeBearers.length > 0 && (
                   <div className="rounded-[var(--radius-md)] border border-daintree-border overflow-hidden">

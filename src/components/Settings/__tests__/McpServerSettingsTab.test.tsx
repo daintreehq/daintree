@@ -6,6 +6,7 @@ import { McpServerSettingsTab } from "../McpServerSettingsTab";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
+import { MCP_CLIENT_CONFIGS } from "@shared/config/mcpClientConfigs";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -1455,6 +1456,23 @@ describe("McpServerSettingsTab", () => {
       const checked = choices.filter((c) => c.getAttribute("aria-checked") === "true");
       expect(checked).toHaveLength(1);
       expect(checked[0]?.textContent).toContain("Claude Code");
+    });
+
+    it("shows each client's destination only on its own card", async () => {
+      // The helper copy under the copy button used to repeat the selected
+      // client's destination verbatim, ~40px below the card that already said it.
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+
+      const text = container.textContent ?? "";
+      for (const entry of MCP_CLIENT_CONFIGS) {
+        const occurrences = text.split(entry.destination).length - 1;
+        expect({ id: entry.id, occurrences }).toEqual({ id: entry.id, occurrences: 1 });
+      }
     });
 
     it("copies generic connection details when Other client is selected", async () => {
