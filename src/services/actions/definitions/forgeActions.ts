@@ -179,6 +179,20 @@ const ForgeCIStatusActionResultSchema = z.object({
   ciStatus: ForgeCIStatusSchema.nullable(),
 });
 
+// A forge label, as both the write actions and the issue result describe it.
+const ForgeLabelResultSchema = z.object({ name: z.string(), color: z.string().optional() });
+
+/**
+ * A forge user, minus `rawData`. `ForgeUser` carries the provider's entire
+ * unnormalized node on that field, so an `z.array(z.unknown())` assignee arm
+ * shipped every GitHub/GitLab user attribute to agents unannounced (#11539).
+ * Naming the two portable fields is what drops it — dispatch strips the rest.
+ */
+const ForgeUserResultSchema = z.object({
+  login: z.string(),
+  avatarUrl: z.string().optional(),
+});
+
 // Normalized issue returned by the create/close/reopen/edit write actions.
 const ForgeIssueResultSchema = z.object({
   number: z.number(),
@@ -186,16 +200,14 @@ const ForgeIssueResultSchema = z.object({
   body: z.string(),
   state: z.string(),
   url: z.string(),
-  labels: z.array(z.unknown()).optional(),
-  assignees: z.array(z.unknown()).optional(),
+  labels: z.array(ForgeLabelResultSchema).optional(),
+  assignees: z.array(ForgeUserResultSchema).optional(),
   createdAt: z.number().optional(),
   updatedAt: z.number().optional(),
 });
 
 // Label set returned by the add/remove-label write actions.
-const ForgeLabelArrayResultSchema = z.array(
-  z.object({ name: z.string(), color: z.string().optional() })
-);
+const ForgeLabelArrayResultSchema = z.array(ForgeLabelResultSchema);
 
 // Comment returned by the add-comment write action.
 const ForgeCommentResultSchema = z.object({
@@ -203,13 +215,6 @@ const ForgeCommentResultSchema = z.object({
   body: z.string(),
   url: z.string(),
   createdAt: z.number(),
-});
-
-// Account reference published in write-action results. Narrower than the
-// contract ForgeUser, which also carries the provider's raw payload.
-const ForgeUserResultSchema = z.object({
-  login: z.string(),
-  avatarUrl: z.string().optional(),
 });
 
 // Resulting assignee list after an assign/unassign. The list is authoritative:
@@ -258,7 +263,7 @@ const ForgePRDraftStateResultSchema = z.object({
 // single-comment shape so the read and write halves describe a comment
 // identically, plus the author the write action doesn't echo back.
 const ForgeCommentPageResultSchema = z.object({
-  items: z.array(ForgeCommentResultSchema.extend({ author: z.unknown().optional() })),
+  items: z.array(ForgeCommentResultSchema.extend({ author: ForgeUserResultSchema.optional() })),
   nextCursor: z.string().nullable(),
   hasMore: z.boolean(),
   totalCount: z.number().optional(),
@@ -733,8 +738,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
           body: z.string(),
           state: z.string(),
           url: z.string(),
-          labels: z.array(z.unknown()).optional(),
-          assignees: z.array(z.unknown()).optional(),
+          labels: z.array(ForgeLabelResultSchema).optional(),
+          assignees: z.array(ForgeUserResultSchema).optional(),
           createdAt: z.number().optional(),
           updatedAt: z.number().optional(),
         })

@@ -117,6 +117,24 @@ function zodSchemaToJsonSchema(
 }
 
 /**
+ * Summarize a result-validation failure as issue paths and codes ONLY.
+ *
+ * Deliberately drops both the rejected value and zod's rendered message. A
+ * result payload can carry secrets (decrypted env vars on project settings,
+ * tokens on forge responses), and this summary travels two ways an agent can
+ * read: into `ActionError.details`, which crosses IPC to the MCP client, and
+ * into the renderer log buffer, which `logs.getAll` exposes as a tool. Echoing
+ * the value would re-open the leak this validation exists to close, through a
+ * different door. Paths and codes are enough to locate a schema/impl mismatch.
+ */
+function summarizeResultIssues(error: z.ZodError): string[] {
+  return error.issues.map((issue) => {
+    const path = issue.path.length > 0 ? issue.path.join(".") : "<root>";
+    return `${path}: ${issue.code}`;
+  });
+}
+
+/**
  * Heuristic for plugin-contributed actions that declare a raw JSON Schema.
  * Treat the action as requiring args if the schema has a non-empty
  * `required` array. Anything else (no schema, schema without required) is
@@ -490,6 +508,21 @@ export class ActionService {
       // double-confirming an agent dispatch the MCP bridge already gated.
       const runContext: ActionContext = { ...context, dispatchSource: source };
       const result = await definition.run(validatedArgs, runContext);
+      // Enforce the action's own result contract. Zod objects strip unknown
+      // keys, so this is what makes the published projection the delivered one
+      // rather than a claim nothing checks (#11539). Keyed on `resultSchema`
+      // alone: `mcpOutputSchema` only gates the advertised JSON Schema, while
+      // the MCP *text* response serializes this value either way.
+      //
+      // Fails closed, mirroring the argsSchema gate above. A result that
+      // violates its own schema means the action is wrong; passing the raw
+      // value through would preserve the leak in exactly the case this exists
+      // to catch. The bookkeeping below still runs — `run()` completed and its
+      // side effects happened, so the dispatch is real even when the payload
+      // is not usable.
+      const validatedResult = definition.resultSchema
+        ? definition.resultSchema.safeParse(result)
+        : undefined;
       const durationMs =
         (typeof performance !== "undefined" ? performance.now() : Date.now()) - monotonicStartMs;
       if (
@@ -517,7 +550,17 @@ export class ActionService {
       });
       if (!definition.suppressShortcutHint)
         this.emitShortcutHint(actionId, source, overlayEpochBeforeRun);
-      return { ok: true, result: result as Result };
+      if (validatedResult && !validatedResult.success) {
+        const issues = summarizeResultIssues(validatedResult.error);
+        logWarn("Action result failed its own resultSchema", { actionId, issues });
+        const error: ActionError = {
+          code: "RESULT_VALIDATION_ERROR",
+          message: `Action "${actionId}" returned a result that does not match its declared schema`,
+          details: issues,
+        };
+        return { ok: false, error };
+      }
+      return { ok: true, result: (validatedResult ? validatedResult.data : result) as Result };
     } catch (err) {
       const error: ActionError = {
         code: "EXECUTION_ERROR",

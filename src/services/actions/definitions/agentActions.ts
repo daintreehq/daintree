@@ -116,9 +116,9 @@ function toAgentFacingBookmark(
  * Rebuild a journal record as the agent-facing shape (#11530). Applied by BOTH
  * list actions — a bookmarked record surfaces through session history too, so
  * stripping in only one of them would leave the other as an open path for the
- * same pane-presentation fields. `resultSchema`/`mcpOutputSchema` cannot do
- * this: nothing parses an action's return value before main casts it into
- * `structuredContent`, so the projection has to be real code.
+ * same pane-presentation fields. Dispatch parses results against `resultSchema`
+ * now (#11539), but this stays real code: the records ride under an
+ * `z.unknown()` arm that opts out of stripping, so the parse cannot narrow them.
  */
 function toAgentFacingRecord(record: AgentSessionRecord): AgentSessionRecord {
   return {

@@ -3577,7 +3577,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "project",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Get aggregate statistics for a project (commit/issue/PR counts and activity). Args: \`projectId\` (optional) — a project id from \`project.getAll\` (the \`id\` field); defaults to the active project. Returns an open-ended stats object. Errors when no projectId is given and no project is active.",
+    "description": "Get aggregate resource statistics for a project. Args: \`projectId\` (optional) — a project id from \`project.getAll\` (the \`id\` field); defaults to the active project. Returns { processCount, terminalCount, estimatedMemoryMB, terminalTypes } — terminalTypes maps each terminal type to its count. Host process ids are deliberately not exposed. Errors when no projectId is given and no project is active.",
     "examples": undefined,
     "id": "project.getStats",
     "keywords": undefined,

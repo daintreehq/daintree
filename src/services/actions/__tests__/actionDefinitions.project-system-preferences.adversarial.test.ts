@@ -455,7 +455,16 @@ describe("project action hardening", () => {
 
   it("passes through project client queries and dispatches settings events", async () => {
     mocks.projectClient.detectRunners.mockResolvedValueOnce(["dev"]);
-    mocks.projectClient.getStats.mockResolvedValueOnce({ files: 12 });
+    // A realistic ProjectStats — `processIds` carries live host pids, which
+    // #11539's result parsing must drop. Before it, the catchall result schema
+    // kept every key and shipped them to any agent that called this.
+    mocks.projectClient.getStats.mockResolvedValueOnce({
+      processCount: 3,
+      terminalCount: 2,
+      estimatedMemoryMB: 256,
+      terminalTypes: { agent: 1, shell: 1 },
+      processIds: [4711, 4712],
+    });
     const dispatchEvent = vi.spyOn(window, "dispatchEvent");
     const { service } = buildService(registerProjectActions);
 
@@ -463,7 +472,15 @@ describe("project action hardening", () => {
       service.dispatch("project.detectRunners", { projectId: "project-1" })
     ).resolves.toEqual({ ok: true, result: { runners: ["dev"] } });
     await expect(service.dispatch("project.getStats", { projectId: "project-1" })).resolves.toEqual(
-      { ok: true, result: { files: 12 } }
+      {
+        ok: true,
+        result: {
+          processCount: 3,
+          terminalCount: 2,
+          estimatedMemoryMB: 256,
+          terminalTypes: { agent: 1, shell: 1 },
+        },
+      }
     );
 
     const openSettings = await service.dispatch("project.settings.open");
@@ -649,8 +666,25 @@ describe("system action hardening", () => {
 
   it("passes through system and copyTree client arguments/results", async () => {
     mocks.systemClient.checkCommand.mockResolvedValueOnce(true);
-    mocks.filesClient.search.mockResolvedValueOnce(["src/main.ts"]);
-    mocks.slashCommandsClient.list.mockResolvedValueOnce(["/review"]);
+    // `FileSearchResult` is `{ files: string[] }` — the bare array this used to
+    // return never matched the client contract, and nothing caught it until
+    // dispatch started parsing results (#11539).
+    mocks.filesClient.search.mockResolvedValueOnce({ files: ["src/main.ts"] });
+    // A realistic SlashCommand. `insertText` and `aliases` are real fields the
+    // action's resultSchema does not declare; parsing is what stops them
+    // reaching agents.
+    mocks.slashCommandsClient.list.mockResolvedValueOnce([
+      {
+        id: "review",
+        label: "/review",
+        description: "Review the diff",
+        scope: "project",
+        agentId: "codex",
+        insertText: "/review",
+        aliases: ["r"],
+        trigger: "/",
+      },
+    ]);
     mocks.copyTreeClient.generate.mockResolvedValueOnce({
       content: "",
       fileCount: 2,
@@ -667,10 +701,25 @@ describe("system action hardening", () => {
     });
     await expect(
       service.dispatch("files.search", { cwd: "/repo", query: "main", limit: 5 })
-    ).resolves.toEqual({ ok: true, result: ["src/main.ts"] });
+    ).resolves.toEqual({ ok: true, result: { files: ["src/main.ts"] } });
+    // insertText/aliases/trigger are stripped: the schema never declared them,
+    // and dispatch now makes that declaration binding.
     await expect(
       service.dispatch("slashCommands.list", { agentId: "codex", projectPath: "/repo" })
-    ).resolves.toEqual({ ok: true, result: { commands: ["/review"] } });
+    ).resolves.toEqual({
+      ok: true,
+      result: {
+        commands: [
+          {
+            id: "review",
+            label: "/review",
+            description: "Review the diff",
+            scope: "project",
+            agentId: "codex",
+          },
+        ],
+      },
+    });
     await expect(
       service.dispatch("copyTree.generate", {
         worktreeId: "wt-1",
