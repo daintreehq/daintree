@@ -3352,7 +3352,7 @@ describe("sessionServer introspection tier filtering", () => {
         const limit = (args as { limit?: number }).limit ?? 20;
         return Promise.resolve({
           result: {
-            ok: true,
+            ok: true as const,
             result: { totalMatches: ranked.length, results: ranked.slice(0, limit) },
           },
         });

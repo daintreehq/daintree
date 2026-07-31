@@ -681,7 +681,10 @@ describe("filterIntrospectionResultForSession", () => {
   }
 
   it("passes a failed dispatch through untouched", () => {
-    const failure = { ok: false as const, error: { code: "EXECUTION_ERROR", message: "boom" } };
+    const failure = {
+      ok: false as const,
+      error: { code: "EXECUTION_ERROR" as const, message: "boom" },
+    };
     expect(
       filterIntrospectionResultForSession("actions.list", failure, permitted, { callerLimit: 20 })
     ).toBe(failure);
