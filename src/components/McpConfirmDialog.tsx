@@ -148,7 +148,7 @@ export function McpConfirmDialog() {
           {(current.previewPending || (current.preview && current.preview.length > 0)) && (
             <div className="space-y-2">
               <div className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
-                Working tree changes
+                {current.previewTitle ?? "Working tree changes"}
               </div>
               {current.previewPending ? (
                 <div className="text-xs text-daintree-text/60">Checking current changes…</div>
