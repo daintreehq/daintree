@@ -69,6 +69,11 @@ Migrations are individual files `NNN-name.ts` in `electron/services/migrations/`
 |     019 | `019-remove-fleet-deck-open.ts`                                        |
 |     020 | `020-window-states-store.ts`                                           |
 |     021 | `021-merge-disabled-plugins.ts`                                        |
+|     022 | `022-audit-logs-store.ts`                                              |
+|     023 | `023-audit-rings-to-audit-logs-store.ts`                               |
+|     024 | `024-backfill-github-forge-credential.ts`                              |
+|     025 | `025-upgrade-voice-correction-model.ts`                                |
+|     026 | `026-remove-full-tool-surface.ts`                                      |
 
 There is no `001`; the chain starts at `002`. Migration files are numbered, not strictly contiguous — `006` is a permanent gap.
 
