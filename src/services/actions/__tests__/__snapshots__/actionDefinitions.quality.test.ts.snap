@@ -2101,14 +2101,22 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "git",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Get the git diff for a single file. Args: \`cwd\` (optional) — repo working directory, defaults to the active worktree path; \`filePath\` (required) — repo-relative path; \`status\` (required) — the file's git status (from a \`git.getStagingStatus\` entry); \`ignoreWhitespace\` (optional) — omit whitespace-only changes. Returns { content } — the unified diff text. Errors when \`cwd\` is omitted and no worktree is active.",
+    "description": "Get a byte-bounded window of the git diff for a single file. Args: \`cwd\` (optional) — repo working directory, defaults to the active worktree path; \`filePath\` (required) — repo-relative path; \`status\` (required) — the file's git status (from a \`git.getStagingStatus\` entry); \`ignoreWhitespace\` (optional); \`offset\` (optional, default 0) — byte offset to read from; \`maxBytes\` (optional, default 24576, max 1048576) — window size. Returns { content, offset, totalBytes, truncated, nextOffset }. When \`truncated\` is true, call again with \`offset: nextOffset\` to read the rest. \`content\` may be a \`BINARY_FILE\` or \`NO_CHANGES\` marker instead of diff text, in which case \`totalBytes\` is 0. Errors when \`cwd\` is omitted and no worktree is active.",
     "examples": [
       {
         "args": {
           "filePath": "src/index.css",
           "status": "modified",
         },
-        "description": "Get the diff for a modified file in the active worktree",
+        "description": "Get the first 24KB of the diff for a modified file",
+      },
+      {
+        "args": {
+          "filePath": "package-lock.json",
+          "offset": 24576,
+          "status": "modified",
+        },
+        "description": "Continue reading a large diff from a previous \`nextOffset\`",
       },
     ],
     "id": "git.getFileDiff",
@@ -2133,7 +2141,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "git",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Get the current working-tree state for a repository. Args: \`cwd\` (optional) — repo working directory, defaults to the active worktree path. Returns staged/unstaged file lists, conflicted/conflictedFiles, currentBranch, isDetachedHead, hasRemote, repoState, and rebase progress fields. Errors when \`cwd\` is omitted and no worktree is active. Use this before committing; do NOT use \`git.getProjectPulse\` for current changes — that reports historical activity, not working-tree state.",
+    "description": "Get the current working-tree state for a repository. Args (all optional): \`cwd\` — repo working directory, defaults to the active worktree path; \`offset\` (default 0) and \`limit\` (default 100, max 200), applied to each file list. Returns staged/unstaged/conflictedFiles pages plus \`totals\` and \`hasMore\` per list, the legacy \`conflicted\` path strings, currentBranch, isDetachedHead, hasRemote, repoState, rebase progress, and \`rebaseSummary\` (backend + step counts + current subject) instead of the full rebase todo. When any \`hasMore\` is true, call again with \`offset: nextOffset\`. Errors when \`cwd\` is omitted and no worktree is active. Use this before committing; do NOT use \`git.getProjectPulse\` for current changes — that reports historical activity, not working-tree state.",
     "examples": undefined,
     "id": "git.getStagingStatus",
     "keywords": undefined,
@@ -2145,7 +2153,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "git",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List commits for a repository with optional search and pagination. Args (all optional): \`cwd\` (repo dir, defaults to the active worktree path); \`search\` (message/author filter); \`branch\`; \`skip\`/\`limit\` for paging. Returns { items, hasMore, total }. Errors when \`cwd\` is omitted and no worktree is active.",
+    "description": "List commits for a repository with optional search and pagination. Args (all optional): \`cwd\` (repo dir, defaults to the active worktree path); \`search\` (message/author filter); \`branch\`; \`skip\`; \`limit\` (default 30, max 100). Returns { items, hasMore, total, skip, limit, nextSkip } — each item has hash, shortHash, message, body, bodyTruncated, author {name,email}, date. Commit bodies are cut at 1KB and flagged with \`bodyTruncated: true\`. When \`hasMore\` is true, call again with \`skip: nextSkip\`. Errors when \`cwd\` is omitted and no worktree is active.",
     "examples": undefined,
     "id": "git.listCommits",
     "keywords": undefined,
@@ -5484,7 +5492,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Compare two worktrees and return the list of files that differ between their branches. Args: \`worktreeId\` (optional — the left/base side; defaults to the focused or active worktree), \`compareToWorktreeId\` (required — the right side to compare against), \`useMergeBase\` (optional — three-dot/PR-accurate range), \`ignoreWhitespace\` (optional). Returns { branch1, branch2, files } where each file has path, oldPath?, status, insertions, deletions. Read-only; does not open any UI. For a single file's full diff, call \`git.getFileDiff\` afterwards.",
+    "description": "Compare two worktrees and return a page of the files that differ between their branches. Args: \`worktreeId\` (optional — the left/base side; defaults to the focused or active worktree), \`compareToWorktreeId\` (required — the right side to compare against), \`useMergeBase\` (optional — three-dot/PR-accurate range), \`ignoreWhitespace\` (optional), \`offset\` (optional, default 0), \`limit\` (optional, default 100, max 200). Returns { branch1, branch2, files, total, hasMore, offset, limit, nextOffset } where each file has path, oldPath?, status, insertions, deletions. When \`hasMore\` is true, call again with \`offset: nextOffset\`. Read-only; does not open any UI. For a single file's full diff, call \`git.getFileDiff\` afterwards.",
     "examples": undefined,
     "id": "worktree.compareDiff",
     "keywords": undefined,
@@ -5709,13 +5717,13 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List git branches for a repository. Args: \`rootPath\` (required) — absolute path to the repository root (a worktree \`path\` from \`worktree.list\`). Returns { branches } — each entry has name, current (bool), commit (sha), and optional remote. Errors when \`rootPath\` is missing or not a git repository.",
+    "description": "List git branches for a repository, one page at a time. Args: \`rootPath\` (required) — absolute path to the repository root (a worktree \`path\` from \`worktree.list\`); \`offset\` (optional, default 0); \`limit\` (optional, default 100, max 200). Returns { branches, total, hasMore, offset, limit, nextOffset } — each branch has name, current (bool), commit (sha), and optional remote. When \`hasMore\` is true, call again with \`offset: nextOffset\`. Errors when \`rootPath\` is missing or not a git repository.",
     "examples": [
       {
         "args": {
           "rootPath": "/Users/me/Projects/app",
         },
-        "description": "List branches for the repository at that path",
+        "description": "List the first 100 branches for the repository at that path",
       },
     ],
     "id": "worktree.listBranches",

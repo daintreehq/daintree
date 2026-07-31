@@ -5,6 +5,11 @@ import { existsSync } from "fs";
 import { stat, readFile, access, mkdir, realpath } from "fs/promises";
 import { resolve as pathResolve, isAbsolute, dirname } from "path";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
+import { sliceUtf8Window } from "../../shared/utils/boundedOutput.js";
+import {
+  GIT_FILE_DIFF_MAX_BYTES,
+  GIT_FILE_DIFF_MAX_SOURCE_BYTES,
+} from "../../shared/config/gitReadLimits.js";
 import { settingsFilePath } from "../services/projectStorePaths.js";
 import { SimpleGit, BranchSummary } from "simple-git";
 import { createHardenedGit, createAuthenticatedGit } from "../utils/hardenedGit.js";
@@ -3209,8 +3214,41 @@ export class WorkspaceService {
     cwd: string,
     filePath: string,
     status: string,
-    ignoreWhitespace?: boolean
+    ignoreWhitespace?: boolean,
+    offset?: number,
+    maxBytes?: number
   ): Promise<void> {
+    // A sentinel is a marker, not diff content — it is never windowed, and
+    // totalBytes 0 is what tells the caller to read `diff` as a marker.
+    const sendSentinel = (diff: string): void => {
+      this.sendEvent({
+        type: "get-file-diff-result",
+        requestId,
+        diff,
+        offset: 0,
+        totalBytes: 0,
+        truncated: false,
+        nextOffset: null,
+      });
+    };
+
+    const sendWindow = (diff: string): void => {
+      const window = sliceUtf8Window(
+        diff,
+        offset ?? 0,
+        Math.min(maxBytes ?? GIT_FILE_DIFF_MAX_BYTES, GIT_FILE_DIFF_MAX_BYTES)
+      );
+      this.sendEvent({
+        type: "get-file-diff-result",
+        requestId,
+        diff: window.content,
+        offset: window.offset,
+        totalBytes: window.totalBytes,
+        truncated: window.truncated,
+        nextOffset: window.nextOffset,
+      });
+    };
+
     try {
       const { resolve, normalize, sep, isAbsolute } = await import("path");
 
@@ -3229,20 +3267,23 @@ export class WorkspaceService {
 
       const absolutePath = resolve(cwd, normalizedPath);
 
-      try {
-        const { stat } = await import("fs/promises");
-        const stats = await stat(absolutePath);
-        if (stats.size > 1024 * 1024) {
-          this.sendEvent({ type: "get-file-diff-result", requestId, diff: "FILE_TOO_LARGE" });
-          return;
-        }
-      } catch {
-        // ignore
-      }
-
       const git = await createHardenedGit(cwd);
 
       if (status === "untracked" || status === "added") {
+        // Only this branch inlines the whole file into the diff, so only this
+        // branch needs a source-size ceiling. Tracked files are bounded by the
+        // size of their change, and are windowed rather than refused (#11531).
+        try {
+          const { stat } = await import("fs/promises");
+          const stats = await stat(absolutePath);
+          if (stats.size > GIT_FILE_DIFF_MAX_SOURCE_BYTES) {
+            sendSentinel("FILE_TOO_LARGE");
+            return;
+          }
+        } catch {
+          // ignore
+        }
+
         const { readFile } = await import("fs/promises");
         const buffer = await readFile(absolutePath);
 
@@ -3256,7 +3297,7 @@ export class WorkspaceService {
         }
 
         if (isBinary) {
-          this.sendEvent({ type: "get-file-diff-result", requestId, diff: "BINARY_FILE" });
+          sendSentinel("BINARY_FILE");
           return;
         }
 
@@ -3270,7 +3311,7 @@ new file mode 100644
 @@ -0,0 +1,${lines.length} @@
 ${lines.map((l) => "+" + l).join("\n")}`;
 
-        this.sendEvent({ type: "get-file-diff-result", requestId, diff });
+        sendWindow(diff);
         return;
       }
 
@@ -3287,26 +3328,25 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       ]);
 
       if (diff.includes("Binary files")) {
-        this.sendEvent({ type: "get-file-diff-result", requestId, diff: "BINARY_FILE" });
+        sendSentinel("BINARY_FILE");
         return;
       }
 
       if (!diff.trim()) {
-        this.sendEvent({ type: "get-file-diff-result", requestId, diff: "NO_CHANGES" });
+        sendSentinel("NO_CHANGES");
         return;
       }
 
-      if (diff.length > 1024 * 1024) {
-        this.sendEvent({ type: "get-file-diff-result", requestId, diff: "FILE_TOO_LARGE" });
-        return;
-      }
-
-      this.sendEvent({ type: "get-file-diff-result", requestId, diff });
+      sendWindow(diff);
     } catch (error) {
       this.sendEvent({
         type: "get-file-diff-result",
         requestId,
         diff: "",
+        offset: 0,
+        totalBytes: 0,
+        truncated: false,
+        nextOffset: null,
         error: (error as Error).message,
       });
     }

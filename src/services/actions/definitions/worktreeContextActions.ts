@@ -11,6 +11,8 @@ import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
 import { basename } from "@shared/utils/path";
+import { paginate } from "@shared/utils/boundedOutput";
+import { GIT_PAGE_LIMIT_DEFAULT, GIT_PAGE_LIMIT_MAX } from "@shared/config/gitReadLimits";
 import {
   deriveReviewReadiness,
   REVIEW_READINESS_ITEM_IDS,
@@ -539,7 +541,7 @@ export function registerWorktreeContextActions(
       id: "worktree.compareDiff",
       title: "Compare Worktree Diff",
       description:
-        "Compare two worktrees and return the list of files that differ between their branches. Args: `worktreeId` (optional — the left/base side; defaults to the focused or active worktree), `compareToWorktreeId` (required — the right side to compare against), `useMergeBase` (optional — three-dot/PR-accurate range), `ignoreWhitespace` (optional). Returns { branch1, branch2, files } where each file has path, oldPath?, status, insertions, deletions. Read-only; does not open any UI. For a single file's full diff, call `git.getFileDiff` afterwards.",
+        "Compare two worktrees and return a page of the files that differ between their branches. Args: `worktreeId` (optional — the left/base side; defaults to the focused or active worktree), `compareToWorktreeId` (required — the right side to compare against), `useMergeBase` (optional — three-dot/PR-accurate range), `ignoreWhitespace` (optional), `offset` (optional, default 0), `limit` (optional, default 100, max 200). Returns { branch1, branch2, files, total, hasMore, offset, limit, nextOffset } where each file has path, oldPath?, status, insertions, deletions. When `hasMore` is true, call again with `offset: nextOffset`. Read-only; does not open any UI. For a single file's full diff, call `git.getFileDiff` afterwards.",
       category: "worktree",
       kind: "query",
       danger: "safe",
@@ -549,6 +551,19 @@ export function registerWorktreeContextActions(
         compareToWorktreeId: z.string(),
         useMergeBase: z.boolean().optional(),
         ignoreWhitespace: z.boolean().optional(),
+        offset: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe("Index to start from — pass a previous `nextOffset` (default 0)."),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(GIT_PAGE_LIMIT_MAX)
+          .optional()
+          .describe(`Files per page (default ${GIT_PAGE_LIMIT_DEFAULT}, max ${GIT_PAGE_LIMIT_MAX}).`),
       }),
       resultSchema: z.object({
         branch1: z.string(),
@@ -562,6 +577,11 @@ export function registerWorktreeContextActions(
             deletions: z.number().nullable(),
           })
         ),
+        total: z.number(),
+        hasMore: z.boolean(),
+        offset: z.number(),
+        limit: z.number(),
+        nextOffset: z.number().nullable(),
       }),
       mcpOutputSchema: true,
       mcpAnnotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
@@ -601,7 +621,30 @@ export function registerWorktreeContextActions(
         if (typeof res === "string") {
           throw new Error("Unexpected diff string from worktree comparison; expected a file list.");
         }
-        return res;
+
+        const start = Math.max(Math.trunc(args.offset ?? 0) || 0, 0);
+        const size = Math.min(
+          Math.max(Math.trunc(args.limit ?? GIT_PAGE_LIMIT_DEFAULT) || 1, 1),
+          GIT_PAGE_LIMIT_MAX
+        );
+        const page = paginate(res.files ?? [], start, size);
+
+        return {
+          branch1: res.branch1,
+          branch2: res.branch2,
+          files: page.items.map((file) => ({
+            path: file.path,
+            oldPath: file.oldPath,
+            status: file.status,
+            insertions: file.insertions,
+            deletions: file.deletions,
+          })),
+          total: page.total,
+          hasMore: page.hasMore,
+          offset: start,
+          limit: size,
+          nextOffset: page.nextOffset,
+        };
       },
     })
   );

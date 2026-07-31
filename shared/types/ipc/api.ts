@@ -840,8 +840,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       cwd: string,
       filePath: string,
       status: GitStatus,
-      ignoreWhitespace?: boolean
-    ): Promise<string>;
+      ignoreWhitespace?: boolean,
+      window?: { offset?: number; maxBytes?: number }
+    ): Promise<import("./git.js").GitFileDiffResult>;
     getProjectPulse(options: {
       worktreeId: string;
       rangeDays: import("../pulse.js").PulseRangeDays;

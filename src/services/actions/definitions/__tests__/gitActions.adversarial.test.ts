@@ -50,10 +50,28 @@ function makeGitStub(): GitStub {
     commit: vi.fn().mockResolvedValue({ sha: "abc" }),
     push: vi.fn().mockResolvedValue({ ok: true }),
     pullRebase: vi.fn().mockResolvedValue(undefined),
-    getFileDiff: vi.fn().mockResolvedValue("diff"),
-    listCommits: vi.fn().mockResolvedValue([]),
+    getFileDiff: vi.fn().mockResolvedValue({
+      content: "diff",
+      offset: 0,
+      totalBytes: 4,
+      truncated: false,
+      nextOffset: null,
+    }),
+    listCommits: vi.fn().mockResolvedValue({ items: [], hasMore: false, total: 0 }),
     getStagingStatus: vi.fn().mockResolvedValue({}),
     getProjectPulse: vi.fn().mockResolvedValue({}),
+  };
+}
+
+function makeCommit(index: number, overrides: Record<string, unknown> = {}) {
+  return {
+    hash: `hash-${index}`,
+    shortHash: `h${index}`,
+    message: `subject ${index}`,
+    body: `body ${index}`,
+    author: { name: "Ada", email: "ada@example.com" },
+    date: "2026-01-01",
+    ...overrides,
   };
 }
 
@@ -260,7 +278,8 @@ describe("gitActions adversarial", () => {
       "/repo",
       "src/file with spaces.ts",
       "renamed",
-      undefined
+      undefined,
+      { offset: 0, maxBytes: 24 * 1024 }
     );
   });
 
@@ -302,13 +321,21 @@ describe("gitActions adversarial", () => {
       { filePath: "x.ts", status: "modified" },
       { activeWorktreePath: "/repo" }
     );
-    expect(git.getFileDiff).toHaveBeenCalledWith("/repo", "x.ts", "modified", undefined);
+    expect(git.getFileDiff).toHaveBeenCalledWith("/repo", "x.ts", "modified", undefined, {
+      offset: 0,
+      maxBytes: 24 * 1024,
+    });
   });
 
   it("git.listCommits falls back to ctx.activeWorktreePath and forwards filters", async () => {
     const { run, git } = setupActions();
     await run("git.listCommits", { search: "fix", limit: 5 }, { activeWorktreePath: "/repo" });
-    expect(git.listCommits).toHaveBeenCalledWith({ cwd: "/repo", search: "fix", limit: 5 });
+    expect(git.listCommits).toHaveBeenCalledWith({
+      cwd: "/repo",
+      search: "fix",
+      skip: 0,
+      limit: 5,
+    });
   });
 
   it("git.stageFile falls back to ctx.activeWorktreePath", async () => {
@@ -355,5 +382,323 @@ describe("gitActions adversarial", () => {
     expect(git.getProjectPulse).toHaveBeenCalledWith(
       expect.objectContaining({ worktreeId: "wt-ctx", rangeDays: 120 })
     );
+  });
+});
+
+/**
+ * `resultSchema` is advertised documentation — `ActionService.dispatch` returns
+ * `run()` output unvalidated — so every assertion here calls `run()` and checks
+ * the value it actually returned. Asserting against `resultSchema.parse()` would
+ * prove nothing about what reaches an agent (#11531).
+ */
+describe("gitActions bounded reads", () => {
+  it("git.listCommits caps the returned page at the requested limit", async () => {
+    const { run, git } = setupActions();
+    git.listCommits.mockResolvedValue({
+      items: Array.from({ length: 500 }, (_, i) => makeCommit(i)),
+      hasMore: true,
+      total: 5000,
+    });
+
+    const result = (await run("git.listCommits", { limit: 10 }, { activeWorktreePath: "/repo" })) as {
+      items: unknown[];
+      nextSkip: number | null;
+    };
+
+    expect(result.items).toHaveLength(10);
+    expect(result.nextSkip).toBe(10);
+  });
+
+  it("git.listCommits clamps an over-ceiling limit instead of forwarding it", async () => {
+    const { run, git } = setupActions();
+    git.listCommits.mockResolvedValue({
+      items: Array.from({ length: 5000 }, (_, i) => makeCommit(i)),
+      hasMore: true,
+      total: 5000,
+    });
+
+    const result = (await run(
+      "git.listCommits",
+      { limit: 5000 },
+      { activeWorktreePath: "/repo" }
+    )) as { items: unknown[]; limit: number };
+
+    expect(git.listCommits).toHaveBeenCalledWith(expect.objectContaining({ limit: 100 }));
+    expect(result.items).toHaveLength(100);
+    expect(result.limit).toBe(100);
+  });
+
+  it("git.listCommits truncates each commit body and flags it", async () => {
+    const { run, git } = setupActions();
+    git.listCommits.mockResolvedValue({
+      items: [makeCommit(0, { body: "x".repeat(50_000) }), makeCommit(1, { body: "short" })],
+      hasMore: false,
+      total: 2,
+    });
+
+    const result = (await run("git.listCommits", undefined, { activeWorktreePath: "/repo" })) as {
+      items: { body?: string; bodyTruncated: boolean }[];
+    };
+
+    expect(result.items[0]?.body).toHaveLength(1024);
+    expect(result.items[0]?.bodyTruncated).toBe(true);
+    expect(result.items[1]?.body).toBe("short");
+    expect(result.items[1]?.bodyTruncated).toBe(false);
+  });
+
+  it("git.listCommits drops fields the schema does not advertise", async () => {
+    const { run, git } = setupActions();
+    git.listCommits.mockResolvedValue({
+      items: [makeCommit(0, { refs: "HEAD -> main", diff: "a".repeat(10_000) })],
+      hasMore: false,
+      total: 1,
+    });
+
+    const result = (await run("git.listCommits", undefined, { activeWorktreePath: "/repo" })) as {
+      items: Record<string, unknown>[];
+    };
+
+    expect(result.items[0]).not.toHaveProperty("refs");
+    expect(result.items[0]).not.toHaveProperty("diff");
+    expect(result.items[0]?.hash).toBe("hash-0");
+  });
+
+  it("git.getFileDiff defaults to the 24KB window and forwards an explicit one", async () => {
+    const { run, git } = setupActions();
+
+    await run("git.getFileDiff", { filePath: "a.ts", status: "modified" }, { activeWorktreePath: "/repo" });
+    expect(git.getFileDiff).toHaveBeenCalledWith("/repo", "a.ts", "modified", undefined, {
+      offset: 0,
+      maxBytes: 24 * 1024,
+    });
+
+    await run(
+      "git.getFileDiff",
+      { filePath: "a.ts", status: "modified", offset: 2048, maxBytes: 4096 },
+      { activeWorktreePath: "/repo" }
+    );
+    expect(git.getFileDiff).toHaveBeenLastCalledWith("/repo", "a.ts", "modified", undefined, {
+      offset: 2048,
+      maxBytes: 4096,
+    });
+  });
+
+  it("git.getFileDiff clamps an over-ceiling maxBytes reaching run() unvalidated", async () => {
+    const { run, git } = setupActions();
+    await run(
+      "git.getFileDiff",
+      { filePath: "a.ts", status: "modified", maxBytes: 999_999_999 },
+      { activeWorktreePath: "/repo" }
+    );
+    expect(git.getFileDiff).toHaveBeenCalledWith(
+      "/repo",
+      "a.ts",
+      "modified",
+      undefined,
+      { offset: 0, maxBytes: 1024 * 1024 }
+    );
+  });
+
+  it("git.getFileDiff surfaces the continuation cursor for an oversized diff", async () => {
+    const { run, git } = setupActions();
+    git.getFileDiff.mockResolvedValue({
+      content: "chunk",
+      offset: 0,
+      totalBytes: 5_000_000,
+      truncated: true,
+      nextOffset: 24576,
+    });
+
+    const result = (await run(
+      "git.getFileDiff",
+      { filePath: "big.lock", status: "modified" },
+      { activeWorktreePath: "/repo" }
+    )) as { truncated: boolean; nextOffset: number | null; totalBytes: number };
+
+    expect(result.truncated).toBe(true);
+    expect(result.nextOffset).toBe(24576);
+    expect(result.totalBytes).toBe(5_000_000);
+  });
+
+  it("git.getStagingStatus pages every file list and reports per-list totals", async () => {
+    const { run, git } = setupActions();
+    const entry = (i: number) => ({
+      path: `file-${i}.ts`,
+      status: "modified",
+      insertions: 1,
+      deletions: 0,
+    });
+    git.getStagingStatus.mockResolvedValue({
+      staged: Array.from({ length: 500 }, (_, i) => entry(i)),
+      unstaged: Array.from({ length: 30 }, (_, i) => entry(i)),
+      conflicted: [],
+      conflictedFiles: [],
+      isDetachedHead: false,
+      currentBranch: "main",
+      hasRemote: true,
+      repoState: "DIRTY",
+      rebaseStep: null,
+      rebaseTotalSteps: null,
+      rebaseSequence: null,
+    });
+
+    const result = (await run("git.getStagingStatus", undefined, {
+      activeWorktreePath: "/repo",
+    })) as {
+      staged: unknown[];
+      unstaged: unknown[];
+      totals: { staged: number; unstaged: number };
+      hasMore: { staged: boolean; unstaged: boolean };
+    };
+
+    expect(result.staged).toHaveLength(100);
+    expect(result.unstaged).toHaveLength(30);
+    expect(result.totals.staged).toBe(500);
+    expect(result.hasMore.staged).toBe(true);
+    expect(result.hasMore.unstaged).toBe(false);
+  });
+
+  it("git.getStagingStatus summarizes the rebase sequence instead of shipping the todo", async () => {
+    const { run, git } = setupActions();
+    git.getStagingStatus.mockResolvedValue({
+      staged: [],
+      unstaged: [],
+      conflicted: [],
+      conflictedFiles: [],
+      isDetachedHead: false,
+      currentBranch: "feature",
+      hasRemote: true,
+      repoState: "REBASING",
+      rebaseStep: 2,
+      rebaseTotalSteps: 400,
+      rebaseSequence: {
+        backend: "merge",
+        entries: [
+          ...Array.from({ length: 200 }, () => ({
+            action: "pick",
+            sha: "abc",
+            subject: "done work",
+            state: "done",
+          })),
+          { action: "pick", sha: "def", subject: "current work", state: "current" },
+          ...Array.from({ length: 199 }, () => ({
+            action: "pick",
+            sha: "ghi",
+            subject: "later work",
+            state: "pending",
+          })),
+        ],
+      },
+    });
+
+    const result = (await run("git.getStagingStatus", undefined, {
+      activeWorktreePath: "/repo",
+    })) as {
+      rebaseSummary: {
+        backend: string;
+        totalEntries: number;
+        completedEntries: number;
+        pendingEntries: number;
+        currentSubject: string | null;
+      } | null;
+    };
+
+    expect(result).not.toHaveProperty("rebaseSequence");
+    expect(result.rebaseSummary).toEqual({
+      backend: "merge",
+      totalEntries: 400,
+      completedEntries: 200,
+      pendingEntries: 199,
+      currentSubject: "current work",
+    });
+  });
+
+  it("git.getStagingStatus keeps the legacy conflicted list aligned with the paged entries", async () => {
+    const { run, git } = setupActions();
+    git.getStagingStatus.mockResolvedValue({
+      staged: [],
+      unstaged: [],
+      conflicted: Array.from({ length: 500 }, (_, i) => `c-${i}.ts`),
+      conflictedFiles: Array.from({ length: 500 }, (_, i) => ({
+        path: `c-${i}.ts`,
+        xy: "UU",
+        label: "both modified",
+      })),
+      isDetachedHead: false,
+      currentBranch: "main",
+      hasRemote: true,
+      repoState: "MERGING",
+      rebaseStep: null,
+      rebaseTotalSteps: null,
+      rebaseSequence: null,
+    });
+
+    const result = (await run("git.getStagingStatus", { limit: 5 }, {
+      activeWorktreePath: "/repo",
+    })) as { conflicted: string[]; conflictedFiles: { path: string }[] };
+
+    expect(result.conflicted).toHaveLength(5);
+    expect(result.conflictedFiles).toHaveLength(5);
+    expect(result.conflicted).toEqual(result.conflictedFiles.map((f) => f.path));
+  });
+
+  it("git.getProjectPulse projects the heatmap whole and caps recent commits", async () => {
+    const { run, git } = setupActions();
+    git.getProjectPulse.mockResolvedValue({
+      worktreeId: "wt-1",
+      worktreePath: "/repo",
+      mainBranch: "main",
+      rangeDays: 60,
+      generatedAt: 1,
+      heatmap: Array.from({ length: 60 }, (_, i) => ({
+        date: `2026-01-${i}`,
+        count: i,
+        level: 1,
+        internalNote: "should not ship",
+      })),
+      commitsInRange: 12,
+      activeDays: 5,
+      projectAgeDays: 100,
+      recentCommits: Array.from({ length: 50 }, (_, i) => ({
+        sha: `sha-${i}`,
+        subject: "s".repeat(5000),
+        timestamp: i,
+      })),
+    });
+
+    const result = (await run("git.getProjectPulse", undefined, { activeWorktreeId: "wt-1" })) as {
+      heatmap: Record<string, unknown>[];
+      recentCommits: { subject: string }[];
+    };
+
+    // The renderer pulse card charts every cell, so the heatmap is projected whole.
+    expect(result.heatmap).toHaveLength(60);
+    expect(result.heatmap[0]).not.toHaveProperty("internalNote");
+    expect(result.recentCommits).toHaveLength(10);
+    expect(result.recentCommits[0]?.subject.length).toBeLessThanOrEqual(512);
+  });
+
+  it("git.getProjectPulse trims a heatmap longer than the requested range", async () => {
+    const { run, git } = setupActions();
+    git.getProjectPulse.mockResolvedValue({
+      worktreeId: "wt-1",
+      worktreePath: "/repo",
+      mainBranch: "main",
+      rangeDays: 60,
+      generatedAt: 1,
+      heatmap: Array.from({ length: 900 }, (_, i) => ({ date: `d-${i}`, count: 0, level: 0 })),
+      commitsInRange: 0,
+      activeDays: 0,
+      projectAgeDays: 0,
+      recentCommits: [],
+    });
+
+    const result = (await run("git.getProjectPulse", { rangeDays: 60 }, {
+      activeWorktreeId: "wt-1",
+    })) as { heatmap: { date: string }[] };
+
+    expect(result.heatmap).toHaveLength(60);
+    // Keeps the newest window, not the oldest.
+    expect(result.heatmap.at(-1)?.date).toBe("d-899");
   });
 });

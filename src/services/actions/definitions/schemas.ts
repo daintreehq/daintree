@@ -68,6 +68,19 @@ export const GitStatusSchema = z.enum([
   "copied",
 ]);
 
+export const StagingFileEntrySchema = z.object({
+  path: z.string(),
+  status: GitStatusSchema,
+  insertions: z.number().nullable(),
+  deletions: z.number().nullable(),
+});
+
+export const ConflictedFileEntrySchema = z.object({
+  path: z.string(),
+  xy: z.string(),
+  label: z.string(),
+});
+
 export const PulseRangeDaysSchema = z
   .union([z.literal(60), z.literal(120), z.literal(180)])
   .optional()
