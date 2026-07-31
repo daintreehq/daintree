@@ -3394,13 +3394,104 @@ describe("sessionServer introspection tier filtering", () => {
     expect((dispatched[1] as { limit: number }).limit).toBe(5000);
   });
 
-  it("does not widen the limit for non-search introspection tools", async () => {
-    const deps = introspectionDeps("workbench", { actions: [] });
+  it("walks every actions.list page before filtering, preserving the caller's filters", async () => {
+    // The renderer pages before main can apply the tier filter, so filtering
+    // one of its pages would return a short page whose total/hasMore counted
+    // actions this session cannot dispatch.
+    const permitted = Array.from({ length: 120 }, (_, i) => entry(`actions.p${i}`));
+    const all = [...permitted.slice(0, 60), entry("git.push"), ...permitted.slice(60)];
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("workbench"),
+      dispatchAction: vi.fn((_id: string, callArgs: unknown) => {
+        const { offset = 0, limit = 50 } = callArgs as { offset?: number; limit?: number };
+        const page = all.slice(offset, offset + limit);
+        return Promise.resolve({
+          result: {
+            ok: true as const,
+            result: {
+              actions: page,
+              total: all.length,
+              limit,
+              offset,
+              hasMore: offset + limit < all.length,
+            },
+          },
+        });
+      }),
+    });
     const server = createSessionServer("s1", deps);
     await callTool(server, { name: "actions.list", arguments: { category: "git" } });
 
-    const dispatched = (deps.dispatchAction as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    expect(dispatched[1]).toEqual({ category: "git" });
+    const calls = (deps.dispatchAction as ReturnType<typeof vi.fn>).mock.calls;
+    // Every page fetched at the maximum window, walking until hasMore clears,
+    // and the caller's own filter carried on each request.
+    expect(calls.length).toBeGreaterThan(1);
+    for (const call of calls) {
+      expect(call[1]).toMatchObject({ category: "git", limit: 100 });
+    }
+    expect(calls.map((c) => (c[1] as { offset: number }).offset)).toEqual([0, 100]);
+  });
+
+  it("pages the permitted set so total and hasMore describe the reachable surface", async () => {
+    // Six workbench-permitted ids, deliberately split across two renderer
+    // pages: three land beyond the first 100-entry window, so a filter applied
+    // to a single page would miss them entirely.
+    const early = ["actions.search", "actions.getSchema", "terminal.list"];
+    const late = ["terminal.getOutput", "terminal.getStatus", "worktree.list"];
+    for (const id of [...early, ...late]) {
+      expect(isTierPermitted("workbench", id, false)).toBe(true);
+    }
+    const denied = (n: number, from: number) =>
+      Array.from({ length: n }, (_, i) => entry(`git.denied${from + i}`));
+    const all = [
+      ...denied(60, 0),
+      ...early.map((id) => entry(id)),
+      ...denied(37, 60),
+      ...late.map((id) => entry(id)),
+      ...denied(20, 100),
+    ];
+    expect(all.length).toBeGreaterThan(100);
+
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("workbench"),
+      dispatchAction: vi.fn((_id: string, callArgs: unknown) => {
+        const { offset = 0, limit = 50 } = callArgs as { offset?: number; limit?: number };
+        return Promise.resolve({
+          result: {
+            ok: true as const,
+            result: {
+              actions: all.slice(offset, offset + limit),
+              total: all.length,
+              limit,
+              offset,
+              hasMore: offset + limit < all.length,
+            },
+          },
+        });
+      }),
+    });
+    const server = createSessionServer("s1", deps);
+
+    const body = payload<{
+      actions: ActionManifestEntry[];
+      total: number;
+      offset: number;
+      limit: number;
+      hasMore: boolean;
+    }>(await callTool(server, { name: "actions.list", arguments: { limit: 4 } }));
+
+    // total counts the permitted surface, not the renderer's raw match count.
+    expect(body.total).toBe(6);
+    expect(body.actions.map((a) => a.id)).toEqual([...early, "terminal.getOutput"]);
+    expect(body.hasMore).toBe(true);
+
+    const second = payload<{ actions: ActionManifestEntry[]; hasMore: boolean }>(
+      await callTool(server, { name: "actions.list", arguments: { limit: 4, offset: 4 } })
+    );
+    // Paging walks the permitted set, so page two continues where page one
+    // stopped instead of re-slicing a tier-blind ordering.
+    expect(second.actions.map((a) => a.id)).toEqual(["terminal.getStatus", "worktree.list"]);
+    expect(second.hasMore).toBe(false);
   });
 
   it("reports a tier-denied getSchema id as NOT_FOUND rather than advertising it", async () => {
