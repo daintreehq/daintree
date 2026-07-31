@@ -10,19 +10,13 @@
  * change to those lines should require a corresponding update here.
  */
 import { describe, it, expect } from "vitest";
+// The real sanitizer, extracted in #11547 — previously hand-mirrored here,
+// which could drift from the hook silently.
+import { sanitizeTerminalName } from "@/utils/agentLaunchValidation";
 
 // ── mirror of the hook's title-resolution block ──────────────────────────────
-// Mirrors `sanitizeTerminalName` + the presetTitle/trimmedName/customTitle
-// resolution in useAgentLauncher.ts. Any change to that logic should update
-// this mirror.
-function sanitizeTerminalName(raw: string): string {
-  let out = "";
-  for (const ch of raw) {
-    const code = ch.codePointAt(0) ?? 0;
-    out += code <= 0x1f || code === 0x7f ? " " : ch;
-  }
-  return out.replace(/\s+/g, " ").trim();
-}
+// Mirrors the presetTitle/trimmedName/customTitle resolution in
+// useAgentLauncher.ts. Any change to that logic should update this mirror.
 
 function resolvePanelTitle(
   computedTitle: string,

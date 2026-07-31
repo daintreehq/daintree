@@ -170,7 +170,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.launch",
     title: "Launch Agent",
     description:
-      "Launch an AI agent in a new terminal. Returns terminalId and location. If Daintree opens a setup diagnostic instead of a PTY, the result also carries spawnStatus: missing-cli. Fire up to 4 in parallel per message.",
+      "Launch an AI agent in a new terminal. Returns { launched, terminalId, location, worktreeId, worktreePath, branch, cwd } — the resolved identity tells you where the agent landed, so parallel launches can be mapped back to their work without re-resolving the target. `launched: true` means the panel was created and its process is starting, NOT that the agent is ready — poll agent.getState or terminal.getStatus for that. `launched: false` means no agent is running: either nothing was created (every field null) or the CLI is missing, where Daintree opened a setup diagnostic instead (terminalId is that panel, spawnStatus is missing-cli). Fire up to 4 in parallel per message.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -201,13 +201,23 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
           'Always provide a short, task-descriptive name for the terminal tab (e.g. "Claude: auth refactor") so the user can tell parallel agents apart. Pins the title so agent detection cannot overwrite it. Empty/whitespace falls back to the default title.'
         ),
     }),
-    resultSchema: z
-      .object({
-        terminalId: z.string(),
-        location: LaunchLocationSchema,
-        spawnStatus: z.literal("missing-cli").optional(),
-      })
-      .nullable(),
+    // Top-level object, never `.nullable()`: `buildToolOutputSchema` (tierAuth)
+    // forwards a manifest schema only when its JSON Schema has
+    // `type === "object"`, and zod renders a nullable object as a top-level
+    // `anyOf`. A nullable schema here silently disabled `mcpOutputSchema` and
+    // no `structuredContent` was ever emitted (#11547). Every field is
+    // required and individually nullable — same shape as `agent.getState`, so
+    // a strict client validating structuredContent never sees a missing key.
+    resultSchema: z.object({
+      launched: z.boolean(),
+      terminalId: z.string().nullable(),
+      location: z.enum(["grid", "dock"]).nullable(),
+      spawnStatus: z.literal("missing-cli").nullable(),
+      worktreeId: z.string().nullable(),
+      worktreePath: z.string().nullable(),
+      branch: z.string().nullable(),
+      cwd: z.string().nullable(),
+    }),
     mcpOutputSchema: true,
     run: async (args: unknown) => {
       const {
@@ -268,11 +278,35 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         force,
         name,
       });
-      if (!result) return null;
+      // Nothing to report: the launcher declined (Electron unavailable, a
+      // re-entrant launch of the same agent, or a caught spawn failure). Still
+      // an object so the MCP output schema stays satisfiable — `launched:false`
+      // is the honest discriminant, where a bare null read as a success with no
+      // terminal. Genuine rejections (unknown id, unresolvable worktree) throw
+      // out of the launcher and surface as ok:false instead.
+      if (!result) {
+        return {
+          launched: false,
+          terminalId: null,
+          location: null,
+          spawnStatus: null,
+          worktreeId: null,
+          worktreePath: null,
+          branch: null,
+          cwd: null,
+        };
+      }
       return {
+        // A missing CLI opens a diagnostic panel but starts no agent, so it is
+        // not a launch — the caller reads spawnStatus for the reason.
+        launched: result.spawnStatus !== "missing-cli",
         terminalId: result.terminalId,
         location: result.location,
-        ...(result.spawnStatus ? { spawnStatus: result.spawnStatus } : {}),
+        spawnStatus: result.spawnStatus ?? null,
+        worktreeId: result.worktreeId,
+        worktreePath: result.worktreePath,
+        branch: result.branch,
+        cwd: result.cwd,
       };
     },
   }));

@@ -71,13 +71,39 @@ vi.mock("@/clients", async (importOriginal) => {
 import { registerAgentActions } from "../agentActions";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 
+/**
+ * The identity the launcher resolves before spawning and now returns alongside
+ * the terminal (#11547). Shared by the callback fixture and the expectations so
+ * a field added to one side can't silently drift from the other.
+ */
+const LAUNCH_IDENTITY = {
+  worktreeId: "wt-1",
+  worktreePath: "/repo/wt-1",
+  branch: "feature/x",
+  cwd: "/repo/wt-1",
+};
+
 function makeCallbacks() {
   return {
-    onLaunchAgent: vi.fn().mockResolvedValue({ terminalId: "term-1", location: "grid" }),
+    onLaunchAgent: vi
+      .fn()
+      .mockResolvedValue({ terminalId: "term-1", location: "grid", ...LAUNCH_IDENTITY }),
     onOpenQuickSwitcher: vi.fn(),
   } as unknown as ActionCallbacks & {
     onLaunchAgent: ReturnType<typeof vi.fn>;
     onOpenQuickSwitcher: ReturnType<typeof vi.fn>;
+  };
+}
+
+/** The full public `agent.launch` result for a launch that started an agent. */
+function launchedResult(overrides: Record<string, unknown> = {}) {
+  return {
+    launched: true,
+    terminalId: "term-1",
+    location: "grid",
+    spawnStatus: null,
+    ...LAUNCH_IDENTITY,
+    ...overrides,
   };
 }
 
@@ -87,16 +113,31 @@ function setupActions(callbacks: ActionCallbacks) {
   return actions;
 }
 
+function getDefinition(actions: ActionRegistry, id: string): AnyActionDefinition {
+  const factory = actions.get(id);
+  if (!factory) throw new Error(`missing ${id}`);
+  return factory() as AnyActionDefinition;
+}
+
 function callAction(
   actions: ActionRegistry,
   id: string,
   args?: unknown,
   ctx: Partial<ActionContext> = {}
 ): Promise<unknown> {
-  const factory = actions.get(id);
-  if (!factory) throw new Error(`missing ${id}`);
-  const def = factory() as AnyActionDefinition;
-  return def.run(args, ctx as never);
+  return getDefinition(actions, id).run(args, ctx as never);
+}
+
+/**
+ * Parse a result through the action's own declared schema. Nothing does this at
+ * runtime (`resultSchema` is manifest documentation, never enforced), so the
+ * round-trip has to be asserted or `run()` silently drifts from what MCP
+ * advertises as the tool's outputSchema.
+ */
+function parseAgainstSchema(actions: ActionRegistry, id: string, result: unknown) {
+  const schema = getDefinition(actions, id).resultSchema;
+  if (!schema) throw new Error(`${id} has no resultSchema`);
+  return schema.safeParse(result);
 }
 
 function setPanelState(
@@ -158,7 +199,63 @@ describe("agentActions adversarial", () => {
       interactive: true,
       modelId: "gpt-5",
     });
-    expect(result).toEqual({ terminalId: "term-1", location: "grid" });
+    expect(result).toEqual(launchedResult());
+    expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
+  });
+
+  it("agent.launch returns the identity the launcher resolved (#11547)", async () => {
+    const callbacks = makeCallbacks();
+    callbacks.onLaunchAgent.mockResolvedValueOnce({
+      terminalId: "term-9",
+      location: "dock",
+      worktreeId: "wt-42",
+      worktreePath: "/repo/wt-42",
+      branch: "feature/parallel",
+      cwd: "/repo/wt-42/packages/app",
+    });
+    const actions = setupActions(callbacks);
+
+    // The point of the widening: a caller firing several launches at once maps
+    // a terminal back to its worktree without re-resolving the target itself.
+    const result = await callAction(actions, "agent.launch", { agentId: "claude" });
+
+    expect(result).toEqual({
+      launched: true,
+      terminalId: "term-9",
+      location: "dock",
+      spawnStatus: null,
+      worktreeId: "wt-42",
+      worktreePath: "/repo/wt-42",
+      branch: "feature/parallel",
+      cwd: "/repo/wt-42/packages/app",
+    });
+    expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
+  });
+
+  it("agent.launch reports a launch outside a worktree with null identity fields", async () => {
+    const callbacks = makeCallbacks();
+    callbacks.onLaunchAgent.mockResolvedValueOnce({
+      terminalId: "term-3",
+      location: "grid",
+      worktreeId: null,
+      worktreePath: null,
+      branch: null,
+      cwd: "/home/user/scratch",
+    });
+    const actions = setupActions(callbacks);
+
+    const result = await callAction(actions, "agent.launch", { agentId: "claude" });
+
+    // cwd is still real — it is where the PTY actually started, which is the
+    // only locator a scratch/project-root launch has.
+    expect(result).toMatchObject({
+      launched: true,
+      worktreeId: null,
+      worktreePath: null,
+      branch: null,
+      cwd: "/home/user/scratch",
+    });
+    expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });
 
   it("agent.launch preserves the atomic missing-CLI diagnostic discriminant", async () => {
@@ -167,16 +264,46 @@ describe("agentActions adversarial", () => {
       terminalId: "diagnostic-panel",
       location: "grid",
       spawnStatus: "missing-cli",
+      ...LAUNCH_IDENTITY,
     });
     const actions = setupActions(callbacks);
 
     const result = await callAction(actions, "agent.launch", { agentId: "claude" });
 
+    // A diagnostic panel is a real panel but no agent started, so `launched` is
+    // false while terminalId still points at something the caller can open.
     expect(result).toEqual({
+      launched: false,
       terminalId: "diagnostic-panel",
       location: "grid",
       spawnStatus: "missing-cli",
+      ...LAUNCH_IDENTITY,
     });
+    expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
+  });
+
+  it("agent.launch reports a declined launch as launched:false, not null (#11547)", async () => {
+    const callbacks = makeCallbacks();
+    // The launcher declines without throwing for a re-entrant launch of the
+    // same agent or when Electron is unavailable.
+    callbacks.onLaunchAgent.mockResolvedValueOnce(null);
+    const actions = setupActions(callbacks);
+
+    const result = await callAction(actions, "agent.launch", { agentId: "claude" });
+
+    // A bare null read to an MCP client as a success with no terminal, and left
+    // the declared object output schema unsatisfiable.
+    expect(result).toEqual({
+      launched: false,
+      terminalId: null,
+      location: null,
+      spawnStatus: null,
+      worktreeId: null,
+      worktreePath: null,
+      branch: null,
+      cwd: null,
+    });
+    expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });
 
   it("agent.launch forwards 'name' to the launch callback", async () => {
@@ -656,7 +783,7 @@ describe("agent.launch dispatch integration", () => {
       service.register(factory());
     }
 
-    const result = await service.dispatch<{ terminalId: string }>(
+    const result = await service.dispatch<{ terminalId: string | null }>(
       "agent.launch",
       { agentId: "claude", worktreeId: "wt-1", location: "grid" },
       { source: "user" }
@@ -664,7 +791,7 @@ describe("agent.launch dispatch integration", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.result).toEqual({ terminalId: "term-1", location: "grid" });
+      expect(result.result).toEqual(launchedResult());
     }
     expect(callbacks.onLaunchAgent).toHaveBeenCalledWith("claude", {
       location: "grid",

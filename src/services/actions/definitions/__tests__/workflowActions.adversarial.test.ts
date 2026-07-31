@@ -57,6 +57,10 @@ vi.mock("@/store/slices/panelRegistry", () => selectorMock);
 
 import { registerWorkflowActions } from "../workflowActions";
 import {
+  clearPluginAgentRegistryForTests,
+  setPluginAgentRegistry,
+} from "@shared/config/pluginAgentRegistry";
+import {
   buildCacheKey,
   getCache,
   getGeneration,
@@ -85,8 +89,34 @@ interface MockCallbacks {
 
 function makeCallbacks(): MockCallbacks & Pick<ActionCallbacks, "onLaunchAgent"> {
   return {
-    onLaunchAgent: vi.fn().mockResolvedValue({ terminalId: "term-1", location: "grid" }),
+    onLaunchAgent: vi.fn().mockResolvedValue({
+      terminalId: "term-1",
+      location: "grid",
+      // The launcher reports where it landed (#11547) — a real non-null result
+      // always carries all four identity fields.
+      worktreeId: "wt-new",
+      worktreePath: "/repo/feature/issue-6609-add-tools",
+      branch: "feature/issue-6609-add-tools",
+      cwd: "/repo/feature/issue-6609-add-tools",
+    }),
   };
+}
+
+/**
+ * Parse a result through the action's own declared `resultSchema`. Nothing does
+ * this at runtime — `ActionService` converts the schema for the manifest but
+ * never validates against it — so a field `run()` forgets is invisible until an
+ * MCP client rejects the structuredContent.
+ */
+function expectMatchesResultSchema(id: string, result: unknown) {
+  const def = setupActions(makeCallbacks())(id);
+  const schema = def.resultSchema;
+  if (!schema) throw new Error(`${id} has no resultSchema`);
+  const parsed = schema.safeParse(result);
+  expect(parsed.success).toBe(true);
+  // Zod strips unadvertised keys, so equality also catches a field `run()`
+  // emits that the published schema never promised.
+  if (parsed.success) expect(parsed.data).toEqual(result);
 }
 
 function setupActions(callbacks: MockCallbacks) {
@@ -632,6 +662,32 @@ describe("workflow.startWorkOnIssue", () => {
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBeNull();
     expect(result.issueTitle).toBe("Add workflow macro tools");
+    // The result is published as structuredContent now (#11547), so it has to
+    // satisfy the schema MCP advertises for it.
+    expectMatchesResultSchema("workflow.startWorkOnIssue", result);
+  });
+
+  it("reports contextInjected:false when CopyTree resolves with an error", async () => {
+    forgeClientMock.getIssue.mockResolvedValue({ number: 42, title: "t", url: "u" });
+    // CopyTree signals the common failures (terminal gone, generation failed)
+    // by RESOLVING with an `error` field rather than rejecting — reporting that
+    // as injected would tell a caller the agent has issue context it never got.
+    copyTreeClientMock.injectToTerminal.mockResolvedValueOnce({
+      content: "",
+      fileCount: 0,
+      error: "Terminal not found",
+    });
+    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
+
+    const result = (await def.run({ issueNumber: 42, agentId: "claude" }, {} as never)) as Record<
+      string,
+      unknown
+    >;
+
+    expect(result.contextInjected).toBe(false);
+    // Still a success overall — the agent is running and the user can re-inject.
+    expect(result.terminalId).toBe("term-1");
+    expectMatchesResultSchema("workflow.startWorkOnIssue", result);
   });
 
   it("passes spawnedBy through to agents launched by MCP workflow actions", async () => {
@@ -664,6 +720,92 @@ describe("workflow.startWorkOnIssue", () => {
     await expect(def.run({ issueNumber: 6609, agentId: "claude" }, {} as never)).rejects.toThrow(
       /No active project/
     );
+  });
+
+  describe("agentId validation runs before any side effect (#11547)", () => {
+    /**
+     * Every collaborator `run()` can reach after the validation point — reads
+     * included, so a refactor that moves one of them above the guard fails
+     * here rather than silently reintroducing the orphan worktree.
+     * `useProjectStore` is excluded on purpose: its no-active-project guard is
+     * meant to run first.
+     */
+    function expectNoSideEffects(callbacks: MockCallbacks) {
+      expect(preferencesStoreMock.getState).not.toHaveBeenCalled();
+      expect(forgeClientMock.getIssue).not.toHaveBeenCalled();
+      expect(currentViewStoreMock.getCurrentViewStore).not.toHaveBeenCalled();
+      expect(recipeStoreMock.getState).not.toHaveBeenCalled();
+      expect(worktreeClientMock.getAvailableBranch).not.toHaveBeenCalled();
+      expect(worktreeClientMock.getDefaultPath).not.toHaveBeenCalled();
+      expect(worktreeClientMock.create).not.toHaveBeenCalled();
+      expect(notifySpawnFailuresMock).not.toHaveBeenCalled();
+      expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+      expect(copyTreeClientMock.injectToTerminal).not.toHaveBeenCalled();
+      expect(forgeClientMock.getCurrentUser).not.toHaveBeenCalled();
+      expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
+    }
+
+    it("rejects an unregistered agentId without creating an orphan worktree", async () => {
+      forgeClientMock.getIssue.mockResolvedValue({ number: 1, title: "x", url: "u" });
+      const runRecipeWithResults = setRecipe("recipe-1");
+      const callbacks = makeCallbacks();
+      const def = setupActions(callbacks)("workflow.startWorkOnIssue");
+
+      // Before #11547 the id was only checked at line-of-spawn — by then the
+      // worktree existed and the recipe terminals had already started.
+      await expect(
+        def.run({ issueNumber: 1, agentId: "clyde-the-agent", recipeId: "recipe-1" }, {} as never)
+      ).rejects.toThrow(/Unknown agent ID 'clyde-the-agent'/);
+
+      expectNoSideEffects(callbacks);
+      expect(runRecipeWithResults).not.toHaveBeenCalled();
+    });
+
+    it.each(["browser", "dev-preview"])(
+      "rejects '%s' because it opens a panel with no PTY",
+      async (agentId) => {
+        forgeClientMock.getIssue.mockResolvedValue({ number: 1, title: "x", url: "u" });
+        const callbacks = makeCallbacks();
+        const def = setupActions(callbacks)("workflow.startWorkOnIssue");
+
+        // These reach their own non-PTY branches inside the launcher, so the
+        // workflow would "succeed" with a panel that can never receive the
+        // injected context the action promises.
+        await expect(def.run({ issueNumber: 1, agentId }, {} as never)).rejects.toThrow(/no PTY/);
+
+        expectNoSideEffects(callbacks);
+      }
+    );
+
+    it("accepts 'terminal', which is PTY-backed despite being unregistered", async () => {
+      forgeClientMock.getIssue.mockResolvedValue({ number: 1, title: "x", url: "u" });
+      const callbacks = makeCallbacks();
+      const def = setupActions(callbacks)("workflow.startWorkOnIssue");
+
+      await def.run({ issueNumber: 1, agentId: "terminal" }, {} as never);
+
+      expect(worktreeClientMock.create).toHaveBeenCalled();
+      expect(callbacks.onLaunchAgent).toHaveBeenCalledWith("terminal", expect.any(Object));
+    });
+
+    it("accepts a plugin-contributed agentId, so the gate is not a built-in enum", async () => {
+      forgeClientMock.getIssue.mockResolvedValue({ number: 1, title: "x", url: "u" });
+      const callbacks = makeCallbacks();
+      const def = setupActions(callbacks)("workflow.startWorkOnIssue");
+
+      setPluginAgentRegistry({
+        "acme-agent": { name: "Acme", command: "acme" } as never,
+      });
+      try {
+        await def.run({ issueNumber: 1, agentId: "acme-agent" }, {} as never);
+      } finally {
+        // Repo convention — also clears per-plugin tracking and listeners,
+        // which setPluginAgentRegistry({}) alone would leave behind.
+        clearPluginAgentRegistryForTests();
+      }
+
+      expect(callbacks.onLaunchAgent).toHaveBeenCalledWith("acme-agent", expect.any(Object));
+    });
   });
 
   it("throws when issue is not found", async () => {
@@ -699,6 +841,11 @@ describe("workflow.startWorkOnIssue", () => {
       terminalId: "diagnostic-1",
       location: "grid",
       spawnStatus: "missing-cli",
+      // A real non-null launcher result always carries the identity too.
+      worktreeId: "wt-new",
+      worktreePath: "/repo/feature/issue-6609-add-tools",
+      branch: "feature/issue-6609-add-tools",
+      cwd: "/repo/feature/issue-6609-add-tools",
     });
     const def = setupActions(callbacks)("workflow.startWorkOnIssue");
     try {

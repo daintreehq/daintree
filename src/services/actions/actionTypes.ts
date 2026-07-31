@@ -75,6 +75,16 @@ export interface ActionCallbacks {
     location: "grid" | "dock";
     /** Present only when Daintree opened a setup diagnostic instead of spawning a PTY. */
     spawnStatus?: "missing-cli";
+    /**
+     * Where the launch landed, resolved by the launcher before the panel was
+     * created. Structurally mirrors `LaunchAgentIdentity` in
+     * `@/hooks/useAgentLauncher` — kept duplicated here for the same reason the
+     * options bag is: this type must not depend on the renderer hook (#11547).
+     */
+    worktreeId: string | null;
+    worktreePath: string | null;
+    branch: string | null;
+    cwd: string | null;
   } | null>;
   onInject: (worktreeId: string, terminalId?: string) => void;
   getDefaultCwd: () => string;
