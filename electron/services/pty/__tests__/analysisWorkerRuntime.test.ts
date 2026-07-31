@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { AnalysisWorkerRuntime } from "../analysis/AnalysisWorkerRuntime.js";
 import { ANALYSIS_ACK_FLUSH_BYTES } from "../analysis/AnalysisSession.js";
-import type { WorkerToHostMessage } from "../analysisWorkerProtocol.js";
+import type { AnalysisFinalSnapshot, WorkerToHostMessage } from "../analysisWorkerProtocol.js";
 
 // Exercises the worker-side protocol end-to-end without spawning a real
 // worker thread: the runtime + AnalysisSession (headless xterm, monitor) run
@@ -74,9 +77,80 @@ describe("AnalysisWorkerRuntime", () => {
     );
     expect(response.type).toBe("response");
     if (response.type === "response") {
-      expect(typeof response.result).toBe("string");
-      expect(response.result).toContain("hello from the worker");
+      expect(response.result).toMatchObject({
+        data: expect.stringContaining("hello from the worker"),
+        cols: 80,
+        rows: 24,
+      });
     }
+  });
+
+  // The grid a serialize was produced at is the worker's to report, because the
+  // mirror can move off the grid the host knows about without the host posting
+  // anything: replaying a persisted session sizes the mirror to the SNAPSHOT's
+  // width and reflows home on a later turn. A host that inferred the geometry
+  // from its own last resize would tag capture-width data with the spawn grid,
+  // and every replay site would then skip the alignment that keeps the payload
+  // readable — the exact defect #11552 is about.
+  describe("restore-window geometry", () => {
+    let userDataDir: string;
+    const previousUserData = process.env.DAINTREE_USER_DATA;
+
+    beforeEach(async () => {
+      userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "daintree-analysis-restore-"));
+      process.env.DAINTREE_USER_DATA = userDataDir;
+      await fsp.mkdir(path.join(userDataDir, "terminal-sessions"), { recursive: true });
+    });
+
+    afterEach(async () => {
+      runtime.handleMessage({ type: "free", terminalId: "restored" });
+      process.env.DAINTREE_USER_DATA = previousUserData;
+      await fsp.rm(userDataDir, { recursive: true, force: true });
+    });
+
+    function serializeRequest(requestId: number): Promise<WorkerToHostMessage> {
+      runtime.handleMessage({
+        type: "request",
+        requestId,
+        terminalId: "restored",
+        op: "serialize",
+        generation: 1,
+      });
+      return waitFor(() => emitted.find((m) => m.type === "response" && m.requestId === requestId));
+    }
+
+    it("reports the grid the mirror is on, not the grid the slot was created at", async () => {
+      await fsp.writeFile(
+        path.join(userDataDir, "terminal-sessions", "restored.restore"),
+        "DAINTREE_SESSION_v2\n40x12\nrestored payload",
+        "utf8"
+      );
+
+      // Spawn grid deliberately unlike the capture grid, and no resize is ever
+      // posted — the only thing that moves this mirror is the restore itself.
+      runtime.handleMessage({
+        type: "create",
+        terminalId: "restored",
+        cols: 120,
+        rows: 40,
+        scrollback: 1000,
+        restore: true,
+        spawnedAt: 99,
+        epoch: 0,
+      });
+
+      const during = await serializeRequest(11);
+      if (during.type !== "response") throw new Error("expected a response");
+      expect(during.result).toMatchObject({ cols: 40, rows: 12 });
+
+      // Once the replay lands the mirror reflows home, and the SAME call now
+      // reports the spawn grid — so the number tracks the buffer, which no
+      // host-side constant could do.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const after = await serializeRequest(12);
+      if (after.type !== "response") throw new Error("expected a response");
+      expect(after.result).toMatchObject({ cols: 120, rows: 40 });
+    });
   });
 
   it("emits activity-state transitions from the monitor with the session spawnedAt", async () => {
@@ -171,8 +245,9 @@ describe("AnalysisWorkerRuntime", () => {
     );
     if (response.type === "response") {
       expect(response.error).toBeUndefined();
-      expect(typeof response.result).toBe("string");
-      expect(response.result).toContain("pre-kill content");
+      expect(response.result).toMatchObject({
+        data: expect.stringContaining("pre-kill content"),
+      });
     }
 
     // The deferred free still runs once the barrier clears.
@@ -237,10 +312,13 @@ describe("AnalysisWorkerRuntime", () => {
     if (response.type === "response") {
       expect(response.result).not.toBeNull();
       expect(typeof response.result).toBe("object");
-      const result = response.result as { snapshot: string | null; persistence: string | null };
-      expect(result.snapshot).toContain("final content");
+      const result = response.result as AnalysisFinalSnapshot;
+      expect(result.snapshot?.data).toContain("final content");
       // No restore banner → persistence equals the plain serialize.
-      expect(result.persistence).toContain("final content");
+      expect(result.persistence?.data).toContain("final content");
+      // Both halves come off one drain, so they describe one grid.
+      expect(result.persistence).toMatchObject({ cols: 80, rows: 24 });
+      expect(result.snapshot).toMatchObject({ cols: 80, rows: 24 });
     }
 
     expect(runtime.sessionCount()).toBe(1);

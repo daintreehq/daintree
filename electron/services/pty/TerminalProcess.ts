@@ -40,6 +40,7 @@ import { SynchronizedFrameDetector } from "./SynchronizedFrameDetector.js";
 import type { IMarker } from "@xterm/headless";
 import {
   TERMINAL_SESSION_PERSISTENCE_ENABLED,
+  resizeMirror,
   restoreSessionFromFile,
 } from "./terminalSessionPersistence.js";
 import { SessionSnapshotter, createTerminalSessionSnapshotter } from "./SessionSnapshotter.js";
@@ -816,7 +817,9 @@ export class TerminalProcess {
   private resizeAnalysisInThread(cols: number, rows: number): void {
     const terminal = this.terminalInfo;
     if (terminal.headlessTerminal) {
-      terminal.headlessTerminal.resize(cols, rows);
+      // Parked, not applied, while a session replay owns the grid — the replay
+      // reflows to this geometry instead of to the one it opened on (#11552).
+      resizeMirror(terminal.headlessTerminal, cols, rows);
       // Reflow rewraps the buffer — invalidate any wake no-change skip.
       terminal.contentEpoch++;
     }

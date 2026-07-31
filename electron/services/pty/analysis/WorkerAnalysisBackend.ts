@@ -39,6 +39,25 @@ export interface AnalysisFeedFlowControl {
   holdHardCap: number;
 }
 
+/**
+ * Narrow a request reply to a single serialization, geometry included.
+ *
+ * The grid is the worker's to report, never the host's to infer (#11552): the
+ * mirror parks at a restored snapshot's capture grid with no host-posted resize
+ * to observe, so anything derived from `lastCols`/`lastRows` can tag
+ * capture-grid data with the spawn grid — which makes every replay site skip
+ * the alignment it needs. A timed-out or dead-worker reply is `null` here.
+ */
+function asSnapshot(result: AnalysisRequestResult): SerializedTerminalSnapshot | null {
+  if (result === null || typeof result !== "object" || !("data" in result)) return null;
+  return result;
+}
+
+function asFinalSnapshot(result: AnalysisRequestResult): AnalysisFinalSnapshot | null {
+  if (result === null || typeof result !== "object" || !("snapshot" in result)) return null;
+  return result;
+}
+
 export interface WorkerAnalysisDelegate {
   onActivityState(
     spawnedAt: number,
@@ -298,52 +317,30 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     return this.cursorLine;
   }
 
-  /**
-   * The grid the worker's mirror will serialize at, sampled synchronously at
-   * the call site that is about to post the request (#11552).
-   *
-   * Correct without a worker round-trip because the ordering is total: this
-   * function and the `pool.request()` that follows run in one JS turn, every
-   * earlier `resize` post is already ahead of the request in the worker's FIFO,
-   * and any later resize necessarily queues behind it. Reading `lastCols` after
-   * the await would instead report a grid the payload was NOT produced at.
-   */
-  private captureGeometry(): { cols: number; rows: number } {
-    return { cols: this.lastCols, rows: this.lastRows };
-  }
-
   async serialize(): Promise<SerializedTerminalSnapshot | null> {
     if (this.inactive()) return null;
     this.flushHeldFeed();
-    const geometry = this.captureGeometry();
     const result = await this.pool.request(this.spec.terminalId, "serialize");
-    return typeof result === "string" ? { data: result, ...geometry } : null;
+    return asSnapshot(result);
   }
 
   async serializeForPersistence(): Promise<SerializedTerminalSnapshot | null> {
     if (this.inactive() || this.persistSuppressed) return null;
     this.flushHeldFeed();
-    const geometry = this.captureGeometry();
     const result = await this.pool.request(this.spec.terminalId, "serialize-persistence");
-    return typeof result === "string" ? { data: result, ...geometry } : null;
+    return asSnapshot(result);
   }
 
   async captureFinalSnapshot(): Promise<AnalysisFinalCapture> {
     if (this.inactive()) return { snapshot: null, persistence: null };
     this.flushHeldFeed();
-    const geometry = this.captureGeometry();
     const result = await this.pool.request(this.spec.terminalId, "final-snapshot");
-    if (result !== null && typeof result === "object") {
-      const wire = result as AnalysisFinalSnapshot;
-      return {
-        snapshot: wire.snapshot === null ? null : { data: wire.snapshot, ...geometry },
-        persistence:
-          this.persistSuppressed || wire.persistence === null
-            ? null
-            : { data: wire.persistence, ...geometry },
-      };
-    }
-    return { snapshot: null, persistence: null };
+    const wire = asFinalSnapshot(result);
+    if (!wire) return { snapshot: null, persistence: null };
+    return {
+      snapshot: wire.snapshot,
+      persistence: this.persistSuppressed ? null : wire.persistence,
+    };
   }
 
   release(): void {

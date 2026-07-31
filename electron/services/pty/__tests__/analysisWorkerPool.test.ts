@@ -135,15 +135,18 @@ describe("AnalysisWorkerPool", () => {
     const request = worker.messagesOfType("request")[0];
     expect(request.op).toBe("serialize");
 
+    // The worker reports the grid its mirror actually serialized at — here a
+    // restored session still parked at its capture width, which is NOT the grid
+    // the host created the slot with. The backend must pass that through
+    // untouched; inferring it from the last resize the host posted (80x24) is
+    // what tagged capture-grid data with the spawn grid (#11552).
     worker.emit("message", {
       type: "response",
       requestId: request.requestId,
       terminalId: "t1",
-      result: "SNAPSHOT",
+      result: { data: "SNAPSHOT", cols: 40, rows: 12 },
     });
-    // The backend stamps the grid it was about to serialize at onto the worker's
-    // payload, so a replay can size to it (#11552).
-    await expect(promise).resolves.toEqual({ data: "SNAPSHOT", cols: 80, rows: 24 });
+    await expect(promise).resolves.toEqual({ data: "SNAPSHOT", cols: 40, rows: 12 });
   });
 
   it("routes worker events to the owning backend", () => {
@@ -203,9 +206,9 @@ describe("AnalysisWorkerPool", () => {
       type: "response",
       requestId: request.requestId,
       terminalId: "t1",
-      result: "PERSISTED",
+      result: { data: "PERSISTED", cols: 132, rows: 43 },
     });
-    await expect(persistReq).resolves.toEqual({ data: "PERSISTED", cols: 80, rows: 24 });
+    await expect(persistReq).resolves.toEqual({ data: "PERSISTED", cols: 132, rows: 43 });
     vi.useRealTimers();
   });
 
@@ -376,7 +379,7 @@ describe("AnalysisWorkerPool", () => {
       type: "response",
       requestId: request.requestId,
       terminalId: "t1",
-      result: "STALE-CONTENT",
+      result: { data: "STALE-CONTENT", cols: 80, rows: 24 },
       generation: 0,
     });
     await expect(promise).resolves.toBeNull();
@@ -399,7 +402,7 @@ describe("AnalysisWorkerPool", () => {
       type: "response",
       requestId: request.requestId,
       terminalId: "t1",
-      result: "FRESH",
+      result: { data: "FRESH", cols: 80, rows: 24 },
       generation: 2,
     });
     await expect(promise).resolves.toEqual({ data: "FRESH", cols: 80, rows: 24 });

@@ -4,9 +4,10 @@ import type { SerializedTerminalSnapshot } from "../../../../shared/types/termin
 
 /**
  * Backend-level counterpart of the worker-wire `AnalysisFinalSnapshot`: the
- * same two serializations, each carrying the grid it was captured at. The wire
- * type stays string-only — geometry is host-side state, so the worker protocol
- * needs no new field (#11552).
+ * same two serializations, each carrying the grid it was captured at. Both
+ * backends read that grid off the mirror in the same synchronous step as the
+ * serialize — the host cannot infer it, because a restore replay moves the
+ * mirror's grid without a host-posted resize (#11552).
  */
 export interface AnalysisFinalCapture {
   /** Full-buffer serialize (banner included) for the preserved snapshot. */

@@ -61,8 +61,9 @@ const TMP_ORPHAN_TTL_MS = 5 * 60 * 1000;
 const SESSION_HEADER_V1 = "DAINTREE_SESSION_v1\n";
 const SESSION_HEADER = "DAINTREE_SESSION_v2\n";
 const SESSION_HEADER_BYTES = Buffer.byteLength(SESSION_HEADER, "utf8");
-// v2 adds a `<cols>x<rows>\n` line after the version line. Four digits per
-// dimension is well past MAX_TERMINAL_GRID_DIMENSION, so this bounds the whole
+// v2 adds a `<cols>x<rows>\n` line after the version line. The writer only ever
+// emits a geometry `isValidTerminalGeometry` accepts (four digits per dimension
+// is already past MAX_TERMINAL_GRID_DIMENSION), so this bounds the whole
 // preamble for the size gate.
 const SESSION_GEOMETRY_LINE_MAX_BYTES = "9999x9999\n".length;
 const SESSION_PREAMBLE_MAX_BYTES = SESSION_HEADER_BYTES + SESSION_GEOMETRY_LINE_MAX_BYTES;
@@ -73,10 +74,13 @@ const VERSION_PREFIX = "DAINTREE_SESSION_";
  * at, when the file records one (#11552).
  *
  * `geometry` is null for v1 and headerless legacy files — those predate the
- * contract and are replayed verbatim, exactly as before. A *v2* file that
- * fails to parse is rejected outright rather than downgraded: v2 asserts the
- * metadata is present, so a malformed line means a corrupt file, and sizing a
- * real xterm from garbage is worse than skipping the restore.
+ * contract and are replayed verbatim, exactly as before. A v2 file whose
+ * geometry line is unusable degrades to the SAME null: an unreadable grid costs
+ * the alignment, never the scrollback, because replaying without alignment is
+ * exactly what v1 did while dropping the file loses a session outright. Only a
+ * v2 file with no geometry line at all is rejected — the writer always emits
+ * one, so its absence means the preamble is truncated and there is no way to
+ * tell where the payload starts (nor, at that length, any payload to save).
  */
 interface ParsedSessionFile {
   content: string;
@@ -96,9 +100,9 @@ function extractSessionContent(raw: string): ParsedSessionFile | null {
     const geometry = parseGeometryLine(rest.slice(0, newlineIndex));
     if (!geometry) {
       console.warn(
-        `[terminalSessionPersistence] v2 session file has an unparseable geometry line, rejecting`
+        `[terminalSessionPersistence] v2 session file has an unusable geometry line; ` +
+          `replaying the session without width alignment`
       );
-      return null;
     }
     return { content: rest.slice(newlineIndex + 1), geometry };
   }
@@ -121,14 +125,29 @@ function extractSessionContent(raw: string): ParsedSessionFile | null {
   return { content: raw, geometry: null };
 }
 
+// Digit count is deliberately unbounded here: `isValidTerminalGeometry` is the
+// single bound both ends of this format agree on, and a second, tighter one in
+// the regex is how a grid the writer could emit came back unreadable.
 function parseGeometryLine(line: string): TerminalGeometry | null {
-  const match = /^(\d{1,4})x(\d{1,4})$/.exec(line);
+  const match = /^(\d+)x(\d+)$/.exec(line);
   if (!match) return null;
   const geometry = { cols: Number(match[1]), rows: Number(match[2]) };
   return isValidTerminalGeometry(geometry) ? geometry : null;
 }
 
+/**
+ * Serialize a snapshot to the on-disk session format.
+ *
+ * A grid the reader would refuse is written as v1 — the format that already
+ * means "no capture geometry" — rather than as a v2 file the next restore would
+ * choke on. Both ends therefore agree on exactly one bound
+ * (`isValidTerminalGeometry`), and an unrepresentable grid costs the width
+ * alignment while the scrollback still comes back.
+ */
 function formatSessionFile(snapshot: SerializedTerminalSnapshot): string {
+  if (!isValidTerminalGeometry({ cols: snapshot.cols, rows: snapshot.rows })) {
+    return `${SESSION_HEADER_V1}${snapshot.data}`;
+  }
   return `${SESSION_HEADER}${snapshot.cols}x${snapshot.rows}\n${snapshot.data}`;
 }
 
@@ -172,69 +191,123 @@ function formatRestoreTimestamp(mtimeMs: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-interface ReplayAlignment {
-  /** Queue the reflow back to the pre-replay grid behind the replay writes. */
-  scheduleRestore(): void;
+interface ReplayWindow {
+  /** The grid this mirror must end up on once the replay has parsed. */
+  target: TerminalGeometry;
 }
 
-const NO_ALIGNMENT: ReplayAlignment = { scheduleRestore: () => {} };
+/**
+ * Mirrors with a session replay in flight, and the grid each owes its owner
+ * when the replay lands. Keyed by the mirror itself rather than by terminal id
+ * so a disposed mirror takes its window with it — the close is driven by an
+ * xterm write callback, which a disposal silently cancels.
+ */
+const replayWindows = new WeakMap<HeadlessTerminalType, ReplayWindow>();
 
 /**
- * Size `headlessTerminal` to the grid a snapshot was captured on, and hand back
- * the means to reflow it home once the replay has parsed (#11552).
+ * The one way to resize a headless mirror (#11552).
  *
- * A no-op when the snapshot carries no geometry (a v1/legacy file) or already
- * matches — legacy payloads replay exactly as they did before, which is no
- * worse than the status quo and strictly better than dropping the session.
+ * While a session replay is in flight the mirror is deliberately parked at the
+ * snapshot's capture grid so SerializeAddon's wrap encoding decodes the way it
+ * was written. A resize applied now would lay the rest of the payload out at
+ * the wrong width AND be reverted by the reflow that ends the replay — leaving
+ * the mirror on a grid the PTY has already moved off, with nothing to re-sync
+ * it (`TerminalProcess.resize` early-returns once the pty dims match). Record
+ * the intent instead: it becomes the grid the replay reflows to, so the newest
+ * resize wins rather than losing to a value pinned before it arrived.
+ *
+ * Returns true when the mirror was resized now, false when the resize was
+ * parked for the in-flight replay.
  */
-function alignForReplay(
+export function resizeMirror(
   headlessTerminal: HeadlessTerminalType,
-  terminalId: string,
-  captureGeometry: TerminalGeometry | null
-): ReplayAlignment {
-  if (!captureGeometry) return NO_ALIGNMENT;
-
-  const liveCols = headlessTerminal.cols;
-  const liveRows = headlessTerminal.rows;
-  if (captureGeometry.cols === liveCols && captureGeometry.rows === liveRows) {
-    return NO_ALIGNMENT;
+  cols: number,
+  rows: number
+): boolean {
+  const window = replayWindows.get(headlessTerminal);
+  if (window) {
+    window.target = { cols, rows };
+    return false;
   }
+  headlessTerminal.resize(cols, rows);
+  return true;
+}
 
+/**
+ * Park `headlessTerminal` on the grid a snapshot was captured at for the
+ * duration of its replay, remembering the grid to return to.
+ *
+ * The window opens even when there is nothing to align to (a v1/legacy file, or
+ * a capture grid that already matches): a resize landing mid-replay would
+ * garble the unparsed tail whatever the capture width was, and with the window
+ * open it is applied once the payload is down instead. Legacy payloads still
+ * replay verbatim, exactly as they did before — no worse than the status quo
+ * and strictly better than dropping the session.
+ */
+function openReplayWindow(
+  headlessTerminal: HeadlessTerminalType,
+  captureGeometry: TerminalGeometry | null
+): void {
+  replayWindows.set(headlessTerminal, {
+    target: { cols: headlessTerminal.cols, rows: headlessTerminal.rows },
+  });
+  if (!captureGeometry) return;
+  if (
+    captureGeometry.cols === headlessTerminal.cols &&
+    captureGeometry.rows === headlessTerminal.rows
+  ) {
+    return;
+  }
   headlessTerminal.resize(captureGeometry.cols, captureGeometry.rows);
+}
 
-  return {
-    scheduleRestore: () => {
-      // Order the reflow behind anything the mirror scheduler is holding for
-      // this terminal, not just behind our own writes. Live PTY chunks reach
-      // the mirror through that queue with no gate of their own, and resizing
-      // while xterm still has queued entries makes its flushSync re-parse from
-      // the head of the write buffer — the same duplication this fix exists to
-      // prevent. With no queue registered (the usual cold-start case) flush()
-      // degrades to a plain sentinel write.
-      headlessMirrorScheduler.flush(terminalId, headlessTerminal, () => {
-        // Hop out of the write callback before resizing: it runs inside xterm's
-        // parser drain, and changing the grid there re-applies the chunk being
-        // drained against the new geometry (a 4-cell write comes back as 8).
-        // A microtask lands after the drain and before any live PTY output.
-        queueMicrotask(() => {
-          // xterm leaves the cursor's own wrapped group unreflowed unless
-          // `reflowCursorLine` is on, so normalizing to a narrower grid would
-          // TRUNCATE that row's tail rather than wrap it. Enable it for this one
-          // corrective resize and put the configured value straight back — the
-          // option is a live-typing ergonomic, not something to change globally.
-          const previous = headlessTerminal.options.reflowCursorLine;
-          headlessTerminal.options.reflowCursorLine = true;
-          try {
-            headlessTerminal.resize(liveCols, liveRows);
-          } catch (error) {
-            console.warn(`[terminalSessionPersistence] Failed to restore session geometry:`, error);
-          } finally {
-            headlessTerminal.options.reflowCursorLine = previous;
-          }
-        });
-      });
-    },
-  };
+/**
+ * Close the replay window and put the mirror on the grid it owes: the one it
+ * had when the window opened, or whichever resize landed while it was open.
+ * Idempotent, and a no-op when the grid already matches.
+ */
+function closeReplayWindow(headlessTerminal: HeadlessTerminalType): void {
+  const window = replayWindows.get(headlessTerminal);
+  if (!window) return;
+  replayWindows.delete(headlessTerminal);
+  const { cols, rows } = window.target;
+  if (cols === headlessTerminal.cols && rows === headlessTerminal.rows) return;
+
+  // xterm leaves the cursor's own wrapped group unreflowed unless
+  // `reflowCursorLine` is on, so normalizing to a narrower grid would TRUNCATE
+  // that row's tail rather than wrap it. Enable it for this one corrective
+  // resize and put the configured value straight back — the option is a
+  // live-typing ergonomic, not something to change globally.
+  const previous = headlessTerminal.options.reflowCursorLine;
+  headlessTerminal.options.reflowCursorLine = true;
+  try {
+    headlessTerminal.resize(cols, rows);
+  } catch (error) {
+    console.warn(`[terminalSessionPersistence] Failed to restore session geometry:`, error);
+  } finally {
+    headlessTerminal.options.reflowCursorLine = previous;
+  }
+}
+
+/** Queue the window close behind everything the replay put in flight. */
+function scheduleReplayWindowClose(
+  headlessTerminal: HeadlessTerminalType,
+  terminalId: string
+): void {
+  // Order the reflow behind anything the mirror scheduler is holding for this
+  // terminal, not just behind our own writes. Live PTY chunks reach the mirror
+  // through that queue with no gate of their own, and resizing while xterm
+  // still has queued entries makes its flushSync re-parse from the head of the
+  // write buffer — the same duplication this fix exists to prevent. With no
+  // queue registered (the usual cold-start case) flush() degrades to a plain
+  // sentinel write.
+  headlessMirrorScheduler.flush(terminalId, headlessTerminal, () => {
+    // Hop out of the write callback before resizing: it runs inside xterm's
+    // parser drain, and changing the grid there re-applies the chunk being
+    // drained against the new geometry (a 4-cell write comes back as 8). A
+    // microtask lands after the drain and before any live PTY output.
+    queueMicrotask(() => closeReplayWindow(headlessTerminal));
+  });
 }
 
 export function restoreSessionFromFile(
@@ -272,11 +345,11 @@ export function restoreSessionFromFile(
     const sessionMtime: number = stat.mtimeMs;
 
     // Replay at the grid the snapshot was captured on, then reflow to the grid
-    // this process actually spawned at (#11552). The mirror is brand new and
-    // empty here, so aligning it up front costs nothing — and it must happen
-    // BEFORE the writes, because xterm parses asynchronously: content queued
-    // now is laid out at whatever cols the terminal has when the parser drains.
-    const alignment = alignForReplay(headlessTerminal, terminalId, captureGeometry);
+    // this mirror owes its owner (#11552). The mirror is brand new and empty
+    // here, so aligning it up front costs nothing — and it must happen BEFORE
+    // the writes, because xterm parses asynchronously: content queued now is
+    // laid out at whatever cols the terminal has when the parser drains.
+    openReplayWindow(headlessTerminal, captureGeometry);
 
     headlessTerminal.write(RESTORE_PARSER_RESET_PREAMBLE);
     headlessTerminal.write(content);
@@ -307,10 +380,14 @@ export function restoreSessionFromFile(
     // Queued behind the replay so it runs once the parser has laid the content
     // out at the capture grid. Live PTY output written after this point queues
     // behind the callback and therefore parses at the restored geometry.
-    alignment.scheduleRestore();
+    scheduleReplayWindowClose(headlessTerminal, terminalId);
 
     return { restored: true, bannerStartMarker, bannerEndMarker };
   } catch (error) {
+    // A replay that died mid-flight still owns the grid and the resize gate —
+    // close the window here or every later resize parks into a window nothing
+    // will ever drain.
+    closeReplayWindow(headlessTerminal);
     // Stat→read race: file vanished between size gate and read. Treat as the
     // normal "no prior session" path rather than logging restore noise.
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return NULL_RESTORE;
