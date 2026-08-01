@@ -2,7 +2,7 @@
 
 Help assistant workspace. This directory is the template that `HelpSessionService` copies into a session-scoped folder each time a CLI-backed help assistant launches. The assistant answers user questions about Daintree using a live MCP documentation server, and connects to the tier-gated local MCP server (`daintree`) when local MCP is enabled in settings, exposing read-only introspection or non-destructive actions on the running app depending on the session's authorization tier.
 
-It generates two prompt contracts: `CLAUDE.md` (Claude Code) and `AGENTS.md` (the OpenAI convention, used by Codex). Both run at the user's selected tier, which defaults to `action`. The authoritative roster of which agents can back a help session lives in `shared/config/agentRegistry.ts` (`getAssistantSupportedAgentIds` / `getAssistantWiredAgentIds`), not in this README — check there rather than trusting a list here.
+It generates two prompt contracts: `CLAUDE.md` (Claude Code) and `AGENTS.md` (the OpenAI convention). `AGENTS.md` is read by Codex and also by the experimental Copilot integration, which has no `COPILOT.md` of its own and picks up `AGENTS.md` from the session cwd. Both prompts run at the user's selected tier, which defaults to `action`. The authoritative roster of which agents can back a help session lives in `shared/config/agentRegistry.ts` (`getAssistantSupportedAgentIds` / `getAssistantWiredAgentIds`), not in this README — check there rather than trusting a list here.
 
 Gemini is still a launchable **work** agent in Daintree, but its help-assistant overlay was deprecated and removed: it no longer has a generated prompt or a bundled config here, and it cannot provision a help session.
 
@@ -60,7 +60,7 @@ Adding a new agent requires three things:
 Both prompt files share the same answer workflow, tone, and topic coverage. They diverge on what the assistant is allowed to do beyond docs search:
 
 - **`CLAUDE.md`** — Tier-aware. Describes the `workbench` / `action` / `system` model exposed by the local `daintree` MCP server (see Tier Model below) and tells Claude to prefer the least-privileged path. Also carries the Claude-only task recipes and the `terminal.getStatus` fleet-polling recipe.
-- **`AGENTS.md`** (Codex) — Connects to the local `daintree` MCP at the selected tier when local MCP is enabled. Full in-app orchestration. Unlike Claude, Codex has no bundled tool-layer deny list and its session directory is writable, so "don't mutate the user's project, don't route around the tier with the shell" is carried by the prompt rather than enforced by a sandbox — the server-side tier gate remains the real boundary.
+- **`AGENTS.md`** (Codex, and the experimental Copilot integration) — Connects to the local `daintree` MCP when local MCP is enabled; capabilities follow the selected tier, so the default `action` tier gives full in-app orchestration. Unlike Claude, Codex has no bundled tool-layer deny list and its session directory is writable, so "don't mutate anything locally, don't route around the tier with the shell" is carried by the prompt rather than enforced by a sandbox — the server-side tier gate remains the real boundary.
 
 Both share:
 

@@ -11,6 +11,7 @@ const root = path.resolve(here, "..");
 const CLAUDE = readFileSync(path.join(root, "help/CLAUDE.md"), "utf8");
 const AGENTS = readFileSync(path.join(root, "help/AGENTS.md"), "utf8");
 const SHARED = readFileSync(path.join(root, "scripts/help-src/SHARED.md"), "utf8");
+const AGENTS_HEAD = readFileSync(path.join(root, "scripts/help-src/AGENTS.head.md"), "utf8");
 
 const ALL_GENERATED = [
   ["CLAUDE.md", CLAUDE],
@@ -92,14 +93,34 @@ describe("help prompt outputs", () => {
     it("AGENTS.md routes operational work through the tier-gated MCP rather than the shell", () => {
       expect(AGENTS).toContain("TIER_NOT_PERMITTED");
       expect(AGENTS).toMatch(/spawn\/close\/kill terminals/);
-      // Asserted as an invariant, not as one sentence: Codex help sessions are
-      // NOT write-sandboxed (`buildCodexLaunchArgs` injects MCP config and
-      // nothing else, and the session dir is writable by design), so the prompt
-      // must carry the restraint itself and must not claim a sandbox enforces
-      // it. Pinning the old exact wording is what let that false claim survive.
-      expect(AGENTS).not.toMatch(/sandbox blocks file writes/i);
-      expect(AGENTS).toMatch(/read-only/i);
-      expect(AGENTS).toMatch(/shell/i);
+    });
+
+    // Asserted against the head partial, not the generated file: SHARED.md is
+    // concatenated into AGENTS.md and independently mentions read-only access
+    // and the shell, so a generated-file check would still pass if the Codex
+    // local-tools restriction were deleted outright.
+    it("AGENTS.head.md carries the local-tool restriction without claiming a sandbox enforces it", () => {
+      expect(AGENTS_HEAD).toMatch(/read-only/i);
+      expect(AGENTS_HEAD).toMatch(/do not edit, create, or delete/i);
+      expect(AGENTS_HEAD).toMatch(/do not use the shell/i);
+      expect(AGENTS_HEAD).toMatch(/instruction, not sandbox enforcement/i);
+    });
+
+    // Codex help sessions are NOT write-sandboxed: `buildCodexLaunchArgs`
+    // injects MCP config and nothing else, and the session dir is writable by
+    // design. A prompt promising sandbox enforcement is a false safety claim,
+    // and pinning one exact sentence is what let the last one survive — so
+    // match the claim shape rather than its wording.
+    it("no prompt claims a sandbox blocks writes or shell", () => {
+      for (const [, body] of [...ALL_GENERATED, ["AGENTS.head.md", AGENTS_HEAD]]) {
+        expect(body).not.toMatch(
+          /\bsandbox\b[^.\n]*(?:blocks?|prevents?|denies?|disallows?|enforces?|restricts?)[^.\n]*(?:writes?|shell|edits?)/i
+        );
+        expect(body).not.toMatch(
+          /(?:writes?|shell|edits?)[^.\n]*(?:blocked|prevented|denied|disallowed)[^.\n]*\bsandbox\b/i
+        );
+        expect(body).not.toMatch(/\bwrite-sandboxed\b/i);
+      }
     });
 
     it("AGENTS.md keeps the absent-MCP fallback caveat", () => {
