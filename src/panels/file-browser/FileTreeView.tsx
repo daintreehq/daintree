@@ -11,6 +11,8 @@ import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
 import { resolveTreeKey, type FlatTreeRow } from "./fileBrowserTree";
+import { getFileBrowserRowGitStatus, type FileBrowserGitStatusIndex } from "./fileBrowserGitStatus";
+import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
 import { FILE_TREE_ICON_CLASS, UNKNOWN_FILE_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
 import { INSERT_FILE_REFERENCE_COMBO, matchesInsertFileReferenceCombo } from "./fileReference";
 
@@ -54,6 +56,17 @@ export interface FileTreeViewProps {
   basePath: string;
   /** Accessible name for the tree, since the panel header isn't part of it. */
   label: string;
+  /**
+   * Git status for the rows, keyed by the same worktree-relative paths
+   * `row.path` uses. Absent or null when nothing git-shaped backs this tree (a
+   * workspace root, or a worktree whose snapshot hasn't arrived), which is the
+   * signal to render no markers at all rather than markers meaning "unchanged".
+   *
+   * Deliberately a separate channel from `rows`: a directory listing doesn't
+   * change when a file's status does, and threading status through the flat
+   * rows would tie the two update cadences together.
+   */
+  gitStatusIndex?: FileBrowserGitStatusIndex | null;
 }
 
 /**
@@ -98,6 +111,7 @@ export function FileTreeView({
   canInsertFileReference = false,
   basePath,
   label,
+  gitStatusIndex = null,
 }: FileTreeViewProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -252,6 +266,7 @@ export function FileTreeView({
       hasDirectories,
       instanceId,
       basePath,
+      gitStatusIndex,
     }),
     [
       selectedPath,
@@ -263,6 +278,7 @@ export function FileTreeView({
       hasDirectories,
       instanceId,
       basePath,
+      gitStatusIndex,
     ]
   );
 
@@ -323,6 +339,7 @@ interface TreeContext {
   hasDirectories: boolean;
   instanceId: string;
   basePath: string;
+  gitStatusIndex: FileBrowserGitStatusIndex | null;
 }
 
 /**
@@ -440,14 +457,31 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
   const RowIcon = fileIcon?.Icon ?? FolderIcon;
   const rowIconColor = fileIcon?.colorClass ?? UNKNOWN_FILE_COLOR_CLASS;
 
+  // A file's own status; a folder's is the worst thing anywhere beneath it, so a
+  // collapsed branch still says that something inside it changed.
+  const gitStatus = getFileBrowserRowGitStatus(context.gitStatusIndex, row.path, row.isDirectory);
+  const gitPresentation = gitStatus ? getGitStatusPresentation(gitStatus) : null;
+  const gitDescription = gitPresentation
+    ? row.isDirectory
+      ? `Contains ${gitPresentation.name.toLowerCase()} changes`
+      : gitPresentation.name
+    : null;
+  const rowId = rowDomId(context.instanceId, row.path);
+  const gitMarkerId = gitPresentation ? `${rowId}-git` : undefined;
+
   const menuItems = context.rowContextMenu?.(row);
   const rowSurface = (
     <div
-      id={rowDomId(context.instanceId, row.path)}
+      id={rowId}
       role="treeitem"
       // Pin the accessible name to the row name so the nested loading
       // `role="status"` (below) can't fold "Loading folder contents" into it.
       aria-label={row.name}
+      // The status rides a description, not the name: the name is pinned to the
+      // filename above, and rows are virtualized — folding status into the name
+      // would rewrite every accessible row query and re-announce the row as a
+      // different thing whenever an agent touched the file.
+      {...(gitMarkerId && { "aria-describedby": gitMarkerId })}
       aria-level={row.depth + 1}
       aria-selected={isSelected}
       {...(row.isDirectory && { "aria-expanded": row.isExpanded })}
@@ -504,7 +538,22 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
         className={cn(FILE_TREE_ICON_CLASS, "h-3.5 w-3.5 shrink-0", rowIconColor)}
         aria-hidden="true"
       />
-      <span className={cn("truncate", isSelected && "font-medium")}>{row.name}</span>
+      {/* `min-w-0` is what lets `truncate` actually shrink here: a flex item
+          defaults to `min-width: auto` and would otherwise push the trailing
+          status marker out of the row instead of ellipsing the name. */}
+      <span className={cn("min-w-0 truncate", isSelected && "font-medium")}>{row.name}</span>
+      {gitPresentation && (
+        // `ml-auto` parks the marker at the trailing edge so a column of them
+        // scans vertically, rather than tracking each name's ragged end.
+        <span
+          id={gitMarkerId}
+          title={gitDescription ?? undefined}
+          className={cn("ml-auto w-3 shrink-0 text-center font-bold", gitPresentation.colorClass)}
+        >
+          <span className="sr-only">{gitDescription}</span>
+          <span aria-hidden="true">{gitPresentation.marker}</span>
+        </span>
+      )}
       {showLoadingSpinner && (
         // Subdued via `text-daintree-text/40` (Spinner strokes currentColor) so
         // it stays quiet even on a selected row, per accent restraint.

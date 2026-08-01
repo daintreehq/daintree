@@ -8,6 +8,7 @@ import { ContextMenuItem } from "@/components/ui/context-menu";
 import { FILE_DRAG_MIME, decodeFileDragPaths } from "@/lib/fileDragPayload";
 import { FileTreeView } from "../FileTreeView";
 import type { FlatTreeRow } from "../fileBrowserTree";
+import { buildFileBrowserGitStatusIndex } from "../fileBrowserGitStatus";
 import { FILE_TREE_ICON_CLASS, getFileTypeIcon } from "../fileTypeIcons";
 
 // `isMac` reads navigator.platform, which jsdom reports as neither — drive it
@@ -685,5 +686,148 @@ describe("FileTreeView menu contract", () => {
       />
     );
     expect(getByRole("tree").hasAttribute("data-row-menu")).toBe(false);
+  });
+});
+
+// Git status markers (#11614). The index is a parallel channel to `rows` — a
+// directory listing doesn't change when a file's status does — so these prove
+// the join and the invalidation seam, not the rows.
+describe("FileTreeView git status markers", () => {
+  /** What the row's status is announced as, via its description. */
+  function describedStatus(container: HTMLElement, name: string): string | null {
+    const treeitem = container.querySelector(`[role="treeitem"][aria-label="${name}"]`);
+    const describedBy = treeitem?.getAttribute("aria-describedby");
+    if (!describedBy) return null;
+    // getElementById rather than a `#id` selector: row ids are URI-encoded
+    // paths, which need escaping the jsdom build here has no `CSS.escape` for.
+    const target = container.ownerDocument.getElementById(describedBy);
+    if (!target) return null;
+    // What a screen reader actually computes: an accessible description skips
+    // aria-hidden content, so the decorative marker letter drops out and only
+    // the spelled-out status is announced. Raw textContent would run the two
+    // together and assert a string no user ever hears.
+    const announced = target.cloneNode(true) as HTMLElement;
+    for (const hidden of announced.querySelectorAll('[aria-hidden="true"]')) hidden.remove();
+    return announced.textContent;
+  }
+
+  const NESTED_ROWS = [row("src", true), row("src/app.ts"), row("README.md")];
+
+  it("marks a changed file and leaves its unchanged siblings bare", () => {
+    const { container } = renderTree({
+      rows: NESTED_ROWS,
+      gitStatusIndex: buildFileBrowserGitStatusIndex([
+        { relativePath: "src/app.ts", status: "modified" },
+      ]),
+    });
+
+    expect(describedStatus(container, "app.ts")).toBe("Modified");
+    expect(describedStatus(container, "README.md")).toBeNull();
+  });
+
+  it("marks a collapsed folder from a descendant it has never listed", () => {
+    // `src` is collapsed, so no child row exists for the changed file at all —
+    // the aggregate is the only thing that can surface it.
+    const { container } = renderTree({
+      rows: [row("src", true), row("README.md")],
+      gitStatusIndex: buildFileBrowserGitStatusIndex([
+        { relativePath: "src/deep/nested/app.ts", status: "modified" },
+      ]),
+    });
+
+    expect(describedStatus(container, "src")).toBe("Contains modified changes");
+  });
+
+  it("phrases a folder as containing changes, not as being changed itself", () => {
+    const { container } = renderTree({
+      rows: NESTED_ROWS,
+      gitStatusIndex: buildFileBrowserGitStatusIndex([
+        { relativePath: "src/app.ts", status: "added" },
+      ]),
+    });
+
+    expect(describedStatus(container, "src")).toBe("Contains added changes");
+    expect(describedStatus(container, "app.ts")).toBe("Added");
+  });
+
+  it("shows a folder its most urgent descendant when several changed", () => {
+    const { container } = renderTree({
+      rows: [row("src", true)],
+      gitStatusIndex: buildFileBrowserGitStatusIndex([
+        { relativePath: "src/a.ts", status: "untracked" },
+        { relativePath: "src/b.ts", status: "conflicted" },
+      ]),
+    });
+
+    expect(describedStatus(container, "src")).toBe("Contains conflicted changes");
+  });
+
+  it("renders no markers at all when the source has no git behind it", () => {
+    const { container } = renderTree({ rows: NESTED_ROWS, gitStatusIndex: null });
+
+    expect(container.querySelector("[aria-describedby]")).toBeNull();
+  });
+
+  it("repaints markers when only the index changes, with identical rows", () => {
+    // The invalidation seam: an agent editing a file moves the status without
+    // touching the listing, so a marker that only followed `rows` would be
+    // stale until the next expansion.
+    const { container, rerender } = renderTree({
+      rows: NESTED_ROWS,
+      gitStatusIndex: buildFileBrowserGitStatusIndex([]),
+    });
+    expect(describedStatus(container, "app.ts")).toBeNull();
+
+    rerender(
+      <FileTreeView
+        rows={NESTED_ROWS}
+        selectedPath={null}
+        onSelect={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        rowContextMenu={() => <div />}
+        basePath={BASE_PATH}
+        label="Files"
+        gitStatusIndex={buildFileBrowserGitStatusIndex([
+          { relativePath: "src/app.ts", status: "conflicted" },
+        ])}
+      />
+    );
+
+    expect(describedStatus(container, "app.ts")).toBe("Conflicted");
+  });
+
+  it("keeps the row's accessible name the filename alone", () => {
+    // Folding status into the name would rewrite every accessible row query and
+    // re-announce the row as a different thing on each agent write.
+    const { getByRole } = renderTree({
+      rows: NESTED_ROWS,
+      gitStatusIndex: buildFileBrowserGitStatusIndex([
+        { relativePath: "src/app.ts", status: "modified" },
+      ]),
+    });
+
+    expect(getByRole("treeitem", { name: "app.ts" })).toBeTruthy();
+  });
+
+  it("shows the status marker alongside a folder's loading spinner", async () => {
+    vi.useFakeTimers();
+    try {
+      const loadingFolder: FlatTreeRow = { ...row("src", true), isLoading: true };
+      const { container } = renderTree({
+        rows: [loadingFolder],
+        gitStatusIndex: buildFileBrowserGitStatusIndex([
+          { relativePath: "src/app.ts", status: "modified" },
+        ]),
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(UI_INLINE_LOADING_GATE_MS + 10);
+      });
+
+      expect(describedStatus(container, "src")).toBe("Contains modified changes");
+      expect(container.querySelector('[role="status"]')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

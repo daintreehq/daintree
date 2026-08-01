@@ -8,8 +8,9 @@ import {
   useRef,
   useState,
 } from "react";
-import type { FileChangeDetail, GitStatus } from "../../types";
+import type { FileChangeDetail } from "../../types";
 import { cn } from "../../lib/utils";
+import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
 import { Folder } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { basename, dirname, isAbsolute, join } from "@shared/utils/path";
@@ -26,17 +27,6 @@ import { usePanelDialogStore } from "@/store/panelDialogStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
 import { FileDecorationBadge } from "@/components/Plugin/FileDecorationBadge";
-
-const STATUS_CONFIG: Record<GitStatus, { label: string; color: string }> = {
-  modified: { label: "M", color: "text-status-warning" },
-  added: { label: "A", color: "text-status-success" },
-  deleted: { label: "D", color: "text-status-error" },
-  untracked: { label: "?", color: "text-status-success" },
-  renamed: { label: "R", color: "text-status-info" },
-  copied: { label: "C", color: "text-status-info" },
-  ignored: { label: "I", color: "text-daintree-text/40" },
-  conflicted: { label: "!", color: "text-status-error" },
-};
 
 interface FileChangeListProps {
   changes: FileChangeDetail[];
@@ -238,7 +228,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
     }
 
     const renderFileItem = (change: WorkingTreeFileChange, showDir: boolean) => {
-      const config = STATUS_CONFIG[change.status] || STATUS_CONFIG.untracked;
+      const presentation = getGitStatusPresentation(change.status);
       const { dir, base } = splitPath(change.relativePath);
       const displayDir = formatDirForDisplay(dir);
       const key = getWorkingTreeChangeKey(change);
@@ -266,7 +256,9 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
                 }
               }}
             >
-              <span className={cn("w-4 font-bold shrink-0", config.color)}>{config.label}</span>
+              <span className={cn("w-4 font-bold shrink-0", presentation.colorClass)}>
+                {presentation.marker}
+              </span>
 
               <div className="flex-1 min-w-0 flex items-center mr-2">
                 {showDir && displayDir && (

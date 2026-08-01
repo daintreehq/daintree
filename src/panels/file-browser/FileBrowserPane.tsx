@@ -42,6 +42,8 @@ import { useExternalChangeTick } from "@/hooks/useExternalChangeTick";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { FileTreeView } from "./FileTreeView";
 import { FileBrowserViewer } from "./FileBrowserViewer";
+import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
+import { buildFileBrowserGitStatusIndex, isReadableRelativePath } from "./fileBrowserGitStatus";
 import { useFileBrowserTree } from "./useFileBrowserTree";
 import { useInsertFileReference } from "./useInsertFileReference";
 import { INSERT_FILE_REFERENCE_COMBO } from "./fileReference";
@@ -238,17 +240,20 @@ export function FileBrowserPane({
   // A stable primitive for the menu callback's dependencies — the source object
   // is rebuilt every render.
   const isWorktreeSource = source?.kind === "worktree";
-  // The worktree's git-status change tick — already coalesced by the watcher's
-  // adaptive burst debounce, so a bulk write lands as one tick.
-  const gitChangeTick = useWorktreeStore(
+  // The whole snapshot, not just its tick: the per-file statuses on it are what
+  // the tree markers and the idle pane's summary read (#11614). Selecting the
+  // object is safe for Zustand — it is a stored reference, so an unchanged
+  // snapshot returns identically and re-renders nothing.
+  const worktreeChanges = useWorktreeStore(
     useCallback(
       (state) =>
-        sourceWorktreeId
-          ? state.worktrees.get(sourceWorktreeId)?.worktreeChanges?.lastUpdated
-          : undefined,
+        sourceWorktreeId ? state.worktrees.get(sourceWorktreeId)?.worktreeChanges : undefined,
       [sourceWorktreeId]
     )
   );
+  // The worktree's git-status change tick — already coalesced by the watcher's
+  // adaptive burst debounce, so a bulk write lands as one tick.
+  const gitChangeTick = worktreeChanges?.lastUpdated;
   // The raw filesystem-write tick, independent of git status. Combining the two
   // is the fix for the issue's reproduction: a write into a gitignored folder
   // moves this even though `worktreeChanges` (which dedups content-identical
@@ -266,6 +271,37 @@ export function FileBrowserPane({
   // workspace root gets nothing from them (#11482) — `externalChangeTick` below
   // is what covers it.
   const worktreeChangeTick = Math.max(gitChangeTick ?? 0, fsChangeTick ?? 0) || undefined;
+
+  // The changed files this browser can mark up and summarise.
+  //
+  // Relativized against `worktreeChanges.rootPath` — the realpath-resolved root
+  // each `change.path` was itself resolved against — and never against
+  // `basePath`, which is the raw worktree path off the store. The two denote the
+  // same directory but not the same string whenever an ancestor is a symlink
+  // (/tmp -> /private/tmp on macOS), and the strip in `buildWorkingTreeDiffModel`
+  // fails *silently* on a mismatch: it hands back the untouched absolute path,
+  // which matches no tree row, so the feature would look shipped and mark
+  // nothing on exactly the machines it was written for.
+  //
+  // `null` means no git status is available at all — a workspace root has no
+  // worktree behind it, and a snapshot may not have arrived yet. That is a
+  // different thing from `[]`, which says the worktree is clean.
+  const changedFiles = useMemo(() => {
+    if (!isWorktreeSource) return null;
+    const changesRoot = worktreeChanges?.rootPath;
+    const changes = worktreeChanges?.changes;
+    if (!changesRoot || !Array.isArray(changes)) return null;
+    return buildWorkingTreeDiffModel(changes, changesRoot).sortedChanges.filter((change) =>
+      // Anything still absolute here is a strip that missed. Dropping it keeps a
+      // path that can't address a row from ever reaching the selection.
+      isReadableRelativePath(change.relativePath)
+    );
+  }, [isWorktreeSource, worktreeChanges]);
+
+  const gitStatusIndex = useMemo(
+    () => (changedFiles === null ? null : buildFileBrowserGitStatusIndex(changedFiles)),
+    [changedFiles]
+  );
 
   const stableExpandedPaths = useMemo(() => expandedPaths ?? EMPTY_PATHS, [expandedPaths]);
 
@@ -874,13 +910,30 @@ export function FileBrowserPane({
     () => rows.find((row) => row.path === selectedPath),
     [rows, selectedPath]
   );
+  // Picking a file from the changed-files summary selects a path whose tree row
+  // may not be flattened at all — its ancestors are collapsed, so `selectedNode`
+  // is undefined for it. Git is the second witness that it is a readable file:
+  // every entry here is a path git just reported as changed.
+  //
+  // Deleted files are excluded on purpose. They are listed in the summary (the
+  // change set would be a lie without them) but there is nothing on disk to
+  // read, and admitting one here would swap the placeholder for a file-not-found
+  // error the moment a live delete landed on the open selection.
+  const isSelectedChangedFile = useMemo(
+    () =>
+      selectedPath !== null &&
+      changedFiles !== null &&
+      changedFiles.some(
+        (change) => change.relativePath === selectedPath && change.status !== "deleted"
+      ),
+    [changedFiles, selectedPath]
+  );
   // Positively a file, not merely "not known to be a directory": collapsing a
   // parent hides the selected row without clearing the selection, and treating
   // that unknown node as a file makes the viewer try to read a directory.
+  const isSelectedReadableFile = selectedNode?.isDirectory === false || isSelectedChangedFile;
   const selectedFilePath =
-    selectedPath && basePath && selectedNode?.isDirectory === false
-      ? join(basePath, selectedPath)
-      : null;
+    selectedPath && basePath && isSelectedReadableFile ? join(basePath, selectedPath) : null;
   const selectedFileName = selectedPath ? (selectedPath.split("/").pop() ?? selectedPath) : "";
 
   return (
@@ -1080,7 +1133,7 @@ export function FileBrowserPane({
               filePath={selectedFilePath}
               rootPath={basePath}
               fileName={selectedFileName}
-              relativePath={selectedNode?.isDirectory === false ? (selectedPath ?? null) : null}
+              relativePath={isSelectedReadableFile ? (selectedPath ?? null) : null}
               revision={viewerRevision}
               // Handed over separately from `revision` rather than pulled back
               // out of it: the media previews may only re-fetch on the explicit
@@ -1092,6 +1145,8 @@ export function FileBrowserPane({
               sidebarCollapsed={sidebarCollapsed}
               onToggleSidebar={handleToggleSidebar}
               treeSidebarId={treeSidebarId}
+              changedFiles={changedFiles}
+              onSelectChangedFile={handleSelect}
             />
           </div>
         )}
@@ -1224,6 +1279,7 @@ export function FileBrowserPane({
           // join the insert-reference and copy-path handlers above use.
           basePath={basePath}
           label={`Files in ${title}`}
+          gitStatusIndex={gitStatusIndex}
         />
         {/* Below the tree, never above: the strip unmounts the instant a
             click makes the selection reachable, and sitting above the rows it

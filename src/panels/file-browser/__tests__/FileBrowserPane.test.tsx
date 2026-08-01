@@ -9,49 +9,65 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // FileBrowserViewer so the toggle and the shared toolbar `Root` actually render
 // — that's what makes the aria-controls and header-alignment invariants real.
 
-const { setFileBrowserViewMock, readMock, treeState, defaultRows, treeArgs, worktreeTicks } =
-  vi.hoisted(() => {
-    const defaultRows = [
-      {
-        path: "src",
-        name: "src",
-        isDirectory: true,
-        depth: 0,
-        isExpanded: true,
-        isLoading: false,
-      },
-      // A file row so a selection can resolve a real viewer path.
-      {
-        path: "src/app.ts",
-        name: "app.ts",
-        isDirectory: false,
-        depth: 1,
-        isExpanded: false,
-        isLoading: false,
-      },
-    ];
-    return {
-      setFileBrowserViewMock: vi.fn(),
-      readMock: vi.fn(),
-      defaultRows,
-      // Mutable so individual tests can drive error/loading/capture states.
-      treeState: {
-        rows: defaultRows as typeof defaultRows,
-        isInitialLoading: false,
-        rootError: null as string | null,
-        hasHiddenDotfiles: false,
-        ensureLoaded: vi.fn(),
-        refresh: vi.fn(),
-        isRefreshing: false,
-        captureSnapshot: (() => null) as () => unknown,
-      },
-      // What the pane last handed the tree hook, so a test can assert the derived
-      // change tick rather than only what renders.
-      treeArgs: { changeTick: undefined as number | undefined },
-      // Ticks the worktree store reports for wt-1; both default to "never moved".
-      worktreeTicks: { git: undefined as number | undefined, fs: undefined as number | undefined },
-    };
-  });
+const {
+  setFileBrowserViewMock,
+  readMock,
+  treeState,
+  defaultRows,
+  treeArgs,
+  worktreeTicks,
+  worktreeMock,
+} = vi.hoisted(() => {
+  const defaultRows = [
+    {
+      path: "src",
+      name: "src",
+      isDirectory: true,
+      depth: 0,
+      isExpanded: true,
+      isLoading: false,
+    },
+    // A file row so a selection can resolve a real viewer path.
+    {
+      path: "src/app.ts",
+      name: "app.ts",
+      isDirectory: false,
+      depth: 1,
+      isExpanded: false,
+      isLoading: false,
+    },
+  ];
+  return {
+    setFileBrowserViewMock: vi.fn(),
+    readMock: vi.fn(),
+    defaultRows,
+    // Mutable so individual tests can drive error/loading/capture states.
+    treeState: {
+      rows: defaultRows as typeof defaultRows,
+      isInitialLoading: false,
+      rootError: null as string | null,
+      hasHiddenDotfiles: false,
+      ensureLoaded: vi.fn(),
+      refresh: vi.fn(),
+      isRefreshing: false,
+      captureSnapshot: (() => null) as () => unknown,
+    },
+    // What the pane last handed the tree hook, so a test can assert the derived
+    // change tick rather than only what renders.
+    treeArgs: { changeTick: undefined as number | undefined },
+    // Ticks the worktree store reports for wt-1; both default to "never moved".
+    worktreeTicks: { git: undefined as number | undefined, fs: undefined as number | undefined },
+    // The rest of what the store reports for wt-1. `changes` stays null by
+    // default so the bulk of this suite keeps the lastUpdated-only snapshot
+    // shape it was written against — which is also a real runtime state (the
+    // pane must not read a snapshot that hasn't populated yet).
+    worktreeMock: {
+      path: "/repo",
+      changes: null as { path: string; status: string }[] | null,
+      changesRootPath: "/repo",
+    },
+  };
+});
 
 interface MockPanel {
   id: string;
@@ -115,9 +131,22 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
         [
           "wt-1",
           {
-            path: "/repo",
+            path: worktreeMock.path,
             worktreeChanges:
-              worktreeTicks.git === undefined ? undefined : { lastUpdated: worktreeTicks.git },
+              worktreeTicks.git === undefined && worktreeMock.changes === null
+                ? undefined
+                : {
+                    lastUpdated: worktreeTicks.git,
+                    // Only present once a test supplies them: the shipped store
+                    // populates all three together, but the pane must survive a
+                    // snapshot that carries the tick alone.
+                    ...(worktreeMock.changes === null
+                      ? {}
+                      : {
+                          changes: worktreeMock.changes,
+                          rootPath: worktreeMock.changesRootPath,
+                        }),
+                  },
           },
         ],
       ]),
@@ -167,6 +196,10 @@ const { treeProps } = vi.hoisted(() => ({
     onInsertFileReference: undefined as ((path: string) => void) | undefined,
     canInsertFileReference: undefined as boolean | undefined,
     basePath: undefined as string | undefined,
+    // The derived git model the pane hands the tree. Captured rather than
+    // rendered: what this suite owns is the derivation and the join, while how a
+    // marker is drawn belongs to FileTreeView's own suite.
+    gitStatusIndex: undefined as FileBrowserGitStatusIndex | null | undefined,
   },
 }));
 vi.mock("../FileTreeView", () => ({
@@ -176,17 +209,20 @@ vi.mock("../FileTreeView", () => ({
     onInsertFileReference,
     canInsertFileReference,
     basePath,
+    gitStatusIndex,
   }: {
     rowContextMenu?: (row: unknown) => React.ReactNode;
     onActivate?: (path: string) => void;
     onInsertFileReference?: (path: string) => void;
     canInsertFileReference?: boolean;
     basePath?: string;
+    gitStatusIndex?: FileBrowserGitStatusIndex | null;
   }) => {
     treeProps.onActivate = onActivate;
     treeProps.onInsertFileReference = onInsertFileReference;
     treeProps.canInsertFileReference = canInsertFileReference;
     treeProps.basePath = basePath;
+    treeProps.gitStatusIndex = gitStatusIndex;
     return (
       <div data-testid="file-tree-view" role="tree" tabIndex={-1}>
         {rowContextMenu?.(FOLDER_ROW)}
@@ -312,6 +348,10 @@ import {
   FILE_BROWSER_SIDEBAR_RESIZE_STEP_COARSE as COARSE_W,
 } from "../sidebarWidth";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  getFileBrowserRowGitStatus,
+  type FileBrowserGitStatusIndex,
+} from "../fileBrowserGitStatus";
 
 function paneJsx(props: { worktreeId?: string } = { worktreeId: "wt-1" }) {
   return (
@@ -387,6 +427,10 @@ beforeEach(() => {
   dispatchMock.mockResolvedValue({ ok: true, result: { panelId: "file-1" } });
   worktreeTicks.git = undefined;
   worktreeTicks.fs = undefined;
+  worktreeMock.path = "/repo";
+  worktreeMock.changes = null;
+  worktreeMock.changesRootPath = "/repo";
+  treeProps.gitStatusIndex = undefined;
   lifecycleListeners.clear();
   dockState.activeDockTerminalId = null;
   for (const name of ["matchMedia"] as const) {
@@ -2232,5 +2276,153 @@ describe("FileBrowserPane re-reads when the project view is revealed (#11588)", 
 
       expect(treeState.refresh).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+// Git status reaching the tree and the idle viewer (#11614). The store snapshot
+// already carried per-file status; the pane only read its tick.
+describe("FileBrowserPane git status derivation", () => {
+  /** The realpath-resolved root git reports, distinct from the worktree path. */
+  function setChanges(
+    changes: { path: string; status: string }[],
+    opts: { worktreePath?: string; changesRootPath?: string } = {}
+  ) {
+    worktreeTicks.git = 100;
+    worktreeMock.path = opts.worktreePath ?? "/repo";
+    worktreeMock.changesRootPath = opts.changesRootPath ?? worktreeMock.path;
+    worktreeMock.changes = changes;
+  }
+
+  it("joins changes on the snapshot root, not the raw worktree path", async () => {
+    // The regression this whole derivation exists to avoid. On macOS a worktree
+    // under a symlinked ancestor reports `/tmp/...` as its path while git
+    // resolves `/private/tmp/...`; stripping the worktree path off an absolute
+    // change would leave it absolute, matching no row, and the feature would
+    // silently mark nothing on exactly the machines it was written for.
+    setChanges([{ path: "/private/tmp/wt/src/app.ts", status: "modified" }], {
+      worktreePath: "/tmp/wt",
+      changesRootPath: "/private/tmp/wt",
+    });
+    renderPane();
+
+    await waitFor(() => expect(treeProps.gitStatusIndex).toBeTruthy());
+    const index = treeProps.gitStatusIndex as FileBrowserGitStatusIndex;
+
+    expect(getFileBrowserRowGitStatus(index, "src/app.ts", false)).toBe("modified");
+    expect(getFileBrowserRowGitStatus(index, "src", true)).toBe("modified");
+  });
+
+  it("summarises the changed files when nothing is selected", async () => {
+    setChanges([{ path: "/repo/src/app.ts", status: "modified" }]);
+    renderPane();
+
+    expect(await screen.findByRole("button", { name: /Read src\/app\.ts/ })).toBeTruthy();
+  });
+
+  it("opens a summarised file whose tree row is not flattened", async () => {
+    // `src` is collapsed here, so the changed file has no row at all. Requiring
+    // one would make the summary click do nothing visible.
+    treeState.rows = [
+      {
+        path: "src",
+        name: "src",
+        isDirectory: true,
+        depth: 0,
+        isExpanded: false,
+        isLoading: false,
+      },
+    ];
+    setChanges([{ path: "/repo/src/app.ts", status: "modified" }]);
+    const { rerender } = renderPane();
+
+    const row = await screen.findByRole("button", { name: /Read src\/app\.ts/ });
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-1", {
+      browserSelectedPath: "src/app.ts",
+    });
+
+    // The store mock is non-reactive, so replay the write the pane just asked
+    // for and re-render to see what the selection resolves to.
+    mockPanel.browserSelectedPath = "src/app.ts";
+    await act(async () => {
+      rerender(paneJsx());
+    });
+
+    await waitFor(() => expect(readMock).toHaveBeenCalled());
+    expect(readMock.mock.calls[0]?.[0]).toMatchObject({ path: "/repo/src/app.ts" });
+  });
+
+  it("refuses to open a deleted file that has no row", async () => {
+    // Nothing on disk to read: admitting it would swap the pane for a
+    // file-not-found error the moment a live delete landed on the open
+    // selection. The pane stays on its idle body — here the summary, since the
+    // deletion is itself a change worth listing.
+    treeState.rows = [];
+    setChanges([{ path: "/repo/src/gone.ts", status: "deleted" }]);
+    mockPanel.browserSelectedPath = "src/gone.ts";
+    renderPane();
+
+    const row = await screen.findByRole("button", { name: /src\/gone\.ts/ });
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(readMock).not.toHaveBeenCalled();
+  });
+
+  it("drops a change whose path could not be made worktree-relative", async () => {
+    // A root that doesn't prefix the change leaves it absolute; persisting one
+    // as the selection would aim the viewer outside the worktree.
+    setChanges([{ path: "/elsewhere/src/app.ts", status: "modified" }], {
+      changesRootPath: "/repo",
+    });
+    renderPane();
+
+    await waitFor(() => expect(treeProps.gitStatusIndex).toBeTruthy());
+    const index = treeProps.gitStatusIndex as FileBrowserGitStatusIndex;
+
+    expect(index.fileStatus.size).toBe(0);
+    // An empty *safe* set is still a valid clean snapshot for the tree, but the
+    // summary must not offer an unopenable row.
+    expect(screen.queryByRole("button", { name: /Read/ })).toBeNull();
+  });
+
+  it("says the worktree is clean only on a populated, empty snapshot", async () => {
+    setChanges([]);
+    renderPane();
+
+    expect(await screen.findByText("Worktree is clean")).toBeTruthy();
+  });
+
+  it("keeps the generic placeholder when the snapshot carries only a tick", async () => {
+    // The shape the store reports before changes populate. Reporting it as clean
+    // would tell the user nothing changed when nothing is actually known.
+    worktreeTicks.git = 100;
+    worktreeMock.changes = null;
+    renderPane();
+
+    expect(await screen.findByText("Nothing selected")).toBeTruthy();
+    expect(screen.queryByText("Worktree is clean")).toBeNull();
+    expect(treeProps.gitStatusIndex).toBeNull();
+  });
+
+  it("gives a workspace-rooted browser no git status at all", async () => {
+    workspaceRootPathMock.mockReturnValue("/workspace");
+    setChanges([{ path: "/repo/src/app.ts", status: "modified" }]);
+    renderPane({});
+
+    expect(await screen.findByText("Nothing selected")).toBeTruthy();
+    expect(treeProps.gitStatusIndex).toBeNull();
+  });
+
+  it("still derives the combined change tick from the fuller snapshot", async () => {
+    // The tick now comes off the selected object rather than its own selector;
+    // the fs side must still win when it is the more recent of the two.
+    setChanges([{ path: "/repo/src/app.ts", status: "modified" }]);
+    worktreeTicks.git = 120;
+    worktreeTicks.fs = 450;
+    renderPane();
+
+    await waitFor(() => expect(treeArgs.changeTick).toBe(450));
   });
 });

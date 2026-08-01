@@ -7,7 +7,7 @@ import {
   RefreshCw,
   XCircle,
 } from "lucide-react";
-import { FolderOpen } from "@/components/icons";
+import { CircleCheck, FolderOpen } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
 import { CodeViewer } from "@/components/FileViewer/CodeViewer";
 import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
@@ -47,6 +47,8 @@ import { isClientAppError } from "@/utils/clientAppError";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
 import type { FileRenderMode } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
+import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
+import { FileBrowserChangeSummary } from "./FileBrowserChangeSummary";
 
 export interface FileBrowserViewerProps {
   /** Absolute path of the selected file; null when nothing is selected. */
@@ -85,6 +87,19 @@ export interface FileBrowserViewerProps {
    * only while the column is mounted (open); the pane unmounts it when collapsed.
    */
   treeSidebarId: string;
+  /**
+   * The worktree's changed files, churn-sorted, with worktree-relative paths.
+   * Drives what fills the pane when nothing is selected.
+   *
+   * Three states, and the empty array is not the same as null: `null` means no
+   * git status is available (a workspace root has no worktree behind it, and a
+   * snapshot may not have arrived yet), while `[]` is a positive statement that
+   * the worktree is clean. Collapsing them would report an unknown worktree as
+   * clean, which is the one thing this pane must not do.
+   */
+  changedFiles: readonly WorkingTreeFileChange[] | null;
+  /** Opens a file picked from the changed-files summary in this viewer. */
+  onSelectChangedFile: (relativePath: string) => void;
 }
 
 /** Which external surface a toolbar action aims the current file at. */
@@ -131,6 +146,8 @@ export function FileBrowserViewer({
   sidebarCollapsed,
   onToggleSidebar,
   treeSidebarId,
+  changedFiles,
+  onSelectChangedFile,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
   // Sticky Source/Rendered choice for markdown, defaulting to the rendered view
@@ -442,25 +459,49 @@ export function FileBrowserViewer({
         />
       )}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {filePath ? (
-          renderBody()
-        ) : (
-          // flex-1 + min-h-0, not h-full: below the now-persistent toolbar a
-          // 100%-height body would overflow the viewer column.
-          <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-            <EmptyState
-              variant="zero-data"
-              scale="canvas"
-              icon={<FileText className="h-6 w-6" />}
-              title="Nothing selected"
-              description="Pick a file in the tree to read it here."
-              className="w-full"
-            />
-          </div>
-        )}
+        {filePath ? renderBody() : renderIdleBody()}
       </div>
     </>
   );
+
+  /**
+   * What fills the pane with nothing selected. The browser is opened to answer
+   * "what did the agent just change in here", so on a dirty worktree that answer
+   * is the body — not a placeholder apologising for the absence of one.
+   */
+  function renderIdleBody() {
+    if (changedFiles !== null && changedFiles.length > 0) {
+      return <FileBrowserChangeSummary changes={changedFiles} onSelect={onSelectChangedFile} />;
+    }
+
+    // flex-1 + min-h-0, not h-full: below the now-persistent toolbar a
+    // 100%-height body would overflow the viewer column.
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+        {changedFiles === null ? (
+          <EmptyState
+            variant="zero-data"
+            scale="canvas"
+            icon={<FileText className="h-6 w-6" />}
+            title="Nothing selected"
+            description="Pick a file in the tree to read it here."
+            className="w-full"
+          />
+        ) : (
+          // A clean worktree is a finished state, not an empty one: the
+          // `user-cleared` variant stays quiet and takes no action, since there
+          // is nothing here the user failed to do.
+          <EmptyState
+            variant="user-cleared"
+            scale="canvas"
+            icon={<CircleCheck className="h-6 w-6" />}
+            title="Worktree is clean"
+            className="w-full"
+          />
+        )}
+      </div>
+    );
+  }
 
   function renderBody() {
     // Narrows `filePath` for this closure — the caller only reaches here through
