@@ -291,11 +291,16 @@ export function FileBrowserPane({
     const changesRoot = worktreeChanges?.rootPath;
     const changes = worktreeChanges?.changes;
     if (!changesRoot || !Array.isArray(changes)) return null;
-    return buildWorkingTreeDiffModel(changes, changesRoot).sortedChanges.filter((change) =>
+    const safe = buildWorkingTreeDiffModel(changes, changesRoot).sortedChanges.filter((change) =>
       // Anything still absolute here is a strip that missed. Dropping it keeps a
       // path that can't address a row from ever reaching the selection.
       isReadableRelativePath(change.relativePath)
     );
+    // Git reported changes but none of them survived. That is an unusable
+    // snapshot, not an empty one — reporting it as "clean" would state the
+    // opposite of what git said. Fall back to "status unavailable".
+    if (safe.length === 0 && changes.length > 0) return null;
+    return safe;
   }, [isWorktreeSource, worktreeChanges]);
 
   const gitStatusIndex = useMemo(
@@ -418,6 +423,26 @@ export function FileBrowserPane({
       setFileBrowserView(id, { browserSelectedPath: path });
     },
     [id, setFileBrowserView]
+  );
+
+  // Picking a file from the changed-files summary also opens its ancestors, so
+  // the row is waiting in the tree once the summary is replaced by the file.
+  // That is the whole reason both halves of #11614 shipped together — a file
+  // surfaced in the summary has to stay findable afterwards.
+  //
+  // It also keeps the selection honest over time: with the row flattened, the
+  // tree itself witnesses that the path is a file, so the viewer holds the file
+  // open after an agent commits it and git stops reporting it as changed.
+  const handleSelectChangedFile = useCallback(
+    (path: string) => {
+      const expanded = new Set(stableExpandedPaths);
+      for (const ancestor of ancestorDirectories(path)) expanded.add(ancestor);
+      setFileBrowserView(id, {
+        browserSelectedPath: path,
+        browserExpandedPaths: [...expanded].sort(),
+      });
+    },
+    [id, stableExpandedPaths, setFileBrowserView]
   );
 
   // Enter and double-click open the row's file as its own panel (#11496), which
@@ -931,7 +956,13 @@ export function FileBrowserPane({
   // Positively a file, not merely "not known to be a directory": collapsing a
   // parent hides the selected row without clearing the selection, and treating
   // that unknown node as a file makes the viewer try to read a directory.
-  const isSelectedReadableFile = selectedNode?.isDirectory === false || isSelectedChangedFile;
+  //
+  // Git only gets a vote when the tree has no opinion. A known directory is a
+  // hard veto — git reports a dirty submodule as a changed path while the
+  // filesystem calls it a directory, and letting the change set override the row
+  // would hand the viewer a directory to read.
+  const isSelectedReadableFile =
+    selectedNode === undefined ? isSelectedChangedFile : selectedNode.isDirectory === false;
   const selectedFilePath =
     selectedPath && basePath && isSelectedReadableFile ? join(basePath, selectedPath) : null;
   const selectedFileName = selectedPath ? (selectedPath.split("/").pop() ?? selectedPath) : "";
@@ -1146,7 +1177,7 @@ export function FileBrowserPane({
               onToggleSidebar={handleToggleSidebar}
               treeSidebarId={treeSidebarId}
               changedFiles={changedFiles}
-              onSelectChangedFile={handleSelect}
+              onSelectChangedFile={handleSelectChangedFile}
             />
           </div>
         )}

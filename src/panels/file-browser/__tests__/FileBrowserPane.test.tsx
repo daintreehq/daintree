@@ -2340,9 +2340,10 @@ describe("FileBrowserPane git status derivation", () => {
       row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
-    expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-1", {
-      browserSelectedPath: "src/app.ts",
-    });
+    expect(setFileBrowserViewMock).toHaveBeenCalledWith(
+      "fb-1",
+      expect.objectContaining({ browserSelectedPath: "src/app.ts" })
+    );
 
     // The store mock is non-reactive, so replay the write the pane just asked
     // for and re-render to see what the selection resolves to.
@@ -2378,13 +2379,62 @@ describe("FileBrowserPane git status derivation", () => {
     });
     renderPane();
 
-    await waitFor(() => expect(treeProps.gitStatusIndex).toBeTruthy());
-    const index = treeProps.gitStatusIndex as FileBrowserGitStatusIndex;
-
-    expect(index.fileStatus.size).toBe(0);
-    // An empty *safe* set is still a valid clean snapshot for the tree, but the
-    // summary must not offer an unopenable row.
+    await screen.findByText("Nothing selected");
+    // Git said there were changes and none survived: that is an unusable
+    // snapshot, not an empty one. Calling it clean would state the opposite of
+    // what git reported.
+    expect(screen.queryByText("Worktree is clean")).toBeNull();
     expect(screen.queryByRole("button", { name: /Read/ })).toBeNull();
+    expect(treeProps.gitStatusIndex).toBeNull();
+  });
+
+  it("expands a summarised file's ancestors so it stays findable in the tree", async () => {
+    // Both halves of the feature exist for this: the summary is replaced by the
+    // file the moment it opens, so the row has to be waiting behind it.
+    treeState.rows = [
+      {
+        path: "src",
+        name: "src",
+        isDirectory: true,
+        depth: 0,
+        isExpanded: false,
+        isLoading: false,
+      },
+    ];
+    setChanges([{ path: "/repo/src/panels/app.ts", status: "modified" }]);
+    renderPane();
+
+    const row = await screen.findByRole("button", { name: /Read src\/panels\/app\.ts/ });
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-1", {
+      browserSelectedPath: "src/panels/app.ts",
+      browserExpandedPaths: ["src", "src/panels"],
+    });
+  });
+
+  it("refuses to read a changed path the tree knows is a directory", async () => {
+    // Git reports a dirty submodule as a changed path while the filesystem calls
+    // it a directory. The row wins: handing the viewer a directory to read is
+    // exactly what the original file check existed to prevent.
+    treeState.rows = [
+      {
+        path: "vendor",
+        name: "vendor",
+        isDirectory: true,
+        depth: 0,
+        isExpanded: false,
+        isLoading: false,
+      },
+    ];
+    setChanges([{ path: "/repo/vendor", status: "modified" }]);
+    mockPanel.browserSelectedPath = "vendor";
+    renderPane();
+
+    await waitFor(() => expect(treeProps.gitStatusIndex).toBeTruthy());
+    expect(readMock).not.toHaveBeenCalled();
   });
 
   it("says the worktree is clean only on a populated, empty snapshot", async () => {
