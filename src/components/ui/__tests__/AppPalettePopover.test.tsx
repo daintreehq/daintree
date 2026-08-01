@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppPalettePopover } from "../AppPalettePopover";
 import { AppPaletteDialog } from "../AppPaletteDialog";
@@ -17,6 +18,7 @@ interface CapturedContentProps {
   onCloseAutoFocus?: (event: Event) => void;
   onPointerDownOutside?: () => void;
   onEscapeKeyDown?: (event: KeyboardEvent) => void;
+  onInteractOutside?: (event: Event) => void;
   onFocus?: React.FocusEventHandler<HTMLDivElement>;
   onMouseDown?: React.MouseEventHandler<HTMLDivElement>;
   onKeyDown?: React.KeyboardEventHandler<HTMLDivElement>;
@@ -93,6 +95,8 @@ interface HarnessProps {
   sideOffset?: number;
   /** Omits the search box, reproducing a cold open before the chunk resolves. */
   withInput?: boolean;
+  /** Renders a second stamped header in a portal outside this content's DOM. */
+  withNestedPortal?: boolean;
 }
 
 function Harness({
@@ -106,6 +110,7 @@ function Harness({
   align,
   sideOffset,
   withInput = true,
+  withNestedPortal = false,
   ...contentOverrides
 }: HarnessProps) {
   const [openState, setOpen] = useState(initialOpen);
@@ -151,6 +156,18 @@ function Harness({
         <button type="button" data-testid="row">
           A row
         </button>
+        {/* A real portal: its events bubble through this content in the React
+            tree while its DOM lives elsewhere — the case `contains()` guards. */}
+        {withNestedPortal
+          ? createPortal(
+              <div data-palette-header="">
+                <button type="button" data-testid="portal-target">
+                  Nested
+                </button>
+              </div>,
+              document.body
+            )
+          : null}
       </AppPalettePopover.Content>
     </AppPalettePopover>
   );
@@ -314,8 +331,19 @@ describe("AppPalettePopover", () => {
     });
 
     it("survives the open frame firing before the input exists", () => {
-      // Same cold path, the RAF half — it must no-op rather than throw.
-      expect(() => render(<Harness withInput={false} />)).not.toThrow();
+      // Same cold path, the RAF half. The guard lives inside the callback, so
+      // the frame has to actually run — a test that only mounts proves nothing
+      // and passes even with the effect deleted.
+      const frames: FrameRequestCallback[] = [];
+      const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      render(<Harness withInput={false} />);
+      raf.mockRestore();
+
+      expect(frames.length).toBeGreaterThan(0);
+      expect(() => frames.forEach((frame) => frame(0))).not.toThrow();
     });
 
     it("hands focus back to the search box when it parks on the content wrapper", () => {
@@ -373,6 +401,17 @@ describe("AppPalettePopover", () => {
 
       expect(fireEvent.mouseDown(glyph)).toBe(false);
       expect(document.activeElement).toBe(input(container));
+    });
+
+    it("ignores a stamped header living in a nested portal", () => {
+      // React bubbles the portal's mousedown through this content, so
+      // `closest()` finds that portal's own header. Redirecting focus into the
+      // palette behind it would steal the click from whatever the portal is.
+      const { container, getByTestId } = render(<Harness withNestedPortal={true} />);
+      input(container).blur();
+
+      expect(fireEvent.mouseDown(getByTestId("portal-target"))).toBe(true);
+      expect(document.activeElement).not.toBe(input(container));
     });
 
     it("defers to a consumer handler that already cancelled the event", () => {

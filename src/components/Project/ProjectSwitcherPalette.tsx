@@ -1707,8 +1707,11 @@ function DropdownContent({
           // Global by role rather than scoped to this palette's own subtree
           // (the #8216 data-attribute + portal-re-provided-Context pattern is
           // the upgrade path if an unrelated menu ever holds it open).
+          //
+          // `Element`, not `HTMLElement`: menu items carry Lucide glyphs, and a
+          // click landing on the SVG would otherwise miss the guard entirely.
           const target = event.target;
-          if (target instanceof HTMLElement && target.closest('[role="menu"]')) {
+          if (target instanceof Element && target.closest('[role="menu"]')) {
             event.preventDefault();
           }
         }}
