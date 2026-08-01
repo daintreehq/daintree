@@ -121,11 +121,13 @@ vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 // Captures the props FilePane hands the rendered viewer so the #11255 release
 // chain (FilePane → MarkdownViewer.onRendered → the height pin) is observable;
 // without this the wiring could be deleted with every test still green.
+// cacheBust rides along for #11587: without it a rewritten embedded image keeps
+// a byte-identical daintree-file:// src and never refetches.
 const markdownViewerProps = vi.hoisted(() => ({
-  current: null as { onRendered?: () => void } | null,
+  current: null as { onRendered?: () => void; cacheBust?: string } | null,
 }));
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({
-  MarkdownViewer: (props: { onRendered?: () => void }) => {
+  MarkdownViewer: (props: { onRendered?: () => void; cacheBust?: string }) => {
     markdownViewerProps.current = props;
     return <div data-testid="markdown-viewer-mock" />;
   },
@@ -941,6 +943,26 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     renderPane("/repo/docs/spec.md", "rendered");
     expect(await screen.findByTestId("markdown-viewer-mock")).toBeTruthy();
     expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
+  });
+
+  // #11587: images embedded in the document resolve to daintree-file:// URLs
+  // built from path + root alone, so a rewritten image stays invisible unless the
+  // pane advances a token. Refresh is the user-facing path that has to move it.
+  it("advances the rendered document's cache token when the pane re-reads the file", async () => {
+    renderPane("/repo/docs/spec.md", "rendered");
+    await screen.findByTestId("markdown-viewer-mock");
+    const before = markdownViewerProps.current?.cacheBust;
+    // The token must exist before it can be meaningfully compared — an
+    // unthreaded prop would leave both sides undefined and pass a bare !==.
+    expect(before).toBeDefined();
+
+    await act(async () => {
+      screen
+        .getByRole("button", { name: "Refresh" })
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    await waitFor(() => expect(markdownViewerProps.current?.cacheBust).not.toBe(before));
   });
 
   // The toolbar's open button follows the view: rendered HTML opens in the

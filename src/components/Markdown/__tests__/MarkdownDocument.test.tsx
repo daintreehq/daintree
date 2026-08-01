@@ -133,6 +133,9 @@ describe("MarkdownDocument", () => {
     expect(src.startsWith("daintree-file://load?")).toBe(true);
     expect(decodeURIComponent(src)).toContain("/repo/docs/img/arch.png");
     expect(decodeURIComponent(src)).toContain("root=/repo");
+    // No host token supplied: the URL must stay clean rather than pick up an
+    // empty or "undefined" parameter.
+    expect(new URL(src).searchParams.has("v")).toBe(false);
   });
 
   it("keeps remote image sources untouched", () => {
@@ -142,6 +145,61 @@ describe("MarkdownDocument", () => {
     expect(container.querySelector("img")?.getAttribute("src")).toBe(
       "https://example.com/logo.png"
     );
+  });
+
+  it("carries the cache token on local images only, never on remote images or links", () => {
+    // A token with a space and an ampersand would corrupt the query string if it
+    // were interpolated raw; round-tripping it through searchParams proves it is
+    // encoded without restating how.
+    const token = "rev 1&2";
+    const { container } = render(
+      <MarkdownDocument
+        {...FIXTURE_PROPS}
+        cacheBust={token}
+        content={[
+          "![diagram](./img/arch.png)",
+          "",
+          "![logo](https://example.com/logo.png)",
+          "",
+          "[spec](./other.md)",
+        ].join("\n")}
+      />
+    );
+
+    const [local, remote] = Array.from(container.querySelectorAll("img"));
+    const localUrl = new URL(local!.getAttribute("src") ?? "");
+    expect(localUrl.searchParams.get("v")).toBe(token);
+    // The token rides alongside the routing params rather than displacing them.
+    expect(localUrl.searchParams.get("path")).toBe("/repo/docs/img/arch.png");
+    expect(localUrl.searchParams.get("root")).toBe("/repo");
+
+    // Remote images short-circuit before the daintree-file branch, and link
+    // hrefs never enter it at all — neither may leak the token.
+    expect(remote!.getAttribute("src")).toBe("https://example.com/logo.png");
+    expect(screen.getByRole("link", { name: "spec" }).getAttribute("href")).not.toContain("v=");
+  });
+
+  it("rebuilds local image sources when only the cache token changes", () => {
+    // The regression guard for #11587: a rewritten image keeps the same path and
+    // root, so the src is byte-identical and Chromium never refetches it. This
+    // fails if the token is dropped from the urlTransform memo's dependencies.
+    const content = "![diagram](./img/arch.png)";
+    const { container, rerender } = render(
+      <MarkdownDocument {...FIXTURE_PROPS} cacheBust="rev-1" content={content} />
+    );
+    const before = container.querySelector("img")!.getAttribute("src") ?? "";
+
+    rerender(<MarkdownDocument {...FIXTURE_PROPS} cacheBust="rev-2" content={content} />);
+    const after = container.querySelector("img")!.getAttribute("src") ?? "";
+
+    expect(after).not.toBe(before);
+    const afterUrl = new URL(after);
+    expect(afterUrl.searchParams.get("v")).toBe("rev-2");
+    // Only the token moved: still the same file under the same containment root.
+    expect(afterUrl.searchParams.get("path")).toBe(
+      new URL(before).searchParams.get("path")
+    );
+    expect(afterUrl.searchParams.get("root")).toBe(new URL(before).searchParams.get("root"));
   });
 
   it("opens external links through browser.openExternal instead of navigating", () => {

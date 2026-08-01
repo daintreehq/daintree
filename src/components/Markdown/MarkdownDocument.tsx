@@ -10,6 +10,7 @@ import {
   isLanguageRegistered,
 } from "@/components/Worktree/diffRefractor";
 import { dirname, isAbsolute, isPathInside, join, normalize } from "@shared/utils/path";
+import { buildDaintreeFileUrl } from "@/components/FileViewer/filePreviewKinds";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
@@ -22,6 +23,14 @@ export interface MarkdownDocumentProps {
   filePath: string;
   /** Containment root for daintree-file:// image loads */
   rootPath: string;
+  /**
+   * Cache-busting token appended to local image URLs. The daintree-file:// URL
+   * is otherwise a pure function of path + root, so a rewritten image keeps a
+   * byte-identical `src` and Chromium never refetches it (#11587). Hosts pass
+   * whatever token already tracks their refresh cycle; same `cacheBust` idiom
+   * as FileImagePreview and ZoomableImage.
+   */
+  cacheBust?: string;
   className?: string;
   /**
    * Fired once the document has committed. Hosts that pinned their height
@@ -97,10 +106,6 @@ function resolveAgainstFile(filePath: string, target: string): string {
   return isAbsolute(target) ? normalize(target) : normalize(join(dirname(filePath), target));
 }
 
-function buildDaintreeFileUrl(filePath: string, rootPath: string): string {
-  return `daintree-file://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
-}
-
 const HTTPish = /^(https?|mailto):/i;
 
 /**
@@ -115,6 +120,7 @@ export function MarkdownDocument({
   content,
   filePath,
   rootPath,
+  cacheBust,
   className,
   onRendered,
 }: MarkdownDocumentProps) {
@@ -134,11 +140,16 @@ export function MarkdownDocument({
         // images referenced by specs render with the same containment checks
         // as the file itself.
         if (HTTPish.test(url) || url.startsWith("data:")) return defaultUrlTransform(url);
-        return buildDaintreeFileUrl(resolveAgainstFile(filePath, url), rootPath);
+        const local = buildDaintreeFileUrl(resolveAgainstFile(filePath, url), rootPath);
+        // Undefined-checked rather than truthy: "" is a token a host may hold
+        // before its first refresh, and dropping it there would make the very
+        // first rewrite invisible. The protocol handler reads only path/root,
+        // so `v` is inert to it.
+        return cacheBust === undefined ? local : `${local}&v=${encodeURIComponent(cacheBust)}`;
       }
       return defaultUrlTransform(url);
     };
-  }, [filePath, rootPath]);
+  }, [filePath, rootPath, cacheBust]);
 
   const handleLinkActivate = useMemo(() => {
     return (href: string | undefined) => {

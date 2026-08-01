@@ -1226,6 +1226,7 @@ export function FilePane({
               rootPath={effectiveRootPath}
               viewMode="rendered"
               wrapLines={markdownWrapLines}
+              cacheBust={String(reloadNonce)}
               onRendered={heightHold.handleRendered}
             />
           ) : viewMode === "rendered" && isHtml ? (
