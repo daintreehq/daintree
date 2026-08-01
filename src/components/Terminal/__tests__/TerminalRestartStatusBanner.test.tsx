@@ -188,9 +188,29 @@ describe("TerminalRestartStatusBanner", () => {
           />
         );
         expect(screen.getAllByRole("button")).toHaveLength(2);
-        expect(
-          screen.getByRole("button", { name: "Dismiss all session-lost warnings" })
-        ).toBeTruthy();
+        expect(screen.getByRole("button", { name: /\bdismiss all\b/i })).toBeTruthy();
+      });
+
+      // WCAG "Label in Name": the accessible name must start with the visible
+      // label so speech-input users can say what they read, and must add the
+      // scope the short label leaves out.
+      it("names the bulk control with its visible label plus the missing scope", () => {
+        render(
+          <TerminalRestartStatusBanner
+            variant={{ type: "session-resume-unavailable" }}
+            onRestart={vi.fn()}
+            onDismiss={vi.fn()}
+            onDismissAll={vi.fn()}
+          />
+        );
+
+        const bulk = screen.getByRole("button", { name: /\bdismiss all\b/i });
+        const visible = (bulk.textContent ?? "").trim();
+        const accessible = (bulk.getAttribute("aria-label") ?? "").trim();
+
+        expect(visible.length).toBeGreaterThan(0);
+        expect(accessible.toLowerCase().startsWith(visible.toLowerCase())).toBe(true);
+        expect(accessible.length).toBeGreaterThan(visible.length);
       });
 
       it("routes each control to its own callback", () => {
@@ -205,7 +225,7 @@ describe("TerminalRestartStatusBanner", () => {
           />
         );
 
-        fireEvent.click(screen.getByRole("button", { name: "Dismiss all session-lost warnings" }));
+        fireEvent.click(screen.getByRole("button", { name: /\bdismiss all\b/i }));
         expect(onDismissAll).toHaveBeenCalledOnce();
         expect(onDismiss).not.toHaveBeenCalled();
 

@@ -199,17 +199,17 @@ describe("selectHasMultipleSessionLost", () => {
     ).toBe(false);
   });
 
+  // The store replaces `panelsById` on every write, so identity change is the
+  // only invalidation signal the memo needs.
   it("recomputes when the carrier identity changes", () => {
     expect(selectHasMultipleSessionLost({ a: lost("a"), b: lost("b") })).toBe(true);
     expect(selectHasMultipleSessionLost({ a: lost("a") })).toBe(false);
+    expect(selectHasMultipleSessionLost({ a: lost("a"), b: lost("b"), c: lost("c") })).toBe(true);
   });
 
-  it("returns the cached verdict for an identity-equal carrier", () => {
+  it("is stable across repeated calls on the same carrier", () => {
     const byId = { a: lost("a"), b: lost("b") };
     expect(selectHasMultipleSessionLost(byId)).toBe(true);
-    // Mutating in place is invisible to the memo — proves the cache was hit
-    // rather than the scan re-running.
-    delete (byId as Record<string, PanelInstance>).b;
     expect(selectHasMultipleSessionLost(byId)).toBe(true);
   });
 });

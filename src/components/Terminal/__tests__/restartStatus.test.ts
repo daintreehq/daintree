@@ -262,16 +262,13 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
   });
 
   it("returns none when sessionLostOnRestore is absent (resumed normally)", () => {
-    const result = getRestartBannerVariant({ ...restored, sessionLostOnRestore: false });
-    expect(result).toEqual({ type: "none" });
-  });
-
-  it("returns none once dismissal consumed the signal (issues #10823, #11589)", () => {
-    // The banner is dismissable, and dismissing it clears `sessionLostOnRestore`
-    // in the panel store rather than setting a second flag — so a cleared signal
-    // is exactly what an acknowledged banner looks like to this policy.
-    const result = getRestartBannerVariant({ ...restored, sessionLostOnRestore: undefined });
-    expect(result).toEqual({ type: "none" });
+    // Both falsey shapes: never set, and consumed by a dismissal (#11589).
+    expect(getRestartBannerVariant({ ...restored, sessionLostOnRestore: false })).toEqual({
+      type: "none",
+    });
+    expect(getRestartBannerVariant({ ...restored, sessionLostOnRestore: undefined })).toEqual({
+      type: "none",
+    });
   });
 
   it("stays visible when only dismissedRestartPrompt is set — independent flags (#10823)", () => {
@@ -284,18 +281,21 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
     expect(result).toEqual({ type: "session-resume-unavailable" });
   });
 
-  it("surfaces exit-error after the lost-session banner is dismissed (#10823)", () => {
-    // Acknowledging the lost session clears only `sessionLostOnRestore` and
-    // never touches `dismissedRestartPrompt`, so a crash of the fresh session
-    // that followed must still get its own banner.
-    const result = getRestartBannerVariant({
-      ...restored,
-      isExited: true,
-      exitCode: 1,
-      sessionLostOnRestore: undefined,
-      dismissedRestartPrompt: false,
-    });
-    expect(result).toEqual({ type: "exit-error", exitCode: 1 });
+  it("hands off to exit-error when the lost-session banner is dismissed (#10823)", () => {
+    // The whole transition on one input, which is what makes it a guarantee
+    // rather than two unrelated assertions: the fresh session has already
+    // crashed, so both signals are live and session-lost wins. Acknowledging it
+    // consumes ONLY `sessionLostOnRestore` (#11589) — `dismissedRestartPrompt`
+    // is untouched — so the crash banner underneath must now surface.
+    const crashedAfterLostSession = { ...restored, isExited: true, exitCode: 1 };
+
+    expect(
+      getRestartBannerVariant({ ...crashedAfterLostSession, sessionLostOnRestore: true })
+    ).toEqual({ type: "session-resume-unavailable" });
+
+    expect(
+      getRestartBannerVariant({ ...crashedAfterLostSession, sessionLostOnRestore: undefined })
+    ).toEqual({ type: "exit-error", exitCode: 1 });
   });
 
   it("ignores backendStatus — the lost session is independent of host connectivity", () => {

@@ -59,7 +59,7 @@ vi.mock("../persistence", async () => {
 const { usePanelStore } = await import("../../../panelStore");
 const { saveNormalized } = await import("../persistence");
 
-function ptyPanel(id: string, overrides: Partial<PtyPanelData> = {}): PanelInstance {
+function ptyPanel(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     kind: "terminal",
@@ -69,7 +69,7 @@ function ptyPanel(id: string, overrides: Partial<PtyPanelData> = {}): PanelInsta
     rows: 24,
     location: "grid",
     ...overrides,
-  } as PanelInstance;
+  } as PtyPanelData;
 }
 
 /**
@@ -125,22 +125,43 @@ describe("dismissSessionLost", () => {
     expect(signalOf("t-2")).toBe(true);
   });
 
-  it("preserves the rest of the panel's runtime state", () => {
-    seed([
-      ptyPanel("t-1", {
-        sessionLostOnRestore: true,
-        agentState: "working",
-        exitCode: 3,
-        isRestarting: true,
-      }),
-    ]);
+  // Whole-object equality, not a sampled field list: an implementation that
+  // rebuilt the panel and dropped unrelated fields would pass a spot check.
+  it("changes nothing on the panel but the consumed signal", () => {
+    const before = ptyPanel("t-1", {
+      sessionLostOnRestore: true,
+      agentState: "working",
+      exitCode: 3,
+      isRestarting: true,
+      worktreeId: "wt-a",
+      agentSessionId: "sess-9",
+    });
+    seed([before]);
 
     usePanelStore.getState().dismissSessionLost("t-1");
 
-    const panel = usePanelStore.getState().panelsById["t-1"] as PtyPanelData;
-    expect(panel.agentState).toBe("working");
-    expect(panel.exitCode).toBe(3);
-    expect(panel.isRestarting).toBe(true);
+    const after = usePanelStore.getState().panelsById["t-1"] as PtyPanelData;
+    const { sessionLostOnRestore: _dropped, ...expected } = before as PtyPanelData;
+    expect(after).toEqual({ ...expected, sessionLostOnRestore: undefined });
+  });
+
+  // Zustand 5 only notifies subscribers when the returned root fails Object.is
+  // against the previous state, so an in-place mutation would leave every value
+  // assertion above green while the banner stayed on screen.
+  it("writes immutably so subscribers are notified", () => {
+    const before = ptyPanel("t-1", { sessionLostOnRestore: true });
+    seed([before]);
+    const carrierBefore = usePanelStore.getState().panelsById;
+
+    const notified = vi.fn();
+    const unsubscribe = usePanelStore.subscribe(notified);
+    usePanelStore.getState().dismissSessionLost("t-1");
+    unsubscribe();
+
+    expect(notified).toHaveBeenCalledTimes(1);
+    expect(usePanelStore.getState().panelsById).not.toBe(carrierBefore);
+    expect(usePanelStore.getState().panelsById["t-1"]).not.toBe(before);
+    expect(before.sessionLostOnRestore).toBe(true);
   });
 
   it("is a no-op for an unknown id", () => {
@@ -192,7 +213,7 @@ describe("dismissSessionLost", () => {
 });
 
 describe("dismissAllSessionLost", () => {
-  it("clears every flagged panel regardless of worktree", () => {
+  it("clears every flagged panel regardless of worktree, keeping them all", () => {
     seed([
       ptyPanel("t-1", { sessionLostOnRestore: true, worktreeId: "wt-a" }),
       ptyPanel("t-2", { sessionLostOnRestore: true, worktreeId: "wt-b" }),
@@ -204,6 +225,24 @@ describe("dismissAllSessionLost", () => {
     expect(signalOf("t-1")).toBeUndefined();
     expect(signalOf("t-2")).toBeUndefined();
     expect(signalOf("t-3")).toBeUndefined();
+    // Consuming the signal must not consume the panels: deleting them outright
+    // would satisfy the assertions above.
+    expect(Object.keys(usePanelStore.getState().panelsById).sort()).toEqual(["t-1", "t-2", "t-3"]);
+  });
+
+  it("notifies subscribers exactly once for the whole sweep", () => {
+    seed([
+      ptyPanel("t-1", { sessionLostOnRestore: true }),
+      ptyPanel("t-2", { sessionLostOnRestore: true }),
+      ptyPanel("t-3", { sessionLostOnRestore: true }),
+    ]);
+
+    const notified = vi.fn();
+    const unsubscribe = usePanelStore.subscribe(notified);
+    usePanelStore.getState().dismissAllSessionLost();
+    unsubscribe();
+
+    expect(notified).toHaveBeenCalledTimes(1);
   });
 
   // A hydration/spawn batch publishes `panelsById` before appending ids
@@ -244,12 +283,16 @@ describe("dismissAllSessionLost", () => {
     expect(usePanelStore.getState().panelsById["t-2"]).toBe(untouched);
   });
 
-  it("keeps the same carrier identity when nothing is flagged", () => {
+  it("wakes no subscriber when nothing is flagged", () => {
     seed([ptyPanel("t-1"), ptyPanel("t-2")]);
     const before = usePanelStore.getState().panelsById;
 
+    const notified = vi.fn();
+    const unsubscribe = usePanelStore.subscribe(notified);
     usePanelStore.getState().dismissAllSessionLost();
+    unsubscribe();
 
+    expect(notified).not.toHaveBeenCalled();
     expect(usePanelStore.getState().panelsById).toBe(before);
   });
 

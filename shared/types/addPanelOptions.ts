@@ -148,8 +148,10 @@ export interface AddPanelOptionsBase {
    * available (neither exact-session nor resume-latest), or resume-latest was
    * suppressed because a sibling pane owns this agent+cwd's single slot
    * (#11461) — so the prior conversation is unreachable for this pane.
-   * Drives the "Session no longer reachable" restart banner. Never persisted;
-   * cleared on the next restart. See `serializePtyPanel` (intentionally omitted).
+   * Drives the "Session no longer reachable" restart banner, and doubles as the
+   * "not yet acknowledged" gate: dismissing the banner consumes this flag
+   * (#11589), as does the next restart. Never persisted — see
+   * `serializePtyPanel` (intentionally omitted).
    */
   sessionLostOnRestore?: boolean;
   /**
