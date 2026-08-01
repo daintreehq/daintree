@@ -1,28 +1,6 @@
 import type { ComponentType } from "react";
 import { AGENT_ICON_MAP } from "@/config/agentIcons";
 import { getAgentConfig } from "@/config/agents";
-import {
-  NpmIcon,
-  YarnIcon,
-  PnpmIcon,
-  BunIcon,
-  PythonIcon,
-  ComposerIcon,
-  DockerIcon,
-  RustIcon,
-  GoIcon,
-  RubyIcon,
-  NodeIcon,
-  DenoIcon,
-  GradleIcon,
-  PhpIcon,
-  ViteIcon,
-  WebpackIcon,
-  KotlinIcon,
-  SwiftIcon,
-  TerraformIcon,
-  ElixirIcon,
-} from "@/components/icons";
 
 export interface TerminalRunIconProps {
   className?: string;
@@ -30,32 +8,14 @@ export interface TerminalRunIconProps {
   brandColor?: string;
 }
 
-const PROCESS_RUN_ICON_MAP = {
-  npm: NpmIcon,
-  yarn: YarnIcon,
-  pnpm: PnpmIcon,
-  bun: BunIcon,
-  python: PythonIcon,
-  composer: ComposerIcon,
-  docker: DockerIcon,
-  rust: RustIcon,
-  go: GoIcon,
-  ruby: RubyIcon,
-  node: NodeIcon,
-  deno: DenoIcon,
-  gradle: GradleIcon,
-  php: PhpIcon,
-  vite: ViteIcon,
-  webpack: WebpackIcon,
-  kotlin: KotlinIcon,
-  swift: SwiftIcon,
-  terraform: TerraformIcon,
-  elixir: ElixirIcon,
-} satisfies Record<string, ComponentType<TerminalRunIconProps>>;
-
+/**
+ * Every brand mark under `icons/brands/`, keyed by lowercased filename minus
+ * `Icon.tsx`. Agents and process tools resolve through the same glob, so a
+ * registry entry named after its icon file needs no second map here —
+ * `check:process-tools` verifies that file exists.
+ */
 export const TERMINAL_RUN_ICON_MAP: Record<string, ComponentType<TerminalRunIconProps>> = {
   ...AGENT_ICON_MAP,
-  ...PROCESS_RUN_ICON_MAP,
 };
 
 export function resolveTerminalRunIcon(

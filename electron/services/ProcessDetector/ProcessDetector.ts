@@ -1,5 +1,5 @@
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
-import type { ProcessTreeCache } from "../ProcessTreeCache.js";
+import type { ProcessInfo, ProcessTreeCache } from "../ProcessTreeCache.js";
 import type { ImagePathProbe } from "../pty/ImagePathProbe.js";
 import { logDebug, logWarn } from "../../utils/logger.js";
 import { logIdentityDebug } from "../pty/identityDebug.js";
@@ -16,6 +16,22 @@ import { redactArgv } from "./commandParser.js";
 import { buildDetectedCandidate, selectPreferredCandidate } from "./candidateHelpers.js";
 
 export { type DetectionResult } from "./types.js";
+
+// Package managers and task runners stack wrappers between the PTY and the
+// tool actually running: `npm run check` in this repo is npm → sh -c → npm →
+// cross-env → npm, five levels before anything identifiable. Eight leaves room
+// for the tool below that chain. Descending is free — `ProcessTreeCache` holds
+// the whole snapshot and `getChildren` is a Map lookup — so the node cap only
+// bounds per-node string work on a pathologically wide tree. It also bounds the
+// PID set diffed by `evictDisappearedImagePathPids`.
+const MAX_PROCESS_TREE_DEPTH = 8;
+const MAX_PROCESS_TREE_NODES = 128;
+// Probes are NOT free: an unseen PID costs an `lsof`/PowerShell subprocess.
+// Bounded by depth rather than by count — a count budget would starve a
+// title-rewriting agent sitting behind many siblings, and the signal only
+// matters for CLIs that rewrite their own title, which sit at the top of the
+// tree. Depth 2 is exactly what the pre-BFS scan probed. #8790
+const MAX_IMAGE_PATH_PROBE_DEPTH = 2;
 
 export class ProcessDetector {
   // Require N consecutive polls agreeing on a new agent/icon state before
@@ -580,64 +596,81 @@ export class ProcessDetector {
 
     let bestMatch: DetectedProcessCandidate | null = null;
     let order = 0;
+    // PIDs whose image path was read this pass. Eviction diffs against exactly
+    // this set: a PID that has dropped out of probe range is either gone or no
+    // longer shallow, and in both cases its cached basename must not survive to
+    // be served after the OS recycles the number. #8794
     const probedPids = new Set<number>();
+    // Counts only nodes below the direct children. A wide first level must not
+    // consume the descent budget, or a PTY with many children would never look
+    // past them — the very blindness the deeper walk exists to fix.
+    let descendantCount = 0;
+    // Guards against a cycle in an inconsistent `ps` snapshot and against
+    // visiting the same PID twice when a node appears under two parents.
+    const scheduled = new Set<number>([this.ptyPid]);
 
-    for (const proc of processes) {
-      const candidate = buildDetectedCandidate(proc.name, proc.command, order++);
-      if (candidate) {
-        bestMatch = selectPreferredCandidate(bestMatch, candidate);
-      }
-      // Image-path candidate: defeats `process.title`/`setproctitle` rewrites
-      // where `comm` and argv have both been clobbered to something like
-      // "Claude Code" but the on-disk binary is still `/opt/homebrew/bin/claude`.
-      // Runs alongside the comm match (not as a replacement) so the existing
-      // selectPreferredCandidate priority logic picks the agent over a generic
-      // icon when both fire. #8790
-      if (this.imagePathProbe) {
-        probedPids.add(proc.pid);
-        const imageBasename = this.imagePathProbe.readBasename(proc.pid);
-        if (imageBasename) {
-          const imageCandidate = buildDetectedCandidate(imageBasename, proc.command, order++);
-          if (imageCandidate) {
-            bestMatch = selectPreferredCandidate(bestMatch, imageCandidate);
-          }
+    let frontier = liveChildren.filter((proc) => {
+      if (scheduled.has(proc.pid)) return false;
+      scheduled.add(proc.pid);
+      return true;
+    });
+
+    for (let depth = 1; depth <= MAX_PROCESS_TREE_DEPTH && frontier.length > 0; depth++) {
+      // Direct children are always scanned in full — they are the cheap,
+      // highest-signal identities, and truncating them could drop an agent
+      // that the pre-BFS scan always examined. The budget bounds descent.
+      const level =
+        depth === 1
+          ? frontier
+          : frontier.slice(0, Math.max(0, MAX_PROCESS_TREE_NODES - descendantCount));
+      if (depth > 1) descendantCount += level.length;
+
+      for (const proc of level) {
+        const command = proc.command || proc.comm;
+        const candidate = buildDetectedCandidate(proc.comm, command, order++);
+        if (candidate) {
+          bestMatch = selectPreferredCandidate(bestMatch, candidate);
         }
-      }
-    }
-
-    // Grandchild fallback. Only run when direct children didn't produce an
-    // identified agent — avoids showing a "node" badge for claude's Node
-    // worker processes when the claude parent renamed its comm. Covers real
-    // nesting: `zsh → npm → node /path/to/claude` for `npm run claude`.
-    if (!bestMatch || bestMatch.priority > 0) {
-      for (const child of liveChildren.slice(0, 10)) {
-        const grandchildren = this.cache.getChildren(child.pid);
-        const liveGrandchildren = grandchildren.filter((gc) => !gc.command.includes("<defunct>"));
-        for (const grandchild of liveGrandchildren) {
-          const candidate = buildDetectedCandidate(
-            grandchild.comm,
-            grandchild.command || grandchild.comm,
-            order++
-          );
-          if (candidate) {
-            bestMatch = selectPreferredCandidate(bestMatch, candidate);
-          }
-          if (this.imagePathProbe) {
-            probedPids.add(grandchild.pid);
-            const grandImageBasename = this.imagePathProbe.readBasename(grandchild.pid);
-            if (grandImageBasename) {
-              const grandImageCandidate = buildDetectedCandidate(
-                grandImageBasename,
-                grandchild.command || grandchild.comm,
-                order++
-              );
-              if (grandImageCandidate) {
-                bestMatch = selectPreferredCandidate(bestMatch, grandImageCandidate);
-              }
+        // Image-path candidate: defeats `process.title`/`setproctitle` rewrites
+        // where `comm` and argv have both been clobbered to something like
+        // "Claude Code" but the on-disk binary is still `/opt/homebrew/bin/claude`.
+        // Runs alongside the comm match (not as a replacement) so the existing
+        // selectPreferredCandidate priority logic picks the agent over a generic
+        // icon when both fire. #8790
+        //
+        // Budgeted separately from the traversal: descending the cached tree is
+        // pure Map lookups, but each unseen PID costs a probe subprocess on
+        // macOS/Windows. Deeper nodes are build tools, which don't rewrite
+        // their titles, so they identify fine from comm/argv alone.
+        if (this.imagePathProbe && depth <= MAX_IMAGE_PATH_PROBE_DEPTH) {
+          probedPids.add(proc.pid);
+          const imageBasename = this.imagePathProbe.readBasename(proc.pid);
+          if (imageBasename) {
+            const imageCandidate = buildDetectedCandidate(imageBasename, command, order++);
+            if (imageCandidate) {
+              bestMatch = selectPreferredCandidate(bestMatch, imageCandidate);
             }
           }
         }
       }
+
+      // Stop once an agent is identified — avoids showing a "node" badge for
+      // claude's Node worker processes when the claude parent renamed its comm.
+      // The whole breadth level is still evaluated first so sibling ordering is
+      // unchanged; only the descent below it is skipped.
+      if (bestMatch?.priority === 0 || descendantCount >= MAX_PROCESS_TREE_NODES) {
+        break;
+      }
+
+      const next: ProcessInfo[] = [];
+      for (const proc of level) {
+        for (const child of this.cache.getChildren(proc.pid)) {
+          if (child.command.includes("<defunct>") || scheduled.has(child.pid)) continue;
+          scheduled.add(child.pid);
+          next.push(child);
+        }
+      }
+      frontier = next;
     }
 
     // Diagnostic: when we saw running processes but couldn't identify any of
@@ -672,11 +705,16 @@ export class ProcessDetector {
 
   /**
    * Evict ImagePathProbe entries for PIDs that were probed last pass but are
-   * absent this pass. Without this, a recycled PID could return the prior
+   * not probed this pass. Without this, a recycled PID could return the prior
    * process's cached basename for up to 30s (the probe's eviction TTL) plus
    * the cache hard-max window, causing a brief misidentification before the
-   * background refresh writes the new value. Diffing here is O(N) per pass
-   * where N is the worst-case 10 children × ~10 grandchildren = 100 PIDs.
+   * background refresh writes the new value.
+   *
+   * Diffs against the probed set rather than every visited PID: a successful
+   * probe entry is served indefinitely until evicted, so a PID that left probe
+   * range must drop its entry. Keeping it because the PID is still visible
+   * somewhere deeper would let an unrelated process that inherited the number
+   * answer with the old basename.
    */
   private evictDisappearedImagePathPids(currentProbedPids: Set<number>): void {
     if (!this.imagePathProbe) return;

@@ -362,7 +362,9 @@ describe("ProcessDetector", () => {
     );
   });
 
-  it("prioritizes package managers over other tool icons", () => {
+  it("uses package managers only as a fallback against a named tool", () => {
+    // A package manager names the launcher, not the work. When something more
+    // specific is running, that is what the pane should say. #11612
     const cache = createCacheMock();
     cache.setChildren(100, [
       { pid: 200, comm: "docker", command: "docker build ." },
@@ -383,9 +385,344 @@ describe("ProcessDetector", () => {
     expect(callback).toHaveBeenCalledWith(
       expect.objectContaining({
         detected: true,
-        processIconId: "pnpm",
-        processName: "pnpm",
+        processIconId: "docker",
+        processName: "docker",
       }),
+      expect.any(Number)
+    );
+  });
+
+  it("still reports the package manager when nothing identifiable runs below it", () => {
+    const cache = createCacheMock();
+    cache.setChildren(100, [{ pid: 200, comm: "npm", command: "npm install" }]);
+    cache.setChildren(200, [{ pid: 300, comm: "sh", command: "sh -c postinstall.sh" }]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-pm-fallback",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
+    cache.emitRefresh();
+
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detected: true,
+        processIconId: "npm",
+        processName: "npm",
+      }),
+      expect.any(Number)
+    );
+  });
+
+  it("sees past an sh -c wrapper to the tool the package manager launched", () => {
+    // npm inserts `sh -c` as soon as a run-script contains a metacharacter,
+    // which put the real tool out of reach of the old two-level scan. #11612
+    const cache = createCacheMock();
+    cache.setChildren(100, [{ pid: 200, comm: "npm", command: "npm run dev" }]);
+    // The wrapper's argv names a script, not the tool, so only reaching the
+    // depth-3 node can identify Vite. Naming it in the `sh -c` argv would let
+    // the old grandchild-only scan pass this test too.
+    cache.setChildren(200, [{ pid: 300, comm: "sh", command: "sh -c ./scripts/start-dev.sh" }]);
+    cache.setChildren(300, [{ pid: 400, comm: "vite", command: "vite --host" }]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-deep-vite",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
+    cache.emitRefresh();
+
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detected: true,
+        processIconId: "vite",
+        processName: "vite",
+      }),
+      expect.any(Number)
+    );
+  });
+
+  it("reaches a tool five wrapper levels below the pty", () => {
+    // Mirrors this repo's own `npm run check`: npm → sh -c → npm → cross-env
+    // → npm before anything identifiable appears.
+    const cache = createCacheMock();
+    cache.setChildren(100, [{ pid: 200, comm: "npm", command: "npm run check" }]);
+    cache.setChildren(200, [{ pid: 300, comm: "sh", command: "sh -c npm run typecheck" }]);
+    cache.setChildren(300, [{ pid: 400, comm: "npm", command: "npm run typecheck" }]);
+    cache.setChildren(400, [{ pid: 500, comm: "node", command: "node cross-env tsc -b" }]);
+    cache.setChildren(500, [{ pid: 600, comm: "tsc", command: "tsc -b --pretty" }]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-deep-tsc",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
+    cache.emitRefresh();
+
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detected: true,
+        processIconId: "typescript",
+        processName: "tsc",
+      }),
+      expect.any(Number)
+    );
+  });
+
+  it("prefers the script a runtime is hosting over the runtime itself", () => {
+    // `node .../vite.js` reports comm=node; without the argv preference every
+    // dev server in every pane would show the same Node mark.
+    const cache = createCacheMock();
+    cache.setChildren(100, [
+      { pid: 200, comm: "node", command: "node /repo/node_modules/.bin/vitest --watch" },
+    ]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-runtime-host",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
+    cache.emitRefresh();
+
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detected: true,
+        processIconId: "vitest",
+        processName: "vitest",
+      }),
+      expect.any(Number)
+    );
+  });
+
+  it("does not descend past an identified agent into its worker processes", () => {
+    const cache = createCacheMock();
+    cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+    cache.setChildren(200, [{ pid: 300, comm: "node", command: "node /worker.js" }]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-agent-stop",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
+    cache.emitRefresh();
+
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({ detected: true, agentType: "claude" }),
+      expect.any(Number)
+    );
+    expect(cache.getChildren).not.toHaveBeenCalledWith(200);
+  });
+
+  it("does not descend into a defunct wrapper", () => {
+    const cache = createCacheMock();
+    cache.setChildren(100, [{ pid: 200, comm: "npm", command: "npm run dev" }]);
+    cache.setChildren(200, [{ pid: 300, comm: "sh", command: "sh <defunct>" }]);
+    cache.setChildren(300, [{ pid: 400, comm: "vite", command: "vite --host" }]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-defunct-deep",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
+    cache.emitRefresh();
+
+    expect(cache.getChildren).not.toHaveBeenCalledWith(300);
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({ processIconId: "npm" }),
+      expect.any(Number)
+    );
+  });
+
+  it("terminates on a process tree that reports itself as its own descendant", () => {
+    const cache = createCacheMock();
+    cache.setChildren(100, [{ pid: 200, comm: "npm", command: "npm run dev" }]);
+    cache.setChildren(200, [{ pid: 300, comm: "sh", command: "sh -c start" }]);
+    // An inconsistent `ps` snapshot can report a cycle; the walk must not hang.
+    cache.setChildren(300, [{ pid: 200, comm: "npm", command: "npm run dev" }]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-cycle",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
+    // The cycle guard is per-pass, so count expansions within one pass — but
+    // the callback needs a second poll to clear hysteresis.
+    cache.getChildren.mockClear();
+    cache.emitRefresh();
+
+    // Termination alone is guaranteed by the depth cap; what proves the guard
+    // works is that the revisited PID is never expanded twice in a pass.
+    const expansionsOf200 = cache.getChildren.mock.calls.filter(([pid]) => pid === 200);
+    expect(expansionsOf200).toHaveLength(1);
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({ detected: true, processIconId: "npm" }),
+      expect.any(Number)
+    );
+  });
+
+  it("does not let an argument to a script masquerade as the tool", () => {
+    // `npm run docker` runs a package script the user named "docker"; the tool
+    // actually running is whatever that script spawns.
+    const cache = createCacheMock();
+    cache.setChildren(100, [{ pid: 200, comm: "npm", command: "npm run docker" }]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-script-name",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
+    cache.emitRefresh();
+
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({ detected: true, processIconId: "npm", processName: "npm" }),
+      expect.any(Number)
+    );
+  });
+
+  it("does not let a runtime's positional argument masquerade as the tool", () => {
+    const cache = createCacheMock();
+    cache.setChildren(100, [
+      { pid: 200, comm: "node", command: "node server.js vite --port 3000" },
+    ]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-positional-arg",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
+    cache.emitRefresh();
+
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({ detected: true, processIconId: "node", processName: "node" }),
+      expect.any(Number)
+    );
+  });
+
+  it("scans every direct child for an agent even past the descent budget", () => {
+    // The node budget bounds how deep the walk expands, not whether a direct
+    // child is looked at — dropping one could hide an agent entirely.
+    const cache = createCacheMock();
+    const siblings = Array.from({ length: 200 }, (_, i) => ({
+      pid: 1000 + i,
+      comm: "sh",
+      command: "sh -c worker",
+    }));
+    cache.setChildren(100, [
+      ...siblings,
+      { pid: 5000, comm: "claude", command: "claude --resume" },
+    ]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-wide-agent",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
+    cache.emitRefresh();
+
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({ detected: true, agentType: "claude" }),
+      expect.any(Number)
+    );
+  });
+
+  it("still descends past a first level wide enough to exhaust the node budget", () => {
+    // Counting direct children against the descent budget would make a PTY
+    // with many children blind to everything below them.
+    const cache = createCacheMock();
+    const siblings = Array.from({ length: 200 }, (_, i) => ({
+      pid: 1000 + i,
+      comm: "sh",
+      command: "sh -c worker",
+    }));
+    cache.setChildren(100, siblings);
+    cache.setChildren(1000, [{ pid: 9000, comm: "vite", command: "vite --host" }]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-wide-descend",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
+    cache.emitRefresh();
+
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({ detected: true, processIconId: "vite" }),
+      expect.any(Number)
+    );
+  });
+
+  it("stops descending once the descendant budget is exhausted", () => {
+    const cache = createCacheMock();
+    cache.setChildren(100, [{ pid: 200, comm: "sh", command: "sh -c fan-out" }]);
+    // A single direct child fans out past the budget at depth 2, so the walk
+    // must stop before expanding the tail of that level.
+    const wide = Array.from({ length: 200 }, (_, i) => ({
+      pid: 1000 + i,
+      comm: "sh",
+      command: "sh -c worker",
+    }));
+    cache.setChildren(200, wide);
+    // Hangs off the last depth-2 node, so it is only reachable if the walk
+    // ignores its own budget.
+    cache.setChildren(1199, [{ pid: 9000, comm: "vite", command: "vite --host" }]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-wide",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
+    cache.emitRefresh();
+
+    expect(cache.getChildren).not.toHaveBeenCalledWith(1199);
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({ detected: false, isBusy: true }),
       expect.any(Number)
     );
   });
@@ -1777,6 +2114,39 @@ describe("extractScriptBasenameFromCommand", () => {
     ).toMatchObject({
       agentType: "claude",
       processIconId: "claude",
+      processName: "claude",
+    });
+  });
+
+  it("prefers the tool a package manager is executing over the package manager", () => {
+    // The shell-observation path is a separate implementation from the
+    // process-tree walk and has to make the same call. #11612
+    expect(detectCommandIdentity("npx vitest --watch")).toMatchObject({
+      processIconId: "vitest",
+      processName: "vitest",
+    });
+  });
+
+  it("keeps the package manager when its argument is a script name, not a tool", () => {
+    expect(detectCommandIdentity("npm run docker")).toMatchObject({
+      processIconId: "npm",
+      processName: "npm",
+    });
+  });
+
+  it("looks past an exec subcommand, which names a binary rather than a script", () => {
+    expect(detectCommandIdentity("pnpm exec vitest --watch")).toMatchObject({
+      processIconId: "vitest",
+      processName: "vitest",
+    });
+    expect(detectCommandIdentity("pnpm dlx prisma migrate dev")).toMatchObject({
+      processIconId: "prisma",
+    });
+  });
+
+  it("keeps an agent ahead of any tool named later in the command", () => {
+    expect(detectCommandIdentity("npx claude --resume")).toMatchObject({
+      agentType: "claude",
       processName: "claude",
     });
   });
