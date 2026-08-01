@@ -51,10 +51,22 @@ const {
       refresh: vi.fn(),
       isRefreshing: false,
       captureSnapshot: (() => null) as () => unknown,
+      // Folder-listing surface (#11620). Defaulted to "no folder is being
+      // listed" so every case below keeps exercising the file/empty branches;
+      // `selectedNode` is filled in per render by the mock factory, which is
+      // where the selected path is actually known.
+      listingPath: null as string | null,
+      listingRows: null as unknown[] | null,
+      listingStatus: "ready" as "pending" | "ready" | "error",
+      listingHasHiddenDotfiles: false,
     },
     // What the pane last handed the tree hook, so a test can assert the derived
     // change tick rather than only what renders.
-    treeArgs: { changeTick: undefined as number | undefined },
+    treeArgs: {
+      changeTick: undefined as number | undefined,
+      sort: undefined as { key: string; direction: string } | undefined,
+      selectedPath: undefined as string | null | undefined,
+    },
     // Ticks the worktree store reports for wt-1; both default to "never moved".
     worktreeTicks: { git: undefined as number | undefined, fs: undefined as number | undefined },
     // The rest of what the store reports for wt-1. `changes` stays null by
@@ -75,6 +87,7 @@ interface MockPanel {
   browserSelectedPath?: string;
   browserExpandedPaths?: string[];
   browserShowIgnored?: boolean;
+  browserHideDotfiles?: boolean;
   browserRootPath?: string;
   browserSidebarCollapsed?: boolean;
   browserViewerCollapsed?: boolean;
@@ -162,9 +175,23 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 // state bag so the tree column renders its header (and the FileTreeView stub
 // below) without touching filesClient, and tests can drive error states.
 vi.mock("../useFileBrowserTree", () => ({
-  useFileBrowserTree: (args: { changeTick?: number }) => {
+  useFileBrowserTree: (args: {
+    changeTick?: number;
+    sort?: { key: string; direction: string };
+    selectedPath?: string | null;
+  }) => {
     treeArgs.changeTick = args.changeTick;
-    return { ...treeState };
+    treeArgs.sort = args.sort;
+    treeArgs.selectedPath = args.selectedPath;
+    // The real hook resolves this against its listings map; here the stubbed
+    // rows are the only data there is, so match by path against them. That
+    // reproduces what the pane used to compute for itself, keeping the
+    // selection cases below unchanged by the move (#11620).
+    const selectedNode =
+      args.selectedPath == null
+        ? undefined
+        : treeState.rows.find((row) => row.path === args.selectedPath);
+    return { ...treeState, selectedNode };
   },
 }));
 
@@ -2477,5 +2504,44 @@ describe("FileBrowserPane git status derivation", () => {
     renderPane();
 
     await waitFor(() => expect(treeArgs.changeTick).toBe(450));
+  });
+});
+
+describe("a selection the dotfile filter hides (#11620)", () => {
+  beforeEach(() => {
+    treeState.rows = [
+      {
+        path: ".env",
+        name: ".env",
+        isDirectory: false,
+        depth: 0,
+        isExpanded: false,
+        isLoading: false,
+      },
+    ] as typeof treeState.rows;
+    mockPanel.browserSelectedPath = ".env";
+    mockPanel.browserHideDotfiles = false;
+  });
+
+  afterEach(() => {
+    treeState.rows = defaultRows as typeof treeState.rows;
+    delete mockPanel.browserSelectedPath;
+    delete mockPanel.browserHideDotfiles;
+  });
+
+  it("previews a dotfile while dotfiles are visible", () => {
+    renderPane();
+    expect(treeArgs.selectedPath).toBe(".env");
+    expect(screen.queryByText("Nothing selected")).toBeNull();
+  });
+
+  it("stops previewing it once the dotfile toggle hides it", () => {
+    // The node now resolves from the listings map rather than from the
+    // rendered rows, so it survives the filter that removed its row — without
+    // an explicit visibility gate the viewer would keep the file's contents on
+    // screen while the tree stopped showing the file at all.
+    mockPanel.browserHideDotfiles = true;
+    renderPane();
+    expect(screen.getByText("Nothing selected")).toBeTruthy();
   });
 });

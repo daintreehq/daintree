@@ -10,7 +10,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/component
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
-import { resolveTreeKey, type FlatTreeRow } from "./fileBrowserTree";
+import { resolveTreeKey, type FileEntryLike, type FlatTreeRow } from "./fileBrowserTree";
 import { getFileBrowserRowGitStatus, type FileBrowserGitStatusIndex } from "./fileBrowserGitStatus";
 import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
 import { FILE_TREE_ICON_CLASS, UNKNOWN_FILE_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
@@ -37,7 +37,7 @@ export interface FileTreeViewProps {
    * the menu visibly targets it, without moving the selection); the pane owns
    * what the items do.
    */
-  rowContextMenu?: (row: FlatTreeRow) => React.ReactNode;
+  rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
   /**
    * Send the selected row to the last agent the user typed to (#11577). Fired
    * by the tree-local Cmd+I, which only exists while a row is selected and a
@@ -335,7 +335,7 @@ interface TreeContext {
   onToggleExpanded: (path: string, expand: boolean) => void;
   onActivate?: ((path: string) => void) | undefined;
   onRootFolder?: ((path: string) => void) | undefined;
-  rowContextMenu?: ((row: FlatTreeRow) => React.ReactNode) | undefined;
+  rowContextMenu?: ((row: FileEntryLike) => React.ReactNode) | undefined;
   hasDirectories: boolean;
   instanceId: string;
   basePath: string;

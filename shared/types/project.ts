@@ -9,6 +9,8 @@ import type {
   ViewportPresetId,
   FileViewMode,
   DiffSource,
+  FileBrowserSortDirection,
+  FileBrowserSortKey,
   FileBrowserTreeSnapshot,
 } from "./panel.js";
 import type { CommandOverride } from "./commands.js";
@@ -238,6 +240,10 @@ export interface PanelSnapshot {
   browserTreeSnapshot?: FileBrowserTreeSnapshot;
   /** File browser tree column width in px (only a non-default, in-range value persisted) */
   browserSidebarWidth?: number;
+  /** What a file browser panel orders entries by (#11620; only a non-default value persisted) */
+  browserSortKey?: FileBrowserSortKey;
+  /** Direction for `browserSortKey` (only `desc` persisted) */
+  browserSortDirection?: FileBrowserSortDirection;
   /**
    * Whether a file browser panel browses the view's workspace root rather than
    * its `worktreeId`, which for such a panel is grid placement only (#11489).

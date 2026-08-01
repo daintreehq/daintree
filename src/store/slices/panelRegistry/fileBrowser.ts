@@ -1,4 +1,8 @@
-import type { FileBrowserTreeSnapshot } from "@shared/types/panel";
+import type {
+  FileBrowserSortDirection,
+  FileBrowserSortKey,
+  FileBrowserTreeSnapshot,
+} from "@shared/types/panel";
 import { deepEqualIgnoringUndefined } from "@shared/utils/layoutMerge";
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { saveNormalized } from "./persistence";
@@ -23,6 +27,10 @@ export interface FileBrowserViewPatch {
   browserTreeSnapshot?: FileBrowserTreeSnapshot;
   /** Tree column width in px; clamped into range before it lands. */
   browserSidebarWidth?: number;
+  /** What the tree and folder listing order entries by (#11620). */
+  browserSortKey?: FileBrowserSortKey;
+  /** Direction for `browserSortKey`; `asc` and absent are the same state. */
+  browserSortDirection?: FileBrowserSortDirection;
 }
 
 function sameStringList(a: string[] | undefined, b: string[]): boolean {
@@ -92,6 +100,15 @@ export const createFileBrowserPanelActions = (
       const widthUnchanged =
         nextWidth === undefined ||
         nextWidth === (panel.browserSidebarWidth ?? FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH);
+      // Both sort halves normalize absent to their default before comparing,
+      // like the collapse flags: patching "name"/"asc" onto a never-sorted
+      // panel is the state it is already in, not a change worth a write.
+      const sortKeyUnchanged =
+        patch.browserSortKey === undefined ||
+        patch.browserSortKey === (panel.browserSortKey ?? "name");
+      const sortDirectionUnchanged =
+        patch.browserSortDirection === undefined ||
+        patch.browserSortDirection === (panel.browserSortDirection ?? "asc");
 
       // Bail on a no-op write. The tree calls this on every arrow key, and a
       // drag calls it on every mousemove; a fresh panel object each time would
@@ -105,7 +122,9 @@ export const createFileBrowserPanelActions = (
         sidebarCollapsedUnchanged &&
         viewerCollapsedUnchanged &&
         treeSnapshotUnchanged &&
-        widthUnchanged
+        widthUnchanged &&
+        sortKeyUnchanged &&
+        sortDirectionUnchanged
       )
         return state;
 
@@ -133,6 +152,12 @@ export const createFileBrowserPanelActions = (
           browserTreeSnapshot: patch.browserTreeSnapshot,
         }),
         ...(nextWidth !== undefined && { browserSidebarWidth: nextWidth }),
+        ...(patch.browserSortKey !== undefined && {
+          browserSortKey: patch.browserSortKey,
+        }),
+        ...(patch.browserSortDirection !== undefined && {
+          browserSortDirection: patch.browserSortDirection,
+        }),
       };
 
       const newById = { ...state.panelsById, [id]: nextPanel };

@@ -5,17 +5,23 @@ import { fileBrowserClient } from "@/clients/fileBrowserClient";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
+  buildFolderListingRows,
   createVisibilityFilter,
+  DEFAULT_FILE_SORT,
+  findNodeInListings,
   flattenTree,
   isRowPathVisible,
+  parentDirectoryOf,
   listingsFromSnapshot,
   pruneListings,
   refreshTargets,
   snapshotFromListings,
   snapshotMatchesSource,
   sourceIdentityKey,
+  type FileBrowserSortOrder,
   type FileBrowserSource,
   type FlatTreeRow,
+  type FolderListingRow,
 } from "./fileBrowserTree";
 
 /**
@@ -81,7 +87,26 @@ export interface UseFileBrowserTreeArgs {
    * other root) is ignored and the tree cold-starts as before.
    */
   treeSnapshot?: FileBrowserTreeSnapshot;
+  /**
+   * What every directory's entries are ordered by (#11620). Applied per level
+   * to the tree and to the folder listing from this one value, so the two
+   * columns can never disagree about the order of the same directory.
+   */
+  sort?: FileBrowserSortOrder;
+  /**
+   * The selected worktree-relative path, whatever kind it turns out to be.
+   *
+   * Resolved here rather than by the caller because deciding whether it names a
+   * folder needs the listings map this hook owns — and if it does, that folder
+   * is fetched on demand like an expansion, kept across an unrelated collapse,
+   * and re-read on a change tick (#11620). A folder can be listed without being
+   * expanded, so those three things have to be arranged for it explicitly.
+   */
+  selectedPath?: string | null;
 }
+
+/** What the viewer's folder listing is doing right now (#11620). */
+export type FolderListingStatus = "pending" | "ready" | "error";
 
 export interface UseFileBrowserTreeResult {
   rows: FlatTreeRow[];
@@ -117,6 +142,37 @@ export interface UseFileBrowserTreeResult {
    * change tick, so persistence writes stay off the refresh path.
    */
   captureSnapshot: () => FileBrowserTreeSnapshot | null;
+  /**
+   * The node `selectedPath` names, looked up through its parent directory's
+   * listing, or undefined when that parent has not been read. Resolved this way
+   * rather than from the rendered tree rows because the folder listing can
+   * select an entry whose parent is collapsed in the tree (#11620) — such an
+   * entry has no row, and asking `rows` would report a real file as unknown.
+   */
+  selectedNode: FileTreeNode | undefined;
+  /**
+   * The folder currently being listed, or null when the selection is a file,
+   * nothing, or hidden by the current filters.
+   */
+  listingPath: string | null;
+  /**
+   * Rows for `listingPath`'s contents, or null when no folder is being listed.
+   * Empty array and null are deliberately different answers: empty is a folder
+   * that really holds nothing, null is no folder selected.
+   */
+  listingRows: FolderListingRow[] | null;
+  /**
+   * Raw state of `listingPath`'s fetch — never gated by an anti-flicker timer.
+   * A gated flag cannot tell "still loading" from "loaded and empty", so the
+   * consumer branches on this and uses its own deferred flag only to decide
+   * whether a skeleton paints (#10083).
+   */
+  listingStatus: FolderListingStatus;
+  /**
+   * Whether the dotfile toggle is hiding something in the folder being listed,
+   * so its empty state can offer "Show dotfiles" only when that would help.
+   */
+  listingHasHiddenDotfiles: boolean;
 }
 
 interface QueueEntry {
@@ -151,6 +207,8 @@ export function useFileBrowserTree({
   rootPath = "",
   changeTick,
   treeSnapshot,
+  sort = DEFAULT_FILE_SORT,
+  selectedPath = null,
 }: UseFileBrowserTreeArgs): UseFileBrowserTreeResult {
   // A primitive standing in for `source` in effect dependency lists: the pane
   // rebuilds the object every render, so depending on it directly would reset
@@ -183,6 +241,13 @@ export function useFileBrowserTree({
     () => seedListings(treeSnapshot, source, rootPath) ?? new Map()
   );
   const [loadingPaths, setLoadingPaths] = useState<ReadonlySet<string>>(new Set());
+  // Non-root directories whose last fetch failed. Per-directory failures are
+  // otherwise silent by design (only the root gets a banner), which leaves a
+  // folder listing with no way to tell "failed" from "still loading" — it would
+  // sit on a skeleton forever. Kept as state, not a ref, because the listing
+  // has to re-render when a fetch fails; cleared on success and on any identity
+  // reset.
+  const [failedListings, setFailedListings] = useState<ReadonlySet<string>>(new Set());
   const [rootError, setRootError] = useState<string | null>(null);
   const [hasLoadedRoot, setHasLoadedRoot] = useState(false);
   // True when the current identity's listings were seeded from a persisted
@@ -232,6 +297,14 @@ export function useFileBrowserTree({
   const rootRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rootRetryStateRef = useRef<RootRetryState>({ generation: 0, nextDelayIndex: 0 });
 
+  // Re-keyed on its two primitives rather than used directly: the pane builds a
+  // fresh object each render, so depending on the prop would invalidate the row
+  // memos below on every pass — the exact cost virtualization exists to avoid.
+  const sortKeyed = useMemo(
+    () => ({ key: sort.key, direction: sort.direction }),
+    [sort.key, sort.direction]
+  );
+
   const expandedSet = useMemo(() => new Set(expandedPaths), [expandedPaths]);
   const expandedSetRef = useRef(expandedSet);
 
@@ -250,6 +323,50 @@ export function useFileBrowserTree({
     [hideDotfiles, alwaysHiddenPatterns]
   );
   const isVisibleRef = useRef(isVisible);
+
+  // The directory whose listing answers what the selection is. Held onto
+  // through the prune below: picking a file out of a folder listing collapses
+  // that folder's role from "being listed" to "merely the parent", and dropping
+  // it right then would forget the file's own kind the moment it was clicked.
+  const selectionParent = selectedPath === null ? null : parentDirectoryOf(selectedPath);
+
+  // What the selection actually is, answered by its parent directory's listing
+  // rather than by the rendered rows — the folder listing can select an entry
+  // whose parent is collapsed in the tree, and that entry has no row (#11620).
+  const selectedNode = useMemo(
+    () => (selectedPath === null ? undefined : findNodeInListings(listings, selectedPath)),
+    [listings, selectedPath]
+  );
+
+  // The folder to list: positively a directory, and still reachable under the
+  // current filters. A folder the dotfile toggle has just hidden keeps its
+  // stale `browserSelectedPath` but has no row to select, so it must stop
+  // driving a listing rather than keep one on screen the tree can't show.
+  const listingPath =
+    selectedPath !== null &&
+    selectedNode?.isDirectory === true &&
+    isRowPathVisible(selectedPath, rootPath, isVisible)
+      ? selectedPath
+      : null;
+  /**
+   * Directories the viewer depends on that expansion alone would not keep: the
+   * folder being listed, and the parent that resolves what the selection is.
+   * One set, so the prune, the fetch-completion guard and the refresh cannot
+   * drift apart — a guard stricter than the prune drops results for entries
+   * that are then kept forever stale, and a prune stricter than the guard
+   * evicts what is on screen.
+   */
+  const retainedPaths = useMemo(
+    () => [listingPath, selectionParent].filter((path): path is string => path !== null),
+    [listingPath, selectionParent]
+  );
+
+  // Read inside `fetchDirectory`'s completion guard and the prune, both of
+  // which run outside the render that knows the current targets. Kept in sync
+  // in the same layout effect as `expandedSetRef` so the two are never read at
+  // different vintages.
+  const listingPathRef = useRef(listingPath);
+  const retainedPathsRef = useRef(retainedPaths);
 
   // Set when a refresh could not run because its targets were already in
   // flight. Without it, a tick that arrives mid-flight is consumed by a request
@@ -314,11 +431,31 @@ export function useFileBrowserTree({
         // been pruned; re-inserting it here would resurrect a cache entry the
         // user closed, and re-expanding later would show that stale snapshot
         // instead of re-reading.
-        if (dirPath !== rootPath && !expandedSetRef.current.has(dirPath)) return;
+        //
+        // Tested against the same retained set the prune keeps, not just
+        // against expansion: the viewer depends on two unexpanded directories
+        // (#11620), and a guard stricter than the prune would drop a result for
+        // a listing that is about to be kept — leaving it permanently stale
+        // with nothing queued to replace it.
+        if (
+          dirPath !== rootPath &&
+          !retainedPathsRef.current.includes(dirPath) &&
+          !expandedSetRef.current.has(dirPath)
+        )
+          return;
 
         setListings((previous) => {
           const next = new Map(previous);
           next.set(dirPath, nodes);
+          return next;
+        });
+        // A directory that has just been read is no longer failed, whether or
+        // not it ever was — clearing unconditionally would churn a new Set on
+        // every listing, so only an actual member triggers a write.
+        setFailedListings((previous) => {
+          if (!previous.has(dirPath)) return previous;
+          const next = new Set(previous);
+          next.delete(dirPath);
           return next;
         });
         if (dirPath === rootPath) {
@@ -328,6 +465,28 @@ export function useFileBrowserTree({
         }
       } catch (error) {
         if (generation !== generationRef.current) return;
+        // Recorded rather than surfaced: the tree still shows nothing for this
+        // directory, exactly as before, but a folder listing pointed at it can
+        // now tell a failure from a fetch still in flight (#11620).
+        //
+        // Only for a directory something still wants, tested the same way the
+        // success path tests it. A request that fails *after* the user collapsed
+        // its directory would otherwise leave a failure nothing goes on to
+        // clear — the prune's clearing pass has already run for that collapse —
+        // and the expansion effect would then refuse to re-request it, making
+        // re-expanding the folder silently do nothing.
+        const stillWanted =
+          dirPath === rootPath ||
+          retainedPathsRef.current.includes(dirPath) ||
+          expandedSetRef.current.has(dirPath);
+        if (dirPath !== rootPath && stillWanted) {
+          setFailedListings((previous) => {
+            if (previous.has(dirPath)) return previous;
+            const next = new Set(previous);
+            next.add(dirPath);
+            return next;
+          });
+        }
         if (dirPath === rootPath) {
           // Only the root surfaces an error: it is the difference between "the
           // browser works" and "it doesn't". A single directory that failed
@@ -432,7 +591,13 @@ export function useFileBrowserTree({
       refreshPendingRef.current = false;
       const generation = generationRef.current;
       enqueueTargets(
-        refreshTargets(listingsRef.current, expandedSetRef.current, rootPath, isVisibleRef.current),
+        refreshTargets(
+          listingsRef.current,
+          expandedSetRef.current,
+          rootPath,
+          isVisibleRef.current,
+          listingPathRef.current
+        ),
         generation
       );
       pumpRef.current();
@@ -463,7 +628,9 @@ export function useFileBrowserTree({
     isVisibleRef.current = isVisible;
     pumpRef.current = pump;
     treeSnapshotRef.current = treeSnapshot;
-  }, [listings, expandedSet, isVisible, pump, treeSnapshot]);
+    listingPathRef.current = listingPath;
+    retainedPathsRef.current = retainedPaths;
+  }, [listings, expandedSet, isVisible, pump, treeSnapshot, listingPath, retainedPaths]);
 
   // Cancel a pending root retry synchronously when the identity changes or the
   // panel unmounts. The generation bump that would invalidate the retry lives in
@@ -508,7 +675,8 @@ export function useFileBrowserTree({
         listingsRef.current,
         expandedSetRef.current,
         rootPath,
-        isVisibleRef.current
+        isVisibleRef.current,
+        listingPathRef.current
       );
       // A user press should spin the toolbar icon until the re-list drains. Set
       // this before `pump` so the flag is up if fetches start synchronously; a
@@ -559,6 +727,10 @@ export function useFileBrowserTree({
     const seededRoot = seeded !== null;
     setListings(seeded ?? new Map());
     setLoadingPaths(new Set());
+    // A failure belongs to the identity it happened under: carrying it across
+    // would leave a folder permanently unfetchable in a worktree that never
+    // failed to list it.
+    setFailedListings(new Set());
     setRootError(null);
     setHasLoadedRoot(false);
     setHasSeededRoot(seededRoot);
@@ -569,7 +741,19 @@ export function useFileBrowserTree({
       // honours the concurrency ceiling. The refs read here are published in a
       // layout effect, so they are current before this passive effect runs.
       enqueueTargets(
-        refreshTargets(seeded, expandedSetRef.current, rootPath, isVisibleRef.current),
+        // The listed folder is revalidated alongside the root and the seeded
+        // expansions: a snapshot can carry a selected-but-collapsed folder
+        // (the prune keeps it), and its seeded rows are structure-only — no
+        // size, no mtime. Leaving it out of the revalidation would paint that
+        // folder's listing as a column of em-dashes until something unrelated
+        // happened to refresh it.
+        refreshTargets(
+          seeded,
+          expandedSetRef.current,
+          rootPath,
+          isVisibleRef.current,
+          listingPathRef.current
+        ),
         generationRef.current
       );
       pumpRef.current();
@@ -587,6 +771,13 @@ export function useFileBrowserTree({
     const pendingTargets: string[] = [];
     for (const dirPath of expandedSet) {
       if (listings.has(dirPath) || inFlightRef.current.has(dirPath)) continue;
+      // A directory whose last fetch failed is in neither of those, so without
+      // this it would be re-requested every time any sibling listing lands and
+      // rebuilds the map. On a restored tree with hundreds of expansions and
+      // one unreadable directory, that is hundreds of redundant calls against
+      // a shared IPC rate limit. Collapsing it clears the flag (see the prune
+      // effect), and an explicit Refresh re-queues it directly.
+      if (failedListings.has(dirPath)) continue;
       // Only fetch directories the tree can actually reach. A persisted
       // expansion whose parent is collapsed (or gone) would otherwise fire a
       // request for a folder the user cannot see.
@@ -600,16 +791,63 @@ export function useFileBrowserTree({
     if (pendingTargets.length === 0) return;
     enqueueTargets(pendingTargets, generationRef.current);
     pump();
-  }, [expandedSet, listings, hasLoadedRoot, rootPath, isVisible, enqueueTargets, pump]);
+  }, [
+    expandedSet,
+    listings,
+    failedListings,
+    hasLoadedRoot,
+    rootPath,
+    isVisible,
+    enqueueTargets,
+    pump,
+  ]);
+
+  // The folder the viewer is listing is fetched on demand, the same way an
+  // expansion is — selecting a folder from the keyboard, or from the listing
+  // itself, never expands it, so nothing else would ask for its contents.
+  // Gated on the root having landed for the same reason the expansion effect
+  // is, and skipped once a fetch has failed: a failed directory is in neither
+  // `listings` nor `inFlightRef`, so without that check this would re-request
+  // it on every render.
+  useEffect(() => {
+    if (!hasLoadedRoot || listingPath === null) return;
+    if (listings.has(listingPath) || failedListings.has(listingPath)) return;
+    if (inFlightRef.current.has(listingPath)) return;
+    if (!isRowPathVisible(listingPath, rootPath, isVisible)) return;
+    enqueueTargets([listingPath], generationRef.current);
+    pump();
+  }, [
+    listingPath,
+    listings,
+    failedListings,
+    hasLoadedRoot,
+    rootPath,
+    isVisible,
+    enqueueTargets,
+    pump,
+  ]);
 
   // Forget collapsed subtrees so re-expanding re-reads rather than replaying a
-  // listing that may be minutes stale on an actively-written worktree.
+  // listing that may be minutes stale on an actively-written worktree. The
+  // folder on screen in the viewer is retained even when collapsed (#11620) —
+  // it is being read right now, so it is not the unused cache entry this drops.
   useEffect(() => {
     setListings((previous) => {
-      const next = pruneListings(previous, expandedSet, rootPath);
+      const next = pruneListings(previous, expandedSet, rootPath, retainedPaths);
       return next.size === previous.size ? previous : next;
     });
-  }, [expandedSet, rootPath]);
+    // Collapsing a directory clears any recorded failure for it, so the natural
+    // collapse-then-expand gesture retries rather than being refused forever by
+    // the expansion effect's skip below.
+    setFailedListings((previous) => {
+      if (previous.size === 0) return previous;
+      const next = new Set<string>();
+      for (const path of previous) {
+        if (expandedSet.has(path) || retainedPaths.includes(path)) next.add(path);
+      }
+      return next.size === previous.size ? previous : next;
+    });
+  }, [expandedSet, rootPath, retainedPaths]);
 
   // Live updates. The tick is the worktree's own change signal, so this
   // inherits its coalescing.
@@ -625,18 +863,60 @@ export function useFileBrowserTree({
   }, [changeTick, hasLoadedRoot, refresh]);
 
   const rows = useMemo(
-    () => flattenTree(listings, expandedSet, loadingPaths, rootPath, isVisible),
-    [listings, expandedSet, loadingPaths, rootPath, isVisible]
+    () => flattenTree(listings, expandedSet, loadingPaths, rootPath, isVisible, sortKeyed),
+    [listings, expandedSet, loadingPaths, rootPath, isVisible, sortKeyed]
   );
+
+  const listingRows = useMemo(
+    () =>
+      listingPath === null
+        ? null
+        : buildFolderListingRows(listings, listingPath, isVisible, sortKeyed),
+    [listings, listingPath, isVisible, sortKeyed]
+  );
+
+  // Raw, never anti-flicker-gated: a gated flag collapses "still loading" and
+  // "loaded and empty" into one value, and the consumer needs them apart to
+  // pick between a skeleton and an empty state (#10083). The gate belongs in
+  // the consumer, deciding only whether the skeleton paints.
+  //
+  // Rows win over a recorded failure deliberately. A failure with rows already
+  // on screen is a *refresh* that failed, and blanking readable content for an
+  // error banner is the thing the tree's own root-error branch refuses to do —
+  // the last-known contents stay, exactly as a non-root directory failure is
+  // already silent for the tree. Only a folder with nothing to show reports the
+  // error, because that is the only case where the error is the whole story.
+  //
+  // "Nothing to show" means no rows, not merely no listing: a folder cached as
+  // empty whose re-read then fails has nothing to protect, and reporting it as
+  // ready would put "Nothing in this folder yet" on screen for a folder we in
+  // fact failed to read — a confident claim built on a failure.
+  const listingStatus: FolderListingStatus =
+    listingPath === null || (listingRows !== null && listingRows.length > 0)
+      ? "ready"
+      : failedListings.has(listingPath)
+        ? "error"
+        : listingRows !== null
+          ? "ready"
+          : "pending";
 
   // Would toggling the dotfile filter off reveal anything at this root? A
   // root-level dot entry that the junk list is *not* already hiding.
-  const hasHiddenDotfiles = useMemo(() => {
-    const rootNodes = listings.get(rootPath);
-    if (!rootNodes) return false;
-    const notJunk = createVisibilityFilter({ hideDotfiles: false, alwaysHiddenPatterns });
-    return rootNodes.some((node) => node.name.startsWith(".") && notJunk(node.name));
-  }, [listings, rootPath, alwaysHiddenPatterns]);
+  const hasHiddenDotfiles = useMemo(
+    () => directoryHasHiddenDotfiles(listings, rootPath, alwaysHiddenPatterns),
+    [listings, rootPath, alwaysHiddenPatterns]
+  );
+
+  // The same question asked of the folder being listed rather than of the root
+  // (#11620) — its empty state offers "Show dotfiles" only when that would
+  // actually put something on screen.
+  const listingHasHiddenDotfiles = useMemo(
+    () =>
+      listingPath === null
+        ? false
+        : directoryHasHiddenDotfiles(listings, listingPath, alwaysHiddenPatterns),
+    [listings, listingPath, alwaysHiddenPatterns]
+  );
 
   // Keyed on `sourceKey` for two reasons: the pane runs its going-away capture
   // in an effect keyed on this callback, so without it a source change that
@@ -660,7 +940,29 @@ export function useFileBrowserTree({
     refresh,
     isRefreshing,
     captureSnapshot,
+    selectedNode,
+    listingPath,
+    listingRows,
+    listingStatus,
+    listingHasHiddenDotfiles,
   };
+}
+
+/**
+ * Whether one loaded directory holds a dot-prefixed entry the junk list is not
+ * already hiding — i.e. whether turning the dotfile toggle off would reveal
+ * anything there. False for a directory that has not been listed: nothing is
+ * known to be hidden in a folder nothing is known about.
+ */
+function directoryHasHiddenDotfiles(
+  listings: ReadonlyMap<string, readonly FileTreeNode[]>,
+  dirPath: string,
+  alwaysHiddenPatterns: readonly string[]
+): boolean {
+  const nodes = listings.get(dirPath);
+  if (!nodes) return false;
+  const notJunk = createVisibilityFilter({ hideDotfiles: false, alwaysHiddenPatterns });
+  return nodes.some((node) => node.name.startsWith(".") && notJunk(node.name));
 }
 
 /**
