@@ -30,6 +30,7 @@ import type { HandlerDependencies, IpcContext } from "../../types.js";
 import type { Project } from "../../../types/index.js";
 import type { ProjectSwitchOutgoingState } from "../../../../shared/types/ipc/project.js";
 import type { TabGroup } from "../../../../shared/types/panel.js";
+import type { ProjectFocusOnActivateIntent } from "../../../../shared/types/ipc/project.js";
 
 export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -40,7 +41,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     ctx: IpcContext,
     projectId: string,
     outgoingState?: ProjectSwitchOutgoingState,
-    options?: { focusIntent?: "focus-next-waiting" }
+    options?: { focusIntent?: ProjectFocusOnActivateIntent }
   ) => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");

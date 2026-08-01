@@ -320,6 +320,8 @@ describe("project action hardening", () => {
 
     expectRegistryToMatchIds(actions, [
       "project.switcherPalette",
+      "pilot.toggle",
+      "pilot.openRun",
       "project.mruCycleOlder",
       "project.add",
       "project.openDialog",

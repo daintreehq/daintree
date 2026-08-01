@@ -130,7 +130,7 @@ export const projectClient = {
   switch: (
     projectId: string,
     outgoingState?: ProjectSwitchOutgoingState,
-    options?: { focusIntent?: "focus-next-waiting" }
+    options?: { focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent }
   ): Promise<Project> => {
     invalidateCurrentCache();
     return window.electron.project.switch(projectId, outgoingState, options);

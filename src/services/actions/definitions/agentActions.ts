@@ -590,7 +590,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       // delivers `project:focus-on-activate` to the incoming view once the
       // paint gate resolves (cold start) or immediately on cache hit, and
       // the renderer subscriber dispatches local `agent.focusNextWaiting`.
-      await projectState.switchProject(target.id, { focusIntent: "focus-next-waiting" });
+      await projectState.switchProject(target.id, {
+        focusIntent: { intent: "focus-next-waiting" },
+      });
     },
   }));
 

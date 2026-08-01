@@ -13,6 +13,25 @@ function isBoundary(str: string, index: number): boolean {
   return /[/\\\-._\s]/.test(prev) || (/[a-z]/.test(prev) && /[A-Z]/.test(curr));
 }
 
+/**
+ * The palette's matching rule: every query character appears in `field`, in
+ * order, not necessarily adjacent. So "fltsnp" finds "fleet snapshot".
+ *
+ * The same acceptance test {@link scoreField} applies before scoring — it is
+ * separated here for surfaces that need to know *whether* something matched
+ * without ranking on *how well*. Both must stay in step: a palette that accepts
+ * a query one way and rejects it another teaches nothing transferable.
+ */
+export function isSubsequenceMatch(query: string, field: string): boolean {
+  const lowerQuery = query.toLowerCase();
+  const lowerField = field.toLowerCase();
+  let qi = 0;
+  for (let fi = 0; fi < lowerField.length && qi < lowerQuery.length; fi++) {
+    if (lowerField[fi] === lowerQuery[qi]) qi++;
+  }
+  return qi === lowerQuery.length;
+}
+
 function scoreField(query: string, field: string): number {
   const lowerQuery = query.toLowerCase();
   const lowerField = field.toLowerCase();

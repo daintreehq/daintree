@@ -9,6 +9,35 @@ import { formatTimeAgo } from "@/utils/timeAgo";
 export type ProjectRowTone = "blocked" | "waiting" | "review" | "working" | "running" | "muted";
 
 /**
+ * Text colour for a status line, by tone.
+ *
+ * Lives here rather than in the switcher that first used it because the fleet
+ * overview renders the same sentences about the same states. Two surfaces
+ * colouring "blocked" differently would be a worse bug than either colour being
+ * individually wrong.
+ */
+export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
+  blocked: "text-status-danger/80",
+  waiting: "text-activity-waiting",
+  // Finished-awaiting-review: the completed-state hue, distinct from both the
+  // warning of a wait and the success-green of a healthy process. Never danger
+  // — completion is the desired outcome, not a fault.
+  review: "text-activity-completed",
+  working: "text-activity-working",
+  running: "text-daintree-text/50",
+  muted: "text-daintree-text/50",
+};
+
+export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
+  blocked: "bg-status-danger",
+  waiting: "bg-status-warning",
+  review: "bg-activity-completed",
+  working: "bg-activity-active animate-activity-pulse",
+  running: "bg-status-success",
+  muted: "border border-daintree-text/20",
+};
+
+/**
  * Wording boundary between "just finished" and plain "finished" on a
  * ready-for-review line. Copy only — it never affects band membership,
  * ordering, or acknowledgement, so being wrong here costs a word, not an
@@ -54,7 +83,7 @@ function formatRangeAge(sinceMs: number, nowMs: number): string {
 }
 
 /** "3m" → "3m ago", "just now" stays bare — "just now ago" is not a phrase. */
-function agoPhrase(age: string): string {
+export function agoPhrase(age: string): string {
   return age === "just now" ? age : `${age} ago`;
 }
 

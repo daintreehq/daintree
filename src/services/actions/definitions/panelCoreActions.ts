@@ -4,6 +4,7 @@ import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useErrorStore } from "@/store/errorStore";
 import { usePortalStore } from "@/store/portalStore";
 import { usePanelStore } from "@/store/panelStore";
+import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 
@@ -126,6 +127,17 @@ export function registerPanelCoreActions(
         throw new Error("Terminal panel no longer exists");
       }
       terminalState.activateTerminal(panelId);
+      // Selection and DOM focus are two states, and this action owes the caller
+      // both. `activateTerminal` only moves selection — the pane grabs focus
+      // from an effect keyed on *becoming* focused, so re-selecting the panel
+      // that is already selected changes nothing and the keyboard stays
+      // wherever it drifted (the sidebar, a dialog, the worktree list). Asking
+      // the pane directly is what makes "focus this run" mean it every time.
+      //
+      // Unmounted panes report `false` here; that path is already covered,
+      // because a pane that is not mounted was not focused either, so its
+      // mount-time effect runs with `isFocused` already true.
+      focusPanelInput(panelId);
     },
   }));
 

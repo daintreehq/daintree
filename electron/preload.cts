@@ -75,6 +75,7 @@ import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
+import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
 import { buildProjectHistoryPreloadBindings } from "./ipc/handlers/projectHistory.preload.js";
 import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRelocation.preload.js";
 import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabricSurface.preload.js";
@@ -1736,7 +1737,9 @@ function buildElectronApi(): ElectronAPI {
       switch: (
         projectId: string,
         outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState,
-        options?: { focusIntent?: "focus-next-waiting" }
+        options?: {
+          focusIntent?: import("../shared/types/ipc/project.js").ProjectFocusOnActivateIntent;
+        }
       ) => _unwrappingInvoke(CHANNELS.PROJECT_SWITCH, projectId, outgoingState, options),
 
       prefetchHydrate: (projectId: string) =>
@@ -1760,8 +1763,11 @@ function buildElectronApi(): ElectronAPI {
       onOpenGitInitDialog: (callback: (payload: { directoryPath: string }) => void) =>
         _typedOn(CHANNELS.PROJECT_OPEN_GIT_INIT_DIALOG, callback),
 
-      onFocusOnActivate: (callback: (payload: { intent: "focus-next-waiting" }) => void) =>
-        _typedOn(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, callback),
+      onFocusOnActivate: (
+        callback: (
+          payload: import("../shared/types/ipc/project.js").ProjectFocusOnActivateIntent
+        ) => void
+      ) => _typedOn(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, callback),
 
       onBackgroundResize: (callback: (payload: { width: number; height: number }) => void) =>
         _typedOn(CHANNELS.PROJECT_BACKGROUND_RESIZE, callback),
@@ -1906,6 +1912,17 @@ function buildElectronApi(): ElectronAPI {
 
       locate: (projectId: string): Promise<Project | null> =>
         _unwrappingInvoke(CHANNELS.PROJECT_LOCATE, projectId),
+    },
+
+    // Fleet-wide run snapshot — every agent run across every workspace, pushed
+    // from main. Read-only and broadcast-only: main is the only process that
+    // can see past a project view's own V8 context.
+    fleet: {
+      ...buildFleetPreloadBindings(_unwrappingInvoke),
+
+      onSnapshotUpdated: (
+        callback: (snapshot: import("../shared/types/ipc/fleet.js").FleetSnapshot) => void
+      ) => _typedOn(CHANNELS.FLEET_SNAPSHOT_UPDATED, callback),
     },
 
     // Scratch (one-off agent workspace) API

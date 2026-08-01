@@ -558,7 +558,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     switch(
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { focusIntent?: "focus-next-waiting" }
+      options?: { focusIntent?: import("./project.js").ProjectFocusOnActivateIntent }
     ): Promise<Project>;
     /**
      * Hover-prefetch trigger for the project switcher palette. Fire-and-forget:
@@ -580,7 +580,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: { projectId: string; worktreeLoadError: string | null }) => void
     ): () => void;
     onOpenGitInitDialog(callback: (payload: { directoryPath: string }) => void): () => void;
-    onFocusOnActivate(callback: (payload: { intent: "focus-next-waiting" }) => void): () => void;
+    onFocusOnActivate(
+      callback: (payload: import("./project.js").ProjectFocusOnActivateIntent) => void
+    ): () => void;
     onBackgroundResize(callback: (payload: { width: number; height: number }) => void): () => void;
     onUpdated(callback: (project: Project) => void): () => void;
     onRemoved(callback: (projectId: string) => void): () => void;
@@ -766,6 +768,21 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     locate(projectId: string): Promise<Project | null>;
   };
+  /**
+   * Fleet-wide run snapshot. `getSnapshot` is inherited from the generated
+   * namespace rather than restated, so the pull signature can't drift from
+   * codegen; only the push subscription is declared by hand.
+   */
+  fleet: GeneratedElectronAPI["fleet"] & {
+    /**
+     * Subscribe to the fleet-wide run snapshot: every agent run across every
+     * project and scratch, including workspaces whose renderer view has been
+     * evicted. Pushed on a 5s aligned poll and debounced on agent state
+     * changes, with unchanged payloads suppressed — so a subscription alone
+     * never guarantees a first payload. Pair it with `getSnapshot` on mount.
+     */
+    onSnapshotUpdated(callback: (snapshot: import("./fleet.js").FleetSnapshot) => void): () => void;
+  };
   scratch: {
     getAll(): Promise<import("../scratch.js").Scratch[]>;
     getCurrent(): Promise<import("../scratch.js").Scratch | null>;
@@ -775,7 +792,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       updates: { name?: string; lastOpened?: number }
     ): Promise<import("../scratch.js").Scratch>;
     remove(scratchId: string): Promise<void>;
-    switch(scratchId: string): Promise<import("../scratch.js").Scratch>;
+    switch(
+      scratchId: string,
+      options?: { focusIntent?: import("./project.js").ProjectFocusOnActivateIntent }
+    ): Promise<import("../scratch.js").Scratch>;
     saveAsProject(scratchId: string): Promise<import("./scratch.js").ScratchSaveAsProjectResult>;
     onUpdated(callback: (scratch: import("../scratch.js").Scratch) => void): () => void;
     onRemoved(callback: (scratchId: string) => void): () => void;

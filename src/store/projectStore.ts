@@ -196,7 +196,7 @@ interface ProjectState {
   createProjectFolder: (parentPath: string, folderName: string, emoji?: string) => Promise<void>;
   switchProject: (
     projectId: string,
-    options?: { focusIntent?: "focus-next-waiting" }
+    options?: { focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent }
   ) => Promise<void>;
   setWorktreeLoadError: (error: string | null) => void;
   clearSwitching: () => void;

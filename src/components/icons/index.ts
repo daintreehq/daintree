@@ -13,6 +13,8 @@ export {
   AtSign, // @file reference handed to an agent's prompt
   BellDot, // watch alert / notify on completion
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
+  CircleCheck, // finished run awaiting review (Pilot's review band)
+  CircleHelp, // workspace whose metadata is missing (removed while its agents ran)
   Clock, // recency sort order (most recently opened first)
   FileText, // view selected file path in the read-only file viewer
   FolderGit2, // git worktree (single)

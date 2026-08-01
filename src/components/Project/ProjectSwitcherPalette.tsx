@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
+import { KbdChord } from "@/components/ui/Kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   ContextMenu,
@@ -46,6 +47,8 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   getProjectRowStatus,
   getScratchRowStatus,
+  ROW_DOT_CLASS,
+  ROW_TONE_CLASS,
   type ProjectRowTone,
 } from "@/lib/projectRowStatus";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
@@ -78,6 +81,7 @@ import {
   type OtherProjectsSortMode,
 } from "@/lib/projectSort";
 import { useUIStore } from "@/store/uiStore";
+import { usePilotStore } from "@/store/pilotStore";
 import {
   useProjectSettingsStore,
   areProjectNotificationsMuted,
@@ -200,27 +204,6 @@ interface ProjectListItemProps {
   onHoverProject?: (projectId: string, pointerType: string) => void;
   onHoverProjectEnd?: (pointerType: string) => void;
 }
-
-const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
-  blocked: "text-status-danger/80",
-  waiting: "text-activity-waiting",
-  // Finished-awaiting-review: the completed-state hue, distinct from both the
-  // warning of a wait and the success-green of a healthy process. Never danger
-  // — completion is the desired outcome, not a fault.
-  review: "text-activity-completed",
-  working: "text-activity-working",
-  running: "text-daintree-text/50",
-  muted: "text-daintree-text/50",
-};
-
-const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
-  blocked: "bg-status-danger",
-  waiting: "bg-status-warning",
-  review: "bg-activity-completed",
-  working: "bg-activity-active animate-activity-pulse",
-  running: "bg-status-success",
-  muted: "border border-daintree-text/20",
-};
 
 /**
  * The dot repeats the status line's tone rather than encoding anything on its
@@ -1243,11 +1226,16 @@ function ScratchSection({
 function ProjectSwitcherFooter({
   mode,
   isScratchSelected,
+  onOpenPilot,
 }: {
   mode?: ProjectSwitcherMode;
   isScratchSelected: boolean;
+  onOpenPilot: () => void;
 }) {
   const modifiers = useModifierKeys();
+  // Resolved, not hardcoded: the literal would be wrong on Windows/Linux and
+  // wrong for anyone who rebound or removed the binding.
+  const pilotShortcut = useEffectiveCombo("pilot.toggle");
 
   const hint =
     modifiers.meta && !isScratchSelected
@@ -1268,11 +1256,25 @@ function ProjectSwitcherFooter({
           </span>
         )}
       </div>
-      {!isScratchSelected && (
-        <span className="text-daintree-text/50">
-          <span>Right-click for more</span>
-        </span>
-      )}
+      <div className="flex items-center gap-3">
+        {/*
+          The switcher answers "which project", so the fleet-wide view belongs
+          beside it rather than inside its list: adding a row would put a
+          non-workspace entry into a listbox whose every other row is a
+          workspace, and into the arrow-key domain that selects one.
+        */}
+        <button
+          type="button"
+          onClick={onOpenPilot}
+          className="inline-flex items-center text-daintree-text/50 transition-colors duration-150 ease-out hover:text-daintree-text"
+          data-testid="project-switcher-open-pilot"
+          {...(pilotShortcut ? { "aria-keyshortcuts": pilotShortcut } : {})}
+        >
+          {pilotShortcut && <KbdChord shortcut={pilotShortcut} />}
+          <span className={pilotShortcut ? "ml-1.5" : undefined}>All agents</span>
+        </button>
+        {!isScratchSelected && <span className="text-daintree-text/50">Right-click for more</span>}
+      </div>
     </div>
   );
 }
@@ -1570,7 +1572,14 @@ function ProjectPaletteInner({
       )}
 
       <AppPaletteDialog.Footer>
-        <ProjectSwitcherFooter mode={mode} isScratchSelected={activeResult?.kind === "scratch"} />
+        <ProjectSwitcherFooter
+          mode={mode}
+          isScratchSelected={activeResult?.kind === "scratch"}
+          onOpenPilot={() => {
+            onClose();
+            usePilotStore.getState().open();
+          }}
+        />
       </AppPaletteDialog.Footer>
     </>
   );

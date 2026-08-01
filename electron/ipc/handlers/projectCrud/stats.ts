@@ -4,6 +4,7 @@ import type { HandlerDependencies } from "../../types.js";
 import type { BulkProjectStats } from "../../../../shared/types/ipc/project.js";
 import type { MemoryRollup, MemoryRollupProject } from "../../../../shared/types/pty-host.js";
 import { ProjectStatsService } from "../../../services/ProjectStatsService.js";
+import { FleetSnapshotService } from "../../../services/FleetSnapshotService.js";
 import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
 import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
 import { projectStore } from "../../../services/ProjectStore.js";
@@ -14,9 +15,14 @@ import { getWindowRegistry } from "../../../window/windowRef.js";
 import { BrowserWindow } from "electron";
 
 let projectStatsServiceInstance: ProjectStatsService | null = null;
+let fleetSnapshotServiceInstance: FleetSnapshotService | null = null;
 
 export function getProjectStatsService(): ProjectStatsService | null {
   return projectStatsServiceInstance;
+}
+
+export function getFleetSnapshotService(): FleetSnapshotService | null {
+  return fleetSnapshotServiceInstance;
 }
 
 export function registerProjectStatsHandlers(deps: HandlerDependencies): () => void {
@@ -37,6 +43,24 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
   handlers.push(() => {
     projectStatsService.stop();
     projectStatsServiceInstance = null;
+  });
+
+  // The run-grained sibling of the counts above, on the same source and the
+  // same cadence. Registered here so the two can never be started apart, and so
+  // one lifecycle owns both. They sample independently, so a surface reading
+  // runs and one reading counts can differ across a single transition.
+  const fleetSnapshotService = new FleetSnapshotService(deps.ptyClient);
+  fleetSnapshotServiceInstance = fleetSnapshotService;
+  fleetSnapshotService.start();
+  registerDeferredTask({
+    name: "fleet-snapshot-initial-compute",
+    run: () => {
+      if (fleetSnapshotService.isStarted) fleetSnapshotService.refresh();
+    },
+  });
+  handlers.push(() => {
+    fleetSnapshotService.stop();
+    fleetSnapshotServiceInstance = null;
   });
 
   // Acknowledgement watermark for completed agents: the project the user has

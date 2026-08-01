@@ -24,6 +24,7 @@ import {
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { usePaletteStore } from "@/store/paletteStore";
+import { consumePaletteFocusRestoreSuppression } from "./paletteFocusRestore";
 import {
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
@@ -58,6 +59,13 @@ export function AppPaletteDialog({
   const restoreFocus = useCallback(() => {
     const el = previousFocusRef.current;
     previousFocusRef.current = null;
+    // A caller placed focus deliberately (the fleet overview focusing the run
+    // it opened); putting it back would undo that. Overlays are still cleared —
+    // only the focus move is skipped.
+    if (consumePaletteFocusRestoreSuppression()) {
+      clearDialogOverlays();
+      return;
+    }
     if (!el) return;
     // Palette-to-palette handoff: the next palette will install its
     // own focus, so skip restore entirely — and skip the overlay clear
@@ -319,6 +327,13 @@ AppPaletteDialog.Header = function AppPaletteHeader({
 const BODY_NAVIGATION_KEYS = new Set([
   "ArrowUp",
   "ArrowDown",
+  // Horizontal arrows carry the disclosure half of the tree pattern for palettes
+  // whose list has collapsible groups (`PilotView`). Withholding them left the
+  // region able to move between rows but not in or out of a group, which is
+  // half a keyboard. Flat-list palettes have no case for them and ignore them,
+  // uncancelled, exactly as they did before.
+  "ArrowLeft",
+  "ArrowRight",
   "Home",
   "End",
   "Enter",

@@ -8,7 +8,11 @@ vi.mock("../AgentAvailabilityStore.js", () => ({
   getAgentAvailabilityStore: () => availabilityMock,
 }));
 
-import { computeProjectAgentCounts, type CountableTerminal } from "../projectAgentCounts.js";
+import {
+  classifyRun,
+  computeProjectAgentCounts,
+  type CountableTerminal,
+} from "../projectAgentCounts.js";
 
 const agent = (over: Partial<CountableTerminal> = {}): CountableTerminal => ({
   id: "t1",
@@ -23,7 +27,67 @@ beforeEach(() => {
   availabilityMock.isHelpTerminal.mockReturnValue(false);
 });
 
+describe("classifyRun", () => {
+  const isHelp = (id: string) => id === "help";
+
+  it("admits a live agent terminal", () => {
+    expect(classifyRun(agent({ detectedAgentId: "claude" }), isHelp)).toBeNull();
+  });
+
+  it("checks trashed before help, so a trashed assistant is never tallied", () => {
+    // Guard ORDER is the contract: if help were checked first, a trashed
+    // assistant PTY would be netted out of a process count it no longer
+    // contributes to, under-reporting every project it lives in.
+    expect(classifyRun(agent({ id: "help", isTrashed: true }), isHelp)).toBe("trashed");
+  });
+
+  it("reports a live assistant as help so callers can net it back out", () => {
+    expect(classifyRun(agent({ id: "help" }), isHelp)).toBe("help");
+  });
+
+  it("reports help before the no-pty and non-agent guards", () => {
+    // A dead or unidentified assistant must still classify as help rather than
+    // falling through — the tally decision belongs to the caller, not here.
+    expect(classifyRun(agent({ id: "help", hasPty: false }), isHelp)).toBe("help");
+    expect(
+      classifyRun(
+        agent({ id: "help", launchAgentId: undefined, detectedAgentId: undefined }),
+        isHelp
+      )
+    ).toBe("help");
+  });
+
+  it("excludes dev previews, dead PTYs and plain shells with distinct reasons", () => {
+    expect(classifyRun(agent({ kind: "dev-preview" }), isHelp)).toBe("dev-preview");
+    expect(classifyRun(agent({ hasPty: false }), isHelp)).toBe("no-pty");
+    expect(
+      classifyRun(agent({ launchAgentId: undefined, detectedAgentId: undefined }), isHelp)
+    ).toBe("not-an-agent");
+  });
+
+  it("keeps a boot-window launch intent but drops a demoted ex-agent", () => {
+    expect(classifyRun(agent({ launchAgentId: "codex" }), isHelp)).toBeNull();
+    expect(classifyRun(agent({ launchAgentId: "codex", everDetectedAgent: true }), isHelp)).toBe(
+      "not-an-agent"
+    );
+  });
+});
+
 describe("computeProjectAgentCounts", () => {
+  it("never tallies a trashed or dead assistant into helpTerminals", () => {
+    availabilityMock.isHelpTerminal.mockImplementation((id: string) => id.startsWith("help"));
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [
+        agent({ id: "help-live" }),
+        agent({ id: "help-trashed", isTrashed: true }),
+        agent({ id: "help-dead", hasPty: false }),
+      ]
+    );
+
+    expect(counts.get("p1")!.helpTerminals).toBe(1);
+  });
+
   it("counts waiting and working agents per project", () => {
     const counts = computeProjectAgentCounts(
       ["p1", "p2"],

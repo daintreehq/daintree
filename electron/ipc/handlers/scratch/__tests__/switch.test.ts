@@ -139,3 +139,64 @@ describe("scratch:switch refreshes the File-menu project gates", () => {
     expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
   });
 });
+
+// A run opened from the fleet overview has to land on its own panel, not on
+// whatever the incoming scratch view happened to focus last. The intent can
+// only ride the switch: the caller's V8 context dies with it.
+describe("scratch:switch carries a focus intent to the incoming view", () => {
+  const setPendingFocusIntent = vi.fn();
+  const switchTo = vi.fn(async () => ({ view: null, isNew: false }));
+
+  function makeDepsWithPvm(): HandlerDependencies {
+    return {
+      mainWindow: {},
+      projectViewManager: { setPendingFocusIntent, switchTo },
+    } as unknown as HandlerDependencies;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    scratchStoreMock.getScratchById.mockReturnValue({ id: "scratch-1", path: "/tmp/scratch-1" });
+    scratchStoreMock.setCurrentScratch.mockReturnValue({
+      id: "scratch-1",
+      path: "/tmp/scratch-1",
+    });
+  });
+
+  it("records the intent against the scratch id before the view swaps", async () => {
+    registerScratchHandlers(makeDepsWithPvm());
+    const focusIntent = { intent: "focus-panel", panelId: "t7" } as const;
+
+    await getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, "scratch-1", { focusIntent });
+
+    expect(setPendingFocusIntent).toHaveBeenCalledWith("scratch-1", focusIntent);
+    // Ordering is the whole contract: the cached-view fast path reads the
+    // pending intent synchronously inside switchTo, so recording it afterwards
+    // would deliver nothing.
+    expect(setPendingFocusIntent.mock.invocationCallOrder[0]!).toBeLessThan(
+      switchTo.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("leaves no intent pending when the caller supplies none", async () => {
+    registerScratchHandlers(makeDepsWithPvm());
+
+    await getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, "scratch-1");
+
+    // A stale one-shot intent would fire on somebody else's later switch.
+    expect(setPendingFocusIntent).not.toHaveBeenCalled();
+  });
+
+  it("records nothing when the scratch does not exist", async () => {
+    scratchStoreMock.getScratchById.mockReturnValue(null);
+    registerScratchHandlers(makeDepsWithPvm());
+
+    await expect(
+      getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, "ghost", {
+        focusIntent: { intent: "focus-panel", panelId: "t7" },
+      })
+    ).rejects.toThrow();
+
+    expect(setPendingFocusIntent).not.toHaveBeenCalled();
+  });
+});

@@ -58,6 +58,50 @@ export interface CountableTerminal {
   everDetectedAgent?: boolean;
 }
 
+/**
+ * Why a terminal is not a countable agent run, or null when it is one.
+ *
+ * Exported as a reason rather than a boolean because one caller has to act on
+ * the distinction: `"help"` is the assistant PTY, which the host already
+ * tallied into `terminalCount` and which therefore has to be netted back out
+ * (#10989), while every other reason is simply "not an agent".
+ */
+export type RunExclusionReason = "trashed" | "help" | "dev-preview" | "no-pty" | "not-an-agent";
+
+/**
+ * The single definition of "this terminal is an agent run".
+ *
+ * Shared by the per-project tallies and by the fleet snapshot so the two can
+ * never disagree about what counts. They previously answered this question
+ * independently and drifted — the assistant PTY showed up as a working agent on
+ * one surface and not the other. A second copy of these five rules is a bug
+ * waiting to be written, so there is exactly one.
+ */
+export function classifyRun(
+  terminal: CountableTerminal,
+  isHelpTerminal: (id: string) => boolean
+): RunExclusionReason | null {
+  if (terminal.isTrashed) return "trashed";
+
+  // The assistant help terminal is a real PTY but tooling-internal: it never
+  // counts as an agent, and is reported here only so callers can net it out of
+  // a process count the host already included it in.
+  if (terminal.id !== undefined && isHelpTerminal(terminal.id)) return "help";
+
+  if (terminal.kind === "dev-preview") return "dev-preview";
+  if (terminal.hasPty === false) return "no-pty";
+
+  // Runtime identity wins; launch intent is only a boot-window fallback before
+  // detection has ever committed. Demoted ex-agents must not count just because
+  // they were launched as agents.
+  const hasLiveOrBootAgent =
+    Boolean(terminal.detectedAgentId) ||
+    (Boolean(terminal.launchAgentId) && terminal.everDetectedAgent !== true);
+  if (!hasLiveOrBootAgent) return "not-an-agent";
+
+  return null;
+}
+
 function empty(): ProjectAgentCounts {
   return {
     active: 0,
@@ -106,26 +150,12 @@ export function computeProjectAgentCounts(
     if (!terminal.projectId) continue;
     const entry = counts.get(terminal.projectId);
     if (!entry) continue;
-    if (terminal.isTrashed) continue;
-
-    // The assistant help terminal is a real PTY but tooling-internal: it never
-    // counts as an agent, and is recorded here only so callers can net it out
-    // of a process count the host already included it in.
-    if (terminal.id !== undefined && availability.isHelpTerminal(terminal.id)) {
+    const exclusion = classifyRun(terminal, (id) => availability.isHelpTerminal(id));
+    if (exclusion === "help") {
       if (terminal.hasPty !== false) entry.helpTerminals += 1;
       continue;
     }
-
-    if (terminal.kind === "dev-preview") continue;
-    if (terminal.hasPty === false) continue;
-
-    // Runtime identity wins; launch intent is only a boot-window fallback before
-    // detection has ever committed. Demoted ex-agents must not inflate counts
-    // just because they were launched as agents.
-    const hasLiveOrBootAgent =
-      Boolean(terminal.detectedAgentId) ||
-      (Boolean(terminal.launchAgentId) && terminal.everDetectedAgent !== true);
-    if (!hasLiveOrBootAgent) continue;
+    if (exclusion !== null) continue;
 
     if (terminal.agentState === "waiting") {
       entry.waiting += 1;

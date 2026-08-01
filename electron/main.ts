@@ -85,7 +85,10 @@ import {
   setupWindowFocusThrottle,
   registerWindowForFocusThrottle,
 } from "./window/powerMonitor.js";
-import { getProjectStatsService } from "./ipc/handlers/projectCrud/index.js";
+import {
+  getProjectStatsService,
+  getFleetSnapshotService,
+} from "./ipc/handlers/projectCrud/index.js";
 import { getIdleTerminalNotificationService } from "./services/IdleTerminalNotificationService.js";
 import {
   getPendingOpenDirPaths,
@@ -504,6 +507,10 @@ if (!gotTheLock) {
         // the fleet is static would otherwise show every project unbanded until
         // agent state next moved. Statically imported, so no dynamic import.
         getProjectStatsService()?.pushSnapshotTo(wc);
+        // Same reasoning, same suppression, run-grained: a view attaching to a
+        // quiet fleet would otherwise render an empty queue until something
+        // moved — and a quiet fleet is exactly when the queue is worth reading.
+        getFleetSnapshotService()?.pushSnapshotTo(wc);
 
         // #10815: cold switch-back auto-resume is driven entirely by the
         // renderer's pull-on-mount `help.peekPendingHibernation` peek (which
@@ -609,6 +616,7 @@ if (!gotTheLock) {
         getPtyClient,
         getWorkspaceClient: getWorkspaceClientRef,
         getProjectStatsService,
+        getFleetSnapshotService,
         getIdleTerminalNotificationService: () => getIdleTerminalNotificationService(),
       });
     }

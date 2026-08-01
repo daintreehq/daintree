@@ -27,6 +27,7 @@ import { gracefulTeardownAndJournalProject } from "../../../services/pty/project
 import { createHardenedGit } from "../../../utils/hardenedGit.js";
 import { logError } from "../../../utils/logger.js";
 import type { HandlerDependencies } from "../../types.js";
+import type { ProjectFocusOnActivateIntent } from "../../../../shared/types/ipc/project.js";
 import type { Scratch } from "../../../../shared/types/scratch.js";
 import type { ScratchSaveAsProjectResult } from "../../../../shared/types/ipc/scratch.js";
 
@@ -89,7 +90,11 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
       }),
       switch: op(
         SCRATCH_METHOD_CHANNELS.switch,
-        async (ctx, scratchId: string): Promise<Scratch> => {
+        async (
+          ctx,
+          scratchId: string,
+          options?: { focusIntent?: ProjectFocusOnActivateIntent }
+        ): Promise<Scratch> => {
           if (typeof scratchId !== "string" || !scratchId) {
             throw new Error("Invalid scratch ID");
           }
@@ -114,6 +119,14 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           // only called after `pvm.switchTo()` resolves.
           let activeView: WebContentsView | null = null;
           if (pvm) {
+            // Recorded BEFORE switchTo, matching project:switch: the cached-view
+            // fast path reads it synchronously, and the cold-start path reads it
+            // once the paint gate resolves. Without this a run opened from the
+            // fleet overview lands in the right scratch but on whatever panel
+            // happened to be focused last.
+            if (options?.focusIntent) {
+              pvm.setPendingFocusIntent(scratchId, options.focusIntent);
+            }
             const result = await pvm.switchTo(scratchId, scratch.path);
             activeView = result.view;
           }

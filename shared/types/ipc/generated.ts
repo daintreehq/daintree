@@ -365,6 +365,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./fileWatch.js").FileWatchFingerprintPayload];
     result: import("./fileWatch.js").FileWatchFingerprintResult;
   };
+  "fleet:get-snapshot": {
+    args: [];
+    result: import("./fleet.js").FleetSnapshot | null;
+  };
   "forge-audit:clear-log": {
     args: [];
     result: void;
@@ -1362,7 +1366,12 @@ export interface GeneratedIpcInvokeMap {
     result: import("./scratch.js").ScratchSaveAsProjectResult;
   };
   "scratch:switch": {
-    args: [scratchId: string];
+    args: [
+      scratchId: string,
+      options?:
+        | { focusIntent?: import("./project.js").ProjectFocusOnActivateIntent | undefined }
+        | undefined,
+    ];
     result: import("../scratch.js").Scratch;
   };
   "scratch:update": {
