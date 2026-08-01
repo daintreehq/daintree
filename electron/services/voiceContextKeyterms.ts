@@ -420,6 +420,12 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
 // hazard, not a theoretical one.
 const OPENAI_FORBIDDEN_KEYWORD_CHARS = /[<>\r\n]/;
 
+// An unpaired surrogate is corrupted input (a term already truncated mid-emoji
+// upstream, or a mangled terminal read), not a meaningful character. It has no
+// valid UTF-8 encoding, so it's dropped like any other unsendable term rather
+// than repaired into a different word.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 /**
  * Truncates to at most `maxLength` UTF-16 code units without splitting a
  * surrogate pair. A bare `slice` on "…99 chars…😀" leaves a lone high surrogate,
@@ -461,6 +467,7 @@ export function sanitizeOpenAIKeywords(terms: readonly string[]): string[] {
     const trimmed = term.trim();
     if (trimmed.length === 0) continue;
     if (OPENAI_FORBIDDEN_KEYWORD_CHARS.test(trimmed)) continue;
+    if (LONE_SURROGATE.test(trimmed)) continue;
 
     const capped = capTermLength(trimmed, MAX_KEYTERM_LENGTH);
     // Dedup after trimming/capping so two terms that collapse to the same wire

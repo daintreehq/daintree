@@ -159,7 +159,11 @@ export function summarizeEchoedSession(session: unknown): Record<string, unknown
     // object or a long string where a short scalar belongs) must not become a
     // channel for arbitrary content reaching the log.
     model: shortScalar(t.model),
-    languages: Array.isArray(t.languages) ? t.languages.map(shortScalar) : shortScalar(t.languages),
+    // Bounded before mapping: we only ever send one language, so a large echoed
+    // array is malformed and must not drive unbounded work here.
+    languages: Array.isArray(t.languages)
+      ? t.languages.slice(0, MAX_LOGGED_LANGUAGES).map(shortScalar)
+      : shortScalar(t.languages),
     delay: shortScalar(t.delay),
     biasTermCount: Array.isArray(t.keywords) ? t.keywords.length : 0,
     hasPrompt: typeof t.prompt === "string" && t.prompt.length > 0,
@@ -172,6 +176,8 @@ export function summarizeEchoedSession(session: unknown): Record<string, unknown
  * isn't a small string/number/boolean becomes a type marker, so a malformed or
  * oversized echo can't smuggle content into the log.
  */
+const MAX_LOGGED_LANGUAGES = 8;
+
 function shortScalar(value: unknown): string | number | boolean {
   if (typeof value === "number" || typeof value === "boolean") return value;
   if (typeof value === "string") return value.length <= 64 ? value : `(string:${value.length})`;

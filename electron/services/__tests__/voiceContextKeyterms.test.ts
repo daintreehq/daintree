@@ -539,19 +539,28 @@ describe("sanitizeOpenAIKeywords", () => {
     expect(sanitizeOpenAIKeywords([long, `${long}bbb`])).toEqual([capped]);
   });
 
-  it("does not split a surrogate pair when capping", () => {
-    // A bare slice at the boundary leaves a lone high surrogate, which
-    // serializes as malformed UTF-8 the server may reject.
-    const [capped] = sanitizeOpenAIKeywords(["a".repeat(150) + "😀"]);
+  it("does not split a surrogate pair straddling the cap boundary", () => {
+    // The emoji's pair must SPAN the cut for this to mean anything — an emoji
+    // safely past the boundary would pass even with a naive slice. A bare slice
+    // here leaves a lone high surrogate, which has no valid UTF-8 encoding.
+    const [capped] = sanitizeOpenAIKeywords(["a".repeat(99) + "😀" + "b".repeat(50)]);
     expect(JSON.stringify(capped)).not.toMatch(/\\ud[89ab][0-9a-f]{2}/i);
+    expect(capped).toBe("a".repeat(99));
   });
 
-  it("keeps a non-BMP character intact when it straddles the cap boundary", () => {
-    const emoji = "😀";
-    // Pad so the emoji's surrogate pair spans the cap: the pair is dropped
-    // whole, never halved.
-    const [capped] = sanitizeOpenAIKeywords(["a".repeat(99) + emoji + "b".repeat(50)]);
-    expect(JSON.stringify(capped)).not.toMatch(/\\ud[89ab][0-9a-f]{2}/i);
+  it("drops a term that already contains an unpaired surrogate", () => {
+    // Corrupted input (truncated mid-emoji upstream, or a mangled terminal
+    // read) is unsendable, so it's dropped like any other bad term — not
+    // repaired into a different word.
+    const loneHigh = String.fromCharCode(0xd83d);
+    const loneLow = String.fromCharCode(0xde00);
+    expect(sanitizeOpenAIKeywords([`bad${loneHigh}`, `bad${loneLow}`, "Daintree"])).toEqual([
+      "Daintree",
+    ]);
+  });
+
+  it("keeps a well-formed emoji term intact", () => {
+    expect(sanitizeOpenAIKeywords(["ship 🚀"])).toEqual(["ship 🚀"]);
   });
 
   it("caps the total number of terms to a stable prefix of the input", () => {
