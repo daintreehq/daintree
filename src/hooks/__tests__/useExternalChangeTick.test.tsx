@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FileWatchFingerprintPayloadSchema } from "../../../electron/schemas/ipc";
 import { useExternalChangeTick } from "../useExternalChangeTick";
 
-const fingerprint = vi.fn<(payload: { rootPath: string; paths: string[] }) => Promise<string[]>>();
+// Mirrors FileWatchFingerprintResult, so a `null` entry — the "nothing readable
+// there" answer — needs no cast to express.
+const fingerprint =
+  vi.fn<(payload: { rootPath: string; paths: string[] }) => Promise<Array<string | null>>>();
 
 /** Every promise the hook has been handed, so a flush can await the real work. */
 const issued: Array<Promise<unknown>> = [];
@@ -90,7 +93,7 @@ describe("useExternalChangeTick", () => {
     await flush();
     expect(fingerprint).toHaveBeenCalledTimes(1);
 
-    fingerprint.mockResolvedValue([null as unknown as string]);
+    fingerprint.mockResolvedValue([null]);
     await pollOnce();
 
     expect(result.current).toBeDefined();

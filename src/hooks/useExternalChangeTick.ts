@@ -54,16 +54,31 @@ export function useExternalChangeTick(
    */
   const watchKey = useMemo(() => {
     if (!enabled || !rootPath) return "";
-    const unique: string[] = [];
+    const list: string[] = [];
     const seen = new Set<string>();
     for (const candidate of paths) {
       if (!candidate || seen.has(candidate)) continue;
       seen.add(candidate);
-      unique.push(candidate);
-      if (unique.length === MAX_WATCHED_PATHS) break;
+      list.push(candidate);
+      if (list.length === MAX_WATCHED_PATHS) break;
     }
-    return unique.length === 0 ? "" : JSON.stringify(unique);
+    return list.length === 0 ? "" : JSON.stringify(list);
   }, [enabled, rootPath, paths]);
+
+  /**
+   * The request payload, derived back from the key so everything downstream
+   * depends on that one primitive. Deriving it here rather than returning it
+   * alongside the key keeps a caller that rebuilds an equivalent array from
+   * producing a fresh object identity, which would re-run the effects below and
+   * re-baseline on every render.
+   */
+  const watchList = useMemo<string[]>(() => {
+    if (watchKey === "") return [];
+    const parsed: unknown = JSON.parse(watchKey);
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  }, [watchKey]);
 
   const [tick, setTick] = useState<number | undefined>(undefined);
 
@@ -85,10 +100,7 @@ export function useExternalChangeTick(
     const generation = generationRef.current;
     let pending: Promise<FileWatchFingerprintResult>;
     try {
-      pending = fileWatchClient.fingerprint({
-        rootPath: root,
-        paths: JSON.parse(key) as string[],
-      });
+      pending = fileWatchClient.fingerprint({ rootPath: root, paths: watchList });
     } catch {
       // A pane can render before (or without) the preload bridge — a test
       // harness, a view torn down mid-render. Losing the live tick is a
@@ -129,7 +141,7 @@ export function useExternalChangeTick(
         // that replaced it.
         if (generation === generationRef.current) inFlightRef.current = false;
       });
-  }, [watchKey, rootPath]);
+  }, [watchKey, watchList, rootPath]);
 
   // Baseline the new set now rather than one interval from now: everything that
   // happens between the pane's explicit read and the first sample would
