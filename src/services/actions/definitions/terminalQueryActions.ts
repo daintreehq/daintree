@@ -36,8 +36,18 @@ export function registerTerminalQueryActions(
     scope: "renderer",
     argsSchema: z
       .object({
-        worktreeId: z.string().optional(),
-        location: z.enum(["grid", "dock", "trash", "background"]).optional(),
+        worktreeId: z
+          .string()
+          .optional()
+          .describe(
+            "Restricts the listing to one worktree, using an id from the worktree-listing capability. Omit to list across every worktree in the project."
+          ),
+        location: z
+          .enum(["grid", "dock", "trash", "background"])
+          .optional()
+          .describe(
+            "Restricts the listing to terminals in one place: the main grid, the sidebar dock, the trash, or the background. Omitted, trashed and backgrounded terminals are left out, so ask for those explicitly to see them."
+          ),
       })
       .optional(),
     resultSchema: z.object({ terminals: z.array(TerminalSummarySchema) }),
@@ -482,7 +492,7 @@ export function registerTerminalQueryActions(
     id: "terminal.sendCommand",
     title: "Submit text to terminal",
     description:
-      "Submit text to a terminal: a shell terminal runs it as a command, an agent pane receives it as the next prompt. Multi-line text is safe — the whole body is delivered atomically and submitted once, so embedded newlines insert line breaks instead of firing off a partial message. This returns as soon as the text is sent and does not wait for a result, so poll the status snapshot or block on the idle wait to see what happened. Anything submitted here runs with the terminal's own privileges.",
+      "Queue text as one submission to a terminal: a shell runs it as a command, an agent pane receives it as the next prompt. Embedded newlines become line breaks rather than firing off a partial message. This returns once the submission is queued, not once it has been delivered or run, so inspect the terminal afterwards to see what happened. It runs with the terminal's own privileges.",
     category: "terminal",
     kind: "command",
     danger: "safe",

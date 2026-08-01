@@ -122,14 +122,43 @@ async function createRegistryWithAudit(): Promise<{
 }
 
 /**
- * True when `text` names `id` as a standalone token. Bounded on both sides by
- * the id character class so `terminal.list` does not match inside
- * `terminal.listBranches`, and so a longer id containing a shorter one is not
- * double-reported.
+ * Every dotted identifier in `text`, as whole tokens.
+ *
+ * Tokenising and then testing membership beats matching each id with its own
+ * boundary regex, which got the common case wrong: a trailing `.` had to be
+ * excluded on both sides to stop `terminal.list` matching inside
+ * `terminal.listBranches`, and that also stopped it matching a sentence-final
+ * "call terminal.list." — the single most likely way to write the broken
+ * cross-reference this guards against.
+ *
+ * A token ends at the first `.` not followed by a letter, so sentence
+ * punctuation falls outside it while `terminal.listBranches` stays one token
+ * and simply is not an action id. Non-action dotted names (`Worktree.branch`,
+ * `ctx.focusedTerminalId`) are excluded the same way — by not being in the set
+ * — which is what keeps legitimate type and field references legal.
  */
-function containsActionId(text: string, id: string): boolean {
-  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^A-Za-z0-9_.-])${escaped}(?=$|[^A-Za-z0-9_.-])`).test(text);
+const DOTTED_TOKEN = /[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)+/g;
+
+function actionIdsNamedIn(text: string, ids: ReadonlySet<string>): string[] {
+  const found = new Set<string>();
+  for (const [token] of text.matchAll(DOTTED_TOKEN)) {
+    if (ids.has(token)) found.add(token);
+  }
+  return [...found];
+}
+
+/** Every `description` string anywhere in an emitted JSON Schema. */
+function nestedDescriptions(node: unknown, out: string[] = []): string[] {
+  if (Array.isArray(node)) {
+    for (const item of node) nestedDescriptions(item, out);
+    return out;
+  }
+  if (typeof node !== "object" || node === null) return out;
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "description" && typeof value === "string") out.push(value);
+    else nestedDescriptions(value, out);
+  }
+  return out;
 }
 
 /**
@@ -139,21 +168,31 @@ function containsActionId(text: string, id: string): boolean {
  */
 const EmittedProperties = z.object({ properties: z.record(z.string(), z.unknown()).optional() });
 
-function inputPropertyNames(argsSchema: z.ZodType | undefined): string[] {
+/** The exact conversion `ActionService.computeSchemas` performs. */
+function emitSchema(schema: z.ZodType, io: "input" | "output"): unknown {
+  return z.toJSONSchema(schema, {
+    io,
+    unrepresentable: "any",
+    reused: "inline",
+    cycles: "ref",
+    target: "draft-2020-12",
+  });
+}
+
+/**
+ * Top-level argument names, or `null` when the schema cannot be converted.
+ *
+ * `null` rather than `[]` because production swallows the same failure and
+ * advertises an empty object instead — so a conversion that starts throwing is
+ * a broken tool surface, and a guard that returned `[]` would go quiet at
+ * precisely that moment.
+ */
+function inputPropertyNames(argsSchema: z.ZodType | undefined): string[] | null {
   if (argsSchema == null) return [];
   try {
-    const json = z.toJSONSchema(argsSchema, {
-      io: "input",
-      unrepresentable: "any",
-      reused: "inline",
-      cycles: "ref",
-      target: "draft-2020-12",
-    });
-    return Object.keys(EmittedProperties.parse(json).properties ?? {});
+    return Object.keys(EmittedProperties.parse(emitSchema(argsSchema, "input")).properties ?? {});
   } catch {
-    // A schema that cannot be represented as JSON Schema advertises no
-    // properties, so there is nothing for the prose to duplicate.
-    return [];
+    return null;
   }
 }
 
@@ -315,23 +354,52 @@ describe("LLM-facing tool descriptions (#11542)", () => {
     expect(violations).toEqual([]);
   });
 
-  it("never names another action by id where the client would mangle it", async () => {
+  it("never names another action by id anywhere the model can read it", async () => {
     const rows = await cohortDefinitions();
+    const ids = new Set<string>(BUILT_IN_ACTION_IDS);
 
     // A client namespaces each tool and rewrites every character outside
     // [A-Za-z0-9_-], so `forge.listPRs` in prose points at a name the model was
-    // never shown. Sibling tools are referenced by capability instead.
+    // never shown.
     //
-    // Matched against the real id list rather than any dotted token, so
-    // `Worktree.branch`, `ctx.focusedTerminalId` and other type/field
-    // references stay legal.
+    // The tool description is not the only prose that reaches it: field
+    // descriptions ride the emitted schemas, and examples are forwarded as
+    // `_meta.examples`. All three are swept, because fixing only descriptions
+    // leaves the other two free to reintroduce exactly what this removes.
+    //
+    // Example ARGUMENTS are deliberately not swept. An action id there is a
+    // value the caller is meant to send — the introspection tools take one —
+    // rather than a name it is being told to call.
     const violations: string[] = [];
+    const flag = (id: string, where: string, text: string) => {
+      for (const named of actionIdsNamedIn(text, ids)) {
+        violations.push(`${id} names ${named} in ${where}`);
+      }
+    };
+
     for (const { id, def } of rows) {
-      const text = def.description ?? "";
-      for (const other of BUILT_IN_ACTION_IDS) {
-        if (containsActionId(text, other)) {
-          violations.push(`${id} names ${other}`);
+      flag(id, "description", def.description ?? "");
+
+      for (const example of def.examples ?? []) {
+        flag(id, "example description", example.description ?? "");
+      }
+
+      if (def.argsSchema) {
+        for (const text of nestedDescriptions(emitSchema(def.argsSchema, "input"))) {
+          flag(id, "input schema", text);
         }
+      }
+      // Output schemas only reach the wire when the action opts in.
+      if (def.mcpOutputSchema && def.resultSchema) {
+        for (const text of nestedDescriptions(emitSchema(def.resultSchema, "output"))) {
+          flag(id, "output schema", text);
+        }
+      }
+      for (const raw of [
+        def.rawInputSchema,
+        def.mcpOutputSchema ? def.rawOutputSchema : undefined,
+      ]) {
+        for (const text of nestedDescriptions(raw)) flag(id, "raw schema", text);
       }
     }
 
@@ -347,10 +415,43 @@ describe("LLM-facing tool descriptions (#11542)", () => {
     const violations: string[] = [];
     for (const { id, def } of rows) {
       const text = def.description ?? "";
-      for (const prop of inputPropertyNames(def.argsSchema)) {
+      const props = inputPropertyNames(def.argsSchema);
+      if (props === null) {
+        violations.push(`${id} has an argsSchema that cannot be advertised at all`);
+        continue;
+      }
+      for (const prop of props) {
         if (text.includes(`\`${prop}\``)) {
           violations.push(`${id} quotes \`${prop}\``);
         }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it("describes every argument it advertises on the external surface", async () => {
+    const rows = await cohortDefinitions();
+
+    // Scoped to the external tier because that is where prose was deleted on
+    // the promise that the schema carries the detail instead. An advertised
+    // argument with no description breaks that trade: the caller is left with
+    // a name and a type, which is exactly the state this issue set out to fix.
+    const violations: string[] = [];
+    for (const { id, def } of rows) {
+      if (!MCP_EXTERNAL_TIER_TOOLS.includes(id as (typeof MCP_EXTERNAL_TIER_TOOLS)[number])) {
+        continue;
+      }
+      if (!def.argsSchema) continue;
+      const emitted = z
+        .object({
+          properties: z
+            .record(z.string(), z.object({ description: z.string().optional() }))
+            .optional(),
+        })
+        .parse(emitSchema(def.argsSchema, "input"));
+      for (const [prop, schema] of Object.entries(emitted.properties ?? {})) {
+        if (!schema.description?.trim()) violations.push(`${id}.${prop}`);
       }
     }
 

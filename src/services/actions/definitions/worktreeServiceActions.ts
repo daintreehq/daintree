@@ -148,7 +148,13 @@ export function registerWorktreeServiceActions(
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({ worktreeId: z.string() }),
+      argsSchema: z.object({
+        worktreeId: z
+          .string()
+          .describe(
+            "Identifies the worktree to make active, using an id from the worktree-listing capability. Everything later scoped to the current worktree follows this."
+          ),
+      }),
       run: async ({ worktreeId }) => {
         await worktreeClient.setActive(worktreeId);
       },

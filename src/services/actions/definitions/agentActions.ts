@@ -197,21 +197,87 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     argsSchema: z.object({
       agentId: AgentIdSchema,
       location: LaunchLocationSchema.optional(),
-      cwd: z.string().optional(),
-      worktreeId: z.string().optional(),
-      prompt: z.string().optional(),
-      interactive: z.boolean().optional(),
-      model: z.string().optional(),
-      presetId: z.string().nullable().optional(),
-      activateDockOnCreate: z.boolean().optional(),
-      env: z.record(z.string(), z.string()).optional(),
-      excludeFromPersistence: z.boolean().optional(),
-      removeOnExit: z.boolean().optional(),
-      agentLaunchFlags: z.array(z.string()).optional(),
+      cwd: z
+        .string()
+        .optional()
+        .describe(
+          "Absolute directory to start the agent process in. This is the launch directory, not a worktree selector — name the worktree separately. Defaults to the resolved worktree root."
+        ),
+      worktreeId: z
+        .string()
+        .optional()
+        .describe(
+          "Identifies the worktree to launch in, using an id from the worktree-listing capability. Defaults to the active worktree."
+        ),
+      prompt: z
+        .string()
+        .optional()
+        .describe(
+          "Initial text submitted to the agent once it starts, as its first turn. Omit to leave the agent waiting for input."
+        ),
+      interactive: z
+        .boolean()
+        .optional()
+        .describe(
+          "Whether the agent runs as a conversation the user can continue, rather than a single non-interactive pass."
+        ),
+      model: z
+        .string()
+        .optional()
+        .describe(
+          "Overrides the model the agent CLI would otherwise pick. Accepted values are the agent's own model names, so an unrecognised one fails when the CLI starts rather than here."
+        ),
+      presetId: z
+        .string()
+        .nullable()
+        .optional()
+        .describe(
+          "Applies one of the user's saved launch presets for this agent. Pass an explicit null to ignore the configured default preset rather than inherit it."
+        ),
+      activateDockOnCreate: z
+        .boolean()
+        .optional()
+        .describe(
+          "Whether to open the sidebar dock when the agent is placed there. Only meaningful for a dock placement; it changes what the user sees."
+        ),
+      env: z
+        .record(z.string(), z.string())
+        .optional()
+        .describe(
+          "Extra environment variables for the agent process, merged over the inherited environment. These reach a real subprocess, so never put credentials here that the user has not already agreed to expose."
+        ),
+      excludeFromPersistence: z
+        .boolean()
+        .optional()
+        .describe(
+          "Keeps the terminal out of the saved session, so it does not come back after a restart. Use for throwaway work the user should not inherit."
+        ),
+      removeOnExit: z
+        .boolean()
+        .optional()
+        .describe(
+          "Closes the panel automatically once the agent process ends, discarding its output. Leave off when the output still needs reading."
+        ),
+      agentLaunchFlags: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Extra command-line flags passed through to the agent CLI verbatim. Unrecognised flags fail when the CLI starts, not here."
+        ),
       spawnedBy: TerminalSpawnSourceSchema.optional(),
       focusPolicy: AddPanelFocusPolicySchema.optional(),
-      requestedId: z.string().optional(),
-      force: z.boolean().optional(),
+      requestedId: z
+        .string()
+        .optional()
+        .describe(
+          "Asks for a specific panel id when the terminal is created, so a caller can correlate the launch it requested with the terminal it got."
+        ),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "Skips the check that the agent's CLI can actually run. Without it an unlaunchable CLI opens a setup diagnostic instead of failing; with it the process is started anyway and simply fails. Leave it off unless the check itself is known to be wrong."
+        ),
       name: z
         .string()
         .max(200)

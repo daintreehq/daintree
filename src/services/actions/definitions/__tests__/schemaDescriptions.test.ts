@@ -23,11 +23,13 @@ import { WAIT_UNTIL_IDLE_INPUT_SCHEMA } from "@shared/types/terminalWaitUntilIdl
  */
 
 /**
- * The slice of an emitted JSON Schema these tests read. Parsing the output
- * rather than asserting a type onto it means a conversion that stopped
- * producing an object — or produced `{}`, the documented failure mode for a
- * transformed schema — fails loudly here instead of quietly yielding
- * `undefined` and passing a `not.toBe("")` check for the wrong reason.
+ * The slice of an emitted JSON Schema these tests read. Parsing rather than
+ * asserting a type onto the output keeps the reads honest: a conversion that
+ * stopped returning an object, or returned a description of the wrong type,
+ * fails here rather than silently yielding `undefined`.
+ *
+ * Every field is optional, so this does NOT by itself prove anything was
+ * emitted — `parse({})` succeeds. The assertions below carry that weight.
  */
 const EmittedSchema = z.object({
   description: z.string().optional(),
@@ -35,11 +37,16 @@ const EmittedSchema = z.object({
   properties: z.record(z.string(), z.object({ description: z.string().optional() })).optional(),
 });
 
-/** The exact conversion `ActionService.zodSchemaToJsonSchema` performs. */
-function emit(schema: z.ZodType): z.infer<typeof EmittedSchema> {
+/**
+ * The exact conversion `ActionService.computeSchemas` performs. The mode is not
+ * cosmetic: `argsSchema` is converted as input and `resultSchema` as output, so
+ * asserting a result schema in input mode would verify text the client is never
+ * sent.
+ */
+function emit(schema: z.ZodType, io: "input" | "output" = "input"): z.infer<typeof EmittedSchema> {
   return EmittedSchema.parse(
     z.toJSONSchema(schema, {
-      io: "input",
+      io,
       unrepresentable: "any",
       reused: "inline",
       cycles: "ref",
@@ -98,20 +105,25 @@ describe("argument descriptions carry the semantics prose no longer states", () 
     // grep — is invisible from the type, which is just a string.
     const query = emit(FileSearchPayloadSchema).properties?.query?.description ?? "";
     expect(query).toMatch(/name|path/i);
-    expect(query).toMatch(/content/i);
+    // Polarity matters: "searches contents" would satisfy a bare /content/.
+    expect(query).toMatch(/not (?:file )?contents|never contents/i);
   });
 
   it("explains why an empty scope list is rejected rather than ignored", () => {
     const scope = emit(CopyTreeOptionsSchema).properties?.scopePaths?.description ?? "";
-    expect(scope).not.toBe("");
     // The trap is that an empty list looks like "no scoping" but would mean
-    // "copy everything", so the description has to name both readings.
-    expect(scope).toMatch(/empty/i);
+    // "copy everything", so the description has to say it is refused — not
+    // merely mention the word "empty".
+    expect(scope).toMatch(/empty list is rejected|rejected rather than/i);
   });
 
-  it("keeps the terminal-id contract on the raw wait schema", () => {
-    // This one is a hand-written JSON Schema rather than a zod conversion, so
-    // it is the one place a describe() regression would not be caught above.
+  it("keeps the terminal-id contract on the hand-written wait schema", () => {
+    // A hand-written JSON Schema rather than a zod conversion, so none of the
+    // propagation above applies to it. Note this constant is NOT what the
+    // registered wait action advertises — that action builds its own zod
+    // argsSchema, which is covered cohort-wide by the description-presence
+    // guard in actionDefinitions.quality.test.ts. This asserts the shipped
+    // constant the MCP server re-exports, which would otherwise go unchecked.
     const props = EmittedSchema.parse(WAIT_UNTIL_IDLE_INPUT_SCHEMA).properties ?? {};
 
     expect(props.terminalId?.description ?? "").not.toBe("");
@@ -120,16 +132,28 @@ describe("argument descriptions carry the semantics prose no longer states", () 
 });
 
 describe("result descriptions explain what a value cannot say for itself", () => {
+  // Converted as OUTPUT, matching `computeSchemas`. `terminal.getStatus` sets
+  // `mcpOutputSchema: true`, so this text is genuinely advertised rather than
+  // documentation that stops at the manifest.
+  const statusProperties = () => emit(TerminalStatusEntrySchema, "output").properties ?? {};
+
   it("marks the parsed check result as not an exit code", () => {
-    // The whole hazard: `passed` reads like a process result but is scraped
-    // from output. Losing this text turns a heuristic into an authority.
-    const entry = emit(TerminalStatusEntrySchema).properties?.lastCheckResult?.description ?? "";
-    expect(entry).toMatch(/exit code/i);
+    // The whole hazard: the parsed result reads like a process outcome but is
+    // scraped from output. Losing this text turns a heuristic into an
+    // authority, so the polarity is the assertion — a description claiming it
+    // IS an exit code would satisfy a bare /exit code/.
+    expect(statusProperties().lastCheckResult?.description ?? "").toMatch(
+      /rather than from a process exit code|not (?:an? )?(?:authoritative )?exit code/i
+    );
   });
 
   it("distinguishes a null exit code from a missing one", () => {
-    const exitCode = emit(TerminalStatusEntrySchema).properties?.exitCode?.description ?? "";
+    const exitCode = statusProperties().exitCode?.description ?? "";
     expect(exitCode).toMatch(/signal/i);
     expect(exitCode).toMatch(/running|absen/i);
+  });
+
+  it("explains a per-entry error rather than letting it read as a whole-call failure", () => {
+    expect(statusProperties().error?.description ?? "").not.toBe("");
   });
 });

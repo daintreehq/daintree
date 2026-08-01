@@ -36,7 +36,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.close",
     title: "Close Terminal",
     description:
-      "Close a terminal, moving it to the trash where it is briefly recoverable before the process is killed for good. Identify the terminal explicitly — an automated caller cannot see what the user has focused, and closing the wrong pane discards someone else's work. Nothing binds a terminal to whoever created it, so the listing includes the user's own shells and other agents' panes.",
+      "Close a panel, usually moving it to the trash where it stays briefly recoverable before its process is killed. Recovery is not universal — panels set to remove on exit, and dialog panels, are discarded outright. This is not limited to terminals. Identify the panel explicitly: an automated caller cannot see what the user has focused, and closing the wrong one discards their work.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -127,7 +127,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.kill",
     title: "Kill Terminal",
     description:
-      "Permanently destroy a terminal and its process immediately, with no trash step and no recovery. Identify the terminal explicitly — an automated caller cannot see what the user has focused, and killing the wrong pane destroys work irrecoverably. Close the terminal instead when recoverability matters.",
+      "Permanently destroy a panel and any process behind it, immediately, with no trash step and no recovery. This is not limited to terminals — whatever panel the id names is removed. Identify it explicitly: an automated caller cannot see what the user has focused, and destroying the wrong pane cannot be undone. Close it instead when recoverability matters.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -169,7 +169,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restart",
     title: "Restart Terminal",
     description:
-      "Restart a terminal's process in place, keeping the pane. Anything running is terminated and unsaved in-process state is lost, so confirm the terminal is idle first. Identify the terminal explicitly — an automated caller cannot see what the user has focused.",
+      "Begin restarting a terminal's process in place, keeping the pane. This returns before the restart has finished, so the terminal is not ready yet when it does — watch its status before sending anything. Whatever was running is terminated and unsaved in-process state is lost. A panel with no process is ignored rather than reported as an error.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -435,7 +435,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.closeAll",
     title: "Close All Terminals",
     description:
-      "Close every terminal in the active worktree at once, moving them all to the trash. This is far broader than closing one pane: it takes the user's own shells and other agents' terminals with it, and recovery is only briefly possible before the processes are killed. Prefer closing terminals individually.",
+      "Close every panel in the active worktree at once, not only terminals. Most move to the trash and stay briefly recoverable, but panels set to remove on exit are discarded outright. This takes the user's own shells and other agents' terminals with it, so prefer closing panels individually. Tooling-internal panels are spared.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -471,7 +471,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.killAll",
     title: "Kill All Terminals",
     description:
-      "Permanently destroy every terminal and its process at once, with no trash step and no recovery. This is the most destructive terminal operation: it takes the user's own shells and other agents' running work with it. There is essentially never a reason for an automated caller to use this.",
+      "Permanently destroy every panel in the project at once — across all worktrees, of every kind, including trashed and backgrounded ones — with no trash step and no recovery. This takes the user's own shells and other agents' running work with it; only tooling-internal panels are spared. There is essentially never a reason for an automated caller to use this.",
     category: "terminal",
     kind: "command",
     danger: "confirm",

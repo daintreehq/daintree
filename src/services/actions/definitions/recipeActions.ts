@@ -22,7 +22,16 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+      argsSchema: z
+        .object({
+          worktreeId: z
+            .string()
+            .optional()
+            .describe(
+              "Restricts the listing to recipes available in one worktree, using an id from the worktree-listing capability. Defaults to the active worktree."
+            ),
+        })
+        .optional(),
       resultSchema: z.object({
         recipes: z.array(RecipeSummarySchema),
         isLoading: z.boolean(),
@@ -65,8 +74,17 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         "Spawns the recipe's terminals, each running shell commands or launching agents. " +
         "Agent-initiated runs are confirmation-gated so a single dispatch can't open many terminals unprompted.",
       argsSchema: z.object({
-        recipeId: z.string(),
-        worktreeId: z.string().optional(),
+        recipeId: z
+          .string()
+          .describe(
+            "Identifies which saved recipe to run, using an id from the recipe-listing capability. An unknown id fails before any terminal is created."
+          ),
+        worktreeId: z
+          .string()
+          .optional()
+          .describe(
+            "Identifies the worktree to launch the recipe terminals in, using an id from the worktree-listing capability. Defaults to the active worktree."
+          ),
         spawnedBy: TerminalSpawnSourceSchema.optional(),
         focusPolicy: AddPanelFocusPolicySchema.optional(),
       }),

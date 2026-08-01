@@ -466,7 +466,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generateAndCopyFile",
       title: "Generate And Copy Context",
       description:
-        "Bundle a worktree's context to a file and put that file on the system clipboard, so the user can paste it elsewhere. This replaces whatever the user currently has copied. The bundle is never returned inline — check the budget flags to tell whether it was complete.",
+        "Bundle a worktree's context to a file and put it on the system clipboard, replacing whatever the user currently has copied. What lands there is platform-dependent: macOS and Linux copy the file itself, Windows copies its path as text. The bundle is never returned inline — check the budget flags to tell whether it was complete.",
       category: "copyTree",
       kind: "command",
       danger: "safe",

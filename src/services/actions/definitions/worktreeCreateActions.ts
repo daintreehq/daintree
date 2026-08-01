@@ -94,7 +94,7 @@ export function registerWorktreeCreateActions(
       id: "worktree.delete",
       title: "Delete Worktree",
       description:
-        "Delete a worktree, removing its directory from disk along with any uncommitted work it holds. This is irreversible from here and destroys changes that were never committed or pushed. Confirm the worktree is the intended one and its work is saved elsewhere first.",
+        "Delete a linked worktree and remove its directory from disk. By default it refuses when the worktree has uncommitted or untracked changes; forcing it past that destroys them irreversibly. The main worktree cannot be deleted. Confirm the target and make sure anything worth keeping is committed or pushed first.",
       category: "worktree",
       kind: "command",
       danger: "confirm",

@@ -122,7 +122,7 @@ export function registerWorktreeResourceActions(
       id: "worktree.resource.teardown",
       title: "Teardown Resource",
       description:
-        "Run the configured teardown commands for a worktree's remote resource, destroying it — typically a cloud devbox and its state. This is irreversible: getting it back means provisioning afresh, and anything living only on that resource is lost. Pause it instead when the goal is to stop paying for something still needed.",
+        "Run the project's configured teardown commands for a worktree's remote resource, typically to destroy a cloud devbox. These are arbitrary commands the project defines, so what they destroy — and whether anything can be recovered — depends entirely on that configuration; read it before running this. Pausing is the gentler option when the resource is still needed.",
       category: "worktree",
       kind: "command",
       danger: "confirm",
@@ -202,7 +202,7 @@ export function registerWorktreeResourceActions(
       id: "worktree.resource.pause",
       title: "Pause Resource",
       description:
-        "Run the configured pause commands for a worktree's remote resource, typically to stop a cloud devbox and save cost. Work in progress on that resource is interrupted. This is reversible by resuming, unlike teardown, which destroys it.",
+        "Run the project's configured pause commands for a worktree's remote resource, typically to stop a cloud devbox and save cost. These are arbitrary commands the project defines: resuming runs a separate sequence, and nothing guarantees it undoes what pausing did. Read the configuration before assuming this is reversible.",
       category: "worktree",
       kind: "command",
       danger: "safe",

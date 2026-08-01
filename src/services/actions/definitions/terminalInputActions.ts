@@ -24,7 +24,17 @@ export function registerTerminalInputActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ terminalId: z.string().min(1).optional() }).optional(),
+    argsSchema: z
+      .object({
+        terminalId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Identifies the terminal to inject into, using a panel id from the terminal-listing capability. An automated caller must name it: focus can drift between the call and its execution, so relying on the focused terminal can land a large context dump in the wrong pane."
+          ),
+      })
+      .optional(),
     run: async (args: { terminalId?: string } | undefined, ctx) => {
       const terminalId = args?.terminalId;
       // Agent/MCP callers must bind an explicit target. Unpinned external
