@@ -8,6 +8,9 @@ import {
 } from "./types.js";
 import { getLiveAgentId } from "./terminalTitle.js";
 import { normalizeSubmitEnterDelay } from "./terminalInput.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("pty:TerminalGracefulShutdown");
 
 export interface TerminalGracefulShutdownHost {
   readonly terminalInfo: TerminalInfo;
@@ -16,17 +19,74 @@ export interface TerminalGracefulShutdownHost {
 }
 
 /**
+ * Which branch of `gracefulShutdown()` resolved this terminal. Logged so a
+ * restore that falls through to a fresh launch can be traced back to a cause:
+ * `timeout` points at the 2.5s budget, `agent-not-live` at state detection,
+ * `exited-no-match` at the agent's `sessionIdPattern`, and the write/demotion
+ * outcomes at the quit signal never landing (#11591).
+ *
+ * Success collapses into a single `captured` — whether the id arrived
+ * mid-stream or on the last-chance match at exit doesn't explain anything,
+ * because nothing went wrong. Failure stays granular for the opposite reason.
+ */
+export type GracefulShutdownOutcome =
+  | "already-exited"
+  | "agent-not-live"
+  | "no-resume-config"
+  | "no-quit-signal"
+  | "captured"
+  | "timeout"
+  | "exited-no-pattern"
+  | "exited-no-match"
+  | "prelude-write-failed"
+  | "demoted-during-clear-delay"
+  | "demoted-during-submit-delay"
+  | "quit-signal-write-failed";
+
+/**
  * Issue the agent's `quitCommand` / `shutdownKeySequence`, optionally wait
  * for a `session-id` echo to land, then `kill("graceful-shutdown")`. Used
  * by Daintree's resume flow to capture a chat session ID before tearing
  * down the PTY. Returns the captured session id, or `null` if the agent
  * has no resume config, has already exited, demoted before shutdown, or
  * the timeout fires before a match.
+ *
+ * Every agent terminal emits exactly one `info` line naming its
+ * {@link GracefulShutdownOutcome}; terminals with no agent identity stay
+ * silent. Callers get the bare id back — the outcome rides the log rather
+ * than the return type, so no caller signature has to widen for it.
  */
 export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Promise<string | null> {
+  const startedAt = Date.now();
   const terminal = host.terminalInfo;
 
+  // Scope gate: only agent terminals get an outcome line. A plain shell has
+  // neither agent id, so `host.isAgentLive` is already false for it — without
+  // this gate every non-agent pane would log `agent-not-live` on each quit.
+  // Deliberately hoisted above the liveness gate: `getLiveAgentId` and
+  // `isAgentLive` are both pure field reads, so the ordering swap is invisible
+  // and both paths still return null. Don't "restore" the original order.
+  const liveAgentId = getLiveAgentId(terminal);
+  if (!liveAgentId) {
+    return null;
+  }
+
+  // Never log the captured session id itself — it's a resume credential
+  // (`--resume <id>`) and `logs.getAll` serves this buffer to agents verbatim.
+  // `captured` carries everything the issue asked for.
+  const logOutcome = (outcome: GracefulShutdownOutcome, captured: boolean): void => {
+    logger.info("Graceful shutdown capture outcome", {
+      terminalId: terminal.id,
+      projectId: terminal.projectId ?? null,
+      agentId: liveAgentId,
+      outcome,
+      captured,
+      elapsedMs: Date.now() - startedAt,
+    });
+  };
+
   if (terminal.isExited || terminal.wasKilled) {
+    logOutcome("already-exited", false);
     return null;
   }
 
@@ -34,21 +94,23 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
   // user typed /quit and the terminal demoted to a plain shell. The
   // launchAgentId persists for identity, but the agent is gone.
   if (!host.isAgentLive) {
+    logOutcome("agent-not-live", false);
     return null;
   }
 
-  const liveAgentId = getLiveAgentId(terminal);
-  const agentConfig = liveAgentId ? getEffectiveAgentConfig(liveAgentId) : undefined;
+  const agentConfig = getEffectiveAgentConfig(liveAgentId);
   const resume = agentConfig?.resume;
 
   // Nothing to send — agent has no resume config or the config supplies
   // neither a quit command nor a key sequence we can emit on shutdown.
   if (!resume) {
+    logOutcome("no-resume-config", false);
     return null;
   }
   const quitCommand = resume.quitCommand;
   const shutdownKeySequence = resume.shutdownKeySequence;
   if (!quitCommand && !shutdownKeySequence) {
+    logOutcome("no-quit-signal", false);
     return null;
   }
   const quitSubmitEnterDelayMs = normalizeSubmitEnterDelay(
@@ -75,7 +137,7 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
     let origOnData: { dispose(): void } = { dispose() {} };
     let origOnExit: { dispose(): void } = { dispose() {} };
 
-    const finish = (sessionId: string | null) => {
+    const finish = (sessionId: string | null, outcome: GracefulShutdownOutcome) => {
       if (resolved) return;
       resolved = true;
       clearTimeout(timer);
@@ -89,11 +151,15 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
         terminal.agentSessionId = sessionId;
       }
 
+      // Logged before kill() so a throwing kill can't erase the diagnostic, and
+      // after the `resolved` guard so a losing racer never double-logs.
+      logOutcome(outcome, sessionId !== null);
+
       host.kill("graceful-shutdown");
       resolve(sessionId);
     };
 
-    const timer = setTimeout(() => finish(null), GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+    const timer = setTimeout(() => finish(null, "timeout"), GRACEFUL_SHUTDOWN_TIMEOUT_MS);
 
     origOnData = terminal.ptyProcess.onData((data: string) => {
       if (resolved) return;
@@ -118,19 +184,20 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
         // restore-on-restart to hand the agent an invalid identifier.
         const captureEnd = match.index + match[0].length;
         if (captureEnd < stripped.length) {
-          finish(match[1]);
+          finish(match[1], "captured");
         }
       }
     });
 
     origOnExit = terminal.ptyProcess.onExit(() => {
       if (!pattern) {
-        finish(null);
+        finish(null, "exited-no-pattern");
         return;
       }
       const stripped = stripAnsiCodes(shutdownBuffer);
       const match = pattern.exec(stripped);
-      finish(match?.[1] ?? null);
+      const sessionId = match?.[1] ?? null;
+      finish(sessionId, sessionId ? "captured" : "exited-no-match");
     });
 
     // Clear any partial user input at the agent prompt before issuing the quit command.
@@ -145,7 +212,7 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
       } catch {
         origOnData.dispose();
         origOnExit.dispose();
-        finish(null);
+        finish(null, "prelude-write-failed");
         return;
       }
 
@@ -159,7 +226,7 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
       if (!host.isAgentLive) {
         origOnData.dispose();
         origOnExit.dispose();
-        finish(null);
+        finish(null, "demoted-during-clear-delay");
         return;
       }
 
@@ -184,7 +251,7 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
             if (!host.isAgentLive) {
               origOnData.dispose();
               origOnExit.dispose();
-              finish(null);
+              finish(null, "demoted-during-submit-delay");
               return;
             }
 
@@ -194,7 +261,7 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
       } catch {
         origOnData.dispose();
         origOnExit.dispose();
-        finish(null);
+        finish(null, "quit-signal-write-failed");
       }
     })();
   });
