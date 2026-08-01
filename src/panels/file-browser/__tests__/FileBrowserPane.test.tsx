@@ -1911,3 +1911,78 @@ describe("FileBrowserPane Refresh reachability and media wiring (#11586)", () =>
     }
   });
 });
+
+describe("FileBrowserPane refresh signal reaches both viewer paths (#11586)", () => {
+  // The nonce travels to the viewer twice over: merged into `viewerRevision`
+  // and handed across on its own. These drive the pane's REAL Refresh button so
+  // they exercise that formula — the viewer-level suite manufactures the
+  // revision string itself and would stay green if the merge were dropped,
+  // which is exactly the "simplification" the comment there warns against.
+  it("re-reads the open text file when Refresh is pressed", async () => {
+    mockPanel.browserSelectedPath = "src/app.ts";
+    mockPanel.browserSidebarCollapsed = true;
+    renderPane();
+
+    await waitFor(() => expect(readMock).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    });
+
+    // Drop the nonce from `viewerRevision` and this never moves: the tree
+    // refreshes, the file on screen silently keeps its stale bytes.
+    await waitFor(() => expect(readMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("recovers a media preview stuck in its error state when Refresh is pressed", async () => {
+    // The media half of the same invariant. A failed fetch unmounts the player,
+    // so the direct `reloadKey` handoff has nothing to reach — only the
+    // revision-driven reclassification can bring it back.
+    let objectUrlSequence = 0;
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("protocol unavailable"))
+      .mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        blob: () => Promise.resolve(new Blob(["x"])),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const realCreateObjectURL = URL.createObjectURL;
+    const realRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => `blob:app://daintree/pane-retry-${objectUrlSequence++}`);
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      treeState.rows = [
+        ...defaultRows,
+        {
+          path: "media/track.mp3",
+          name: "track.mp3",
+          isDirectory: false,
+          depth: 1,
+          isExpanded: false,
+          isLoading: false,
+        },
+      ];
+      mockPanel.browserSelectedPath = "media/track.mp3";
+      mockPanel.browserSidebarCollapsed = true;
+      const { container } = renderPane();
+
+      await screen.findByText("This audio file couldn't be played");
+      expect(container.querySelector("audio")).toBeNull();
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      });
+
+      await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+      expect(screen.queryByText("This audio file couldn't be played")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      URL.createObjectURL = realCreateObjectURL;
+      URL.revokeObjectURL = realRevokeObjectURL;
+    }
+  });
+});
