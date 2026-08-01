@@ -27,6 +27,7 @@ vi.mock("react-virtuoso", () => ({
 
 import { FolderListingView } from "../FolderListingView";
 import { ContextMenuItem } from "@/components/ui/context-menu";
+import { FILE_TREE_ICON_CLASS, FILE_TREE_ICON_COLOR_CLASS } from "../fileTypeIcons";
 
 function row(path: string, extra: Partial<FolderListingRow> = {}): FolderListingRow {
   return { path, name: path.split("/").pop()!, isDirectory: false, ...extra };
@@ -185,5 +186,63 @@ describe("FolderListingView has no double-click gesture", () => {
     // it, which is the behaviour that rules a double-click out.
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onSelect).toHaveBeenCalledWith("src/pkg");
+  });
+});
+
+describe("FolderListingView entry icons", () => {
+  /** The row's icon: the listing renders it as the first SVG inside the row. */
+  function iconOf(name: string): SVGElement {
+    const svg = screen.getByLabelText(name).querySelector("svg");
+    if (!svg) throw new Error(`no icon rendered for ${name}`);
+    return svg;
+  }
+
+  const ROWS = [
+    row("src/main.ts"),
+    row("src/notes.md"),
+    row("src/logo.png"),
+    row("src/mystery.qqq"),
+    row("src/pkg", { isDirectory: true }),
+  ];
+
+  it("paints every entry the same neutral, whatever its type", () => {
+    // The tree asserts this for its own rows; the listing is the second
+    // renderer of the same icons and diverged from it once already.
+    renderListing(ROWS);
+    for (const entry of ROWS) {
+      const paint = (iconOf(entry.name).getAttribute("class") ?? "")
+        .split(/\s+/)
+        .filter((token) => token.startsWith("text-"));
+      expect(paint, entry.name).toEqual([FILE_TREE_ICON_COLOR_CLASS]);
+    }
+  });
+
+  it("marks every entry icon for the increased-contrast lift", () => {
+    // Without the marker the stylesheet rule in src/index.css cannot reach
+    // these icons, and the contract test guarding that rule would still pass.
+    renderListing(ROWS);
+    for (const entry of ROWS) {
+      expect((iconOf(entry.name).getAttribute("class") ?? "").split(/\s+/), entry.name).toContain(
+        FILE_TREE_ICON_CLASS
+      );
+    }
+  });
+
+  it("gives a file its type glyph and a directory the folder glyph", () => {
+    renderListing(ROWS);
+    // Distinctness across categories is proven in fileTypeIcons.test.ts; what
+    // this renderer has to get right is wiring type through at all rather than
+    // drawing one glyph for every row, which is the bug #11596 fixed.
+    expect(iconOf("main.ts").innerHTML).not.toBe(iconOf("logo.png").innerHTML);
+    expect(iconOf("main.ts").innerHTML).not.toBe(iconOf("mystery.qqq").innerHTML);
+    expect(iconOf("pkg").innerHTML).not.toBe(iconOf("mystery.qqq").innerHTML);
+  });
+
+  it("lets a directory outrank a name that would otherwise classify", () => {
+    // `archive.zip` resolves to the archive category by name alone, so a
+    // renderer that classified before checking isDirectory would draw it as a
+    // zip file rather than a folder.
+    renderListing([row("src/archive.zip", { isDirectory: true }), row("src/real.zip")]);
+    expect(iconOf("archive.zip").innerHTML).not.toBe(iconOf("real.zip").innerHTML);
   });
 });

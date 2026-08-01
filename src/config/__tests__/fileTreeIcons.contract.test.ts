@@ -8,10 +8,10 @@ const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
 const INDEX_CSS = path.join(REPO_ROOT, "src/index.css");
 
-// Issue #11596: the file-browser tree tints file icons with category-* hues so
-// types separate at a glance. Those hues are tuned for restrained chroma, not
-// for maximum contrast, so Increase Contrast repaints them monochrome — the
-// glyph shapes already carry the type, and the hue is the expendable half.
+// Issue #11596: the file-browser tree draws entry icons in the secondary text
+// token so they sit under the filename they label. That token is tuned for
+// restraint, not contrast, so Increase Contrast lifts them to the solid text
+// token — recession is the expendable half, legibility is not.
 // jsdom never evaluates media queries, so the rule is guarded here in source.
 
 /** CSS with every block comment blanked, so a marker quoted in prose can't match. */
@@ -56,7 +56,7 @@ function readMediaBlocks(file: string, query: string): string {
 const SELECTOR = new RegExp(`\\.${FILE_TREE_ICON_CLASS}\\s*\\{([^}]*)\\}`);
 
 describe("file-tree icon contrast contract (#11596)", () => {
-  it("repaints entry icons with the solid text token under Increase Contrast", () => {
+  it("lifts entry icons to the solid text token under Increase Contrast", () => {
     const block = readMediaBlocks(INDEX_CSS, "prefers-contrast: more");
     // Fail loudly rather than vacuously if the whole block ever disappears.
     expect(block).not.toBe("");
@@ -67,19 +67,22 @@ describe("file-tree icon contrast contract (#11596)", () => {
     const body = rule![1]!;
     // Specifically the `color` property set to the solid primary-text token.
     // The leading boundary matters: without it `background-color` or
-    // `border-color` would satisfy this while the glyph itself stayed tinted.
-    // And `transparent`, `inherit` or a category hue would all satisfy a bare
-    // "sets a color" assertion while leaving Increase Contrast users exactly
-    // where they started.
+    // `border-color` would satisfy this while the glyph itself stayed muted.
+    // And `transparent`, `inherit` or the same secondary token the icons
+    // already carry would all satisfy a bare "sets a color" assertion while
+    // leaving Increase Contrast users exactly where they started.
     expect(body).toMatch(/(^|[;{\s])color:\s*var\(--color-daintree-text\)/);
-    expect(body).not.toMatch(/category/);
+    // The base token would be a no-op here, and a category hue would be the
+    // tint #11596 introduced and this change removed, sneaking back in through
+    // the contrast rule.
+    expect(body).not.toMatch(/category|text-secondary/);
   });
 
   it("leaves the icons opted in to forced-colors", () => {
     // These icons paint from `currentColor`, and forced-colors already forces
     // `color` to a system keyword — so no rule is needed there. But opting out
     // with `forced-color-adjust: none` would strand High Contrast users on the
-    // category hues, so guard that no rule naming these icons ever does.
+    // muted token, so guard that no rule naming these icons ever does.
     //
     // Scoped to rules that name the icon class: the property inherits, so an
     // ancestor opting out would defeat this too, but enumerating every possible

@@ -9,7 +9,7 @@ import { FILE_DRAG_MIME, decodeFileDragPaths } from "@/lib/fileDragPayload";
 import { FileTreeView } from "../FileTreeView";
 import type { FlatTreeRow } from "../fileBrowserTree";
 import { buildFileBrowserGitStatusIndex } from "../fileBrowserGitStatus";
-import { FILE_TREE_ICON_CLASS, getFileTypeIcon } from "../fileTypeIcons";
+import { FILE_TREE_ICON_CLASS, FILE_TREE_ICON_COLOR_CLASS } from "../fileTypeIcons";
 
 // `isMac` reads navigator.platform, which jsdom reports as neither — drive it
 // explicitly so both modifier branches of the insert shortcut are covered.
@@ -460,26 +460,20 @@ describe("FileTreeView row icons", () => {
     }
   });
 
-  it("paints each file with the color its own resolution asked for", () => {
-    const { getByRole } = renderTree({ rows: MIXED, rowContextMenu: undefined });
-
-    // Compared against the resolver rather than against a literal token, so a
-    // renderer that hardcoded one hue for every row would fail here.
-    for (const entry of MIXED.filter((candidate) => !candidate.isDirectory)) {
-      const className = iconOf(getByRole("treeitem", { name: entry.name })).getAttribute("class");
-      expect(className?.split(/\s+/)).toContain(getFileTypeIcon(entry.name).colorClass);
-    }
-  });
-
-  it("leaves folders on the unclassified file's neutral", () => {
+  it("paints every row the same neutral, whatever its type", () => {
     const { getByRole } = renderTree({ rows: MIXED, rowContextMenu: undefined });
     const classesOf = (name: string) =>
       iconOf(getByRole("treeitem", { name })).getAttribute("class")?.split(/\s+/) ?? [];
 
-    // A folder is one shape for the whole tree, so a hue on it sorts nothing.
-    expect(classesOf("src")).toContain(getFileTypeIcon("mystery.qqq").colorClass);
-    expect(classesOf("src").some((token) => token.startsWith("text-category-"))).toBe(false);
-    // ...but it must still be a folder, not the generic file glyph.
+    // Files and folders share one paint contract: type is carried by the glyph
+    // alone. Asserting the neutral is the row's *only* color utility, not
+    // merely present — a per-type hue added alongside it would otherwise pass.
+    for (const entry of MIXED) {
+      const paint = classesOf(entry.name).filter((token) => token.startsWith("text-"));
+      expect(paint, entry.name).toEqual([FILE_TREE_ICON_COLOR_CLASS]);
+    }
+
+    // ...and a folder must still be a folder, not the generic file glyph.
     expect(iconOf(getByRole("treeitem", { name: "src" })).innerHTML).not.toBe(
       iconOf(getByRole("treeitem", { name: "mystery.qqq" })).innerHTML
     );

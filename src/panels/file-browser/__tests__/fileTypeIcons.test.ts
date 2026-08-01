@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
-import { WORKTREE_COLOR_PALETTE } from "@shared/theme/worktreeColors";
+import { BUILT_IN_THEME_SOURCES } from "@shared/theme/builtInThemes";
+import { contrastRatio } from "@shared/theme/contrast";
 import { LANGUAGE_MAP } from "@/components/FileViewer/languageUtils";
-import { UNKNOWN_FILE_COLOR_CLASS, getFileTypeIcon } from "../fileTypeIcons";
+import { FILE_TREE_ICON_COLOR_CLASS, getFileTypeIcon } from "../fileTypeIcons";
 
 // These tests assert relationships — "these names agree", "this name outranks
-// that one", "this hue comes from the proven palette" — rather than echoing the
+// that one", "every category draws a different glyph" — rather than echoing the
 // table back. Copying `png -> image` here would just restate the source and
 // would have to be edited in lockstep with it, which proves nothing.
 
@@ -55,7 +56,6 @@ describe("getFileTypeIcon grouping", () => {
         const entry = getFileTypeIcon(name);
         expect(entry.category).toBe(first.category);
         expect(entry.Icon).toBe(first.Icon);
-        expect(entry.colorClass).toBe(first.colorClass);
       }
     });
   }
@@ -65,14 +65,12 @@ describe("getFileTypeIcon grouping", () => {
     const icons = GROUPS.map((group) => representative(group).Icon);
 
     expect(new Set(categories).size).toBe(GROUPS.length);
-    // Shape is the primary signal, so no two categories may share a glyph —
-    // hues are allowed to repeat, glyphs are not.
+    // Shape is the only signal now that color is gone, so two categories
+    // sharing a glyph would erase one of them rather than merely blur it.
     expect(new Set(icons).size).toBe(GROUPS.length);
   });
 
   it("separates unrecognized files from every classified group", () => {
-    expect(FALLBACK.colorClass).toBe(UNKNOWN_FILE_COLOR_CLASS);
-
     for (const group of GROUPS) {
       expect(representative(group).Icon).not.toBe(FALLBACK.Icon);
       expect(representative(group).category).not.toBe(FALLBACK.category);
@@ -204,35 +202,73 @@ describe("getFileTypeIcon coverage", () => {
   });
 });
 
-describe("getFileTypeIcon palette", () => {
-  const ALLOWED = new Set(WORKTREE_COLOR_PALETTE.map((token) => `text-${token}`));
+describe("getFileTypeIcon carries no color", () => {
   const ALL_NAMES = [
     ...GROUPS.flatMap((group) => [...group.samples]),
     "mystery.qqq",
     "vite.config.ts",
   ];
 
-  it("draws every classified hue from the CVD-proven palette", () => {
+  it("hands back no color of any kind", () => {
+    // The resolver used to return a per-category `colorClass`, which made the
+    // tree a fourth consumer of the eight `category-*` hues already spoken for
+    // by worktree identity, agent state and action categories. Scanning the
+    // values for a color-shaped utility rather than pinning the key set: a new
+    // non-color field is fine and should not fail here, a color is the whole
+    // point of the guard.
     for (const name of ALL_NAMES) {
-      const { category, colorClass } = getFileTypeIcon(name);
-      if (category === FALLBACK.category) continue;
-      expect(ALLOWED.has(colorClass), `${name} -> ${colorClass}`).toBe(true);
+      for (const value of Object.values(getFileTypeIcon(name))) {
+        if (typeof value !== "string") continue;
+        expect(value, `${name} -> ${value}`).not.toMatch(/^(text|bg|border|fill|stroke)-/);
+      }
     }
   });
 
-  it("keeps the unknown fallback outside the categorical palette", () => {
-    expect(ALLOWED.has(FALLBACK.colorClass)).toBe(false);
+  it("paints every row from one exported neutral", () => {
+    // The single class both list views apply. Asserting it is not a category
+    // hue, an accent or a status token is the actual invariant — the token's
+    // own value is the source of truth and copying it here would prove
+    // nothing.
+    expect(FILE_TREE_ICON_COLOR_CLASS).not.toMatch(/category/);
+    expect(FILE_TREE_ICON_COLOR_CLASS).not.toMatch(/accent/);
+    expect(FILE_TREE_ICON_COLOR_CLASS).not.toMatch(/status-/);
+    // The `/30`-`/40` alpha is the "near invisible" bug #11596 fixed.
+    expect(FILE_TREE_ICON_COLOR_CLASS).not.toMatch(/\//);
   });
 
-  it("never reaches for the accent, a status hue, or an alpha suffix", () => {
-    for (const name of ALL_NAMES) {
-      const { colorClass } = getFileTypeIcon(name);
-      // Accent restraint: one load-bearing accent signal per focus region, and
-      // a tree tinting dozens of rows is not it.
-      expect(colorClass).not.toMatch(/accent/);
-      expect(colorClass).not.toMatch(/status-/);
-      // The `/30`-`/40` alpha is the "near invisible" bug this issue fixed.
-      expect(colorClass).not.toMatch(/\//);
+  it("keeps that neutral above the graphical-object floor in every theme", () => {
+    // Shape is the only type channel left, so an icon that fades out costs the
+    // whole signal rather than half of it. 3:1 is WCAG 1.4.11 for a graphical
+    // object.
+    //
+    // This is the guard that `shared/theme/contrast.ts` does NOT provide: its
+    // `text-muted` rows are `appliesTo: "light"`, so dark muted is sanctioned
+    // sub-AA (namib ~2.2:1, redwoods ~2.5:1) and picking it here would have
+    // reintroduced the pre-#11596 bug on two dark themes with nothing failing.
+    // Computed per theme rather than asserting the token's name, so it stays
+    // honest if either the token or a palette moves.
+    // `text-text-secondary` -> the `secondary` entry of the palette's text
+    // ramp. The two guards below are what keep this honest if the constant
+    // ever moves off that ramp: an accent or activity hue would not carry the
+    // prefix, and a misspelling would not resolve to a color.
+    const key = FILE_TREE_ICON_COLOR_CLASS.replace(/^text-text-/, "");
+    expect(key, `${FILE_TREE_ICON_COLOR_CLASS} is not a text-ramp token`).not.toBe(
+      FILE_TREE_ICON_COLOR_CLASS
+    );
+
+    for (const source of BUILT_IN_THEME_SOURCES) {
+      const ramp: Record<string, string> = source.palette.text;
+      const foreground = ramp[key];
+      // Throw rather than expect(): this also narrows the type, and a missing
+      // ramp entry is a broken test rather than a failing assertion.
+      if (foreground === undefined) throw new Error(`${source.id} has no text.${key}`);
+
+      for (const [name, surface] of Object.entries(source.palette.surfaces)) {
+        expect(
+          contrastRatio(foreground, surface),
+          `${source.id} ${FILE_TREE_ICON_COLOR_CLASS} on ${name}`
+        ).toBeGreaterThanOrEqual(3);
+      }
     }
   });
 });
@@ -249,11 +285,21 @@ describe("getFileTypeIcon components", () => {
   });
 
   it("draws a visibly different glyph for every category", () => {
-    // Component identity is checked above; this compares what actually paints,
-    // so two distinct exports that happen to render the same art still fail.
-    const drawn = REPRESENTATIVES.map((name) =>
-      renderToStaticMarkup(createElement(getFileTypeIcon(name).Icon))
+    // With color gone the glyph is the only type channel, so this is the whole
+    // signal rather than half of it.
+    //
+    // Compares the painted geometry with the wrapper stripped. Lucide stamps a
+    // per-icon `lucide-file-code` class on the <svg>, so comparing whole markup
+    // would call any two icons distinct on their names alone — including two
+    // exports that draw identical art, which is exactly the collision worth
+    // catching.
+    const geometry = REPRESENTATIVES.map((name) =>
+      renderToStaticMarkup(createElement(getFileTypeIcon(name).Icon)).replace(/^<svg[^>]*>/, "")
     );
-    expect(new Set(drawn).size).toBe(REPRESENTATIVES.length);
+    // Non-vacuous: stripping the wrapper must leave the drawing behind.
+    for (const [index, drawn] of geometry.entries()) {
+      expect(drawn, REPRESENTATIVES[index]).toMatch(/<(path|circle|rect|line|polyline|polygon)/);
+    }
+    expect(new Set(geometry).size).toBe(REPRESENTATIVES.length);
   });
 });

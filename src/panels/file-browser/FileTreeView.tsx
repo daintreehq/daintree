@@ -13,7 +13,7 @@ import { isMac } from "@/lib/platform";
 import { resolveTreeKey, type FileEntryLike, type FlatTreeRow } from "./fileBrowserTree";
 import { getFileBrowserRowGitStatus, type FileBrowserGitStatusIndex } from "./fileBrowserGitStatus";
 import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
-import { FILE_TREE_ICON_CLASS, UNKNOWN_FILE_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
+import { FILE_TREE_ICON_CLASS, FILE_TREE_ICON_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
 import { INSERT_FILE_REFERENCE_COMBO, matchesInsertFileReferenceCombo } from "./fileReference";
 
 export interface FileTreeViewProps {
@@ -450,12 +450,7 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
   // Files carry their type; folders keep the folder shape (#11596). Resolved
   // per render rather than memoized: it is an object lookup, and Virtuoso only
   // ever renders the visible window.
-  //
-  // Folders stay neutral deliberately — they are one shape for the whole tree,
-  // so a hue on them would sort nothing.
-  const fileIcon = row.isDirectory ? null : getFileTypeIcon(row.name);
-  const RowIcon = fileIcon?.Icon ?? FolderIcon;
-  const rowIconColor = fileIcon?.colorClass ?? UNKNOWN_FILE_COLOR_CLASS;
+  const RowIcon = row.isDirectory ? FolderIcon : getFileTypeIcon(row.name).Icon;
 
   // A file's own status; a folder's is the worst thing anywhere beneath it, so a
   // collapsed branch still says that something inside it changed.
@@ -529,13 +524,13 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
         chevron gutter when folders are present and this icon when they are
         not, and the tree's layout contract is asserted on exactly that.
 
-        Solid color rather than the old `/30`–`/40` alpha — at 14px an
+        Solid neutral rather than the old `/30`–`/40` alpha — at 14px an
         alpha-reduced stroke is barely a shape cue, let alone a type cue. The
-        FILE_TREE_ICON_CLASS marker is what `prefers-contrast: more` repaints
-        to monochrome; see `src/index.css`.
+        FILE_TREE_ICON_CLASS marker is what `prefers-contrast: more` lifts to
+        the solid text token; see `src/index.css`.
       */}
       <RowIcon
-        className={cn(FILE_TREE_ICON_CLASS, "h-3.5 w-3.5 shrink-0", rowIconColor)}
+        className={cn(FILE_TREE_ICON_CLASS, "h-3.5 w-3.5 shrink-0", FILE_TREE_ICON_COLOR_CLASS)}
         aria-hidden="true"
       />
       {/* `min-w-0` is what lets `truncate` actually shrink here: a flex item

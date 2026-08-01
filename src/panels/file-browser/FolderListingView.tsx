@@ -8,7 +8,7 @@ import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { FILE_DRAG_MIME, encodeFileDragPaths } from "@/lib/fileDragPayload";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import type { FileEntryLike, FolderListingRow } from "./fileBrowserTree";
-import { FILE_TREE_ICON_CLASS, UNKNOWN_FILE_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
+import { FILE_TREE_ICON_CLASS, FILE_TREE_ICON_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
 
 const ROW_HEIGHT_PX = 28;
 
@@ -166,9 +166,7 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
     dataTransfer.setDragImage(event.currentTarget, 12, ROW_HEIGHT_PX / 2);
   };
 
-  const fileIcon = row.isDirectory ? null : getFileTypeIcon(row.name);
-  const RowIcon = fileIcon?.Icon ?? Folder;
-  const rowIconColor = fileIcon?.colorClass ?? UNKNOWN_FILE_COLOR_CLASS;
+  const RowIcon = row.isDirectory ? Folder : getFileTypeIcon(row.name).Icon;
 
   const menuItems = context.rowContextMenu?.(row);
   const rowSurface = (
@@ -188,7 +186,7 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
     >
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         <RowIcon
-          className={cn(FILE_TREE_ICON_CLASS, "h-3.5 w-3.5 shrink-0", rowIconColor)}
+          className={cn(FILE_TREE_ICON_CLASS, "h-3.5 w-3.5 shrink-0", FILE_TREE_ICON_COLOR_CLASS)}
           aria-hidden="true"
         />
         <span className="truncate">{row.name}</span>

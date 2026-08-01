@@ -17,7 +17,6 @@ import {
   FileType,
   type LucideIcon,
 } from "lucide-react";
-import type { WORKTREE_COLOR_PALETTE } from "@shared/theme/worktreeColors";
 
 /**
  * File-type icons for the browser tree (#11596).
@@ -27,17 +26,17 @@ import type { WORKTREE_COLOR_PALETTE } from "@shared/theme/worktreeColors";
  * filename-only — no MIME sniffing, no stat, no extra IPC — because the tree
  * already has the basename and nothing else is worth a round trip per row.
  *
- * Colors come from the existing `category-*` theme tokens, never the accent:
- * accent restraint allows one load-bearing accent signal per focus region, and
- * a tree tinting dozens of rows at once is exactly what that forbids. The hues
- * are limited to the eight-token CVD-safe subset `WORKTREE_COLOR_PALETTE`
- * already proven distinguishable under all three dichromacies across every
- * built-in theme, so this map inherits that proof instead of restating it.
- *
- * At `h-3.5` shape carries the signal and color only reinforces it — which is
- * why hues repeat across categories whose glyphs look nothing alike (a gear
- * and a play triangle both sit on violet), and why dropping to monochrome
- * under `prefers-contrast: more` costs nothing but the reinforcement.
+ * Glyphs only: every icon paints the same neutral. The categories originally
+ * carried `category-*` hues, and measuring the result on this repo is what
+ * removed them — 80% of tracked files resolve to `source` alone, and 95% of
+ * directories come out a single hue, so the code discriminated nothing in the
+ * folders anyone actually browses and turned into a rainbow only in the root.
+ * Three costs for that: the eight `category-*` hues already mean worktree
+ * identity, agent state and action-palette category elsewhere in the app, so a
+ * fourth meaning collided with all three; the tinted column competed with the
+ * git status markers in the same rows, which are the load-bearing signal here;
+ * and a saturated glyph beside a 70%-alpha filename put the metadata above the
+ * content. Grey costs a channel that was carrying no information anyway.
  */
 
 /** Category identity. Exposed so callers can group rows without matching on icon identity. */
@@ -59,60 +58,61 @@ export type FileTypeCategory =
   | "binary"
   | "unknown";
 
-type CategoryColor = `text-${(typeof WORKTREE_COLOR_PALETTE)[number]}`;
-
-/** The neutral every unrecognized file falls back to — deliberately outside the categorical palette. */
-export const UNKNOWN_FILE_COLOR_CLASS = "text-text-secondary";
+/**
+ * The one neutral every tree entry icon paints in, file and folder alike.
+ *
+ * A complete Tailwind literal, never composed at runtime: the v4 scanner only
+ * emits utilities it can find as whole strings in source.
+ *
+ * Secondary, and specifically NOT muted. Pre-#11596 these icons were
+ * `text-daintree-text/30` (files) and `/40` (folders), which on a dark panel
+ * is ~2.4:1 — under the 3:1 floor for a graphical object, and the "near
+ * invisible" bug #11596 set out to fix. Muted looks like the tidier choice
+ * because it sits a step below the `/70` filename it labels, but it is only
+ * floored for light themes in `shared/theme/contrast.ts`: dark muted runs a
+ * sanctioned sub-AA calibration that bottoms out at 2.22:1 on namib and
+ * 2.50:1 on redwoods, which would reintroduce the original bug on two of the
+ * seven dark themes. Secondary is guarded at >=3.0 on every surface in every
+ * theme and measures >=4.96:1 across all fourteen, so it is the only tier
+ * that holds. Anything quieter needs an all-theme, all-surface proof first.
+ */
+export const FILE_TREE_ICON_COLOR_CLASS = "text-text-secondary";
 
 /**
  * Marker class on every tree entry icon, file and folder alike. Carries no
  * styling of its own — it exists so `@media (prefers-contrast: more)` in
- * `src/index.css` can repaint the whole set monochrome. Exported so the
- * component and the stylesheet's contract test agree on one spelling.
+ * `src/index.css` can lift the whole set to the solid text token. Exported so
+ * the component and the stylesheet's contract test agree on one spelling.
  */
 export const FILE_TREE_ICON_CLASS = "file-tree-entry-icon";
 
 export interface FileTypeIcon {
   category: FileTypeCategory;
   Icon: LucideIcon;
-  /**
-   * A complete Tailwind literal, never composed at runtime: the v4 scanner
-   * only emits utilities it can find as whole strings in source.
-   */
-  colorClass: CategoryColor | typeof UNKNOWN_FILE_COLOR_CLASS;
 }
 
 /**
- * Fifteen categories over eight hues, so seven pairs share a color. Pairing is
- * by *inner mark*, not by meaning: almost every glyph here is a page outline
- * with a symbol inside it, so the silhouette can't separate them and the
- * symbol has to. Each pair below is a padlock against text lines, a gear
- * against a play triangle — never two marks that read alike at 14px, which is
- * why `document` sits beside `lock` rather than beside `spreadsheet`.
+ * One glyph per category, and no two alike: with color gone the shape is the
+ * only channel left, so a duplicate here would erase a category outright
+ * rather than merely weakening it.
  */
 const CATEGORIES: Record<FileTypeCategory, FileTypeIcon> = {
-  source: { category: "source", Icon: FileCode, colorClass: "text-category-blue" },
-  font: { category: "font", Icon: FileType, colorClass: "text-category-blue" },
-  script: { category: "script", Icon: FileTerminal, colorClass: "text-category-cyan" },
-  audio: { category: "audio", Icon: FileMusic, colorClass: "text-category-cyan" },
-  data: { category: "data", Icon: FileBraces, colorClass: "text-category-amber" },
-  spreadsheet: {
-    category: "spreadsheet",
-    Icon: FileSpreadsheet,
-    colorClass: "text-category-amber",
-  },
-  config: { category: "config", Icon: FileCog, colorClass: "text-category-violet" },
-  video: { category: "video", Icon: FilePlay, colorClass: "text-category-violet" },
-  lock: { category: "lock", Icon: FileLock, colorClass: "text-category-indigo" },
-  document: { category: "document", Icon: FileText, colorClass: "text-category-indigo" },
-  image: { category: "image", Icon: FileImage, colorClass: "text-category-pink" },
-  key: { category: "key", Icon: FileKey, colorClass: "text-category-pink" },
-  archive: { category: "archive", Icon: FileArchive, colorClass: "text-category-orange" },
-  binary: { category: "binary", Icon: Binary, colorClass: "text-category-orange" },
-  // A cylinder rather than a page — distinct enough on silhouette alone that it
-  // is the one category left holding a hue by itself.
-  database: { category: "database", Icon: Database, colorClass: "text-category-teal" },
-  unknown: { category: "unknown", Icon: File, colorClass: UNKNOWN_FILE_COLOR_CLASS },
+  source: { category: "source", Icon: FileCode },
+  font: { category: "font", Icon: FileType },
+  script: { category: "script", Icon: FileTerminal },
+  audio: { category: "audio", Icon: FileMusic },
+  data: { category: "data", Icon: FileBraces },
+  spreadsheet: { category: "spreadsheet", Icon: FileSpreadsheet },
+  config: { category: "config", Icon: FileCog },
+  video: { category: "video", Icon: FilePlay },
+  lock: { category: "lock", Icon: FileLock },
+  document: { category: "document", Icon: FileText },
+  image: { category: "image", Icon: FileImage },
+  key: { category: "key", Icon: FileKey },
+  archive: { category: "archive", Icon: FileArchive },
+  binary: { category: "binary", Icon: Binary },
+  database: { category: "database", Icon: Database },
+  unknown: { category: "unknown", Icon: File },
 };
 
 /**
@@ -516,7 +516,7 @@ function basenameOf(filePath: string): string {
 }
 
 /**
- * Icon and color for one tree row, keyed off its name alone.
+ * Icon and category for one tree row, keyed off its name alone.
  *
  * Resolution runs exact basename → pattern → extension → unknown, so the most
  * specific reading of a name always wins. Every step is an O(1) lookup or a

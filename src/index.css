@@ -2768,19 +2768,17 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-color: var(--color-daintree-text);
   }
 
-  /* File-browser type icons (issue #11596). The tree tints file icons with the
-   * category-* hues so types separate at a glance, but those hues are chosen
-   * for restrained chroma, not for maximum contrast. Under Increase Contrast
-   * the hue is the expendable half of the signal — the glyph shapes already
-   * carry the type — so repaint every entry icon with the solid text token.
+  /* File-browser type icons (issue #11596). Entry icons paint in the secondary
+   * text token so they sit under the filename they label, but that token is
+   * tuned for restraint rather than contrast. Under Increase Contrast the
+   * recession is the expendable half — the glyph still has to be legible — so
+   * lift every entry icon to the solid text token.
    *
    * Unlike the rule above, !important is belt-and-braces here rather than
-   * load-bearing: this rule is unlayered while the Tailwind category-hue text
-   * utilities live in the `utilities` layer, and unlayered author CSS already
+   * load-bearing: this rule is unlayered while the Tailwind text utility it
+   * overrides lives in the `utilities` layer, and unlayered author CSS already
    * outranks any layered rule whatever the specificity. It stays because
    * moving this rule into a layer later would silently reverse that.
-   * (Spelling those utility names out in full here would trip the
-   * colorSystem contract's scan for unexported color tokens.)
    *
    * There is deliberately no counterpart in the `forced-colors: active` block
    * earlier in this file: these icons paint from `currentColor`, and that mode
