@@ -517,8 +517,11 @@ export interface PtyPanelData extends BasePanelData {
    * could not be safely resumed — unreachable, or resume-latest suppressed
    * because a sibling pane owns the slot (#11461) — and a fresh session was
    * launched instead. Drives the
-   * "Session no longer reachable" restart banner. Cleared on restart; never
-   * serialized — see `serializePtyPanel`.
+   * "Session no longer reachable" restart banner. Cleared on restart, and when
+   * the user dismisses the banner (#11589) — dismissal consumes this signal
+   * rather than shadowing it with a second flag, so the acknowledgement
+   * survives the unmount a worktree switch causes. Never serialized — see
+   * `serializePtyPanel`.
    */
   sessionLostOnRestore?: boolean;
 }

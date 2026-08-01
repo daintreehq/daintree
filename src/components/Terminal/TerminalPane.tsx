@@ -93,6 +93,7 @@ import { decideChromeAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { isPtyPanel } from "@shared/types/panel";
+import { useSessionLostBanner } from "./useSessionLostBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -364,9 +365,12 @@ function TerminalPaneComponent({
   const [justFocusedUntil, setJustFocusedUntil] = useState(0);
   const inputBarRef = useRef<HybridInputBarHandle>(null);
   const [dismissedRestartPrompt, setDismissedRestartPrompt] = useState(false);
-  // Separate from dismissedRestartPrompt so dismissing the lost-session
-  // acknowledgement (issue #10823) never suppresses a later exit-error banner.
-  const [dismissedSessionLost, setDismissedSessionLost] = useState(false);
+  // Note: the lost-session acknowledgement is deliberately NOT component state.
+  // A worktree switch drops this pane from the grid entirely, so local state
+  // couldn't survive it — dismissal clears `sessionLostOnRestore` in the panel
+  // store instead (issue #11589). It stays independent of
+  // `dismissedRestartPrompt` either way, so acknowledging a lost session still
+  // never suppresses a later exit-error banner (issue #10823).
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
   const [isAutoRestarting, setIsAutoRestarting] = useState(false);
@@ -395,7 +399,6 @@ function TerminalPaneComponent({
 
   useEffect(() => {
     setDismissedRestartPrompt(false);
-    setDismissedSessionLost(false);
     inputTracker.reset();
     // Track process start time on each restart for backoff stability window
     processStartTimeRef.current = Date.now();
@@ -412,6 +415,7 @@ function TerminalPaneComponent({
   const backendStatus = usePanelStore((state) => state.backendStatus);
   const clearReconnectError = usePanelStore((state) => state.clearReconnectError);
   const clearScrollbackRestoreError = usePanelStore((state) => state.clearScrollbackRestoreError);
+  const sessionLostBanner = useSessionLostBanner(id);
 
   const cliDetails = useCliAvailabilityStore((state) => state.details);
   const getPanelCliDetail = (): AgentCliDetail | undefined => {
@@ -477,7 +481,6 @@ function TerminalPaneComponent({
         isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
         spawnStatus: pty?.spawnStatus,
         eagerAttach: pty?.eagerAttach ?? false,
-        sessionLostOnRestore: pty?.sessionLostOnRestore ?? false,
       };
     })
   );
@@ -490,7 +493,6 @@ function TerminalPaneComponent({
     isTrashedOrRemoved,
     spawnStatus,
     eagerAttach,
-    sessionLostOnRestore,
   } = terminalState;
   // Fleet-scope mounts pass `isInputLocked: true` to render the panel as a
   // read-only broadcast view. Prop takes precedence over the stored flag so
@@ -1166,8 +1168,7 @@ function TerminalPaneComponent({
     reconnectError,
     spawnError,
     backendStatus,
-    sessionLostOnRestore,
-    dismissedSessionLost,
+    sessionLostOnRestore: sessionLostBanner.sessionLostOnRestore,
   });
   // Backend-dependent banners (restart / spawn / reconnect) describe failures
   // whose only recovery path runs through the host, so they're hidden while
@@ -1335,8 +1336,13 @@ function TerminalPaneComponent({
           onRestart={handleRestart}
           onDismiss={() =>
             restartBannerVariant.type === "session-resume-unavailable"
-              ? setDismissedSessionLost(true)
+              ? sessionLostBanner.dismiss()
               : setDismissedRestartPrompt(true)
+          }
+          onDismissAll={
+            restartBannerVariant.type === "session-resume-unavailable"
+              ? sessionLostBanner.dismissAll
+              : undefined
           }
         />
       </BannerSlot>

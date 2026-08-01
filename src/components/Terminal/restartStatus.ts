@@ -20,15 +20,16 @@ export interface RestartBannerInput {
   reconnectError?: TerminalReconnectError;
   spawnError?: SpawnError;
   backendStatus: BackendStatus;
-  /** True when restore fell through to a fresh agent launch (issue #9802). */
-  sessionLostOnRestore?: boolean;
   /**
-   * True once the user dismissed the session-resume-unavailable banner
-   * (issue #10823). Tracked separately from `dismissedRestartPrompt` so
-   * acknowledging a lost session never suppresses a later exit-error banner
-   * for a crash of the fresh session.
+   * True when restore fell through to a fresh agent launch and the user hasn't
+   * acknowledged it yet (issue #9802). Dismissing the banner clears the flag in
+   * the panel store (issue #11589), so this doubles as the "not yet dismissed"
+   * gate — there is deliberately no separate dismissal flag to fall out of sync
+   * with it. Kept independent of `dismissedRestartPrompt` so acknowledging a
+   * lost session never suppresses a later exit-error banner for a crash of the
+   * fresh session (issue #10823).
    */
-  dismissedSessionLost?: boolean;
+  sessionLostOnRestore?: boolean;
 }
 
 export function getRestartBannerVariant(input: RestartBannerInput): RestartBannerVariant {
@@ -52,13 +53,12 @@ export function getRestartBannerVariant(input: RestartBannerInput): RestartBanne
   // restart takes precedence) and above exit-error so a lost session is
   // acknowledged before any prior exit prompt. Dismissable (issue #10823): the
   // user recovers just by carrying on in the fresh session, so once they
-  // acknowledge it the banner stays gone for this session. Uses a dedicated
-  // `dismissedSessionLost` flag — not `dismissedRestartPrompt` — so dismissing
-  // this acknowledgement never suppresses a later exit-error for the fresh
-  // session crashing.
+  // acknowledge it the banner stays gone for this session. Dismissal clears
+  // `sessionLostOnRestore` itself in the panel store (issue #11589) — it never
+  // touches `dismissedRestartPrompt`, so acknowledging a lost session still
+  // can't suppress a later exit-error for the fresh session crashing.
   if (
     input.sessionLostOnRestore &&
-    !input.dismissedSessionLost &&
     !input.isRestarting &&
     !input.isAutoRestarting &&
     !input.restartError &&

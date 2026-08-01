@@ -939,6 +939,28 @@ describe("restartTerminal stale flow state cleared (#9899)", () => {
     // folding the now-cleared paused flow status.
     expect(after?.runtimeStatus).not.toBe("paused-backpressure");
   });
+
+  // Restarting is itself an acknowledgement of the lost session (#9802), and
+  // dismissal now consumes the same flag (#11589) — so this clear is the other
+  // half of that contract and must keep working.
+  it("consumes the session-lost signal on restart (#9802)", async () => {
+    const lost = {
+      ...agentPanelBase,
+      sessionLostOnRestore: true,
+    };
+    usePanelStore.setState({
+      panelsById: { [lost.id]: lost },
+      panelIds: [lost.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
+    // Assert survival first — `after?.x` would read undefined for a panel that
+    // vanished, which is not what this test is about.
+    expect(after).toBeDefined();
+    expect(after?.sessionLostOnRestore).toBeUndefined();
+  });
 });
 
 describe("restartTerminal input lock + parallel IPC (#9164)", () => {
