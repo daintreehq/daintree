@@ -64,13 +64,14 @@ export interface FileBrowserViewerProps {
    */
   revision: string;
   /**
-   * Changes only when the user presses Refresh, never on an ambient worktree
-   * tick — the half of `revision` the media branches can safely honour. Typed
-   * `number` rather than `string | number` so handing it the merged `revision`
-   * (which also carries the change tick) is a compile error, not a silent
-   * regression to restarting playback on every background write.
+   * Changes on a foreground refresh — pressing Refresh, or returning to this
+   * project after it sat cached — never on an ambient worktree tick. The half
+   * of `revision` the media branches can safely honour. Typed `number` rather
+   * than `string | number` so handing it the merged `revision` (which also
+   * carries the change tick) is a compile error, not a silent regression to
+   * restarting playback on every background write.
    */
-  manualRefreshNonce: number;
+  surfaceRefreshNonce: number;
   /** Runs the pane's manual refresh — re-reads the tree and the open file. */
   onRefresh: () => void;
   /** Whether that refresh is still draining; spins the Refresh icon. */
@@ -124,7 +125,7 @@ export function FileBrowserViewer({
   fileName,
   relativePath,
   revision,
-  manualRefreshNonce,
+  surfaceRefreshNonce,
   onRefresh,
   isRefreshing,
   sidebarCollapsed,
@@ -526,16 +527,17 @@ export function FileBrowserViewer({
       case "video":
         return (
           <div className="h-full w-full overflow-auto">
-            {/* Reloaded on `manualRefreshNonce`, never on `revision`: that
+            {/* Reloaded on `surfaceRefreshNonce`, never on `revision`: that
                 ticks on every worktree write, and re-fetching would reset
-                playback whenever an agent touches any file. Pressing Refresh
-                is the one gesture that outranks continuity, so it — and only
-                it — pulls the rewritten bytes (#11586). */}
+                playback whenever an agent touches any file. Only a foreground
+                refresh outranks continuity — pressing Refresh (#11586), or
+                coming back to this project (#11588) — so only those pull the
+                rewritten bytes. */}
             <FileVideoPreview
               filePath={filePath}
               rootPath={rootPath}
               label={fileName}
-              reloadKey={manualRefreshNonce}
+              reloadKey={surfaceRefreshNonce}
               onError={(error) =>
                 setState({
                   status: "error",
@@ -557,7 +559,7 @@ export function FileBrowserViewer({
               filePath={filePath}
               rootPath={rootPath}
               label={fileName}
-              reloadKey={manualRefreshNonce}
+              reloadKey={surfaceRefreshNonce}
               onError={(error) =>
                 setState({
                   status: "error",
@@ -577,7 +579,7 @@ export function FileBrowserViewer({
             filePath={filePath}
             rootPath={rootPath}
             label={fileName}
-            reloadKey={manualRefreshNonce}
+            reloadKey={surfaceRefreshNonce}
           />
         );
 
