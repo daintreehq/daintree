@@ -26,7 +26,8 @@ export function registerTerminalSpawnActions(
   actions.set("terminal.new", () => ({
     id: "terminal.new",
     title: "New Terminal",
-    description: "Create a new terminal in the active worktree",
+    description:
+      "Open a new terminal in the active worktree, ready for commands. This creates a visible panel and starts a shell process that consumes resources until it is closed. Launch an agent instead when the intent is to start an AI CLI rather than a plain shell.",
     category: "terminal",
     kind: "command",
     danger: "safe",

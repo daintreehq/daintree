@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { ActionService } from "@/services/ActionService";
 import { _resetForTests as resetEscapeStack, registerEscape } from "@/lib/escapeStack";
 import type { ActionId } from "@shared/types/actions";
@@ -660,7 +661,30 @@ describe("system action hardening", () => {
     ]);
 
     const filesSearch = actions.get("files.search")!();
-    expect(filesSearch.description).toContain("active worktree");
+    // The active-worktree fallback is a property of the `cwd` ARGUMENT, so it
+    // is asserted where it is actually advertised (#11542). It used to live in
+    // the action description, restated on every worktree-scoped tool; asserting
+    // it there again would pull the boilerplate straight back in. What matters
+    // is that the semantics still reach the wire, so this reads the emitted
+    // JSON Schema rather than the prose.
+    const emitted = z
+      .object({
+        properties: z.record(z.string(), z.object({ description: z.string().optional() })),
+      })
+      .parse(
+        z.toJSONSchema(filesSearch.argsSchema!, {
+          io: "input",
+          unrepresentable: "any",
+          reused: "inline",
+          cycles: "ref",
+          target: "draft-2020-12",
+        })
+      );
+    const cwd = emitted.properties.cwd;
+
+    expect(cwd?.description).toMatch(/active worktree/i);
+    // Both halves: what omitting it does, and that omitting it is not always safe.
+    expect(cwd?.description).toMatch(/fails|error/i);
     expect(filesSearch.description).not.toContain("project_getCurrent");
   });
 

@@ -9,10 +9,11 @@ import {
 // string so plugin-contributed agent ids (#10560) validate through the action
 // system (`agent.launch`). Plugin ids are validated at registration time in
 // `pluginAgentRegistry`; this schema is not the authoritative boundary for them.
-export const AgentIdSchema = z.union([
-  z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser", "dev-preview"]),
-  z.string().min(1),
-]);
+export const AgentIdSchema = z
+  .union([z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser", "dev-preview"]), z.string().min(1)])
+  .describe(
+    "Which agent CLI to run. The enumerated ids are the built-ins; any other non-empty string is accepted so user- and plugin-contributed agents work, which means an unrecognised id fails at launch rather than at validation. Query the agent-listing capability for the ids actually installed and launchable."
+  );
 
 export const LaunchLocationSchema = z
   .enum(["grid", "dock", "overlay"])
@@ -26,15 +27,20 @@ export const LaunchLocationSchema = z
  * stamps `"mcp"` on spawn-producing dispatches; user surfaces stamp their own
  * origin (`"quickrun"`, `"recipe"`, `"agent"`, `"palette"`).
  */
-export const TerminalSpawnSourceSchema = z.enum(["quickrun", "recipe", "agent", "palette", "mcp"]);
+export const TerminalSpawnSourceSchema = z
+  .enum(["quickrun", "recipe", "agent", "palette", "mcp"])
+  .describe(
+    "Records which surface asked for the spawn, for provenance and run history only; it never changes what is launched. Leave it unset when dispatching over MCP — the bridge stamps its own origin."
+  );
 
 /**
- * Mirror of `AddPanelFocusPolicy` from `shared/types/panel.ts`. `"auto"` (the
- * effective default) suppresses focus change only when the assistant owns
- * keyboard input. `"preserve"` always keeps focus where it is. `"take"`
- * always advances focus to the new panel.
+ * Mirror of `AddPanelFocusPolicy` from `shared/types/panel.ts`.
  */
-export const AddPanelFocusPolicySchema = z.enum(["auto", "preserve", "take"]);
+export const AddPanelFocusPolicySchema = z
+  .enum(["auto", "preserve", "take"])
+  .describe(
+    'Whether creating the panel moves keyboard focus to it. "auto" (the effective default) moves focus except while the assistant owns input, "preserve" always leaves focus where it is, and "take" always moves it. Prefer "preserve" when spawning in the background so the user\'s typing is not interrupted.'
+  );
 
 // Derived from the settingsTabIds tuples so the action schema can't drift from
 // the registry (the previous hand-written enum was missing plugins,
@@ -90,17 +96,29 @@ export const ConflictedFileEntrySchema = z.object({
 export const PulseRangeDaysSchema = z
   .union([z.literal(60), z.literal(120), z.literal(180)])
   .optional()
-  .default(60);
+  .default(60)
+  .describe(
+    "How far back to aggregate commit activity, in days. A wider window costs more history to walk, so widen it only when the shorter window leaves the trend ambiguous."
+  );
 
 export const FileSearchPayloadSchema = z.object({
   cwd: z
     .string()
     .optional()
     .describe(
-      "Working directory to search in (project root path). Defaults to the active worktree path."
+      "Absolute root path to search under. Defaults to the active worktree; the call fails when it is omitted and no worktree is active."
     ),
-  query: z.string().describe("File name search query"),
-  limit: z.number().int().positive().optional().describe("Max results to return"),
+  query: z
+    .string()
+    .describe(
+      "Matched as a plain substring against file names and paths — not as a glob, and not file contents. Use a source-reading capability to search inside files."
+    ),
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Caps how many matches come back; results are truncated silently rather than paged."),
 });
 
 /**
@@ -245,9 +263,15 @@ export const CopyTreeOptionsSchema = z.object({
   exclude: z.union([z.string(), z.array(z.string())]).optional(),
   always: z.array(z.string()).optional(),
   includePaths: z.array(z.string()).optional(),
-  // Empty list or blank entry would resolve to the worktree root — a folder
+  // An empty list or blank entry would resolve to the worktree root — a folder
   // copy that silently became a whole-worktree copy. Absent means no scoping.
-  scopePaths: z.array(z.string().min(1)).min(1).optional(),
+  scopePaths: z
+    .array(z.string().min(1))
+    .min(1)
+    .optional()
+    .describe(
+      "Restricts the copy to these subtrees, relative to the worktree root. Omit to include the whole worktree; supplying an empty list is rejected rather than treated as no scoping, since that would silently copy everything."
+    ),
   modified: z.boolean().optional(),
   changed: z.string().optional(),
   maxFileSize: z.number().int().positive().optional(),
@@ -333,19 +357,20 @@ export const TerminalStatusEntrySchema = z.object({
   agentState: z.string().nullable(),
   waitingReason: z.string().optional(),
   lastTransitionAt: z.number().optional(),
-  // Process exit code from the last exit, present once the PTY has exited;
-  // null when the process was signal-terminated with no numeric code. Lets a
-  // supervisor tell a clean finish from a failure without scraping output.
-  exitCode: z.number().int().nullable().optional(),
-  // Wall-clock spawn timestamp (ms), for run-duration/staleness reasoning.
-  spawnedAt: z.number().optional(),
-  // Parsed test/lint/build result from the agent's most recent recognized check
-  // summary (issue #10682). Best-effort and PARSED, not an authoritative exit
-  // code — the check runs as a child of the agent CLI inside the PTY, so the
-  // real subcommand exit code is unobservable. `passed` is derived from
-  // tsc/ESLint/Vitest/Jest summary lines; absence means "no recognized check
-  // summary was seen", NOT "no check ran" and NOT "passed". Read `ranAt` for
-  // freshness and `command` (may be null) for which check it was.
+  exitCode: z
+    .number()
+    .int()
+    .nullable()
+    .optional()
+    .describe(
+      "Present once the process has exited, so its absence means still running. Null means the process was terminated by a signal and produced no numeric code — tell a clean finish from a failure with this rather than by scraping output."
+    ),
+  spawnedAt: z
+    .number()
+    .optional()
+    .describe(
+      "Wall-clock spawn time in epoch milliseconds, for run-duration and staleness checks."
+    ),
   lastCheckResult: z
     .object({
       command: z.string().nullable(),
@@ -354,13 +379,23 @@ export const TerminalStatusEntrySchema = z.object({
       failureSummary: z.string().nullable(),
       truncated: z.boolean(),
     })
-    .optional(),
+    .optional()
+    .describe(
+      "A best-effort reading of the agent's most recent test, lint, or build summary, parsed from its output rather than from a process exit code — the check runs inside the terminal, so its real exit status is unobservable. Absence means no recognized summary was seen, which is not the same as no check running and not the same as passing. Check the run time for freshness before trusting it."
+    ),
   recentOutput: z.string().nullable().optional(),
-  // True when this terminal is in the fleet arming set (broadcast input is
-  // routed to it). Always populated for found terminals; absent on not-found
-  // entries (which carry `error` instead).
-  armed: z.boolean().optional(),
-  error: z.string().optional(),
+  armed: z
+    .boolean()
+    .optional()
+    .describe(
+      "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found; absent only when the terminal itself could not be resolved."
+    ),
+  error: z
+    .string()
+    .optional()
+    .describe(
+      "Set when the terminal was not found, and also stamped on every resolved entry when the batched output fetch fails — in that case the status fields are still populated and only the recent output is missing. Its presence therefore does not by itself mean this terminal was unreadable, and it never fails the call as a whole."
+    ),
 });
 
 export const PersistedStoreInfoSchema = z.object({

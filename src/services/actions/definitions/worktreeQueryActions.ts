@@ -16,7 +16,7 @@ export function registerWorktreeQueryActions(
     id: "worktree.list",
     title: "List Worktrees",
     description:
-      "List every worktree in the active project with summary status. Takes no args. Returns { worktrees } — each entry has id, path, branch, isActive, isMain, issueNumber/issueTitle, prNumber/prTitle/prUrl, status (mood), and lastCommit. Never errors; returns an empty array when none exist. Do NOT use this when you only need the active worktree — call `worktree.getCurrent`.",
+      "List every worktree in the active project with its branch, status and any linked issue or pull request. Use this to discover worktree ids; ask for the current worktree instead when all you need is the one in use. It never fails — an empty list means the project has no worktrees.",
     category: "worktree",
     kind: "query",
     danger: "safe",
@@ -51,7 +51,7 @@ export function registerWorktreeQueryActions(
     id: "worktree.getCurrent",
     title: "Get Current Worktree",
     description:
-      "Get the currently active worktree's summary. Takes no args. Returns { worktree } — the same shape as a `worktree.list` entry (id, path, branch, isActive, isMain, issue/PR fields, status, lastCommit), or null when no worktree is active or it can't be found. Never errors. Do NOT use `worktree.list` for this — that returns all worktrees; this returns only the active one.",
+      "Get the worktree currently in use, which is what most work should be scoped to. Use the full worktree listing only when you genuinely need the others. An empty result means no worktree is active, or the active one can no longer be found — either way, handle it before acting.",
     category: "worktree",
     kind: "query",
     danger: "safe",
@@ -93,7 +93,7 @@ export function registerWorktreeQueryActions(
       id: "worktree.listBranches",
       title: "List Branches",
       description:
-        "List git branches for a repository, one page at a time. Args (all optional): `worktreeId` or `worktreePath` — target worktree, defaults to the active one (`rootPath` is accepted as a legacy alias for `worktreePath`); `offset` (default 0); `limit` (default 100, max 200). Returns { branches, total, hasMore, offset, limit, nextOffset } — each branch has name, current (bool), commit (sha), and optional remote. When `hasMore` is true, call again with `offset: nextOffset`. Errors when no worktree is given and none is active, or when the target is not a git repository.",
+        "List a repository's git branches a page at a time, flagging which one is checked out. Use this to discover branch names before creating a worktree or opening a pull request. Long branch lists are paged, so continue from the offset it hands back while more remain. A target that is not a git repository fails rather than returning nothing.",
       category: "worktree",
       kind: "query",
       danger: "safe",
@@ -175,7 +175,7 @@ export function registerWorktreeQueryActions(
       id: "worktree.getDefaultPath",
       title: "Get Default Worktree Path",
       description:
-        "Compute the default filesystem path for a new worktree from the repo root, branch name, and the configured path pattern. Args: `worktreeId` or `worktreePath` (required) — the repository root to anchor the path on (`rootPath` is accepted as a legacy alias for `worktreePath`); `branchName` (required) — the branch the worktree will track. Returns { path }. Errors when either argument is missing. There is deliberately no active-worktree default: the active worktree is usually a linked worktree, and anchoring on one silently misses the project's configured path pattern and produces a path nested under that worktree.",
+        "Work out where a new worktree for a given branch should live, honouring the project's configured path pattern. Use this before creating a worktree so the path matches project convention rather than being invented. The repository must be named explicitly — there is deliberately no active-worktree fallback, because anchoring on a linked worktree silently produces a path nested inside it.",
       category: "worktree",
       kind: "query",
       danger: "safe",
@@ -206,7 +206,7 @@ export function registerWorktreeQueryActions(
       id: "worktree.getAvailableBranch",
       title: "Get Available Branch Name",
       description:
-        "Resolve a collision-safe branch name: returns the requested name if free, otherwise a numbered variant (e.g. 'feature-2'). Args: `worktreeId` or `worktreePath` (optional) — the repository, defaults to the active worktree (`rootPath` is accepted as a legacy alias for `worktreePath`); `branchName` (required) — the desired branch name. Returns { branch } — the safe name to use. Errors when `branchName` is missing, or when no worktree is given and none is active.",
+        "Turn a desired branch name into one that is actually free, appending a numeric suffix when the name is taken. Use this before creating a branch or worktree so creation does not fail on a collision. It reserves nothing — the name can still be taken between this call and the one that uses it.",
       category: "worktree",
       kind: "query",
       danger: "safe",

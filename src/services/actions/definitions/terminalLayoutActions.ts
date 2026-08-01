@@ -15,7 +15,7 @@ export function registerTerminalLayoutActions(
     id: "terminal.moveToDock",
     title: "Move to Dock",
     description:
-      "Move the target terminal from the grid to the dock. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch, which cannot see what is focused. Interactive dispatch may omit it and falls back to the focused terminal.",
+      "Move a terminal out of the main grid into the sidebar dock, keeping its process running. This rearranges what the user sees and is reversible by moving it back. Name the target explicitly — an automated caller cannot see what the user has focused.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -54,7 +54,7 @@ export function registerTerminalLayoutActions(
     id: "terminal.moveToGrid",
     title: "Move to Grid",
     description:
-      "Move the target terminal from the dock back into the grid. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch, which cannot see what is focused. Interactive dispatch may omit it and falls back to the focused terminal.",
+      "Move a terminal from the sidebar dock back into the main grid, keeping its process running. This rearranges what the user sees and is reversible. Name the target explicitly — an automated caller cannot see what the user has focused.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -255,7 +255,7 @@ export function registerTerminalLayoutActions(
     id: "terminal.toggleDock",
     title: "Toggle Dock",
     description:
-      "Toggle a terminal between the dock and the grid. Pushes a layout undo snapshot so the move can be reversed. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch, which cannot see what is focused. Interactive dispatch may omit it and falls back to the focused terminal.",
+      "Move a terminal between the grid and the dock, whichever it is not currently in. The move is recorded so the user can undo it. Name the target explicitly — an automated caller cannot see what the user has focused, and this rearranges what they see.",
     category: "terminal",
     kind: "command",
     danger: "safe",

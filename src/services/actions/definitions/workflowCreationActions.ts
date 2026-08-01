@@ -39,7 +39,7 @@ export function registerWorkflowCreationActions(
       id: "worktree.createWithRecipe",
       title: "Create Worktree with Recipe",
       description:
-        "Create a worktree with branch setup, optionally from a PR, with recipe and issue assignment.",
+        "Create a git worktree with its branch, optionally tracking a pull request, and optionally launch a recipe's terminals in it. This is the heavy composite path: it writes to disk, may check out a remote branch, and may start several processes. Create the worktree alone when no terminals are wanted. Partial failure is possible — the worktree can exist while its recipe did not fully start.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -336,7 +336,7 @@ export function registerWorkflowCreationActions(
           .string()
           .min(1)
           .describe(
-            "Registered agent CLI to launch in the new worktree (e.g. 'claude', 'codex', 'gemini') — call agent.listAvailable to discover ids, or pass 'terminal' for a plain shell. Rejected before any side effect if unknown."
+            "Which agent CLI to launch in the new worktree, such as 'claude' or 'codex'; pass 'terminal' for a plain shell. Discover the ids actually installed with the agent-listing capability. An unknown id is rejected before anything is created."
           ),
         branchName: z
           .string()
@@ -423,7 +423,7 @@ export function registerWorkflowCreationActions(
         if (NON_TERMINAL_PANEL_IDS.has(agentId)) {
           throw new Error(
             `'${agentId}' opens a panel with no PTY, so it cannot work on an issue or receive injected context. ` +
-              `Call agent.listAvailable for registered agent IDs, or use 'terminal' for a plain shell.`
+              `Discover registered agent ids with the agent-listing capability, or use 'terminal' for a plain shell.`
           );
         }
         resolveAgentLaunchKind(agentId, isEffectivelyRegisteredAgent(agentId));

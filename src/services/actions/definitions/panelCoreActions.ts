@@ -108,7 +108,8 @@ export function registerPanelCoreActions(
   actions.set("panel.focus", () => ({
     id: "panel.focus",
     title: "Focus Panel",
-    description: "Focus a specific panel by ID",
+    description:
+      "Move keyboard focus to a specific panel, changing what the user is looking at and where their typing goes. Use it to surface a panel the user should attend to. It reports nothing about the panel — list terminals or panels to inspect state.",
     category: "panel",
     kind: "command",
     danger: "safe",

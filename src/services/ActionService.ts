@@ -16,7 +16,11 @@ import { keybindingService } from "./KeybindingService";
 import { shortcutHintStore } from "../store/shortcutHintStore";
 import { useUIStore } from "@/store/uiStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { WORKBENCH_TIER_TOOLS } from "@shared/config/helpAssistantTierAllowlists";
+import {
+  WORKBENCH_TIER_TOOLS,
+  ACTION_TIER_ADDONS,
+  SYSTEM_TIER_ADDONS,
+} from "@shared/config/helpAssistantTierAllowlists";
 import { deriveBand } from "../../shared/utils/actionRiskBand.js";
 
 /**
@@ -29,6 +33,17 @@ const SENSITIVE_ARG_FIELD_PATTERN = /token|password|secret|key|auth|credential/i
 
 /** Max size for args in event payloads (prevents explosion) */
 const MAX_ARG_PAYLOAD_SIZE = 1024;
+
+/**
+ * Every action a model can be shown, at any assistant tier. Derived from the
+ * live allowlists so a newly exposed action picks up the description rules
+ * without a second list to keep in step.
+ */
+const LLM_EXPOSED_ACTION_IDS = new Set<string>([
+  ...WORKBENCH_TIER_TOOLS,
+  ...ACTION_TIER_ADDONS,
+  ...SYSTEM_TIER_ADDONS,
+]);
 
 /**
  * Validate a definition against invariants that should hold for every action.
@@ -45,7 +60,14 @@ export function validateDefinitionInvariants(definition: AnyActionDefinition): s
     );
   }
 
-  if ((definition.description?.length ?? 0) < 80) {
+  // Scoped to the tools a model can actually be shown (#11542). It used to fire
+  // for every action, which meant ~300 warnings for panel movement and focus
+  // cycling — prose no model ever reads. That noise is not free: renderer
+  // console output is captured into the buffer agents read back, so an
+  // unactionable warning per UI action is worse than no warning at all. The
+  // hard range for this cohort lives in actionDefinitions.quality.test.ts; this
+  // is the authoring-time nudge that points the same way.
+  if (LLM_EXPOSED_ACTION_IDS.has(definition.id) && (definition.description?.length ?? 0) < 80) {
     violations.push(
       `Action "${definition.id}" description is ${definition.description?.length ?? 0} chars ` +
         `(minimum 80). Descriptions are the primary MCP tool docs — short descriptions ` +

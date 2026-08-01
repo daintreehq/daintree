@@ -36,7 +36,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.close",
     title: "Close Terminal",
     description:
-      "Close a terminal (move to trash). Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch, which cannot see what is focused. Interactive dispatch may omit it and falls back to the focused terminal.",
+      "Close a panel, usually moving it to the trash where it stays briefly recoverable before its process is killed. Recovery is not universal — panels set to remove on exit, and dialog panels, are discarded outright. This is not limited to terminals. Identify the panel explicitly: an automated caller cannot see what the user has focused, and closing the wrong one discards their work.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -127,7 +127,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.kill",
     title: "Kill Terminal",
     description:
-      "Permanently kill and remove terminal. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch, which cannot see what is focused. Interactive dispatch may omit it and falls back to the focused terminal.",
+      "Permanently destroy a panel and any process behind it, with no trash step and no recovery. This is not limited to terminals — whatever panel the id names is removed. A panel running an agent session is left untouched unless the call itself is marked confirmed, so read back its state rather than assuming it went. Identify it explicitly: an automated caller cannot see what the user has focused. Close it instead when recoverability matters.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -136,7 +136,12 @@ export function registerTerminalLifecycleActions(
     keywords: ["terminate", "stop", "remove", "delete"],
     argsSchema: z.object({
       terminalId: z.string().optional(),
-      confirmed: z.boolean().optional(),
+      confirmed: z
+        .boolean()
+        .optional()
+        .describe(
+          "Acknowledges losing a running agent session. Without it, a panel running an agent is left alone and a confirmation is staged for the user instead, so the call returns having changed nothing."
+        ),
     }),
     run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
@@ -169,7 +174,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restart",
     title: "Restart Terminal",
     description:
-      "Restart the terminal process. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch, which cannot see what is focused. Interactive dispatch may omit it and falls back to the focused terminal.",
+      "Begin restarting a terminal's process in place, keeping the pane. This returns before the restart has finished, so the terminal is not ready yet when it does — watch its status before sending anything. A terminal running an agent session is left untouched unless the call itself is marked confirmed; otherwise whatever was running is terminated and unsaved in-process state is lost. A panel with no process is ignored rather than reported as an error.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -179,7 +184,12 @@ export function registerTerminalLifecycleActions(
     keywords: ["relaunch", "reset", "rerun", "process"],
     argsSchema: z.object({
       terminalId: z.string().optional(),
-      confirmed: z.boolean().optional(),
+      confirmed: z
+        .boolean()
+        .optional()
+        .describe(
+          "Acknowledges interrupting a running agent session. Without it, a terminal running an agent is left alone and a confirmation is staged for the user instead, so the call returns having changed nothing."
+        ),
     }),
     run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
@@ -228,7 +238,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.rename",
     title: "Rename Terminal",
     description:
-      "Rename the terminal tab. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field); `name` — the new title, where an empty string clears back to the identity-derived default. Both are REQUIRED for agent/MCP dispatch: a headless caller cannot see what is focused, and cannot answer the rename dialog that an omitted `name` opens. Note a title the user set by hand outranks automation, so a rename of one of those is accepted and then ignored. Interactive dispatch may omit either — it falls back to the focused terminal and opens the dialog.",
+      "Change a terminal tab's title, or clear it back to the automatic default. Identify the terminal explicitly — an automated caller cannot see what the user has focused, and cannot answer the dialog that omitting a title would open. A title the user set by hand outranks automation, so renaming one of those is accepted and then quietly ignored.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -434,7 +444,8 @@ export function registerTerminalLifecycleActions(
   actions.set("terminal.closeAll", () => ({
     id: "terminal.closeAll",
     title: "Close All Terminals",
-    description: "Move all terminals in the active worktree to trash",
+    description:
+      "Close every panel in the active worktree at once, not only terminals. Most move to the trash and stay briefly recoverable, but panels set to remove on exit are discarded outright. This takes the user's own shells and other agents' terminals with it, so prefer closing panels individually. Tooling-internal and dialog-hosted panels are spared.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -469,7 +480,8 @@ export function registerTerminalLifecycleActions(
   actions.set("terminal.killAll", () => ({
     id: "terminal.killAll",
     title: "Kill All Terminals",
-    description: "Permanently remove all terminals (cannot be undone)",
+    description:
+      "Permanently destroy every panel in the project at once — across all worktrees, of every kind, including trashed and backgrounded ones — with no trash step and no recovery. This takes the user's own shells and other agents' running work with it; only tooling-internal and dialog-hosted panels are spared. While any agent session is running it destroys nothing unless the call itself is marked confirmed. There is essentially never a reason for an automated caller to use this.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -477,7 +489,16 @@ export function registerTerminalLifecycleActions(
     dangerRationale:
       "Permanently kills every user-facing terminal. All scrollback and session state are lost.",
     keywords: ["terminate", "stop", "remove", "delete"],
-    argsSchema: z.object({ confirmed: z.boolean().optional() }).optional(),
+    argsSchema: z
+      .object({
+        confirmed: z
+          .boolean()
+          .optional()
+          .describe(
+            "Acknowledges losing every running agent session. Without it, nothing is destroyed while any agent is running — a confirmation is staged for the user and the call returns having changed nothing."
+          ),
+      })
+      .optional(),
     run: async (args: unknown) => {
       // Don't reuse bulkCloseAll() — it indiscriminately removes every panel,
       // including the tooling-internal assistant terminal. Filter those out

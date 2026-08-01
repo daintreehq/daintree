@@ -14,7 +14,8 @@ export function registerWorktreeServiceActions(
   actions.set("worktree.refresh", () => ({
     id: "worktree.refresh",
     title: "Refresh Sidebar",
-    description: "Refresh worktrees, pull requests, and forge stats",
+    description:
+      "Re-read worktree state, pull requests and forge statistics from disk and the provider, discarding what is cached. Use this after changes made outside the app leave stale data on screen. It costs provider round trips against your rate limit, so prefer it over routine polling rather than as a habit.",
     category: "worktree",
     kind: "command",
     danger: "safe",
@@ -141,12 +142,19 @@ export function registerWorktreeServiceActions(
     defineAction({
       id: "worktree.setActive",
       title: "Set Active Worktree",
-      description: "Set the active worktree in the backend",
+      description:
+        "Switch which worktree is the active one, changing the default target for everything scoped to 'the current worktree' and moving what the user sees. Call this deliberately — subsequent actions that omit a worktree will follow it, so switching mid-task can silently retarget later work.",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({ worktreeId: z.string() }),
+      argsSchema: z.object({
+        worktreeId: z
+          .string()
+          .describe(
+            "Identifies the worktree to make active, using an id from the worktree-listing capability. Everything later scoped to the current worktree follows this."
+          ),
+      }),
       run: async ({ worktreeId }) => {
         await worktreeClient.setActive(worktreeId);
       },

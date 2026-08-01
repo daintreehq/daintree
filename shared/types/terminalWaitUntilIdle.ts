@@ -50,7 +50,8 @@ export const WAIT_UNTIL_IDLE_INPUT_SCHEMA: Record<string, unknown> = {
   properties: {
     terminalId: {
       type: "string",
-      description: "Panel UUID returned by `terminal.list` (the `id` field).",
+      description:
+        "Identifies the terminal to watch, using a panel id from the terminal-listing capability. An id no longer tracked resolves immediately as idle with an unknown reason rather than failing.",
     },
     timeoutMs: {
       type: "integer",
@@ -72,6 +73,8 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
     idleReason: {
       type: "string",
       enum: ["idle", "waiting_for_user", "completed", "exited", "unknown"],
+      description:
+        "Why the terminal is not working: 'idle' at rest, 'waiting_for_user' blocked on input, 'completed' or 'exited' once the process ended, 'unknown' when the terminal is not tracked. Only the ended states carry an exit code.",
     },
     waitingReason: {
       type: "string",
@@ -91,13 +94,17 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
       description:
         "OS signal number that terminated the process, when applicable (completed/exited only).",
     },
-    timedOut: { type: "boolean" },
+    timedOut: {
+      type: "boolean",
+      description:
+        "True when the wait elapsed with the agent still working. Call again to keep waiting — it is not a failure.",
+    },
   },
   required: ["terminalId", "busyState", "timedOut"],
 };
 
 export const WAIT_UNTIL_IDLE_DESCRIPTION =
-  "Check whether the agent in one terminal has left the working state, with an optional wait. Args: `terminalId` is a panel UUID from `terminal.list` (the `id` field); `timeoutMs` is optional (0 = immediate non-blocking snapshot — recommended; otherwise max ms to long-poll, default 60s). Returns { terminalId, busyState ('working'|'idle'), idleReason, waitingReason ('prompt'|'question'|'approval'|'error', only while waiting_for_user), exitCode (number|null, only on 'completed'|'exited' — verify a real success before an irreversible follow-up), exitSignal (where available), timedOut }. `timedOut: true` means still working — re-call to keep waiting. Interactive sessions cap at 60s server-side regardless of `timeoutMs`; headless sessions may block up to 2h. An untracked `terminalId` returns immediately as { busyState: 'idle', idleReason: 'unknown', timedOut: false }. To wait on several terminals use `terminal.waitUntilIdleBatch`; for a snapshot of many terminals use `terminal.getStatus`.";
+  "Block until the agent in one terminal stops working, so the next step runs against finished output. Use the batched wait for several terminals, or a status snapshot to poll without blocking. This can hold the call open for a minute in an interactive session and far longer in a headless one. Timing out is a normal result meaning still working, and an exit code appears only once the process has ended — confirm success there before acting irreversibly.";
 
 // === Batched wait (fan-out orchestration) ===
 
@@ -170,4 +177,4 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
 };
 
 export const WAIT_UNTIL_IDLE_BATCH_DESCRIPTION =
-  "Wait on several terminals at once and return when the first (or all) leave the working state — the fan-out primitive for orchestrating multiple agents that finish at different speeds. Args: `terminalIds` (1-256 panel UUIDs from `terminal.list`); `mode` ('first' = resolve when ANY terminal goes idle, the default; 'all' = resolve only when EVERY terminal is idle); `timeoutMs` (optional, 0 = immediate snapshot; otherwise max ms to long-poll, default 60s). Returns { mode, results (one entry per terminal with terminalId, busyState, idleReason, waitingReason, exitCode/exitSignal where applicable, and `settled`), settledTerminalIds, timedOut }. `timedOut: true` means the first/all predicate was not met — re-call to keep waiting. Interactive sessions are capped at 60s server-side regardless of `timeoutMs`; headless sessions may block up to 2 hours. Untracked terminalIds count as already-idle. For a non-blocking point-in-time snapshot use `terminal.getStatus` instead.";
+  "Block until the first of several agents stops working, or until all of them do — the fan-out primitive for agents that finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. This can hold the call open for a minute in an interactive session and far longer in a headless one. Timing out means the condition is not met yet, and terminals no longer tracked count as already finished.";

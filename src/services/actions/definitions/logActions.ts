@@ -216,7 +216,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "errors.recent",
     title: "Recent Errors",
     description:
-      "List recent errors from the diagnostics-dock error store (IPC and normalized runtime failures), newest first. Args (all optional): `limit` (1-50, default 20); `includesDismissed` (default false — active only). Returns { errors } — each with id, type, message, details, source, timestamp, retryability, dismissed, worktreeId/terminalId, recoveryHint, occurrenceCount. Never errors. This is a different store from `notifications.recent` (the user inbox) — query both if you need the full picture.",
+      "List recent entries from the diagnostics error log, covering runtime and inter-process failures, newest first. This is a separate store from the user's notification inbox, so a full picture usually means reading both. Dismissed entries are left out by default, so an empty list means nothing was recorded or everything recorded has been dismissed.",
     category: "errors",
     kind: "query",
     danger: "safe",
@@ -271,7 +271,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "notifications.recent",
     title: "Recent Notifications",
     description:
-      "List recent entries from the durable notification inbox (completion/waiting/info toasts the user saw), newest first. Args (all optional): `limit` (1-50, default 20); `type` ('success'|'error'|'info'|'warning'); `unreadOnly` (default false). Returns { notifications } — each with id, type, title, message, timestamp, seenAsToast. Never errors. This is a different store from `errors.recent` (the diagnostics-dock errors) — query both if you need the full picture.",
+      "List recent entries from the notification inbox — the completion, waiting and informational messages raised for the user, including quiet ones that never surfaced as a toast — newest first. This is a separate store from the diagnostics error log, so a full picture of what went wrong usually means reading both. It never fails; an empty list means nothing was notified.",
     category: "diagnostics",
     kind: "query",
     danger: "safe",

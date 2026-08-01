@@ -40,7 +40,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "git.getProjectPulse",
     title: "Get Project Pulse",
     description:
-      "Get a worktree's git activity pulse — historical commit heatmap, range counts, streak, and optional uncommitted/delta-to-main summary. Args (all optional): `worktreeId` or `worktreePath` (from `worktree.list`, defaults to active); `rangeDays` (60|120|180); `includeDelta`; `includeRecentCommits`; `forceRefresh`. Returns worktree/branch info, heatmap, commitsInRange, activeDays, projectAgeDays, recentCommits, and optional uncommitted/deltaToMain. Errors when no worktree is active. Do NOT use this for current staged/unstaged state — use `git.getStagingStatus`.",
+      "Summarise a worktree's historical git activity — a commit heatmap, counts over a window, and the current streak. Use this for trends and momentum, not for what is changed right now: read the staging status for the current working tree. Widening the window or asking for the delta against the main branch costs more history to walk, so request those only when needed.",
     category: "git",
     kind: "query",
     danger: "safe",
@@ -175,7 +175,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "git.getFileDiff",
     title: "Get File Diff",
     description:
-      "Get a byte-bounded window of the git diff for a single file. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias for `worktreePath`); `filePath` (required) — repo-relative path; `status` (required) — the file's git status (from a `git.getStagingStatus` entry); `ignoreWhitespace` (optional); `offset` (optional, default 0) — byte offset to read from; `maxBytes` (optional, default 24576, max 1048576) — window size. Returns { content, offset, totalBytes, truncated, nextOffset }. When `truncated` is true, call again with `offset: nextOffset` to read the rest. `content` may be a `BINARY_FILE`, `NO_CHANGES`, or `FILE_TOO_LARGE` marker instead of diff text, in which case `totalBytes` is 0. Errors when no worktree is given and none is active.",
+      "Read one file's git diff as a byte-bounded window, so a large diff cannot flood the response. When the result is flagged truncated, call again from the offset it hands back to continue — a single call is not guaranteed to be the whole diff. Some files have no diff text at all: binary files, unchanged files and oversized files come back as a marker instead, which is a valid result rather than a failure.",
     category: "git",
     kind: "query",
     danger: "safe",
@@ -184,9 +184,11 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       {
         filePath: z
           .string()
-          .describe("Repo-relative file path (from a `git.getStagingStatus` entry)."),
+          .describe(
+            "Identifies the file, as a repo-relative path taken from a working-tree status entry."
+          ),
         status: GitStatusSchema.describe(
-          "The file's git status — the `status` value from a `git.getStagingStatus` entry."
+          "The file's git status, taken from the same working-tree status entry as its path. It selects which diff is computed, so a status that does not match the file yields the wrong comparison rather than an error."
         ),
         ignoreWhitespace: z
           .boolean()
@@ -269,7 +271,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "git.listCommits",
     title: "List Commits",
     description:
-      "List commits for a repository with optional search and pagination. Args (all optional): `worktreeId` or `worktreePath` (defaults to the active worktree; `cwd` is accepted as a legacy alias for `worktreePath`); `search` (message/author filter); `branch`; `limit` (default 30, max 100) plus `offset` or `cursor` for paging (`skip` is accepted as a legacy alias for `offset`). Returns { items, hasMore, nextCursor, total } — each item has hash, shortHash, message, body, bodyTruncated, author {name,email}, date. Commit bodies are cut at 1KB and flagged with `bodyTruncated: true`. When `hasMore` is true, call again with `cursor: nextCursor`. Errors when no worktree is given and none is active.",
+      "List a repository's commit history, oldest changes last, with optional filtering by message, author or branch. Use this for history; read the staging status for uncommitted work. Commit bodies are cut off at roughly a kilobyte and flagged when that happens, so treat a truncated body as partial. Page onward with the cursor it returns while more results remain.",
     category: "git",
     kind: "query",
     danger: "safe",
@@ -372,7 +374,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.stageFile", () => ({
     id: "git.stageFile",
     title: "Stage File",
-    description: "Stage a file for commit",
+    description:
+      "Stage one file's changes for the next commit. Reversible by unstaging, and staging an already-staged file is harmless. This changes the index only — nothing is committed or pushed until you do so explicitly.",
     category: "git",
     kind: "command",
     danger: "safe",
@@ -387,7 +390,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.unstageFile", () => ({
     id: "git.unstageFile",
     title: "Unstage File",
-    description: "Unstage a file from the index",
+    description:
+      "Remove one file from the staging area, leaving its working-tree changes untouched. This is the inverse of staging and discards no edits.",
     category: "git",
     kind: "command",
     danger: "safe",
@@ -402,7 +406,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.stageAll", () => ({
     id: "git.stageAll",
     title: "Stage All Files",
-    description: "Stage all changes for commit",
+    description:
+      "Stage every change in the worktree for the next commit — modifications, new files, deletions and renames alike. This is broader than it looks — it sweeps in unrelated edits — so read the staging status first when the commit is meant to be scoped. Reversible by unstaging everything.",
     category: "git",
     kind: "command",
     danger: "safe",
@@ -418,7 +423,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.unstageAll", () => ({
     id: "git.unstageAll",
     title: "Unstage All Files",
-    description: "Unstage all files from the index",
+    description:
+      "Clear the staging area entirely, leaving all working-tree changes untouched. This is the inverse of staging everything and discards no edits.",
     category: "git",
     kind: "command",
     danger: "safe",
@@ -434,7 +440,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.commit", () => ({
     id: "git.commit",
     title: "Commit",
-    description: "Commit staged changes with a message",
+    description:
+      "Commit whatever is currently staged, with a message. Read the staging status first — this commits the index as it stands, including anything staged earlier that you did not intend. The commit stays local until it is pushed, so it is recoverable, but rewriting it afterwards is not something this surface offers.",
     category: "git",
     kind: "command",
     danger: "safe",
@@ -461,7 +468,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.push", () => ({
     id: "git.push",
     title: "Push",
-    description: "Push commits to remote",
+    description:
+      "Publish local commits to the remote branch, making them visible to everyone working from it. This leaves the local repository and cannot be undone from here — confirm the commits are the intended ones first. It fails rather than overwriting when the remote has diverged.",
     category: "git",
     kind: "command",
     danger: "confirm",
@@ -542,7 +550,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "git.getStagingStatus",
     title: "Get Staging Status",
     description:
-      "Get the current working-tree state for a repository. Args (all optional): `worktreeId` or `worktreePath` — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias for `worktreePath`); `offset` (default 0) and `limit` (default 100, max 200), applied to each file list. Returns staged/unstaged/conflictedFiles pages plus `totals` and `hasMore` per list, the legacy `conflicted` path strings, currentBranch, isDetachedHead, hasRemote, repoState, rebase progress, and `rebaseSummary` (backend + step counts + current subject) instead of the full rebase todo. When any `hasMore` is true, call again with `offset: nextOffset`. Errors when no worktree is given and none is active. Use this before committing; do NOT use `git.getProjectPulse` for current changes — that reports historical activity, not working-tree state.",
+      "Read the current working-tree state of a repository: what is staged, what is modified but unstaged, what is conflicted, and which branch is checked out. Read this before committing. Use the activity pulse for historical trends instead — it reports past activity, not current changes. Long file lists are paged, so a partial page is normal; continue from the offset it hands back while more remain.",
     category: "git",
     kind: "query",
     danger: "safe",

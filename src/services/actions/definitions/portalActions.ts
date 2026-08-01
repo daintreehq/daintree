@@ -20,7 +20,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("portal.toggle", () => ({
     id: "portal.toggle",
     title: "Toggle Portal",
-    description: "Toggle the portal panel",
+    description:
+      "Show or hide the portal browser panel, whichever it currently is not. This changes what the user sees without closing any tab or discarding page state. Because it toggles rather than sets, calling it without knowing the current state can hide a panel the user is using. Opening is suppressed while a dialog or overlay owns the viewport, so the call can do nothing at all.",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -34,7 +35,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("portal.listTabs", () => ({
     id: "portal.listTabs",
     title: "List Portal Tabs",
-    description: "List all portal tabs with their IDs, URLs, and titles",
+    description:
+      "List the tabs currently open in the portal browser, with their addresses and titles. Use this to find a tab to act on. It never fails — an empty list means the portal has no tabs open rather than that it is unavailable.",
     category: "portal",
     kind: "query",
     danger: "safe",
@@ -178,7 +180,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("portal.newTab", () => ({
     id: "portal.newTab",
     title: "New Portal Tab",
-    description: "Open a new portal tab",
+    description:
+      "Open a new tab in the portal browser for the user to work in. It loads the user's configured default address when they have set one, and is blank otherwise. This adds a tab that consumes resources until closed. Open a specific address instead when the destination is already known.",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -255,7 +258,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("portal.openUrl", () => ({
     id: "portal.openUrl",
     title: "Open URL in Portal",
-    description: "Open a URL in a new portal tab",
+    description:
+      "Open a web page in a new portal tab, adding to whatever tabs are already open. This creates a tab that consumes resources until closed, so reuse an existing tab when repeatedly visiting the same page. It shows the page to the user rather than returning its contents.",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -390,7 +394,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("portal.toggleDevDashboard", () => ({
     id: "portal.toggleDevDashboard",
     title: "Toggle Dev Server Dashboard",
-    description: "Show or hide the cross-worktree dev-server dashboard in the portal",
+    description:
+      "Show or hide the dashboard that lists dev servers across every worktree. This changes what the user sees and starts or stops no server itself. Because it toggles rather than sets, calling it blind can hide a view the user is reading.",
     category: "portal",
     kind: "command",
     danger: "safe",

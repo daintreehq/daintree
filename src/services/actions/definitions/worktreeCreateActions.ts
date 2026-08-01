@@ -93,7 +93,8 @@ export function registerWorktreeCreateActions(
     defineAction({
       id: "worktree.delete",
       title: "Delete Worktree",
-      description: "Delete a worktree",
+      description:
+        "Delete a linked worktree and remove its directory from disk. By default it refuses when the worktree has uncommitted or untracked changes; forcing it past that destroys them irreversibly. The main worktree cannot be deleted. Confirm the target and make sure anything worth keeping is committed or pushed first.",
       category: "worktree",
       kind: "command",
       danger: "confirm",

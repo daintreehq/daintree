@@ -25,7 +25,7 @@ export function registerProjectCheckActions(
       id: "project.runCheck",
       title: "Run Project Check",
       description:
-        "Run a project's detected runner (test, lint, build, etc.) as a child process and return the exit code. Args: `projectId`, `runnerId` (e.g. `npm-test` from `project.detectRunners`), `cwd` (optional, defaults to project root), `timeoutMs` (default 10min, max 1h). Returns { exitCode, output, durationMs, timedOut, aborted, … }. A failing check returns `passed: false` — not an error. `project.detectRunners` lists ALL detected runners (npm scripts, Make targets, Procfile, etc.), not just checks — always verify `command` before running unfamiliar ids. Do NOT use for long-lived servers; they block until timeout.",
+        "Run one of a project's detected commands as a child process and report its exit code and output. A command that fails is reported as a failed check rather than as an error, so read the result rather than relying on the call succeeding. Detection finds every runnable script, not just checks — verify what a command actually is before running an unfamiliar one. Never use this for long-lived servers: they block until the timeout expires.",
       category: "project",
       kind: "command",
       danger: "safe",
@@ -36,11 +36,18 @@ export function registerProjectCheckActions(
       denyPluginDispatch: true,
       scope: "renderer",
       argsSchema: z.object({
-        projectId: z.string().min(1).describe("Project ID from `project.getAll`."),
+        projectId: z
+          .string()
+          .min(1)
+          .describe(
+            "Identifies the project whose runner should be executed, using an id from the project-listing capability."
+          ),
         runnerId: z
           .string()
           .min(1)
-          .describe("Runner `id` from `project.detectRunners`, e.g. `npm-test` or `make-lint`."),
+          .describe(
+            "Identifies which detected command to run, using an id from runner detection. Detection surfaces every runnable script, not only checks, so confirm what an unfamiliar id actually runs first."
+          ),
         cwd: z
           .string()
           .min(1)

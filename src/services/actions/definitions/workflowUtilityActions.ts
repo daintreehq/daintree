@@ -20,7 +20,7 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
       // status and detected runners and changes nothing (#11548).
       title: "Inspect Branch for Review",
       description:
-        "Inspect a worktree's working tree and detected runners and return a typed go/no-go verdict for starting review checks. Read-only: it prepares nothing and runs nothing — use `project.runCheck` to actually run a detected runner. Args (all optional): `worktreeId` or `worktreePath` — the worktree to inspect, defaults to the active one (`cwd` is accepted as a legacy alias for `worktreePath`); `projectId` — for runner detection, defaults to the current project (pass explicitly when the worktree is in another project). Returns verdict ('ready'|'blocked_uncommitted_changes'|'blocked_merge_conflicts'|'blocked_repo_busy'|'no_runners_detected'), the uncommitted/conflict flags, staged/unstaged counts, currentBranch, repoState, and detectedRunners. Errors when no worktree is given and none is active.",
+        "Inspect a worktree and report a go/no-go verdict on whether review checks can start, naming what is blocking if not. Despite the name it prepares nothing and runs nothing — it is read-only, and running a detected check is a separate step. Use it to avoid launching checks against a dirty or conflicted tree.",
       category: "worktree",
       kind: "query",
       danger: "safe",
@@ -115,7 +115,7 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
       id: "workflow.focusNextAttention",
       title: "Focus Next Attention",
       description:
-        "Focus the next agent needing attention (waiting before working); returns focused state and counts.",
+        "Move keyboard focus to the agent most in need of attention, preferring one blocked on the user over one merely working. Use this to triage a fleet by hand. It changes what the user sees, and reports whether anything was focused, which state that agent was in, and how many are waiting or working — read an agent status snapshot for the state of each terminal.",
       category: "worktree",
       kind: "command",
       danger: "safe",

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { z } from "zod";
 import { createStore } from "zustand/vanilla";
 import { setCurrentViewStore } from "@/store/createWorktreeStore";
 import type { WorktreeViewStore, WorktreeViewStoreApi } from "@/store/createWorktreeStore";
@@ -120,6 +121,81 @@ async function createRegistryWithAudit(): Promise<{
   return { registry, duplicates };
 }
 
+/**
+ * Every dotted identifier in `text`, as whole tokens.
+ *
+ * Tokenising and then testing membership beats matching each id with its own
+ * boundary regex, which got the common case wrong: a trailing `.` had to be
+ * excluded on both sides to stop `terminal.list` matching inside
+ * `terminal.listBranches`, and that also stopped it matching a sentence-final
+ * "call terminal.list." — the single most likely way to write the broken
+ * cross-reference this guards against.
+ *
+ * A token ends at the first `.` not followed by a letter, so sentence
+ * punctuation falls outside it while `terminal.listBranches` stays one token
+ * and simply is not an action id. Non-action dotted names (`Worktree.branch`,
+ * `ctx.focusedTerminalId`) are excluded the same way — by not being in the set
+ * — which is what keeps legitimate type and field references legal.
+ */
+const DOTTED_TOKEN = /[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)+/g;
+
+function actionIdsNamedIn(text: string, ids: ReadonlySet<string>): string[] {
+  const found = new Set<string>();
+  for (const [token] of text.matchAll(DOTTED_TOKEN)) {
+    if (ids.has(token)) found.add(token);
+  }
+  return [...found];
+}
+
+/** Every `description` string anywhere in an emitted JSON Schema. */
+function nestedDescriptions(node: unknown, out: string[] = []): string[] {
+  if (Array.isArray(node)) {
+    for (const item of node) nestedDescriptions(item, out);
+    return out;
+  }
+  if (typeof node !== "object" || node === null) return out;
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "description" && typeof value === "string") out.push(value);
+    else nestedDescriptions(value, out);
+  }
+  return out;
+}
+
+/**
+ * The top-level argument names a tool advertises, read through the same
+ * conversion `ActionService` uses — so this sees exactly the properties a
+ * client is sent, including those a `.transform()` would otherwise hide.
+ */
+const EmittedProperties = z.object({ properties: z.record(z.string(), z.unknown()).optional() });
+
+/** The exact conversion `ActionService.computeSchemas` performs. */
+function emitSchema(schema: z.ZodType, io: "input" | "output"): unknown {
+  return z.toJSONSchema(schema, {
+    io,
+    unrepresentable: "any",
+    reused: "inline",
+    cycles: "ref",
+    target: "draft-2020-12",
+  });
+}
+
+/**
+ * Top-level argument names, or `null` when the schema cannot be converted.
+ *
+ * `null` rather than `[]` because production swallows the same failure and
+ * advertises an empty object instead — so a conversion that starts throwing is
+ * a broken tool surface, and a guard that returned `[]` would go quiet at
+ * precisely that moment.
+ */
+function inputPropertyNames(argsSchema: z.ZodType | undefined): string[] | null {
+  if (argsSchema == null) return [];
+  try {
+    return Object.keys(EmittedProperties.parse(emitSchema(argsSchema, "input")).properties ?? {});
+  } catch {
+    return null;
+  }
+}
+
 // #11585 — the external MCP surface is budgeted in BOTH dimensions, because the
 // failure it guards against is measured in bytes, not tools. The old surface was
 // 100 tools AND ~128 KB of schema; 23 tools carrying novel-length descriptions
@@ -198,6 +274,202 @@ describe("external MCP tool surface budget (#11585)", () => {
       ...MCP_EXTERNAL_TIER_TOOLS,
     ]);
     expect(hidden.filter((id) => everyTierTool.has(id))).toEqual([]);
+  });
+});
+
+/**
+ * Style rules for the descriptions a model actually reads (#11542).
+ *
+ * The cohort is every action reachable at any assistant tier, derived from the
+ * live allowlists rather than restated, so an action added to a tier is held to
+ * these rules the moment it is exposed. The external tier is a subset (asserted
+ * below), which is why one cohort covers all four.
+ *
+ * The rubric these enforce, in order: what the tool is for; when to prefer a
+ * sibling instead; what it costs or changes; and what an unusual outcome means.
+ * What must NOT appear is anything the JSON Schema already carries — argument
+ * names, types, optionality, defaults. `buildToolInputSchema` emits all of that
+ * from `argsSchema`, so restating it in prose is duplication the model pays for
+ * on every turn. Field-level semantics belong in `.describe()`, which reaches
+ * the wire through the same conversion.
+ */
+describe("LLM-facing tool descriptions (#11542)", () => {
+  const LLM_EXPOSED_TOOL_IDS = new Set<string>([
+    ...WORKBENCH_TIER_TOOLS,
+    ...ACTION_TIER_ADDONS,
+    ...SYSTEM_TIER_ADDONS,
+  ]);
+
+  // Below the floor a description says nothing a caller can act on; above the
+  // ceiling it is almost always restating the schema. Both are per-description,
+  // so neither can be averaged away by the aggregate budgets.
+  const MIN_DESCRIPTION_BYTES = 120;
+  const MAX_SINGLE_DESCRIPTION_BYTES = 500;
+
+  // Aggregate ceilings, set a little above the real totals so a description
+  // that balloons trips them while ordinary wording edits do not. Same
+  // reasoning as the external payload budget above, applied to the two
+  // payloads that exist: what a third-party client is sent, and the largest
+  // set the in-app assistant can be sent.
+  const MAX_EXTERNAL_TOTAL_BYTES = 10_000;
+  const MAX_COHORT_TOTAL_BYTES = 53_000;
+
+  const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
+
+  async function cohortDefinitions() {
+    const { registry } = await createRegistryWithAudit();
+    return [...LLM_EXPOSED_TOOL_IDS]
+      .map((id) => ({ id, def: registry.get(id as ActionId)?.() }))
+      .filter((row): row is { id: string; def: NonNullable<typeof row.def> } => row.def != null);
+  }
+
+  it("covers every externally advertised tool", async () => {
+    // One cohort can only stand in for all four tiers while this holds. If a
+    // tool is ever added to the external allowlist alone, these rules would
+    // silently stop applying to the surface that needs them most.
+    expect(MCP_EXTERNAL_TIER_TOOLS.filter((id) => !LLM_EXPOSED_TOOL_IDS.has(id))).toEqual([]);
+
+    const rows = await cohortDefinitions();
+    expect(rows.length).toBe(LLM_EXPOSED_TOOL_IDS.size);
+  });
+
+  it("keeps every description within the readable range", async () => {
+    const rows = await cohortDefinitions();
+
+    const violations = rows
+      .map(({ id, def }) => ({ id, bytes: Buffer.byteLength(def.description ?? "", "utf8") }))
+      .filter((r) => r.bytes < MIN_DESCRIPTION_BYTES || r.bytes > MAX_SINGLE_DESCRIPTION_BYTES)
+      .map((r) => `${r.id} (${r.bytes} bytes)`);
+
+    expect(violations).toEqual([]);
+  });
+
+  it("never restates the argument schema in prose", async () => {
+    const rows = await cohortDefinitions();
+
+    const violations = rows
+      .filter(({ def }) => ARG_SECTION.test(def.description ?? ""))
+      .map(({ id }) => id);
+
+    expect(violations).toEqual([]);
+  });
+
+  it("never names another action by id anywhere the model can read it", async () => {
+    const rows = await cohortDefinitions();
+    const ids = new Set<string>(BUILT_IN_ACTION_IDS);
+
+    // A client namespaces each tool and rewrites every character outside
+    // [A-Za-z0-9_-], so `forge.listPRs` in prose points at a name the model was
+    // never shown.
+    //
+    // The tool description is not the only prose that reaches it: field
+    // descriptions ride the emitted schemas, and examples are forwarded as
+    // `_meta.examples`. All three are swept, because fixing only descriptions
+    // leaves the other two free to reintroduce exactly what this removes.
+    //
+    // Example ARGUMENTS are deliberately not swept. An action id there is a
+    // value the caller is meant to send — the introspection tools take one —
+    // rather than a name it is being told to call.
+    const violations: string[] = [];
+    const flag = (id: string, where: string, text: string) => {
+      for (const named of actionIdsNamedIn(text, ids)) {
+        violations.push(`${id} names ${named} in ${where}`);
+      }
+    };
+
+    for (const { id, def } of rows) {
+      flag(id, "description", def.description ?? "");
+
+      for (const example of def.examples ?? []) {
+        flag(id, "example description", example.description ?? "");
+      }
+
+      if (def.argsSchema) {
+        for (const text of nestedDescriptions(emitSchema(def.argsSchema, "input"))) {
+          flag(id, "input schema", text);
+        }
+      }
+      // Output schemas only reach the wire when the action opts in.
+      if (def.mcpOutputSchema && def.resultSchema) {
+        for (const text of nestedDescriptions(emitSchema(def.resultSchema, "output"))) {
+          flag(id, "output schema", text);
+        }
+      }
+      for (const raw of [
+        def.rawInputSchema,
+        def.mcpOutputSchema ? def.rawOutputSchema : undefined,
+      ]) {
+        for (const text of nestedDescriptions(raw)) flag(id, "raw schema", text);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it("leaves argument names to the schema that advertises them", async () => {
+    const rows = await cohortDefinitions();
+
+    // Backticked only: prose may well use a word that happens to be an
+    // argument name ("submit the command"), but backticking it is quoting the
+    // schema, which is the duplication this guards against.
+    const violations: string[] = [];
+    for (const { id, def } of rows) {
+      const text = def.description ?? "";
+      const props = inputPropertyNames(def.argsSchema);
+      if (props === null) {
+        violations.push(`${id} has an argsSchema that cannot be advertised at all`);
+        continue;
+      }
+      for (const prop of props) {
+        if (text.includes(`\`${prop}\``)) {
+          violations.push(`${id} quotes \`${prop}\``);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it("describes every argument it advertises on the external surface", async () => {
+    const rows = await cohortDefinitions();
+
+    // Scoped to the external tier because that is where prose was deleted on
+    // the promise that the schema carries the detail instead. An advertised
+    // argument with no description breaks that trade: the caller is left with
+    // a name and a type, which is exactly the state this issue set out to fix.
+    const external = new Set<string>(MCP_EXTERNAL_TIER_TOOLS);
+    const violations: string[] = [];
+    for (const { id, def } of rows) {
+      if (!external.has(id)) continue;
+      if (!def.argsSchema) continue;
+      const emitted = z
+        .object({
+          properties: z
+            .record(z.string(), z.object({ description: z.string().optional() }))
+            .optional(),
+        })
+        .parse(emitSchema(def.argsSchema, "input"));
+      for (const [prop, schema] of Object.entries(emitted.properties ?? {})) {
+        if (!schema.description?.trim()) violations.push(`${id}.${prop}`);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps both advertised payloads within budget", async () => {
+    const rows = await cohortDefinitions();
+    const bytesOf = (id: string) =>
+      Buffer.byteLength(rows.find((r) => r.id === id)?.def.description ?? "", "utf8");
+
+    const externalTotal = MCP_EXTERNAL_TIER_TOOLS.reduce((sum, id) => sum + bytesOf(id), 0);
+    const cohortTotal = rows.reduce(
+      (sum, { def }) => sum + Buffer.byteLength(def.description ?? "", "utf8"),
+      0
+    );
+
+    expect(externalTotal).toBeLessThanOrEqual(MAX_EXTERNAL_TOTAL_BYTES);
+    expect(cohortTotal).toBeLessThanOrEqual(MAX_COHORT_TOTAL_BYTES);
   });
 });
 
@@ -303,26 +575,12 @@ describe("definition invariants", () => {
     expect(missing).toEqual([]);
   });
 
-  it("every action description is at least 80 characters", async () => {
-    const { registry } = await createRegistryWithAudit();
-
-    const short: string[] = [];
-    for (const [key, factory] of registry) {
-      const def = factory();
-      const len = def.description?.length ?? 0;
-      if (len < 80) {
-        short.push(`${key} (${len} chars)`);
-      }
-    }
-
-    if (short.length > 0) {
-      console.warn(
-        `[quality-gate] ${short.length} action(s) with descriptions shorter than 80 chars:\n` +
-          short.map((s) => `  - ${s}`).join("\n")
-      );
-    }
-    // TODO(#8431): Promote to hard assert once descriptions are gradually improved.
-  });
+  // The length floor is enforced per-cohort in the LLM-facing description
+  // suite below, not here. It was a console.warn with a TODO pointing at an
+  // issue that closed months earlier — the warn-then-promote pattern that
+  // never graduates. Enforcing it registry-wide would still be wrong: the ~300
+  // UI-only actions (panel movement, focus cycling, theme toggles) are never
+  // advertised to a model, so a prose floor buys them nothing.
 
   it("every dangerous action has dangerRationale", async () => {
     const { registry } = await createRegistryWithAudit();

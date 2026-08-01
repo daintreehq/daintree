@@ -83,7 +83,7 @@ export function registerWorktreeResourceActions(
       id: "worktree.resource.provision",
       title: "Provision Resource",
       description:
-        "Run the configured provisioning commands for a worktree's remote resource (e.g. spin up a cloud devbox). Args: `worktreeId` (optional) — a worktree id from `worktree.list`; defaults to the focused or active worktree. Returns no result on success. Errors when no worktree is selected or provisioning fails.",
+        "Run the configured provisioning commands for a worktree's remote resource, such as creating a cloud devbox. This creates real infrastructure and may incur cost; tearing it down is a separate step. It executes whatever the project configured, so confirm the target worktree is the intended one first.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -122,13 +122,13 @@ export function registerWorktreeResourceActions(
       id: "worktree.resource.teardown",
       title: "Teardown Resource",
       description:
-        "Run the configured teardown commands for a worktree's remote resource (e.g. destroy a cloud devbox). Args: `worktreeId` (optional) — a worktree id from `worktree.list`; defaults to the focused or active worktree. Destructive: recovery requires re-provisioning. Returns no result on success. Errors when no worktree is selected or teardown fails.",
+        "Run the project's configured teardown commands for a worktree's remote resource, typically to destroy a cloud devbox. These are arbitrary commands the project defines, so what they destroy — and whether anything can be recovered — depends entirely on that configuration; read it before running this. The project's pause commands are the intended lighter-weight path when the resource is still needed.",
       category: "worktree",
       kind: "command",
       danger: "confirm",
       scope: "renderer",
       dangerRationale:
-        "Destroys the cloud resource associated with a worktree. Recovery requires re-provisioning.",
+        "Runs the project's configured teardown commands for this worktree's cloud resource. What they destroy, and whether it can be recovered, is defined by the project rather than by Daintree.",
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
       isEnabled: (ctx: ActionContext) => {
         const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
@@ -163,7 +163,7 @@ export function registerWorktreeResourceActions(
       id: "worktree.resource.resume",
       title: "Resume Resource",
       description:
-        "Run the configured resume commands for a worktree's paused remote resource. Args: `worktreeId` (optional) — a worktree id from `worktree.list`; defaults to the focused or active worktree. Returns no result on success. Errors when no worktree is selected or resume fails.",
+        "Run the configured resume commands to bring a paused remote resource back up. This may take time and may incur cost from the moment it returns. Resuming something that was never paused does whatever the project's command does, so it is not guaranteed to be harmless.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -202,7 +202,7 @@ export function registerWorktreeResourceActions(
       id: "worktree.resource.pause",
       title: "Pause Resource",
       description:
-        "Run the configured pause commands for a worktree's remote resource (e.g. stop a cloud devbox to save cost). Args: `worktreeId` (optional) — a worktree id from `worktree.list`; defaults to the focused or active worktree. Returns no result on success. Errors when no worktree is selected or pause fails.",
+        "Run the project's configured pause commands for a worktree's remote resource, typically to stop a cloud devbox and save cost. These are arbitrary commands the project defines: resuming runs a separate sequence, and nothing guarantees it undoes what pausing did. Read the configuration before assuming this is reversible.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -241,7 +241,7 @@ export function registerWorktreeResourceActions(
       id: "worktree.resource.status",
       title: "Check Resource Status",
       description:
-        "Run the configured status command for a worktree's remote resource and report the result. Args: `worktreeId` (optional) — a worktree id from `worktree.list` (the `id` field); defaults to the focused or active worktree. Returns `{ configured: false, status: null }` when no status command is configured; otherwise `{ configured: true, status }`, where `status` is the resulting resource-status object or null. The status object may include `lastStatus`, `lastOutput`, `error`, `lastCheckedAt`, `endpoint`, `meta`, `provider`, `resumedAt`, and `pausedAt`. Errors when no worktree is selected, the worktree is not found, or the status command fails; failures never return cached status.",
+        "Run the configured status command for a worktree's remote resource, such as a cloud devbox, and report what it said. This executes a real command and waits for it, so it costs whatever that command costs. It reports nothing when no status command is configured, and a failing command fails the call rather than falling back to a cached answer — so a failure never masquerades as stale-but-fine.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -252,7 +252,7 @@ export function registerWorktreeResourceActions(
             .string()
             .optional()
             .describe(
-              "Worktree id from `worktree.list` (the `id` field). Defaults to the focused or active worktree."
+              "Identifies the worktree whose remote resource is targeted, using an id from the worktree-listing capability. Defaults to the focused or active worktree."
             ),
         })
         .optional(),

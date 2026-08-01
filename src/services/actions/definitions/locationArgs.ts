@@ -54,20 +54,43 @@ const legacyAliasDescription = (canonical: string): string =>
  */
 const selectorField = (description: string) => z.string().min(1).optional().describe(description);
 
+/**
+ * These four descriptions are the single home for location semantics (#11542).
+ * They used to be restated in every worktree-scoped tool's own description —
+ * "defaults to the active worktree" appeared verbatim on 14 tools, and the
+ * no-active-worktree failure on more. Stating it here puts it on the wire once
+ * per field instead of once per tool, and keeps it correct when the fallback
+ * changes.
+ *
+ * Sibling capabilities are named in prose rather than by action id: a client
+ * replaces every character outside `[A-Za-z0-9_-]` when it namespaces a tool,
+ * so a literal `worktree.list` here refers to a name the model never sees.
+ */
 const worktreeIdField = selectorField(
-  "Worktree id (the `id` from `worktree.list`). Defaults to the active worktree."
+  "Identifies the worktree to act on, using an id from the worktree-listing capability. Omit this and the path to target the active worktree; the call fails when neither is given and no worktree is active."
+);
+
+/**
+ * The `requireSelector: true` variant. The default text above promises an
+ * active-worktree fallback that these tools do not have — they reject in the
+ * schema transform before any resolution runs, whether or not a worktree is
+ * active — and one of them (the default-path tool) says so in its own
+ * description, so emitting the fallback text here contradicted it on the wire.
+ */
+const worktreeIdRequiredField = selectorField(
+  "Identifies the worktree to act on, using an id from the worktree-listing capability. This action has no active-worktree fallback: supply this or the path, or the call is rejected."
 );
 
 const worktreePathField = selectorField(
-  "Absolute worktree root path (the `path` from `worktree.list`). Used when `worktreeId` is omitted."
+  "Identifies the worktree to act on by absolute root path, as an alternative to its id. The id wins when both are given, and the path is used as given — it is never silently replaced by the active worktree."
 );
 
 const projectIdField = selectorField(
-  "Project id (the `id` from `project.getAll`). Defaults to the active project."
+  "Identifies the project to act on, using an id from the project-listing capability. Omit this and the path to target the active project; an id naming no open project is rejected rather than silently retargeted, as long as the set of open projects is known."
 );
 
 const projectPathField = selectorField(
-  "Absolute project root path. Used when `projectId` is omitted."
+  "Identifies the project to act on by absolute root path, as an alternative to its id. The id wins when both are given."
 );
 
 /**
@@ -194,7 +217,7 @@ export function withWorktreeLocation<T extends z.ZodRawShape>(
   const { legacy = [], requireSelector = false, pagination } = options;
 
   const shape: Record<string, z.ZodTypeAny> = {
-    worktreeId: worktreeIdField,
+    worktreeId: requireSelector ? worktreeIdRequiredField : worktreeIdField,
     worktreePath: worktreePathField,
   };
   for (const alias of legacy) {

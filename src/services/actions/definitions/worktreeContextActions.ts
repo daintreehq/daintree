@@ -212,7 +212,8 @@ export function registerWorktreeContextActions(
     defineAction({
       id: "worktree.copyContext",
       title: "Copy Worktree Context (Alias)",
-      description: "Alias for worktree.copyTree",
+      description:
+        "Alias for generating a worktree context bundle. It accepts a subset of the copy-tree capability's arguments — path scoping is not available here, so use that capability directly for a scoped copy.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -541,7 +542,7 @@ export function registerWorktreeContextActions(
       id: "worktree.compareDiff",
       title: "Compare Worktree Diff",
       description:
-        "Compare two worktrees and return a page of the files that differ between their branches. Args: `worktreeId` (optional — the left/base side; defaults to the focused or active worktree), `compareToWorktreeId` (required — the right side to compare against), `useMergeBase` (optional — three-dot/PR-accurate range), `ignoreWhitespace` (optional), `offset` (optional, default 0), `limit` (optional, default 100, max 200). Returns { branch1, branch2, files, total, hasMore, offset, limit, nextOffset } where each file has path, oldPath?, status, insertions, deletions. When `hasMore` is true, call again with `offset: nextOffset`. Read-only; does not open any UI. For a single file's full diff, call `git.getFileDiff` afterwards.",
+        "Compare two worktrees and list the files that differ between their branches, a page at a time. Use this to survey the shape of a change; read a single file's diff afterwards for its contents. It is read-only and opens no UI. Ask for the merge-base comparison when the goal is to see what a pull request would show, rather than every difference between the two tips.",
       category: "worktree",
       kind: "query",
       danger: "safe",
@@ -656,7 +657,7 @@ export function registerWorktreeContextActions(
       id: "worktree.reviewReadiness",
       title: "Review Readiness",
       description:
-        "Summarize whether a worktree is ready to commit, push, and merge without performing any git or forge operation. Args: `worktreeId` (optional — defaults to the focused or active worktree). Returns the readiness level (ready / needs-review / blocked / unknown), commit/push/PR readiness flags, prioritized blocker/warning/info items with suggested follow-up action ids, staged/unstaged/conflict counts, ahead/behind counts, and linked PR + CI + forge-provider health context. Signals that depend on forge data report as unknown (never as passing) when the data has not arrived. Read-only; does not open any UI.",
+        "Judge whether a worktree is ready to commit, push and merge, and list what is blocking it. This is a read-only summary: it reads git state and performs no git or forge mutation. Signals that depend on forge data report as unknown rather than as passing when that data has not arrived, so an unknown is genuinely unknown and should not be read as a green light.",
       category: "worktree",
       kind: "query",
       danger: "safe",

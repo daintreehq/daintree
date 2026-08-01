@@ -62,7 +62,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     id: "help.displayImage",
     title: "Display documentation image",
     description:
-      "Display a Daintree documentation image inline in the assistant panel so it can be referenced as `[image #N]`. Call this when a `daintree-docs` search result includes an image URL that directly illustrates your answer; skip images that are decorative or tangential rather than displaying every image a result contains. Reference the returned `figureLabel` as plain text at the insertion point (e.g. `[image #2]`) — never markdown image syntax (`![](...)`), which CLI renderers strip. Args: `url` is an `https://daintree.org` image URL (data:/blob:/non-daintree URLs are rejected); `caption` and `altText` are optional. Returns { imageId, figureNumber, figureLabel } — the figure number is assigned by the app sequentially per session; never pick your own.",
+      "Show a documentation image inline in the assistant panel so an answer can point at it. Use this only when an image genuinely illustrates the answer, not for decorative ones. Reference the returned figure label as plain text at the insertion point rather than as markdown image syntax, which command-line renderers strip. Figure numbers are assigned by the app in sequence and must never be chosen yourself.",
     category: "help",
     kind: "command",
     danger: "safe",
