@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { KbdChord } from "@/components/ui/Kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -273,28 +274,16 @@ function ProjectListItem({
       role="option"
       aria-selected={isSelected}
       className={cn(
-        "group relative w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent",
-        // The accent bar is always laid out and only its opacity changes, so it
-        // rides the same transition as the row background. Toggling `content`
-        // instead meant the pseudo-element popped into existence with nothing to
-        // transition, and the bar arrived at the new row while the highlight was
-        // still fading in behind it. Duration and easing are deliberately left
-        // to match `transition-colors` above — a tier of its own would only move
-        // the desync rather than remove it.
-        "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-[''] before:opacity-0 before:transition-opacity aria-selected:before:opacity-100",
+        PALETTE_ROW_CLASS,
+        "group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left cursor-pointer",
         project.isActive
-          ? cn(
-              "text-daintree-text cursor-pointer",
-              isSelected && "bg-overlay-raised border-overlay"
-            )
+          ? "text-daintree-text"
           : project.isMissing
-            ? cn(
-                "text-daintree-text/50 cursor-pointer",
-                isSelected ? "bg-overlay-raised border-overlay" : "hover:bg-overlay-subtle"
-              )
-            : isSelected
-              ? "bg-overlay-raised border-overlay text-daintree-text cursor-pointer"
-              : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text cursor-pointer"
+            ? // A missing project stays dimmed while selected: the row's own
+              // brightness is what says the folder is gone, and restoring it
+              // under the highlight would erase that.
+              "text-daintree-text/50 hover:bg-overlay-subtle aria-selected:text-daintree-text/50"
+            : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
       )}
       // The current project is selectable too: picking where you already are is
       // a "never mind", and the handler closes the palette rather than sitting
@@ -473,13 +462,11 @@ function ScratchListItem({
       role="option"
       aria-selected={isSelected}
       className={cn(
-        "group relative w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent cursor-pointer",
-        "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-[''] before:opacity-0 before:transition-opacity aria-selected:before:opacity-100",
-        isSelected
-          ? "bg-overlay-raised border-overlay text-daintree-text"
-          : scratch.isActive
-            ? "text-daintree-text hover:bg-overlay-subtle"
-            : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
+        PALETTE_ROW_CLASS,
+        "group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left cursor-pointer",
+        scratch.isActive
+          ? "text-daintree-text hover:bg-overlay-subtle"
+          : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
       )}
       onClick={() => onSelect(scratch)}
     >

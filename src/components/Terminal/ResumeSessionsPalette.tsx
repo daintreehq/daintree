@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
@@ -29,10 +30,10 @@ function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: Resu
       aria-disabled={item.isStale || undefined}
       ref={itemRef}
       className={cn(
-        "relative w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
-        isSelected
-          ? "bg-overlay-raised border-overlay text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:bg-daintree-accent before:content-['']"
-          : "border-transparent text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text",
+        PALETTE_ROW_CLASS,
+        "w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
+        "text-daintree-text/70",
+        "hover:bg-overlay-subtle hover:text-daintree-text",
         item.isStale && "opacity-50"
       )}
       onClick={() => onSelect(item)}

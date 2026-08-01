@@ -131,14 +131,12 @@ const DURABLE_ALLOWLIST = new Set([
   // primary anchor per active focus region)
   "src/components/Layout/DockLaunchMenuItems.tsx",
 
-  // ResumeSessionsPalette selected-row left-edge accent stripe (single primary anchor per active focus region)
-  "src/components/Terminal/ResumeSessionsPalette.tsx",
-
-  // ProjectSwitcherPalette selected-row left-edge accent stripe (single primary anchor per active focus region)
-  "src/components/Project/ProjectSwitcherPalette.tsx",
-
-  // PilotView selected-row left-edge accent stripe (single primary anchor per active focus region)
-  "src/components/Pilot/PilotView.tsx",
+  // The one definition of the palette selected-row left-edge accent stripe,
+  // shared by every palette row (single primary anchor per active focus region).
+  // PilotView, ProjectSwitcherPalette, ResumeSessionsPalette, QuickSwitcherItem
+  // and ActionPaletteItem all take the stripe from here rather than spelling it
+  // out themselves, which is why none of them appears in a bucket any more.
+  "src/components/ui/paletteRowStyles.ts",
 
   // PluginQuickPickDialog selected-row left-edge accent stripe (single primary anchor per active focus region)
   "src/components/Plugin/PluginQuickPickDialog.tsx",
@@ -177,7 +175,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "plugins/builtin/github/renderer/components/CommitList.tsx",
     "plugins/builtin/github/renderer/components/GitHubListItem.tsx",
     "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
-    "src/components/ActionPalette/ActionPaletteItem.tsx",
     "src/components/Browser/WebviewDialog.tsx",
     "src/components/Commands/CommandBuilder.tsx",
     "src/components/Commands/CommandPicker.tsx",
@@ -203,7 +200,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Project/GitInitDialog.tsx",
     "src/components/Project/ProjectNotificationsTab.tsx",
     "src/components/Project/WelcomeScreen.tsx",
-    "src/components/QuickSwitcher/QuickSwitcherItem.tsx",
     "src/components/Recovery/CrashRecoveryDialog.tsx",
     "src/components/Settings/AgentSelectorDropdown.tsx",
     "src/components/Settings/EditorIntegrationTab.tsx",
