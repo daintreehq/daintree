@@ -180,7 +180,7 @@ const OPENAI_SETTINGS: VoiceInputSettings = {
   language: "en",
   customDictionary: [],
   transcriptionProvider: "openai",
-  transcriptionModel: "gpt-realtime-whisper",
+  transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,
   correctionModel: "gpt-5.6-luna",
   correctionCustomInstructions: "",

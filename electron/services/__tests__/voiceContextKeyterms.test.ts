@@ -3,6 +3,7 @@ import type { PtyClient } from "../PtyClient.js";
 import {
   assembleKeyterms,
   formatKeytermPrompt,
+  sanitizeOpenAIKeywords,
   tokenizeBranchName,
   tokenizeProjectName,
   extractTerminalIdentifiers,
@@ -459,5 +460,117 @@ describe("formatKeytermPrompt", () => {
 
   it("skips whitespace-only terms defensively", () => {
     expect(formatKeytermPrompt(["   ", "\t\n", "foo"])).toBe("Keywords: foo");
+  });
+});
+
+describe("sanitizeOpenAIKeywords", () => {
+  const CR = String.fromCharCode(13);
+  const LF = String.fromCharCode(10);
+
+  it("passes through safe terms unchanged and in order", () => {
+    expect(sanitizeOpenAIKeywords(["Daintree", "xterm", "PtyClient"])).toEqual([
+      "Daintree",
+      "xterm",
+      "PtyClient",
+    ]);
+  });
+
+  it("preserves internal spaces, punctuation, and casing in literal terms", () => {
+    expect(sanitizeOpenAIKeywords(["AC-42", "Premium Plus", "node_modules"])).toEqual([
+      "AC-42",
+      "Premium Plus",
+      "node_modules",
+    ]);
+  });
+
+  it.each([
+    ["less-than", "<div>"],
+    ["greater-than", "a->b"],
+    ["carriage return", `foo${CR}bar`],
+    ["line feed", `foo${LF}bar`],
+  ])("drops a term containing %s", (_label, term) => {
+    expect(sanitizeOpenAIKeywords([term])).toEqual([]);
+  });
+
+  it("drops the whole offending term rather than stripping the character", () => {
+    // Stripping would yield "div" — a different literal the user never typed,
+    // biasing transcription toward a word that isn't on their screen.
+    const result = sanitizeOpenAIKeywords(["<div>"]);
+    expect(result).toEqual([]);
+    expect(result).not.toContain("div");
+  });
+
+  it("keeps safe terms that surround a rejected one", () => {
+    expect(sanitizeOpenAIKeywords(["Daintree", "a<b", "xterm"])).toEqual(["Daintree", "xterm"]);
+  });
+
+  it("lets later safe terms fill capacity freed by rejected entries", () => {
+    const terms = ["bad<term", ...Array.from({ length: 50 }, (_, i) => `term${i}`)];
+    const result = sanitizeOpenAIKeywords(terms);
+    expect(result).toHaveLength(50);
+    expect(result).not.toContain("bad<term");
+    expect(result[0]).toBe("term0");
+    expect(result[49]).toBe("term49");
+  });
+
+  it("trims surrounding whitespace and drops empty results", () => {
+    expect(sanitizeOpenAIKeywords(["  Daintree  ", "   ", "\t", "xterm"])).toEqual([
+      "Daintree",
+      "xterm",
+    ]);
+  });
+
+  it("deduplicates case-insensitively, keeping the first spelling", () => {
+    expect(sanitizeOpenAIKeywords(["Daintree", "daintree", "DAINTREE", "xterm"])).toEqual([
+      "Daintree",
+      "xterm",
+    ]);
+  });
+
+  it("deduplicates terms that collapse to the same value only after trimming", () => {
+    expect(sanitizeOpenAIKeywords(["Daintree", "  Daintree  "])).toEqual(["Daintree"]);
+  });
+
+  it("caps term length and dedups terms that collide only after capping", () => {
+    const long = "a".repeat(150);
+    const result = sanitizeOpenAIKeywords([long, `${long}bbb`]);
+    expect(result).toEqual(["a".repeat(100)]);
+  });
+
+  it("caps the total number of terms", () => {
+    const result = sanitizeOpenAIKeywords(Array.from({ length: 200 }, (_, i) => `term${i}`));
+    expect(result).toHaveLength(50);
+  });
+
+  it("returns an empty array when every term is unsafe", () => {
+    expect(sanitizeOpenAIKeywords(["<a>", `b${LF}c`, "   ", "c>d"])).toEqual([]);
+  });
+
+  it("trims a trailing newline rather than rejecting the term", () => {
+    // Trimming yields the same term the user meant; only an INTERNAL CR/LF
+    // (a multi-line blob) is grounds for dropping it.
+    expect(sanitizeOpenAIKeywords([`Daintree${LF}`, `xterm${CR}`])).toEqual(["Daintree", "xterm"]);
+  });
+
+  it("returns an empty array for empty input", () => {
+    expect(sanitizeOpenAIKeywords([])).toEqual([]);
+  });
+
+  it("ignores non-string entries defensively", () => {
+    const hostile = ["Daintree", null, undefined, 42, { term: "x" }] as unknown as string[];
+    expect(sanitizeOpenAIKeywords(hostile)).toEqual(["Daintree"]);
+  });
+
+  it("does not mutate the input array", () => {
+    // The session keyterm snapshot is frozen and reused across reconnects.
+    const input = Object.freeze(["Daintree", "<bad>", "xterm"]);
+    expect(sanitizeOpenAIKeywords(input)).toEqual(["Daintree", "xterm"]);
+    expect(input).toEqual(["Daintree", "<bad>", "xterm"]);
+  });
+
+  it("produces a prompt free of rejected terms when composed with formatKeytermPrompt", () => {
+    const prompt = formatKeytermPrompt(sanitizeOpenAIKeywords(["Daintree", "<script>", "xterm"]));
+    expect(prompt).toBe("Keywords: Daintree, xterm");
+    expect(prompt).not.toContain("script");
   });
 });

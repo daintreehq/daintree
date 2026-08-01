@@ -413,6 +413,55 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
   return result;
 }
 
+// OpenAI's Realtime API rejects an entire `session.update` if any entry in
+// `transcription.keywords` contains one of these characters, so a single bad
+// keyterm would kill the whole dictation session. Terminal output is a rich
+// source of `<`/`>` (shell redirects, JSX, diff markers), so this is a live
+// hazard, not a theoretical one.
+const OPENAI_FORBIDDEN_KEYWORD_CHARS = /[<>\r\n]/;
+
+/**
+ * Sanitizes assembled keyterms for OpenAI's `transcription.keywords` array.
+ *
+ * Offending terms are DROPPED WHOLE rather than stripped: deleting `<` from
+ * `<div>` yields `div`, a different literal that would bias transcription
+ * toward a word the user never has on screen. A dropped term is simply absent;
+ * a mangled one is silently wrong.
+ *
+ * The count and length bounds are Daintree's own conservative limits (shared
+ * with the Deepgram path) — OpenAI documents neither, so we do not claim to
+ * mirror an API limit here.
+ *
+ * Pure and non-mutating: the session keyterm snapshot is frozen for the
+ * session's lifetime and reused across reconnects.
+ */
+export function sanitizeOpenAIKeywords(terms: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const term of terms) {
+    if (out.length >= MAX_KEYTERMS) break;
+    // Defensive: `keyterms` crosses an IPC boundary, so a malformed payload can
+    // carry non-strings despite the declared type.
+    if (typeof term !== "string") continue;
+
+    const trimmed = term.trim();
+    if (trimmed.length === 0) continue;
+    if (OPENAI_FORBIDDEN_KEYWORD_CHARS.test(trimmed)) continue;
+
+    const capped =
+      trimmed.length > MAX_KEYTERM_LENGTH ? trimmed.slice(0, MAX_KEYTERM_LENGTH) : trimmed;
+    // Dedup after trimming/capping so two terms that collapse to the same wire
+    // value don't burn two slots.
+    const key = capped.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(capped);
+  }
+
+  return out;
+}
+
 export function formatKeytermPrompt(terms: string[], maxChars: number = MAX_PROMPT_CHARS): string {
   if (terms.length === 0) return "";
 

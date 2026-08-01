@@ -50,7 +50,7 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   language: "en",
   customDictionary: [],
   transcriptionProvider: "openai",
-  transcriptionModel: "gpt-realtime-whisper",
+  transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,
   correctionModel: VOICE_DICTATION_AI_MODEL,
   correctionCustomInstructions: "",
@@ -100,11 +100,17 @@ export function getVoiceSettings(): VoiceInputSettings {
   if (providerNeedsDefault) merged.transcriptionProvider = "openai";
 
   // Normalize a stale/invalid transcription model to the only supported value.
-  // The model union is single-valued, so this is a one-shot cleanup of legacy
-  // Deepgram model strings ('nova-3' / 'nova-2'), not a user-choice revert —
-  // the provider, not the model, is what selects the backend now.
-  const staleTranscriptionModel = merged.transcriptionModel !== "gpt-realtime-whisper";
-  if (staleTranscriptionModel) merged.transcriptionModel = "gpt-realtime-whisper";
+  // The model union is single-valued, so this is a one-shot cleanup of the
+  // retired 'gpt-realtime-whisper' and legacy Deepgram model strings ('nova-3' /
+  // 'nova-2'), not a user-choice revert — the provider, not the model, is what
+  // selects the backend, and `transcriptionProvider` above is left untouched.
+  // migration027 moves stores below schema 27 forward; this read-time net
+  // catches stores already on the current version (never revisited by the
+  // migration), plus post-downgrade or hand-edited values. If a model picker is
+  // ever added, widening the union must also replace this single-target
+  // normalizer with valid-choice preservation.
+  const staleTranscriptionModel = merged.transcriptionModel !== "gpt-live-transcribe";
+  if (staleTranscriptionModel) merged.transcriptionModel = "gpt-live-transcribe";
 
   // Same one-shot cleanup for the correction model: gpt-5.6-luna replaced the
   // retired gpt-5-mini/gpt-5-nano tiers, so this union is single-valued too.

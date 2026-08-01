@@ -60,7 +60,7 @@ const TRANSCRIPTION_PROVIDERS: {
   {
     value: "openai",
     label: "OpenAI",
-    description: "Realtime Whisper · spoken-command formatting",
+    description: "Live Transcribe · keyword biasing · spoken-command formatting",
   },
   {
     value: "deepgram",
@@ -76,7 +76,7 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   language: "en",
   customDictionary: [],
   transcriptionProvider: "openai",
-  transcriptionModel: "gpt-realtime-whisper",
+  transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,
   correctionModel: VOICE_DICTATION_AI_MODEL,
   correctionCustomInstructions: "",

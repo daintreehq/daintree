@@ -63,6 +63,7 @@ import { migration002 } from "../migrations/002-add-terminal-location.js";
 import { migration003 } from "../migrations/003-migrate-recipes-to-project.js";
 import { migration004 } from "../migrations/004-upgrade-correction-model.js";
 import { migration025 } from "../migrations/025-upgrade-voice-correction-model.js";
+import { migration027 } from "../migrations/027-upgrade-voice-transcription-model.js";
 import { migration005 } from "../migrations/005-add-getting-started-checklist.js";
 import { migration007 } from "../migrations/007-reduce-default-terminal-scrollback.js";
 import { migration008 } from "../migrations/008-split-notification-sounds.js";
@@ -721,6 +722,88 @@ describe("MigrationRunner", () => {
     it("skips when no voiceInput settings exist", () => {
       const store = createMockStore(storePath, {});
       migration025.up(store as never);
+      expect(store.data.voiceInput).toBeUndefined();
+    });
+  });
+
+  describe("migration 027 — upgrade voice transcription model to gpt-live-transcribe", () => {
+    it("upgrades the retired gpt-realtime-whisper and preserves sibling fields", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: {
+          transcriptionModel: "gpt-realtime-whisper",
+          enabled: true,
+          language: "es",
+          customDictionary: ["Daintree"],
+        },
+      });
+      migration027.up(store as never);
+      const voiceInput = store.data.voiceInput as Record<string, unknown>;
+      expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
+      expect(voiceInput.enabled).toBe(true);
+      expect(voiceInput.language).toBe("es");
+      expect(voiceInput.customDictionary).toEqual(["Daintree"]);
+    });
+
+    it("moves a Deepgram user forward without touching their provider choice", () => {
+      // The provider — not the model — selects the backend, so normalizing the
+      // single-valued model must never revert a real user choice.
+      const store = createMockStore(storePath, {
+        voiceInput: {
+          transcriptionModel: "gpt-realtime-whisper",
+          transcriptionProvider: "deepgram",
+          deepgramApiKey: "dg-key",
+        },
+      });
+      migration027.up(store as never);
+      const voiceInput = store.data.voiceInput as Record<string, unknown>;
+      expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
+      expect(voiceInput.transcriptionProvider).toBe("deepgram");
+      expect(voiceInput.deepgramApiKey).toBe("dg-key");
+    });
+
+    it("upgrades a legacy Deepgram model string to gpt-live-transcribe", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { transcriptionModel: "nova-3", enabled: true },
+      });
+      migration027.up(store as never);
+      const voiceInput = store.data.voiceInput as { transcriptionModel: string };
+      expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
+    });
+
+    it("upgrades missing transcriptionModel to gpt-live-transcribe", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { enabled: true },
+      });
+      migration027.up(store as never);
+      const voiceInput = store.data.voiceInput as { transcriptionModel: string };
+      expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
+    });
+
+    it("upgrades a malformed/unknown transcriptionModel value to gpt-live-transcribe", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { transcriptionModel: "some-old-junk", enabled: true },
+      });
+      migration027.up(store as never);
+      const voiceInput = store.data.voiceInput as { transcriptionModel: string };
+      expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
+    });
+
+    it("leaves gpt-live-transcribe unchanged without rewriting the store", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { transcriptionModel: "gpt-live-transcribe", enabled: true },
+      });
+      const before = store.data.voiceInput;
+      migration027.up(store as never);
+      const voiceInput = store.data.voiceInput as { transcriptionModel: string };
+      expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
+      // No write on the already-current path: store.set would replace the object
+      // (via spread), so an untouched reference proves the migration no-oped.
+      expect(store.data.voiceInput).toBe(before);
+    });
+
+    it("skips when no voiceInput settings exist", () => {
+      const store = createMockStore(storePath, {});
+      migration027.up(store as never);
       expect(store.data.voiceInput).toBeUndefined();
     });
   });

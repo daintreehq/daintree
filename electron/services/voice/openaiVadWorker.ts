@@ -1,8 +1,8 @@
 /**
  * VAD side-chain worker for `OpenAITranscriptionProvider`.
  *
- * `gpt-realtime-whisper` has no server-side VAD (`turn_detection` must be
- * null), so segmentation happens on the client. Rather than commit on a blind
+ * The provider sends `turn_detection: null`, so the server never auto-commits
+ * and segmentation happens on the client. Rather than commit on a blind
  * 2s timer — which cuts words mid-pause and adds latency at end-of-speech — we
  * run Silero VAD v5 (via `avr-vad`) here, on a worker thread, and report
  * speech-boundary events back to the provider. ONNX inference runs every ~32ms

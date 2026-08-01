@@ -159,7 +159,7 @@ const BASE_SETTINGS: VoiceInputSettings = {
   language: "en",
   customDictionary: [],
   transcriptionProvider: "deepgram",
-  transcriptionModel: "gpt-realtime-whisper",
+  transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,
   correctionModel: "gpt-5.6-luna",
   correctionCustomInstructions: "",

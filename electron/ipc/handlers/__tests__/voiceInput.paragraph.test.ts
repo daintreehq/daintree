@@ -104,7 +104,7 @@ vi.mock("../../../store.js", () => ({
           customDictionary: [],
           correctionCustomInstructions: "",
           language: "en",
-          transcriptionModel: "gpt-realtime-whisper",
+          transcriptionModel: "gpt-live-transcribe",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
         };
@@ -450,7 +450,7 @@ describe("voiceInput — manual paragraphing strategy", () => {
       customDictionary: [],
       correctionCustomInstructions: "",
       language: "en",
-      transcriptionModel: "gpt-realtime-whisper",
+      transcriptionModel: "gpt-live-transcribe",
       paragraphingStrategy: "manual",
       resolveFileLinks: true,
     });
@@ -504,7 +504,7 @@ describe("voiceInput — context keyterms wiring", () => {
       language: "en",
       customDictionary: [],
       transcriptionProvider: provider,
-      transcriptionModel: "gpt-realtime-whisper",
+      transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
       correctionModel: "gpt-5.6-luna",
       correctionCustomInstructions: "",
@@ -644,7 +644,7 @@ describe("getVoiceSettings migration", () => {
       correctionApiKey: "sk-correction",
       language: "en",
       customDictionary: [],
-      transcriptionModel: "gpt-realtime-whisper",
+      transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
       correctionModel: "gpt-5-mini",
       correctionCustomInstructions: "",
@@ -725,6 +725,62 @@ describe("getVoiceSettings migration", () => {
 
     expect(settings.transcriptionProvider).toBe("deepgram");
     // A valid stored provider with no legacy keys triggers no write.
+    expect(vi.mocked(store.set)).not.toHaveBeenCalled();
+  });
+
+  it("moves a stored gpt-realtime-whisper forward and persists the upgrade", async () => {
+    // migration027 handles stores below schema 27; this read-time net catches a
+    // store already marked current but carrying the retired value (downgrade or
+    // hand-edit). It must move FORWARD, never back to the old literal.
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-present",
+      transcriptionModel: "gpt-realtime-whisper",
+    });
+
+    const settings = getVoiceSettings();
+
+    expect(settings.transcriptionModel).toBe("gpt-live-transcribe");
+    expect(vi.mocked(store.set)).toHaveBeenCalledWith(
+      "voiceInput",
+      expect.objectContaining({ transcriptionModel: "gpt-live-transcribe" })
+    );
+  });
+
+  it("upgrades the model without disturbing a deepgram provider choice", async () => {
+    // The provider — not the model — selects the backend. Normalizing the
+    // single-valued model must never revert a real user choice (#9175).
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      deepgramApiKey: "dg-xxx",
+      transcriptionProvider: "deepgram",
+      transcriptionModel: "nova-3",
+    });
+
+    const settings = getVoiceSettings();
+
+    expect(settings.transcriptionModel).toBe("gpt-live-transcribe");
+    expect(settings.transcriptionProvider).toBe("deepgram");
+    expect(settings.deepgramApiKey).toBe("dg-xxx");
+    const persisted = (
+      vi.mocked(store.set).mock.calls[0] as unknown as [string, Record<string, unknown>]
+    )[1];
+    expect(persisted).toHaveProperty("transcriptionProvider", "deepgram");
+  });
+
+  it("does not rewrite the store when the model is already current", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-present",
+      transcriptionModel: "gpt-live-transcribe",
+    });
+
+    const settings = getVoiceSettings();
+
+    expect(settings.transcriptionModel).toBe("gpt-live-transcribe");
     expect(vi.mocked(store.set)).not.toHaveBeenCalled();
   });
 

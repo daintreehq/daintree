@@ -2867,7 +2867,7 @@ function buildElectronApi(): ElectronAPI {
           language: string;
           customDictionary: string[];
           transcriptionProvider: "openai" | "deepgram";
-          transcriptionModel: "gpt-realtime-whisper";
+          transcriptionModel: "gpt-live-transcribe";
           correctionEnabled: boolean;
           correctionModel: "gpt-5.6-luna";
           correctionCustomInstructions: string;
