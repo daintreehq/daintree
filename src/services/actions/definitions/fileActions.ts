@@ -196,7 +196,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     id: "file.openPanel",
     title: "Open File Panel",
     description:
-      "Show a file to the user in a persistent read-only panel in the grid. Markdown and HTML can be shown as source or rendered, with rendered HTML sandboxed. It reuses a panel already showing the same file rather than opening a duplicate. This displays a file to the user; read the file directly when the content is for you.",
+      "Show a file to the user in a persistent read-only panel in the grid. Markdown and HTML can be shown as source or rendered, with rendered HTML sandboxed. It reuses an existing grid or dock panel showing the same file rather than duplicating it, but will not revive a trashed or backgrounded one. Read the file directly when the content is for you rather than the user.",
     category: "files",
     kind: "command",
     danger: "safe",

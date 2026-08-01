@@ -248,7 +248,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     id: "cliAvailability.get",
     title: "Get CLI Availability",
     description:
-      "Read which agent CLIs are installed on this machine, to confirm one exists before launching it. This reads a cache populated at startup rather than probing now, so a CLI installed since then will not appear until the cache is refreshed. Refresh explicitly when a stale answer would be misleading.",
+      "Read which agent CLIs are installed on this machine, to confirm one exists before launching it. It answers from cache when one is warm and probes on demand when it is not, so a cached answer can miss a CLI installed since. Refresh explicitly when a stale answer would be misleading.",
     category: "system",
     kind: "query",
     danger: "safe",

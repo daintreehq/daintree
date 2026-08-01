@@ -242,7 +242,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     palette: { mode: "hidden" },
     title: "Capture Browser Screenshot",
     description:
-      "Capture what the focused browser panel is currently showing as an image. Use this to see a rendered page — a running dev server, a deployed site — when its appearance is what matters. It captures the focused panel only, so focus the intended one first, and it returns pixels rather than page text or markup.",
+      "Capture what a browser or dev-preview panel is currently showing, as an image. Use this to see a rendered page — a running dev server, a deployed site — when its appearance is what matters. Name the panel to capture; without one it falls back to whichever is focused. It returns pixels rather than page text or markup.",
     category: "browser",
     kind: "command",
     danger: "safe",

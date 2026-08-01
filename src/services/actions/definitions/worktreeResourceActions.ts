@@ -122,13 +122,13 @@ export function registerWorktreeResourceActions(
       id: "worktree.resource.teardown",
       title: "Teardown Resource",
       description:
-        "Run the project's configured teardown commands for a worktree's remote resource, typically to destroy a cloud devbox. These are arbitrary commands the project defines, so what they destroy — and whether anything can be recovered — depends entirely on that configuration; read it before running this. Pausing is the gentler option when the resource is still needed.",
+        "Run the project's configured teardown commands for a worktree's remote resource, typically to destroy a cloud devbox. These are arbitrary commands the project defines, so what they destroy — and whether anything can be recovered — depends entirely on that configuration; read it before running this. The project's pause commands are the intended lighter-weight path when the resource is still needed.",
       category: "worktree",
       kind: "command",
       danger: "confirm",
       scope: "renderer",
       dangerRationale:
-        "Destroys the cloud resource associated with a worktree. Recovery requires re-provisioning.",
+        "Runs the project's configured teardown commands for this worktree's cloud resource. What they destroy, and whether it can be recovered, is defined by the project rather than by Daintree.",
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
       isEnabled: (ctx: ActionContext) => {
         const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;

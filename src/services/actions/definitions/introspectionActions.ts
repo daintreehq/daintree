@@ -133,7 +133,7 @@ export function registerIntrospectionActions(
     id: "actions.getContext",
     title: "Get Action Context",
     description:
-      "Snapshot what the user currently has open — active project, worktree, focused terminal, and panel state. Call this first to resolve an implicit 'current' target before an action that needs an explicit id. It never fails; anything not focused or active is simply absent, so treat a missing field as nothing being selected rather than as an error.",
+      "Snapshot what the user currently has open — active project, worktree, focused terminal, and panel state. Call this first to resolve an implicit 'current' target before an action that needs an explicit id. Anything not focused or active is simply absent, so treat a missing field as nothing being selected. It can fail early in a session, before the worktree view store has initialised.",
     category: "introspection",
     kind: "query",
     danger: "safe",

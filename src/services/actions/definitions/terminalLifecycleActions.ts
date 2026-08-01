@@ -435,7 +435,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.closeAll",
     title: "Close All Terminals",
     description:
-      "Close every panel in the active worktree at once, not only terminals. Most move to the trash and stay briefly recoverable, but panels set to remove on exit are discarded outright. This takes the user's own shells and other agents' terminals with it, so prefer closing panels individually. Tooling-internal panels are spared.",
+      "Close every panel in the active worktree at once, not only terminals. Most move to the trash and stay briefly recoverable, but panels set to remove on exit are discarded outright. This takes the user's own shells and other agents' terminals with it, so prefer closing panels individually. Tooling-internal and dialog-hosted panels are spared.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -471,7 +471,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.killAll",
     title: "Kill All Terminals",
     description:
-      "Permanently destroy every panel in the project at once — across all worktrees, of every kind, including trashed and backgrounded ones — with no trash step and no recovery. This takes the user's own shells and other agents' running work with it; only tooling-internal panels are spared. There is essentially never a reason for an automated caller to use this.",
+      "Permanently destroy every panel in the project at once — across all worktrees, of every kind, including trashed and backgrounded ones — with no trash step and no recovery. This takes the user's own shells and other agents' running work with it; only tooling-internal and dialog-hosted panels are spared. There is essentially never a reason for an automated caller to use this.",
     category: "terminal",
     kind: "command",
     danger: "confirm",

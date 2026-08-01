@@ -267,7 +267,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.getSettings",
     title: "Get Project Settings",
     description:
-      "Read a project's operational settings — run commands, dev server command, worktree naming, forge remote and notification overrides. This deliberately exposes only that fixed set: environment variables, secrets, access-control state and UI preferences are withheld and cannot be read here at all, so their absence is by design rather than a sign they are unset.",
+      "Read a project's operational settings — run commands, dev server command, worktree naming, forge remote and notification overrides. Dedicated environment-variable, secret and access-control fields are withheld. The command strings themselves come back verbatim though, so treat them as potentially sensitive: a project may have inlined a credential in one.",
     category: "project",
     kind: "query",
     danger: "safe",

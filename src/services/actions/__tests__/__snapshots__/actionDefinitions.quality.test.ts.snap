@@ -30,7 +30,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "introspection",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Snapshot what the user currently has open — active project, worktree, focused terminal, and panel state. Call this first to resolve an implicit 'current' target before an action that needs an explicit id. It never fails; anything not focused or active is simply absent, so treat a missing field as nothing being selected rather than as an error.",
+    "description": "Snapshot what the user currently has open — active project, worktree, focused terminal, and panel state. Call this first to resolve an implicit 'current' target before an action that needs an explicit id. Anything not focused or active is simply absent, so treat a missing field as nothing being selected. It can fail early in a session, before the worktree view store has initialised.",
     "examples": undefined,
     "id": "actions.getContext",
     "keywords": undefined,
@@ -291,7 +291,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Look up one agent's live state by its agent id, to tell whether it is working, waiting on the user, or finished. Use a terminal listing or status snapshot to enumerate terminals — this answers about a single agent only. It never fails: an agent that is not running comes back flagged as not found with empty fields, so absence is data rather than an error. An exit code appears only once the process has actually ended.",
+    "description": "Look up one agent's live state by its agent id, to tell whether it is working, waiting on the user, or finished. Use a terminal listing or status snapshot to enumerate terminals — this answers about a single agent only. It never fails: with no matching panel the result is flagged not found with empty fields, while a panel whose agent has exited stays found and carries its exit code.",
     "examples": [
       {
         "args": {
@@ -382,7 +382,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List every agent that can be launched right now — built-in, user-defined and plugin-contributed — read from the authoritative registry rather than a local guess. Use this before launching so an id is known to exist. Launchability is confirmed by a live probe of each CLI, so early in a session that probe may still be running and the result flags itself as incomplete; call again rather than treating a missing agent as absent.",
+    "description": "List every registered agent — built-in, user-defined and plugin-contributed — from the authoritative registry, including ones that are not currently launchable. Use this before launching so an id is known to exist, and read each entry's launchability rather than assuming membership implies it. Those fields appear only once a live probe of each CLI finishes, and the result says so while that is incomplete.",
     "examples": undefined,
     "id": "agent.listAvailable",
     "keywords": undefined,
@@ -738,7 +738,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "browser",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Capture what the focused browser panel is currently showing as an image. Use this to see a rendered page — a running dev server, a deployed site — when its appearance is what matters. It captures the focused panel only, so focus the intended one first, and it returns pixels rather than page text or markup.",
+    "description": "Capture what a browser or dev-preview panel is currently showing, as an image. Use this to see a rendered page — a running dev server, a deployed site — when its appearance is what matters. Name the panel to capture; without one it falls back to whichever is focused. It returns pixels rather than page text or markup.",
     "examples": undefined,
     "id": "browser.captureScreenshot",
     "keywords": undefined,
@@ -899,7 +899,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "system",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Read which agent CLIs are installed on this machine, to confirm one exists before launching it. This reads a cache populated at startup rather than probing now, so a CLI installed since then will not appear until the cache is refreshed. Refresh explicitly when a stale answer would be misleading.",
+    "description": "Read which agent CLIs are installed on this machine, to confirm one exists before launching it. It answers from cache when one is warm and probes on demand when it is not, so a cached answer can miss a CLI installed since. Refresh explicitly when a stale answer would be misleading.",
     "examples": undefined,
     "id": "cliAvailability.get",
     "keywords": undefined,
@@ -1329,7 +1329,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "files",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Show a file to the user in a persistent read-only panel in the grid. Markdown and HTML can be shown as source or rendered, with rendered HTML sandboxed. It reuses a panel already showing the same file rather than opening a duplicate. This displays a file to the user; read the file directly when the content is for you.",
+    "description": "Show a file to the user in a persistent read-only panel in the grid. Markdown and HTML can be shown as source or rendered, with rendered HTML sandboxed. It reuses an existing grid or dock panel showing the same file rather than duplicating it, but will not revive a trashed or backgrounded one. Read the file directly when the content is for you rather than the user.",
     "examples": [
       {
         "args": {
@@ -3565,7 +3565,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "project",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Read a project's operational settings — run commands, dev server command, worktree naming, forge remote and notification overrides. This deliberately exposes only that fixed set: environment variables, secrets, access-control state and UI preferences are withheld and cannot be read here at all, so their absence is by design rather than a sign they are unset.",
+    "description": "Read a project's operational settings — run commands, dev server command, worktree naming, forge remote and notification overrides. Dedicated environment-variable, secret and access-control fields are withheld. The command strings themselves come back verbatim though, so treat them as potentially sensitive: a project may have inlined a credential in one.",
     "examples": undefined,
     "id": "project.getSettings",
     "keywords": undefined,
@@ -4139,7 +4139,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Close every panel in the active worktree at once, not only terminals. Most move to the trash and stay briefly recoverable, but panels set to remove on exit are discarded outright. This takes the user's own shells and other agents' terminals with it, so prefer closing panels individually. Tooling-internal panels are spared.",
+    "description": "Close every panel in the active worktree at once, not only terminals. Most move to the trash and stay briefly recoverable, but panels set to remove on exit are discarded outright. This takes the user's own shells and other agents' terminals with it, so prefer closing panels individually. Tooling-internal and dialog-hosted panels are spared.",
     "examples": undefined,
     "id": "terminal.closeAll",
     "keywords": [
@@ -4577,7 +4577,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "confirm",
     "dangerRationale": "Permanently kills every user-facing terminal. All scrollback and session state are lost.",
-    "description": "Permanently destroy every panel in the project at once — across all worktrees, of every kind, including trashed and backgrounded ones — with no trash step and no recovery. This takes the user's own shells and other agents' running work with it; only tooling-internal panels are spared. There is essentially never a reason for an automated caller to use this.",
+    "description": "Permanently destroy every panel in the project at once — across all worktrees, of every kind, including trashed and backgrounded ones — with no trash step and no recovery. This takes the user's own shells and other agents' running work with it; only tooling-internal and dialog-hosted panels are spared. There is essentially never a reason for an automated caller to use this.",
     "examples": undefined,
     "id": "terminal.killAll",
     "keywords": [
@@ -6119,8 +6119,8 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   {
     "category": "worktree",
     "danger": "confirm",
-    "dangerRationale": "Destroys the cloud resource associated with a worktree. Recovery requires re-provisioning.",
-    "description": "Run the project's configured teardown commands for a worktree's remote resource, typically to destroy a cloud devbox. These are arbitrary commands the project defines, so what they destroy — and whether anything can be recovered — depends entirely on that configuration; read it before running this. Pausing is the gentler option when the resource is still needed.",
+    "dangerRationale": "Runs the project's configured teardown commands for this worktree's cloud resource. What they destroy, and whether it can be recovered, is defined by the project rather than by Daintree.",
+    "description": "Run the project's configured teardown commands for a worktree's remote resource, typically to destroy a cloud devbox. These are arbitrary commands the project defines, so what they destroy — and whether anything can be recovered — depends entirely on that configuration; read it before running this. The project's pause commands are the intended lighter-weight path when the resource is still needed.",
     "examples": undefined,
     "id": "worktree.resource.teardown",
     "keywords": undefined,

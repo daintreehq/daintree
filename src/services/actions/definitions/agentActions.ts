@@ -655,7 +655,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.getState",
     title: "Get Agent State",
     description:
-      "Look up one agent's live state by its agent id, to tell whether it is working, waiting on the user, or finished. Use a terminal listing or status snapshot to enumerate terminals — this answers about a single agent only. It never fails: an agent that is not running comes back flagged as not found with empty fields, so absence is data rather than an error. An exit code appears only once the process has actually ended.",
+      "Look up one agent's live state by its agent id, to tell whether it is working, waiting on the user, or finished. Use a terminal listing or status snapshot to enumerate terminals — this answers about a single agent only. It never fails: with no matching panel the result is flagged not found with empty fields, while a panel whose agent has exited stays found and carries its exit code.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -991,7 +991,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.listAvailable",
     title: "List Available Agents",
     description:
-      "List every agent that can be launched right now — built-in, user-defined and plugin-contributed — read from the authoritative registry rather than a local guess. Use this before launching so an id is known to exist. Launchability is confirmed by a live probe of each CLI, so early in a session that probe may still be running and the result flags itself as incomplete; call again rather than treating a missing agent as absent.",
+      "List every registered agent — built-in, user-defined and plugin-contributed — from the authoritative registry, including ones that are not currently launchable. Use this before launching so an id is known to exist, and read each entry's launchability rather than assuming membership implies it. Those fields appear only once a live probe of each CLI finishes, and the result says so while that is incomplete.",
     category: "agent",
     kind: "query",
     danger: "safe",
