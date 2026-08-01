@@ -20,7 +20,7 @@ import { ACTIONS_LIST_TOOL } from "./helpAssistantTierAllowlists.js";
  * `tools/call` for a name it never received (Claude Code builds its registry
  * from `tools/list` and rejects unlisted names before they become requests).
  *
- * The size is a hard product constraint, not a style preference (#11585). At 99
+ * The size is a hard product constraint, not a style preference (#11585). At 100
  * entries / ~128 KB of schema this surface was past what clients tolerate:
  * Cursor caps the tool count across all connected servers and silently
  * truncates the overflow, and GitHub Copilot's 128-tool cap is a hard blocking
@@ -34,9 +34,12 @@ import { ACTIONS_LIST_TOOL } from "./helpAssistantTierAllowlists.js";
  * workbench/action/system tiers in `helpAssistantTierAllowlists.ts`, which no
  * third-party client cap applies to.
  *
- * Both the count and the summed description bytes are budgeted by
- * `actionDefinitions.quality.test.ts` — 24 tools carrying novel-length
- * descriptions would reproduce the same failure the count alone looks fine for.
+ * Budgeted in both dimensions, because the failure is measured in bytes as much
+ * as in tools: the count ceiling lives in `tierAuth.test.ts` (against
+ * `TIER_ALLOWLISTS.external`, the actual gate) and the summed description bytes
+ * in `actionDefinitions.quality.test.ts` (where the live registry text is
+ * reachable). 23 tools carrying novel-length descriptions would reproduce the
+ * same truncation with a count that still looks fine.
  */
 export const MCP_EXTERNAL_TIER_TOOLS = [
   ACTIONS_LIST_TOOL,

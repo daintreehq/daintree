@@ -582,7 +582,6 @@ describe("McpServerService", () => {
         "actions.list",
         "worktree.list",
         "worktree.createWithRecipe",
-        "worktree.delete",
         "terminal.list",
         "terminal.inject",
         "terminal.sendCommand",

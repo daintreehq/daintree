@@ -485,17 +485,22 @@ describe("McpServerService", () => {
           .map((m) => (typeof m.content === "object" && "text" in m.content ? m.content.text : ""))
           .join("\n");
 
-        // Backticked `namespace.action` tokens are how prompts name tools.
-        for (const [, id] of text.matchAll(/`([a-z][a-zA-Z]*\.[a-zA-Z.]+)`/g)) {
-          if (!BUILT_IN_ACTION_IDS.includes(id as never)) continue; // `git status`, filenames, etc.
-          if (TIER_ALLOWLISTS.external.has(id)) continue;
-          // Naming an unreachable tool is allowed only alongside a fallback the
-          // caller can actually run, e.g. "`git.getStagingStatus` if available,
-          // otherwise `git status`".
-          expect(
-            /if available/i.test(text),
-            `prompt "${prompt.name}" names ${id}, which the external tier cannot call, with no fallback`
-          ).toBe(true);
+        // Match action ids wherever they appear — backticked, bare, or followed
+        // by call syntax — rather than only the backticked form, so a reference
+        // does not escape the guard by dropping its markup.
+        for (const line of text.split("\n")) {
+          for (const id of BUILT_IN_ACTION_IDS) {
+            if (!line.includes(id)) continue;
+            if (TIER_ALLOWLISTS.external.has(id)) continue;
+            // Naming an unreachable tool is allowed only alongside a fallback the
+            // caller can actually run. The fallback must be on the SAME line as
+            // the reference — an "if available" elsewhere in a long prompt would
+            // otherwise excuse every id in it.
+            expect(
+              /if available/i.test(line),
+              `prompt "${prompt.name}" names ${id}, which the external tier cannot call, with no fallback on that line`
+            ).toBe(true);
+          }
         }
       }
     });

@@ -951,7 +951,7 @@ describe("McpServerService", () => {
         }
         return {
           ok: true,
-          result: { deleted: true },
+          result: { ran: true },
         };
       });
     }
@@ -963,7 +963,7 @@ describe("McpServerService", () => {
       // client advertises `elicitation.form` and auto-accepts, but the server
       // must never consult it — approval authority lives host-side (#11342).
       const dispatchMock = vi.fn(() => ({
-        result: { ok: true, result: { deleted: true } } as ActionDispatchResult,
+        result: { ok: true, result: { ran: true } } as ActionDispatchResult,
         confirmationDecision: "approved" as const,
       }));
       const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
@@ -999,7 +999,7 @@ describe("McpServerService", () => {
       // The self-declared elicitation capability is never exercised.
       expect(onElicit).not.toHaveBeenCalled();
       expect(result.isError).not.toBe(true);
-      expect(JSON.parse(result.content[0].text)).toEqual({ deleted: true });
+      expect(JSON.parse(result.content[0].text)).toEqual({ ran: true });
       // Exactly one dispatch, sent UNCONFIRMED — the renderer owns the confirm.
       expect(dispatchMock).toHaveBeenCalledTimes(1);
       expect(dispatchMock).toHaveBeenNthCalledWith(

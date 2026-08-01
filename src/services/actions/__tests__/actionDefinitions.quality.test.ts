@@ -8,7 +8,11 @@ import { BUILT_IN_ACTION_IDS, DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/co
 import type { ActionId } from "@shared/types/actions";
 import type { ActionRegistry, ActionCallbacks } from "../actionTypes";
 import { DEFAULT_KEYBINDINGS } from "../../defaultKeybindings";
-import { WORKBENCH_TIER_TOOLS } from "@shared/config/helpAssistantTierAllowlists";
+import {
+  WORKBENCH_TIER_TOOLS,
+  ACTION_TIER_ADDONS,
+  SYSTEM_TIER_ADDONS,
+} from "@shared/config/helpAssistantTierAllowlists";
 import { MCP_EXTERNAL_TIER_TOOLS } from "@shared/config/mcpExternalTierAllowlist";
 
 /**
@@ -118,7 +122,7 @@ async function createRegistryWithAudit(): Promise<{
 
 // #11585 — the external MCP surface is budgeted in BOTH dimensions, because the
 // failure it guards against is measured in bytes, not tools. The old surface was
-// 99 tools AND ~128 KB of schema; 24 tools carrying novel-length descriptions
+// 100 tools AND ~128 KB of schema; 23 tools carrying novel-length descriptions
 // would reproduce the same truncation with a count that looks fine. The cohort
 // is derived from the real allowlist rather than restated here, so this cannot
 // drift from the gate it is budgeting.
@@ -169,6 +173,31 @@ describe("external MCP tool surface budget (#11585)", () => {
         "hidden"
       );
     }
+  });
+
+  // The same trap from the other direction, and at every tier rather than just
+  // external: `shouldExposeTool` withholds `hidden` while `isTierPermitted`
+  // ignores visibility, so a hidden action added to ANY allowlist is unlisted
+  // yet callable. `actions.persistedStores` is the only hidden action today and
+  // it is deliberately in no tier — this is what keeps that true. The tier
+  // suites build synthetic manifest entries, so only a live-registry check here
+  // can see it.
+  it("no tier allowlist permits an action hidden from tools/list", async () => {
+    const { registry } = await createRegistryWithAudit();
+
+    const hidden = [...registry.keys()].filter(
+      (id) => registry.get(id as ActionId)?.().mcpVisibility === "hidden"
+    );
+    // Guard the guard: with no hidden actions at all this proves nothing.
+    expect(hidden.length).toBeGreaterThan(0);
+
+    const everyTierTool = new Set<string>([
+      ...WORKBENCH_TIER_TOOLS,
+      ...ACTION_TIER_ADDONS,
+      ...SYSTEM_TIER_ADDONS,
+      ...MCP_EXTERNAL_TIER_TOOLS,
+    ]);
+    expect(hidden.filter((id) => everyTierTool.has(id))).toEqual([]);
   });
 });
 

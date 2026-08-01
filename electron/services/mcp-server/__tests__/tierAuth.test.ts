@@ -430,7 +430,7 @@ describe("external tool surface invariants (#10701, #11537)", () => {
 });
 
 // #11585 — the external surface has a size ceiling, and it is a product
-// constraint rather than a style preference. At 99 entries it exceeded what MCP
+// constraint rather than a style preference. At 100 entries it exceeded what MCP
 // clients tolerate: Cursor caps the tool count across every connected server and
 // silently truncates the overflow, and Copilot's 128-tool cap is a hard error.
 // Both pick which of our tools survive, and neither tells us. A budget here is
@@ -557,9 +557,10 @@ describe("forge tool exposure is help-assistant-only (#11585)", () => {
     const systemForgeTools = [...TIER_ALLOWLISTS.system].filter((id) => id.startsWith("forge."));
 
     expect(allForgeActions.length).toBeGreaterThan(0);
-    // `forge.rateLimit` is renderer-internal plumbing, not an MCP tool.
-    const expected = allForgeActions.filter((id) => id !== "forge.rateLimit");
-    expect(new Set(systemForgeTools)).toEqual(new Set(expected));
+    // No exemptions: every forge action in the registry is an MCP tool at the
+    // system tier. Carrying a placeholder exclusion here would blind the check
+    // the day an id matching it actually appears.
+    expect(new Set(systemForgeTools)).toEqual(new Set(allForgeActions));
   });
 
   // Sentinel for the read added in #11545: an agent that can post a comment must
@@ -629,11 +630,13 @@ describe("buildAnnotations", () => {
 // help OVERLAYS, plus the system/external boundaries the assistant relies on.
 // The distinction is load-bearing: `action` leaves irreversible mutations
 // (git.push, worktree.delete) TIER_NOT_PERMITTED so the overlays need a
-// human-approved scoped grant, while `system` (the assistant) and `external`
-// permit them subject only to the confirm gate. These assertions lock those
-// invariants against allowlist drift (e.g. someone promoting git.push into the
-// action tier). They test the runtime gate `isTierPermitted`, not the raw
-// allowlist arrays, so they fail closed if the tier wiring itself regresses.
+// human-approved scoped grant, while `system` (the assistant) permits them
+// subject only to the confirm gate. `external` used to permit them too — #11585
+// removed them from that surface entirely, so `system` is now the only tier that
+// reaches them. These assertions lock those invariants against allowlist drift
+// (e.g. someone promoting git.push into the action tier). They test the runtime
+// gate `isTierPermitted`, not the raw allowlist arrays, so they fail closed if
+// the tier wiring itself regresses.
 describe("help-session tier policy (#10640)", () => {
   // The conductor's working tool set — orchestration, terminal driving, branch
   // setup, recipes, and reads — all resolve under `action`.

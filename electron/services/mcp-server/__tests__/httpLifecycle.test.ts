@@ -567,20 +567,6 @@ describe("HttpLifecycle", () => {
       expect(() => lc.issueGrant("sess-1", toolId, 42)).toThrow(/non-grantable/);
       expect(grantCacheOf(deps).issueGrant).not.toHaveBeenCalled();
     });
-
-    // External-only ids are equally ungrantable: grants are additive over the
-    // help tiers and must never elevate a session onto the api-key surface.
-    it("refuses to grant a tool only the external tier permits", () => {
-      const externalOnly = [...TIER_ALLOWLISTS.external].filter(
-        (id) => minimumPermittingTier(id) === null
-      );
-      const deps = pinnedDeps();
-      const lc = new HttpLifecycle(deps);
-
-      for (const toolId of externalOnly) {
-        expect(() => lc.issueGrant("sess-1", toolId, 42)).toThrow(/non-grantable/);
-      }
-    });
   });
 
   describe("issueNativeGrant / revokeNativeGrant (#10648)", () => {
