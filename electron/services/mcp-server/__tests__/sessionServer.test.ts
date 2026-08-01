@@ -305,6 +305,14 @@ describe("sessionServer initialize instructions", () => {
     expect(referenced).toContain(ACTIONS_SEARCH_TOOL_ID);
     expect(referenced).toContain(ACTIONS_GET_SCHEMA_TOOL_ID);
     expect(referenced.filter((id) => !BUILT_IN_ACTION_IDS.includes(id as never))).toEqual([]);
+    // Existing as an action is the weaker guard. The instructions go to every
+    // session including `external`, whose surface is the hand-curated
+    // `mcpExternalTierAllowlist.ts` — `terminal.close` was cut from it in
+    // #11592 while staying a perfectly valid BuiltInActionId. Cutting a
+    // referenced id without editing the prose would leave the text telling
+    // external clients to call something that only ever returns
+    // TIER_NOT_PERMITTED.
+    expect(referenced.filter((id) => !TIER_ALLOWLISTS.external.has(id))).toEqual([]);
   });
 });
 
