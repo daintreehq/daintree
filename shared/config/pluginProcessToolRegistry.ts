@@ -1,4 +1,20 @@
 import type { PluginProcessToolContribution } from "../types/plugin.js";
+import { isPluginIconId } from "./pluginIconIds.js";
+
+/**
+ * Icon a contribution falls back to when it names an id outside the generic
+ * plugin namespace. Deliberately a real id rather than passing the value
+ * through: the detected icon id is also the renderer's process *identity*, so
+ * an unsanitized value lets a plugin claim a built-in one — `iconId: "claude"`
+ * would resolve through `getAgentConfig` in `deriveTerminalChrome` and paint
+ * the Claude brand mark, name, and color onto an unrelated command, while
+ * `iconId: "npm"` would inherit package-manager detection priority instead of
+ * the tool tier plugin entries are documented to get. Neither is a manifest
+ * error — `iconId` stays advisory like its panel/toolbar siblings, so a
+ * manifest written for a newer host still loads — but it degrades to the
+ * generic glyph rather than borrowing a built-in identity.
+ */
+const FALLBACK_PLUGIN_PROCESS_ICON_ID = "terminal";
 
 /**
  * Process-global registry of plugin-contributed terminal process detections
@@ -62,7 +78,13 @@ function rebuildSnapshot(): void {
  * Commands are lower-cased on the way in: `ProcessDetector` lower-cases every
  * candidate name before looking it up, so a mixed-case key could never match.
  * The manifest schema already rejects uppercase at parse time — this is the
- * belt-and-braces half, covering any caller that bypasses the schema.
+ * belt-and-braces half, covering any caller that bypasses the schema. Icon ids
+ * outside the generic plugin namespace collapse to
+ * {@link FALLBACK_PLUGIN_PROCESS_ICON_ID}; see that constant for why.
+ *
+ * A command repeated within one plugin's array resolves last-wins (plain
+ * `Map.set`). The manifest schema rejects exact duplicates before they get
+ * here, so this only decides the outcome for a schema-bypassing caller.
  */
 export function registerPluginProcessTools(
   pluginId: string,
@@ -78,7 +100,10 @@ export function registerPluginProcessTools(
     if (typeof contribution?.command !== "string" || typeof contribution?.iconId !== "string") {
       continue;
     }
-    commands.set(contribution.command.toLowerCase(), contribution.iconId);
+    const iconId = isPluginIconId(contribution.iconId)
+      ? contribution.iconId
+      : FALLBACK_PLUGIN_PROCESS_ICON_ID;
+    commands.set(contribution.command.toLowerCase(), iconId);
   }
   byPlugin.set(pluginId, commands);
   rebuildSnapshot();

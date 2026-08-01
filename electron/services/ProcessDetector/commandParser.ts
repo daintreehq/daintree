@@ -116,7 +116,14 @@ export function redactArgv(command: string | undefined): string {
 // Package-manager subcommands whose next argument is a real binary rather than
 // a user-defined script name. `run` is deliberately absent: `npm run docker`
 // runs whatever the "docker" script says, which is usually not Docker.
-const BINARY_EXEC_SUBCOMMANDS = new Set(["exec", "dlx", "x"]);
+/**
+ * Package-manager subcommands that run *another* binary rather than being one.
+ * Exported because the plugin-manifest schema reserves these names: a plugin
+ * that registered `exec` as its own command would match at argv[1] of
+ * `npm exec vite` and win the tie against Vite at argv[2] (leftmost wins on
+ * equal tier), reporting the plugin for a process it never launched.
+ */
+export const BINARY_EXEC_SUBCOMMANDS = new Set(["exec", "dlx", "x"]);
 
 /**
  * Highest candidate index that can still name the tool being run. Normally

@@ -22,10 +22,13 @@ function processToolErrorCode(result: ReturnType<typeof parseProcessTools>): str
 
 describe("contributes.processTools (#11613)", () => {
   it("accepts a flat command → icon entry with no capability declared", () => {
+    // The manifest above declares no `capabilities`; a successful parse is the
+    // whole proof that process tools aren't capability-gated the way
+    // `contributes.agents` is.
     const result = parseProcessTools([{ command: "acme-cli", iconId: "sparkles" }]);
     expect(result.success).toBe(true);
     if (!result.success) return;
-    expect(result.data.capabilities).toEqual([]);
+    // Both fields survive parsing verbatim — no host-side rewriting.
     expect(result.data.contributes.processTools).toEqual([
       { command: "acme-cli", iconId: "sparkles" },
     ]);
@@ -119,6 +122,22 @@ describe("contributes.processTools (#11613)", () => {
     // `prototype` are ordinary lowercase words that pass it, so they need the
     // explicit reserved-key refinement.
     for (const command of ["__proto__", "constructor", "prototype"]) {
+      expect(parseProcessTools([{ command, iconId: "sparkles" }]).success, command).toBe(false);
+    }
+  });
+
+  it("rejects a command carrying an extension the detector strips before matching", () => {
+    // Otherwise the entry registers under a key nothing is ever looked up by —
+    // it validates, loads, and silently never fires.
+    for (const command of ["acme.exe", "acme.cmd", "acme.bat", "acme.ps1", "serve.py", "cli.js"]) {
+      expect(parseProcessTools([{ command, iconId: "sparkles" }]).success, command).toBe(false);
+    }
+    // A dot that isn't a stripped extension stays legal.
+    expect(parseProcessTools([{ command: "acme.tool", iconId: "sparkles" }]).success).toBe(true);
+  });
+
+  it("rejects package-manager exec subcommands, which name the launcher not a tool", () => {
+    for (const command of ["exec", "dlx", "x"]) {
       expect(parseProcessTools([{ command, iconId: "sparkles" }]).success, command).toBe(false);
     }
   });

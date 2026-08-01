@@ -312,11 +312,16 @@ describe("createPtyHostMessageDispatcher", () => {
       const ctx = makeCtx();
       const dispatch = createPtyHostMessageDispatcher(ctx);
 
+      // Baseline first, so the assertion is "injecting a colliding plugin entry
+      // changes nothing" rather than a copy of Vite's current icon id.
+      const builtIn = buildDetectedCandidate("vite", undefined, 0)?.processIconId;
+      expect(builtIn).toBeDefined();
+
       // The manifest schema rejects this collision at parse time; the merge
       // order is the defense in depth for anything that bypasses the schema.
       dispatch({ type: "set-plugin-process-tool-registry", registry: { vite: "sparkles" } });
 
-      expect(buildDetectedCandidate("vite", undefined, 0)?.processIconId).toBe("vite");
+      expect(buildDetectedCandidate("vite", undefined, 0)?.processIconId).toBe(builtIn);
     } finally {
       clearPluginProcessToolRegistryForTests();
     }

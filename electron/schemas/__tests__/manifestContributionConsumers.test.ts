@@ -626,12 +626,12 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "Keys the flattened command → icon snapshot the pty-host detector looks a running process up by.",
     },
     iconId: {
-      mode: "verbatim",
+      mode: "derived-input",
       consumers: [
         { file: PROCESS_TOOL_REGISTRY, symbol: "registerPluginProcessTools (snapshot value)" },
         { file: "src/components/Terminal/TerminalIcon.tsx", symbol: "getPluginIconComponent" },
       ],
-      note: "Emitted as the detected process icon id and rendered from the generic plugin icon registry.",
+      note: "Collapsed to the generic `terminal` glyph unless it names a PLUGIN_ICON_ID, then emitted as the detected process icon id — the id doubles as process identity, so an unsanitized value could borrow a built-in agent's mark or a built-in tool's detection priority.",
     },
   },
   settings: {

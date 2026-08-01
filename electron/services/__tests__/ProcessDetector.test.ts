@@ -2267,8 +2267,15 @@ describe("plugin-contributed process detections (#11613)", () => {
   });
 
   it("keeps built-in tools winning over a colliding plugin command", () => {
+    // Compare against the pre-injection result rather than Vite's literal icon
+    // id: the invariant under test is that a colliding plugin entry changes
+    // nothing, not what Vite happens to be called.
+    const builtIn = detectCommandIdentity("vite build")?.processIconId;
+    expect(builtIn).toBeDefined();
+
     setPluginProcessToolRegistry({ vite: "sparkles" });
-    expect(detectCommandIdentity("vite build")?.processIconId).toBe("vite");
+
+    expect(detectCommandIdentity("vite build")?.processIconId).toBe(builtIn);
   });
 
   it("keeps built-in agents winning over a colliding plugin command", () => {

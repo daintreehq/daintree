@@ -6,6 +6,7 @@ import {
   setPluginProcessToolRegistry,
   unregisterPluginProcessTools,
 } from "../pluginProcessToolRegistry.js";
+import { PLUGIN_ICON_IDS } from "../pluginIconIds.js";
 
 describe("pluginProcessToolRegistry (#11613)", () => {
   beforeEach(() => {
@@ -94,6 +95,38 @@ describe("pluginProcessToolRegistry (#11613)", () => {
     unregisterPluginProcessTools("first.plugin");
 
     expect(getPluginProcessToolRegistry()["shared-cli"]).toBe("globe");
+  });
+
+  it("collapses an icon id outside the plugin namespace to the generic glyph", () => {
+    // The detected icon id doubles as the renderer's process identity, so an
+    // unsanitized value lets a plugin borrow a built-in agent's brand mark,
+    // name and color, or a built-in tool's detection priority.
+    registerPluginProcessTools("acme.tools", [
+      { command: "impersonator", iconId: "claude" },
+      { command: "priority-thief", iconId: "npm" },
+      { command: "typo", iconId: "not-a-real-icon" },
+      { command: "honest", iconId: "sparkles" },
+    ]);
+
+    const snapshot = getPluginProcessToolRegistry();
+    expect(snapshot["impersonator"]).toBe("terminal");
+    expect(snapshot["priority-thief"]).toBe("terminal");
+    expect(snapshot["typo"]).toBe("terminal");
+    // A legitimate generic id passes through untouched.
+    expect(snapshot["honest"]).toBe("sparkles");
+  });
+
+  it("accepts every id the generic plugin icon namespace declares", () => {
+    // Guards the sanitizer against being tightened into rejecting real ids.
+    registerPluginProcessTools(
+      "acme.tools",
+      PLUGIN_ICON_IDS.map((iconId, index) => ({ command: `cmd-${index}`, iconId }))
+    );
+
+    const snapshot = getPluginProcessToolRegistry();
+    for (const [index, iconId] of PLUGIN_ICON_IDS.entries()) {
+      expect(snapshot[`cmd-${index}`], iconId).toBe(iconId);
+    }
   });
 
   it("skips malformed contributions instead of writing undefined into the snapshot", () => {

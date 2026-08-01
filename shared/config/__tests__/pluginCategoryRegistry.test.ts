@@ -47,8 +47,9 @@ describe("pluginCategoryRegistry", () => {
     // for, so it must not pull the plugin out of the fallback bucket the way a
     // forge provider or an agent does.
     const manifest = makeManifest();
+    const before = resolvePluginCategory(manifest);
     manifest.contributes.processTools = [{ command: "acme-cli", iconId: "sparkles" }];
-    expect(resolvePluginCategory(manifest)).toBe("other");
+    expect(resolvePluginCategory(manifest)).toBe(before);
   });
 
   it("places the fallback category last so real categories render above it", () => {

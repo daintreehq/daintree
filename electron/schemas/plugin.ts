@@ -15,6 +15,10 @@ import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
 import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../shared/config/processToolRegistry.js";
 import { AGENT_CLI_NAMES } from "../services/ProcessDetector/registries.js";
 import {
+  BINARY_EXEC_SUBCOMMANDS,
+  stripCommandExecutableExtension,
+} from "../services/ProcessDetector/commandParser.js";
+import {
   BUILT_IN_ACTION_IDS,
   DENY_PLUGIN_DISPATCH_ACTION_IDS,
 } from "../../shared/config/actionIds.js";
@@ -343,8 +347,24 @@ export const ProcessToolContributionSchema = z
           "command must be a bare lowercase executable name (letters, digits, dot, dash, underscore)",
       })
       .refine((command) => !RESERVED_PROCESS_TOOL_COMMANDS.has(command), {
+        message: "command cannot be a reserved key (__proto__, constructor, prototype)",
+      })
+      // The detector strips launcher/script extensions off a process name before
+      // looking it up, so `acme.exe` or `serve.py` would register under a key
+      // nothing is ever looked up by — a detection that validates and then
+      // silently never fires. Reject the non-canonical form and name the one
+      // that works, rather than rewriting the author's value behind their back.
+      .refine((command) => stripCommandExecutableExtension(command) === command, {
         message:
-          "command cannot be a reserved key (__proto__, constructor, prototype)",
+          "command must omit the executable/script extension (write \"acme\", not \"acme.exe\" or \"acme.py\") — detection strips it before matching",
+      })
+      // `npm exec vite` puts the launcher subcommand at argv[1] and the real
+      // binary at argv[2]. A plugin owning `exec` would match first and win the
+      // equal-tier tie by being leftmost, reporting itself for a process it
+      // never launched.
+      .refine((command) => !BINARY_EXEC_SUBCOMMANDS.has(command), {
+        message:
+          "command cannot be a package-manager exec subcommand (exec, dlx, x) — those name the launcher, not a tool",
       }),
     iconId: z.string().min(1).max(64),
   })
@@ -1194,8 +1214,9 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
           });
         }
         // A manifest declaring the same command twice is a typo, not a
-        // precedence question — the second entry silently loses to the first in
-        // the registry's per-plugin map, so reject it rather than dropping it.
+        // precedence question — the registry's per-plugin map is last-wins, so
+        // one of the two icons would silently disappear. Reject rather than
+        // pick.
         if (seenProcessToolCommands.has(tool.command)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
