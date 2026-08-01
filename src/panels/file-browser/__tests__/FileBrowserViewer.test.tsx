@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { render, act, screen, waitFor } from "@testing-library/react";
+import { forwardRef, type ReactNode } from "react";
+import { fireEvent, render, act, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Type-only: erased before the vi.mock factory runs, so it cannot pull the real
 // module in ahead of its own mock.
@@ -51,10 +52,73 @@ vi.mock("@/components/ui/SpinningIcon", () => ({
   ),
 }));
 
+// Radix's dropdown opens on a pointer sequence and portals its content, neither
+// of which jsdom drives faithfully. Render the menu inline and let the radio
+// items fire their own onValueChange — what this suite owns is the sort
+// contract (which keys, and how re-picking flips direction), not Radix's
+// open/close choreography. Mirrors the ReviewHub sort-menu suite.
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
+  DropdownMenuTrigger: ({ children, asChild }: { children: ReactNode; asChild?: boolean }) =>
+    asChild ? <>{children}</> : <button type="button">{children}</button>,
+  DropdownMenuContent: ({ children }: { children: ReactNode }) => <div role="menu">{children}</div>,
+  DropdownMenuLabel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenuRadioGroup: ({
+    children,
+    value,
+    onValueChange,
+  }: {
+    children: ReactNode;
+    value: string;
+    onValueChange: (v: string) => void;
+  }) => (
+    <div data-value={value} data-onvaluechange={registerValueChange(onValueChange)}>
+      {children}
+    </div>
+  ),
+  DropdownMenuRadioItem: ({ children, value }: { children: ReactNode; value: string }) => (
+    <div role="menuitemradio" onClick={() => currentValueChange?.(value)}>
+      {children}
+    </div>
+  ),
+}));
+
+// The radio group owns the change handler but the items are what get clicked,
+// so the handler is stashed as the group renders and read back by the item.
+let currentValueChange: ((value: string) => void) | null = null;
+function registerValueChange(handler: (value: string) => void): string {
+  currentValueChange = handler;
+  return "registered";
+}
+
+// The folder listing (#11620) virtualizes its rows, and a real Virtuoso renders
+// none of them in jsdom, where every element measures zero. Render them all —
+// what this suite owns is which body the viewer picks, not how it windows.
+vi.mock("react-virtuoso", () => ({
+  Virtuoso: forwardRef(function VirtuosoStub(
+    props: {
+      data: unknown[];
+      context: unknown;
+      itemContent: (index: number, row: never, context: unknown) => ReactNode;
+    },
+    _ref
+  ) {
+    return (
+      <div>
+        {props.data.map((row, index) => (
+          <div key={index}>{props.itemContent(index, row as never, props.context)}</div>
+        ))}
+      </div>
+    );
+  }),
+}));
+
 import { FileBrowserViewer } from "../FileBrowserViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { GitStatus } from "@shared/types/git";
 import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
+import type { FileBrowserSortOrder, FileEntryLike, FolderListingRow } from "../fileBrowserTree";
+import type { FolderListingStatus } from "../useFileBrowserTree";
 
 interface ViewerOpts {
   sidebarCollapsed?: boolean;
@@ -70,6 +134,19 @@ interface ViewerOpts {
    */
   changedFiles?: readonly WorkingTreeFileChange[] | null;
   onSelectChangedFile?: (relativePath: string) => void;
+  // Folder-selected state (#11620). Defaulted to "no folder" so every existing
+  // file-preview case keeps exercising the file branch untouched.
+  folderPath?: string | null;
+  folderRows?: FolderListingRow[] | null;
+  folderStatus?: FolderListingStatus;
+  folderHasHiddenDotfiles?: boolean;
+  onShowDotfiles?: () => void;
+  onSelectEntry?: (path: string) => void;
+  onActivateEntry?: (path: string) => void;
+  onRootFolder?: (path: string) => void;
+  rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
+  sort?: FileBrowserSortOrder;
+  onSortChange?: (sort: FileBrowserSortOrder) => void;
 }
 
 function change(relativePath: string, status: GitStatus = "modified"): WorkingTreeFileChange {
@@ -103,6 +180,18 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         treeSidebarId="file-tree-column"
         changedFiles={opts.changedFiles ?? null}
         onSelectChangedFile={opts.onSelectChangedFile ?? vi.fn()}
+        folderPath={opts.folderPath ?? null}
+        folderRows={opts.folderRows ?? null}
+        folderStatus={opts.folderStatus ?? "ready"}
+        folderHasHiddenDotfiles={opts.folderHasHiddenDotfiles ?? false}
+        onShowDotfiles={opts.onShowDotfiles ?? vi.fn()}
+        onSelectEntry={opts.onSelectEntry ?? vi.fn()}
+        onActivateEntry={opts.onActivateEntry ?? vi.fn()}
+        onRootFolder={opts.onRootFolder ?? vi.fn()}
+        {...(opts.rowContextMenu ? { rowContextMenu: opts.rowContextMenu } : {})}
+        basePath="/repo"
+        sort={opts.sort ?? { key: "name", direction: "asc" }}
+        onSortChange={opts.onSortChange ?? vi.fn()}
       />
     </TooltipProvider>
   );
@@ -630,5 +719,123 @@ describe("FileBrowserViewer idle body", () => {
     await screen.findByTestId("code-viewer-mock");
 
     expect(screen.queryByRole("button", { name: /Read src\/app\.ts/ })).toBeNull();
+  });
+});
+
+describe("folder-selected state (#11620)", () => {
+  const FOLDER_ROWS: FolderListingRow[] = [
+    { path: "src/pkg", name: "pkg", isDirectory: true, itemCount: 2 },
+    { path: "src/a.ts", name: "a.ts", isDirectory: false, size: 100, mtimeMs: 1_700_000_000_000 },
+  ];
+
+  it("lists a selected folder's contents instead of the nothing-selected state", () => {
+    renderViewer(null, { folderPath: "src", folderRows: FOLDER_ROWS });
+    expect(screen.queryByText("Nothing selected")).toBeNull();
+    expect(screen.getByLabelText("pkg")).toBeTruthy();
+    expect(screen.getByLabelText("a.ts")).toBeTruthy();
+  });
+
+  it("still shows the nothing-selected state when neither a file nor a folder is selected", () => {
+    renderViewer(null);
+    expect(screen.getByText("Nothing selected")).toBeTruthy();
+  });
+
+  it("prefers the file preview when a file is selected", () => {
+    // The two are mutually exclusive by construction; if both ever arrived, the
+    // file must win rather than the viewer rendering two bodies.
+    renderViewer("/repo/a.ts", { folderPath: "src", folderRows: FOLDER_ROWS });
+    expect(screen.queryByLabelText("pkg")).toBeNull();
+  });
+
+  it("does not render the empty state while the listing is still pending", () => {
+    // The #10083 trap: branching on a Doherty-gated flag would paint "This
+    // folder is empty" for the first 400ms of every folder load.
+    renderViewer(null, { folderPath: "src", folderRows: null, folderStatus: "pending" });
+    expect(screen.queryByText("This folder is empty")).toBeNull();
+    expect(screen.queryByText("Nothing selected")).toBeNull();
+  });
+
+  it("shows the empty state for a folder that really holds nothing", () => {
+    renderViewer(null, { folderPath: "src", folderRows: [], folderStatus: "ready" });
+    expect(screen.getByText("This folder is empty")).toBeTruthy();
+  });
+
+  it("offers Show dotfiles only when unhiding them would reveal something", () => {
+    renderViewer(null, {
+      folderPath: "src",
+      folderRows: [],
+      folderStatus: "ready",
+      folderHasHiddenDotfiles: true,
+    });
+    expect(screen.getByText("Dotfiles are hidden here")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show dotfiles" })).toBeTruthy();
+  });
+
+  it("does not offer Show dotfiles when the folder is genuinely empty", () => {
+    renderViewer(null, {
+      folderPath: "src",
+      folderRows: [],
+      folderStatus: "ready",
+      folderHasHiddenDotfiles: false,
+    });
+    expect(screen.queryByRole("button", { name: "Show dotfiles" })).toBeNull();
+  });
+
+  it("runs the dotfile recovery from the filtered-empty state", async () => {
+    const onShowDotfiles = vi.fn();
+    renderViewer(null, {
+      folderPath: "src",
+      folderRows: [],
+      folderStatus: "ready",
+      folderHasHiddenDotfiles: true,
+      onShowDotfiles,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Show dotfiles" }));
+    expect(onShowDotfiles).toHaveBeenCalled();
+  });
+
+  it("surfaces a readable error with a retry when the folder can't be read", () => {
+    renderViewer(null, { folderPath: "src", folderRows: null, folderStatus: "error" });
+    expect(screen.getByText("Can't show this folder")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("retries through the pane's refresh", async () => {
+    const onRefresh = vi.fn();
+    renderViewer(null, {
+      folderPath: "src",
+      folderRows: null,
+      folderStatus: "error",
+      onRefresh,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRefresh).toHaveBeenCalled();
+  });
+});
+
+describe("sort menu (#11620)", () => {
+  it("stays available with no selection, since it also orders the tree", () => {
+    renderViewer(null);
+    expect(screen.getByRole("button", { name: "Sort files" })).toBeTruthy();
+  });
+
+  it("flips direction when the active key is re-picked", async () => {
+    const onSortChange = vi.fn();
+    renderViewer(null, { sort: { key: "name", direction: "asc" }, onSortChange });
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Name/ }));
+    expect(onSortChange).toHaveBeenCalledWith({ key: "name", direction: "desc" });
+  });
+
+  it("keeps the current direction when a different key is picked", async () => {
+    const onSortChange = vi.fn();
+    renderViewer(null, { sort: { key: "name", direction: "desc" }, onSortChange });
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Size/ }));
+    expect(onSortChange).toHaveBeenCalledWith({ key: "size", direction: "desc" });
+  });
+
+  it("offers exactly the four documented sort keys", async () => {
+    renderViewer(null);
+    const items = await screen.findAllByRole("menuitemradio");
+    expect(items.map((i) => i.textContent?.trim())).toEqual(["Name", "Modified", "Size", "Type"]);
   });
 });

@@ -1541,3 +1541,244 @@ describe("workspace source", () => {
     expect(listDirectory).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("useFileBrowserTree folder listing (#11620)", () => {
+  beforeEach(() => {
+    listDirectory.mockReset();
+  });
+
+  function renderTree(selectedPath: string | null, expandedPaths: string[] = []) {
+    return renderHook(
+      (props: { selectedPath: string | null; expandedPaths: string[] }) =>
+        useFileBrowserTree({
+          source: wtSource("wt-1"),
+          expandedPaths: props.expandedPaths,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
+          changeTick: undefined,
+          selectedPath: props.selectedPath,
+        }),
+      { initialProps: { selectedPath, expandedPaths } }
+    );
+  }
+
+  it("reports no listing when nothing is selected", async () => {
+    listDirectory.mockResolvedValue([dir("src")]);
+
+    const { result } = renderTree(null);
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+    expect(result.current.listingPath).toBeNull();
+    expect(result.current.listingRows).toBeNull();
+  });
+
+  it("reports no listing when the selection is a file", async () => {
+    listDirectory.mockResolvedValue([file("README.md")]);
+
+    const { result } = renderTree("README.md");
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+    expect(result.current.listingPath).toBeNull();
+    expect(result.current.selectedNode?.isDirectory).toBe(false);
+  });
+
+  it("fetches a selected folder that was never expanded, and lists its contents", async () => {
+    // Selecting from the keyboard never expands, so nothing else would ask for
+    // this folder's children.
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === "src" ? [file("src/a.ts")] : [dir("src")]
+    );
+
+    const { result } = renderTree("src");
+
+    await waitFor(() => expect(result.current.listingRows).not.toBeNull());
+    expect(result.current.listingPath).toBe("src");
+    expect(result.current.listingRows?.map((r) => r.path)).toEqual(["src/a.ts"]);
+  });
+
+  it("reports pending until the folder's listing arrives", async () => {
+    const gate = deferred<FileTreeNode[]>();
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === "src" ? gate.promise : [dir("src")]
+    );
+
+    const { result } = renderTree("src");
+
+    // Raw pending, not a gated flag — the consumer needs this apart from
+    // "loaded and empty" to choose between a skeleton and an empty state.
+    await waitFor(() => expect(result.current.listingStatus).toBe("pending"));
+    expect(result.current.listingRows).toBeNull();
+
+    await act(async () => {
+      gate.resolve([file("src/a.ts")]);
+      await gate.promise;
+    });
+
+    await waitFor(() => expect(result.current.listingStatus).toBe("ready"));
+  });
+
+  it("distinguishes an empty folder from one still loading", async () => {
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === "src" ? [] : [dir("src")]
+    );
+
+    const { result } = renderTree("src");
+
+    await waitFor(() => expect(result.current.listingStatus).toBe("ready"));
+    // [] not null: the folder really holds nothing.
+    expect(result.current.listingRows).toEqual([]);
+  });
+
+  it("reports an error instead of pending forever when the folder can't be read", async () => {
+    // Per-directory failures are silent for the tree, which would otherwise
+    // leave the listing on a skeleton with no way out.
+    listDirectory.mockImplementation(async (payload) => {
+      if (payload.dirPath === "src") throw new Error("EACCES");
+      return [dir("src")];
+    });
+
+    const { result } = renderTree("src");
+
+    await waitFor(() => expect(result.current.listingStatus).toBe("error"));
+    expect(result.current.listingRows).toBeNull();
+  });
+
+  it("does not re-request a folder whose fetch already failed", async () => {
+    listDirectory.mockImplementation(async (payload) => {
+      if (payload.dirPath === "src") throw new Error("EACCES");
+      return [dir("src")];
+    });
+
+    const { result } = renderTree("src");
+
+    await waitFor(() => expect(result.current.listingStatus).toBe("error"));
+    const afterFailure = listDirectory.mock.calls.filter((c) => c[0].dirPath === "src").length;
+
+    // A failed path is in neither the listings map nor the in-flight set, so
+    // without an explicit guard this would refire on every render.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(listDirectory.mock.calls.filter((c) => c[0].dirPath === "src")).toHaveLength(
+      afterFailure
+    );
+  });
+
+  it("keeps the listed folder's contents when an unrelated folder collapses", async () => {
+    // The prune drops collapsed subtrees; the folder on screen is being read
+    // right now, so it is not the stale unused entry that prune exists for.
+    listDirectory.mockImplementation(async (payload) => {
+      if (payload.dirPath === "src") return [file("src/a.ts")];
+      if (payload.dirPath === "docs") return [file("docs/b.md")];
+      return [dir("src"), dir("docs")];
+    });
+
+    const { result, rerender } = renderTree("src", ["docs"]);
+
+    await waitFor(() => expect(result.current.listingRows).not.toBeNull());
+
+    // Collapse the unrelated folder — the listed one must survive the prune.
+    rerender({ selectedPath: "src", expandedPaths: [] });
+
+    await waitFor(() => expect(result.current.listingStatus).toBe("ready"));
+    expect(result.current.listingRows?.map((r) => r.path)).toEqual(["src/a.ts"]);
+  });
+
+  it("resolves a node whose parent is not expanded in the tree", async () => {
+    // The reason selection resolution moved off the rendered rows: an entry
+    // picked from the folder listing has no tree row at all.
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === "src" ? [file("src/deep.ts")] : [dir("src")]
+    );
+
+    const { result, rerender } = renderTree("src");
+
+    await waitFor(() => expect(result.current.listingRows).not.toBeNull());
+    rerender({ selectedPath: "src/deep.ts", expandedPaths: [] });
+
+    await waitFor(() => expect(result.current.selectedNode?.path).toBe("src/deep.ts"));
+    expect(result.current.selectedNode?.isDirectory).toBe(false);
+    // It is genuinely absent from the tree's rows — that is the whole point.
+    expect(result.current.rows.map((r) => r.path)).not.toContain("src/deep.ts");
+  });
+
+  it("stops listing a folder the dotfile filter has just hidden", async () => {
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === ".config" ? [file(".config/a.ts")] : [dir(".config")]
+    );
+
+    const { result, rerender } = renderHook(
+      (props: { hideDotfiles: boolean }) =>
+        useFileBrowserTree({
+          source: wtSource("wt-1"),
+          expandedPaths: [],
+          hideDotfiles: props.hideDotfiles,
+          alwaysHiddenPatterns: [],
+          changeTick: undefined,
+          selectedPath: ".config",
+        }),
+      { initialProps: { hideDotfiles: false } }
+    );
+
+    await waitFor(() => expect(result.current.listingPath).toBe(".config"));
+
+    rerender({ hideDotfiles: true });
+
+    // The selection survives in the panel record but has no row, so it must
+    // stop driving a listing the tree cannot show.
+    await waitFor(() => expect(result.current.listingPath).toBeNull());
+  });
+
+  it("orders the tree and the listing by the same sort", async () => {
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === "src"
+        ? [
+            { name: "a.ts", path: "src/a.ts", isDirectory: false, size: 1 },
+            { name: "b.ts", path: "src/b.ts", isDirectory: false, size: 900 },
+          ]
+        : [dir("src")]
+    );
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        source: wtSource("wt-1"),
+        expandedPaths: ["src"],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+        selectedPath: "src",
+        sort: { key: "size", direction: "desc" },
+      })
+    );
+
+    await waitFor(() => expect(result.current.listingRows).not.toBeNull());
+
+    const listingOrder = result.current.listingRows?.map((r) => r.path);
+    const treeOrder = result.current.rows.map((r) => r.path).filter((p) => p.startsWith("src/"));
+
+    expect(listingOrder).toEqual(["src/b.ts", "src/a.ts"]);
+    // Two columns showing the same directory in different orders would read as
+    // two different folders.
+    expect(treeOrder).toEqual(listingOrder);
+  });
+
+  it("reports whether the dotfile toggle is hiding anything in the listed folder", async () => {
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === "src" ? [file("src/.env")] : [dir("src")]
+    );
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        source: wtSource("wt-1"),
+        expandedPaths: [],
+        hideDotfiles: true,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+        selectedPath: "src",
+      })
+    );
+
+    await waitFor(() => expect(result.current.listingStatus).toBe("ready"));
+    expect(result.current.listingRows).toEqual([]);
+    // Filtered-empty, not zero-data: offering "Show dotfiles" here actually helps.
+    expect(result.current.listingHasHiddenDotfiles).toBe(true);
+  });
+});

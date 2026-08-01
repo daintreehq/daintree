@@ -291,6 +291,11 @@ const FILE_BROWSER_FIELD_CLASSIFICATION = {
   // at creation — a promoted panel carries an adopted placement id by save time
   // (#11489) — so it has to ride the record like any other user intent.
   browserWorkspaceRooted: true,
+  // What the tree and the folder listing are ordered by (#11620). User intent,
+  // chosen from the toolbar menu, so it rides the record — only a non-default
+  // value is written, which keeps a never-sorted panel sparse.
+  browserSortKey: true,
+  browserSortDirection: true,
   // BasePanelData carrier-bookkeeping timestamps — written by the base
   // serialization layer in panelToSnapshot, not per-kind serializers.
   createdAt: false,
@@ -487,6 +492,11 @@ const fileBrowserFixture: FileBrowserPanelData = {
   // the key instead of dropping it as a default.
   browserSidebarWidth: 360,
   browserWorkspaceRooted: true,
+  // A non-default order for the same reason as the width above: the serializer
+  // omits name/ascending, so a default fixture would drop both keys and the
+  // coverage spread could not tell that from a missing implementation (#11620).
+  browserSortKey: "size",
+  browserSortDirection: "desc",
 };
 
 const savedFileBrowser: SavedTerminalData = {
@@ -501,6 +511,8 @@ const savedFileBrowser: SavedTerminalData = {
   browserTreeSnapshot: browserTreeSnapshotFixture,
   browserSidebarWidth: 360,
   browserWorkspaceRooted: true,
+  browserSortKey: "size",
+  browserSortDirection: "desc",
 };
 
 const diffFixture: DiffPanelData = {

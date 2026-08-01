@@ -105,9 +105,13 @@ export class FileTreeService {
         if (!result) continue;
         const { fileStat, name, gitRelativePath } = result;
 
+        // Both branches read `mtimeMs` off the `lstat` above rather than
+        // stat-ing again: the modified column in the file browser's folder
+        // listing (#11620) is free here and would otherwise cost one extra
+        // syscall per entry on every directory read and bulk scan.
         const isDirectory = fileStat.isDirectory();
         if (isDirectory) {
-          nodes.push({ name, path: gitRelativePath, isDirectory });
+          nodes.push({ name, path: gitRelativePath, isDirectory, mtimeMs: fileStat.mtimeMs });
           continue;
         }
 
@@ -117,6 +121,7 @@ export class FileTreeService {
             path: gitRelativePath,
             isDirectory,
             size: fileStat.size,
+            mtimeMs: fileStat.mtimeMs,
           });
         } catch {
           // skip entries where size read fails

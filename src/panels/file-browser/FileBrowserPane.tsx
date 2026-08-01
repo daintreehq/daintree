@@ -60,8 +60,9 @@ import {
   createVisibilityFilter,
   isRowPathVisible,
   parentRootPath,
+  type FileBrowserSortOrder,
   type FileBrowserSource,
-  type FlatTreeRow,
+  type FileEntryLike,
 } from "./fileBrowserTree";
 import { useWorkspaceRootPath } from "./useWorkspaceRootPath";
 
@@ -125,6 +126,31 @@ export function FileBrowserPane({
   );
   const alwaysHiddenPatterns = usePreferencesStore(
     (state) => state.fileBrowserAlwaysHiddenPatterns
+  );
+  // Selected as two primitives rather than one object: a selector returning a
+  // fresh object would fail the store's reference check and re-render this
+  // panel on every unrelated store write.
+  const sortKey = usePanelStore(
+    useCallback(
+      (state) => {
+        const panel = state.panelsById[id];
+        return panel?.kind === "file-browser" ? (panel.browserSortKey ?? "name") : "name";
+      },
+      [id]
+    )
+  );
+  const sortDirection = usePanelStore(
+    useCallback(
+      (state) => {
+        const panel = state.panelsById[id];
+        return panel?.kind === "file-browser" ? (panel.browserSortDirection ?? "asc") : "asc";
+      },
+      [id]
+    )
+  );
+  const sort = useMemo<FileBrowserSortOrder>(
+    () => ({ key: sortKey, direction: sortDirection }),
+    [sortKey, sortDirection]
   );
   const rootPath = usePanelStore(
     useCallback(
@@ -353,6 +379,11 @@ export function FileBrowserPane({
     refresh,
     isRefreshing,
     captureSnapshot,
+    selectedNode,
+    listingPath,
+    listingRows,
+    listingStatus,
+    listingHasHiddenDotfiles,
   } = useFileBrowserTree({
     source,
     expandedPaths: stableExpandedPaths,
@@ -361,6 +392,8 @@ export function FileBrowserPane({
     rootPath,
     changeTick,
     treeSnapshot,
+    sort,
+    selectedPath,
   });
 
   // Persist the last-known tree at going-away points only (#11367): the
@@ -528,6 +561,23 @@ export function FileBrowserPane({
   const handleToggleDotfiles = useCallback(() => {
     setFileBrowserView(id, { browserHideDotfiles: !hideDotfiles });
   }, [id, hideDotfiles, setFileBrowserView]);
+
+  // Unconditionally turns the filter off, unlike the toggle above: it backs the
+  // "Show dotfiles" recovery on an empty state, where the only reason the
+  // control is offered is that the filter is currently hiding something.
+  const handleShowDotfiles = useCallback(() => {
+    setFileBrowserView(id, { browserHideDotfiles: false });
+  }, [id, setFileBrowserView]);
+
+  // Both halves in one write: the setter's no-op guard compares each against
+  // its own default, so sending them separately would let a key change land
+  // while a simultaneous direction change was still being judged unchanged.
+  const handleSortChange = useCallback(
+    (next: FileBrowserSortOrder) => {
+      setFileBrowserView(id, { browserSortKey: next.key, browserSortDirection: next.direction });
+    },
+    [id, setFileBrowserView]
+  );
 
   // A selection the junk list or dotfile toggle now hides. The viewer already
   // clears (the hidden row isn't in `rows`, so `selectedNode` is undefined),
@@ -840,8 +890,13 @@ export function FileBrowserPane({
     [basePath, reveal]
   );
 
+  // Typed on the shared entry shape rather than on `FlatTreeRow` so the tree and
+  // the folder listing hand it their own row types and get the identical menu
+  // (#11620). Nothing below reads a tree-only field — the handlers all take a
+  // path or a name — and a second copy of this menu for the listing would be
+  // sixty lines that have to stay in lockstep forever.
   const rowContextMenu = useCallback(
-    (row: FlatTreeRow) => (
+    (row: FileEntryLike) => (
       <>
         {row.isDirectory && (
           <>
@@ -931,10 +986,6 @@ export function FileBrowserPane({
     setFileBrowserView(id, { browserExpandedPaths: [...current].sort() });
   }, [id, selectedPath, stableExpandedPaths, setFileBrowserView]);
 
-  const selectedNode = useMemo(
-    () => rows.find((row) => row.path === selectedPath),
-    [rows, selectedPath]
-  );
   // Picking a file from the changed-files summary selects a path whose tree row
   // may not be flattened at all — its ancestors are collapsed, so `selectedNode`
   // is undefined for it. Git is the second witness that it is a readable file:
@@ -961,10 +1012,22 @@ export function FileBrowserPane({
   // hard veto — git reports a dirty submodule as a changed path while the
   // filesystem calls it a directory, and letting the change set override the row
   // would hand the viewer a directory to read.
+  //
+  // `selectedNode` now comes from the tree hook, resolved against its listings
+  // map rather than against the rendered rows (#11620), so it already answers
+  // for an entry picked out of a folder listing whose parent is collapsed. Git
+  // still covers what that cannot: a path whose parent directory has not been
+  // listed at all, where there is no node to consult either way.
   const isSelectedReadableFile =
     selectedNode === undefined ? isSelectedChangedFile : selectedNode.isDirectory === false;
+  // `selectionFilteredHidden` is part of the gate, not decoration: resolving the
+  // node from the listings map means it survives the filter that removed its
+  // row, so without this an entry hidden by the dotfile toggle would keep its
+  // contents on screen in the viewer while the tree stopped showing it at all.
   const selectedFilePath =
-    selectedPath && basePath && isSelectedReadableFile ? join(basePath, selectedPath) : null;
+    selectedPath && basePath && isSelectedReadableFile && !selectionFilteredHidden
+      ? join(basePath, selectedPath)
+      : null;
   const selectedFileName = selectedPath ? (selectedPath.split("/").pop() ?? selectedPath) : "";
 
   return (
@@ -1178,6 +1241,22 @@ export function FileBrowserPane({
               treeSidebarId={treeSidebarId}
               changedFiles={changedFiles}
               onSelectChangedFile={handleSelectChangedFile}
+              // The folder-selected state (#11620). `folderPath` and `filePath`
+              // are mutually exclusive by construction — both are derived from
+              // the same resolved `selectedNode`, so the viewer never has to
+              // decide which one wins.
+              folderPath={listingPath}
+              folderRows={listingRows}
+              folderStatus={listingStatus}
+              folderHasHiddenDotfiles={hideDotfiles && listingHasHiddenDotfiles}
+              onShowDotfiles={handleShowDotfiles}
+              onSelectEntry={handleSelect}
+              onActivateEntry={handleActivate}
+              onRootFolder={handleSetRoot}
+              rowContextMenu={rowContextMenu}
+              basePath={basePath}
+              sort={sort}
+              onSortChange={handleSortChange}
             />
           </div>
         )}

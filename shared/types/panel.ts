@@ -746,6 +746,14 @@ export interface FileBrowserTreeSnapshot {
 }
 
 /**
+ * What the file browser orders directory entries by (#11620). Lives here
+ * rather than beside the comparator in the renderer because it is a persisted
+ * panel field, and `shared/` cannot import from `src/`.
+ */
+export type FileBrowserSortKey = "name" | "modified" | "size" | "type";
+export type FileBrowserSortDirection = "asc" | "desc";
+
+/**
  * File browser panel — a lazily-expanded directory tree over one folder with a
  * read-only viewer beside it. Every field is relative rather than absolute (the
  * root comes from `worktreeId`, like `DiffPanelData.filePath`), so moving or
@@ -832,6 +840,18 @@ export interface FileBrowserPanelData extends BasePanelData {
    * the user never asked for (#11489). Only `true` is persisted.
    */
   browserWorkspaceRooted?: boolean;
+  /**
+   * What the tree and the folder listing are ordered by (#11620). Absent = the
+   * `name`/`asc` default, which is the order the listing service already
+   * returns, so only a non-default choice earns a persisted field.
+   *
+   * One setting drives both surfaces deliberately: the sort menu is a single
+   * control, and letting the two columns disagree about the order of the same
+   * directory would make the listing read as a different folder.
+   */
+  browserSortKey?: FileBrowserSortKey;
+  /** Direction for `browserSortKey`. Absent = `asc`; only `desc` is persisted. */
+  browserSortDirection?: FileBrowserSortDirection;
 }
 
 export type PanelInstance =

@@ -39,5 +39,13 @@ export function serializeFileBrowser(t: FileBrowserPanelData): Partial<PanelSnap
     // `worktreeId`, because a promoted panel carries an adopted placement
     // `worktreeId` by the time it is saved (#11489).
     ...(t.browserWorkspaceRooted === true ? { browserWorkspaceRooted: true } : {}),
+    // Same non-default rule as the sidebar width: "name" ascending is the order
+    // the listing service already returns, so a panel left on the default sort
+    // persists neither field (#11620). The two are written independently — a
+    // descending name sort is a real choice even though its key is the default.
+    ...(t.browserSortKey != null && t.browserSortKey !== "name"
+      ? { browserSortKey: t.browserSortKey }
+      : {}),
+    ...(t.browserSortDirection === "desc" ? { browserSortDirection: "desc" } : {}),
   };
 }

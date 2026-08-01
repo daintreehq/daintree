@@ -308,3 +308,78 @@ describe("setFileBrowserView", () => {
     expect(store.get()).toBe(before);
   });
 });
+
+describe("setFileBrowserView sort fields (#11620)", () => {
+  let store: ReturnType<typeof makeSet>;
+  let setFileBrowserView: ReturnType<typeof createFileBrowserPanelActions>["setFileBrowserView"];
+
+  beforeEach(() => {
+    store = makeSet({
+      panelsById: { "panel-1": browserPanel() },
+      panelIds: ["panel-1"],
+    });
+    setFileBrowserView = createFileBrowserPanelActions(store.set).setFileBrowserView;
+  });
+
+  it("stores a non-default sort key and direction", () => {
+    setFileBrowserView("panel-1", { browserSortKey: "size", browserSortDirection: "desc" });
+
+    expect(store.get().panelsById["panel-1"]).toMatchObject({
+      browserSortKey: "size",
+      browserSortDirection: "desc",
+    });
+  });
+
+  it("treats patching the default order onto a never-sorted panel as a no-op", () => {
+    // Absent and name/asc are the same state, so this must not dirty the panel
+    // record (and with it the persisted layout) for nothing.
+    const before = store.get();
+
+    setFileBrowserView("panel-1", { browserSortKey: "name", browserSortDirection: "asc" });
+
+    expect(store.get()).toBe(before);
+  });
+
+  it("commits a direction change even when the key is unchanged", () => {
+    // The direction gets its own comparison rather than riding the key's:
+    // folding them together would make every flip a silent no-op.
+    setFileBrowserView("panel-1", { browserSortKey: "name", browserSortDirection: "desc" });
+
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserSortDirection: "desc" });
+  });
+
+  it("commits a key change even when the direction is unchanged", () => {
+    setFileBrowserView("panel-1", { browserSortKey: "type", browserSortDirection: "asc" });
+
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserSortKey: "type" });
+  });
+
+  it("writes both halves in one commit", () => {
+    // The pane always sends them together; a split write could land a key while
+    // its direction was still being judged unchanged.
+    setFileBrowserView("panel-1", { browserSortKey: "modified", browserSortDirection: "desc" });
+    const panel = store.get().panelsById["panel-1"];
+
+    expect(panel).toMatchObject({ browserSortKey: "modified", browserSortDirection: "desc" });
+  });
+
+  it("leaves an existing sort alone when the patch names neither field", () => {
+    setFileBrowserView("panel-1", { browserSortKey: "size", browserSortDirection: "desc" });
+    setFileBrowserView("panel-1", { browserSelectedPath: "src/app.ts" });
+
+    expect(store.get().panelsById["panel-1"]).toMatchObject({
+      browserSortKey: "size",
+      browserSortDirection: "desc",
+      browserSelectedPath: "src/app.ts",
+    });
+  });
+
+  it("is a no-op when re-patching the sort already in effect", () => {
+    setFileBrowserView("panel-1", { browserSortKey: "size", browserSortDirection: "desc" });
+    const before = store.get();
+
+    setFileBrowserView("panel-1", { browserSortKey: "size", browserSortDirection: "desc" });
+
+    expect(store.get()).toBe(before);
+  });
+});

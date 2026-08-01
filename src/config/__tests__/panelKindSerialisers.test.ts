@@ -109,6 +109,56 @@ describe("panelKindSerialisers", () => {
   describe("file-browser", () => {
     const deserialize = () => getDeserializer("file-browser")!;
 
+    describe("sort fields (#11620)", () => {
+      it("restores a recognized non-default sort key", () => {
+        expect(deserialize()({ id: "fb1", browserSortKey: "modified" }).browserSortKey).toBe(
+          "modified"
+        );
+      });
+
+      it("drops an unrecognized key rather than letting it reach the comparator", () => {
+        // An unknown key would order by nothing, leaving the tree in service
+        // order while the menu claimed otherwise.
+        expect(
+          deserialize()({ id: "fb1", browserSortKey: "churn" }).browserSortKey
+        ).toBeUndefined();
+        expect(deserialize()({ id: "fb1", browserSortKey: 7 }).browserSortKey).toBeUndefined();
+        expect(deserialize()({ id: "fb1", browserSortKey: {} }).browserSortKey).toBeUndefined();
+      });
+
+      it("leaves the default key absent rather than materializing it", () => {
+        // The serializer never writes "name"; restoring it as an explicit value
+        // would make the record less sparse than it was written.
+        expect(deserialize()({ id: "fb1", browserSortKey: "name" }).browserSortKey).toBeUndefined();
+      });
+
+      it("restores only a literal desc direction", () => {
+        expect(
+          deserialize()({ id: "fb1", browserSortDirection: "desc" }).browserSortDirection
+        ).toBe("desc");
+        expect(
+          deserialize()({ id: "fb1", browserSortDirection: "asc" }).browserSortDirection
+        ).toBeUndefined();
+        expect(
+          deserialize()({ id: "fb1", browserSortDirection: "sideways" }).browserSortDirection
+        ).toBeUndefined();
+      });
+
+      it("round-trips a non-default order through serialize and back", () => {
+        const panel = {
+          id: "fb1",
+          kind: "file-browser",
+          title: "Files",
+          cwd: "/repo",
+          browserSortKey: "size",
+          browserSortDirection: "desc",
+        } as unknown as FileBrowserPanelData;
+        const restored = deserialize()({ id: "fb1", ...serializeFileBrowser(panel) });
+        expect(restored.browserSortKey).toBe("size");
+        expect(restored.browserSortDirection).toBe("desc");
+      });
+    });
+
     it("keeps safe relative paths and drops everything that could escape the root", () => {
       const result = deserialize()({
         id: "fb1",

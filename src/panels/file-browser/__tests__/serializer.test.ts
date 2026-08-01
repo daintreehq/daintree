@@ -63,7 +63,7 @@ describe("serializeFileBrowser", () => {
     // The old field's meaning was inverted; an old panel that showed gitignored
     // files must NOT hydrate as hiding dotfiles (#10938-class trap). The
     // serializer only knows the new field, so the stale key is simply dropped.
-    const legacy = { ...basePanel, browserShowIgnored: true } as FileBrowserPanelData;
+    const legacy = { ...basePanel, browserShowIgnored: true } as unknown as FileBrowserPanelData;
 
     const snapshot = serializeFileBrowser(legacy);
 
@@ -250,5 +250,63 @@ describe("createFileBrowserDefaults", () => {
         browserWorkspaceRooted: true,
       })
     ).toEqual({ browserWorkspaceRooted: true });
+  });
+});
+
+describe("serializeFileBrowser sort fields (#11620)", () => {
+  function base(): FileBrowserPanelData {
+    return {
+      id: "p1",
+      kind: "file-browser",
+      title: "Files",
+      cwd: "/repo",
+    } as unknown as FileBrowserPanelData;
+  }
+
+  it("persists neither field for the default name/ascending order", () => {
+    // The default is the order the listing service already returns, so a
+    // never-sorted panel must stay as sparse as it was before the feature.
+    const snapshot = serializeFileBrowser({
+      ...base(),
+      browserSortKey: "name",
+      browserSortDirection: "asc",
+    });
+    expect(snapshot.browserSortKey).toBeUndefined();
+    expect(snapshot.browserSortDirection).toBeUndefined();
+  });
+
+  it("persists neither field when the panel has never been sorted", () => {
+    const snapshot = serializeFileBrowser(base());
+    expect("browserSortKey" in snapshot).toBe(false);
+    expect("browserSortDirection" in snapshot).toBe(false);
+  });
+
+  it("persists a non-default key", () => {
+    expect(serializeFileBrowser({ ...base(), browserSortKey: "size" }).browserSortKey).toBe("size");
+  });
+
+  it("persists a descending direction even under the default key", () => {
+    // Name-descending is a real choice, and the two halves are written
+    // independently — dropping the direction because its key is the default
+    // would silently reset the order on restore.
+    const snapshot = serializeFileBrowser({
+      ...base(),
+      browserSortKey: "name",
+      browserSortDirection: "desc",
+    });
+    expect(snapshot.browserSortKey).toBeUndefined();
+    expect(snapshot.browserSortDirection).toBe("desc");
+  });
+
+  it("round-trips a non-default order through serialize", () => {
+    const snapshot = serializeFileBrowser({
+      ...base(),
+      browserSortKey: "modified",
+      browserSortDirection: "desc",
+    });
+    expect(snapshot).toMatchObject({
+      browserSortKey: "modified",
+      browserSortDirection: "desc",
+    });
   });
 });

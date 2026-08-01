@@ -258,6 +258,15 @@ export interface FileTreeNode {
   isDirectory: boolean;
   /** File size in bytes (directories have size 0) */
   size?: number;
+  /**
+   * Last-modified time in epoch milliseconds, read off the `lstat` the listing
+   * already performs — never its own syscall. Absent on nodes that did not come
+   * from a live directory read: a tree rehydrated from a persisted snapshot
+   * (which stores structure only) and the CopyTree context listing (which is
+   * rebuilt from the SDK manifest) both leave it undefined, so every consumer
+   * has to have an answer for "unknown" rather than treating it as 0.
+   */
+  mtimeMs?: number;
   /** Children (only populated for directories if expanded) */
   children?: FileTreeNode[];
   /**

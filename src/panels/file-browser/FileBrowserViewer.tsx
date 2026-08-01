@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArrowDownNarrowWide,
+  ArrowUpNarrowWide,
   ExternalLink,
   FileText,
+  FolderTree,
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
@@ -41,7 +44,24 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { FolderListingView } from "./FolderListingView";
+import type {
+  FileBrowserSortKey,
+  FileBrowserSortOrder,
+  FileEntryLike,
+  FolderListingRow,
+} from "./fileBrowserTree";
+import type { FolderListingStatus } from "./useFileBrowserTree";
 import { filesClient } from "@/clients/filesClient";
 import { isClientAppError } from "@/utils/clientAppError";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
@@ -100,6 +120,53 @@ export interface FileBrowserViewerProps {
   changedFiles: readonly WorkingTreeFileChange[] | null;
   /** Opens a file picked from the changed-files summary in this viewer. */
   onSelectChangedFile: (relativePath: string) => void;
+  /**
+   * Worktree-relative path of the selected *folder*, or null when the selection
+   * is a file or nothing (#11620). Mutually exclusive with `filePath` — the
+   * pane resolves the selection's kind once and hands over exactly one.
+   */
+  folderPath: string | null;
+  /** Rows for `folderPath`'s contents; null when no folder is selected. */
+  folderRows: FolderListingRow[] | null;
+  /** Raw fetch state for `folderPath` — never anti-flicker gated (#10083). */
+  folderStatus: FolderListingStatus;
+  /** Whether the dotfile toggle is what's hiding this folder's entries. */
+  folderHasHiddenDotfiles: boolean;
+  /** Turns the dotfile filter off; offered from the filtered-empty state. */
+  onShowDotfiles: () => void;
+  /** Selecting an entry in the listing — a folder steps in, a file opens. */
+  onSelectEntry: (path: string) => void;
+  /** Double-click on a listing file: open it in its own panel. */
+  onActivateEntry: (path: string) => void;
+  /** Double-click on a listing folder: re-root the browser there. */
+  onRootFolder: (path: string) => void;
+  /** Menu items for a listing row's right-click menu — the tree's own callback. */
+  rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
+  /** Absolute base the listing's relative paths hang off, for drags (#11576). */
+  basePath: string;
+  /** Current order for the tree and the listing; driven by the toolbar menu. */
+  sort: FileBrowserSortOrder;
+  onSortChange: (sort: FileBrowserSortOrder) => void;
+}
+
+/** Toolbar sort menu entries, in menu order. */
+const SORT_OPTIONS: Array<{ value: FileBrowserSortKey; label: string }> = [
+  { value: "name", label: "Name" },
+  { value: "modified", label: "Modified" },
+  { value: "size", label: "Size" },
+  { value: "type", label: "Type" },
+];
+
+/**
+ * Picking the key already in use flips direction; picking a different one keeps
+ * the current direction. Mirrors the review hub's sort menu (`applySortChange`)
+ * so the two menus in the app behave identically — re-picking as "toggle" is
+ * the only way a single radio group can express direction at all.
+ */
+function nextSort(current: FileBrowserSortOrder, value: string): FileBrowserSortOrder {
+  const key = SORT_OPTIONS.find((option) => option.value === value)?.value ?? current.key;
+  if (key !== current.key) return { key, direction: current.direction };
+  return { key, direction: current.direction === "asc" ? "desc" : "asc" };
 }
 
 /** Which external surface a toolbar action aims the current file at. */
@@ -148,6 +215,18 @@ export function FileBrowserViewer({
   treeSidebarId,
   changedFiles,
   onSelectChangedFile,
+  folderPath,
+  folderRows,
+  folderStatus,
+  folderHasHiddenDotfiles,
+  onShowDotfiles,
+  onSelectEntry,
+  onActivateEntry,
+  onRootFolder,
+  rowContextMenu,
+  basePath,
+  sort,
+  onSortChange,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
   // Sticky Source/Rendered choice for markdown, defaulting to the rendered view
@@ -405,6 +484,60 @@ export function FileBrowserViewer({
             with nothing selected would otherwise offer no way to refresh
             anything. */}
         <FileViewerToolbar.Actions>
+          {/* The single home for sort (#11620). Deliberately not duplicated as
+              clickable column headers in the listing below: two controls for
+              one setting is the same trap the Refresh comment above avoids, and
+              a header that looks sortable in one column but has no counterpart
+              in the tree would misdescribe what the setting governs. Always
+              present, because it orders the tree as well as the listing —
+              gating it on a folder selection would hide the control that
+              explains the tree's own order. */}
+          <DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Sort files"
+                    data-testid="file-browser-sort-menu"
+                    className="toolbar-icon-button rounded p-1.5 text-daintree-text/60"
+                  >
+                    {sort.direction === "asc" ? (
+                      <ArrowUpNarrowWide className="h-4 w-4" />
+                    ) : (
+                      <ArrowDownNarrowWide className="h-4 w-4" />
+                    )}
+                  </button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Sort files</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="end" className="min-w-[180px]">
+              <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+              {/* One radio group, no separate direction control: re-picking the
+                  active key flips it, which keeps the menu to a single list of
+                  choices instead of a key list plus a direction list that can
+                  disagree. The arrow marks which key carries the direction. */}
+              <DropdownMenuRadioGroup
+                value={sort.key}
+                onValueChange={(value) => onSortChange(nextSort(sort, value))}
+              >
+                {SORT_OPTIONS.map((option) => (
+                  <DropdownMenuRadioItem key={option.value} value={option.value}>
+                    <span className="flex flex-1 items-center gap-2">
+                      {option.label}
+                      {sort.key === option.value &&
+                        (sort.direction === "asc" ? (
+                          <ArrowUpNarrowWide className="ml-auto h-3 w-3 text-daintree-text/40" />
+                        ) : (
+                          <ArrowDownNarrowWide className="ml-auto h-3 w-3 text-daintree-text/40" />
+                        ))}
+                    </span>
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {/* Only while the tree column is collapsed away. Its header owns the
               Refresh the rest of the time, and two identical buttons in one
               panel would read as two different actions — the same
@@ -459,7 +592,10 @@ export function FileBrowserViewer({
         />
       )}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {filePath ? renderBody() : renderIdleBody()}
+        {/* A selected folder outranks the idle body: the changed-files summary
+            answers "nothing is selected", and a folder selection is a
+            selection (#11620). */}
+        {filePath ? renderBody() : folderPath !== null ? renderFolderBody() : renderIdleBody()}
       </div>
     </>
   );
@@ -500,6 +636,103 @@ export function FileBrowserViewer({
           />
         )}
       </div>
+    );
+  }
+
+  /**
+   * The folder-selected state (#11620) — what a selected folder shows instead
+   * of the same "Nothing selected" a bare panel shows.
+   *
+   * Branches on `folderStatus`, the raw fetch state, never on a Doherty-gated
+   * flag: a gated boolean is false both before the gate opens and after the
+   * data arrives, so branching on it renders "this folder is empty" for the
+   * first 400ms of every load. The gate below decides only whether the skeleton
+   * paints during a pending window — under 400ms this renders nothing at all,
+   * which is the point.
+   */
+  function renderFolderBody() {
+    if (folderPath === null) return null;
+
+    if (folderStatus === "error") {
+      return (
+        <div className="flex h-full w-full items-center justify-center p-6">
+          <EmptyState
+            variant="zero-data"
+            scale="canvas"
+            icon={<FolderTree className="h-6 w-6" />}
+            title="Can't show this folder"
+            description="The folder couldn't be read. It may have been moved or deleted."
+            action={
+              <button
+                type="button"
+                onClick={onRefresh}
+                className="text-xs underline underline-offset-2"
+              >
+                Retry
+              </button>
+            }
+            className="w-full"
+          />
+        </div>
+      );
+    }
+
+    // `== null`, so an absent value is treated the same as an explicit null:
+    // "no rows yet" is the honest reading either way, and reaching `.length`
+    // on it below would throw rather than degrade.
+    if (folderStatus === "pending" || folderRows == null) {
+      return (
+        // Predictable shape (a column of rows), so a skeleton rather than a
+        // spinner — and `Skeleton` carries the 400ms gate itself, so a listing
+        // already in the cache shows nothing before the rows appear.
+        <div className="p-3">
+          <Skeleton label="Loading folder">
+            <SkeletonText lines={10} />
+          </Skeleton>
+        </div>
+      );
+    }
+
+    if (folderRows.length === 0) {
+      // "Filtered" only when turning the dotfile toggle off would actually
+      // reveal something here — otherwise the folder is genuinely empty, and
+      // offering a control that changes nothing would be a dead end.
+      const canRevealDotfiles = folderHasHiddenDotfiles;
+      return (
+        <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+          <EmptyState
+            variant={canRevealDotfiles ? "filtered-empty" : "zero-data"}
+            scale="canvas"
+            className="w-full"
+            {...(canRevealDotfiles ? {} : { icon: <FolderTree className="h-6 w-6" /> })}
+            title={canRevealDotfiles ? "Dotfiles are hidden here" : "This folder is empty"}
+            action={
+              canRevealDotfiles ? (
+                <button
+                  type="button"
+                  onClick={onShowDotfiles}
+                  className="text-xs underline underline-offset-2"
+                >
+                  Show dotfiles
+                </button>
+              ) : undefined
+            }
+          />
+        </div>
+      );
+    }
+
+    return (
+      <FolderListingView
+        rows={folderRows}
+        selectedPath={null}
+        onSelect={onSelectEntry}
+        onActivateFile={onActivateEntry}
+        onRootFolder={onRootFolder}
+        rowContextMenu={rowContextMenu}
+        basePath={basePath}
+        label={`Contents of ${fileName}`}
+      />
     );
   }
 

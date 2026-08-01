@@ -196,3 +196,69 @@ describe("FileTreeService", () => {
     }
   });
 });
+
+describe("FileTreeService mtimeMs (#11620)", () => {
+  let tempDir: string;
+  let service: FileTreeService;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-file-tree-mtime-"));
+    service = new FileTreeService();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("reports a file's modified time, matching what the filesystem records", async () => {
+    const filePath = path.join(tempDir, "a.ts");
+    await fs.writeFile(filePath, "x");
+    const stat = await fs.lstat(filePath);
+
+    const nodes = await service.getFileTree(tempDir, "");
+    const node = nodes.find((n) => n.name === "a.ts");
+
+    // Compared against the real stat rather than a literal: this asserts the
+    // value is actually plumbed through, not that a constant was copied.
+    expect(node?.mtimeMs).toBe(stat.mtimeMs);
+  });
+
+  it("reports a directory's modified time too", async () => {
+    // The directory branch returns early, before the size read — it needs its
+    // own mtime treatment or every folder row would show an em-dash.
+    const dirPath = path.join(tempDir, "pkg");
+    await fs.mkdir(dirPath);
+    const stat = await fs.lstat(dirPath);
+
+    const nodes = await service.getFileTree(tempDir, "");
+    const node = nodes.find((n) => n.name === "pkg");
+
+    expect(node?.isDirectory).toBe(true);
+    expect(node?.mtimeMs).toBe(stat.mtimeMs);
+  });
+
+  it("reflects a rewrite rather than caching the first read", async () => {
+    const filePath = path.join(tempDir, "a.ts");
+    await fs.writeFile(filePath, "one");
+    const first = (await service.getFileTree(tempDir, "")).find((n) => n.name === "a.ts")?.mtimeMs;
+
+    // Push the mtime forward explicitly: a same-millisecond rewrite would make
+    // the assertion below vacuous on a fast filesystem.
+    const later = new Date(Date.now() + 60_000);
+    await fs.writeFile(filePath, "two");
+    await fs.utimes(filePath, later, later);
+
+    const second = (await service.getFileTree(tempDir, "")).find((n) => n.name === "a.ts")?.mtimeMs;
+
+    expect(second).toBeGreaterThan(first!);
+  });
+
+  it("still reports a byte size alongside the modified time", async () => {
+    await fs.writeFile(path.join(tempDir, "a.ts"), "hello");
+
+    const node = (await service.getFileTree(tempDir, "")).find((n) => n.name === "a.ts");
+
+    expect(node).toMatchObject({ size: 5 });
+    expect(node?.mtimeMs).toBeGreaterThan(0);
+  });
+});
