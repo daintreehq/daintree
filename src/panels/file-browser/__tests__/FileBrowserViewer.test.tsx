@@ -33,6 +33,16 @@ vi.mock("@/components/Html/HtmlViewer", () => ({
   HtmlViewer: () => <div data-testid="html-viewer-mock" />,
 }));
 
+// Surfaces the `active` prop instead of letting the real component apply its
+// spin class. What this suite owns is the wiring — `isRefreshing` reaching the
+// icon — while how a spin is rendered belongs to SpinningIcon's own suite; an
+// assertion on its class name here would break on a harmless refactor there.
+vi.mock("@/components/ui/SpinningIcon", () => ({
+  SpinningIcon: ({ active }: { active: boolean }) => (
+    <svg data-testid="spinning-icon-mock" data-active={String(active)} />
+  ),
+}));
+
 import { FileBrowserViewer } from "../FileBrowserViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -275,13 +285,21 @@ describe("FileBrowserViewer video preview (#11382)", () => {
     expect(container.querySelector("video")?.getAttribute("src")).toBe(firstSrc);
     expect(videoFetchMock).toHaveBeenCalledTimes(1);
 
-    // Refresh pressed: exactly one more request, carrying the new nonce.
+    // Refresh pressed: exactly one more request, aimed at a different URL —
+    // proof the nonce reached it, without pinning the leaf's `v=` spelling.
     rerender(viewerJsx("/repo/media/demo.webm", { revision: "r2", manualRefreshNonce: 1 }));
     await waitFor(() => expect(videoFetchMock).toHaveBeenCalledTimes(2));
-    expect(String(videoFetchMock.mock.calls[1]?.[0])).toContain("v=1");
-    await waitFor(() =>
-      expect(container.querySelector("video")?.getAttribute("src")).not.toBe(firstSrc)
+    expect(String(videoFetchMock.mock.calls[1]?.[0])).not.toBe(
+      String(videoFetchMock.mock.calls[0]?.[0])
     );
+    // Both halves in ONE waitFor: the hook nulls its object URL while refetching,
+    // so a bare `.not.toBe(firstSrc)` would go green on the empty gap and never
+    // prove the replacement player arrived.
+    await waitFor(() => {
+      const refreshed = container.querySelector("video");
+      expect(refreshed).not.toBeNull();
+      expect(refreshed?.getAttribute("src")).not.toBe(firstSrc);
+    });
   });
 });
 
@@ -362,14 +380,46 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
     rerender(viewerJsx("/repo/media/track.mp3", { manualRefreshNonce: 1 }));
     await waitFor(() => expect(audioFetchMock).toHaveBeenCalledTimes(2));
 
-    // The nonce reaches the protocol URL, so the fetch is a genuinely new
-    // request rather than a re-render of the cached blob.
-    expect(String(audioFetchMock.mock.calls[1]?.[0])).toContain("v=1");
-    await waitFor(() =>
-      expect(container.querySelector("audio")?.getAttribute("src")).not.toBe(firstSrc)
+    // A different URL, so the nonce genuinely reached the request rather than
+    // the blob being re-rendered from cache.
+    expect(String(audioFetchMock.mock.calls[1]?.[0])).not.toBe(
+      String(audioFetchMock.mock.calls[0]?.[0])
     );
-    // Keyed by object URL, so fresh bytes mean a fresh element.
-    expect(container.querySelector("audio")).not.toBe(firstNode);
+    // One waitFor for the whole claim: the hook nulls its object URL while
+    // refetching, so asserting the src alone would pass on the empty gap
+    // between the two players.
+    await waitFor(() => {
+      const refreshed = container.querySelector("audio");
+      expect(refreshed).not.toBeNull();
+      expect(refreshed?.getAttribute("src")).not.toBe(firstSrc);
+      // Keyed by object URL, so fresh bytes mean a fresh element.
+      expect(refreshed).not.toBe(firstNode);
+    });
+  });
+
+  it("recovers a failed track on refresh, which takes both halves of the signal", async () => {
+    // A failed fetch unmounts the preview entirely (`status: "error"`), so
+    // `reloadKey` alone can't bring it back — nothing is mounted to receive it.
+    // Recovery rides `revision`, whose re-run reclassifies the file and
+    // remounts the player. That is why the nonce must stay folded into
+    // `revision` as well as being passed separately.
+    let objectUrlSequence = 0;
+    URL.createObjectURL = vi.fn(() => `blob:app://daintree/audio-retry-${objectUrlSequence++}`);
+    audioFetchMock.mockRejectedValueOnce(new Error("protocol unavailable"));
+
+    const { container, rerender } = renderViewer("/repo/media/track.mp3", {
+      revision: "0:0",
+      manualRefreshNonce: 0,
+    });
+    await screen.findByText("This audio file couldn't be played");
+    expect(container.querySelector("audio")).toBeNull();
+
+    // Exactly what the pane emits for one Refresh press: both values move.
+    rerender(viewerJsx("/repo/media/track.mp3", { revision: "0:1", manualRefreshNonce: 1 }));
+
+    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+    expect(screen.queryByText("This audio file couldn't be played")).toBeNull();
+    expect(audioFetchMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -403,20 +453,24 @@ describe("FileBrowserViewer PDF preview (#11427)", () => {
       manualRefreshNonce: 0,
     });
     await act(async () => {});
-    const frame = container.querySelector("iframe");
-    const firstSrc = frame?.getAttribute("src");
+    const firstFrame = container.querySelector("iframe");
+    const firstSrc = firstFrame?.getAttribute("src");
 
-    // An ambient write must not throw away the reader's page and zoom, which a
-    // changed src would.
+    // An ambient write must not throw away the reader's page and zoom. Both a
+    // changed src AND a remounted frame would do that, so pin the node too —
+    // a remount carrying an identical src resets the reader just the same.
     rerender(viewerJsx("/repo/docs/spec.pdf", { revision: "r2", manualRefreshNonce: 0 }));
     await act(async () => {});
+    expect(container.querySelector("iframe")).toBe(firstFrame);
     expect(container.querySelector("iframe")?.getAttribute("src")).toBe(firstSrc);
 
     rerender(viewerJsx("/repo/docs/spec.pdf", { revision: "r2", manualRefreshNonce: 1 }));
     await act(async () => {});
     const refreshed = container.querySelector("iframe");
+    // Re-navigated in place rather than remounted: the same element takes a new
+    // src, which is what makes the reload deliberate instead of incidental.
+    expect(refreshed).toBe(firstFrame);
     expect(refreshed?.getAttribute("src")).not.toBe(firstSrc);
-    expect(new URL(refreshed?.getAttribute("src") ?? "").searchParams.get("v")).toBe("1");
     // The reload rides the same frame, so the COEP contract must survive it.
     expect(refreshed?.hasAttribute("credentialless")).toBe(true);
     expect(refreshed?.hasAttribute("sandbox")).toBe(false);
@@ -446,14 +500,12 @@ describe("FileBrowserViewer Refresh control (#11586)", () => {
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it("spins the icon only while the refresh is draining", () => {
+  it("hands the in-flight refresh state to the icon", () => {
     const { rerender } = renderViewer(null, { sidebarCollapsed: true, isRefreshing: false });
-    const idleIcon = screen.getByRole("button", { name: "Refresh" }).querySelector("svg");
-    expect(idleIcon?.classList.contains("animate-spin")).toBe(false);
+    expect(screen.getByTestId("spinning-icon-mock").getAttribute("data-active")).toBe("false");
 
     rerender(viewerJsx(null, { sidebarCollapsed: true, isRefreshing: true }));
-    const busyIcon = screen.getByRole("button", { name: "Refresh" }).querySelector("svg");
-    expect(busyIcon?.classList.contains("animate-spin")).toBe(true);
+    expect(screen.getByTestId("spinning-icon-mock").getAttribute("data-active")).toBe("true");
   });
 
   it("keeps re-reading text on an ambient revision tick", async () => {
@@ -464,6 +516,23 @@ describe("FileBrowserViewer Refresh control (#11586)", () => {
     expect(readMock).toHaveBeenCalledTimes(1);
 
     rerender(viewerJsx("/repo/src/notes.txt", { revision: "r2" }));
+    await waitFor(() => expect(readMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("re-reads text on an explicit refresh too, not just an ambient tick", async () => {
+    // Guards the other direction of the pane's dual handoff: the nonce is fed
+    // to the media previews directly AND folded into `revision`. Drop the
+    // second and text, html and svg go stale on Refresh with nothing to catch
+    // it — the media tests above would all still pass.
+    const { rerender } = renderViewer("/repo/src/notes.txt", {
+      revision: "0:0",
+      manualRefreshNonce: 0,
+    });
+    await screen.findByTestId("code-viewer-mock");
+    expect(readMock).toHaveBeenCalledTimes(1);
+
+    // What the pane produces for a Refresh press on a worktree with no tick.
+    rerender(viewerJsx("/repo/src/notes.txt", { revision: "0:1", manualRefreshNonce: 1 }));
     await waitFor(() => expect(readMock).toHaveBeenCalledTimes(2));
   });
 });

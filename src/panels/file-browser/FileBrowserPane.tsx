@@ -387,8 +387,13 @@ export function FileBrowserPane({
     [location, onClose, basePath, rows]
   );
 
-  // Counted separately from the change tick so the toolbar's Refresh also
-  // re-reads the open file, not just the tree.
+  // The explicit half of the refresh signal, counted apart from the ambient
+  // change tick so Refresh also re-reads the open file, not just the tree. It
+  // then travels to the viewer BOTH ways, and both are load-bearing: merged
+  // into `viewerRevision` below, and handed over on its own as the media
+  // previews' reload key (#11586). Dropping the direct handoff makes Refresh
+  // inert for media again; substituting the merged value there restarts
+  // playback on every ambient write. Keep both.
   const [manualRefreshNonce, setManualRefreshNonce] = useState(0);
   const handleRefresh = useCallback(() => {
     setManualRefreshNonce((nonce) => nonce + 1);
@@ -397,7 +402,9 @@ export function FileBrowserPane({
 
   // One value per refresh *cycle*, not per directory listed. Deriving it from
   // the tree's per-listing commits would make a 500-directory refresh re-read
-  // the open file 500 times.
+  // the open file 500 times. Carrying the nonce here as well as separately is
+  // what re-runs the viewer's classification effect, so a media file stuck in
+  // `status: "error"` remounts its preview on Refresh instead of staying dead.
   const viewerRevision = `${changeTick ?? 0}:${manualRefreshNonce}`;
 
   const handleToggleDotfiles = useCallback(() => {

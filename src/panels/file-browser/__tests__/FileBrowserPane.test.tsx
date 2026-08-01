@@ -1832,15 +1832,16 @@ describe("FileBrowserPane Refresh reachability and media wiring (#11586)", () =>
   });
 
   it("runs the pane's manual refresh from the viewer with nothing selected", () => {
-    // A workspace-rooted browser has no change tick (#11482), so with the tree
-    // hidden and no file selected this button is the only freshness signal
-    // there is.
+    // Nothing selected is not a dead layout: Refresh re-reads the tree, and a
+    // browser whose source reports no change tick (a workspace root, #11482)
+    // has no other freshness signal at all.
     mockPanel.browserSidebarCollapsed = true;
     renderPane();
-    expect(treeArgs.changeTick).toBeUndefined();
 
+    // getByRole, not the plural helper: this must be the one and only Refresh,
+    // and a missing button should fail here rather than inside fireEvent.
     act(() => {
-      fireEvent.click(refreshButtons()[0]!);
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     });
 
     expect(treeState.refresh).toHaveBeenCalledTimes(1);
@@ -1861,6 +1862,11 @@ describe("FileBrowserPane Refresh reachability and media wiring (#11586)", () =>
       blob: () => Promise.resolve(new Blob(["x"])),
     });
     vi.stubGlobal("fetch", fetchMock);
+    // Saved by hand: these are methods on URL, not globals, so
+    // `unstubAllGlobals` can't put them back and a later test would inherit
+    // this suite's sequence counter.
+    const realCreateObjectURL = URL.createObjectURL;
+    const realRevokeObjectURL = URL.revokeObjectURL;
     URL.createObjectURL = vi.fn(() => `blob:app://daintree/pane-audio-${objectUrlSequence++}`);
     URL.revokeObjectURL = vi.fn();
 
@@ -1876,21 +1882,32 @@ describe("FileBrowserPane Refresh reachability and media wiring (#11586)", () =>
       expect(String(fetchMock.mock.calls[0]?.[0])).toContain("v=0");
 
       act(() => {
-        fireEvent.click(refreshButtons()[0]!);
+        fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
       });
 
       // The tree refreshes and the preview re-requests — one gesture, both
       // halves, no rerender needed because the nonce is the pane's own state.
       expect(treeState.refresh).toHaveBeenCalledWith({ manual: true });
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      // The one place the `v=` spelling is worth pinning: this is the whole
+      // thesis of the fix, that the pane's nonce survives the trip through the
+      // viewer into the leaf's request URL. A fetch count alone wouldn't say
+      // the nonce is what drove it.
       expect(String(fetchMock.mock.calls[1]?.[0])).toContain("v=1");
-      await waitFor(() =>
-        expect(container.querySelector("audio")?.getAttribute("src")).not.toBe(firstSrc)
-      );
+      // One waitFor for the whole claim: the hook nulls its object URL while
+      // refetching, so a bare src comparison would go green on the empty gap
+      // without the replacement player ever arriving.
+      await waitFor(() => {
+        const refreshed = container.querySelector("audio");
+        expect(refreshed).not.toBeNull();
+        expect(refreshed?.getAttribute("src")).not.toBe(firstSrc);
+      });
       // Media never round-trips through the text-read IPC path.
       expect(readMock).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
+      URL.createObjectURL = realCreateObjectURL;
+      URL.revokeObjectURL = realRevokeObjectURL;
     }
   });
 });
