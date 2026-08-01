@@ -206,7 +206,10 @@ export function registerIntrospectionActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    mcpVisibility: "discoverable",
+    // Genuinely off the MCP surface: this id is in no tier allowlist, so it is
+    // neither dispatchable nor grantable (httpLifecycle.ts). `hidden` states
+    // that plainly instead of implying it is one search away (#11585).
+    mcpVisibility: "hidden",
     resultSchema: z.object({
       storeCount: z.number(),
       stores: z.array(PersistedStoreInfoSchema),

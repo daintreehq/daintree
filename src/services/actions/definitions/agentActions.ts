@@ -884,7 +884,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    mcpVisibility: "discoverable",
     resultSchema: z.object({
       agents: z.array(
         z.object({
@@ -927,7 +926,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    mcpVisibility: "discoverable",
     resultSchema: z.object({
       complete: z.literal(true),
       availabilityComplete: z.boolean(),

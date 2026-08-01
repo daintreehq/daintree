@@ -781,6 +781,20 @@ describe("McpServerService", () => {
       ];
     }
 
+    // Resources authorize through their backing action (`RESOURCE_BACKING_ACTIONS`),
+    // so #11585's allowlist cut reaches them too: `forge.listIssues` and
+    // `git.getProjectPulse` left the external tier, taking the issues and pulse
+    // resources with them. That is the intended consequence, not collateral —
+    // an external agent reads issues with `gh` and the working tree with `git`.
+    // The in-app assistant keeps both, so the behavioural tests below run under a
+    // workbench token; the external contraction gets its own test at the end.
+    const WORKBENCH_TOKEN = "token-wb-resources";
+    const workbenchHeaders = { Authorization: `Bearer ${WORKBENCH_TOKEN}` };
+
+    beforeEach(() => {
+      paneTokenTiers.set(WORKBENCH_TOKEN, "workbench");
+    });
+
     it("advertises the resources capability with subscribe enabled", async () => {
       const { window } = createMockWindow({ getManifest: manifestForResources });
       await service.start(window);
@@ -819,7 +833,7 @@ describe("McpServerService", () => {
         dispatchAction: dispatchMock,
       });
       await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!);
+      const { client, transport } = await connectClient(service.currentPort!, workbenchHeaders);
       transports.push(transport);
 
       const result = await client.listResources();
@@ -846,7 +860,7 @@ describe("McpServerService", () => {
         dispatchAction: dispatchMock,
       });
       await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!);
+      const { client, transport } = await connectClient(service.currentPort!, workbenchHeaders);
       transports.push(transport);
 
       const result = await client.listResources();
@@ -857,7 +871,7 @@ describe("McpServerService", () => {
     it("listResourceTemplates returns the four template patterns", async () => {
       const { window } = createMockWindow({ getManifest: manifestForResources });
       await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!);
+      const { client, transport } = await connectClient(service.currentPort!, workbenchHeaders);
       transports.push(transport);
 
       const result = await client.listResourceTemplates();
@@ -865,6 +879,43 @@ describe("McpServerService", () => {
       expect(patterns).toContain("daintree://worktree/{id}/pulse");
       expect(patterns).toContain("daintree://terminal/{id}/scrollback");
       expect(patterns).toContain("daintree://agent/{id}/state");
+    });
+
+    // The external half of the same contract. Resources are gated by their
+    // backing action, so cutting `forge.listIssues` and `git.getProjectPulse`
+    // from the external tier (#11585) withdraws the issues and pulse resources
+    // with them — listed nowhere, and refused at read rather than silently
+    // returning an empty payload. Terminal and agent resources are untouched,
+    // which is what makes this a boundary rather than a regression.
+    it("external tier keeps terminal/agent resources but loses issues and pulse (#11585)", async () => {
+      const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
+        if (payload.actionId === "terminal.list") {
+          return { ok: true, result: [{ id: "term-1", title: "shell", agentId: null }] };
+        }
+        return { ok: true, result: [] };
+      });
+      const { window } = createMockWindow({
+        getManifest: manifestForResources,
+        dispatchAction: dispatchMock,
+      });
+      await service.start(window);
+      // No headers → the global apiKey → external tier.
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const uris = (await client.listResources()).resources.map((r) => r.uri);
+      expect(uris).toContain("daintree://terminal/term-1/scrollback");
+      expect(uris).not.toContain("daintree://project/current/issues");
+
+      await expect(
+        client.readResource({ uri: "daintree://project/current/issues" })
+      ).rejects.toThrow(/not permitted/i);
+      await expect(client.readResource({ uri: "daintree://worktree/wt-1/pulse" })).rejects.toThrow(
+        /not permitted/i
+      );
+      expect(dispatchMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ actionId: "forge.listIssues" })
+      );
     });
 
     it("readResource for project issues dispatches forge.listIssues", async () => {
@@ -879,7 +930,7 @@ describe("McpServerService", () => {
         dispatchAction: dispatchMock,
       });
       await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!);
+      const { client, transport } = await connectClient(service.currentPort!, workbenchHeaders);
       transports.push(transport);
 
       const result = await client.readResource({ uri: "daintree://project/current/issues" });
@@ -905,7 +956,7 @@ describe("McpServerService", () => {
         dispatchAction: dispatchMock,
       });
       await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!);
+      const { client, transport } = await connectClient(service.currentPort!, workbenchHeaders);
       transports.push(transport);
 
       await client.readResource({ uri: "daintree://worktree/wt-42/pulse" });
@@ -1054,7 +1105,7 @@ describe("McpServerService", () => {
         dispatchAction: dispatchMock,
       });
       await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!);
+      const { client, transport } = await connectClient(service.currentPort!, workbenchHeaders);
       transports.push(transport);
 
       const result = await client.listResources();

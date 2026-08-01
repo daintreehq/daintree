@@ -168,12 +168,14 @@ describe("systemActions adversarial", () => {
       expect(result).toEqual(snapshot);
     });
 
-    it("is a discoverable read-only MCP tool (kept off the eager tools/list)", () => {
+    it("is a read-only MCP tool listed wherever its tier permits it", () => {
       const { getDef } = setupActions();
       const def = getDef("system.getResourceProfileSnapshot");
       expect(def.kind).toBe("query");
       expect(def.danger).toBe("safe");
-      expect(def.mcpVisibility).toBe("discoverable");
+      // Was `discoverable`, which withheld it from tools/list on the false
+      // premise that the meta-tools could still surface it (#11585).
+      expect(def.mcpVisibility).toBeUndefined();
     });
   });
 

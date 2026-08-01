@@ -1083,7 +1083,9 @@ describe("agent.listToolbar (#10838)", () => {
     expect(def.kind).toBe("query");
     expect(def.danger).toBe("safe");
     expect(def.scope).toBe("renderer");
-    expect(def.mcpVisibility).toBe("discoverable");
+    // Was `discoverable`, which hid it from tools/list while pretending the
+    // meta-tools kept it reachable (#11585). Its tier placement is the control.
+    expect(def.mcpVisibility).toBeUndefined();
     expect(def.argsSchema).toBeUndefined();
   });
 });
@@ -1197,13 +1199,16 @@ describe("agent.listAvailable", () => {
     expect(claude).not.toHaveProperty("launchable");
   });
 
-  it("registers as a narrow discoverable read with a structured MCP result", () => {
+  it("registers as a narrow read with a structured MCP result", () => {
     const actions = setupActions(makeCallbacks());
     const def = actions.get("agent.listAvailable")?.() as AnyActionDefinition;
     expect(def.kind).toBe("query");
     expect(def.danger).toBe("safe");
     expect(def.scope).toBe("renderer");
-    expect(def.mcpVisibility).toBe("discoverable");
+    // Was `discoverable` — see the tier tests for where it is actually reachable
+    // (every in-app tier plus `external`, which needs it to resolve launchable
+    // agent ids for `agent.launch`).
+    expect(def.mcpVisibility).toBeUndefined();
     expect(def.mcpOutputSchema).toBe(true);
   });
 

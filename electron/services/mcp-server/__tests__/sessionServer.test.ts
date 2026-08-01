@@ -252,14 +252,14 @@ describe("sessionServer tools/list handler", () => {
     const rejection = new Error("Manifest request timed out");
     const deps = externalDeps({
       requestManifest: vi.fn().mockRejectedValue(rejection),
-      getCachedManifest: vi.fn(() => [makeManifestEntry("git.commit")]),
+      getCachedManifest: vi.fn(() => [makeManifestEntry("terminal.list")]),
     });
     const server = createSessionServer("tools-list-fallback", deps);
     await server.connect(makeMockTransport());
 
     const result = await listTools(server);
 
-    expect(result.tools.map((t) => t.name)).toEqual(["git.commit"]);
+    expect(result.tools.map((t) => t.name)).toEqual(["terminal.list"]);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     // The rejection must reach the log so operators can diagnose the stale serve.
     expect(warnSpy.mock.calls[0]).toContain(rejection);
@@ -3313,17 +3313,19 @@ describe("sessionServer introspection tier filtering", () => {
     expect(await ids("system")).toEqual(["actions.list", "git.push"]);
   });
 
-  it("keeps discoverable entries reachable through search (progressive disclosure)", async () => {
-    // These are exactly the entries eager tools/list omits, so search is their
-    // only route. Filtering discovery with shouldExposeTool would delete them.
-    const discoverable = entry("terminal.list", { mcpVisibility: "discoverable" });
-    // tools/list refuses to advertise it; search is the only way to reach it.
-    expect(shouldExposeTool(discoverable, "workbench")).toBe(false);
+  it("narrows search to the session's own surface", async () => {
+    // Search reports what this tier can dispatch and nothing beyond it: a
+    // workbench session sees terminal.list and not git.push. Post-#11585 there
+    // is no class of entry that search reaches but tools/list withholds — the
+    // tier allowlist is the whole surface, and both gates read it.
+    const permittedEntry = entry("terminal.list");
+    expect(shouldExposeTool(permittedEntry, "workbench")).toBe(true);
     expect(isTierPermitted("workbench", "terminal.list")).toBe(true);
+    expect(isTierPermitted("workbench", "git.push")).toBe(false);
 
     const deps = introspectionDeps("workbench", {
       totalMatches: 2,
-      results: [discoverable, entry("git.push")],
+      results: [permittedEntry, entry("git.push")],
     });
     const server = createSessionServer("s1", deps);
     const res = await callTool(server, {

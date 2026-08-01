@@ -11,7 +11,7 @@ export type ActionDanger = "safe" | "confirm" | "restricted";
 export type RiskBand =
   "reversible" | "external-effect" | "destructive-local" | "destructive-network";
 
-export type McpVisibility = "core" | "discoverable" | "hidden";
+export type McpVisibility = "core" | "hidden";
 
 export type ActionScope = "renderer";
 
@@ -259,11 +259,18 @@ export interface ActionDefinition<
    */
   mcpOutputSchema?: boolean;
   /**
-   * MCP progressive-disclosure visibility. `core` tools always appear on
-   * `tools/list`; `discoverable` tools are reachable via `actions.search` +
-   * `actions.getSchema` but omitted from the default list; `hidden` tools
-   * never surface in discovery. Unset (undefined) preserves pre-existing
-   * behavior (tool appears on `tools/list` when tier-permitted).
+   * MCP listing visibility, applied on top of the tier allowlist — never
+   * instead of it. `hidden` withholds the tool from `tools/list` *and* from
+   * introspection results; `core` is an advisory marker for the bootstrap
+   * cohort and does not itself grant or widen anything. Unset (the norm) means
+   * the tool is listed whenever its tier permits it.
+   *
+   * There is no lazy-loading tier here. `discoverable` used to promise that a
+   * tool omitted from `tools/list` stayed reachable through `actions.search` +
+   * `actions.getSchema`; #11585 established that no shipped client can act on
+   * that, so the value meant deletion while reading as deferral. To take a tool
+   * away from a caller class, remove it from that tier's allowlist — which
+   * revokes it at both the listing and dispatch gates, visibly.
    */
   mcpVisibility?: McpVisibility;
 }
@@ -296,7 +303,7 @@ export interface ActionManifestEntry {
   dangerRationale?: string;
   /** Risk band derived from danger + open-world category. Read by consent dialogs. */
   band?: RiskBand;
-  /** MCP progressive-disclosure visibility classification. */
+  /** MCP listing visibility. Layered on the tier allowlist, never a substitute. */
   mcpVisibility?: McpVisibility;
   /**
    * Projected from {@link ActionDefinition.palette}. Palette-only — these are

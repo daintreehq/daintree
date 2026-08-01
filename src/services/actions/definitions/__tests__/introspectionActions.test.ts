@@ -996,11 +996,10 @@ describe("actions.getSchema", () => {
     expect(result.error.code).toBe("NOT_FOUND");
   });
 
-  it("returns schema for discoverable action (getSchema is the path to reach them)", async () => {
+  it("returns the full input schema for an action the listing summarised", async () => {
     const entry = makeEntry({
       id: "git.push",
       title: "Push",
-      mcpVisibility: "discoverable",
       inputSchema: { type: "object", properties: { force: { type: "boolean" } } },
     });
     vi.mocked(actionService.get).mockReturnValueOnce(entry);
@@ -1032,14 +1031,17 @@ describe("search → getSchema roundtrip", () => {
     } as ActionManifestEntry;
   }
 
-  it("allows model to discover then fetch schema for a non-core tool", async () => {
-    // Step 1: the discoverable tool is in the full manifest but excluded from tools/list
+  // Schema-on-demand, not reachability. `actions.search` deliberately answers
+  // without `inputSchema` so a broad query stays cheap, and `actions.getSchema`
+  // fetches the full shape for the one action the model settled on. Both only
+  // ever describe actions the session can already dispatch — the roundtrip does
+  // not widen anything, which is what #11585 established the hard way.
+  it("summarises in search, then returns the full schema on getSchema", async () => {
     const pushEntry = makeEntry({
       id: "git.push",
       title: "Push",
       description: "Push commits to remote",
       category: "git",
-      mcpVisibility: "discoverable",
       inputSchema: { type: "object", properties: { force: { type: "boolean" } } },
     });
     vi.mocked(actionService.list).mockImplementationOnce((_ctx, options) => {

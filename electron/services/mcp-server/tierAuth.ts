@@ -94,15 +94,22 @@ export function resolveTokenTier(
  * filters layered on top of the tier floor; membership itself defers to
  * {@link isTierPermitted} so exposure and dispatch can never drift apart and
  * advertise a tool the dispatcher then rejects (#7155).
+ *
+ * Only two things withhold a tier-permitted tool from the listing, and both are
+ * genuine ceilings rather than deferrals: `danger: "restricted"` (which
+ * `ActionService.dispatch` rejects independently of tier) and
+ * `mcpVisibility: "hidden"`. `mcpVisibility: "discoverable"` used to be a third,
+ * on the theory that omitted tools stayed reachable through the meta-tools —
+ * #11585 established that no shipped client can act on that, so withholding a
+ * name is equivalent to revoking it. Tools we do not want an external caller to
+ * reach are now cut from the tier allowlist itself, which revokes them honestly
+ * at both gates.
  */
 export function shouldExposeTool(entry: ActionManifestEntry, tier: McpTier): boolean {
   if (entry.danger === "restricted") {
     return false;
   }
   if (entry.mcpVisibility === "hidden") {
-    return false;
-  }
-  if (entry.mcpVisibility === "discoverable") {
     return false;
   }
   return isTierPermitted(tier, entry.id);
@@ -207,12 +214,13 @@ function readEntryId(entry: unknown): string | null {
  * here even though the renderer already enforces them: this is the host-side
  * authorization boundary, and it does not take the renderer's word for it.
  *
- * `mcpVisibility: "discoverable"` is deliberately allowed through — that
- * visibility exists precisely so `actions.search` / `actions.getSchema` can
- * surface non-core actions that eager `tools/list` omits (#8502). Reusing
- * {@link shouldExposeTool} here would silently defeat progressive disclosure.
+ * This narrows introspection results to the session's *effective* surface, so
+ * `actions.search` / `actions.getSchema` describe tools the caller can actually
+ * dispatch. It is not a progressive-disclosure escape hatch: since #11585 the
+ * tier allowlist is the whole surface, and introspection reports it rather than
+ * reaching past it.
  */
-function isDiscoverableForSession(
+function isIntrospectableForSession(
   entry: unknown,
   permittedActionIds: ReadonlySet<string>
 ): boolean {
@@ -255,7 +263,7 @@ export function filterIntrospectionResultForSession(
     const payload = result.result as { actions?: unknown } | null | undefined;
     const entries = Array.isArray(payload?.actions) ? payload.actions : [];
     const permitted = entries.filter((entry) =>
-      isDiscoverableForSession(entry, permittedActionIds)
+      isIntrospectableForSession(entry, permittedActionIds)
     );
     // `entries` is the COMPLETE match set — the handler walked every renderer
     // page before calling this. Paging the permitted set here (rather than
@@ -283,7 +291,7 @@ export function filterIntrospectionResultForSession(
     const payload = result.result as { results?: unknown } | null | undefined;
     const entries = Array.isArray(payload?.results) ? payload.results : [];
     const permitted = entries.filter((entry) =>
-      isDiscoverableForSession(entry, permittedActionIds)
+      isIntrospectableForSession(entry, permittedActionIds)
     );
     // `totalMatches` counts the permitted matches main actually saw. The
     // handler over-fetches to ACTIONS_SEARCH_MAX_LIMIT so that window is the
@@ -313,7 +321,7 @@ export function filterIntrospectionResultForSession(
       payload?.ok === true &&
       requestedId !== undefined &&
       readEntryId(payload.entry) === requestedId;
-    if (answersTheRequest && isDiscoverableForSession(payload.entry, permittedActionIds)) {
+    if (answersTheRequest && isIntrospectableForSession(payload.entry, permittedActionIds)) {
       return { ok: true, result: { ok: true, entry: payload.entry } };
     }
     // Collapse onto the shape the renderer already returns for an unknown,

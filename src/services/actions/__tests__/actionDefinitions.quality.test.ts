@@ -9,6 +9,7 @@ import type { ActionId } from "@shared/types/actions";
 import type { ActionRegistry, ActionCallbacks } from "../actionTypes";
 import { DEFAULT_KEYBINDINGS } from "../../defaultKeybindings";
 import { WORKBENCH_TIER_TOOLS } from "@shared/config/helpAssistantTierAllowlists";
+import { MCP_EXTERNAL_TIER_TOOLS } from "@shared/config/mcpExternalTierAllowlist";
 
 /**
  * Action IDs that exist in BuiltInKeyAction but are intentionally NOT in the
@@ -114,6 +115,46 @@ async function createRegistryWithAudit(): Promise<{
 
   return { registry, duplicates };
 }
+
+// #11585 — the external MCP surface is budgeted in BOTH dimensions, because the
+// failure it guards against is measured in bytes, not tools. The old surface was
+// 99 tools AND ~128 KB of schema; 24 tools carrying novel-length descriptions
+// would reproduce the same truncation with a count that looks fine. The cohort
+// is derived from the real allowlist rather than restated here, so this cannot
+// drift from the gate it is budgeting.
+describe("external MCP tool surface budget (#11585)", () => {
+  const MAX_TOOLS = 30;
+  const MAX_DESCRIPTION_BYTES = 24_000;
+
+  it("stays within the tool-count and description-byte budget", async () => {
+    const { registry } = await createRegistryWithAudit();
+
+    const descriptions = MCP_EXTERNAL_TIER_TOOLS.map((id) => {
+      const def = registry.get(id as ActionId)?.();
+      // A missing definition means the allowlist names an id the registry no
+      // longer has — surface that as a failure rather than a zero-byte entry.
+      expect(def, `${id} is allowlisted but absent from the action registry`).toBeDefined();
+      return def!.description ?? "";
+    });
+
+    expect(MCP_EXTERNAL_TIER_TOOLS.length).toBeLessThanOrEqual(MAX_TOOLS);
+
+    const totalBytes = descriptions.reduce((sum, d) => sum + Buffer.byteLength(d, "utf8"), 0);
+    expect(totalBytes).toBeLessThanOrEqual(MAX_DESCRIPTION_BYTES);
+  });
+
+  it("names only real, dispatchable actions", async () => {
+    const { registry } = await createRegistryWithAudit();
+    const builtInIds = new Set<string>(BUILT_IN_ACTION_IDS);
+
+    for (const id of MCP_EXTERNAL_TIER_TOOLS) {
+      expect(builtInIds.has(id), `${id} is not a built-in action id`).toBe(true);
+      // `restricted` actions are refused by ActionService regardless of tier, so
+      // allowlisting one would advertise a tool that can never run.
+      expect(registry.get(id as ActionId)?.().danger).not.toBe("restricted");
+    }
+  });
+});
 
 describe("registry-vs-union drift", () => {
   it("every runtime registry key appears in BUILT_IN_ACTION_IDS", async () => {
