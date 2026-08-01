@@ -497,7 +497,7 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
 
         Solid color rather than the old `/30`–`/40` alpha — at 14px an
         alpha-reduced stroke is barely a shape cue, let alone a type cue. The
-        `file-tree-entry-icon` marker is what `prefers-contrast: more` repaints
+        FILE_TREE_ICON_CLASS marker is what `prefers-contrast: more` repaints
         to monochrome; see `src/index.css`.
       */}
       <RowIcon

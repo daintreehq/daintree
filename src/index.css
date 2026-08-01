@@ -2780,9 +2780,10 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
    * outranks it whatever the specificity. It stays because moving this rule
    * into a layer during some later refactor would silently reverse that.
    *
-   * There is deliberately no counterpart in the Windows High Contrast block
-   * below: these icons paint from `currentColor`, and that mode already forces
-   * `color` to a system keyword, so the flattening happens with no rule. */
+   * There is deliberately no counterpart in the `forced-colors: active` block
+   * earlier in this file: these icons paint from `currentColor`, and that mode
+   * already forces `color` to a system keyword, so the flattening happens on
+   * its own with no rule at all. */
   .file-tree-entry-icon {
     color: var(--color-daintree-text) !important;
   }

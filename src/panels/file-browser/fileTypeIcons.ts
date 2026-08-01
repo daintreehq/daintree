@@ -109,7 +109,8 @@ const CATEGORIES: Record<FileTypeCategory, FileTypeIcon> = {
   key: { category: "key", Icon: FileKey, colorClass: "text-category-pink" },
   archive: { category: "archive", Icon: FileArchive, colorClass: "text-category-orange" },
   binary: { category: "binary", Icon: Binary, colorClass: "text-category-orange" },
-  // The only glyph that isn't a page at all, so it needs no partner to tell it apart.
+  // A cylinder rather than a page — distinct enough on silhouette alone that it
+  // is the one category left holding a hue by itself.
   database: { category: "database", Icon: Database, colorClass: "text-category-teal" },
   unknown: { category: "unknown", Icon: File, colorClass: UNKNOWN_FILE_COLOR_CLASS },
 };

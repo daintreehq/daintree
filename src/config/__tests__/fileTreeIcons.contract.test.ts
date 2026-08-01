@@ -65,20 +65,25 @@ describe("file-tree icon contrast contract (#11596)", () => {
     expect(rule, `no .${FILE_TREE_ICON_CLASS} rule under prefers-contrast`).toBeTruthy();
 
     const body = rule![1]!;
-    // Specifically the solid primary-text token: `transparent`, `inherit` or a
-    // category hue would all satisfy a bare "sets a color" assertion while
-    // leaving Increase Contrast users exactly where they started.
-    expect(body).toMatch(/color:\s*var\(--color-daintree-text\)/);
+    // Specifically the `color` property set to the solid primary-text token.
+    // The leading boundary matters: without it `background-color` or
+    // `border-color` would satisfy this while the glyph itself stayed tinted.
+    // And `transparent`, `inherit` or a category hue would all satisfy a bare
+    // "sets a color" assertion while leaving Increase Contrast users exactly
+    // where they started.
+    expect(body).toMatch(/(^|[;{\s])color:\s*var\(--color-daintree-text\)/);
     expect(body).not.toMatch(/category/);
   });
 
   it("leaves the icons opted in to forced-colors", () => {
     // These icons paint from `currentColor`, and forced-colors already forces
     // `color` to a system keyword — so no rule is needed there. But opting out
-    // with `forced-color-adjust: none` anywhere would strand High Contrast
-    // users on the category hues, so guard that absence repo-wide rather than
-    // only inside the media block (the property inherits, so an ancestor rule
-    // outside any media query would disable the repaint just as effectively).
+    // with `forced-color-adjust: none` would strand High Contrast users on the
+    // category hues, so guard that no rule naming these icons ever does.
+    //
+    // Scoped to rules that name the icon class: the property inherits, so an
+    // ancestor opting out would defeat this too, but enumerating every possible
+    // ancestor selector is not something a source scan can do honestly.
     const content = stripComments(fs.readFileSync(INDEX_CSS, "utf8"));
     const rules = [
       ...content.matchAll(new RegExp(`\\.${FILE_TREE_ICON_CLASS}[^{}]*\\{([^}]*)\\}`, "g")),
