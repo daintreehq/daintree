@@ -37,7 +37,11 @@ export function registerPanelCoreActions(
         z.object({
           id: z.string(),
           kind: z.string(),
-          type: z.unknown().nullable(),
+          // `.optional()` is load-bearing: zod 4 strips `z.unknown()`'s implicit
+          // optionality once it's wrapped in `.nullable()`, so without it a
+          // MISSING key fails where an explicit `undefined` passes. Same fix as
+          // the sibling TerminalSummarySchema in schemas.ts.
+          type: z.unknown().nullable().optional(),
           worktreeId: z.string().nullable(),
           title: z.string().nullable(),
           location: z.string(),

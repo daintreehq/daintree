@@ -2767,4 +2767,154 @@ describe("ActionService", () => {
       expect(captured?.args).toBeUndefined();
     });
   });
+
+  describe("result validation (#11539)", () => {
+    function makeAction(
+      id: string,
+      resultSchema: z.ZodType | undefined,
+      result: unknown
+    ): ActionDefinition<undefined, unknown> {
+      return {
+        id: id as ActionId,
+        title: "Result Validation Test",
+        description:
+          "A test action used to verify that dispatch parses run() output against the declared resultSchema.",
+        category: "test",
+        kind: "query",
+        danger: "safe",
+        scope: "renderer",
+        resultSchema,
+        run: vi.fn().mockResolvedValue(result),
+      };
+    }
+
+    it("strips keys the resultSchema does not declare", async () => {
+      service.register(
+        makeAction("test.strip", z.object({ id: z.string() }), {
+          id: "abc",
+          insertText: "/compact",
+          aliases: ["a", "b"],
+        })
+      );
+
+      const res = await service.dispatch("test.strip" as ActionId);
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.result).toEqual({ id: "abc" });
+    });
+
+    it("strips undeclared keys from array rows, not just the root", async () => {
+      service.register(
+        makeAction("test.stripRows", z.object({ items: z.array(z.object({ id: z.string() })) }), {
+          items: [
+            { id: "1", processIds: [4711] },
+            { id: "2", processIds: [4712] },
+          ],
+        })
+      );
+
+      const res = await service.dispatch("test.stripRows" as ActionId);
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.result).toEqual({ items: [{ id: "1" }, { id: "2" }] });
+    });
+
+    it("strips for agent dispatch too — the MCP surface is not a special case", async () => {
+      service.register(
+        makeAction("test.stripAgent", z.object({ id: z.string() }), { id: "abc", secret: "leak" })
+      );
+
+      const res = await service.dispatch("test.stripAgent" as ActionId, undefined, {
+        source: "agent",
+      });
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.result).toEqual({ id: "abc" });
+    });
+
+    it("returns RESULT_VALIDATION_ERROR when the result violates its own schema", async () => {
+      service.register(makeAction("test.violate", z.object({ id: z.string() }), { id: 42 }));
+
+      const res = await service.dispatch("test.violate" as ActionId);
+
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe("RESULT_VALIDATION_ERROR");
+    });
+
+    it("never echoes the rejected value back in error details", async () => {
+      // details crosses IPC to the MCP client, and a rejected result can hold
+      // secrets. Only issue codes and structural depth may travel.
+      service.register(
+        makeAction("test.noEcho", z.object({ token: z.string() }), {
+          token: { nested: "sk-live-SUPERSECRET" },
+        })
+      );
+
+      const res = await service.dispatch("test.noEcho" as ActionId);
+
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(JSON.stringify(res.error.details)).not.toContain("sk-live-SUPERSECRET");
+    });
+
+    it("never echoes a record KEY back in error details", async () => {
+      // Under z.record the issue path segment IS data, not a schema-declared
+      // field name — so a secret used as a key would ride out on the path.
+      service.register(
+        makeAction("test.recordKey", z.record(z.string(), z.string()), {
+          "sk-live-SUPERSECRET": 42,
+        })
+      );
+
+      const res = await service.dispatch("test.recordKey" as ActionId);
+
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe("RESULT_VALIDATION_ERROR");
+      expect(JSON.stringify(res.error.details)).not.toContain("sk-live-SUPERSECRET");
+    });
+
+    it("does not record a rejected dispatch as repeatable or emit a completion event", async () => {
+      // action:dispatched is a completion event and lastAction feeds
+      // action.repeatLast — a dispatch that returned an error is neither.
+      service.register(makeAction("test.notRepeatable", z.object({ id: z.string() }), { id: 1 }));
+
+      const before = service.getLastAction();
+      const res = await service.dispatch("test.notRepeatable" as ActionId, undefined, {
+        source: "user",
+      });
+
+      expect(res.ok).toBe(false);
+      expect(service.getLastAction()).toBe(before);
+    });
+
+    it("leaves the result untouched when no resultSchema is declared", async () => {
+      const raw = { anything: "goes", n: 1 };
+      service.register(makeAction("test.noSchema", undefined, raw));
+
+      const res = await service.dispatch("test.noSchema" as ActionId);
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.result).toBe(raw);
+    });
+
+    it("does not strip through a z.unknown() arm — the documented escape still works", async () => {
+      service.register(
+        makeAction("test.unknownArm", z.object({ items: z.array(z.unknown()) }), {
+          items: [{ id: "1", providerNode: { raw: true } }],
+        })
+      );
+
+      const res = await service.dispatch("test.unknownArm" as ActionId);
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.result).toEqual({ items: [{ id: "1", providerNode: { raw: true } }] });
+    });
+  });
 });

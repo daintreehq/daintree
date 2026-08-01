@@ -116,8 +116,9 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
         rangeDays,
       } as any);
 
-      // Hand-projected rather than spread: `resultSchema` never runs, so an
-      // added upstream field would otherwise ship to agents unannounced. The
+      // Hand-projected rather than spread: dispatch parses against `resultSchema`
+      // now (#11539), but building the object explicitly keeps an added upstream
+      // field from depending on that parse to stay unannounced. The
       // heatmap stays whole — it is what the renderer pulse card charts, and
       // `rangeDays` (<= 180) already bounds it.
       return {

@@ -22,14 +22,32 @@ import { cancelContextInjection } from "@/hooks/useContextInjection";
 import type { CopyTreeResult } from "@shared/types";
 
 /**
- * The generation numbers every CopyTree action reports. Kept separate from
- * CopyTree's own richer budget stats so the advertised shape stays small — the
- * whole point of #11528 is that these tools return metadata, not bulk.
+ * The generation numbers every CopyTree action reports.
+ *
+ * Narrower than CopyTree's own `stats`: the per-reason exclusion breakdown stays
+ * off, because #11528's whole point is that these tools return metadata rather
+ * than bulk. The budget flags below are on for the opposite reason — they are
+ * scalars, and they are the only way a caller learns its bundle is INCOMPLETE
+ * now that the bundle itself sits in a file rather than in the result. Dispatch
+ * parses results against this schema (#11539), so an undeclared flag is a flag
+ * the caller never sees.
  */
 const CopyTreeStatsSchema = z
   .object({
     totalSize: z.number(),
     duration: z.number(),
+    estimatedTokens: z.number().optional().describe("Rough token count, accurate to about ±20%"),
+    noFilesMatched: z.boolean().optional().describe("Nothing matched — a valid outcome, not error"),
+    truncated: z.boolean().optional().describe("A budget dropped or cut short some files"),
+    truncatedCount: z.number().optional(),
+    truncatedBy: z
+      .string()
+      .optional()
+      .describe("Which budget bit first: maxFileCount, maxTotalSize or charLimit"),
+    budgetExceeded: z
+      .boolean()
+      .optional()
+      .describe("The retained set is larger than maxTotalSize — can be true without truncation"),
   })
   .optional();
 
@@ -39,6 +57,11 @@ const CopyTreeGenerateResultSchema = z.object({
     .describe("Absolute path of the written bundle. Temporary — read it promptly."),
   fileCount: z.number(),
   outputBytes: z.number().describe("UTF-8 size of the bundle on disk."),
+  outputFormatVersion: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("Version of the emitted format, e.g. `copytree-xml@1`."),
   content: z
     .string()
     .optional()
@@ -48,7 +71,16 @@ const CopyTreeGenerateResultSchema = z.object({
 });
 
 function projectCopyTreeStats(stats: NonNullable<CopyTreeResult["stats"]>) {
-  return { totalSize: stats.totalSize, duration: stats.duration };
+  return {
+    totalSize: stats.totalSize,
+    duration: stats.duration,
+    ...(stats.estimatedTokens !== undefined && { estimatedTokens: stats.estimatedTokens }),
+    ...(stats.noFilesMatched !== undefined && { noFilesMatched: stats.noFilesMatched }),
+    ...(stats.truncated !== undefined && { truncated: stats.truncated }),
+    ...(stats.truncatedCount !== undefined && { truncatedCount: stats.truncatedCount }),
+    ...(stats.truncatedBy !== undefined && { truncatedBy: stats.truncatedBy }),
+    ...(stats.budgetExceeded !== undefined && { budgetExceeded: stats.budgetExceeded }),
+  };
 }
 
 /**
@@ -64,6 +96,22 @@ function throwOnCopyTreeFailure(result: CopyTreeResult): void {
   const failure =
     result && typeof result === "object" ? (result as { error?: string }).error : undefined;
   if (failure) throw new Error(failure);
+}
+
+/**
+ * Narrow a file-backed result to the pair the schema declares as required.
+ *
+ * `filePath` and `outputBytes` are optional on `CopyTreeResult` — the inline
+ * paths never set them — and only the handler's own check ties them to a
+ * successful generation. Now that dispatch parses results (#11539) an unset one
+ * would surface as RESULT_VALIDATION_ERROR, which tells a caller nothing. Assert
+ * the invariant where it is used so the same condition reads as a plain failure.
+ */
+function requireGeneratedFile(result: CopyTreeResult): { filePath: string; outputBytes: number } {
+  if (typeof result.filePath !== "string" || typeof result.outputBytes !== "number") {
+    throw new Error("Failed to generate context");
+  }
+  return { filePath: result.filePath, outputBytes: result.outputBytes };
 }
 
 export function registerSystemActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
@@ -360,7 +408,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generate",
       title: "Generate CopyTree Context",
       description:
-        "Generate a CopyTree context dump (file tree plus selected file contents) for a worktree and write it to a file, returning the path. Args (all optional): `worktreeId` or `worktreePath` — the worktree, defaults to the active one; `options` — CopyTree include/exclude options; `includeContent` — also return a bounded head of the bundle. Returns { filePath, fileCount, outputBytes, optional content, optional contentTruncated, optional stats:{ totalSize, duration } }. `filePath` is a temporary file that is pruned by age and count, so read it promptly. The bundle is NOT returned inline by default — it routinely runs to tens of megabytes, far past what any tool result can carry; `includeContent` returns only the first few KB. Throws when generation fails or when no worktree is given and none is active. Do NOT use this to inject context into a terminal — use `copyTree.injectToTerminal`.",
+        "Generate a CopyTree context dump (file tree plus selected file contents) for a worktree and write it to a file, returning the path. Args (all optional): `worktreeId` or `worktreePath` — the worktree, defaults to the active one; `options` — CopyTree include/exclude options; `includeContent` — also return a bounded head of the bundle. Returns { filePath, fileCount, outputBytes, optional outputFormatVersion, optional content, optional contentTruncated, optional stats }. `stats` carries the budget flags — check `truncated` and `budgetExceeded` before trusting the bundle as complete. `filePath` is a temporary file pruned by age and count, so read it promptly. The bundle is NOT returned inline by default — it routinely runs to tens of megabytes, far past any tool-result limit; `includeContent` returns only the first few KB. Throws when generation fails or when no worktree is given and none is active. Do NOT use this to inject context into a terminal — use `copyTree.injectToTerminal`.",
       category: "copyTree",
       kind: "query",
       danger: "safe",
@@ -391,14 +439,18 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           args?.includeContent
         );
         throwOnCopyTreeFailure(result);
-        // Projected explicitly rather than passed through: `resultSchema` is
-        // manifest documentation and strips nothing, so omitting `content` from
-        // the schema would not stop it reaching the wire. Building the result
-        // here is what actually keeps the bundle off it.
+        const { filePath, outputBytes } = requireGeneratedFile(result);
+        // Projected explicitly rather than passed through. Dispatch does parse
+        // results against `resultSchema` now (#11539), but building the result
+        // here is still what keeps the bundle off the wire: a parse would reject
+        // an oversized `content`, not drop it.
         return {
-          filePath: result.filePath,
+          filePath,
           fileCount: result.fileCount,
-          outputBytes: result.outputBytes,
+          outputBytes,
+          ...(result.outputFormatVersion !== undefined
+            ? { outputFormatVersion: result.outputFormatVersion }
+            : {}),
           // Gated on what was ASKED for, not on what came back: keying off the
           // response would forward a bundle to a caller who never opted in if
           // the layer below ever returned one.
@@ -416,7 +468,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generateAndCopyFile",
       title: "Generate And Copy Context",
       description:
-        "Generate worktree context, write it to a file and put that file on the clipboard. Args (all optional): `worktreeId` — the worktree, defaults to the active one; `options` — CopyTree include/exclude options. Returns { filePath, fileCount, outputBytes, optional stats:{ totalSize, duration } }. The bundle is never returned inline. Throws when generation or the clipboard write fails.",
+        "Generate worktree context, write it to a file and put that file on the clipboard. Args (all optional): `worktreeId` — the worktree, defaults to the active one; `options` — CopyTree include/exclude options. Returns { filePath, fileCount, outputBytes, optional stats:{ totalSize, duration, plus the budget flags truncated / budgetExceeded / noFilesMatched } }. The bundle is never returned inline. Throws when generation or the clipboard write fails.",
       category: "copyTree",
       kind: "command",
       danger: "safe",
@@ -450,10 +502,11 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         if (!worktreeId) throw new Error("No active worktree");
         const result = await copyTreeClient.generateAndCopyFile(worktreeId, args?.options);
         throwOnCopyTreeFailure(result);
+        const { filePath, outputBytes } = requireGeneratedFile(result);
         return {
-          filePath: result.filePath,
+          filePath,
           fileCount: result.fileCount,
-          outputBytes: result.outputBytes,
+          outputBytes,
           ...(result.stats ? { stats: projectCopyTreeStats(result.stats) } : {}),
         };
       },
@@ -465,7 +518,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.injectToTerminal",
       title: "Inject Context To Terminal",
       description:
-        "Write a worktree's CopyTree context straight into a terminal. Args: `terminalId` — required; `worktreeId` — defaults to the active worktree; `options` — CopyTree include/exclude options. Returns { fileCount, optional stats:{ totalSize, duration } } — the context goes to the terminal, never back through this result. Throws when generation or injection fails.",
+        "Write a worktree's CopyTree context straight into a terminal. Args: `terminalId` — required; `worktreeId` — defaults to the active worktree; `options` — CopyTree include/exclude options. Returns { fileCount, optional stats:{ totalSize, duration, plus the budget flags truncated / budgetExceeded / noFilesMatched } } — the context goes to the terminal, never back through this result. Throws when generation or injection fails.",
       category: "copyTree",
       kind: "command",
       danger: "safe",

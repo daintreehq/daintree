@@ -1431,6 +1431,29 @@ describe("agentSessionHistory.list (#10854)", () => {
     expect(result).toEqual({ sessions: [], total: 0, hasMore: false });
   });
 
+  // #11539 — dispatch parses results against `resultSchema`, but the journal's
+  // own `normalizeRecords` deliberately admits any object with a string
+  // sessionId so a corrupt, hand-edited or newer-schema file degrades instead of
+  // crashing reads. Without a filter here, one such row rejects the whole page.
+  it("drops a record the advertised shape cannot carry instead of failing the page", async () => {
+    listMock.mockResolvedValue([
+      SAMPLE_SESSIONS[0],
+      // Everything the schema requires beyond `sessionId` is missing.
+      { sessionId: "sess-degraded" },
+      SAMPLE_SESSIONS[1],
+    ]);
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agentSessionHistory.list", {
+      worktreeId: "wt-1",
+    })) as { sessions: Array<{ sessionId: string }>; total: number; hasMore: boolean };
+
+    expect(result.sessions.map((s) => s.sessionId)).toEqual(["sess-1", "sess-2"]);
+    // `total` still counts what the journal holds, and `hasMore` is computed
+    // before the drop — a dropped row must not read as "end of list" and strand
+    // the records behind it.
+    expect(result).toMatchObject({ total: 3, hasMore: false });
+  });
+
   // Read the declared default off the schema rather than copying the constant,
   // so the assertion stays exact without pinning the product decision.
   function declaredDefaults(): { limit: number; offset: number } {

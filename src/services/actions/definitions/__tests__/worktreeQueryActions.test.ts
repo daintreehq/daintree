@@ -18,16 +18,20 @@ import { registerWorktreeQueryActions } from "../worktreeQueryActions";
 
 type ActionFactory = () => AnyActionDefinition;
 
-function getRun(id: string): AnyActionDefinition["run"] {
+function getDefinition(id: string, worktrees: unknown[] = []): AnyActionDefinition {
   const registry = new Map<string, ActionFactory>();
   registerWorktreeQueryActions(
     registry as never,
     {
-      getWorktrees: () => [],
+      getWorktrees: () => worktrees,
       getActiveWorktreeId: () => null,
     } as never
   );
-  return registry.get(id)!().run;
+  return registry.get(id)!();
+}
+
+function getRun(id: string): AnyActionDefinition["run"] {
+  return getDefinition(id).run;
 }
 
 const branches = (count: number) =>
@@ -39,9 +43,25 @@ const branches = (count: number) =>
   }));
 
 /**
- * `resultSchema` never parses a result — `ActionService.dispatch` returns `run()`
- * output as-is — so these assert on what `run()` actually returned (#11531).
+ * These assert on what `run()` actually returned (#11531). Since #11539
+ * `ActionService.dispatch` also parses that value through `resultSchema`, so a
+ * shape `run()` can produce but the schema rejects fails the whole action.
  */
+describe("worktree.list result shape", () => {
+  it("survives its own resultSchema when a worktree is on a detached HEAD", async () => {
+    // `Worktree.branch` is undefined with no branch checked out, while the
+    // summary shape declares `string | null`. Returning it unmapped made the
+    // entire list action fail once dispatch started parsing results.
+    const definition = getDefinition("worktree.list", [
+      { id: "wt-1", path: "/repo/detached", isMainWorktree: false },
+    ]);
+
+    const result = await definition.run(undefined as never, {} as never);
+
+    expect(definition.resultSchema?.safeParse(result).success).toBe(true);
+  });
+});
+
 describe("worktree.listBranches bounded reads", () => {
   beforeEach(() => {
     vi.clearAllMocks();

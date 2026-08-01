@@ -141,20 +141,70 @@ const ForgePRListOptionsSchema = ForgeListPagingSchema.extend({
     .describe("State filter (default: open)"),
 }).strict();
 
-// Normalized PR shape returned by getPR/createPR/editPR. Kept loose (provider
-// payload passes through `rawData`) — only the cross-provider fields are typed.
+// A forge label, as both the write actions and the issue result describe it.
+const ForgeLabelResultSchema = z.object({ name: z.string(), color: z.string().optional() });
+
+/**
+ * A forge user, minus `rawData`. `ForgeUser` carries the provider's entire
+ * unnormalized node on that field, so an `z.array(z.unknown())` assignee arm
+ * shipped every GitHub/GitLab user attribute to agents unannounced (#11539).
+ * Naming the two portable fields is what drops it — dispatch strips the rest.
+ */
+const ForgeUserResultSchema = z.object({
+  login: z.string(),
+  avatarUrl: z.string().optional(),
+});
+
+// Compact projection of the PR an issue links to, mirroring `LinkedPRSummary`.
+const ForgeLinkedPRResultSchema = z.object({
+  number: z.number(),
+  state: z.string(),
+  url: z.string(),
+  ciStatus: z.string().optional(),
+});
+
+// Normalized PR shape returned by getPR/createPR/editPR. Every cross-provider
+// field of `PR` is named except `rawData`, the verbatim provider node — dispatch
+// parses results now (#11539), so an omission here is a field an agent stops
+// receiving, not just one the manifest fails to mention. `reviewDecision` and
+// `ciStatus` in particular are what a caller reads to judge a PR.
+//
+// Fields the `PR` interface marks required (`rawState`, `createdAt`, `updatedAt`)
+// are declared optional anyway: providers are plugins, and a value the host never
+// verifies should degrade to an absent key rather than reject the whole result.
 const ForgePRResultSchema = z.object({
   number: z.number(),
   title: z.string(),
   body: z.string(),
   state: z.string(),
+  rawState: z.string().optional().describe("The forge's own spelling of the state"),
   isDraft: z.boolean(),
   merged: z.boolean(),
   url: z.string(),
+  author: ForgeUserResultSchema.optional(),
   baseRef: z.string(),
   headRef: z.string(),
+  mergeable: z
+    .boolean()
+    .nullable()
+    .optional()
+    .describe("null when the provider has not computed mergeability yet"),
+  // `null` is a real answer — "this provider gates on no review" — and readers
+  // treat it as equivalent to approved. Only `undefined` ("not reported") drops.
+  reviewDecision: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED, or null when reviews aren't gated"),
+  ciStatus: z
+    .string()
+    .optional()
+    .describe("Roll-up head-commit CI state: success, failure, pending, neutral or unknown"),
+  commentCount: z.number().optional(),
   createdAt: z.number().optional(),
   updatedAt: z.number().optional(),
+  closedAt: z.number().nullable().optional(),
+  mergedAt: z.number().nullable().optional(),
 });
 
 // Roll-up CI state vocabulary, mirroring `CIStatusState`. `neutral` means the
@@ -179,23 +229,30 @@ const ForgeCIStatusActionResultSchema = z.object({
   ciStatus: ForgeCIStatusSchema.nullable(),
 });
 
-// Normalized issue returned by the create/close/reopen/edit write actions.
+// Normalized issue returned by `forge.getIssue` and by the
+// create/close/reopen/edit write actions. Same reasoning as
+// `ForgePRResultSchema`: every cross-provider field of `Issue` bar `rawData` is
+// named, because dispatch strips whatever isn't. `author` and `commentCount` are
+// both promised by action descriptions, so omitting them made those false.
 const ForgeIssueResultSchema = z.object({
   number: z.number(),
   title: z.string(),
   body: z.string(),
   state: z.string(),
+  rawState: z.string().optional().describe("The forge's own spelling of the state"),
   url: z.string(),
-  labels: z.array(z.unknown()).optional(),
-  assignees: z.array(z.unknown()).optional(),
+  author: ForgeUserResultSchema.optional(),
+  labels: z.array(ForgeLabelResultSchema).optional(),
+  assignees: z.array(ForgeUserResultSchema).optional(),
+  commentCount: z.number().optional(),
+  linkedPR: ForgeLinkedPRResultSchema.optional(),
   createdAt: z.number().optional(),
   updatedAt: z.number().optional(),
+  closedAt: z.number().nullable().optional(),
 });
 
 // Label set returned by the add/remove-label write actions.
-const ForgeLabelArrayResultSchema = z.array(
-  z.object({ name: z.string(), color: z.string().optional() })
-);
+const ForgeLabelArrayResultSchema = z.array(ForgeLabelResultSchema);
 
 // Comment returned by the add-comment write action.
 const ForgeCommentResultSchema = z.object({
@@ -203,13 +260,6 @@ const ForgeCommentResultSchema = z.object({
   body: z.string(),
   url: z.string(),
   createdAt: z.number(),
-});
-
-// Account reference published in write-action results. Narrower than the
-// contract ForgeUser, which also carries the provider's raw payload.
-const ForgeUserResultSchema = z.object({
-  login: z.string(),
-  avatarUrl: z.string().optional(),
 });
 
 // Resulting assignee list after an assign/unassign. The list is authoritative:
@@ -258,7 +308,7 @@ const ForgePRDraftStateResultSchema = z.object({
 // single-comment shape so the read and write halves describe a comment
 // identically, plus the author the write action doesn't echo back.
 const ForgeCommentPageResultSchema = z.object({
-  items: z.array(ForgeCommentResultSchema.extend({ author: z.unknown().optional() })),
+  items: z.array(ForgeCommentResultSchema.extend({ author: ForgeUserResultSchema.optional() })),
   nextCursor: z.string().nullable(),
   hasMore: z.boolean(),
   totalCount: z.number().optional(),
@@ -726,19 +776,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
           description: "Fetch issue #100 from a specific repo",
         },
       ],
-      resultSchema: z
-        .object({
-          number: z.number(),
-          title: z.string(),
-          body: z.string(),
-          state: z.string(),
-          url: z.string(),
-          labels: z.array(z.unknown()).optional(),
-          assignees: z.array(z.unknown()).optional(),
-          createdAt: z.number().optional(),
-          updatedAt: z.number().optional(),
-        })
-        .nullable(),
+      // The same normalized issue the write actions return — one shape for one
+      // provider object, so the read and write halves cannot drift.
+      resultSchema: ForgeIssueResultSchema.nullable(),
       run: async ({ issueNumber, ...location }, ctx: ActionContext) => {
         const resolvedCwd = requireWorktreePath(location, ctx);
         return await forgeClient.getIssue(resolvedCwd, issueNumber);

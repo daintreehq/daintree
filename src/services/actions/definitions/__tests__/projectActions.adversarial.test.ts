@@ -244,6 +244,34 @@ describe("projectActions adversarial", () => {
       expect(schema).toBeDefined();
       expect(() => schema?.parse(result)).not.toThrow();
     });
+
+    // The codec type-checks only `id` and `command`, and the agent-callable
+    // `project.saveSettings` types runCommands as `z.array(z.unknown())` — so a
+    // wrong-typed value can reach disk. Since dispatch parses results (#11539),
+    // forwarding one would fail this action for that project on every call,
+    // permanently. The value is dropped and the row survives instead.
+    it("drops wrong-typed run command fields rather than failing the whole read", async () => {
+      projectClientMock.getSettings.mockResolvedValue({
+        runCommands: [
+          {
+            id: "r1",
+            command: "npm run dev",
+            name: 42,
+            preferredLocation: "sidebar",
+            preferredAutoRestart: "yes",
+          },
+          // No usable identity at all — the advertised shape requires both, so
+          // the row itself goes rather than being emitted incomplete.
+          { id: 7, command: "npm test" },
+        ],
+      });
+      const { run, define } = setupActions();
+
+      const result = await run("project.getSettings", { projectId: "proj-1" });
+
+      expect(result).toEqual({ runCommands: [{ id: "r1", command: "npm run dev" }] });
+      expect(() => define("project.getSettings").resultSchema?.parse(result)).not.toThrow();
+    });
   });
 
   describe("project.detectRunners", () => {

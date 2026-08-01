@@ -144,6 +144,23 @@ export interface ActionDefinition<
    */
   denyPluginDispatch?: boolean;
   argsSchema?: S;
+  /**
+   * Runtime contract for what `run()` returns — enforced, not documentation.
+   * `ActionService.dispatch` parses every result through this schema before
+   * returning it, so unknown keys are stripped (zod objects default to
+   * `"strip"`) and the delivered payload matches the published projection.
+   * A result that fails to parse yields `RESULT_VALIDATION_ERROR`.
+   *
+   * Enforcement keys off this field's presence, NOT off `mcpOutputSchema` —
+   * the MCP text response serializes the same value whether or not the schema
+   * is advertised, so gating on the advertising flag would leave that path
+   * unfiltered.
+   *
+   * Constructs that opt out of stripping (`z.unknown()`, `z.any()`,
+   * `.catchall()`, `z.record(k, z.unknown())`, `z.union([X, z.unknown()])`)
+   * make the parse a no-op for the nodes they cover. `resultSchemaHygiene`
+   * fails on any new one that is not explicitly allowlisted with a reason.
+   */
   resultSchema?: z.ZodType<Result>;
   isEnabled?: (ctx: ActionContext) => boolean;
   disabledReason?: (ctx: ActionContext) => string | undefined;
@@ -312,6 +329,13 @@ export type ActionDispatchResult<Result = unknown> =
 export type ActionErrorCode =
   | "NOT_FOUND"
   | "VALIDATION_ERROR"
+  /**
+   * `run()` completed but its return value did not satisfy the action's own
+   * `resultSchema`. Distinct from `EXECUTION_ERROR` (which means `run()` threw)
+   * because the action's side effects DID happen — only the payload is
+   * unusable. Signals a bug in the action itself, not in the caller's request.
+   */
+  | "RESULT_VALIDATION_ERROR"
   | "DISABLED"
   | "RESTRICTED"
   | "CONFIRMATION_REQUIRED"

@@ -1,8 +1,10 @@
 /**
  * Pagination and UTF-8 windowing for agent-facing reads (#11531).
  *
- * These run inside action `run()` bodies, which are the only enforcement point —
- * `resultSchema` is advertised documentation and never parses a result.
+ * These run inside action `run()` bodies, which are the only enforcement point for
+ * a bound. `ActionService.dispatch` parses results against `resultSchema` (#11539),
+ * but that parse strips undeclared keys — it cannot window a payload, and a schema
+ * written to try would reject an over-long result rather than trim it.
  *
  * TextEncoder/TextDecoder rather than Buffer: the action definitions are renderer
  * code, and the renderer runs with `nodeIntegration: false`.

@@ -1378,7 +1378,14 @@ interface ActionDispatchError {
     error: ActionError;
 }
 type ActionDispatchResult<Result = unknown> = ActionDispatchSuccess<Result> | ActionDispatchError;
-type ActionErrorCode = "NOT_FOUND" | "VALIDATION_ERROR" | "DISABLED" | "RESTRICTED" | "CONFIRMATION_REQUIRED" | "EXECUTION_ERROR" | "USER_REJECTED" | "CONFIRMATION_TIMEOUT" | "ELICITATION_FAILED" | "BINDING_STALE" | "PLUGIN_UNLOADED" | "TIER_NOT_PERMITTED" | "INVALID_URL";
+type ActionErrorCode = "NOT_FOUND" | "VALIDATION_ERROR"
+/**
+ * `run()` completed but its return value did not satisfy the action's own
+ * `resultSchema`. Distinct from `EXECUTION_ERROR` (which means `run()` threw)
+ * because the action's side effects DID happen — only the payload is
+ * unusable. Signals a bug in the action itself, not in the caller's request.
+ */
+ | "RESULT_VALIDATION_ERROR" | "DISABLED" | "RESTRICTED" | "CONFIRMATION_REQUIRED" | "EXECUTION_ERROR" | "USER_REJECTED" | "CONFIRMATION_TIMEOUT" | "ELICITATION_FAILED" | "BINDING_STALE" | "PLUGIN_UNLOADED" | "TIER_NOT_PERMITTED" | "INVALID_URL";
 interface ActionError {
     code: ActionErrorCode;
     message: string;

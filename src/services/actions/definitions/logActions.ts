@@ -91,7 +91,11 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     resultSchema: z.object({ success: z.boolean() }),
     run: async (args: unknown) => {
       const { enabled } = args as { enabled: boolean };
-      return await logsClient.setVerbose(enabled);
+      // `logsClient.setVerbose` resolves void, so returning it directly gave
+      // `undefined` where the declared shape promises `{ success }`. Reaching
+      // this line means the call resolved; a rejection throws past it.
+      await logsClient.setVerbose(enabled);
+      return { success: true };
     },
   }));
 

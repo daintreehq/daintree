@@ -659,14 +659,18 @@ describe("forge.* write actions return the state they changed (#11546)", () => {
     await expect(runAction(id, { cwd: "/repo", ...args })).rejects.toThrow();
   });
 
-  it("drops the provider's extra PR fields that the published schema doesn't name", async () => {
+  it("keeps every cross-provider PR field and drops only the raw provider node", async () => {
     const result = (await run("forge.closePR", { prNumber: 12 })) as Record<string, unknown>;
 
-    // `mergeable`/`closedAt`/`author` are on the normalized PR but outside the
-    // declared result contract — leaking them would make the schema a lie.
-    expect(Object.keys(result)).not.toContain("mergeable");
-    expect(Object.keys(result)).not.toContain("closedAt");
-    expect(Object.keys(result)).not.toContain("author");
+    // `mergeable`, `closedAt` and `author` are cross-provider fields an agent
+    // reads to judge a PR, so the published schema names them and dispatch's
+    // parse keeps them. Only `rawData` — the verbatim provider node, redundant
+    // with everything above and the reason a page of PRs is enormous — is cut.
+    expect(result).toMatchObject({ mergeable: null, closedAt: 3, author: { login: "octocat" } });
+    expect(Object.keys(result)).not.toContain("rawData");
+    // The author projection is still a projection: `ForgeUser.rawData` carries
+    // the provider's whole user node and must not ride along inside it.
+    expect(result.author).toEqual({ login: "octocat", avatarUrl: expect.any(String) });
   });
 
   it("still returns the result when the renderer cache patch throws", async () => {

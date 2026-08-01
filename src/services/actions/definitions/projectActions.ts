@@ -17,19 +17,26 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
  * Typing the shape as `Record<AgentVisibleProjectSettingsKey, z.ZodType>` is what keeps
  * this honest: omitting a key classified `exposed`, or adding one that isn't, is a
  * compile error, so the advertised schema cannot drift from
- * `PROJECT_SETTINGS_AGENT_EXPOSURE`. The schema is documentation only —
- * `ActionService.dispatch` never parses results — so the actual filtering is done by
- * `pickAgentVisibleProjectSettings` in `run()`.
+ * `PROJECT_SETTINGS_AGENT_EXPOSURE`.
+ *
+ * `ActionService.dispatch` now parses results through this schema (#11539), so it
+ * filters as well as documents. `pickAgentVisibleProjectSettings` in `run()` is kept
+ * as the inner boundary: it cannot fail, whereas a parse that rejects the payload
+ * would surface `RESULT_VALIDATION_ERROR` instead of a safe subset.
  */
 const agentVisibleProjectSettingsShape: Record<AgentVisibleProjectSettingsKey, z.ZodType> = {
   runCommands: z.array(
     z.object({
       id: z.string(),
-      // Only `id` and `command` are codec-guaranteed: `decode` in
-      // projectSettingsCodec admits any entry with those two as strings, and the
-      // projection copies through only the keys that are present. Advertising
-      // `name` as required would make a nameless persisted entry emit
-      // `structuredContent` that violates this schema.
+      // Every optional key here is typed rather than left open, which is only
+      // safe because `pickAgentVisibleRunCommand` now drops a value whose type
+      // doesn't match instead of forwarding it. Nothing below that projection
+      // guarantees these types: the codec admits any entry with a string
+      // `id`/`command` and copies the rest through verbatim, and the
+      // agent-callable `project.saveSettings` types runCommands as
+      // `z.array(z.unknown())`. Without the sanitize, one persisted
+      // `preferredLocation: "sidebar"` would make this action return
+      // RESULT_VALIDATION_ERROR for that project on every call, forever.
       name: z.string().optional(),
       command: z.string(),
       icon: z.string().optional(),
@@ -275,9 +282,10 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       // Project down to the agent-safe field set before returning. This action is on
       // every MCP tier's allowlist, and the settings payload carries decrypted secure
       // env vars (ProjectSettingsManager resolves them) plus a 250KB icon blob.
-      // `resultSchema` cannot do this — dispatch never validates results — so the
-      // filtering has to happen here, on a fresh object (projectClient caches the value
-      // it returns and the renderer's settings UI legitimately needs the full payload).
+      // Dispatch also parses the result against `resultSchema` (#11539), but this stays
+      // as the inner boundary — it builds a fresh object (projectClient caches the value
+      // it returns and the renderer's settings UI legitimately needs the full payload)
+      // and, unlike a parse, has no failure mode that could fall back to the raw value.
       return pickAgentVisibleProjectSettings(settings);
     },
   }));
@@ -520,13 +528,22 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.getStats",
     title: "Get Project Stats",
     description:
-      "Get aggregate statistics for a project (commit/issue/PR counts and activity). Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project. Returns an open-ended stats object. Errors when no projectId is given and no project is active.",
+      "Get aggregate resource statistics for a project. Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project. Returns { processCount, terminalCount, estimatedMemoryMB, terminalTypes } — terminalTypes maps each terminal type to its count. Host process ids are deliberately not exposed. Errors when no projectId is given and no project is active.",
     category: "project",
     kind: "query",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string().optional() }).optional(),
-    resultSchema: z.object({}).catchall(z.unknown()),
+    // Shaped, not open: the previous `z.object({}).catchall(z.unknown())` kept
+    // every key, which shipped `ProjectStats.processIds` — live host pids — to
+    // any agent that called this. Naming the fields is what strips them, since
+    // a catchall opts out of zod's unknown-key stripping entirely (#11539).
+    resultSchema: z.object({
+      processCount: z.number(),
+      terminalCount: z.number(),
+      estimatedMemoryMB: z.number(),
+      terminalTypes: z.record(z.string(), z.number()),
+    }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { projectId } = (args ?? {}) as { projectId?: string };
       const resolvedProjectId = projectId ?? ctx.projectId;

@@ -86,16 +86,18 @@ const pageEnvelope = {
 };
 
 /**
- * Declared result shapes. These are documentation, NOT a runtime filter —
- * `ActionService.dispatch` never parses `resultSchema`, so a field only stops
- * being sent when the projector below stops building it.
+ * Declared result shapes. `ActionService.dispatch` parses results against these
+ * (#11539), but the `z.unknown()` arm below opts that row out of stripping, so
+ * for `view: "full"` a field still only stops being sent when the projector
+ * below stops building it.
  *
  * Each `items` arm is a row under one `view`: the summary schema documents the
  * default projection, and `z.unknown()` stands for `view: "full"`, whose row is
  * the provider's own normalized object — provider-defined, so nothing narrower
  * is true of it. The arm is also load-bearing rather than decorative:
  * `resultSchema` infers the `run()` return type, and without it the `full`
- * branch returning the untouched `Page<T>` fails to type-check.
+ * branch returning the untouched `Page<T>` fails to type-check. Both arms are
+ * allowlisted in `resultSchemaHygiene.test.ts` for exactly this reason.
  */
 export const ForgeIssuePageResultSchema = z.object({
   items: z.array(z.union([ForgeIssueSummarySchema, z.unknown()])),

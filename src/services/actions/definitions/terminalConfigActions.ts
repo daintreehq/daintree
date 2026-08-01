@@ -20,6 +20,9 @@ export function registerTerminalConfigActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    // `scrollbackLines` and `performanceMode` are the only required members, and
+    // they hold because the IPC handler backfills both before returning — the
+    // persisted object can be partial, so nothing else guarantees them.
     resultSchema: z.object({
       scrollbackLines: z.number(),
       performanceMode: z.boolean(),
@@ -28,6 +31,22 @@ export function registerTerminalConfigActions(
       hybridInputEnabled: z.boolean().optional(),
       hybridInputAutoFocus: z.boolean().optional(),
       colorSchemeId: z.string().optional(),
+      // Always populated by the handler (it migrates the legacy string form and
+      // falls back to an empty array), so leaving them undeclared meant dispatch
+      // stripped a real answer.
+      customSchemes: z
+        .array(
+          z.object({
+            id: z.string(),
+            name: z.string(),
+            type: z.enum(["dark", "light"]),
+            builtin: z.boolean(),
+            colors: z.record(z.string(), z.string()),
+            location: z.string().optional(),
+          })
+        )
+        .optional(),
+      recentSchemeIds: z.array(z.string()).optional(),
       screenReaderMode: z.enum(["auto", "on", "off"]).optional(),
       resourceMonitoringEnabled: z.boolean().optional(),
       memoryLeakDetectionEnabled: z.boolean().optional(),

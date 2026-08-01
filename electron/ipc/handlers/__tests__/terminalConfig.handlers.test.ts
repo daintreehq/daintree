@@ -139,6 +139,35 @@ describe("terminalConfig handlers", () => {
     expect(result.cachedProjectViews).toBe(2);
   });
 
+  // `TerminalConfig` types both of these as required and `terminalConfig.get`'s
+  // action schema now enforces that at dispatch (#11539), but nothing on the way
+  // in guarantees them: electron-store's defaults merge is shallow, so a
+  // persisted partial replaces the default object wholesale, and every writer
+  // sets a single dot-path.
+  it("get backfills scrollbackLines and performanceMode from a partial persisted config", async () => {
+    storeState.data.terminalConfig = { fontSize: 14 };
+    registerTerminalConfigHandlers();
+    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
+
+    const result = (await handler({}, undefined)) as Record<string, unknown>;
+
+    expect(typeof result.scrollbackLines).toBe("number");
+    expect(result.performanceMode).toBe(false);
+    expect(result.fontSize).toBe(14);
+  });
+
+  it("get replaces an out-of-range persisted scrollbackLines with a usable one", async () => {
+    storeState.data.terminalConfig = { scrollbackLines: 0, performanceMode: true };
+    registerTerminalConfigHandlers();
+    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
+
+    const result = (await handler({}, undefined)) as Record<string, unknown>;
+
+    // 0 is the legacy "unlimited" sentinel, which xterm rejects outright.
+    expect(result.scrollbackLines).toBeGreaterThan(0);
+    expect(result.performanceMode).toBe(true);
+  });
+
   describe("get derives cachedProjectViews", () => {
     it("preserves a stored preference regardless of RAM", async () => {
       (storeState.data.terminalConfig as Record<string, unknown>).cachedProjectViews = 5;

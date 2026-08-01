@@ -334,6 +334,18 @@ export function registerTerminalLifecycleActions(
       kind: z.string().optional(),
       launchAgentId: z.string().optional(),
       title: z.string().optional(),
+      // Both are read straight off the payload by TerminalInfoDialog —
+      // `resizeStrategy` drives its Resize Strategy row, which would otherwise
+      // report "default" for every settled TUI agent once dispatch starts
+      // stripping undeclared fields (#11539). Declared as strings rather than
+      // enums to match `kind`/`agentState`/`activityTier` above: these values
+      // come off persisted panel data, and a stale spelling should degrade the
+      // one field, not fail the whole read.
+      titleMode: z.string().optional().describe("'default', 'custom' or 'user'"),
+      resizeStrategy: z
+        .string()
+        .optional()
+        .describe("'default' (immediate) or 'settled' (batched for TUI agents)"),
       cwd: z.string(),
       shell: z.string().optional(),
       command: z.string().optional(),

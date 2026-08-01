@@ -1,9 +1,11 @@
 /**
  * Ceilings for agent-facing git/worktree reads (#11531).
  *
- * Action `resultSchema` is advertised documentation only — `ActionService.dispatch`
- * returns `run()` output unvalidated — so every limit here must be applied by real
- * code inside `run()`, never by declaring a narrower schema.
+ * Every limit here must be applied by real code inside `run()`, never by declaring
+ * a narrower schema. `ActionService.dispatch` does parse results against
+ * `resultSchema` (#11539), but a parse strips undeclared keys — it cannot cap a
+ * count, a byte length, or a page size, and a schema that tried would reject the
+ * oversized result instead of trimming it.
  */
 
 export const GIT_LIST_COMMITS_LIMIT_DEFAULT = 30;

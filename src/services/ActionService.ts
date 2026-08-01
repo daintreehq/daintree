@@ -117,6 +117,41 @@ function zodSchemaToJsonSchema(
 }
 
 /**
+ * Cap on reported issues. A deeply wrong result can produce an issue per row;
+ * the first few identify the mismatch and the rest only inflate a payload that
+ * crosses IPC.
+ */
+const MAX_REPORTED_RESULT_ISSUES = 10;
+
+/**
+ * Summarize a result-validation failure as issue CODES and structural depth.
+ *
+ * Deliberately drops the rejected value, zod's rendered message, AND the issue
+ * path. Dropping the path is not over-caution: under `z.record(...)` the path
+ * segment IS a key from the data, so a result shaped
+ * `{ "sk-live-abc": 42 }` reports that key verbatim. This summary reaches two
+ * surfaces an agent can read — `ActionError.details`, which crosses IPC to the
+ * MCP client, and the renderer log buffer, which `logs.getAll` serves as a tool
+ * — so a leaked key would re-open the hole this validation exists to close.
+ *
+ * There is deliberately no richer DEV-only variant either: `console.warn` is
+ * not local. `rendererConsoleCapture` forwards renderer console messages to
+ * the main logger, which buffers them before scrubbing, so a prettified error
+ * would reach `logs.getAll` too.
+ *
+ * The action id plus code and depth locate the mismatch against a schema the
+ * developer already has.
+ */
+function summarizeResultIssues(error: z.ZodError): string[] {
+  const seen = new Set<string>();
+  for (const issue of error.issues) {
+    seen.add(`${issue.code} at depth ${issue.path.length}`);
+    if (seen.size >= MAX_REPORTED_RESULT_ISSUES) break;
+  }
+  return [...seen];
+}
+
+/**
  * Heuristic for plugin-contributed actions that declare a raw JSON Schema.
  * Treat the action as requiring args if the schema has a non-empty
  * `required` array. Anything else (no schema, schema without required) is
@@ -490,6 +525,35 @@ export class ActionService {
       // double-confirming an agent dispatch the MCP bridge already gated.
       const runContext: ActionContext = { ...context, dispatchSource: source };
       const result = await definition.run(validatedArgs, runContext);
+      // Enforce the action's own result contract. Zod objects strip unknown
+      // keys, so this is what makes the published projection the delivered one
+      // rather than a claim nothing checks (#11539). Keyed on `resultSchema`
+      // alone: `mcpOutputSchema` only gates the advertised JSON Schema, while
+      // the MCP *text* response serializes this value either way.
+      //
+      // Fails closed, mirroring the argsSchema gate above. A result that
+      // violates its own schema means the action is wrong; passing the raw
+      // value through would preserve the leak in exactly the case this exists
+      // to catch.
+      //
+      // Returns BEFORE the success-only bookkeeping below. `run()` did execute
+      // and its side effects stand, but `action:dispatched` is contractually a
+      // completion event and `lastAction` feeds `action.repeatLast` — recording
+      // a dispatch whose result was rejected would let a keybinding replay it
+      // and would log a success breadcrumb for a call that returned an error.
+      const validatedResult = definition.resultSchema
+        ? definition.resultSchema.safeParse(result)
+        : undefined;
+      if (validatedResult && !validatedResult.success) {
+        const issues = summarizeResultIssues(validatedResult.error);
+        logWarn("Action result failed its own resultSchema", { actionId, issues });
+        const error: ActionError = {
+          code: "RESULT_VALIDATION_ERROR",
+          message: `Action "${actionId}" returned a result that does not match its declared schema`,
+          details: issues,
+        };
+        return { ok: false, error };
+      }
       const durationMs =
         (typeof performance !== "undefined" ? performance.now() : Date.now()) - monotonicStartMs;
       if (
@@ -517,7 +581,7 @@ export class ActionService {
       });
       if (!definition.suppressShortcutHint)
         this.emitShortcutHint(actionId, source, overlayEpochBeforeRun);
-      return { ok: true, result: result as Result };
+      return { ok: true, result: (validatedResult ? validatedResult.data : result) as Result };
     } catch (err) {
       const error: ActionError = {
         code: "EXECUTION_ERROR",
