@@ -206,6 +206,50 @@ describe("runValidate", () => {
     expect(result.warnings.join("\n")).toMatch(/toolbarButtons\[0\].iconId.*package icon/);
   });
 
+  it("warns (non-fatally) on an unrecognized process-tool iconId (#11613)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        processTools: [{ command: "acme-cli", iconId: "not-a-real-icon" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toMatch(/processTools\[0\].iconId.*terminal icon/);
+  });
+
+  it("warns on a built-in brand iconId, which the host collapses rather than honoring (#11613)", async () => {
+    // `claude` is a real agent brand mark, so it looks like it would work — the
+    // host sanitizes it to the generic glyph, and the author needs to know.
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        processTools: [{ command: "acme-cli", iconId: "claude" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toMatch(/processTools\[0\].iconId/);
+  });
+
+  it("does not warn on a recognized process-tool iconId (#11613)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        processTools: [{ command: "acme-cli", iconId: "sparkles" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).not.toMatch(/iconId/);
+  });
+
   it("does not warn on a recognized toolbar button iconId (#11298)", async () => {
     await writeManifest({
       name: "acme.demo",

@@ -418,6 +418,42 @@ export interface PluginAgentContribution {
 }
 
 /**
+ * A plugin-contributed terminal process detection (#11613). Maps one command
+ * name to the icon a terminal tab shows while that command runs, so a plugin
+ * that ships or wraps a CLI can make it identifiable in a pane instead of
+ * falling back to the generic terminal glyph.
+ *
+ * `command` is the bare executable name the detector matches — the same key
+ * space as the built-in `PROCESS_TOOL_REGISTRY` commands (`vite`, `pytest`,
+ * `redis-cli`). Lowercase only: `ProcessDetector` lower-cases every candidate
+ * before lookup, so a mixed-case key could never match. A tool with aliases
+ * declares one entry per alias.
+ *
+ * `iconId` uses the generic plugin icon namespace ({@link PLUGIN_ICON_IDS} in
+ * `shared/config/pluginIconIds.ts`), the same one `contributes.panels[].iconId`
+ * and `contributes.toolbarButtons[].iconId` use — plugins cannot ship bundled
+ * brand marks. Advisory, like those siblings: an unrecognized id renders a
+ * fallback glyph rather than failing the load.
+ *
+ * Inert declarative data, so no capability is required. A command that collides
+ * with a built-in tool or agent is rejected at parse time; a cross-plugin
+ * collision resolves first-registered-wins with a warning.
+ *
+ * Deliberately no `label`: the renderer resolves a detected process's display
+ * label from its icon id (`deriveTerminalChrome`), and generic plugin icon ids
+ * are shared across plugins, so a plugin-supplied label could not be resolved
+ * unambiguously. A plugin-detected process labels itself with its icon id until
+ * the identity model carries a distinct process label through panel state.
+ *
+ * Registered into `shared/config/pluginProcessToolRegistry.ts` at load time and
+ * mirrored into the pty-host, where detection runs.
+ */
+export interface PluginProcessToolContribution {
+  command: string;
+  iconId: string;
+}
+
+/**
  * Closed set of catalog categories a plugin can declare via
  * `manifest.category`. The plugin manager groups its list by these (#9554
  * successor) — a closed enum rather than free-form tags so the catalog can't
@@ -508,6 +544,13 @@ export interface PluginManifest {
      * `agent:register` capability. Empty unless the plugin opts in.
      */
     agents: PluginAgentContribution[];
+    /**
+     * Plugin-contributed terminal process detections (#11613). Each entry maps
+     * a command name to the icon a terminal tab shows while that command runs.
+     * Inert declarative data; no capability required. Empty unless the plugin
+     * ships or wraps a CLI it wants recognized.
+     */
+    processTools: PluginProcessToolContribution[];
     /**
      * Declared plugin settings. When absent or empty, `host.settings.set()`
      * accepts any key (permissive for plugins that declare none). When non-empty,

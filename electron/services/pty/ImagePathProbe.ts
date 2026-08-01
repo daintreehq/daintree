@@ -281,7 +281,7 @@ export class ImagePathProbe {
     const lower = baseRaw.toLowerCase();
     // Strip Windows executable extensions so the basename lines up with the
     // lowercase keys the candidate builder uses for AGENT_CLI_NAMES /
-    // PROCESS_ICON_MAP lookups.
+    // getProcessIconMap() lookups.
     const stripped = lower.replace(/\.(exe|cmd|bat|com|ps1)$/u, "");
     return stripped || null;
   }

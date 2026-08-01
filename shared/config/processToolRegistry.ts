@@ -9,10 +9,13 @@
  * check:process-tools` fails the build when an entry has no matching brand
  * file, which is what stops a missing icon or label from shipping silently.
  *
- * Deliberately static and built-in only. `ProcessDetector` imports this from
+ * Static and built-in only, deliberately. `ProcessDetector` imports this from
  * the pty-host utility process, and `shared/config` registries are per-process
- * singletons — plugin-contributed entries would need an explicit IPC mirror
- * replayed on every host restart. Module-level data needs none of that. #10601
+ * singletons, so module-level data needs no cross-process plumbing at all.
+ * Plugin-contributed detections do pay that cost and live in
+ * `./pluginProcessToolRegistry.ts`, which main mirrors into the pty-host and
+ * replays on every host restart; `getProcessIconMap()` merges the two with
+ * built-ins on top. Nothing plugin-supplied belongs here. #10601, #11613
  */
 
 /**

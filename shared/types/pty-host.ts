@@ -326,6 +326,15 @@ export type PtyHostRequest =
    * restarted host re-syncs before any spawn replay.
    */
   | { type: "set-plugin-agent-registry"; registry: Record<string, AgentConfig> }
+  /**
+   * Mirror the main-process plugin process-tool registry into the pty-host
+   * (#11613). `ProcessDetector` runs in this process and resolves a command
+   * name to a terminal-tab icon, but never registers plugin contributions
+   * itself — main is authoritative. Carries the flattened command → icon-id
+   * snapshot; the host applies it via `setPluginProcessToolRegistry`. Replayed
+   * on every host-ready so a restarted host re-syncs before any spawn replay.
+   */
+  | { type: "set-plugin-process-tool-registry"; registry: Record<string, string> }
   | { type: "get-flow-control-snapshot"; requestId: string }
   | { type: "get-worker-governance-snapshot"; requestId: string };
 

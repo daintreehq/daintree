@@ -153,6 +153,10 @@ import {
   clearPluginAgentRegistryForTests,
   getPluginAgentRegistry,
 } from "../../../shared/config/pluginAgentRegistry.js";
+import {
+  clearPluginProcessToolRegistryForTests,
+  getPluginProcessToolRegistry,
+} from "../../../shared/config/pluginProcessToolRegistry.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import {
   searchPluginSkills,
@@ -187,6 +191,7 @@ type PluginManifestShape = {
     fileDecorationProviders?: unknown[];
     agents?: unknown[];
     skills?: unknown[];
+    processTools?: unknown[];
   };
 };
 
@@ -640,6 +645,59 @@ describe("PluginService integration — agent contributions (issue #9560)", () =
     // The manifest fails strict validation (capability gate), so the plugin
     // never loads its agent into the registry.
     expect(getPluginAgentRegistry()["uncapped-agent"]).toBeUndefined();
+  });
+});
+
+describe("PluginService integration — process-tool contributions (#11613)", () => {
+  beforeEach(() => {
+    clearPluginProcessToolRegistryForTests();
+  });
+
+  afterEach(() => {
+    clearPluginProcessToolRegistryForTests();
+  });
+
+  it("registers manifest process tools with no capability declared and drops them on unload", async () => {
+    await writePlugin("acme.process-tool-plugin", {
+      name: "acme.process-tool-plugin",
+      version: "1.0.0",
+      contributes: {
+        processTools: [
+          { command: "acme-cli", iconId: "sparkles" },
+          { command: "acme-serve", iconId: "globe" },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    // No `capabilities` block above — process detections are inert declarative
+    // data, unlike `contributes.agents`, which is capability-gated.
+    expect(getPluginProcessToolRegistry()).toEqual({
+      "acme-cli": "sparkles",
+      "acme-serve": "globe",
+    });
+
+    service.unloadPlugin("acme.process-tool-plugin");
+
+    expect(getPluginProcessToolRegistry()).toEqual({});
+  });
+
+  it("does not load a plugin whose process tool collides with a built-in command", async () => {
+    await writePlugin("acme.colliding-tool", {
+      name: "acme.colliding-tool",
+      version: "1.0.0",
+      contributes: {
+        processTools: [{ command: "vite", iconId: "sparkles" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    // The manifest fails strict validation, so nothing reaches the registry.
+    expect(getPluginProcessToolRegistry()).toEqual({});
   });
 });
 

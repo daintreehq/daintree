@@ -74,6 +74,7 @@ describe("PtyClient fabric", () => {
   let forks: ForkedShard[];
   let failNextFork: boolean;
   let PtyClientClass: typeof import("../PtyClient.js").PtyClient;
+  let pluginProcessTools: typeof import("../../../shared/config/pluginProcessToolRegistry.js");
   let fabricConfig: typeof import("../pty/fabricConfig.js");
 
   beforeEach(async () => {
@@ -118,6 +119,10 @@ describe("PtyClient fabric", () => {
 
     PtyClientClass = (await import("../PtyClient.js")).PtyClient;
     fabricConfig = await import("../pty/fabricConfig.js");
+    // Must come from the post-`resetModules` graph: a static top-level import
+    // would be a different module instance than the one PtyClient reads, so
+    // registrations here would be invisible to the code under test.
+    pluginProcessTools = await import("../../../shared/config/pluginProcessToolRegistry.js");
   });
 
   afterEach(() => {
@@ -284,10 +289,63 @@ describe("PtyClient fabric", () => {
 
       expect(messagesOfType(shardA.child, "set-log-level-overrides")).toHaveLength(1);
       expect(messagesOfType(shardA.child, "set-plugin-agent-registry")).toHaveLength(1);
+      expect(messagesOfType(shardA.child, "set-plugin-process-tool-registry")).toHaveLength(1);
       expect(messagesOfType(shardA.child, "set-resource-profile")).toHaveLength(1);
       // The pre-ready spawn send was dropped by the real host; ready replays it.
       expect(messagesOfType(shardA.child, "spawn").map((m) => m.id)).toEqual(["t1"]);
       // Only this shard's terminals replay — never siblings'.
+      client.dispose();
+    });
+
+    it("fans a plugin process-tool sync out to every ready shard, carrying live content (#11613)", () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      const defaultChild = defaultShard().child;
+      defaultChild.emit("message", { type: "ready" });
+      shardA.child.postMessage.mockClear();
+      defaultChild.postMessage.mockClear();
+
+      try {
+        pluginProcessTools.registerPluginProcessTools("acme.tools", [
+          { command: "acme-cli", iconId: "sparkles" },
+        ]);
+        client.syncPluginProcessToolRegistry();
+
+        // Every ready shard gets it — a per-project shard is not covered by the
+        // default shard's copy — and the payload reflects the registry at call
+        // time rather than an empty or cached snapshot.
+        for (const child of [shardA.child, defaultChild]) {
+          const sent = messagesOfType(child, "set-plugin-process-tool-registry");
+          expect(sent).toHaveLength(1);
+          expect(sent[0].registry).toEqual({ "acme-cli": "sparkles" });
+        }
+      } finally {
+        pluginProcessTools.clearPluginProcessToolRegistryForTests();
+        client.dispose();
+      }
+    });
+
+    it("mirrors the process-tool registry before replaying spawns (#11613)", () => {
+      // Ordering is the contract: a terminal replayed onto a restarted host must
+      // resolve its tab icon from the first process-tree poll, so the registry
+      // has to land before the spawn, not after.
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.postMessage.mockClear();
+
+      shardA.child.emit("message", { type: "ready" });
+
+      const types = shardA.child.postMessage.mock.calls.map(
+        (call: unknown[]) => (call[0] as Record<string, unknown>)?.type
+      );
+      expect(types).toContain("set-plugin-process-tool-registry");
+      expect(types).toContain("spawn");
+      expect(types.indexOf("set-plugin-process-tool-registry")).toBeLessThan(
+        types.indexOf("spawn")
+      );
       client.dispose();
     });
   });
@@ -340,6 +398,17 @@ describe("PtyClient fabric", () => {
 
       const respawns = messagesOfType(restarted.child, "spawn");
       expect(respawns.map((m) => m.id)).toEqual(["t1"]);
+      // A restarted host is a fresh process with an empty plugin registry, so
+      // the mirror has to be replayed here too — and before the respawn, or the
+      // recovered terminal resolves its icon against an empty map. The
+      // first-ready test can't catch a restart-only regression.
+      const restartedTypes = restarted.child.postMessage.mock.calls.map(
+        (call: unknown[]) => (call[0] as Record<string, unknown>)?.type
+      );
+      expect(restartedTypes).toContain("set-plugin-process-tool-registry");
+      expect(restartedTypes.indexOf("set-plugin-process-tool-registry")).toBeLessThan(
+        restartedTypes.indexOf("spawn")
+      );
       // The respawn is a NEW incarnation.
       expect(
         (respawns[0].options as { launchGeneration?: number }).launchGeneration

@@ -62,6 +62,7 @@ import { fileURLToPath } from "url";
 import { createLogger, isValidLogOverrideLevel } from "../utils/logger.js";
 import { store } from "../store.js";
 import { getPluginAgentRegistry } from "../../shared/config/pluginAgentRegistry.js";
+import { getPluginProcessToolRegistry } from "../../shared/config/pluginProcessToolRegistry.js";
 
 const logger = createLogger("main:PtyClient");
 const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
@@ -747,6 +748,13 @@ export class PtyClient extends EventEmitter {
     // main-process snapshot directly — no cache needed, and a host restart
     // re-syncs whatever plugins are loaded now.
     shard.send({ type: "set-plugin-agent-registry", registry: getPluginAgentRegistry() });
+    // Same contract for plugin-contributed process detections (#11613): mirror
+    // before any spawn replay so a respawned terminal resolves its tab icon from
+    // the first process-tree poll rather than after the next plugin mutation.
+    shard.send({
+      type: "set-plugin-process-tool-registry",
+      registry: getPluginProcessToolRegistry(),
+    });
     // A project shard forked mid-session missed every earlier config setter
     // (resource profile, monitoring, persistence suppression) — those are
     // host-process-wide, so replay the caches on its first ready. Restart
@@ -1162,6 +1170,24 @@ export class PtyClient extends EventEmitter {
     for (const shard of this.shards.values()) {
       if (shard.lifecycle.isInitialized && shard.lifecycle.child) {
         shard.send({ type: "set-plugin-agent-registry", registry: getPluginAgentRegistry() });
+      }
+    }
+  }
+
+  /**
+   * Push the current plugin process-tool registry to every ready shard so their
+   * `ProcessDetector` resolves plugin-contributed command → icon detections
+   * (#11613). Same contract as {@link syncPluginAgentRegistry}: called by
+   * `PluginService` after a plugin load/unload, reads the authoritative main
+   * snapshot at call time, and leaves the restart case to the `ready` replay.
+   */
+  syncPluginProcessToolRegistry(): void {
+    for (const shard of this.shards.values()) {
+      if (shard.lifecycle.isInitialized && shard.lifecycle.child) {
+        shard.send({
+          type: "set-plugin-process-tool-registry",
+          registry: getPluginProcessToolRegistry(),
+        });
       }
     }
   }

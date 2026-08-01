@@ -5,6 +5,7 @@ import {
 import { setLogLevelOverrides } from "../../utils/logger.js";
 import { setPortBatchThroughputDelayMs } from "../portBatcher.js";
 import { setPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
+import { setPluginProcessToolRegistry } from "../../../shared/config/pluginProcessToolRegistry.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
 export function createResourceConfigHandlers(ctx: HostContext): HandlerMap {
@@ -80,6 +81,21 @@ export function createResourceConfigHandlers(ctx: HostContext): HandlerMap {
       // Analysis workers resolve detection patterns on their own thread —
       // mirror the registry there too (new workers receive it at spawn).
       ctx.analysisWorkerPool?.setPluginAgentRegistry(registry);
+    },
+
+    // Mirror main's plugin process-tool registry so `getProcessIconMap` resolves
+    // plugin-contributed command → icon detections in this process (the one
+    // running `ProcessDetector`). Main is authoritative; the pty-host only ever
+    // mirrors (#11613). Same boundary guard as the agent registry above — only a
+    // plain object is a valid registry. Analysis workers are deliberately NOT
+    // mirrored: they resolve agent activity patterns and never consult the
+    // process-icon map.
+    "set-plugin-process-tool-registry": (msg) => {
+      const registry =
+        msg.registry != null && typeof msg.registry === "object" && !Array.isArray(msg.registry)
+          ? msg.registry
+          : {};
+      setPluginProcessToolRegistry(registry);
     },
   };
 }

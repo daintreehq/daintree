@@ -184,6 +184,19 @@ export async function runValidate(opts: ValidateOptions = {}): Promise<ValidateR
       );
     }
   }
+  // Same advisory treatment for process detections (#11613), with NO
+  // agent-brand exemption — unlike panels, an unrecognized id here is collapsed
+  // to `terminal` by the host at registration so a plugin can't borrow a
+  // built-in agent's mark or a built-in tool's detection priority. That makes a
+  // brand id like `claude` especially worth warning about: it names a real
+  // glyph, so it looks like it works, but the host never honors it.
+  for (const [index, tool] of manifest.contributes.processTools.entries()) {
+    if (tool.iconId && !isPluginIconId(tool.iconId)) {
+      warnings.push(
+        `processTools[${index}].iconId "${tool.iconId}" isn't a recognized plugin icon — the host will collapse it and the terminal tab will render the default terminal icon. Known ids: ${knownIds}`
+      );
+    }
+  }
 
   // Advisory build-target check: warn when `main` or a view's `componentPath`
   // points at a missing file whose parent dir exists (a typo or stale path). A

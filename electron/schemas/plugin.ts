@@ -12,6 +12,12 @@ import {
   PLUGIN_PANEL_BADGE_LABEL_MAX,
 } from "../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
+import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../shared/config/processToolRegistry.js";
+import { AGENT_CLI_NAMES } from "../services/ProcessDetector/registries.js";
+import {
+  BINARY_EXEC_SUBCOMMANDS,
+  stripCommandExecutableExtension,
+} from "../services/ProcessDetector/commandParser.js";
 import {
   BUILT_IN_ACTION_IDS,
   DENY_PLUGIN_DISPATCH_ACTION_IDS,
@@ -297,6 +303,129 @@ export const SkillContributionSchema = z
         "path must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
     }),
     triggers: z.array(z.string().min(1)).max(50).optional(),
+  })
+  .strict();
+
+/**
+ * Bare executable name a plugin process-tool detection matches, in the same key
+ * space as the built-in `PROCESS_TOOL_REGISTRY` commands (`vite`, `redis-cli`,
+ * `python3`, `gradlew`). Lowercase is enforced rather than normalized:
+ * `ProcessDetector` lower-cases every candidate before lookup, so a mixed-case
+ * key would silently never match — failing loudly at parse time beats a
+ * detection that quietly does nothing.
+ */
+const PROCESS_TOOL_COMMAND_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
+
+/**
+ * Command names that would index an inherited member on any prototype-bearing
+ * lookup table. The registries this feeds are all null-prototype, so these are
+ * inert in practice — rejected anyway so a manifest never advertises a command
+ * whose detection depends on that invariant holding everywhere forever.
+ * Mirrors {@link RESERVED_CREDENTIAL_FIELD_IDS}. (`__proto__` is already
+ * excluded by the leading-alphanumeric rule above; listed for completeness.)
+ */
+const RESERVED_PROCESS_TOOL_COMMANDS = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * Shells and launcher wrappers — names that identify the process *running* a
+ * tool rather than a tool. None of them appear in `PROCESS_TOOL_ICON_BY_COMMAND`
+ * or `AGENT_CLI_NAMES`, so the manifest-level built-in collision checks never
+ * see them, yet claiming one is a wider version of the `exec`/`dlx`/`x` hole
+ * {@link BINARY_EXEC_SUBCOMMANDS} already closes:
+ *
+ *   - `sudo vite` yields candidates `[sudo, vite]`, both at tool tier (an
+ *     unregistered plugin icon id ranks there), and the leftmost wins the tie —
+ *     the plugin reports itself instead of Vite.
+ *   - `bash -c "vite build"` is worse: the quoted string never resolves to a
+ *     registry key, so `bash` is the only match there is.
+ *   - The process-tree walk turns every subshell node into a candidate, so a
+ *     plugin owning `bash` tags nearly every pane and outranks the
+ *     package-manager tier wherever it appears.
+ *
+ * Deliberately limited to shells and prefix runners. Tool-shaped launchers a
+ * plugin could plausibly want to brand (`mise`, `direnv`, `npx`) stay claimable;
+ * `exec`/`dlx`/`x` are handled by the neighbouring refinement.
+ */
+const RESERVED_PROCESS_TOOL_LAUNCHERS = new Set([
+  // Shells. The process-tree walk sees these as the parent of everything a
+  // user types, and `-c` hides the real command inside a quoted string.
+  "sh",
+  "bash",
+  "zsh",
+  "fish",
+  "dash",
+  "ash",
+  "ksh",
+  "csh",
+  "tcsh",
+  "nu",
+  "pwsh",
+  "powershell",
+  "cmd",
+  // Prefix runners: argv[0] is the wrapper, the tool sits somewhere right of it.
+  "env",
+  "sudo",
+  "doas",
+  "su",
+  "command",
+  "nohup",
+  "setsid",
+  "xargs",
+  "time",
+  "timeout",
+  "nice",
+  "stdbuf",
+]);
+
+/**
+ * `contributes.processTools` manifest entry (#11613). One command name mapped
+ * to the icon a terminal tab shows while that command runs. `iconId` is a
+ * generic plugin icon id (`shared/config/pluginIconIds.ts`) — advisory, matching
+ * `contributes.panels[].iconId`, so an unrecognized id renders a fallback glyph
+ * rather than failing the load and a manifest written for a newer host degrades
+ * safely. Inert declarative data, so no capability is required. Strict so
+ * unknown fields (a `label` or `tier` the host would ignore) are rejected
+ * loudly instead of reading as accepted.
+ */
+export const ProcessToolContributionSchema = z
+  .object({
+    command: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(PROCESS_TOOL_COMMAND_PATTERN, {
+        message:
+          "command must be a bare lowercase executable name (letters, digits, dot, dash, underscore)",
+      })
+      .refine((command) => !RESERVED_PROCESS_TOOL_COMMANDS.has(command), {
+        message: "command cannot be a reserved key (__proto__, constructor, prototype)",
+      })
+      // The detector strips launcher/script extensions off a process name before
+      // looking it up, so `acme.exe` or `serve.py` would register under a key
+      // nothing is ever looked up by — a detection that validates and then
+      // silently never fires. Reject the non-canonical form and name the one
+      // that works, rather than rewriting the author's value behind their back.
+      .refine((command) => stripCommandExecutableExtension(command) === command, {
+        message:
+          'command must omit the executable/script extension (write "acme", not "acme.exe" or "acme.py") — detection strips it before matching',
+      })
+      // `npm exec vite` puts the launcher subcommand at argv[1] and the real
+      // binary at argv[2]. A plugin owning `exec` would match first and win the
+      // equal-tier tie by being leftmost, reporting itself for a process it
+      // never launched.
+      .refine((command) => !BINARY_EXEC_SUBCOMMANDS.has(command), {
+        message:
+          "command cannot be a package-manager exec subcommand (exec, dlx, x) — those name the launcher, not a tool",
+      })
+      // Same failure, wider blast radius: a shell or prefix runner sits to the
+      // left of the real binary in argv and above it in the process tree, so a
+      // plugin owning one wins the equal-tier tie for commands it never
+      // launched — every pane, in the `bash` case.
+      .refine((command) => !RESERVED_PROCESS_TOOL_LAUNCHERS.has(command), {
+        message:
+          "command cannot be a shell or launcher wrapper (sh, bash, zsh, cmd, env, sudo, xargs, …) — those name the process that runs a tool, not the tool",
+      }),
+    iconId: z.string().min(1).max(64),
   })
   .strict();
 
@@ -915,6 +1044,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   forgeProviders: 20,
   fileDecorationProviders: 50,
   agents: 50,
+  processTools: 100,
   settings: 200,
 } as const;
 
@@ -1052,6 +1182,10 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
               .array(AgentContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.agents)
               .default([]),
+            processTools: z
+              .array(ProcessToolContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.processTools)
+              .default([]),
             settings: z
               .array(SettingDefinitionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.settings)
@@ -1070,6 +1204,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
             forgeProviders: [],
             fileDecorationProviders: [],
             agents: [],
+            processTools: [],
             settings: [],
           })
       ),
@@ -1109,6 +1244,47 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
             params: { errorCode: "agent_id_reserved" },
           });
         }
+      });
+
+      // Plugin process-tool commands are additive for new commands only (#11613).
+      // A command already claimed by a built-in tool or by a built-in agent's CLI
+      // would never win at runtime — the detector merges built-ins over the plugin
+      // snapshot — so accepting it would register a detection that silently never
+      // fires. Reject at parse time, mirroring the agent-id reservation above.
+      // Cross-plugin collisions are deliberately NOT checked here: they resolve
+      // first-registered-wins at runtime, and a manifest cannot know what else is
+      // installed.
+      const processTools = manifest.contributes.processTools;
+      const seenProcessToolCommands = new Set<string>();
+      processTools.forEach((tool, index) => {
+        if (Object.hasOwn(PROCESS_TOOL_ICON_BY_COMMAND, tool.command)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "processTools", index, "command"],
+            message: `Process-tool command "${tool.command}" collides with a built-in tool — plugin process tools must use new commands.`,
+            params: { errorCode: "process_tool_command_reserved" },
+          });
+        } else if (Object.hasOwn(AGENT_CLI_NAMES, tool.command)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "processTools", index, "command"],
+            message: `Process-tool command "${tool.command}" collides with a built-in agent CLI — plugin process tools must use new commands.`,
+            params: { errorCode: "process_tool_command_reserved" },
+          });
+        }
+        // A manifest declaring the same command twice is a typo, not a
+        // precedence question — the registry's per-plugin map is last-wins, so
+        // one of the two icons would silently disappear. Reject rather than
+        // pick.
+        if (seenProcessToolCommands.has(tool.command)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "processTools", index, "command"],
+            message: `Duplicate process-tool command "${tool.command}" in this manifest.`,
+            params: { errorCode: "process_tool_command_duplicate" },
+          });
+        }
+        seenProcessToolCommands.add(tool.command);
       });
 
       // Every contributed `actionId` (toolbar buttons, menu items, keybindings,

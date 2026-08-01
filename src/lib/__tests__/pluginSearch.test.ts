@@ -34,6 +34,7 @@ function makePlugin(overrides: {
         forgeProviders: [],
         fileDecorationProviders: [],
         agents: [],
+        processTools: [],
       },
     },
     dir: `/plugins/${overrides.name}`,

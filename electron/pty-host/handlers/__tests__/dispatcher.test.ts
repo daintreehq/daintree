@@ -7,6 +7,8 @@ import type { SerializedTerminalSnapshot } from "../../../../shared/types/termin
 const STATE_PAYLOAD: SerializedTerminalSnapshot = { data: "state-payload", cols: 80, rows: 24 };
 import { clearPluginAgentRegistryForTests } from "../../../../shared/config/pluginAgentRegistry.js";
 import { getEffectiveAgentConfig } from "../../../../shared/config/agentRegistry.js";
+import { clearPluginProcessToolRegistryForTests } from "../../../../shared/config/pluginProcessToolRegistry.js";
+import { buildDetectedCandidate } from "../../../services/ProcessDetector/candidateHelpers.js";
 
 function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   const ptyManager = {
@@ -261,6 +263,84 @@ describe("createPtyHostMessageDispatcher", () => {
       expect(getEffectiveAgentConfig("anything")).toBeUndefined();
     } finally {
       clearPluginAgentRegistryForTests();
+    }
+  });
+
+  it("mirrors the plugin process-tool registry so detection resolves it (#11613)", () => {
+    clearPluginProcessToolRegistryForTests();
+    try {
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+
+      // Before the sync this process has never heard of the command, so the
+      // detector declines to build a candidate at all.
+      expect(buildDetectedCandidate("acme-cli", undefined, 0)).toBeNull();
+
+      dispatch({
+        type: "set-plugin-process-tool-registry",
+        registry: { "acme-cli": "sparkles" },
+      });
+
+      expect(buildDetectedCandidate("acme-cli", undefined, 0)?.processIconId).toBe("sparkles");
+    } finally {
+      clearPluginProcessToolRegistryForTests();
+    }
+  });
+
+  it("replaces the plugin process-tool registry wholesale on a later sync (#11613)", () => {
+    clearPluginProcessToolRegistryForTests();
+    try {
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+
+      dispatch({ type: "set-plugin-process-tool-registry", registry: { "acme-cli": "sparkles" } });
+      expect(buildDetectedCandidate("acme-cli", undefined, 0)).not.toBeNull();
+
+      // Plugin A unloaded, plugin B loaded — the absent command stops resolving,
+      // which also proves the merged detector map is not a stale module const.
+      dispatch({ type: "set-plugin-process-tool-registry", registry: { "other-cli": "globe" } });
+      expect(buildDetectedCandidate("acme-cli", undefined, 0)).toBeNull();
+      expect(buildDetectedCandidate("other-cli", undefined, 0)?.processIconId).toBe("globe");
+    } finally {
+      clearPluginProcessToolRegistryForTests();
+    }
+  });
+
+  it("never lets a mirrored plugin command shadow a built-in tool (#11613)", () => {
+    clearPluginProcessToolRegistryForTests();
+    try {
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+
+      // Baseline first, so the assertion is "injecting a colliding plugin entry
+      // changes nothing" rather than a copy of Vite's current icon id.
+      const builtIn = buildDetectedCandidate("vite", undefined, 0)?.processIconId;
+      expect(builtIn).toBeDefined();
+
+      // The manifest schema rejects this collision at parse time; the merge
+      // order is the defense in depth for anything that bypasses the schema.
+      dispatch({ type: "set-plugin-process-tool-registry", registry: { vite: "sparkles" } });
+
+      expect(buildDetectedCandidate("vite", undefined, 0)?.processIconId).toBe(builtIn);
+    } finally {
+      clearPluginProcessToolRegistryForTests();
+    }
+  });
+
+  it("ignores a malformed plugin process-tool registry shape without crashing (#11613)", () => {
+    clearPluginProcessToolRegistryForTests();
+    try {
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+      expect(() =>
+        dispatch({ type: "set-plugin-process-tool-registry", registry: null as never })
+      ).not.toThrow();
+      expect(() =>
+        dispatch({ type: "set-plugin-process-tool-registry", registry: [] as never })
+      ).not.toThrow();
+      expect(buildDetectedCandidate("acme-cli", undefined, 0)).toBeNull();
+    } finally {
+      clearPluginProcessToolRegistryForTests();
     }
   });
 

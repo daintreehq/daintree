@@ -85,6 +85,7 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "mcpServers": [/* ... */],
     "forgeProviders": [/* ... */],
     "fileDecorationProviders": [/* ... */],
+    "processTools": [/* command → terminal-tab icon detections */],
   },
 }
 ```
