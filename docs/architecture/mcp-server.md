@@ -12,7 +12,7 @@ Do not confuse this with the two outbound MCP concepts in the plugin docs:
 | Plugin-authored MCP servers | IDE → external MCP server | plugin process, supervised | [`docs/plugins/`](../plugins/) |
 | Plugin-MCP supervisor | spawns/monitors plugin servers | host | [`docs/plugins/architecture.md`](../plugins/architecture.md) |
 
-This server is **security-load-bearing**: it accepts network connections (loopback only) and turns them into privileged IDE mutations (commit, push, delete worktree, launch agents). The auth ladder, tier model, per-tool grants, rate limits, and abuse policy below are the gates that keep an agent from doing more than the user authorized. The whole subsystem is ~7.5K LOC across `electron/services/mcp-server/` plus the `McpServerService` orchestrator.
+This server is **security-load-bearing**: it accepts network connections (loopback only) and turns them into privileged IDE mutations (commit, push, delete worktree, launch agents). The auth ladder, tier model, per-tool grants, rate limits, and abuse policy below are the gates that keep an agent from doing more than the user authorized. The subsystem lives in `electron/services/mcp-server/` plus the `McpServerService` orchestrator.
 
 ## Connecting an external client
 
@@ -89,22 +89,27 @@ Troubleshooting the failures worth naming:
 
 ## File map
 
-| File | LOC | Role |
-| --- | --- | --- |
-| `McpServerService.ts` (parent dir) | ~615 | Top-level orchestrator. Owns `SessionStore`, `AuditService`, `TurnOutcomeService`, `HttpLifecycle`, `AbusePolicy`, renderer bridge; exposes IPC-facing methods (`setEnabled`, `rotateApiKey`, `setSessionTier`, `issueGrant`, `disconnectBearer`). Singleton `mcpServerService`. |
-| `httpLifecycle.ts` | ~1379 | The HTTP server itself: bind/teardown, supervised restart, the `handleRequest` auth+routing gate, bearer register, session pinning, tier-elevation and grant IPC. |
-| `sessionServer.ts` | ~1120 | Per-session MCP `Server` instance — `tools/list`, `tools/call`, resources, prompts. The `CallTool` handler is the end-to-end dispatch pipeline (tier → grant → rate-limit → dedup → confirm → dispatch → audit). |
-| `shared.ts` | ~881 | Tier model (`McpTier`, `TIER_ALLOWLISTS`), constants (TTLs, ports, timeouts), error codes/envelopes, dedup + rate-limit config, resource URIs, prompt definitions. |
-| `sessionStore.ts` | ~664 | Per-session state: SSE + Streamable-HTTP session maps, tier map, idle timers, `GrantCache`, dedup caches, rate-limit buckets, WebContents/context pins. |
-| `auditLog.ts` | ~606 | Ring-buffer audit log + anomaly signals (first-seen combos, latency drift, failure clusters, p95 z-score). Persisted to the `mcpServer` store key. |
-| `turnOutcomeLog.ts` | ~476 | Classifies each help-session assistant _turn_ (`answered`/`refused`/`tool-error`/…) by correlating FSM transitions with recent audit records. |
-| `grantCache.ts` | ~417 | Per-`(sessionId, toolId)` time-bounded "Approve once" grants — issue/check/refresh/revoke, sliding TTL + hard ceiling, denial-suppression counters. |
-| `rendererBridge.ts` | ~340 | IPC bridge to the renderer: requests the action manifest and dispatches actions, with per-session pinning (`SessionBindingError` when the pinned view is gone). |
-| `tierAuth.ts` | ~214 | Auth primitives: bearer extraction, timing-safe API-key compare, tier resolution, `shouldExposeTool`/`isTierPermitted`, tool schema/annotation builders, `requestKey` parsing. Re-exports `deriveBand`/`BAND_OVERRIDES`. |
-| `readinessProbe.ts` | ~522 | Active `initialize` round-trip probe (`/mcp` and `/sse`) proving the server actually answers, not just that the socket is bound. Used by `HelpSessionService` before launching the assistant. |
-| `waitUntilIdle.ts` | ~193 | The `terminal.waitUntilIdle` handshake — bounded long-poll until an agent FSM leaves `working` (interactive sessions capped at 60s). Runs in main, not via renderer dispatch. |
-| `abusePolicy.ts` | ~67 | Per-session sliding-window denial counter (401 + tier-mismatch). Trips → revoke session. |
-| `sessionDedup.ts` | ~88 | Idempotency keys + canonical args hashing for the creation-tool dedup cache. |
+Roughly in dependency order rather than by size — per-file line counts are deliberately not listed, because they drift on every change to the subsystem and nothing in CI compares them against the real files.
+
+| File | Role |
+| --- | --- |
+| `McpServerService.ts` (parent dir) | Top-level orchestrator. Owns `SessionStore`, `AuditService`, `TurnOutcomeService`, `HttpLifecycle`, `AbusePolicy`, renderer bridge; exposes IPC-facing methods (`setEnabled`, `rotateApiKey`, `setSessionTier`, `issueGrant`, `disconnectBearer`). Singleton `mcpServerService`. |
+| `httpLifecycle.ts` | The HTTP server itself: bind/teardown, supervised restart, the `handleRequest` auth+routing gate, bearer register, session pinning, tier-elevation and grant IPC. |
+| `sessionServer.ts` | Per-session MCP `Server` instance — `tools/list`, `tools/call`, resources, prompts. The `CallTool` handler is the end-to-end dispatch pipeline (tier → grant → rate-limit → dedup → confirm → dispatch → audit). |
+| `shared.ts` | Tier model (`McpTier`, `TIER_ALLOWLISTS`), constants (TTLs, ports, timeouts, `RESOURCE_TEXT_MAX_BYTES`), error codes/envelopes, dedup + rate-limit config, resource URIs, prompt definitions. |
+| `sessionStore.ts` | Per-session state: SSE + Streamable-HTTP session maps, tier map, idle timers, `GrantCache`, dedup caches, rate-limit buckets, WebContents/context pins. |
+| `toolCallResult.ts` | The `tools/call` response budget — byte-capped text bodies, UTF-8-safe truncation, and the structured half re-derived from the bounded text. See [Payload and registry budgets](#payload-and-registry-budgets-11526-11585). |
+| `auditLog.ts` | Ring-buffer audit log + anomaly signals (first-seen combos, latency drift, failure clusters, p95 z-score). Persisted to the `mcpServer` store key. |
+| `turnOutcomeLog.ts` | Classifies each help-session assistant _turn_ (`answered`/`refused`/`tool-error`/…) by correlating FSM transitions with recent audit records. |
+| `grantCache.ts` | Per-`(sessionId, toolId)` time-bounded "Approve once" grants — issue/check/refresh/revoke, sliding TTL + hard ceiling, denial-suppression counters. |
+| `rendererBridge.ts` | IPC bridge to the renderer: requests the action manifest and dispatches actions, with per-session pinning (`SessionBindingError` when the pinned view is gone). |
+| `tierAuth.ts` | Auth primitives: bearer extraction, timing-safe API-key compare, tier resolution, `shouldExposeTool`/`isTierPermitted`, tool schema/annotation builders, `requestKey` parsing. Re-exports `deriveBand`/`BAND_OVERRIDES`. |
+| `readinessProbe.ts` | Active `initialize` round-trip probe (`/mcp` and `/sse`) proving the server actually answers, not just that the socket is bound. Used by `HelpSessionService` before launching the assistant. |
+| `waitUntilIdle.ts` | The `terminal.waitUntilIdle` / `terminal.waitUntilIdleBatch` handshakes — bounded long-polls until an agent FSM leaves `working` (interactive sessions capped at 60s). Runs in main, not via renderer dispatch. |
+| `projectCheck.ts` | Main-process short-circuit for `project.runCheck` — validates the runner against the project's detected set, spawns it, and projects the capped, secret-scrubbed result. |
+| `skills.ts` | Main-process short-circuit for `skills.search` / `skills.load` against the skill registry. |
+| `abusePolicy.ts` | Per-session sliding-window denial counter (401 + tier-mismatch). Trips → revoke session. |
+| `sessionDedup.ts` | Idempotency keys + canonical args hashing for the creation-tool dedup cache. |
 
 Tier tool lists live in `shared/config/helpAssistantTierAllowlists.ts` so the renderer's blast-radius preview can read them without an IPC round-trip.
 
@@ -164,9 +169,9 @@ type McpTier = "workbench" | "action" | "system" | "external";
 | `workbench` | `WORKBENCH_TIER_TOOLS` — read-only / low-risk introspection (the help-assistant baseline). |
 | `action` | workbench ∪ `ACTION_TIER_ADDONS` (includes `terminal.waitUntilIdle`). |
 | `system` | workbench ∪ action ∪ `SYSTEM_TIER_ADDONS`. |
-| `external` | `MCP_TOOL_ALLOWLIST` — 23 orchestration tools for API-key callers, and the only surface they can reach. Nothing widens it: adding an entry to that list is the sole way to expose a tool externally (#11537 removed the never-reachable `fullToolSurface` opt-in that used to promise otherwise). |
+| `external` | `MCP_TOOL_ALLOWLIST` (the `Set` built from `MCP_EXTERNAL_TIER_TOOLS`) — a small, budgeted roster of orchestration tools for API-key callers, and the only surface they can reach. Nothing widens it: adding an entry to that list is the sole way to expose a tool externally (#11537 removed the never-reachable `fullToolSurface` opt-in that used to promise otherwise). See [Payload and registry budgets](#payload-and-registry-budgets-11526-11585) for the enforced size range; the roster itself lives in [`shared/config/mcpExternalTierAllowlist.ts`](../../shared/config/mcpExternalTierAllowlist.ts) and is deliberately not restated here, because a count in prose drifts the moment a tool is added or cut and nothing in CI compares the two. |
 
-The `external` surface is deliberately small (#11585). It stood at 100 entries / ~128 KB of schema, past what MCP clients tolerate — Cursor caps the tool count across all connected servers and silently truncates the overflow; GitHub Copilot's 128-tool cap is a hard error. Either way the truncation picked our tools for us. The selection rule is **what only Daintree can do**: terminal and agent orchestration, worktrees, recipes, skills, live IDE context. An external agent driving Daintree over MCP is sitting in a terminal with its own shell and its own `gh`, so git plumbing, forge reads and writes, file reads, and project queries are its job. Those remain fully available to the in-app assistant through the workbench/action/system tiers, which no third-party client cap applies to.
+The `external` surface is deliberately small (#11585) — it stood at 100 entries / ~128 KB of schema, past what MCP clients tolerate, and [Payload and registry budgets](#payload-and-registry-budgets-11526-11585) covers the caps that now bound it. The selection rule is **what only Daintree can do**: terminal and agent orchestration, worktrees, recipes, skills, live IDE context. An external agent driving Daintree over MCP is sitting in a terminal with its own shell and its own `gh`, so git plumbing, forge reads and writes, file reads, and project queries are its job. Those remain fully available to the in-app assistant through the workbench/action/system tiers, which the external cut did not touch — though those tiers are much larger and carry their own client-registry exposure, as [Payload and registry budgets](#payload-and-registry-budgets-11526-11585) sets out.
 
 Two consequences worth knowing. `git.push` keeps its bespoke MCP plumbing (branch/commit preview in the confirm dialog, cwd pinning against a mid-modal worktree switch, the headless-safe confirm path) — it is reachable at `system`, just not externally. And because MCP resources authorize through their backing action (`RESOURCE_BACKING_ACTIONS`), external sessions no longer read `daintree://project/current/issues` or `daintree://worktree/{id}/pulse`; terminal-scrollback and agent-state resources are unaffected.
 
@@ -242,7 +247,12 @@ tools/call(actionId, args)
   │      CONFIRMATION_REQUIRED (confirmationChannel: "unavailable").
   │
   ├─5 Dispatch:
-  │      ├─ terminal.waitUntilIdle → handleWaitUntilIdle (main process, see below)
+  │      ├─ main-process short-circuits (never via rendererBridge):
+  │      │    terminal.waitUntilIdle      → handleWaitUntilIdle
+  │      │    terminal.waitUntilIdleBatch → handleWaitUntilIdleBatch
+  │      │    skills.search / skills.load → skills.ts
+  │      │    project.runCheck            → projectCheck.ts
+  │      │    help.displayImage           → inline handler in sessionServer.ts
   │      └─ else → rendererBridge.dispatchAction(actionId, args, confirmed)
   │              ├─ danger:"confirm" & unconfirmed → renderer surfaces the
   │              │  native ConfirmDialog, dispatches only after human approval
@@ -272,11 +282,47 @@ A tool with no meaningful active-worktree default opts out with `{ requireSelect
 
 Aliases collapse inside the zod schema (a whole-object `.transform()`), not in the MCP bridge, because every surface — MCP, palette, keybindings, context menus — funnels through `ActionService.dispatch`, which validates `argsSchema` before the handler runs. `z.toJSONSchema(..., { io: "input" })` unwraps the transform and still advertises every alias property with its own description; `locationArgs.test.ts` asserts that, so a zod upgrade that changed it fails loudly instead of silently emptying the advertised surface. Never wrap a `resultSchema` in `.transform()` — the matching `io: "output"` call collapses a transformed schema to an empty object, erasing the advertised output shape.
 
-**Errors.** Throw for anything the caller must treat as a failure. A value returned from `run()` is serialized by the bridge as a _successful_ tool result, so an inline `{ ok: false }` or an `error` string beside the data is invisible to an agent checking `isError`; only a throw (→ `EXECUTION_ERROR`) or a dispatch-gate rejection becomes a tool error. Error messages must be static — never interpolate the rejected input, and never surface a caught `ZodError.message`, which in zod 4 carries the offending values inline.
+**Errors.** Throw for anything the caller must treat as a failure. A value returned from `run()` is serialized by the bridge as a _successful_ tool result, so an inline `{ ok: false }` or an `error` string beside the data is invisible to an agent checking `isError`; only a throw (→ `EXECUTION_ERROR`) or a dispatch-gate rejection becomes a tool error. One transport-level exception sits outside that rule: a response whose promised `structuredContent` the result helper had to omit — because the text was truncated, because it nested too deeply, or because it could not be reproduced as bounded transport-safe JSON — is flagged `isError` even though `run()` succeeded. See [Payload and registry budgets](#payload-and-registry-budgets-11526-11585). Error messages must be static — never interpolate the rejected input, and never surface a caught `ZodError.message`, which in zod 4 carries the offending values inline.
 
 Two narrow exceptions, both genuinely domain data rather than execution status: a **per-item failure inside a batch result**, where the other entries are still useful (`terminal.getStatuses`), and a **lookup miss** where "not found" is the answer the caller asked for (`actions.getSchema`). A new per-item failure should carry `{ code, message }` rather than a bare string so a caller can branch on the code; the existing terminal batch surfaces still return a bare `error` string and have not been migrated.
 
 **Pagination.** A list tool takes `limit?` plus a positional selector — `cursor?` for sources that issue one, `offset?` for sources that page by index — and returns `{ items, hasMore, nextCursor, total? }`. `skip` stays accepted as a legacy alias for `offset`. Build with `withPagination(extra, opts)` (or `withWorktreeLocation(extra, { pagination })` when the tool needs both) and shape the result with `PaginatedResultSchema(itemSchema)`. Where a source pages by index, its `nextCursor` is simply the next offset, so a caller can round-trip the cursor without knowing that. Choosing the actual `limit` ceilings is issue #11531, not this convention.
+
+## Payload and registry budgets (#11526, #11585)
+
+Two independent budgets bound this surface, and they fail in different ways. The **registry** budget bounds what the tool list costs a client before any call happens; the **payload** budget bounds what a single call returns. Neither is derived from the other, and staying inside one says nothing about the other.
+
+### Registry budget — what `tools/list` costs
+
+A tool registry is charged to the model's context on every request, so an oversized one is not merely wasteful — it gets silently mangled. The `external` surface stood at 100 entries and ~128 KB of schema before #11585, past what MCP clients tolerate: Cursor caps the tool count across all connected servers and truncates the overflow without telling anyone, while GitHub Copilot's 128-tool cap is a hard error. Truncated or rejected, the client was choosing our tools for us. Two regression thresholds now bound the external roster on **both** axes, because either one alone is gameable:
+
+- **Tool count** — `EXTERNAL_BUDGET_MAX` (26) and a floor of 15, asserted in [`tierAuth.test.ts`](../../electron/services/mcp-server/__tests__/tierAuth.test.ts). The floor is as load-bearing as the ceiling: a surface that quietly erodes to nothing is also a regression.
+- **Aggregate description bytes** — `MAX_DESCRIPTION_BYTES` (16,000 UTF-8 bytes summed across the whole external roster, not per tool), asserted in [`actionDefinitions.quality.test.ts`](../../src/services/actions/__tests__/actionDefinitions.quality.test.ts). Counting tools alone would miss the obvious workaround: a couple of dozen tools carrying novel-length descriptions reproduces the same problem with a count that looks fine.
+
+Both are **test thresholds, not runtime constants** — nothing rejects a call or a listing for exceeding them; the unit suite fails in CI instead. Both derive their input from the real allowlist rather than restating it, so neither can drift from the gate it budgets. Note what they do _not_ measure: only top-level `description` bytes are summed, while a real `tools/list` response also ships input schemas, annotations, optional output schemas, and examples. Those can grow without moving either number, so the thresholds are a regression tripwire on the roster, not a bound on the serialized listing.
+
+The help-assistant tiers (`workbench` / `action` / `system`) are outside **these tests** and were not cut by #11585 — but they are not exempt from client limits. They are cumulative and each is several times the size of the external roster; the `system` tier is comfortably past the Copilot figure above, by a margin no plausible edit closes. So a help client that enforces its own registry ceiling still enforces it here — there is simply no test standing guard. Derive the current totals from `HELP_TIER_CUMULATIVE` in [`shared/config/helpAssistantTierAllowlists.ts`](../../shared/config/helpAssistantTierAllowlists.ts) rather than trusting a number written down here, for the same reason the external count isn't restated above. What #11585 changed is the `external` roster only: do not read "the surface was cut to a couple dozen tools" as a statement about any help tier.
+
+### Payload budget — what one `tools/call` returns
+
+`buildToolCallResult` / `buildToolCallTextResult` ([`toolCallResult.ts`](../../electron/services/mcp-server/toolCallResult.ts)) cap the **text block** of a tool response at `TOOL_RESULT_TEXT_MAX_BYTES`, 50 KiB. Before #11526 resources were capped and tool results were not capped at all, so one call could return 31 MB. The bound is deliberately **byte-based, not token-based** — tokenization is a client concern and pinning the server to one vendor's tokenizer would be worse than a conservative fixed bound. 50 KiB of compact JSON lands in the low tens of thousands of tokens for typical content, but that is an estimate across tokenizers, not a guarantee: the server guarantees bytes.
+
+Read that as a per-block cap, not an envelope cap. A promised `structuredContent` is measured against the same 50 KiB separately, so a response carrying both halves can exceed 50 KiB in total. Two paths bypass the helper entirely: non-text content (`browser.captureScreenshot` returns an uncapped base64 image block) and protocol-level JSON-RPC errors, which never reach it.
+
+Over the cap, the text is truncated at a **UTF-8 character boundary** (`utf8BoundaryEnd` backs off continuation bytes, so a chopped multi-byte tail is dropped rather than decoded to U+FFFD) and the notice is **prefixed, not appended**: a client that trims the tail again would cut a trailing marker off and leave the model reading incomplete JSON as though it were complete. The notice states bytes shown vs. original and tells the caller to narrow its filters, limits, or paths and retry.
+
+The structured half is derived from the text rather than accepted as given: `structuredFromText` **re-derives `structuredContent` by parsing the already-bounded text**, then measures that value's own serialization against the cap. Taking the caller's object as-is would leave `structuredContent` unbounded, since the transport `JSON.stringify`s it independently and the two can diverge without limit — a getter, a `toJSON`, or a replacer-rewritten value all ship different bytes than the ones that were counted. Round-tripping through the text keeps both halves derived from the same bounded source, which is what the #10676 "same data" contract needs, and it also removes the transport's only unserializable inputs (a cyclic or BigInt-bearing result would make the transport's own `JSON.stringify` throw). It does not make the two encodings byte-identical — re-serialization can rewrite a value (`1e20` parses from 4 bytes and re-emits as 21), which is exactly why the re-serialized form is what gets measured. The structured half is dropped when the text was truncated, when nesting exceeds `MAX_STRUCTURED_DEPTH` (100), or when that re-serialized size exceeds the cap.
+
+**Whenever a promised structured half is dropped, for any reason, the envelope is flagged `isError: true`.** This is not cosmetic: an MCP client that declared an `outputSchema` treats a response carrying neither `structuredContent` nor `isError` as a protocol violation and throws client-side, before the model ever sees the notice explaining what happened. The flag also encodes the truth — the caller asked for structured output and did not get it. A structured-only drop (text fits, structure could not be produced) carries its own distinct notice rather than the truncation one.
+
+Two sibling thresholds sit at the same 50 KiB, applied independently of the tool-result budget:
+
+- **Resource reads** — `RESOURCE_TEXT_MAX_BYTES` in [`shared.ts`](../../electron/services/mcp-server/shared.ts), the truncation threshold `truncateText()` applies to pulse, scrollback, and issue-body resources. It is a threshold rather than a hard ceiling: the helper slices to the limit and then appends a `[truncated]` marker, so the returned body can run slightly over. Agent-state resource bodies are assembled from small scalar fields and don't go through it at all.
+- **`project.runCheck` output** — `PROJECT_CHECK_MAX_OUTPUT_BYTES` in [`shared/types/projectCheck.ts`](../../shared/types/projectCheck.ts). Tail-preserving (a failing check's useful output is at the end) and secret-scrubbed across an 8 KiB overlap window, so a credential straddling the cut is still redacted. The outer tool-result budget still applies on top, and the result flags the field-level cut separately from the envelope-level notice above.
+
+### Why this is the drift story
+
+The surface drifted because nothing bounded it. Every individually reasonable "expose one more tool" and "return one more field" was invisible in isolation and only legible in aggregate — at which point the failure mode was a client silently truncating a registry, or a 31 MB response blowing a context window, neither of which reports itself as an MCP error. The two kinds of budget answer that differently, and it is worth keeping them straight: **roster growth trips a unit test** in CI, in a diff, against a number someone chose, while **payload growth is degraded at runtime** by truncation or structured-output omission and never fails a build at all. So when adding a tool to the external surface the question is what earns the slot; when widening a result the question is what the caller loses when the tail is cut, because nothing will stop it being cut.
 
 ## Forge action surface (`forgeActions.ts`)
 

@@ -11,6 +11,7 @@ const root = path.resolve(here, "..");
 const CLAUDE = readFileSync(path.join(root, "help/CLAUDE.md"), "utf8");
 const AGENTS = readFileSync(path.join(root, "help/AGENTS.md"), "utf8");
 const SHARED = readFileSync(path.join(root, "scripts/help-src/SHARED.md"), "utf8");
+const AGENTS_HEAD = readFileSync(path.join(root, "scripts/help-src/AGENTS.head.md"), "utf8");
 
 const ALL_GENERATED = [
   ["CLAUDE.md", CLAUDE],
@@ -89,10 +90,81 @@ describe("help prompt outputs", () => {
       expect(AGENTS).toMatch(/`daintree-docs`/);
     });
 
-    it("AGENTS.md frames Codex at the action tier with sandbox caveat", () => {
+    it("AGENTS.md routes operational work through the tier-gated MCP rather than the shell", () => {
       expect(AGENTS).toContain("TIER_NOT_PERMITTED");
       expect(AGENTS).toMatch(/spawn\/close\/kill terminals/);
-      expect(AGENTS).toMatch(/Codex sandbox blocks file writes and arbitrary shell/);
+    });
+
+    // Asserted against the head partial, not the generated file: SHARED.md is
+    // concatenated into AGENTS.md and independently mentions read-only access
+    // and the shell, so a generated-file check would still pass if the Codex
+    // local-tools restriction were deleted outright. Matched semantically
+    // rather than by exact phrase so ordinary rewording doesn't force a paired
+    // test edit — only losing the policy does.
+    it("AGENTS.head.md carries the local-tool restriction without claiming a sandbox enforces it", () => {
+      expect(AGENTS_HEAD).toMatch(/read-only/i);
+      expect(AGENTS_HEAD).toMatch(/(?:do not|don't|never)[^.\n]*\b(?:edit|write|create|mutate)\b/i);
+      expect(AGENTS_HEAD).toMatch(/(?:do not|don't|never)[^.\n]*\bshell\b/i);
+      expect(AGENTS_HEAD).toMatch(
+        /\b(?:instruction|prompt-level)\b[^.\n]*\b(?:not|rather than)\b/i
+      );
+    });
+
+    // Codex help sessions are NOT write-sandboxed: `buildCodexLaunchArgs`
+    // injects MCP config and nothing else, and the session dir is writable by
+    // design. A prompt promising sandbox enforcement is a false safety claim,
+    // and pinning one exact sentence is what let the last one survive — so
+    // match the claim shape rather than its wording. The patterns require the
+    // sandbox to be the thing doing the blocking, which is why the prompt's own
+    // truthful disclaimer does not trip them — see the negative control below.
+    const SANDBOX_CLAIM_PATTERNS = [
+      // Sandbox as the actor: "the sandbox blocks/prevents/is configured to block/enforces read-only".
+      /\bsandbox(?:es|ing)?\b(?:\s+\S+){0,4}\s+(?:blocks?|prevents?|denies?|disallows?|restricts?|enforces?|rejects?)\b/i,
+      // Passive, sandbox as the agent: "writes are rejected by the sandbox".
+      /\b(?:writes?|shell|edits?|file modification)\b[^.\n]*\b(?:blocked|prevented|denied|disallowed|rejected)\b[^.\n]*\bsandbox/i,
+      // Capability attributed to being sandboxed: "you cannot write because the session is sandboxed",
+      // "the workspace is read-only under the Codex sandbox".
+      /\b(?:cannot|can't|unable to|not able to)\b[^.\n]*\b(?:write|edit|modify)\b[^.\n]*\bsandbox/i,
+      /\bread-only\b[^.\n]*\bunder\b[^.\n]*\bsandbox/i,
+    ];
+
+    // Positive controls: claims that MUST be caught. Without these, a future
+    // loosening of the patterns would silently turn the guard below into a
+    // no-op — the exact failure mode it exists to prevent. The first entry is
+    // the wording that actually shipped; the rest are realistic paraphrases.
+    it("the sandbox-claim patterns catch the retired wording and its paraphrases", () => {
+      const falseClaims = [
+        "The Codex sandbox blocks file writes and arbitrary shell, so do operational work through the `daintree` MCP, not the shell.",
+        "The sandbox is configured to block file writes.",
+        "The sandbox enforces read-only filesystem access.",
+        "You cannot write files because the session is sandboxed.",
+        "File modification is rejected by the sandbox.",
+        "The workspace is read-only under the Codex sandbox.",
+      ];
+      for (const claim of falseClaims) {
+        expect(
+          SANDBOX_CLAIM_PATTERNS.some((re) => re.test(claim)),
+          `not caught: ${claim}`
+        ).toBe(true);
+      }
+    });
+
+    // Negative control: the truthful disclaimer must NOT trip the guard, or the
+    // guard would forbid saying the accurate thing.
+    it("the sandbox-claim patterns allow the truthful disclaimer", () => {
+      const truthful =
+        "Treat this as instruction rather than enforcement: depending on which CLI is running this session you may or may not be launched in a read-only mode, so assume nothing is stopping you and let the restraint come from you.";
+      for (const pattern of SANDBOX_CLAIM_PATTERNS) {
+        expect(pattern.test(truthful), `false positive from ${pattern}`).toBe(false);
+      }
+    });
+
+    it("no prompt claims a sandbox blocks writes or shell", () => {
+      for (const [name, body] of [...ALL_GENERATED, ["AGENTS.head.md", AGENTS_HEAD]]) {
+        for (const pattern of SANDBOX_CLAIM_PATTERNS) {
+          expect(pattern.test(body), `${name} claims a sandbox enforces writes/shell`).toBe(false);
+        }
+      }
     });
 
     it("AGENTS.md keeps the absent-MCP fallback caveat", () => {
