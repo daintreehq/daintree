@@ -159,6 +159,25 @@ export function DockLaunchButton({
     return () => cancelAnimationFrame(frame);
   }, [open, focusInput]);
 
+  // Re-anchor the selection each time the launcher opens. Closing only clears
+  // the query, so the hook's follow-anchor still points wherever browsing
+  // ended, while the reopened popover mounts its scroller at the top and the
+  // active row keeps its id — so the scroll effect below never re-runs and
+  // Enter launches a row that was never on screen.
+  //
+  // In an effect rather than the open handler: the Recently launched band is
+  // rebuilt from MRU that can change while the launcher is closed without
+  // re-rendering it, so the handler's closure would anchor a row the opening
+  // render is about to displace. Gated on the transition because
+  // `setSelectedIndex` takes a new identity every render (the hook's results
+  // memo keys on an inline `getItemId`), and resetting on each of those would
+  // undo the deliberate follow-the-selection behaviour while typing.
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    if (open && !wasOpenRef.current) setSelectedIndex(0);
+    wasOpenRef.current = open;
+  }, [open, setSelectedIndex]);
+
   // Keep the active option in view as the selection moves. `getElementById`
   // rather than a `#id` query: both `useId()` and the item keys contain colons,
   // which are illegal in a CSS id selector.
@@ -180,21 +199,13 @@ export function DockLaunchButton({
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
       if (nextOpen) {
-        // The palette hook follows the selected row across result changes, and
-        // closing only resets the query — so the anchor still points wherever
-        // browsing ended. A reopened popover mounts its scroller at the top and
-        // the active row never changes id, so the scroll effect below won't
-        // re-run: without this the highlight sits offscreen and Enter launches
-        // a row the user can't see. Re-anchoring to the top row is enough; the
-        // hook re-follows from there once the user types.
-        setSelectedIndex(0);
         setOpen(true);
         setTooltipOpen(false);
       } else {
         closeLauncher();
       }
     },
-    [closeLauncher, setSelectedIndex]
+    [closeLauncher]
   );
 
   const activateRow = useCallback(

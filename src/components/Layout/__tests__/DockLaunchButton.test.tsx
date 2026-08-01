@@ -1156,6 +1156,25 @@ describe("DockLaunchButton", () => {
       expect(getByText("Recently launched")).toBeTruthy();
     });
 
+    it("anchors the reopened selection to a row the recency band inserted while closed", () => {
+      // Same no-re-render MRU update as above, but aimed at the selection: the
+      // open handler's closure still describes the pre-launch rows, so
+      // re-anchoring from there would land on the row the opening render is
+      // about to displace and the hook would then follow it down to index 1.
+      mockMruEntries = [];
+      const { container } = renderButton({ agents: MANY });
+      expect(options(container)[0]?.textContent).not.toContain("Codex");
+
+      mockMruEntries = [{ id: "agent.codex", score: 1, lastAccessedAt: 7000 }];
+
+      act(() => popoverOpenChangeSpy!(false));
+      act(() => popoverOpenChangeSpy!(true));
+
+      const rows = options(container);
+      expect(rows[0]?.textContent).toContain("Codex");
+      expect(selectedOption(container)).toBe(rows[0]);
+    });
+
     it("survives an unfiltered reopen after a search is cleared", () => {
       mockMruEntries = [{ id: "agent.codex", score: 3, lastAccessedAt: 3000 }];
       const { container, queryByText, getByText } = renderButton({ agents: MANY });
