@@ -14,6 +14,7 @@ import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { KBD_CLASS, KbdChord } from "@/components/ui/Kbd";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
+import { PALETTE_HEADER_ATTR } from "./paletteHeaderAttr";
 import { useOverlayState, useEscapeStack } from "@/hooks";
 import {
   registerDialogEscapeBackstop,
@@ -288,6 +289,7 @@ AppPaletteDialog.Header = function AppPaletteHeader({
 }: AppPaletteHeaderProps) {
   return (
     <div
+      {...{ [PALETTE_HEADER_ATTR]: "" }}
       className={cn(
         "relative overflow-hidden px-3 pt-2 pb-1 border-b border-border-strong",
         className

@@ -131,6 +131,7 @@ vi.mock("@/components/ui/popover", () => ({
     onEscapeKeyDown,
     onFocus,
     onKeyDown,
+    onMouseDown,
   }: {
     children: ReactNode;
     onOpenAutoFocus?: (e: { preventDefault: () => void }) => void;
@@ -139,6 +140,7 @@ vi.mock("@/components/ui/popover", () => ({
     onEscapeKeyDown?: (e: { preventDefault: () => void }) => void;
     onFocus?: React.FocusEventHandler<HTMLDivElement>;
     onKeyDown?: React.KeyboardEventHandler<HTMLDivElement>;
+    onMouseDown?: React.MouseEventHandler<HTMLDivElement>;
   }) => {
     popoverOpenAutoFocusSpy = onOpenAutoFocus ?? null;
     popoverCloseAutoFocusSpy = onCloseAutoFocus ?? null;
@@ -152,6 +154,7 @@ vi.mock("@/components/ui/popover", () => ({
         tabIndex={-1}
         onFocus={onFocus}
         onKeyDown={onKeyDown}
+        onMouseDown={onMouseDown}
       >
         {children}
       </div>
@@ -165,8 +168,11 @@ vi.mock("@/components/ui/popover", () => ({
 // key handling stay under test.
 vi.mock("@/components/ui/AppPaletteDialog", () => {
   const AppPaletteDialog = {
+    // The marker is load-bearing, not decoration: the anchored shell delegates
+    // its header mousedown redirect off this attribute, so a stub without it
+    // silently stops exercising that handler.
     Header: ({ label, children }: { label: string; children: ReactNode }) => (
-      <div data-testid="dock-launcher-header">
+      <div data-testid="dock-launcher-header" data-palette-header="">
         <span>{label}</span>
         {children}
       </div>

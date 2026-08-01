@@ -363,6 +363,27 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     expect(footer.textContent).not.toContain("⌥↵");
     expect(footer.textContent).toContain("Switch");
   });
+
+  it("closes on Escape in modal mode, where the input owns the key", () => {
+    const onClose = vi.fn();
+    render(<ProjectSwitcherPalette {...defaultProps} onClose={onClose} />);
+
+    fireEvent.keyDown(screen.getByTestId("palette-input"), { key: "Escape" });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves Escape to the anchored shell in dropdown mode", () => {
+    // The shell spends the first press clearing the query and vetoes Radix's
+    // capture-phase dismissal. This handler runs on bubble, afterwards — closing
+    // here would shut the palette on a press meant to filter it.
+    const onClose = vi.fn();
+    render(<ProjectSwitcherPalette {...defaultProps} mode="dropdown" onClose={onClose} />);
+
+    fireEvent.keyDown(screen.getByTestId("palette-input"), { key: "Escape" });
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });
 
 // #11071: the palette used to render a narrower list than the one selectedIndex

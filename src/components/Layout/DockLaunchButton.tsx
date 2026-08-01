@@ -3,7 +3,7 @@ import Fuse, { type IFuseOptions } from "fuse.js";
 import { Plus, SquareTerminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { BrandMark, Workflow } from "@/components/icons";
@@ -61,11 +61,6 @@ export function DockLaunchButton({
   // genuine pointer hover (cleared via onPointerEnter).
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const isRestoringFocusRef = useRef(false);
-  // Set in onPointerDownOutside, read in onCloseAutoFocus. Lets us
-  // preventDefault() the focus restoration only for pointer dismissals so the
-  // launch pill doesn't keep its accent focus-visible ring; keyboard close
-  // (Escape/Enter) still gets default focus return for WAI-ARIA.
-  const wasPointerCloseRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listboxId = useId();
   const getOptionId = useCallback((rowKey: string) => `${listboxId}-${rowKey}`, [listboxId]);
@@ -112,24 +107,7 @@ export function DockLaunchButton({
       deferFiltering: false,
     });
 
-  // Read synchronously from Radix's document-level Escape handler, which fires
-  // before React state has re-rendered. Written only from `updateQuery` (never
-  // during render) so an abandoned concurrent render can't leave the ref
-  // describing a query the user never committed.
-  const queryRef = useRef(query);
-
-  const updateQuery = useCallback(
-    (next: string) => {
-      queryRef.current = next;
-      setQuery(next);
-      // Deliberately NOT resetting the selection here: the hook's own effect
-      // reconciles it, and calling its setter with the pre-query results would
-      // stamp the old list's first row as the item to follow — after which the
-      // effect chases that row into the new results instead of settling on the
-      // top match. `activeIndex` below covers the frame before it lands.
-    },
-    [setQuery]
-  );
+  const clearQuery = useCallback(() => setQuery(""), [setQuery]);
 
   // The hook reconciles `selectedIndex` in an effect, so the render right after
   // the results change still holds the old index — which browsing can now leave
@@ -145,20 +123,10 @@ export function DockLaunchButton({
   const selectedRow = activeIndex >= 0 ? results[activeIndex] : undefined;
   const activeDescendant = selectedRow ? getOptionId(selectedRow.rowKey) : undefined;
 
-  const focusInput = useCallback(() => {
-    inputRef.current?.focus({ preventScroll: true });
+  const suppressTooltipDuringFocusRestore = useCallback(() => {
+    setTooltipOpen(false);
+    isRestoringFocusRef.current = true;
   }, []);
-
-  // Second focus attempt behind `onOpenAutoFocus`. `PopoverContent` renders
-  // nothing until its lazily imported Radix chunk resolves, so on a cold click
-  // this frame can fire before the input exists; on a warm one it runs after
-  // the mount handler already focused it and is a harmless no-op. Neither
-  // covers both orders alone.
-  useEffect(() => {
-    if (!open) return;
-    const frame = requestAnimationFrame(focusInput);
-    return () => cancelAnimationFrame(frame);
-  }, [open, focusInput]);
 
   // Re-anchor the selection each time the launcher opens. Closing only clears
   // the query, so the hook's follow-anchor still points wherever browsing
@@ -193,9 +161,9 @@ export function DockLaunchButton({
   const closeLauncher = useCallback(() => {
     // Local state, not paletteId-backed — reset it ourselves so the next open
     // starts unfiltered on the Recently launched / Pinned bands.
-    updateQuery("");
+    clearQuery();
     setOpen(false);
-  }, [updateQuery]);
+  }, [clearQuery]);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
@@ -281,8 +249,8 @@ export function DockLaunchButton({
   );
 
   return (
-    <Popover
-      open={open}
+    <AppPalettePopover
+      isOpen={open}
       onOpenChange={handleOpenChange}
       // The DropdownMenu this replaced was modal, and the launcher relies on
       // that: focus stays trapped so Tab cycles input → results instead of
@@ -298,7 +266,7 @@ export function DockLaunchButton({
         }}
       >
         <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
+          <AppPalettePopover.Trigger asChild>
             <Button
               type="button"
               variant="pill"
@@ -311,108 +279,56 @@ export function DockLaunchButton({
             >
               <Plus className="w-3.5 h-3.5" />
             </Button>
-          </PopoverTrigger>
+          </AppPalettePopover.Trigger>
         </TooltipTrigger>
         <TooltipContent side="top">Open launcher</TooltipContent>
       </Tooltip>
-      <PopoverContent
+      <AppPalettePopover.Content
+        ariaLabel="Launch"
+        inputRef={inputRef}
+        onClearQuery={clearQuery}
+        onCloseAutoFocus={suppressTooltipDuringFocusRestore}
         side="top"
         align="start"
         sideOffset={4}
         className="w-[22rem] p-0"
-        // Radix renders this as role="dialog". Without a name a screen reader
-        // announces a generic dialog before reaching the combobox; match the
-        // visible header so speech control can target it by the word on screen.
-        aria-label="Launch"
-        aria-modal={true}
-        onOpenAutoFocus={(event) => {
-          // Radix would otherwise focus the content wrapper; the search box is
-          // what the user is about to type into.
-          event.preventDefault();
-          focusInput();
-        }}
-        onFocus={(event) => {
-          // A focus trap hauls focus back to the content wrapper whenever
-          // something outside steals it — a panel launched moments ago
-          // re-focusing itself on its own frame, say. The wrapper is
-          // tabIndex={-1} and owns no keys, so leaving focus parked there makes
-          // the next keystroke vanish; hand it to the search box instead.
-          if (event.target === event.currentTarget) focusInput();
-        }}
         // Catch-all behind the input's own handler, for the frame before the
-        // refocus above lands and for focus legitimately sitting on the results
-        // region. Bubble phase, so the input and body still get first refusal.
+        // shell's refocus lands and for focus legitimately sitting on the
+        // results region. Bubble phase, so the input and body still get first
+        // refusal.
         onKeyDown={handleNavigationKeyDown}
-        onPointerDownOutside={() => {
-          wasPointerCloseRef.current = true;
-        }}
-        onEscapeKeyDown={(event) => {
-          // This document-capture listener runs ahead of the input's own
-          // composition guard, so the IME check has to be repeated: mid-
-          // composition Escape belongs to the candidate window, and letting it
-          // through would wipe the query or close the launcher underneath it.
-          if (event.isComposing || event.keyCode === 229) {
-            event.preventDefault();
-            return;
-          }
-          // The dismissable layer listens on document with capture, so a
-          // stopPropagation from the input would be too late. Spend the first
-          // Escape clearing the query and block the close here — whitespace
-          // alone doesn't filter, so it must not cost the user a press.
-          if (queryRef.current.trim().length > 0) {
-            event.preventDefault();
-            updateQuery("");
-          }
-        }}
-        onCloseAutoFocus={(event) => {
-          setTooltipOpen(false);
-          isRestoringFocusRef.current = true;
-          if (wasPointerCloseRef.current) {
-            event.preventDefault();
-            wasPointerCloseRef.current = false;
-          }
-        }}
       >
-        <div
-          data-testid="dock-launcher-search-row"
-          // The header padding around the input is a click target that isn't
-          // the input, and Radix's focus scope wrapper is tabIndex={-1}, so
-          // clicking it parks focus on the content: Escape then dead-ends (the
-          // content vetoes the close while only the input clears the query).
-          // The input's own mousedown is left untouched so caret placement and
-          // drag-select still work.
-          onMouseDown={(event) => {
-            if (event.target === inputRef.current) return;
-            event.preventDefault();
-            focusInput();
-          }}
-        >
-          <AppPaletteDialog.Header label="Launch">
-            <AppPaletteDialog.Input
-              inputRef={inputRef}
-              value={query}
-              onChange={(e) => updateQuery(e.target.value)}
-              onKeyDownCapture={handleNavigationKeyDown}
-              placeholder="Search agents, panels, and recipes"
-              role="combobox"
-              // The listbox only exists when something matched, so claiming it
-              // is expanded — or pointing aria-controls at an unrendered id —
-              // would leave the combobox describing a popup that isn't there.
-              aria-expanded={results.length > 0}
-              aria-haspopup="listbox"
-              aria-label="Search agents, panels, and recipes"
-              aria-controls={results.length > 0 ? listboxId : undefined}
-              aria-activedescendant={activeDescendant}
-              autoComplete="off"
-              spellCheck={false}
-              // The focus indicator is deliberately neutral: the selected row
-              // owns this region's single accent anchor, and the input holds
-              // focus the whole time the launcher is open, so an accent ring
-              // here would be a permanently competing signal.
-              className="focus:border-daintree-border focus:ring-daintree-border/30"
-            />
-          </AppPaletteDialog.Header>
-        </div>
+        <AppPaletteDialog.Header label="Launch">
+          <AppPaletteDialog.Input
+            inputRef={inputRef}
+            value={query}
+            // Deliberately NOT resetting the selection here: the palette hook's
+            // own effect reconciles it, and calling its setter with the
+            // pre-query results would stamp the old list's first row as the item
+            // to follow — after which the effect chases that row into the new
+            // results instead of settling on the top match. `activeIndex` above
+            // covers the frame before it lands.
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDownCapture={handleNavigationKeyDown}
+            placeholder="Search agents, panels, and recipes"
+            role="combobox"
+            // The listbox only exists when something matched, so claiming it
+            // is expanded — or pointing aria-controls at an unrendered id —
+            // would leave the combobox describing a popup that isn't there.
+            aria-expanded={results.length > 0}
+            aria-haspopup="listbox"
+            aria-label="Search agents, panels, and recipes"
+            aria-controls={results.length > 0 ? listboxId : undefined}
+            aria-activedescendant={activeDescendant}
+            autoComplete="off"
+            spellCheck={false}
+            // The focus indicator is deliberately neutral: the selected row
+            // owns this region's single accent anchor, and the input holds
+            // focus the whole time the launcher is open, so an accent ring
+            // here would be a permanently competing signal.
+            className="focus:border-daintree-border focus:ring-daintree-border/30"
+          />
+        </AppPaletteDialog.Header>
 
         <AppPaletteDialog.Body
           ariaLabel="Launcher results"
@@ -440,8 +356,8 @@ export function DockLaunchButton({
         </AppPaletteDialog.Body>
 
         <AppPaletteDialog.Footer />
-      </PopoverContent>
-    </Popover>
+      </AppPalettePopover.Content>
+    </AppPalettePopover>
   );
 }
 

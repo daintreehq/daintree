@@ -26,7 +26,7 @@ import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { KbdChord } from "@/components/ui/Kbd";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -81,7 +81,6 @@ import {
   OTHER_PROJECTS_SORT_MODES,
   type OtherProjectsSortMode,
 } from "@/lib/projectSort";
-import { useUIStore } from "@/store/uiStore";
 import { usePilotStore } from "@/store/pilotStore";
 import {
   useProjectSettingsStore,
@@ -1392,6 +1391,11 @@ function ProjectPaletteInner({
           }
           break;
         case "Escape":
+          // Anchored mode leaves Escape entirely to the shell, which spends the
+          // first press clearing the query. Closing here would beat that: this
+          // runs on bubble, after Radix's capture-phase dismissal has already
+          // been vetoed, so the palette would shut on a press meant to filter.
+          if (mode === "dropdown") break;
           e.preventDefault();
           e.stopPropagation();
           onClose();
@@ -1413,6 +1417,7 @@ function ProjectPaletteInner({
     [
       results,
       selectedIndex,
+      mode,
       onSelectPrevious,
       onSelectNext,
       onSelect,
@@ -1645,63 +1650,63 @@ function DropdownContent({
   mode,
   onDropdownCloseAutoFocus,
   paletteInputRef: inputRef,
+  onQueryChange,
   ...innerProps
 }: ProjectSwitcherPaletteProps & PaletteInputRefProp) {
   const listRef = useRef<HTMLDivElement>(null);
-  const overlayStackLength = useUIStore((state) => state.overlayStack.length);
-  const prevOverlayStackLengthRef = useRef<number>(overlayStackLength);
-  const focusRafRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    focusRafRef.current = requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      focusRafRef.current = null;
-    });
-    return () => {
-      if (focusRafRef.current !== null) {
-        cancelAnimationFrame(focusRafRef.current);
-        focusRafRef.current = null;
-      }
-    };
-    // `inputRef` is a prop now that the search box is shared with the dialogs;
-    // it is a stable ref object, so this only satisfies the linter.
-  }, [isOpen, inputRef]);
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open) onClose();
+    },
+    [onClose]
+  );
 
-  useEffect(() => {
-    if (
-      isOpen &&
-      overlayStackLength > prevOverlayStackLengthRef.current &&
-      overlayStackLength > 0
-    ) {
-      onClose();
-    }
-    prevOverlayStackLengthRef.current = overlayStackLength;
-  }, [isOpen, overlayStackLength, onClose]);
+  const handleClearQuery = useCallback(() => onQueryChange(""), [onQueryChange]);
 
   return (
-    <Popover open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent
+    <AppPalettePopover
+      isOpen={isOpen}
+      onOpenChange={handleOpenChange}
+      // Non-modal on purpose: Tab leaves the palette by native traversal, and
+      // the controls the switcher renders after its results region stay
+      // reachable. The modal form is the ⌘P dialog, not this.
+      modal={false}
+      // A confirm dialog opened from one of the rows stacks above the switcher;
+      // leaving it open behind the dialog it spawned reads as two live surfaces.
+      dismissOnForeignOverlay
+    >
+      <AppPalettePopover.Trigger asChild>{children}</AppPalettePopover.Trigger>
+      <AppPalettePopover.Content
+        ariaLabel="Project switcher"
+        inputRef={inputRef}
+        onClearQuery={handleClearQuery}
+        onCloseAutoFocus={onDropdownCloseAutoFocus}
+        // Keeps the trigger's focus ring on a pointer dismissal, which is what
+        // this palette has always done. The shell's default (suppress) is the
+        // better behaviour and worth adopting — but as its own change, not
+        // folded silently into an extraction.
+        restoreFocusOnPointerDismiss
         className={cn(PALETTE_WIDTH, "p-0")}
         data-testid="project-switcher-palette"
         align={dropdownAlign}
         sideOffset={8}
-        onOpenAutoFocus={(e) => {
-          e.preventDefault();
-          inputRef.current?.focus();
-        }}
-        onCloseAutoFocus={() => onDropdownCloseAutoFocus?.()}
         onEscapeKeyDown={(event) => {
           // Radix dismisses on a document-capture listener, which beats the
           // scratch-name input's own handler. While that input owns focus,
-          // Escape means "cancel the edit", not "close the switcher".
+          // Escape means "cancel the edit", not "clear the query or close the
+          // switcher" — so veto before the shell's staged Escape runs.
           const active = document.activeElement;
           if (active instanceof HTMLElement && active.hasAttribute("data-scratch-name-input")) {
             event.preventDefault();
           }
         }}
         onInteractOutside={(event) => {
+          // A row's context menu portals outside this content, so its clicks
+          // read as "outside" and would dismiss the switcher underneath it.
+          // Global by role rather than scoped to this palette's own subtree
+          // (the #8216 data-attribute + portal-re-provided-Context pattern is
+          // the upgrade path if an unrelated menu ever holds it open).
           const target = event.target;
           if (target instanceof HTMLElement && target.closest('[role="menu"]')) {
             event.preventDefault();
@@ -1715,7 +1720,7 @@ function DropdownContent({
           results={innerProps.results}
           selectedIndex={innerProps.selectedIndex}
           mode={mode}
-          onQueryChange={innerProps.onQueryChange}
+          onQueryChange={onQueryChange}
           onSelect={innerProps.onSelect}
           onClose={onClose}
           onSelectPrevious={innerProps.onSelectPrevious}
@@ -1743,8 +1748,8 @@ function DropdownContent({
           onRenameScratch={innerProps.onRenameScratch}
           onSaveAsProject={innerProps.onSaveAsProject}
         />
-      </PopoverContent>
-    </Popover>
+      </AppPalettePopover.Content>
+    </AppPalettePopover>
   );
 }
 
