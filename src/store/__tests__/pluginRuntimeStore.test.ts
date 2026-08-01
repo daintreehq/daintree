@@ -35,6 +35,7 @@ function makePlugin(opts: {
         forgeProviders: [],
         fileDecorationProviders: [],
         agents: [],
+        processTools: [],
       },
     },
     dir: `/plugins/${opts.id}`,

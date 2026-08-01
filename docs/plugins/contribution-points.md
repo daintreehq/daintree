@@ -675,6 +675,34 @@ A plugin agent is launchable and selectable as a named entry in the effective re
 | `primaryConfidence` / `fallbackConfidence` / `promptConfidence` / `completionConfidence` | no | Confidence weights in `[0, 1]` for a matched tier. |
 | `titleStatePatterns` | no | `{ working, waiting }` string arrays (≤50 entries, each ≤256 chars) matched against the terminal title. |
 
+## Process tools — _Shipped_
+
+Teaches Daintree to recognize a CLI running inside a terminal pane, so the tab shows the plugin's icon instead of the generic terminal glyph. Detection normally runs off a fixed built-in list (npm, Vite, Docker, …); this is how a plugin that ships or wraps its own CLI gets the same treatment. Inert declarative data — no capability required.
+
+```json
+{
+  "contributes": {
+    "processTools": [
+      { "command": "acme-cli", "iconId": "sparkles" },
+      { "command": "acmec", "iconId": "sparkles" }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `command` | yes | Bare executable name to match (≤64 chars), lowercase, starting with a letter or digit and otherwise limited to letters, digits, `.`, `-`, `_`. Lowercase is enforced rather than normalized: the detector lower-cases every process name before lookup, so a mixed-case entry would silently never fire. Additive for **new** commands only — a collision with a built-in tool command or a built-in agent CLI is rejected at the manifest gate, and built-in entries always win at runtime. Cross-plugin collisions resolve first-registered-wins with a warning. |
+| `iconId` | yes | Same namespace as `panels[].iconId` / `toolbarButtons[].iconId` — one of the generic plugin icon IDs (`terminal`, `package`, `sparkles`, `globe`, …). **Not** the agent brand-mark namespace; plugins can't ship custom icon assets. Advisory: an unrecognized ID renders the fallback terminal glyph rather than failing the load, and `daintree-plugin validate` warns about it. |
+
+A tool with several aliases declares one entry per alias, each pointing at the same `iconId`. There is no `tier` field: plugin detections rank at the same `tool` tier as named built-in tools, so `npm exec acme-cli` reports the plugin's CLI rather than npm.
+
+Detections are registered at plugin load and mirrored into the pty-host process where detection actually runs, including across a pty-host restart. Unloading or disabling the plugin removes them.
+
+**No `label` field.** Daintree resolves a detected process's display name from its icon ID, and generic plugin icon IDs are shared across plugins, so a plugin-supplied label couldn't be attributed unambiguously. A plugin-detected process therefore shows its icon ID as its descriptor text in surfaces like the quick switcher. The terminal tab icon — the point of the contribution — is correct. A real label needs the identity model to carry a distinct process label through panel state; that's tracked separately.
+
 ## What's missing and why
 
 A few surfaces I've decided **not** to expose as dedicated contribution points:

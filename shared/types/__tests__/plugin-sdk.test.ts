@@ -504,6 +504,7 @@ describe("plugin-sdk boundary", () => {
           forgeProviders: [],
           fileDecorationProviders: [],
           agents: [],
+          processTools: [],
         },
       };
       expectTypeOf(manifest.name).toEqualTypeOf<string>();

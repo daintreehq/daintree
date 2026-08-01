@@ -16,6 +16,7 @@ import {
   McpServerContributionSchema,
   MenuItemContributionSchema,
   PanelContributionObjectSchema,
+  ProcessToolContributionSchema,
   SettingDefinitionObjectSchema,
   SkillContributionSchema,
   ToolbarButtonContributionSchema,
@@ -79,9 +80,11 @@ const AGENT_REGISTRY = "shared/config/pluginAgentRegistry.ts";
 const MCP_SUPERVISOR = "electron/services/PluginMcpSupervisor.ts";
 const PLUGIN_SCHEMA = "electron/schemas/plugin.ts";
 const SKILL_REGISTRY = "electron/services/plugin/PluginSkillRegistry.ts";
+const PROCESS_TOOL_REGISTRY = "shared/config/pluginProcessToolRegistry.ts";
+const PROCESS_DETECTOR_REGISTRIES = "electron/services/ProcessDetector/registries.ts";
 
 /**
- * The schemas swept for field coverage. The first block matches the thirteen
+ * The schemas swept for field coverage. The first block matches the fourteen
  * `contributes.*` array kinds one-to-one; the second block covers the
  * high-fanout nested object schemas (a new detection tuning field or credential
  * field would otherwise be able to drift silently under a top-level kind).
@@ -99,6 +102,7 @@ const SWEPT_SCHEMAS = {
   forgeProviders: ForgeProviderContributionSchema,
   fileDecorationProviders: FileDecorationContributionSchema,
   agents: AgentContributionSchema,
+  processTools: ProcessToolContributionSchema,
   settings: SettingDefinitionObjectSchema,
   "agents.detection": AgentDetectionConfigSchema,
   "forgeProviders.credentialFields": CredentialFieldSchema,
@@ -108,7 +112,7 @@ const SWEPT_SCHEMAS = {
 type SweptGroup = keyof typeof SWEPT_SCHEMAS;
 
 /**
- * The thirteen keys that must line up one-to-one with `contributes.*`. Kept
+ * The fourteen keys that must line up one-to-one with `contributes.*`. Kept
  * separate from the nested-group keys so the "no unknown contribution kind"
  * guard can compare against exactly the parsed `contributes` shape.
  */
@@ -125,6 +129,7 @@ const TOP_LEVEL_GROUPS = [
   "forgeProviders",
   "fileDecorationProviders",
   "agents",
+  "processTools",
   "settings",
 ] as const;
 
@@ -164,6 +169,7 @@ type FieldConsumerCoverage = {
     ConsumerDescriptor
   >;
   agents: Record<keyof z.infer<typeof AgentContributionSchema>, ConsumerDescriptor>;
+  processTools: Record<keyof z.infer<typeof ProcessToolContributionSchema>, ConsumerDescriptor>;
   settings: Record<keyof z.infer<typeof SettingDefinitionObjectSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
   "forgeProviders.credentialFields": Record<
@@ -608,6 +614,24 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: AGENT_REGISTRY, symbol: "toPluginAgentConfig" }],
       note: "Copied into the runtime agent config detection block (see agents.detection).",
+    },
+  },
+  processTools: {
+    command: {
+      mode: "verbatim",
+      consumers: [
+        { file: PROCESS_TOOL_REGISTRY, symbol: "registerPluginProcessTools (snapshot key)" },
+        { file: PROCESS_DETECTOR_REGISTRIES, symbol: "getProcessIconMap" },
+      ],
+      note: "Keys the flattened command → icon snapshot the pty-host detector looks a running process up by.",
+    },
+    iconId: {
+      mode: "verbatim",
+      consumers: [
+        { file: PROCESS_TOOL_REGISTRY, symbol: "registerPluginProcessTools (snapshot value)" },
+        { file: "src/components/Terminal/TerminalIcon.tsx", symbol: "getPluginIconComponent" },
+      ],
+      note: "Emitted as the detected process icon id and rendered from the generic plugin icon registry.",
     },
   },
   settings: {

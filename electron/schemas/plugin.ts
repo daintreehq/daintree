@@ -12,6 +12,8 @@ import {
   PLUGIN_PANEL_BADGE_LABEL_MAX,
 } from "../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
+import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../shared/config/processToolRegistry.js";
+import { AGENT_CLI_NAMES } from "../services/ProcessDetector/registries.js";
 import {
   BUILT_IN_ACTION_IDS,
   DENY_PLUGIN_DISPATCH_ACTION_IDS,
@@ -297,6 +299,54 @@ export const SkillContributionSchema = z
         "path must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
     }),
     triggers: z.array(z.string().min(1)).max(50).optional(),
+  })
+  .strict();
+
+/**
+ * Bare executable name a plugin process-tool detection matches, in the same key
+ * space as the built-in `PROCESS_TOOL_REGISTRY` commands (`vite`, `redis-cli`,
+ * `python3`, `gradlew`). Lowercase is enforced rather than normalized:
+ * `ProcessDetector` lower-cases every candidate before lookup, so a mixed-case
+ * key would silently never match — failing loudly at parse time beats a
+ * detection that quietly does nothing.
+ */
+const PROCESS_TOOL_COMMAND_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
+
+/**
+ * Command names that would index an inherited member on any prototype-bearing
+ * lookup table. The registries this feeds are all null-prototype, so these are
+ * inert in practice — rejected anyway so a manifest never advertises a command
+ * whose detection depends on that invariant holding everywhere forever.
+ * Mirrors {@link RESERVED_CREDENTIAL_FIELD_IDS}. (`__proto__` is already
+ * excluded by the leading-alphanumeric rule above; listed for completeness.)
+ */
+const RESERVED_PROCESS_TOOL_COMMANDS = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * `contributes.processTools` manifest entry (#11613). One command name mapped
+ * to the icon a terminal tab shows while that command runs. `iconId` is a
+ * generic plugin icon id (`shared/config/pluginIconIds.ts`) — advisory, matching
+ * `contributes.panels[].iconId`, so an unrecognized id renders a fallback glyph
+ * rather than failing the load and a manifest written for a newer host degrades
+ * safely. Inert declarative data, so no capability is required. Strict so
+ * unknown fields (a `label` or `tier` the host would ignore) are rejected
+ * loudly instead of reading as accepted.
+ */
+export const ProcessToolContributionSchema = z
+  .object({
+    command: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(PROCESS_TOOL_COMMAND_PATTERN, {
+        message:
+          "command must be a bare lowercase executable name (letters, digits, dot, dash, underscore)",
+      })
+      .refine((command) => !RESERVED_PROCESS_TOOL_COMMANDS.has(command), {
+        message:
+          "command cannot be a reserved key (__proto__, constructor, prototype)",
+      }),
+    iconId: z.string().min(1).max(64),
   })
   .strict();
 
@@ -915,6 +965,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   forgeProviders: 20,
   fileDecorationProviders: 50,
   agents: 50,
+  processTools: 100,
   settings: 200,
 } as const;
 
@@ -1052,6 +1103,10 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
               .array(AgentContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.agents)
               .default([]),
+            processTools: z
+              .array(ProcessToolContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.processTools)
+              .default([]),
             settings: z
               .array(SettingDefinitionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.settings)
@@ -1070,6 +1125,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
             forgeProviders: [],
             fileDecorationProviders: [],
             agents: [],
+            processTools: [],
             settings: [],
           })
       ),
@@ -1109,6 +1165,46 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
             params: { errorCode: "agent_id_reserved" },
           });
         }
+      });
+
+      // Plugin process-tool commands are additive for new commands only (#11613).
+      // A command already claimed by a built-in tool or by a built-in agent's CLI
+      // would never win at runtime — the detector merges built-ins over the plugin
+      // snapshot — so accepting it would register a detection that silently never
+      // fires. Reject at parse time, mirroring the agent-id reservation above.
+      // Cross-plugin collisions are deliberately NOT checked here: they resolve
+      // first-registered-wins at runtime, and a manifest cannot know what else is
+      // installed.
+      const processTools = manifest.contributes.processTools;
+      const seenProcessToolCommands = new Set<string>();
+      processTools.forEach((tool, index) => {
+        if (Object.hasOwn(PROCESS_TOOL_ICON_BY_COMMAND, tool.command)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "processTools", index, "command"],
+            message: `Process-tool command "${tool.command}" collides with a built-in tool — plugin process tools must use new commands.`,
+            params: { errorCode: "process_tool_command_reserved" },
+          });
+        } else if (Object.hasOwn(AGENT_CLI_NAMES, tool.command)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "processTools", index, "command"],
+            message: `Process-tool command "${tool.command}" collides with a built-in agent CLI — plugin process tools must use new commands.`,
+            params: { errorCode: "process_tool_command_reserved" },
+          });
+        }
+        // A manifest declaring the same command twice is a typo, not a
+        // precedence question — the second entry silently loses to the first in
+        // the registry's per-plugin map, so reject it rather than dropping it.
+        if (seenProcessToolCommands.has(tool.command)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "processTools", index, "command"],
+            message: `Duplicate process-tool command "${tool.command}" in this manifest.`,
+            params: { errorCode: "process_tool_command_duplicate" },
+          });
+        }
+        seenProcessToolCommands.add(tool.command);
       });
 
       // Every contributed `actionId` (toolbar buttons, menu items, keybindings,

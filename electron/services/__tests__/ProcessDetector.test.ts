@@ -5,6 +5,11 @@ import {
   extractCommandNameCandidates,
   extractScriptBasenameFromCommand,
 } from "../ProcessDetector.js";
+import {
+  clearPluginProcessToolRegistryForTests,
+  setPluginProcessToolRegistry,
+} from "../../../shared/config/pluginProcessToolRegistry.js";
+import { AGENT_CLI_NAMES } from "../ProcessDetector/registries.js";
 
 type ProcessNode = { pid: number; comm: string; command?: string };
 
@@ -2201,5 +2206,83 @@ describe("extractScriptBasenameFromCommand", () => {
   it("returns null for undefined / empty input", () => {
     expect(extractScriptBasenameFromCommand(undefined)).toBeNull();
     expect(extractScriptBasenameFromCommand("")).toBeNull();
+  });
+});
+
+describe("plugin-contributed process detections (#11613)", () => {
+  beforeEach(() => {
+    clearPluginProcessToolRegistryForTests();
+  });
+
+  afterEach(() => {
+    clearPluginProcessToolRegistryForTests();
+  });
+
+  function runTreeDetection(terminalId: string) {
+    const cache = createCacheMock();
+    cache.setChildren(100, [{ pid: 200, comm: "acme-cli", command: "/usr/local/bin/acme-cli run" }]);
+    const callback = vi.fn();
+    const detector = new ProcessDetector(terminalId, Date.now(), 100, callback, cache as never);
+    detector.start();
+    cache.emitRefresh();
+    detector.stop();
+    return callback;
+  }
+
+  it("detects a plugin-contributed command from the process tree", () => {
+    // Nothing resolves before the registry is mirrored in — the same tree, run
+    // twice, is what isolates the registry as the cause.
+    expect(runTreeDetection("t-plugin-before")).toHaveBeenCalledWith(
+      expect.objectContaining({ detected: false }),
+      expect.any(Number)
+    );
+
+    setPluginProcessToolRegistry({ "acme-cli": "sparkles" });
+
+    expect(runTreeDetection("t-plugin-after")).toHaveBeenCalledWith(
+      expect.objectContaining({ detected: true, processIconId: "sparkles" }),
+      expect.any(Number)
+    );
+  });
+
+  it("resolves a plugin-contributed command from a shell command line", () => {
+    expect(detectCommandIdentity("acme-cli serve --port 3000")).toBeNull();
+
+    setPluginProcessToolRegistry({ "acme-cli": "sparkles" });
+
+    expect(detectCommandIdentity("acme-cli serve --port 3000")).toEqual({
+      processIconId: "sparkles",
+      processName: "acme-cli",
+    });
+  });
+
+  it("stops resolving once the plugin's entry is mirrored away", () => {
+    setPluginProcessToolRegistry({ "acme-cli": "sparkles" });
+    expect(detectCommandIdentity("acme-cli serve")).not.toBeNull();
+
+    // Proves the merged map tracks the snapshot rather than caching a stale
+    // module-level const built at import time.
+    setPluginProcessToolRegistry({});
+    expect(detectCommandIdentity("acme-cli serve")).toBeNull();
+  });
+
+  it("keeps built-in tools winning over a colliding plugin command", () => {
+    setPluginProcessToolRegistry({ vite: "sparkles" });
+    expect(detectCommandIdentity("vite build")?.processIconId).toBe("vite");
+  });
+
+  it("keeps built-in agents winning over a colliding plugin command", () => {
+    const [agentCommand, agentId] = Object.entries(AGENT_CLI_NAMES)[0];
+    setPluginProcessToolRegistry({ [agentCommand]: "sparkles" });
+
+    const identity = detectCommandIdentity(`${agentCommand} --help`);
+    expect(identity?.agentType).toBe(agentId);
+    expect(identity?.processIconId).not.toBe("sparkles");
+  });
+
+  it("ranks a plugin detection at tool tier, so it beats a package manager host", () => {
+    setPluginProcessToolRegistry({ "acme-cli": "sparkles" });
+    // `npm` is package-manager tier and loses to anything more specific.
+    expect(detectCommandIdentity("npm exec acme-cli")?.processIconId).toBe("sparkles");
   });
 });

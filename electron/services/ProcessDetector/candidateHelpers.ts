@@ -1,7 +1,7 @@
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { DetectedProcessCandidate } from "./types.js";
 import { getProcessToolPriority } from "../../../shared/config/processToolRegistry.js";
-import { AGENT_CLI_NAMES, PROCESS_ICON_MAP } from "./registries.js";
+import { AGENT_CLI_NAMES, getProcessIconMap } from "./registries.js";
 import {
   executablePositionLimit,
   extractCommandNameCandidates,
@@ -33,8 +33,11 @@ export function buildDetectedCandidate(
   const normalizedName = normalizeProcessName(processName);
   const lowerName = normalizedName.toLowerCase();
 
+  // Captured once so every lookup in this candidate resolves against one
+  // consistent map, even if a plugin loads mid-pass.
+  const processIconMap = getProcessIconMap();
   let agentType = AGENT_CLI_NAMES[lowerName];
-  let processIconId = PROCESS_ICON_MAP[lowerName];
+  let processIconId = processIconMap[lowerName];
   let effectiveName = normalizedName;
 
   if (!agentType && processCommand) {
@@ -54,12 +57,12 @@ export function buildDetectedCandidate(
       const candidateAgent = AGENT_CLI_NAMES[lowerCandidate];
       if (candidateAgent) {
         agentType = candidateAgent;
-        processIconId = PROCESS_ICON_MAP[lowerCandidate] ?? processIconId;
+        processIconId = processIconMap[lowerCandidate] ?? processIconId;
         effectiveName = candidate;
         break;
       }
       if (index > executablePositionLimit(candidates)) continue;
-      const candidateIcon = PROCESS_ICON_MAP[lowerCandidate];
+      const candidateIcon = processIconMap[lowerCandidate];
       if (candidateIcon) {
         const priority = getProcessToolPriority(candidateIcon);
         // Strict `<` keeps the leftmost argv name on ties, matching argv order.

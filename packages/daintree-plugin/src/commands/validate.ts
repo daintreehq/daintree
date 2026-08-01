@@ -184,6 +184,17 @@ export async function runValidate(opts: ValidateOptions = {}): Promise<ValidateR
       );
     }
   }
+  // Same advisory treatment for process detections (#11613): the terminal tab
+  // resolves the detected icon through the generic plugin icon registry, with
+  // no agent-brand exemption — an unrecognized id falls back to the terminal
+  // glyph, which is exactly what the plugin was trying to replace.
+  for (const [index, tool] of manifest.contributes.processTools.entries()) {
+    if (tool.iconId && !isPluginIconId(tool.iconId)) {
+      warnings.push(
+        `processTools[${index}].iconId "${tool.iconId}" isn't a recognized plugin icon — the terminal tab will render the default terminal icon. Known ids: ${knownIds}`
+      );
+    }
+  }
 
   // Advisory build-target check: warn when `main` or a view's `componentPath`
   // points at a missing file whose parent dir exists (a typo or stale path). A

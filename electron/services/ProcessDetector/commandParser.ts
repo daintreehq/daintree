@@ -1,6 +1,6 @@
 import type { CommandIdentity } from "./types.js";
 import { getProcessToolPriority } from "../../../shared/config/processToolRegistry.js";
-import { AGENT_CLI_NAMES, PROCESS_ICON_MAP } from "./registries.js";
+import { AGENT_CLI_NAMES, getProcessIconMap } from "./registries.js";
 
 const WINDOWS_LAUNCHER_EXTENSION_PATTERN = /\.(?:exe|cmd|bat|com|ps1)$/i;
 const SCRIPT_EXTENSION_PATTERN = /\.(?:m?jsx?|cjs|tsx?|py|rb|php|pl)$/i;
@@ -142,6 +142,9 @@ export function executablePositionLimit(candidates: string[]): number {
 export function detectCommandIdentity(command: string | undefined): CommandIdentity | null {
   const candidates = extractCommandNameCandidates(command);
   let iconMatch: { name: string; icon: string; priority: number } | null = null;
+  // Captured once so every lookup in this resolution sees one consistent map,
+  // even if a plugin loads mid-pass.
+  const processIconMap = getProcessIconMap();
 
   for (const [index, candidate] of candidates.entries()) {
     const lowerCandidate = candidate.toLowerCase();
@@ -149,14 +152,14 @@ export function detectCommandIdentity(command: string | undefined): CommandIdent
     if (candidateAgent) {
       return {
         agentType: candidateAgent,
-        processIconId: PROCESS_ICON_MAP[lowerCandidate],
+        processIconId: processIconMap[lowerCandidate],
         processName: candidate,
       };
     }
 
     // Same executable-position rule as the process-tree path.
     if (index > executablePositionLimit(candidates)) continue;
-    const candidateIcon = PROCESS_ICON_MAP[lowerCandidate];
+    const candidateIcon = processIconMap[lowerCandidate];
     if (candidateIcon) {
       // Tier preference, so a typed `npx vitest` reports Vitest rather than
       // npm. Strict `<` keeps argv order on ties.

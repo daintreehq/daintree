@@ -284,10 +284,33 @@ describe("PtyClient fabric", () => {
 
       expect(messagesOfType(shardA.child, "set-log-level-overrides")).toHaveLength(1);
       expect(messagesOfType(shardA.child, "set-plugin-agent-registry")).toHaveLength(1);
+      expect(messagesOfType(shardA.child, "set-plugin-process-tool-registry")).toHaveLength(1);
       expect(messagesOfType(shardA.child, "set-resource-profile")).toHaveLength(1);
       // The pre-ready spawn send was dropped by the real host; ready replays it.
       expect(messagesOfType(shardA.child, "spawn").map((m) => m.id)).toEqual(["t1"]);
       // Only this shard's terminals replay — never siblings'.
+      client.dispose();
+    });
+
+    it("mirrors the process-tool registry before replaying spawns (#11613)", () => {
+      // Ordering is the contract: a terminal replayed onto a restarted host must
+      // resolve its tab icon from the first process-tree poll, so the registry
+      // has to land before the spawn, not after.
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.postMessage.mockClear();
+
+      shardA.child.emit("message", { type: "ready" });
+
+      const types = shardA.child.postMessage.mock.calls.map(
+        (call: unknown[]) => (call[0] as Record<string, unknown>)?.type
+      );
+      expect(types).toContain("set-plugin-process-tool-registry");
+      expect(types).toContain("spawn");
+      expect(types.indexOf("set-plugin-process-tool-registry")).toBeLessThan(
+        types.indexOf("spawn")
+      );
       client.dispose();
     });
   });

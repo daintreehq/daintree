@@ -1,6 +1,7 @@
 /**
- * The icon ids a plugin may name in `contributes.panels[].iconId` and
- * `contributes.toolbarButtons[].iconId`.
+ * The icon ids a plugin may name in `contributes.panels[].iconId`,
+ * `contributes.toolbarButtons[].iconId`, and
+ * `contributes.processTools[].iconId` (#11613).
  *
  * This list is the single source of truth for *which* ids exist. The renderer
  * half — the id → component map — lives in
