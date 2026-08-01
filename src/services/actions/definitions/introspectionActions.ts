@@ -31,7 +31,7 @@ export function registerIntrospectionActions(
     id: "actions.list",
     title: "List Actions",
     description:
-      "List lightweight action manifest entries without inputSchema/outputSchema, filtered and paginated. Args (all optional): `category` filters by exact domain (e.g. terminal, worktree, forge, git, portal); `search` substring-matches id/title/description; `enabledOnly` drops disabled actions; `limit` sets the page size (1-100, default 50); `offset` skips matching actions (default 0). Returns { actions, total, limit, offset, hasMore } with `actions` sorted by id so paging stays stable, and `total` counting matches after filtering but before pagination, so `hasMore` tells you whether another page remains. Errors when `limit` isn't an integer in 1-100 or `offset` isn't a non-negative integer; filters that match nothing, or an offset past the end, return an empty `actions` array. Use `actions.search` for ranked discovery and `actions.getSchema` to fetch one action's schemas.",
+      "Enumerate the available actions as lightweight entries, filtered by domain or substring and returned a page at a time. Use ranked search instead when looking for a capability by intent; use this when the goal is to walk a domain systematically. Entries omit argument and result schemas to stay small — fetch one action's schema before dispatching it. Ordering is stable, so paging cannot skip or repeat entries.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -133,7 +133,7 @@ export function registerIntrospectionActions(
     id: "actions.getContext",
     title: "Get Action Context",
     description:
-      "Snapshot the current UI context the assistant operates in. Takes no args. Returns the active project (id/name/path), active and focused worktree (id/name/path/branch/isMain), focused terminal (id/kind/title), portal open state and active tab, plus terminalCount and worktreeCount. Fields are omitted when nothing is focused/active. Never errors. Call this first to resolve the implicit 'current' worktree or terminal before actions that take an explicit id.",
+      "Snapshot what the user currently has open — active project, worktree, focused terminal, and panel state. Call this first to resolve an implicit 'current' target before an action that needs an explicit id. It never fails; anything not focused or active is simply absent, so treat a missing field as nothing being selected rather than as an error.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -261,7 +261,8 @@ export function registerIntrospectionActions(
   actions.set("actions.search", () => ({
     id: "actions.search",
     title: "Search Actions",
-    description: `Search the action registry by natural-language query, ranked by relevance. Args: \`query\` (required — keywords or phrase); \`limit\` (optional, 1-${ACTIONS_SEARCH_MAX_LIMIT}, default ${ACTIONS_SEARCH_DEFAULT_LIMIT}). Returns { totalMatches, results } where results are lightweight manifest entries WITHOUT inputSchema/outputSchema. Errors when \`query\` is empty or whitespace-only. Use this for ranked discovery, then \`actions.getSchema\` for the chosen action's full schema; use \`actions.list\` when you want filtered, paginated enumeration instead of ranking.`,
+    description:
+      "Find actions by describing what you want to do, ranked by how well each matches. This is the discovery path: start here, then fetch the chosen action's schema before dispatching it. Use the plain listing instead when walking a domain systematically rather than searching by intent. Results omit argument and result schemas to stay small, and matching nothing returns an empty list rather than failing.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -365,7 +366,7 @@ export function registerIntrospectionActions(
     id: "actions.getSchema",
     title: "Get Action Schema",
     description:
-      "Fetch one action's full manifest entry, including inputSchema and outputSchema. Args: `actionId` (required) — an action id from `actions.search` results (the `id` field). Returns { ok: true, entry } on success, or { ok: false, error: { code: 'NOT_FOUND', message } } as data (not a thrown error) when the id is unknown, hidden, or restricted. Use after `actions.search` to inspect the exact arguments an action expects before dispatching it.",
+      "Fetch one action's full manifest entry, including the exact arguments it accepts and the shape it returns. Use this after finding a candidate by search or listing, before dispatching it, so the arguments are known rather than guessed. An unknown, hidden or restricted id comes back as a structured failure in the result rather than as a thrown error.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -376,13 +377,14 @@ export function registerIntrospectionActions(
         .string()
         .min(1)
         .describe(
-          "Action id returned by `actions.search` (the `id` field), e.g. 'terminal.getStatus'."
+          "Identifies the action to inspect, using an id from a registry search or listing. This is a Daintree action id passed as a value, not the name of a tool to call."
         ),
     }),
     examples: [
       {
         args: { actionId: "terminal.getStatus" },
-        description: "Inspect the input/output schema for terminal.getStatus",
+        description:
+          "Inspect the input and output schema of a terminal status tool before calling it",
       },
     ],
     resultSchema: z.union([

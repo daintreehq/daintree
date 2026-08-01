@@ -29,7 +29,7 @@ export function registerTerminalQueryActions(
     id: "terminal.list",
     title: "List Terminals",
     description:
-      "List terminals/panels with lightweight metadata. Args (all optional): `worktreeId` filters to one worktree; `location` filters by 'grid'|'dock'|'trash'|'background' (default excludes trash and background). Returns { terminals } — each with id, kind, worktreeId, title, location, agentId, agentState, isInputLocked, isFocused. Ephemeral/internal panels are excluded. Never errors. Do NOT use this to poll agent state across a fleet or read output — use `terminal.getStatus`.",
+      "Enumerate the open terminals and panels, with just enough metadata to pick one to act on. Start here to discover terminal ids, then read status or output for the ones that matter — this is a cheap inventory, not a polling path, and the status snapshot carries richer agent state for a whole fleet in one call. Ephemeral and internal panels are left out, and an empty result means no terminals are open rather than a failure.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -91,7 +91,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getOutput",
     title: "Get Terminal Output",
     description:
-      "Read the trailing scrollback of a single terminal. Args: `terminalId` (required) — panel UUID from `terminal.list` (the `id` field); `maxLines` (1-1000, default 100); `stripAnsi` (default true). Returns { terminalId, content, lineCount, truncated }, or { ..., error } as data when the terminal is not found (not a thrown error). Do NOT use this to poll many terminals — `terminal.getStatus` with `includeOutput` fetches tails for N terminals in one call.",
+      "Read the trailing scrollback of one terminal, for inspecting what an agent or command actually printed. Use the terminal status snapshot instead when watching several terminals — it fetches output tails for a whole fleet in one call, and reading them one at a time is the common mistake here. Output is returned verbatim and may be truncated to the requested tail; a terminal that no longer exists comes back as an error field in the result rather than failing the call.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -100,7 +100,9 @@ export function registerTerminalQueryActions(
       terminalId: z
         .string()
         .min(1)
-        .describe("Panel UUID returned by `terminal.list` (the `id` field)."),
+        .describe(
+          "Identifies the terminal to act on, using a panel id from the terminal-listing capability. An id no longer tracked resolves as idle rather than failing."
+        ),
       maxLines: z
         .number()
         .int()
@@ -181,7 +183,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getStatus",
     title: "Get Terminal Status",
     description:
-      "Poll agent/terminal state across many terminals in one call. Args (all optional): `terminalIds` (1-256 ids from `terminal.list`; when set, worktreeId/location are ignored and unknown ids return a per-entry `error`); `worktreeId`/`location` filters; `includeOutput:{ lines, stripAnsi }` for recent scrollback tails. Returns { terminals } — each with terminalId, agentId, agentState, waitingReason, lastTransitionAt, exitCode (number|null — set once the PTY exits), spawnedAt, optional lastCheckResult, optional recentOutput, `armed` (in the fleet broadcast set; set via `terminal.arm`/`terminal.disarm`), optional per-entry error. `lastCheckResult` is a PARSED test/lint/build signal { command, passed, ranAt, failureSummary, truncated } from tsc/ESLint/Vitest/Jest output — best-effort, NOT an exit code; absence means no recognized summary, so read `ranAt` for freshness. Never throws. Do NOT use `terminal.getOutput` for fleet polling or `terminal.list` for agent state — this is the batched path.",
+      "Take a point-in-time snapshot of agent and process state across many terminals at once, optionally with recent output tails. This is the batched polling path: prefer it over listing terminals for agent state or reading each terminal's output in turn. It never blocks and never fails as a whole — a terminal that cannot be read carries its own error while the rest stay valid — so use the blocking wait instead when the goal is to proceed the moment an agent finishes.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -402,7 +404,9 @@ export function registerTerminalQueryActions(
       terminalId: z
         .string()
         .min(1)
-        .describe("Panel UUID returned by `terminal.list` (the `id` field)."),
+        .describe(
+          "Identifies the terminal to act on, using a panel id from the terminal-listing capability. An id no longer tracked resolves as idle rather than failing."
+        ),
       timeoutMs: z
         .number()
         .int()
@@ -442,12 +446,14 @@ export function registerTerminalQueryActions(
         .array(z.string().min(1))
         .min(1)
         .max(MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS)
-        .describe("Panel UUIDs returned by `terminal.list` (the `id` field). 1-256 ids."),
+        .describe(
+          "Identifies the terminals to watch, using panel ids from the terminal-listing capability. Ids no longer tracked count as already finished rather than failing the batch."
+        ),
       mode: z
         .enum(["first", "all"])
         .optional()
         .describe(
-          "'first' (default) resolves as soon as ANY terminal leaves working; 'all' resolves only once EVERY terminal is non-working."
+          "Whether to return as soon as any one terminal stops working (the default, for dispatching follow-up work as each agent frees up) or only once every terminal has stopped (a join barrier)."
         ),
       timeoutMs: z
         .number()
@@ -476,7 +482,7 @@ export function registerTerminalQueryActions(
     id: "terminal.sendCommand",
     title: "Submit text to terminal",
     description:
-      "Submit text to a terminal. For a plain shell terminal it runs as a command; for an agent pane (Claude/Codex/Gemini/…) it is submitted as the agent's next prompt/turn. Multi-line text is safe: the body is delivered atomically — a single bracketed paste where the agent supports it, otherwise with interior newlines rewritten to the agent's soft-newline — then submitted with a single trailing Enter, so embedded newlines insert line breaks and never prematurely submit a partial message. Extra trailing newlines each send an additional Enter. Fire-and-return — it does not wait for the agent to respond; poll `terminal.getStatus`/`terminal.waitUntilIdle` for the result. Args: `terminalId` (from `terminal.list`), `command` (the text to submit).",
+      "Submit text to a terminal: a shell terminal runs it as a command, an agent pane receives it as the next prompt. Multi-line text is safe — the whole body is delivered atomically and submitted once, so embedded newlines insert line breaks instead of firing off a partial message. This returns as soon as the text is sent and does not wait for a result, so poll the status snapshot or block on the idle wait to see what happened. Anything submitted here runs with the terminal's own privileges.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -488,7 +494,12 @@ export function registerTerminalQueryActions(
     denyPluginDispatch: true,
     scope: "renderer",
     argsSchema: z.object({
-      terminalId: z.string().min(1).describe("Terminal instance ID from terminal.list"),
+      terminalId: z
+        .string()
+        .min(1)
+        .describe(
+          "Identifies the terminal to submit to, using a panel id from the terminal-listing capability."
+        ),
       command: z
         .string()
         .min(1)

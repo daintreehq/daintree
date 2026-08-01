@@ -22,7 +22,7 @@ export function registerAppConfigActions(
     id: "agentSettings.get",
     title: "Get Agent Settings",
     description:
-      "Read the per-agent settings map (model, flags, and other agent configuration). Takes no args. Returns { agents } — a record keyed by agent id of settings entries — plus an optional `settingsVersion` and the two global overrides `globalSkipPermissions` and `globalUseAltScreen`. Never errors; unconfigured agents are absent from the map. Use `agentSettings.set` to change a value.",
+      "Read the stored per-agent configuration, such as each agent's model and launch flags, plus the global overrides. Use this before changing a setting so unrelated values are preserved. Agents that have never been configured are simply absent from the result rather than appearing with defaults, so absence means unconfigured.",
     category: "settings",
     kind: "query",
     danger: "safe",

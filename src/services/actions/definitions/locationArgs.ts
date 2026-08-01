@@ -54,20 +54,32 @@ const legacyAliasDescription = (canonical: string): string =>
  */
 const selectorField = (description: string) => z.string().min(1).optional().describe(description);
 
+/**
+ * These four descriptions are the single home for location semantics (#11542).
+ * They used to be restated in every worktree-scoped tool's own description —
+ * "defaults to the active worktree" appeared verbatim on 14 tools, and the
+ * no-active-worktree failure on more. Stating it here puts it on the wire once
+ * per field instead of once per tool, and keeps it correct when the fallback
+ * changes.
+ *
+ * Sibling capabilities are named in prose rather than by action id: a client
+ * replaces every character outside `[A-Za-z0-9_-]` when it namespaces a tool,
+ * so a literal `worktree.list` here refers to a name the model never sees.
+ */
 const worktreeIdField = selectorField(
-  "Worktree id (the `id` from `worktree.list`). Defaults to the active worktree."
+  "Identifies the worktree to act on, using an id from the worktree-listing capability. Omit this and the path to target the active worktree; the call fails when neither is given and no worktree is active."
 );
 
 const worktreePathField = selectorField(
-  "Absolute worktree root path (the `path` from `worktree.list`). Used when `worktreeId` is omitted."
+  "Identifies the worktree to act on by absolute root path, as an alternative to its id. The id wins when both are given, and an unknown path fails rather than falling back to the active worktree."
 );
 
 const projectIdField = selectorField(
-  "Project id (the `id` from `project.getAll`). Defaults to the active project."
+  "Identifies the project to act on, using an id from the project-listing capability. Omit this and the path to target the active project; an id that names no open project fails."
 );
 
 const projectPathField = selectorField(
-  "Absolute project root path. Used when `projectId` is omitted."
+  "Identifies the project to act on by absolute root path, as an alternative to its id. The id wins when both are given."
 );
 
 /**

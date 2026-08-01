@@ -52,7 +52,8 @@ export function registerDevPreviewActions(
   actions.set("devPreview.reloadPreview", () => ({
     id: "devPreview.reloadPreview",
     title: "Reload preview",
-    description: "Reload the dev preview webview without restarting the dev server",
+    description:
+      "Reload the dev preview's page without restarting the underlying dev server. Try this first when the preview looks stale — it is fast and keeps the server warm. Restart the server instead when the process itself is wedged or its configuration changed.",
     category: "devServer",
     kind: "command",
     danger: "safe",
@@ -78,7 +79,8 @@ export function registerDevPreviewActions(
   actions.set("devPreview.restart", () => ({
     id: "devPreview.restart",
     title: "Restart dev server",
-    description: "Stop and respawn the dev server, keeping caches and dependencies",
+    description:
+      "Stop the dev server and start it again, keeping caches and installed dependencies. Anything in flight is interrupted and the preview is unavailable until it comes back, which is slower than simply reloading the page. Reload first unless the server process itself is the problem.",
     category: "devServer",
     kind: "command",
     danger: "safe",

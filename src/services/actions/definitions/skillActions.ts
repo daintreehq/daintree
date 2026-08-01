@@ -17,7 +17,7 @@ export function registerSkillActions(actions: ActionRegistry, _callbacks: Action
       id: "skills.search",
       title: "Search skills",
       description:
-        "Search plugin-contributed skills — reusable markdown instructions/workflows (e.g. a TDD workflow, a review rubric) that plugins ship. Returns matching skills' ids, names, descriptions, and trigger phrases; call `skills.load` with an id to read the full body. Args: `query` (keywords matched against skill id/name/description/triggers; omit or pass empty to list all), `limit` (max results, default 20). Returns { skills }.",
+        "Find plugin-contributed skills: reusable written instructions and workflows, such as a review rubric or a test-driven-development procedure, that plugins ship for an agent to follow. This returns names and summaries only; load a skill by id to read its actual instructions. Omitting a query lists everything available, which is the cheapest way to see what exists.",
       category: "agent",
       kind: "query",
       danger: "safe",
@@ -65,7 +65,7 @@ export function registerSkillActions(actions: ActionRegistry, _callbacks: Action
       id: "skills.load",
       title: "Load skill",
       description:
-        "Load the full markdown body of a plugin-contributed skill by its id (from `skills.search`), so its instructions can be incorporated into the current task. Args: `id` — the skill id, namespaced as `{pluginId}.{skillId}` (e.g. `daintree.hello.tdd-workflow`). Returns { id, name, description, body }. Errors if no skill matches the id.",
+        "Read the full instructions of one plugin-contributed skill, so they can be followed as part of the current task. Find the id with a skills search first — ids are namespaced by plugin and cannot be guessed reliably. An id that matches nothing fails rather than returning empty.",
       category: "agent",
       kind: "query",
       danger: "safe",
@@ -74,7 +74,9 @@ export function registerSkillActions(actions: ActionRegistry, _callbacks: Action
         id: z
           .string()
           .min(1)
-          .describe("The skill id from `skills.search`, e.g. `daintree.hello.tdd-workflow`."),
+          .describe(
+            "Identifies the skill to load, using an id from a skills search. Ids are namespaced by the contributing plugin and cannot be guessed reliably."
+          ),
       }),
       resultSchema: z.object({
         id: z.string(),

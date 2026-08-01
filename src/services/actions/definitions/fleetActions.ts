@@ -241,7 +241,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     palette: { mode: "hidden" },
     title: "Fleet: Kill",
     description:
-      "Remove every armed terminal panel (matches terminal.killAll semantics — not a raw SIGKILL; always requires confirmation)",
+      "Remove every armed terminal panel. This destroys those terminals and their running work with no trash step and no recovery, so it always requires confirmation.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -564,7 +564,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     palette: { mode: "hidden" },
     title: "Fleet: Get run status",
     description:
-      "Read-only snapshot of the current supervised fleet broadcast run (the user's in-app fleet fan-out), or { run: null } when none is tracked. Per-window: reports the run owned by the window handling this dispatch. A run has runId, status ('submitting' | 'watching' | 'completed' | 'cancelled' | 'failed' | 'superseded'), aggregate counts, and per-target entries: submission ('sent' | 'failed' | 'skipped' | 'pending'), failureKind ('permanent' = dead PTY, auto-disarmed; 'transient' = retryable), a live agentState/waitingReason snapshot, settled ('waiting' counts as settled), gone (panel closed mid-run), and lastCheckResult when present. agentState is a passive heuristic and lastCheckResult is PARSED, not an exit code — cross-check with `terminal.getStatus` before acting on either. Never dispatches anything: to broadcast over MCP, fan out `terminal.sendCommand` per terminal and watch with `terminal.getStatus` / `terminal.waitUntilIdleBatch`.",
+      "Read a snapshot of the in-app fleet broadcast the user is currently running, including per-terminal delivery and liveness. This only observes — it dispatches nothing, so driving a fan-out means sending to each terminal yourself and watching them with a status snapshot or batched wait. Agent state here is a passive heuristic and any parsed check result is not a process exit code, so confirm both before acting on them.",
     category: "terminal",
     kind: "query",
     danger: "safe",

@@ -36,7 +36,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.close",
     title: "Close Terminal",
     description:
-      "Close a terminal (move to trash). Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch, which cannot see what is focused. Interactive dispatch may omit it and falls back to the focused terminal.",
+      "Close a terminal, moving it to the trash where it is briefly recoverable before the process is killed for good. Identify the terminal explicitly — an automated caller cannot see what the user has focused, and closing the wrong pane discards someone else's work. Nothing binds a terminal to whoever created it, so the listing includes the user's own shells and other agents' panes.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -127,7 +127,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.kill",
     title: "Kill Terminal",
     description:
-      "Permanently kill and remove terminal. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch, which cannot see what is focused. Interactive dispatch may omit it and falls back to the focused terminal.",
+      "Permanently destroy a terminal and its process immediately, with no trash step and no recovery. Identify the terminal explicitly — an automated caller cannot see what the user has focused, and killing the wrong pane destroys work irrecoverably. Close the terminal instead when recoverability matters.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -169,7 +169,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restart",
     title: "Restart Terminal",
     description:
-      "Restart the terminal process. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch, which cannot see what is focused. Interactive dispatch may omit it and falls back to the focused terminal.",
+      "Restart a terminal's process in place, keeping the pane. Anything running is terminated and unsaved in-process state is lost, so confirm the terminal is idle first. Identify the terminal explicitly — an automated caller cannot see what the user has focused.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -228,7 +228,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.rename",
     title: "Rename Terminal",
     description:
-      "Rename the terminal tab. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field); `name` — the new title, where an empty string clears back to the identity-derived default. Both are REQUIRED for agent/MCP dispatch: a headless caller cannot see what is focused, and cannot answer the rename dialog that an omitted `name` opens. Note a title the user set by hand outranks automation, so a rename of one of those is accepted and then ignored. Interactive dispatch may omit either — it falls back to the focused terminal and opens the dialog.",
+      "Change a terminal tab's title, or clear it back to the automatic default. Identify the terminal explicitly — an automated caller cannot see what the user has focused, and cannot answer the dialog that omitting a title would open. A title the user set by hand outranks automation, so renaming one of those is accepted and then quietly ignored.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -434,7 +434,8 @@ export function registerTerminalLifecycleActions(
   actions.set("terminal.closeAll", () => ({
     id: "terminal.closeAll",
     title: "Close All Terminals",
-    description: "Move all terminals in the active worktree to trash",
+    description:
+      "Close every terminal in the active worktree at once, moving them all to the trash. This is far broader than closing one pane: it takes the user's own shells and other agents' terminals with it, and recovery is only briefly possible before the processes are killed. Prefer closing terminals individually.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -469,7 +470,8 @@ export function registerTerminalLifecycleActions(
   actions.set("terminal.killAll", () => ({
     id: "terminal.killAll",
     title: "Kill All Terminals",
-    description: "Permanently remove all terminals (cannot be undone)",
+    description:
+      "Permanently destroy every terminal and its process at once, with no trash step and no recovery. This is the most destructive terminal operation: it takes the user's own shells and other agents' running work with it. There is essentially never a reason for an automated caller to use this.",
     category: "terminal",
     kind: "command",
     danger: "confirm",

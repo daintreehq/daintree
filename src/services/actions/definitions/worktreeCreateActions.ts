@@ -93,7 +93,8 @@ export function registerWorktreeCreateActions(
     defineAction({
       id: "worktree.delete",
       title: "Delete Worktree",
-      description: "Delete a worktree",
+      description:
+        "Delete a worktree, removing its directory from disk along with any uncommitted work it holds. This is irreversible from here and destroys changes that were never committed or pushed. Confirm the worktree is the intended one and its work is saved elsewhere first.",
       category: "worktree",
       kind: "command",
       danger: "confirm",

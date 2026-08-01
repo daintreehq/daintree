@@ -323,7 +323,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     defineAction({
       id: "forge.openIssues",
       title: "Open Issues",
-      description: "Open the forge issues list for the current project",
+      description:
+        "Open the forge's issue list for this project in the system browser, for a human to read. This hands off to another application rather than returning data — use the issue-listing capability to actually retrieve issues.",
       category: "forge",
       kind: "command",
       danger: "safe",
@@ -350,7 +351,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     defineAction({
       id: "forge.openPRs",
       title: "Open Pull Requests",
-      description: "Open the forge pull requests list for the current project",
+      description:
+        "Open the forge's pull-request list for this project in the system browser, for a human to read. This hands off to another application rather than returning data — use the pull-request listing capability to actually retrieve PRs.",
       category: "forge",
       kind: "command",
       danger: "safe",
@@ -377,7 +379,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     defineAction({
       id: "forge.openCommits",
       title: "Open Commits",
-      description: "Open the forge commits page for the current project",
+      description:
+        "Open the forge's commit history for this project in the system browser, for a human to read. This hands off to another application rather than returning data — use a git history capability to actually retrieve commits.",
       category: "forge",
       kind: "command",
       danger: "safe",
@@ -401,7 +404,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     defineAction({
       id: "forge.openIssue",
       title: "Open Issue",
-      description: "Open a forge issue in the system browser",
+      description:
+        "Open one issue on the forge in the system browser, for a human to read. This hands off to another application rather than returning data — use the single-issue lookup to retrieve its title, body or state.",
       category: "forge",
       kind: "command",
       danger: "safe",
@@ -421,7 +425,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     defineAction({
       id: "forge.openPR",
       title: "Open pull request",
-      description: "Open a forge pull request in the system browser",
+      description:
+        "Open one pull request on the forge in the system browser, for a human to read. This hands off to another application rather than returning data — use the single-PR lookup to retrieve its title, body or state.",
       category: "forge",
       kind: "command",
       danger: "safe",
@@ -442,7 +447,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.assignIssue",
       title: "Assign Issue",
       description:
-        "Assign a forge issue to a user via the active provider. Returns the issue's resulting assignee list — forges silently drop assignees the account can't take, so the list is what actually landed.",
+        "Assign an issue to a user on the active forge. Read back the resulting assignee list rather than assuming the request applied in full: forges silently drop accounts that lack access to the repository, so the returned list is what actually landed. Assigning someone already assigned is harmless.",
       category: "forge",
       kind: "command",
       danger: "safe",
@@ -474,7 +479,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.unassignIssue",
       title: "Unassign Issue",
       description:
-        "Remove a user's assignment from a forge issue via the active provider. Returns the issue's resulting assignee list.",
+        "Remove one user's assignment from an issue on the active forge. Read back the resulting assignee list to confirm what remains. Removing someone who was not assigned is harmless rather than an error, so this is safe to call without checking first.",
       category: "forge",
       kind: "command",
       danger: "safe",
@@ -506,7 +511,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.approvePR",
       title: "Approve Pull Request",
       description:
-        "Submit an approving review on a pull request via the active forge provider. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `prNumber` (required, positive int); `body` (optional) — an approval comment. Errors when no worktree is given and none is active, when the provider can't approve PRs, or when the forge rejects the review (e.g. approving your own PR). Returns the created review { id, state, rawState, body, url, author, submittedAt, commitId }.",
+        "Submit an approving review on a pull request, visible to everyone watching it on the forge. This is a public act of sign-off, so read the PR first. The forge rejects approvals it does not permit — approving your own pull request, most commonly — and a provider with no review support fails outright rather than silently doing nothing.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -534,7 +539,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.requestChanges",
       title: "Request Changes on Pull Request",
       description:
-        "Submit a request-changes review on a pull request via the active forge provider. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `prNumber` (required, positive int); `body` (required) — explains what needs to change. Errors when no worktree is given and none is active, when the provider can't review PRs, or when the forge rejects the review. Returns the created review.",
+        "Submit a request-changes review on a pull request, which blocks merging on most forges until it is resolved. This is publicly visible and requires an explanatory body, so write the reasoning for the author. A provider without review support fails rather than silently doing nothing.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -562,7 +567,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.dismissReview",
       title: "Dismiss Pull Request Review",
       description:
-        "Dismiss a submitted review on a pull request via the active forge provider. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `prNumber` (required, positive int); `reviewId` (required, positive int) — the review to dismiss, obtained from a prior review-thread lookup; `message` (required) — explains the dismissal. Errors when no worktree is given and none is active, or when the provider can't dismiss reviews. Returns the dismissed review.",
+        "Dismiss a submitted review on a pull request, clearing the block it placed on merging. This is publicly visible, usually needs elevated permissions, and requires a message explaining why. Identify the review from a prior review-thread lookup — dismissing the wrong one silently unblocks a merge someone intended to gate.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -594,7 +599,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.requestReviewers",
       title: "Request Pull Request Reviewers",
       description:
-        "Request reviewers on a pull request via the active forge provider. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `prNumber` (required, positive int); `users` (optional) — account logins; `teams` (optional) — team identifiers (GitHub team slugs). Provide at least one user or team. Errors when no worktree is given and none is active, or when the provider can't request reviewers. Returns the PR's resulting reviewer requests { prNumber, requestedUsers, requestedTeams } — these include reviewers requested earlier and omit any the forge refused.",
+        "Request reviewers on a pull request, notifying each of them on the forge. Supply at least one account or team. Read back the resulting request list rather than assuming it applied: it includes reviewers requested earlier and omits any the forge refused, typically for lacking repository access.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -632,7 +637,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     defineAction({
       id: "forge.validateToken",
       title: "Validate Forge Token",
-      description: "Validate a forge access token without saving it",
+      description:
+        "Check whether a forge access token is accepted by the provider, without storing it anywhere. Use this to verify credentials before saving them. It performs a live authentication round trip, so a rejection may mean an expired or insufficiently scoped token rather than a malformed one.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -662,7 +668,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getRepoStats",
       title: "Get Repo Stats",
       description:
-        "Get repository statistics (commit/issue/PR counts) via the active forge provider. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `bypassCache` (optional) to force a fresh fetch. Returns commitCount, issueCount, prCount, loading, plus optional error/stale/lastUpdated/rate-limit fields. Errors when no worktree is given and none is active; forge failures surface in `error` rather than throwing.",
+        "Get headline repository counts — commits, issues and pull requests — from the active forge provider. Use this for a cheap overview rather than paging a list to count it. Results are cached and may be stale; bypassing the cache costs a live provider round trip against your rate limit. A provider failure comes back as an error field on an otherwise valid result rather than failing the call, so check it before trusting the counts.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -694,7 +700,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listIssues",
       title: "List Issues",
       description:
-        "List repository issues via the active forge provider (paginated). Args (all optional): `worktreeId` or `worktreePath` (defaults to the active worktree; `cwd` is a legacy alias); `state` ('open'|'closed'|'all', default 'open'); `perPage` (1-100, default 20); `sort` ('created'|'updated'); `direction` ('asc'|'desc'); `cursor` from a previous response's `nextCursor`; `view` ('summary' default — drops body and raw provider payload — or 'full'); `bypassCache` to force a fresh fetch when the list may have changed outside this app; `search`, a query fragment in the active provider's issue-search dialect passed through verbatim (e.g. 'no:assignee -label:human-review'). Unknown args are rejected, not ignored. Returns { items, nextCursor, hasMore }; summary rows carry number, title, state, url, author, assignees, labels, commentCount, linkedPR and timestamps. Errors when no worktree is given and none is active. Do NOT use this for pull requests — call `forge.listPRs`.",
+        "List repository issues from the active forge provider, one page at a time. Use this to discover or filter issues; use the pull-request listing for PRs, and the single-issue lookup when the number is already known. Summary results keep responses small by dropping bodies and raw provider payloads — ask for full results only when the body is needed. Results are cached, and bypassing the cache spends a live provider round trip against your rate limit.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -727,7 +733,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listPRs",
       title: "List Pull Requests",
       description:
-        "List repository pull requests via the active forge provider (paginated). Args (all optional): `worktreeId` or `worktreePath` (defaults to the active worktree; `cwd` is a legacy alias); `state` ('open'|'closed'|'merged'|'all', default 'open'); `perPage` (1-100, default 20); `sort` ('created'|'updated'); `direction` ('asc'|'desc'); `cursor` from a previous response's `nextCursor`; `view` ('summary' default — drops body and raw provider payload — or 'full'); `bypassCache` to force a fresh fetch when the list may have changed outside this app. There is no `search` here: the active provider has no PR query path, so passing it is rejected rather than silently returning an unfiltered page. Unknown args are rejected too. Returns { items, nextCursor, hasMore }. Errors when no worktree is given and none is active. Do NOT use this for issues — call `forge.listIssues`.",
+        "List repository pull requests from the active forge provider, one page at a time. Use this to discover or filter PRs; use the issue listing for issues, and the single-PR lookup when the number is already known. There is no text search here — no provider on the roster can query PRs, so asking for one is rejected rather than quietly returning an unfiltered page. Summary results keep responses small, and bypassing the cache spends a live provider round trip.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -757,7 +763,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getIssue",
       title: "Get Issue",
       description:
-        "Fetch a single issue by its number via the active forge provider. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `issueNumber` (required, positive int). Returns the normalized forge issue { number, title, body, state ('open'|'closed'), url, author, assignees, labels, createdAt, updatedAt, ... } or null when not found. Errors when no worktree is given and none is active. Do NOT use `forge.listIssues` to fetch one known number — this is the direct lookup.",
+        "Fetch one issue by number from the active forge provider, including its body. This is the direct lookup — reach for it instead of paging the issue listing to find a number you already have. An issue that does not exist comes back empty rather than failing, so treat an empty result as absence rather than an error. It reports how many comments exist but not their text; read the comment thread for that.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -791,7 +797,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listIssueComments",
       title: "List Issue Comments",
       description:
-        "Read one page of an issue's comment thread via the active forge provider — the read counterpart to `forge.addIssueComment`. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `issueNumber` (required, positive int); `cursor` (optional) from a previous response's `nextCursor`; `perPage` (optional, 1-100, default 20). Comments come back OLDEST-FIRST — to read the latest reply, page until `hasMore` is false and take the last item. Returns { items: [{ id, body, url, author, createdAt }], nextCursor, hasMore, totalCount }. An empty `items` means nobody has commented — a missing issue or a provider that can't read comments errors instead, so you never mistake one for silence. Errors when no worktree is given and none is active. Use `forge.getIssue` for the issue itself — it reports `commentCount` but no comment bodies.",
+        "Read one page of an issue's comment thread from the active forge provider. Use this when comment text matters — the single-issue lookup reports only how many comments exist. Comments arrive oldest first, so reaching the newest reply means paging to the end rather than reading the first page. An empty page genuinely means nobody has commented: a missing issue or a provider that cannot read threads fails instead, so silence is never ambiguous.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -836,7 +842,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getPR",
       title: "Get Pull Request",
       description:
-        "Fetch a single pull request by its number via the active forge provider. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `prNumber` (required, positive int). Returns the normalized forge PR { number, title, body, state ('open'|'closed'|'merged'), isDraft, merged, url, baseRef, headRef, createdAt, updatedAt, ... } or null when not found. Errors when no worktree is given and none is active. Use this before editing or merging a known PR; do NOT page `forge.listPRs` to find one known number.",
+        "Fetch one pull request by number from the active forge provider, including its body, draft state and branches. This is the direct lookup — reach for it instead of paging the PR listing for a number you already have, and read it before editing or merging so the current state is known. A pull request that does not exist comes back empty rather than failing, so treat an empty result as absence rather than an error.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -858,7 +864,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getCIStatus",
       title: "Get CI Status",
       description:
-        "Fetch the roll-up CI status for a single pull request via the active forge provider. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `prNumber` (required, positive int). Returns `{ ciStatus }`: null when the PR doesn't exist, otherwise { state ('success'|'failure'|'pending'|'neutral'|'unknown'), total, passed, failed, pending, requiredChecksPassing? }. Read `state` for the verdict. The counts describe REQUIRED checks only, so a repo with no required checks reports total 0 while `state` still reflects overall CI health — never infer 'no checks ran' from total 0; only state 'neutral' means that. `requiredChecksPassing` is omitted when the provider reported no gating information, and false means gating is configured but not yet satisfied. Values may be up to ~60s stale (provider-cached), so poll rather than treating one success as final. Errors when no worktree is given and none is active.",
+        "Fetch the roll-up CI verdict for one pull request from the active forge provider. Read the overall state for the answer: the accompanying counts cover required checks only, so a zero total means nothing is gating the merge, not that no checks ran — only a neutral state means that. Values are provider-cached and can lag by around a minute, so poll for a settled verdict rather than treating a single success as final.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -891,7 +897,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.createPR",
       title: "Create pull request",
       description:
-        "Open a new pull request from `head` into `base` via the active forge provider. Args: `worktreeId` or `worktreePath` (optional, defaults to the active worktree; `cwd` is a legacy alias); `head` (source branch, required); `base` (target branch, required); `title` (required); `body` (optional); `draft` (optional). Returns the created normalized PR. Errors when no worktree is given and none is active.",
+        "Open a new pull request between two branches on the active forge. This is publicly visible and notifies watchers, so confirm the branches are pushed and the target is right before calling. The forge rejects the request when the branches do not exist or a pull request already links them.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -919,7 +925,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.closePR",
       title: "Close pull request",
       description:
-        "Close an open pull request without merging, via the active forge provider. Args: `worktreeId` or `worktreePath` (optional, defaults to the active worktree; `cwd` is a legacy alias); `prNumber` (required, positive int). Returns the updated pull request. Errors when no worktree is given and none is active.",
+        "Close a pull request without merging it, discarding it as a proposal while leaving its branch intact. This is publicly visible and can be undone by reopening. Use the merge capability when the intent is to land the change instead.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -944,7 +950,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.reopenPR",
       title: "Reopen pull request",
       description:
-        "Reopen a previously closed pull request via the active forge provider. Args: `worktreeId` or `worktreePath` (optional, defaults to the active worktree; `cwd` is a legacy alias); `prNumber` (required, positive int). Returns the updated pull request. Errors when no worktree is given and none is active.",
+        "Reopen a previously closed pull request, putting it back in the review queue. This is publicly visible. A pull request that was merged, or whose branch has since been deleted, cannot be reopened and the forge rejects the request.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -969,7 +975,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.mergePR",
       title: "Merge pull request",
       description:
-        "Merge a pull request via the active forge provider. Args: `worktreeId` or `worktreePath` (optional, defaults to the active worktree; `cwd` is a legacy alias); `prNumber` (required, positive int); `mergeMethod` (optional 'merge'|'squash'|'rebase'); `commitTitle`/`commitMessage` (optional overrides). Irreversible — writes to the shared base branch. Returns the merge acknowledgement { prNumber, sha, merged, message }; `sha` is the merge commit. Errors when no worktree is given and none is active, or when the PR is not mergeable.",
+        "Merge a pull request, writing its commits onto the shared base branch. This is irreversible and affects everyone working from that branch — confirm the CI verdict and the review state first. The forge rejects the merge when the pull request is not mergeable, so a failure here usually means conflicts or unsatisfied checks rather than a bad request.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -1009,7 +1015,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.createIssue",
       title: "Create Issue",
       description:
-        "Create a new issue via the active forge provider. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `title` (required); `body` (optional markdown); `labels` (optional array of label names). Returns the created issue { number, title, body, state, url, ... }. Errors when no worktree is given and none is active.",
+        "File a new issue on the active forge. This is publicly visible and notifies watchers. Labels must already exist on the repository — the forge rejects the request rather than creating them, so confirm the names first.",
       category: "forge",
       kind: "command",
       danger: "safe",
@@ -1039,7 +1045,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.convertPRToDraft",
       title: "Convert pull request to draft",
       description:
-        "Convert an open pull request to a draft via the active forge provider. Args: `worktreeId` or `worktreePath` (optional, defaults to the active worktree; `cwd` is a legacy alias); `prNumber` (required, positive int). Returns the resulting draft state { prNumber, isDraft }. Errors when no worktree is given and none is active.",
+        "Mark an open pull request as a draft, signalling it is not ready and removing it from most review queues. This is publicly visible and reversible by marking it ready again. A provider without draft support fails rather than silently doing nothing.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -1066,7 +1072,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.closeIssue",
       title: "Close Issue",
       description:
-        "Close an open issue via the active forge provider. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `issueNumber` (required, positive int); `stateReason` (optional, 'completed', 'not_planned', or 'duplicate'). Returns the updated issue. Errors when no worktree is given and none is active.",
+        "Close an issue on the active forge, optionally recording why it was closed. This is publicly visible and reversible by reopening. Prefer stating a reason, since it distinguishes finished work from something declined or duplicated.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -1094,7 +1100,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.markPRReadyForReview",
       title: "Mark pull request ready for review",
       description:
-        "Mark a draft pull request ready for review via the active forge provider. Args: `worktreeId` or `worktreePath` (optional, defaults to the active worktree; `cwd` is a legacy alias); `prNumber` (required, positive int). Returns the resulting draft state { prNumber, isDraft }. Errors when no worktree is given and none is active.",
+        "Mark a draft pull request as ready for review, which notifies reviewers and re-enters it in review queues. This is publicly visible and reversible by converting it back to a draft.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -1121,7 +1127,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.reopenIssue",
       title: "Reopen Issue",
       description:
-        "Reopen a closed issue via the active forge provider. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `issueNumber` (required, positive int). Returns the updated issue. Errors when no worktree is given and none is active.",
+        "Reopen a closed issue, putting it back in the active queue and notifying watchers. This is publicly visible and reversible by closing it again.",
       category: "forge",
       kind: "command",
       danger: "safe",
@@ -1143,7 +1149,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.commentOnPR",
       title: "Comment on pull request",
       description:
-        "Post a comment on a pull request via the active forge provider. Args: `worktreeId` or `worktreePath` (optional, defaults to the active worktree; `cwd` is a legacy alias); `prNumber` (required, positive int); `body` (required comment text). Returns the created comment { id, body, url, createdAt }. Errors when no worktree is given and none is active.",
+        "Post a comment on a pull request, visible to everyone watching it and delivered as a notification. Comments cannot be edited or withdrawn through this capability, so treat posting as final.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -1171,7 +1177,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.editPR",
       title: "Edit pull request",
       description:
-        "Edit a pull request's title and/or body via the active forge provider. Args: `worktreeId` or `worktreePath` (optional, defaults to the active worktree; `cwd` is a legacy alias); `prNumber` (required, positive int); `title` (optional); `body` (optional). Provide at least one of title/body. Returns the updated normalized PR. Errors when no worktree is given and none is active.",
+        "Change a pull request's title or body on the active forge. Supply at least one of them; whichever is omitted is left as it is, so this cannot accidentally blank a field. The new text replaces the old wholesale rather than appending, and the edit is publicly visible.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -1201,7 +1207,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.editIssue",
       title: "Edit Issue",
       description:
-        "Edit an issue's title and/or body via the active forge provider. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `issueNumber` (required, positive int); `title` (optional); `body` (optional). Provide at least one of title or body. Only the supplied fields change. Returns the updated issue. Errors when no worktree is given and none is active.",
+        "Change an issue's title or body on the active forge. Supply at least one of them; whichever is omitted is left as it is, so this cannot accidentally blank a field. The new text replaces the old wholesale rather than appending, and the edit is publicly visible.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -1231,7 +1237,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.addIssueComment",
       title: "Add Issue Comment",
       description:
-        "Add a comment to an issue via the active forge provider. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `issueNumber` (required, positive int); `body` (required markdown). Returns the created comment { id, body, url, createdAt }. Errors when no worktree is given and none is active.",
+        "Post a comment on an issue, visible to everyone watching it and delivered as a notification. Comments cannot be edited or withdrawn through this capability, so treat posting as final.",
       category: "forge",
       kind: "command",
       danger: "safe",
@@ -1254,7 +1260,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.addIssueLabel",
       title: "Add Issue Label",
       description:
-        "Add a label (by name) to an issue via the active forge provider. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `issueNumber` (required, positive int); `label` (required label name). Additive — existing labels are kept. Returns the issue's full label set. Errors when no worktree is given and none is active.",
+        "Add one existing label to an issue. This is additive — labels already on the issue are kept — so read back the returned label set to see the result. The label must already exist on the repository; the forge rejects an unknown name rather than creating it.",
       category: "forge",
       kind: "command",
       danger: "safe",
@@ -1277,7 +1283,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.removeIssueLabel",
       title: "Remove Issue Label",
       description:
-        "Remove a label (by name) from an issue via the active forge provider. Args: `worktreeId` or `worktreePath` (optional) — target worktree, defaults to the active one (`cwd` is accepted as a legacy alias); `issueNumber` (required, positive int); `label` (required label name). Errors if the label isn't on the issue. Returns the issue's remaining label set. Errors when no worktree is given and none is active.",
+        "Remove one label from an issue. Unlike adding, this fails when the label is not currently on the issue, so check the issue's labels first rather than calling speculatively. Read back the remaining label set to confirm the result.",
       category: "forge",
       kind: "command",
       danger: "safe",

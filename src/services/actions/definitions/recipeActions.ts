@@ -16,7 +16,8 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
     defineAction({
       id: "recipe.list",
       title: "List Recipes",
-      description: "List all available recipes for the current project",
+      description:
+        "List the saved recipes for the current project — named multi-terminal setups the user has configured. Use this to discover recipe ids before running one. It never fails; an empty list means the project has no recipes rather than that recipes are unavailable.",
       category: "recipes",
       kind: "query",
       danger: "safe",
@@ -54,7 +55,8 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
     defineAction({
       id: "recipe.run",
       title: "Run Recipe",
-      description: "Run a terminal recipe",
+      description:
+        "Launch every terminal a saved recipe defines, in one worktree, as a repeatable multi-pane setup. Launch a single agent or a plain terminal instead when only one pane is wanted. This creates several panels at once and starts their configured commands or agents, so it can consume substantial resources and may partly succeed — check what actually started rather than assuming all of it did.",
       category: "recipes",
       kind: "command",
       danger: "confirm",

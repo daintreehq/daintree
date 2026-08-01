@@ -152,7 +152,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "system.checkCommand",
       title: "Check Command Availability",
       description:
-        "Check whether an executable is available on the user's PATH. Args: `command` (required) — the executable name to look for (e.g. 'node', 'gh'). Returns { available: boolean }. Never errors for a missing command — absence is reported as available:false, not an exception.",
+        "Check whether an executable is present on the user's PATH, to confirm a tool exists before depending on it. Absence is reported as a negative result rather than an error, so this never fails for a missing command. It only establishes presence — it neither runs the command nor reports its version.",
       category: "system",
       kind: "query",
       danger: "safe",
@@ -183,7 +183,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "system.checkDirectory",
       title: "Check Directory",
       description:
-        "Check whether a filesystem directory exists. Args: `path` (required) — an absolute directory path. Returns { exists: boolean }. Never errors for a missing path — absence is reported as exists:false, not an exception.",
+        "Check whether a filesystem directory exists at an absolute path. Absence is reported as a negative result rather than an error, so this never fails for a missing path. It reports existence only, not readability, contents or whether the path is a file.",
       category: "system",
       kind: "query",
       danger: "safe",
@@ -225,7 +225,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "system.getResourceProfileSnapshot",
       title: "Get Resource Profile Snapshot",
       description:
-        "Read a snapshot of the host machine's resource pressure and the active resource profile. Use this to gauge whether the machine has headroom before launching more agents or heavy work. No arguments. Returns { profile, thermalState, isOnBattery, speedLimit, lagPressureActive }: `profile` is 'performance' | 'balanced' | 'efficiency' (the adaptive mode currently in effect); `thermalState` is the OS thermal reading ('unknown' off macOS); `isOnBattery` is true when running unplugged; `speedLimit` is the OS CPU speed-limit percentage (0–100, 100 = unthrottled); `lagPressureActive` is true when sustained event-loop-lag mitigation is latched. Never errors — falls back to the balanced/unknown baseline when the service is still initializing.",
+        "Read how much pressure the host machine is under and which adaptive performance mode is in effect. Use this to judge whether there is headroom before launching more agents or heavy work. Some readings are platform-specific and report as unknown elsewhere. It never fails — while the service is still starting it returns a neutral baseline, so treat an unremarkable reading early in a session with some caution.",
       category: "system",
       kind: "query",
       danger: "safe",
@@ -248,7 +248,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     id: "cliAvailability.get",
     title: "Get CLI Availability",
     description:
-      "Get the cached availability of agent CLIs (e.g. claude, codex, gemini) on the host. Use this to confirm an agent's CLI is installed before launching it. No arguments. Returns a map of agent id to a status string. Reads a cache populated at startup; call `cliAvailability.refresh` to force a re-check.",
+      "Read which agent CLIs are installed on this machine, to confirm one exists before launching it. This reads a cache populated at startup rather than probing now, so a CLI installed since then will not appear until the cache is refreshed. Refresh explicitly when a stale answer would be misleading.",
     category: "system",
     kind: "query",
     danger: "safe",
@@ -277,7 +277,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "files.search",
       title: "Search Files",
       description:
-        "Search for files by name/glob within a directory tree. Args: `query` (required) — filename or glob; `cwd` (optional) — directory to search, defaults to the active worktree path; `limit` (optional) caps results. Returns { files } — an array of matching paths. Errors when `cwd` is omitted and no worktree is active.",
+        "Find files by name or glob within a worktree. This matches paths only, never file contents — use a source-reading capability to search inside files. Results are capped and truncated silently rather than paged, so a full-looking result may not be exhaustive when the pattern is broad.",
       category: "files",
       kind: "query",
       danger: "safe",
@@ -307,7 +307,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "slashCommands.list",
       title: "List Slash Commands",
       description:
-        "List the slash commands available for an agent CLI. Args (all optional): `agentId` — built-in agent id (e.g. 'claude', 'codex'), defaults to 'claude'; `projectId` or `projectPath` — project to scope project-local commands, defaults to the active project. Returns { commands } — each with id, label, description, scope, agentId, and optional sourcePath/kind, and an empty list when the agent has none. Errors when `projectId` names a project that is not open.",
+        "List the slash commands an agent CLI offers, including any the project defines locally. Use this to discover what a given agent can be driven with before sending it a command. An empty list means the agent exposes none, whereas naming a project that is not open fails.",
       category: "agent",
       kind: "query",
       danger: "safe",
@@ -406,7 +406,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generate",
       title: "Generate CopyTree Context",
       description:
-        "Generate a CopyTree context dump (file tree plus selected file contents) for a worktree and write it to a file, returning the path. Args (all optional): `worktreeId` or `worktreePath` — the worktree, defaults to the active one; `options` — CopyTree include/exclude options; `includeContent` — also return a bounded head of the bundle. Returns { filePath, fileCount, outputBytes, optional outputFormatVersion, optional content, optional contentTruncated, optional stats }. `stats` carries the budget flags — check `truncated` and `budgetExceeded` before trusting the bundle as complete. `filePath` is a temporary file pruned by age and count, so read it promptly. The bundle is NOT returned inline by default — it routinely runs to tens of megabytes, far past any tool-result limit; `includeContent` returns only the first few KB. Throws when generation fails or when no worktree is given and none is active. Do NOT use this to inject context into a terminal — use `copyTree.injectToTerminal`.",
+        "Bundle a worktree's file tree and selected file contents into a context dump written to a temporary file, and return its path. Use this to hand a large codebase context to something that can read a file; inject directly into a terminal instead when the target is an agent. The bundle routinely runs to tens of megabytes and is never returned inline. Check the budget flags before trusting it as complete, and read the file promptly — it is pruned by age.",
       category: "copyTree",
       kind: "query",
       danger: "safe",
@@ -466,7 +466,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generateAndCopyFile",
       title: "Generate And Copy Context",
       description:
-        "Generate worktree context, write it to a file and put that file on the clipboard. Args (all optional): `worktreeId` — the worktree, defaults to the active one; `options` — CopyTree include/exclude options. Returns { filePath, fileCount, outputBytes, optional stats:{ totalSize, duration, plus the budget flags truncated / budgetExceeded / noFilesMatched } }. The bundle is never returned inline. Throws when generation or the clipboard write fails.",
+        "Bundle a worktree's context to a file and put that file on the system clipboard, so the user can paste it elsewhere. This replaces whatever the user currently has copied. The bundle is never returned inline — check the budget flags to tell whether it was complete.",
       category: "copyTree",
       kind: "command",
       danger: "safe",
@@ -516,7 +516,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.injectToTerminal",
       title: "Inject Context To Terminal",
       description:
-        "Write a worktree's CopyTree context straight into a terminal. Args: `terminalId` — required; `worktreeId` — defaults to the active worktree; `options` — CopyTree include/exclude options. Returns { fileCount, optional stats:{ totalSize, duration, plus the budget flags truncated / budgetExceeded / noFilesMatched } } — the context goes to the terminal, never back through this result. Throws when generation or injection fails.",
+        "Bundle a worktree's context and write it straight into a terminal, which is how an agent is given a large codebase context. The context goes to the terminal and never comes back in the result, so read the budget flags to tell whether the bundle was complete. This types a potentially enormous payload into a live pane, so target an idle terminal.",
       category: "copyTree",
       kind: "command",
       danger: "safe",

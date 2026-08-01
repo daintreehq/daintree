@@ -189,7 +189,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.launch",
     title: "Launch Agent",
     description:
-      "Launch an AI agent in a new terminal. Returns { launched, terminalId, location, worktreeId, worktreePath, branch, cwd } — the resolved identity tells you where the agent landed, so parallel launches can be mapped back to their work without re-resolving the target. `launched: true` means the panel was created and its process is starting, NOT that the agent is ready — poll agent.getState or terminal.getStatus for that. `launched: false` means no agent is running: either nothing was created (every field null) or the CLI is missing, where Daintree opened a setup diagnostic instead (terminalId is that panel, spawnStatus is missing-cli). Fire up to 4 in parallel per message.",
+      "Start an AI agent in a new terminal and report where it landed, so parallel launches can be told apart without re-resolving the target. Success means the panel was created and its process is starting, not that the agent is ready — poll its state or a terminal status snapshot for that. A failure to launch may mean the agent's CLI is missing, in which case a setup diagnostic panel is opened instead. Launching consumes real resources, so keep concurrent launches modest.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -398,7 +398,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("agent.terminal", () => ({
     id: "agent.terminal",
     title: "Launch Terminal",
-    description: "Launch a plain terminal",
+    description:
+      "Open a plain shell terminal with no agent attached, for running ordinary commands. Use an agent launch instead when the intent is to start an AI CLI. This creates a visible panel and starts a shell process, so it consumes resources until closed.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -448,7 +449,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("agent.focusNextWaiting", () => ({
     id: "agent.focusNextWaiting",
     title: "Focus Next Waiting Agent",
-    description: "Focus the next agent in waiting state",
+    description:
+      "Move keyboard focus to the next agent that is blocked waiting on the user, so it can be answered. This changes what the user sees and is a navigation aid only — it reports no agent state. Use an agent status snapshot to find out which agents are waiting and why.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -529,7 +531,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("agent.focusNextWorking", () => ({
     id: "agent.focusNextWorking",
     title: "Focus Next Working Agent",
-    description: "Focus the next agent in working state",
+    description:
+      "Move keyboard focus to the next agent that is currently working, to watch its progress. This changes what the user sees and is a navigation aid only — it reports no agent state. Use an agent status snapshot to find out which agents are working.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -549,7 +552,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("agent.focusNextAgent", () => ({
     id: "agent.focusNextAgent",
     title: "Focus Next Agent",
-    description: "Cycle through all agent panels",
+    description:
+      "Move keyboard focus to the next agent panel in order, cycling back to the first at the end. This changes what the user sees and reports no agent state; use a terminal listing to enumerate panels instead.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -585,7 +589,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.getState",
     title: "Get Agent State",
     description:
-      "Look up the live state of an agent by its agent id. Args: `agentId` (required) — agent id such as 'claude' or 'codex', as seen in `terminal.list` entries' `agentId` field. Returns { agentId, state, waitingReason ('prompt'|'question'|'approval'|'error', non-null only when state is 'waiting'), lastTransitionAt, exitCode (number|null — set once the PTY has exited, null while running or on a signal kill; read alongside `state` to tell pass from fail), spawnedAt, terminalId, found }. Never errors — an unknown agent returns found:false with null fields. Do NOT use this to enumerate terminals — use `terminal.list` or `terminal.getStatus`.",
+      "Look up one agent's live state by its agent id, to tell whether it is working, waiting on the user, or finished. Use a terminal listing or status snapshot to enumerate terminals — this answers about a single agent only. It never fails: an agent that is not running comes back flagged as not found with empty fields, so absence is data rather than an error. An exit code appears only once the process has actually ended.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -595,7 +599,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .string()
         .min(1)
         .describe(
-          "Agent id to look up (e.g. 'claude', 'codex') — from `terminal.list` entries' `agentId` field."
+          "Identifies the agent to look up, using an agent id such as 'claude' or 'codex' as reported by the terminal-listing capability."
         ),
     }),
     examples: [
@@ -657,7 +661,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agentSessionHistory.list",
     title: "List Resumable Sessions",
     description:
-      "List resumable agent sessions from the on-disk journal — the closed sessions the user can relaunch. A faithful record listing, NOT a summary of what happened in each session. Requires a scope: pass `worktreeId` and/or `projectId` (they combine), else the caller's worktree and project context is used; with no resolvable scope this throws rather than listing every project. Args: `worktreeId`, `projectId`, `limit` (default 20, max 100), `offset` (default 0). Returns { sessions: [{ sessionId, agentId, worktreeId, title, projectId, savedAt (epoch ms; newest-first), agentLaunchFlags?, agentModelId?, cwd?, branch?, bookmark? }], total, hasMore } — `total` counts the scoped records before paging; when `hasMore` is true, advance `offset` for the next page. Pruned by the journal's retention policy. To relaunch a session, feed its `agentId`/`cwd`/`worktreeId`/`agentLaunchFlags`/`agentModelId` into `agent.launch`.",
+      "List closed agent sessions that can be relaunched, read from the on-disk journal. This is a faithful record of which sessions exist, not a summary of what happened in them — it carries no transcript text. It must be scoped to a worktree or project and fails rather than listing every project when no scope can be resolved. Old sessions are pruned by the journal's retention policy, so absence does not mean a session never existed.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -838,7 +842,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "session.bookmarks.list",
     title: "List bookmarks",
     description:
-      "List the user's durable session bookmarks for one project, newest-first by bookmark time. Args: `projectId` (optional) — the project to scope to; when omitted the caller's project context is used. `limit` (default 20, max 100) and `offset` (default 0). Bookmarks are project-scoped: with no explicit `projectId` and no project context this returns an empty list rather than leaking bookmarks across projects. Returns { bookmarks: [{ sessionId, agentId, worktreeId, title, projectId, savedAt, agentLaunchFlags?, agentModelId?, cwd?, branch?, bookmark: { bookmarkedAt, label, ... } }], total, hasMore } — `total` counts the project's bookmarks before paging; bookmarks never expire, so advance `offset` while `hasMore` is true to reach them all. Read-only metadata; NO transcript content. Never errors.",
+      "List the durable session bookmarks the user has saved for one project, newest first. Bookmarks never expire, unlike ordinary session history, so this is where deliberately kept sessions live. It is strictly project-scoped: with no project to scope to it returns nothing rather than leaking bookmarks between projects. Read-only metadata — it carries no transcript text.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -879,7 +883,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.listToolbar",
     title: "List Toolbar Agents",
     description:
-      "List the built-in agents and their resolved toolbar visibility. Returns { agents: [{ id, displayName, pinned, installed, visible }] } for every launchable built-in agent. `pinned` is tri-state: true (explicitly pinned), false (explicitly hidden), or omitted (follows CLI availability). `installed` is whether the agent's CLI binary was detected. `visible` is the resolved toolbar state — true when the agent button currently shows in the toolbar. Use this to discover which agents the user has surfaced without reading the full agent settings.",
+      "List the built-in agents together with whether each one currently shows in the toolbar. Use this to see what the user has surfaced without reading full agent settings. Visibility is resolved for you: an agent can be explicitly pinned, explicitly hidden, or left to follow whether its CLI is installed, so read the resolved visibility rather than inferring it from pinning alone.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -921,7 +925,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.listAvailable",
     title: "List Available Agents",
     description:
-      "List every registered direct-agent candidate in Daintree's current effective registry, including built-in, user-defined, and plugin agents. Returns { complete, availabilityComplete, agents: [{ id, displayName, source, availability?, installed?, launchable?, pinned?, toolbarVisible? }] }. Registry membership comes from the authoritative main process; `complete` marks a full (never-truncated) read of the current effective registry — plugin agents still initializing at call time appear on a later call. `launchable` is true only for ready/unauthenticated agents and is omitted with availability (and `availabilityComplete` is false) until a live CLI probe has finished this session — never inferred from the still-hydrating cache. Built-in rows include tri-state explicit pin intent and resolved main-toolbar visibility; user/plugin rows omit toolbar fields because they are not toolbar entries.",
+      "List every agent that can be launched right now — built-in, user-defined and plugin-contributed — read from the authoritative registry rather than a local guess. Use this before launching so an id is known to exist. Launchability is confirmed by a live probe of each CLI, so early in a session that probe may still be running and the result flags itself as incomplete; call again rather than treating a missing agent as absent.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -999,7 +1003,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("agent.focusPreviousAgent", () => ({
     id: "agent.focusPreviousAgent",
     title: "Focus Previous Agent",
-    description: "Cycle backwards through all agent panels",
+    description:
+      "Move keyboard focus to the previous agent panel in order, cycling to the last at the beginning. This changes what the user sees and reports no agent state; use a terminal listing to enumerate panels instead.",
     category: "agent",
     kind: "command",
     danger: "safe",

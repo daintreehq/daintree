@@ -50,7 +50,14 @@ describe("withWorktreeLocation", () => {
     // An alias must point the caller at the canonical name it stands in for,
     // and must not read as an independent argument.
     expect(props.cwd?.description).toMatch(/alias for `worktreePath`/i);
-    expect(props.worktreeId?.description).toContain("worktree.list");
+    // The canonical selector must state where a caller gets an id and what
+    // omitting it does — that fallback used to be restated in every tool's own
+    // description, and this field is now its only home (#11542). Referencing
+    // the source capability in prose rather than by action id is deliberate:
+    // clients rewrite every character outside [A-Za-z0-9_-] when namespacing a
+    // tool, so a literal `worktree.list` names something the model never sees.
+    expect(props.worktreeId?.description).toMatch(/worktree-listing capability/i);
+    expect(props.worktreeId?.description).toMatch(/active worktree/i);
   });
 
   it("does not add legacy aliases to tools that never accepted them", () => {

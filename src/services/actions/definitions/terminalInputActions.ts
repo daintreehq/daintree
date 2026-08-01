@@ -19,7 +19,7 @@ export function registerTerminalInputActions(
     id: "terminal.inject",
     title: "Inject Context",
     description:
-      "Inject the active worktree's prepared context into a terminal. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch: an external caller must name its target explicitly, because focus can drift between the call and its execution and would otherwise route a multi-KB context dump into whatever terminal happens to be focused (#11346). Interactive (keybinding) dispatch may omit it and falls back to the focused terminal.",
+      "Write the active worktree's prepared context into a terminal, which is how an agent is handed a large codebase context. Name the target terminal explicitly — focus can drift between the call and its execution, and a mistarget types a multi-kilobyte dump into whatever pane happened to be focused. Target an idle terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -219,7 +219,7 @@ export function registerTerminalInputActions(
     id: "terminal.arm",
     title: "Arm Terminal",
     description:
-      "Add a terminal to the fleet arming set so the next broadcast input is also routed to it. Args: `terminalId` (required) — panel UUID from `terminal.list` (the `id` field); ignored when the terminal is not arm-eligible. Returns { armed } — the resulting armed terminal IDs in broadcast (arm) order.",
+      "Add a terminal to the set that receives the user's fleet broadcasts, so the next broadcast reaches it too. Read back the resulting set to confirm — a terminal that cannot be armed is ignored rather than reported as an error. This changes where the user's subsequent broadcast input lands.",
     category: "terminal",
     kind: "command",
     // Arming reroutes the human's *next* keystrokes to every armed terminal, so
@@ -255,7 +255,7 @@ export function registerTerminalInputActions(
     id: "terminal.disarm",
     title: "Disarm Terminal",
     description:
-      "Remove a terminal from the fleet arming set. Args: `terminalId` (required) — panel UUID from `terminal.list` (the `id` field). No-op when the terminal is not armed. Returns { armed } — the resulting armed terminal IDs in broadcast (arm) order.",
+      "Remove a terminal from the set that receives fleet broadcasts, so subsequent broadcasts skip it. Read back the resulting set to confirm. Disarming a terminal that was not armed does nothing rather than failing, so it is safe to call without checking first.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -274,7 +274,7 @@ export function registerTerminalInputActions(
     id: "terminal.disarmAll",
     title: "Disarm All",
     description:
-      "Clear the entire fleet arming set so no terminal receives broadcast input. Returns { armed } — always an empty array.",
+      "Clear the fleet arming set entirely, so no terminal receives the user's broadcast input until something is armed again. This silently changes where the user's next broadcast lands, so prefer disarming individual terminals unless resetting is genuinely the intent.",
     category: "terminal",
     kind: "command",
     danger: "safe",

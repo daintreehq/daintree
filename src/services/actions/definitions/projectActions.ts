@@ -155,7 +155,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   actions.set("project.update", () => ({
     id: "project.update",
     title: "Update Project",
-    description: "Update project metadata",
+    description:
+      "Change a project's stored metadata, such as its display name. This persists immediately and has no undo here, so read the project's current record first rather than overwriting fields blindly.",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -234,7 +235,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.getAll",
     title: "List Projects",
     description:
-      "List every project registered in Daintree, open or not. Takes no args. Returns { projects } — an array of project records with id, name, path, and metadata. Never errors; returns an empty array when no projects are registered. Do NOT use this just to find the active project — call `project.getCurrent`, which returns only the one currently open.",
+      "List every project registered in the app, whether or not it is currently open. Use this to discover project ids; ask for the current project instead when all you need is the one the user is working in. It never fails — an empty list means no projects are registered rather than an error.",
     category: "project",
     kind: "query",
     danger: "safe",
@@ -250,7 +251,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.getCurrent",
     title: "Get Current Project",
     description:
-      "Get the project currently open in the active window. Takes no args. Returns { project } — the active project record (id, name, path, metadata), or null when no project is open. Never errors. Do NOT use `project.getAll` for this — that lists every registered project; this returns only the active one.",
+      "Get the project currently open in the active window, which is what most work should be scoped to. Use the full project listing only when you genuinely need projects the user is not in. It never fails: an empty result means no project is open.",
     category: "project",
     kind: "query",
     danger: "safe",
@@ -266,7 +267,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.getSettings",
     title: "Get Project Settings",
     description:
-      "Read the operational subset of a project's persisted settings (run commands, dev server command, worktree path pattern, branch prefix, forge remote, notification overrides, terminal overrides, etc.). Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project's id. Returns only that fixed field set: environment variables (including secure ones), the project icon SVG, resource environment definitions, access-control state (MCP tier, browser allow-list), and renderer-only UI preferences are deliberately omitted and cannot be read through this action. Errors when no projectId is given and no project is active.",
+      "Read a project's operational settings — run commands, dev server command, worktree naming, forge remote and notification overrides. This deliberately exposes only that fixed set: environment variables, secrets, access-control state and UI preferences are withheld and cannot be read here at all, so their absence is by design rather than a sign they are unset.",
     category: "project",
     kind: "query",
     danger: "safe",
@@ -293,7 +294,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   actions.set("project.saveSettings", () => ({
     id: "project.saveSettings",
     title: "Save Project Settings",
-    description: "Save a project's settings",
+    description:
+      "Persist a project's settings, replacing the stored values with the ones supplied. This writes immediately and has no undo, and settings drive real behaviour such as run commands and worktree naming — read the current settings first so unrelated fields are not lost.",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -327,7 +329,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   actions.set("project.muteNotifications", () => ({
     id: "project.muteNotifications",
     title: "Mute Project Notifications",
-    description: "Suppress future agent completion and waiting notifications for a project",
+    description:
+      "Stop a project from raising notifications when its agents finish or need attention. The user will no longer be prompted for work that is waiting, so anything blocked on them may sit unnoticed. This persists until it is turned back on.",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -508,7 +511,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.detectRunners",
     title: "Detect Runners",
     description:
-      "Detect runnable commands (test/lint/build/dev scripts) for a project by inspecting its manifest files. Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project. Returns { runners } — an array of { id, name, command }. Errors when no projectId is given and no project is active.",
+      "Detect the runnable commands a project defines — its test, lint, build and dev scripts — by inspecting its manifest files. Use this to discover the right command to run rather than guessing one. It reads declared scripts only, so a project that drives tooling some other way returns nothing.",
     category: "project",
     kind: "query",
     danger: "safe",
@@ -528,7 +531,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.getStats",
     title: "Get Project Stats",
     description:
-      "Get aggregate resource statistics for a project. Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project. Returns { processCount, terminalCount, estimatedMemoryMB, terminalTypes } — terminalTypes maps each terminal type to its count. Host process ids are deliberately not exposed. Errors when no projectId is given and no project is active.",
+      "Get aggregate resource usage for a project — how many processes and terminals it is running and roughly how much memory they consume. Use this to judge whether there is headroom before launching more work. Host process ids are deliberately withheld, so this cannot be used to target individual processes.",
     category: "project",
     kind: "query",
     danger: "safe",
