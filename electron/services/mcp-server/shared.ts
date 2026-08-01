@@ -379,6 +379,75 @@ export const TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
 export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
 
 /**
+ * Where the strictest known client cuts `instructions` off. Claude Code
+ * hard-truncates at 2 KiB, and our tail is the authorization paragraph — the
+ * one sentence whose loss would leave a model guessing at why a call was
+ * denied.
+ */
+const MCP_INSTRUCTIONS_CLIENT_TRUNCATION_BYTES = 2_048;
+
+/**
+ * Headroom held back from the client cap so the next paragraph someone adds
+ * does not have to arrive in the same edit as a re-measurement of the whole
+ * string. Slack for a future author, not slack to spend on prose.
+ */
+const MCP_INSTRUCTIONS_RESERVE_BYTES = 512;
+
+/**
+ * Authoring budget for {@link MCP_SERVER_INSTRUCTIONS}, enforced by test rather
+ * than by runtime truncation (#11541) — silently cutting controlled static text
+ * is strictly worse than failing an author's edit, so this is a ceiling the
+ * suite asserts, not a bound `truncateText` applies.
+ *
+ * Derived rather than written as a literal so the reserve cannot be quietly
+ * spent by editing one number: raising this means raising the client cap or
+ * lowering the reserve, both of which read as the decisions they are.
+ */
+export const MCP_SERVER_INSTRUCTIONS_MAX_BYTES =
+  MCP_INSTRUCTIONS_CLIENT_TRUNCATION_BYTES - MCP_INSTRUCTIONS_RESERVE_BYTES;
+
+/**
+ * The `instructions` string sent once in the MCP `initialize` result (#11541).
+ * Clients fold it into the model's system prompt at session start, so this is
+ * the only place to establish cross-cutting workflow rules before the model has
+ * picked a tool. Per the MCP spec, it deliberately does not restate tool
+ * descriptions — every line here is guidance no single tool's description
+ * carries.
+ *
+ * Deliberately static and tier-agnostic even though the tier is knowable at
+ * construction (`httpLifecycle.ts` resolves it before `createSessionServer`).
+ * `instructions` is sent once and has no update notification, while in-app tiers
+ * elevate and decay mid-session and grants widen the surface transiently — a
+ * tier-specific sentence would silently rot, whereas the generic tier-model
+ * sentence stays true for the life of the session.
+ *
+ * Tool ids appear as literal prose rather than interpolated constants on
+ * purpose: the suite extracts every dotted id from this text and asserts it is
+ * a real action, so renaming a tool fails a test naming this text as newly
+ * lying instead of silently rewriting what the model is told.
+ *
+ * On the discovery paragraph: it must not imply a deferred catalog. #11582
+ * tried withholding tools from `tools/list` while keeping them dispatchable and
+ * it does not work — no shipped client sends `tools/call` for a name it never
+ * received — so #11585 made the listing and the callable set the same boundary.
+ * Telling a model otherwise would send it probing for names that cannot exist.
+ *
+ * The shell sentence is scoped to external clients deliberately. In-app tiers
+ * withhold writes on purpose (git/file mutations arrive only at `system`), so
+ * an unscoped "use your shell when a tool is missing" would read to an
+ * `action`-tier model as licence to route around its own authorization floor.
+ */
+export const MCP_SERVER_INSTRUCTIONS = [
+  "Daintree orchestrates IDE-owned worktrees, recipes, and agent terminals — use it for that coordination. External clients should use their own shell and tooling for repository, file, git, and forge work omitted from `tools/list`; that is not licence to route around an in-app tier.",
+
+  "`tools/list` is the advertised baseline; do not invent tool names. When its schemas are too large to reason over, use `actions.search` for a compact ranked shortlist of what this session is already authorized to call, then `actions.getSchema` for one action's manifest entry and whatever schemas it publishes. This narrows attention; it does not reveal a deferred catalog or widen access.",
+
+  'Resolve the target worktree and terminal ids before scoped actions. `terminal.sendCommand` returns once the text is submitted, not when the work finishes — prefer `terminal.waitUntilIdle` or `terminal.waitUntilIdleBatch` over tight polling, then read `idleReason`, `waitingReason`, and `exitCode` before your next turn or any irreversible step. Those waits track agent panes: a terminal with no tracked agent returns `idleReason: "unknown"` at once, which is not proof a shell command finished.',
+
+  "Authorization is tiered: in-app `workbench`, `action`, and `system` progressively widen access, while `external` is an independently curated allowlist; a call outside the current authorized surface returns `TIER_NOT_PERMITTED`. Honor `retriable` on errors — retry a `false` only once arguments, context, or authorization have changed.",
+].join("\n\n");
+
+/**
  * Creation-tool allowlist for per-session idempotency dedup. LLMs replay
  * tool calls during multi-step planning, especially across reconnects.
  * Inside the TTL window a duplicate call returns the original result

@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ActionManifestEntry, ActionId } from "../../../../shared/types/actions.js";
+import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 
 vi.mock("electron", () => ({
   app: {
@@ -29,10 +32,18 @@ import {
   unwrapDispatchResult,
   RESOLVED_WORKSPACE_META_KEY,
   withResolvedWorkspace,
+  MCP_SERVER_INSTRUCTIONS,
+  MCP_SERVER_INSTRUCTIONS_MAX_BYTES,
+  TIER_ALLOWLISTS,
 } from "../shared.js";
 import type { DispatchedWorkspaceRef } from "../shared.js";
 import { TOOL_RESULT_TEXT_MAX_BYTES } from "../toolCallResult.js";
-import { isTierPermitted, shouldExposeTool } from "../tierAuth.js";
+import {
+  isTierPermitted,
+  shouldExposeTool,
+  ACTIONS_SEARCH_TOOL_ID,
+  ACTIONS_GET_SCHEMA_TOOL_ID,
+} from "../tierAuth.js";
 import { SessionBindingError, RendererBridgeUnavailableError } from "../rendererBridge.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
@@ -202,6 +213,27 @@ async function listTools(server: ReturnType<typeof createSessionServer>) {
   ) as Promise<{ tools: Array<{ name: string }> }>;
 }
 
+/**
+ * Complete a real MCP handshake against the session server and return what the
+ * client received (#11541).
+ *
+ * Deliberately the public path rather than this file's `_requestHandlers` idiom:
+ * `initialize` is the SDK's own handler, not one we register, so the question
+ * is whether the constructor option survives all the way to a client. Invoking
+ * the handler directly would stay green if the SDK stopped forwarding the field
+ * on the way to the transport, which is the failure actually worth catching.
+ */
+async function initializeClient(server: ReturnType<typeof createSessionServer>) {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    return client.getInstructions();
+  } finally {
+    await client.close();
+  }
+}
+
 function makeManifestEntry(id: string): ActionManifestEntry {
   return {
     id: id as ActionId,
@@ -216,6 +248,73 @@ function makeManifestEntry(id: string): ActionManifestEntry {
     inputSchema: { type: "object", properties: {} },
   };
 }
+
+describe("sessionServer initialize instructions", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("delivers the instructions to a client that completes a real handshake", async () => {
+    const server = createSessionServer("session-instructions", fakeDeps());
+
+    await expect(initializeClient(server)).resolves.toBe(MCP_SERVER_INSTRUCTIONS);
+  });
+
+  it("sends the same instructions regardless of session tier", async () => {
+    // Instructions are sent once and have no update notification, so they must
+    // not encode a tier that can elevate or decay later in the same session.
+    const perTier = await Promise.all(
+      (Object.keys(TIER_ALLOWLISTS) as Array<keyof typeof TIER_ALLOWLISTS>).map((tier) =>
+        initializeClient(
+          createSessionServer(`session-${tier}`, fakeDeps({ sessionStore: fakeSessionStore(tier) }))
+        )
+      )
+    );
+
+    expect(new Set(perTier)).toEqual(new Set([MCP_SERVER_INSTRUCTIONS]));
+  });
+
+  it("stays within the authored byte budget", () => {
+    // The budget is derived from the client truncation point minus a reserve,
+    // and the authorization paragraph is last — overflow silently drops the
+    // denial guidance in the field rather than failing anything here.
+    expect(Buffer.byteLength(MCP_SERVER_INSTRUCTIONS, "utf8")).toBeLessThanOrEqual(
+      MCP_SERVER_INSTRUCTIONS_MAX_BYTES
+    );
+  });
+
+  it("names every tier a session can hold", () => {
+    // Adding a tier without describing it here leaves the model unable to
+    // reason about a denial it can now receive. Matched with backticks because
+    // the bare word `action` also occurs inside `actions.search` and prose.
+    for (const tier of Object.keys(TIER_ALLOWLISTS)) {
+      expect(MCP_SERVER_INSTRUCTIONS).toContain(`\`${tier}\``);
+    }
+    expect(MCP_SERVER_INSTRUCTIONS).toContain(TIER_NOT_PERMITTED_CODE);
+  });
+
+  it("names only tools that actually exist", () => {
+    // Every dotted id in the text, not a hand-listed subset: a tool rename that
+    // skips this prose fails here rather than telling every connecting model to
+    // call a name that no longer resolves. New references are covered on
+    // arrival, without interpolating constants into model-facing text.
+    const referenced = [
+      ...MCP_SERVER_INSTRUCTIONS.matchAll(/`([a-z][A-Za-z]*(?:\.[A-Za-z]+)+)`/g),
+    ].map(([, id]) => id);
+
+    expect(referenced).toContain(ACTIONS_SEARCH_TOOL_ID);
+    expect(referenced).toContain(ACTIONS_GET_SCHEMA_TOOL_ID);
+    expect(referenced.filter((id) => !BUILT_IN_ACTION_IDS.includes(id as never))).toEqual([]);
+    // Existing as an action is the weaker guard. The instructions go to every
+    // session including `external`, whose surface is the hand-curated
+    // `mcpExternalTierAllowlist.ts` — `terminal.close` was cut from it in
+    // #11592 while staying a perfectly valid BuiltInActionId. Cutting a
+    // referenced id without editing the prose would leave the text telling
+    // external clients to call something that only ever returns
+    // TIER_NOT_PERMITTED.
+    expect(referenced.filter((id) => !TIER_ALLOWLISTS.external.has(id))).toEqual([]);
+  });
+});
 
 describe("sessionServer tools/list handler", () => {
   // The external tier is gated by the curated MCP_TOOL_ALLOWLIST and nothing
