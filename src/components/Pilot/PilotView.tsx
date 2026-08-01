@@ -7,18 +7,25 @@ import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { usePilotStore } from "@/store/pilotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { getAgentConfig } from "@shared/config/agentRegistry";
 import { actionService } from "@/services/ActionService";
-import { countDemands } from "@/lib/fleetAttention";
+import { BAND_TONE, type FleetBand } from "@/lib/fleetAttention";
+import { UI_ANIMATION_DURATION, UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { agoPhrase, formatWaitAge, ROW_TONE_CLASS } from "@/lib/projectRowStatus";
 import {
   buildPilotGroups,
   filterPilotGroups,
+  summarizePilotGroups,
   type PilotProjectGroup,
   type PilotRow,
+  type PilotWorkspaceMeta,
 } from "./pilotRows";
-import { PilotRunState, runStateLabel } from "./PilotRunState";
+import { PilotRunState } from "./PilotRunState";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
-import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
+import { CircleHelp, FileText } from "@/components/icons";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 // Leaf import, not the `@/hooks` barrel: palette suites routinely mock that
 // barrel and throw on an export they don't list.
@@ -26,10 +33,13 @@ import { useOverlayClaim } from "@/hooks/useOverlayState";
 
 /** Matches the project switcher, which this opens from and sits beside. */
 const PALETTE_WIDTH = "w-[484px] max-w-[calc(100vw-2rem)]";
+const PALETTE_MAX_HEIGHT = "max-h-[60vh]";
 const TREE_ID = "pilot-tree";
 
 /** Ages are minute-grained, so a 30s tick keeps them honest without churn. */
 const AGE_TICK_MS = 30_000;
+/** The loading rule's ">5s says something" threshold. */
+const LOADING_HINT_MS = 5_000;
 
 /**
  * The tree is flat in the DOM — every node is a sibling, depth carried by
@@ -48,22 +58,62 @@ function runDomId(runId: string): string {
 /**
  * Selection styling, lifted verbatim from the switcher's rows so one palette
  * doesn't invent a second vocabulary for "this is the row Enter will act on".
- * The accent bar is the region's single load-bearing signal: the search input
- * holds focus, so the bar is the only thing saying where the keyboard is.
  */
 const ROW_BASE = cn(
   "relative flex w-full cursor-pointer items-center rounded-[var(--radius-md)] border border-transparent text-left transition-colors",
-  "before:absolute before:top-1.5 before:bottom-1.5 before:left-0 before:w-[2px] before:rounded-r before:bg-daintree-accent before:opacity-0 before:transition-opacity before:content-[''] aria-selected:before:opacity-100"
+  "before:absolute before:top-2 before:bottom-2 before:left-0 before:w-[2px] before:rounded-r before:bg-daintree-accent before:opacity-0 before:transition-opacity before:content-[''] aria-selected:before:opacity-100"
 );
 
-/** One phrasing of the demand, so the header chip and the footer can't disagree. */
+/**
+ * One phrasing of the demand, so the header and the footer can't disagree.
+ *
+ * The subject rides the sentence — a bare "1 needs you" makes the reader supply
+ * the noun, which is the same correction the switcher's status line already
+ * carries.
+ */
 function demandPhrase(count: number): string {
-  return count === 1 ? "1 needs you" : `${count} need you`;
+  return count === 1 ? "Agent needs you" : `${count} agents need you`;
 }
 
-/** Only ever read aloud — the visible header renders the bare number. */
 function agentCount(count: number): string {
   return count === 1 ? "1 agent" : `${count} agents`;
+}
+
+/** The worst band's own sentence, plural-aware. */
+function bandPhrase(band: FleetBand, count: number): string {
+  switch (band) {
+    case "blocked":
+      return count === 1 ? "Agent blocked" : `${count} agents blocked`;
+    case "needs-you":
+      return demandPhrase(count);
+    case "review":
+      return count === 1 ? "Ready for review" : `${count} agents ready for review`;
+    case "running":
+      return count === 1 ? "Agent working" : `${count} agents working`;
+    case "done":
+      return count === 1 ? "Agent finished" : `${count} agents finished`;
+    default:
+      return agentCount(count);
+  }
+}
+
+/**
+ * A group's one status sentence, in the switcher's shape: what the worst thing
+ * in it is, then how much else is there.
+ *
+ * Named rather than left to the tone: "blocked" and "needs input" are both
+ * demands and would otherwise differ only in hue, which is the colour-only
+ * encoding the switcher's own status line exists to avoid.
+ *
+ * The remainder is "N more" rather than a repeated total — "2 agents blocked ·
+ * 3 agents" states the same population twice and reads as a contradiction, and
+ * naming that remainder "running" would be false for an exited or idle run.
+ */
+function groupSummary(group: PilotProjectGroup): string {
+  const inTopBand = group.rows.filter((row) => row.band === group.topBand).length;
+  const rest = group.rows.length - inTopBand;
+  const lead = bandPhrase(group.topBand, inTopBand);
+  return rest > 0 ? `${lead} · ${rest} more` : lead;
 }
 
 function rowTone(isSelected: boolean): string {
@@ -88,21 +138,61 @@ type PilotNavRow =
     }
   | { kind: "run"; domId: string; workspaceId: string; row: PilotRow };
 
+const TILE_BASE =
+  "flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-lg)] text-base";
+
+/**
+ * The workspace's identity tile, at the switcher's size and radius.
+ *
+ * Only a project carries an emoji and a colour. A scratch is an app-managed
+ * folder with neither, so the switcher gives it a neutral tile and a glyph —
+ * rendering the project tile for one produced an empty coloured square. An
+ * unknown workspace is a genuine anomaly (removed while its agents kept
+ * running) and is allowed to look like one.
+ */
+function WorkspaceTile({ group }: { group: PilotProjectGroup }) {
+  if (group.kind !== "project") {
+    const Glyph = group.kind === "scratch" ? FileText : CircleHelp;
+    return (
+      <div className={cn(TILE_BASE, "bg-tint/[0.04] text-muted-foreground")}>
+        <Glyph className="h-4 w-4" aria-hidden="true" />
+      </div>
+    );
+  }
+  return (
+    <div
+      className={cn(
+        TILE_BASE,
+        "shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))]"
+      )}
+      style={{
+        background: group.color
+          ? `var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), ${getProjectGradient(group.color)}`
+          : "var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), var(--color-daintree-sidebar)",
+      }}
+    >
+      <span className="leading-none select-none filter drop-shadow-sm">{group.emoji}</span>
+    </div>
+  );
+}
+
 function GroupHeader({
   group,
   isCollapsed,
   isSelected,
   domId,
+  className,
   onActivate,
-  onHover,
 }: {
   group: PilotProjectGroup;
   isCollapsed: boolean;
   isSelected: boolean;
   domId: string;
+  className?: string;
   onActivate: () => void;
-  onHover: () => void;
 }) {
+  const summary = groupSummary(group);
+
   return (
     <div
       id={domId}
@@ -110,17 +200,16 @@ function GroupHeader({
       aria-level={1}
       aria-expanded={!isCollapsed}
       aria-selected={isSelected}
-      // Pinned rather than computed from contents: the bare count and the
-      // demand chip would otherwise read as "daintree 2 2 need you".
+      // Pinned rather than computed from contents, which would fold the
+      // "Current" marker and the separator dots into one run-on string.
       aria-label={
-        group.demandCount > 0
-          ? `${group.name}, ${agentCount(group.rows.length)}, ${demandPhrase(group.demandCount)}`
-          : `${group.name}, ${agentCount(group.rows.length)}`
+        group.isCurrent
+          ? `${group.name}, current workspace, ${summary}`
+          : `${group.name}, ${summary}`
       }
       data-testid="pilot-group-header"
       onClick={onActivate}
-      onPointerMove={onHover}
-      className={cn(ROW_BASE, rowTone(isSelected), "gap-2 py-1.5 pr-3 pl-2")}
+      className={cn(ROW_BASE, rowTone(isSelected), "gap-2 py-2 pr-3 pl-3", className)}
     >
       {/*
         A span, not a button: `aria-expanded` on the row already exposes the
@@ -130,42 +219,45 @@ function GroupHeader({
       <ChevronRight
         aria-hidden="true"
         className={cn(
-          "size-3.5 shrink-0 text-daintree-text/40 transition-transform duration-150 ease-out",
+          "size-3.5 shrink-0 text-daintree-text/40 transition-transform ease-out motion-reduce:transition-none",
           !isCollapsed && "rotate-90"
         )}
+        style={{ transitionDuration: `${UI_ANIMATION_DURATION}ms` }}
       />
 
-      <span
-        aria-hidden="true"
-        className="flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[11px] shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))]"
-        style={{
-          background: group.color
-            ? `var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), ${getProjectGradient(group.color)}`
-            : "var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), var(--color-daintree-sidebar)",
-        }}
-      >
-        <span className="leading-none select-none">{group.emoji}</span>
-      </span>
+      <WorkspaceTile group={group} />
 
-      <span className="min-w-0 truncate text-sm font-semibold text-daintree-text">
-        {group.name}
-      </span>
-      {/*
-        The total rides beside the name rather than the far edge: pushed right
-        it sat against the demand chip, where "3 need you 3" reads as one
-        garbled string instead of two separate facts.
-      */}
-      <span aria-hidden="true" className="shrink-0 text-[11px] tabular-nums text-daintree-text/40">
-        {group.rows.length}
-      </span>
-
-      <span className="flex-1" />
-
-      {group.demandCount > 0 && (
-        <span aria-hidden="true" className="shrink-0 text-[11px] text-activity-waiting">
-          {demandPhrase(group.demandCount)}
-        </span>
-      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center">
+          <span className="truncate text-sm leading-tight font-semibold text-daintree-text">
+            {group.name}
+          </span>
+          {/*
+            Which workspace you are already in decides whether opening a run is
+            instant or swaps the whole view, so it is worth a word. Muted and
+            textual — membership is never an accent signal.
+          */}
+          {group.isCurrent && (
+            <span
+              aria-hidden="true"
+              className="ml-1.5 shrink-0 text-[11px] leading-none text-daintree-text/40"
+            >
+              Current
+            </span>
+          )}
+        </div>
+        <div className="mt-0.5 flex min-w-0 items-center">
+          <span
+            aria-hidden="true"
+            className={cn(
+              "truncate text-[11px] leading-none",
+              ROW_TONE_CLASS[BAND_TONE[group.topBand]]
+            )}
+          >
+            {summary}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -175,16 +267,16 @@ function RunRow({
   isSelected,
   domId,
   onActivate,
-  onHover,
 }: {
   row: PilotRow;
   isSelected: boolean;
   domId: string;
   onActivate: () => void;
-  onHover: () => void;
 }) {
-  const { run } = row;
-  const subtitle = [row.worktreeLabel, row.agentLabel].filter(Boolean).join(" · ");
+  // State first, then how long it has been that way, then where it is running.
+  // The age sat on the trailing edge before, where a bare "2h" beside a title
+  // named no quantity — runtime, wait, and time-since-finish all read the same.
+  const detail = [row.age, row.worktreeLabel, row.agentLabel].filter(Boolean).join(" · ");
 
   return (
     <div
@@ -194,16 +286,22 @@ function RunRow({
       aria-selected={isSelected}
       data-testid="pilot-row"
       onClick={onActivate}
-      onPointerMove={onHover}
-      // Indented to sit under the header's project tile — the chevron column
-      // plus its gap, so the run rows read as belonging to the row above. The
-      // min-height holds the list's rhythm even: a run whose worktree and agent
-      // are both already implied by its title has no second line, and mixing
-      // one- and two-line rows in one column reads as ragged.
-      className={cn(ROW_BASE, rowTone(isSelected), "min-h-9 gap-2.5 py-1.5 pr-3 pl-7")}
+      // Deliberately the header's own column structure — same padding, a spacer
+      // the width of its chevron, then a tile-width column — rather than a
+      // hand-computed indent. Alignment then holds by construction: titles line
+      // up with the project title above them, and stay lined up if either
+      // column ever changes size.
+      className={cn(ROW_BASE, rowTone(isSelected), "gap-2 py-1.5 pr-3 pl-3")}
     >
-      <PilotRunState agentState={run.agentState} waitingReason={run.waitingReason} />
-      <span className="sr-only">{runStateLabel(run.agentState, run.waitingReason)}</span>
+      <span aria-hidden="true" className="size-3.5 shrink-0" />
+      {/*
+        A tile-width column, not a flush glyph. Left flush, the 14px glyph
+        stands in for the header's 32px tile and every run title starts LEFT of
+        its own project's title — the child outdenting itself.
+      */}
+      <span className="flex w-8 shrink-0 items-center justify-center">
+        <PilotRunState band={row.band} agentState={row.run.agentState} />
+      </span>
 
       <span className="min-w-0 flex-1">
         <span
@@ -214,16 +312,11 @@ function RunRow({
         >
           {row.title}
         </span>
-        {subtitle && (
-          <span className="mt-0.5 block truncate text-[11px] leading-none text-daintree-text/50">
-            {subtitle}
-          </span>
-        )}
+        <span className="mt-0.5 block truncate text-[11px] leading-none">
+          <span className={ROW_TONE_CLASS[row.tone]}>{row.statusLabel}</span>
+          {detail && <span className="text-daintree-text/50">{` · ${detail}`}</span>}
+        </span>
       </span>
-
-      {row.age && (
-        <span className="shrink-0 text-[11px] tabular-nums text-daintree-text/50">{row.age}</span>
-      )}
     </div>
   );
 }
@@ -274,8 +367,7 @@ export function PilotView() {
    * Searching force-expands every matching group, so without a separate set the
    * header toggle would be a dead control: `aria-expanded` pinned open while the
    * click silently edited the persisted set, collapsing the group minutes later
-   * when the query cleared. Scoping the toggle here keeps it honest — it acts on
-   * what is on screen, and clearing the query discards it.
+   * when the query cleared.
    */
   const [searchCollapsed, setSearchCollapsed] = useState<readonly string[]>([]);
 
@@ -313,15 +405,27 @@ export function PilotView() {
   }, []);
 
   const workspaces = useMemo(() => {
-    const map = new Map<string, { name: string; emoji?: string; color?: string }>();
+    const map = new Map<string, PilotWorkspaceMeta>();
     for (const project of projects) {
       map.set(project.id, {
+        kind: "project",
         name: project.name,
         ...(project.emoji ? { emoji: project.emoji } : {}),
         ...(project.color ? { color: project.color } : {}),
+        ...(project.lastCompletionSeenAt !== undefined
+          ? { lastCompletionSeenAt: project.lastCompletionSeenAt }
+          : {}),
       });
     }
-    for (const scratch of scratches) map.set(scratch.id, { name: scratch.name });
+    for (const scratch of scratches) {
+      map.set(scratch.id, {
+        kind: "scratch",
+        name: scratch.name,
+        ...(scratch.lastCompletionSeenAt !== undefined
+          ? { lastCompletionSeenAt: scratch.lastCompletionSeenAt }
+          : {}),
+      });
+    }
     return map;
   }, [projects, scratches]);
 
@@ -333,7 +437,12 @@ export function PilotView() {
         agentNames.set(run.agentId, getAgentConfig(run.agentId)?.name ?? run.agentId);
       }
     }
-    return buildPilotGroups(snapshot.runs, { workspaces, agentNames, nowMs });
+    return buildPilotGroups(snapshot.runs, {
+      workspaces,
+      agentNames,
+      currentWorkspaceId: getViewWorkspaceId(),
+      nowMs,
+    });
   }, [snapshot, workspaces, nowMs]);
 
   /**
@@ -342,13 +451,12 @@ export function PilotView() {
    * Ordering is derived from live agent state, so without this a run changing
    * state reorders the list under the cursor — the classic sort-thrash misclick,
    * and the one that matters most here because every row is a navigation target.
-   * The ORDER is pinned; the rows keep updating in place, so a state circle or
+   * The ORDER is pinned; the rows keep updating in place, so a state glyph or
    * an age still moves the instant it changes.
    *
-   * Held in state rather than a ref so every mutation — pinning, clearing on
-   * close, appending — is a declared input of the memo below. A ref read during
-   * render is invisible to memoization and would serve a stale order for a
-   * frame after reopening.
+   * Held in state rather than a ref so every mutation is a declared input of the
+   * memo below. A ref read during render is invisible to memoization and would
+   * serve a stale order for a frame after reopening.
    */
   const [frozenOrder, setFrozenOrder] = useState<{
     groups: string[];
@@ -494,11 +602,6 @@ export function PilotView() {
   // A new query re-ranks the list, so fall back to the top match, and the
   // search-scoped collapses belong to the query that produced them. Closing
   // drops both so a reopen doesn't restore state from a fleet that has moved on.
-  //
-  // Keyed on the query VALUE rather than the input's onChange because Escape
-  // also clears the box. Both routes happen to end in a keystroke today, so
-  // this is not fixing a reachable bug — it just stops the invariant depending
-  // on every future caller remembering to reset alongside `setQuery`.
   useEffect(() => {
     setSelectedDomId(null);
     setSearchCollapsed([]);
@@ -639,16 +742,10 @@ export function PilotView() {
   const handleInputKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
-      // Escape empties the box before it closes the palette, and it has to be
-      // stopped HERE to do so. `AppPaletteDialog` closes from a document-bubble
-      // backstop that also marks the event consumed, so the escape stack never
-      // gets a turn — a `useEscapeStack` claim looks right and never runs.
-      if (e.key === "Escape" && query !== "") {
-        e.preventDefault();
-        e.stopPropagation();
-        setQuery("");
-        return;
-      }
+      // Escape is deliberately NOT intercepted to clear the query first. The
+      // project switcher — which opens this and sits beside it — closes on the
+      // first Escape, and two adjacent palettes that hand off to each other
+      // must not disagree about what the key does.
       handleNavigationKeyDown(e, query.length > 0);
     },
     [handleNavigationKeyDown, query]
@@ -659,17 +756,37 @@ export function PilotView() {
     [handleNavigationKeyDown]
   );
 
-  const demandCount = snapshot ? countDemands(snapshot.runs) : 0;
-  const runCount = snapshot?.runs.length ?? 0;
+  /**
+   * What the surface can honestly claim right now.
+   *
+   * `degraded` means a PTY shard failed to answer, so `runs` is retained rather
+   * than current. Distinguishing "never had data" from "have stale data" is the
+   * whole point: the first cannot say anything about the fleet, and the second
+   * can, as long as it says how old it is. Neither may render as all-clear.
+   */
+  const status = useMemo(() => {
+    if (snapshot === null) return { kind: "loading" } as const;
+    if (!snapshot.degraded) return { kind: "live" } as const;
+    return snapshot.lastSuccessfulAt === null
+      ? ({ kind: "unavailable" } as const)
+      : ({ kind: "stale", since: snapshot.lastSuccessfulAt } as const);
+  }, [snapshot]);
 
+  const fleet = useMemo(() => summarizePilotGroups(stableGroups), [stableGroups]);
+
+  // Counted by band, never off the raw row total: a fleet holding two working
+  // agents and six exited ones is not "8 agents running".
+  const live = fleet.bands.running;
   const summary =
-    snapshot === null
+    status.kind === "loading" || status.kind === "unavailable"
       ? ""
-      : demandCount > 0
-        ? `${demandCount} ${demandCount === 1 ? "agent needs" : "agents need"} you`
-        : runCount > 0
-          ? `Nothing needs you · ${runCount} ${runCount === 1 ? "agent" : "agents"} running`
-          : "";
+      : fleet.demand > 0
+        ? demandPhrase(fleet.demand)
+        : live > 0
+          ? `Nothing needs you · ${live} ${live === 1 ? "agent" : "agents"} working`
+          : fleet.total > 0
+            ? `Nothing needs you · ${agentCount(fleet.total)}`
+            : "";
 
   const actionLabel =
     selectedRow === undefined
@@ -680,27 +797,9 @@ export function PilotView() {
           ? "Expand"
           : "Collapse";
 
-  const activeDescendant = selectedRow?.domId;
-  const hasTree = snapshot !== null && navRows.length > 0;
-
-  /**
-   * Combobox semantics, but only while there is a popup to be a combobox for.
-   *
-   * Loading, empty-fleet and no-match all render no tree, and axe-core requires
-   * BOTH `aria-expanded` and `aria-controls` on `role="combobox"` — so keeping
-   * the role while dropping the dangling IDREF just trades one violation for
-   * another. Standing the whole role down leaves an ordinary search box, which
-   * is what it actually is when nothing is listed.
-   */
-  const comboboxProps = hasTree
-    ? ({
-        role: "combobox",
-        "aria-expanded": true,
-        "aria-haspopup": "tree",
-        "aria-controls": TREE_ID,
-        "aria-activedescendant": activeDescendant,
-      } as const)
-    : {};
+  const hasTree = navRows.length > 0;
+  const showEmpty = status.kind === "live" && !hasTree;
+  const showSkeleton = useDeferredLoading(status.kind === "loading", UI_DOHERTY_THRESHOLD);
 
   return (
     <AppPaletteDialog
@@ -717,68 +816,122 @@ export function PilotView() {
           onKeyDown={handleInputKeyDown}
           placeholder="Search agents…"
           aria-label="Search agents"
-          {...comboboxProps}
+          // The role is constant, not conditional on there being results. A
+          // control that changes role underneath a screen reader as rows come
+          // and go is not re-announced, so it silently stops being what the
+          // user was told it was. The tree container below is always mounted,
+          // which is what keeps `aria-controls` resolving.
+          role="combobox"
+          aria-expanded={hasTree}
+          aria-haspopup="tree"
+          aria-controls={TREE_ID}
+          aria-activedescendant={selectedRow?.domId}
           data-testid="pilot-search"
         />
       </AppPaletteDialog.Header>
 
       <AppPaletteDialog.Body
-        maxHeight="max-h-[60vh]"
+        maxHeight={PALETTE_MAX_HEIGHT}
         className="p-0"
         ariaLabel="Agents"
-        activeDescendant={activeDescendant}
+        activeDescendant={selectedRow?.domId}
         onNavigationKeyDown={handleBodyKeyDown}
       >
-        {snapshot === null ? (
-          <Skeleton className="flex flex-col gap-2 p-4" data-testid="pilot-skeleton">
-            {Array.from({ length: 4 }, (_, i) => (
-              <SkeletonBone key={i} className="h-8 w-full" />
-            ))}
-          </Skeleton>
-        ) : !hasTree ? (
+        {showSkeleton && (
           /*
-           * Deliberately quiet, and deliberately not a call to action. An empty
-           * fleet here is overwhelmingly the completed-work state — everything
-           * finished — which the empty-state rule says stays quiet rather than
-           * nudging. Pilot also cannot start an agent: launching is per-project,
-           * and this surface spans them all, so a CTA would name an action it
-           * has no way to perform. The usual teaching gate (`hasEverLaunchedAgent`)
-           * is no help either — it lives in a per-project-view store and would
-           * answer only for whichever project happens to be active.
+           * Gated at the Doherty threshold — a fleet read that resolves in
+           * 80ms must not flash a skeleton on the way. The hint is a SIBLING of
+           * the skeleton, never a child: the wrapper carries `aria-busy`, which
+           * silences live-region mutations inside its own subtree.
            */
-          <AppPaletteDialog.Empty query={query} emptyMessage="No agents running">
-            <p className="mt-2 text-xs text-daintree-text/40">
-              Agents you start in any project show up here
+          <>
+            <Skeleton className="flex flex-col gap-1 p-2" data-testid="pilot-skeleton">
+              {/* Shaped like what is coming: a group header, then its runs. */}
+              <SkeletonBone className="h-12 w-full" />
+              <SkeletonBone className="h-10 w-full" />
+              <SkeletonBone className="h-10 w-full" />
+              <SkeletonBone className="h-12 w-full" />
+            </Skeleton>
+            <SkeletonHint firstThreshold={LOADING_HINT_MS} message="Still reading the fleet…" />
+          </>
+        )}
+
+        {status.kind === "unavailable" && (
+          <div className="px-3 py-8 text-center" role="status" data-testid="pilot-unavailable">
+            <p className="text-sm text-daintree-text/70">Can&apos;t reach the agent host</p>
+            {/*
+              No retry button: the service already re-reads every few seconds,
+              so a control that does what the app is doing anyway would be a
+              promise the user has to keep pressing.
+            */}
+            <p className="mt-1 text-xs text-daintree-text/40">
+              Agents keep running. This reconnects on its own.
             </p>
-          </AppPaletteDialog.Empty>
-        ) : (
-          // No padding of its own: the palette body's scroller already carries
-          // `p-2`, and a second layer here would inset every row twice.
-          <div id={TREE_ID} role="tree" aria-label="Agents by project">
-            {navRows.map((navRow, index) =>
-              navRow.kind === "group" ? (
-                <GroupHeader
-                  key={navRow.domId}
-                  group={navRow.group}
-                  isCollapsed={navRow.isCollapsed}
-                  isSelected={index === selectedIndex}
-                  domId={navRow.domId}
-                  onActivate={() => activate(navRow)}
-                  onHover={() => setSelectedDomId(navRow.domId)}
-                />
-              ) : (
-                <RunRow
-                  key={navRow.domId}
-                  row={navRow.row}
-                  isSelected={index === selectedIndex}
-                  domId={navRow.domId}
-                  onActivate={() => activate(navRow)}
-                  onHover={() => setSelectedDomId(navRow.domId)}
-                />
-              )
-            )}
           </div>
         )}
+
+        {status.kind === "stale" && (
+          <div data-testid="pilot-stale" className="px-3 py-1.5 text-[11px] text-activity-waiting">
+            {/*
+              The announced copy is fixed and the ticking age is hidden from it.
+              Putting the age inside the live region made a disconnected host
+              announce itself afresh every minute, which is noise, not news.
+            */}
+            <span className="sr-only" role="status">
+              Fleet data is stale. Reconnecting automatically.
+            </span>
+            <span aria-hidden="true">
+              {`Can't reach the agent host — showing the last known state from ${agoPhrase(formatWaitAge(status.since, nowMs))}`}
+            </span>
+          </div>
+        )}
+
+        {showEmpty && (
+          /*
+           * Names the next action rather than the absence. This is not the
+           * completed-work state it first looks like: a finished agent stays in
+           * the fleet as a `review` or `done` row, and an exited one as `idle`,
+           * so an empty snapshot means no agent terminals exist at all.
+           *
+           * No button — launching is per-project and this surface spans them
+           * all, so a CTA here would name an action it cannot perform. The
+           * sentence is the affordance.
+           */
+          <AppPaletteDialog.Empty query={query} emptyMessage="Start an agent in any project" />
+        )}
+
+        {/*
+          Always mounted so `aria-controls` on the combobox above always
+          resolves, even while loading or empty. No padding of its own: the
+          palette body's scroller already carries `p-2`.
+        */}
+        <div id={TREE_ID} {...(hasTree ? { role: "tree", "aria-label": "Agents by project" } : {})}>
+          {navRows.map((navRow, index) =>
+            navRow.kind === "group" ? (
+              <GroupHeader
+                key={navRow.domId}
+                group={navRow.group}
+                isCollapsed={navRow.isCollapsed}
+                isSelected={index === selectedIndex}
+                domId={navRow.domId}
+                // The scroller spaces every flat-tree sibling equally, so after
+                // a long run list the next project header arrives with no more
+                // separation than one more run. Only between groups — a leading
+                // gap would just push the list off its own top edge.
+                className={index > 0 ? "mt-2" : undefined}
+                onActivate={() => activate(navRow)}
+              />
+            ) : (
+              <RunRow
+                key={navRow.domId}
+                row={navRow.row}
+                isSelected={index === selectedIndex}
+                domId={navRow.domId}
+                onActivate={() => activate(navRow)}
+              />
+            )
+          )}
+        </div>
       </AppPaletteDialog.Body>
 
       <AppPaletteDialog.Footer>

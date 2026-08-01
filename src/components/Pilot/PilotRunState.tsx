@@ -5,11 +5,12 @@ import {
   ExitedCircle,
   CircleCheck,
 } from "@/components/icons";
-import type { AgentState, WaitingReason } from "@shared/types/agent";
+import type { FleetBand } from "@/lib/fleetAttention";
+import type { AgentState } from "@shared/types/agent";
 
 interface PilotRunStateProps {
+  band: FleetBand;
   agentState: AgentState | undefined;
-  waitingReason: WaitingReason | undefined;
 }
 
 /**
@@ -20,48 +21,39 @@ interface PilotRunStateProps {
  * of "working" and "waiting" in this product. Inventing a second set for one
  * surface would teach the user two languages for one fact.
  *
- * The only addition is `blocked`, which the other surfaces have no concept of:
- * it reuses the waiting circle in the danger tone, because a block IS a wait —
- * one where input may not be what unblocks it.
+ * Keyed on the BAND, not the raw state, so the glyph cannot contradict the label
+ * and tone beside it: an acknowledged completion has to stop looking like a
+ * hand-back at the same moment it stops being counted as one.
+ *
+ * Redundant by design. Every state here is also written out in words on the row,
+ * because the two states a supervisor most needs to tell apart — waiting and
+ * idle — are both hollow circles, and hue is the only thing separating them.
  */
-export function PilotRunState({ agentState, waitingReason }: PilotRunStateProps) {
+export function PilotRunState({ band, agentState }: PilotRunStateProps) {
   const size = "size-3.5 shrink-0";
 
-  if (agentState === "working") {
-    return (
-      <SpinnerCircle
-        className={`${size} text-state-working animate-spin-slow motion-reduce:animate-none`}
-      />
-    );
+  switch (band) {
+    case "blocked":
+      return <HollowCircle className={`${size} text-status-danger`} />;
+    case "needs-you":
+      return <HollowCircle className={`${size} text-state-waiting`} />;
+    case "review":
+      return <CircleCheck className={`${size} text-activity-completed`} />;
+    case "running":
+      return agentState === "directing" ? (
+        <InteractingCircle className={`${size} text-category-blue`} />
+      ) : (
+        <SpinnerCircle
+          className={`${size} text-state-working animate-spin-slow motion-reduce:animate-none`}
+        />
+      );
+    case "done":
+      return <CircleCheck className={`${size} text-daintree-text/40`} />;
+    default:
+      return agentState === "exited" ? (
+        <ExitedCircle className={`${size} text-daintree-text/40`} />
+      ) : (
+        <HollowCircle className={`${size} text-daintree-text/30`} />
+      );
   }
-  if (agentState === "directing") {
-    return <InteractingCircle className={`${size} text-category-blue`} />;
-  }
-  if (agentState === "waiting") {
-    return (
-      <HollowCircle
-        className={`${size} ${waitingReason === "error" ? "text-status-danger" : "text-state-waiting"}`}
-      />
-    );
-  }
-  if (agentState === "completed") {
-    return <CircleCheck className={`${size} text-activity-completed`} />;
-  }
-  if (agentState === "exited") {
-    return <ExitedCircle className={`${size} text-daintree-text/40`} />;
-  }
-  return <HollowCircle className={`${size} text-daintree-text/30`} />;
-}
-
-/** Screen-reader label, so state is never carried by the glyph alone. */
-export function runStateLabel(
-  agentState: AgentState | undefined,
-  waitingReason: WaitingReason | undefined
-): string {
-  if (agentState === "working") return "Working";
-  if (agentState === "directing") return "Directing";
-  if (agentState === "waiting") return waitingReason === "error" ? "Blocked" : "Needs you";
-  if (agentState === "completed") return "Ready for review";
-  if (agentState === "exited") return "Exited";
-  return "Idle";
 }

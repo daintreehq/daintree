@@ -1,13 +1,26 @@
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
-import type { FleetBand } from "@/lib/fleetAttention";
-import { bandForRun, compareWithinBand, FLEET_BANDS, isDemandBand } from "@/lib/fleetAttention";
-import { formatWaitAge } from "@/lib/projectRowStatus";
+import type { FleetBand, FleetBandCounts } from "@/lib/fleetAttention";
+import {
+  bandForRun,
+  bandLabel,
+  BAND_TONE,
+  compareWithinBand,
+  emptyBandCounts,
+  FLEET_BANDS,
+  isDemandBand,
+} from "@/lib/fleetAttention";
+import { formatWaitAge, type ProjectRowTone } from "@/lib/projectRowStatus";
+import { isSubsequenceMatch } from "@/lib/projectSwitcherSearch";
 
 export interface PilotRow {
   run: FleetRunRow;
   band: FleetBand;
   /** Panel title — what the agent calls its own work. Falls back to the agent name. */
   title: string;
+  /** What the run is doing, in the same words the switcher uses for the same state. */
+  statusLabel: string;
+  /** Status colour for {@link statusLabel}. Always a status token, never the accent. */
+  tone: ProjectRowTone;
   /** Worktree label, or null when it would only repeat the project name. */
   worktreeLabel: string | null;
   /**
@@ -19,12 +32,17 @@ export interface PilotRow {
   age: string | null;
 }
 
+export type PilotWorkspaceKind = "project" | "scratch" | "unknown";
+
 export interface PilotProjectGroup {
   workspaceId: string;
+  kind: PilotWorkspaceKind;
   name: string;
   emoji: string | null;
   /** Project tile colour, so the header carries the same identity as the switcher's rows. */
   color: string | null;
+  /** True for the workspace this view already owns — opening its runs costs no switch. */
+  isCurrent: boolean;
   rows: PilotRow[];
   /** Runs in this project that constitute a demand on the user. */
   demandCount: number;
@@ -54,14 +72,22 @@ function disambiguatingLabel(label: string | null, against: string): string | nu
 }
 
 export interface PilotWorkspaceMeta {
+  kind: PilotWorkspaceKind;
   name: string;
   emoji?: string;
   color?: string;
+  /**
+   * The workspace's completion watermark. Completions at or before it have been
+   * seen and stop counting as a hand-back — see `bandForRun`.
+   */
+  lastCompletionSeenAt?: number;
 }
 
 export interface PilotRowContext {
   workspaces: ReadonlyMap<string, PilotWorkspaceMeta>;
   agentNames: ReadonlyMap<string, string>;
+  /** Workspace this renderer view owns, so its group can be marked as already here. */
+  currentWorkspaceId: string | null;
   nowMs: number;
 }
 
@@ -106,19 +132,23 @@ export function buildPilotGroups(
     // A run whose workspace has been removed from the store still has to render
     // — dropping it would hide a live agent because a lookup missed.
     const name = meta?.name ?? "Unknown workspace";
+    const acknowledgedAt = meta?.lastCompletionSeenAt;
 
     const sorted = [...workspaceRuns].sort((a, b) => {
-      const byBand = rank(bandForRun(a)) - rank(bandForRun(b));
+      const byBand = rank(bandForRun(a, acknowledgedAt)) - rank(bandForRun(b, acknowledgedAt));
       return byBand !== 0 ? byBand : compareWithinBand(a, b);
     });
 
     const rows: PilotRow[] = sorted.map((run) => {
       const agentLabel = run.agentId ? (ctx.agentNames.get(run.agentId) ?? run.agentId) : null;
       const title = run.title?.trim() || agentLabel || "Untitled";
+      const band = bandForRun(run, acknowledgedAt);
       return {
         run,
-        band: bandForRun(run),
+        band,
         title,
+        statusLabel: bandLabel(band, run),
+        tone: BAND_TONE[band],
         worktreeLabel: disambiguatingLabel(directoryLabel(run.cwd), name),
         agentLabel: disambiguatingLabel(agentLabel, title),
         age: run.since !== undefined ? formatWaitAge(run.since, ctx.nowMs) : null,
@@ -127,9 +157,11 @@ export function buildPilotGroups(
 
     groups.push({
       workspaceId,
+      kind: meta?.kind ?? "unknown",
       name,
       emoji: meta?.emoji ?? null,
       color: meta?.color ?? null,
+      isCurrent: workspaceId === ctx.currentWorkspaceId,
       rows,
       demandCount: rows.filter((r) => isDemandBand(r.band)).length,
       topBand: rows[0]?.band ?? "idle",
@@ -158,24 +190,27 @@ export function buildPilotGroups(
  *
  * Matches the panel title first because that is what the user is searching by,
  * but also the worktree, agent and project name, since any of those is a
- * plausible thing to type.
+ * plausible thing to type. Order is left alone: the switcher re-ranks by match
+ * quality because one of its rows is the destination, whereas here the ranking
+ * IS the answer — demoting a blocked agent because a fresher one matched the
+ * query better would defeat the surface.
  */
 export function filterPilotGroups(
   groups: readonly PilotProjectGroup[],
   query: string
 ): PilotProjectGroup[] {
-  const needle = query.trim().toLowerCase();
+  const needle = query.trim();
   if (!needle) return [...groups];
 
   const out: PilotProjectGroup[] = [];
   for (const group of groups) {
-    const projectMatches = group.name.toLowerCase().includes(needle);
+    const projectMatches = isSubsequenceMatch(needle, group.name);
     const rows = group.rows.filter(
       (row) =>
         projectMatches ||
-        row.title.toLowerCase().includes(needle) ||
-        row.worktreeLabel?.toLowerCase().includes(needle) === true ||
-        row.agentLabel?.toLowerCase().includes(needle) === true
+        isSubsequenceMatch(needle, row.title) ||
+        (row.worktreeLabel !== null && isSubsequenceMatch(needle, row.worktreeLabel)) ||
+        (row.agentLabel !== null && isSubsequenceMatch(needle, row.agentLabel))
     );
     if (rows.length === 0) continue;
     out.push({
@@ -185,4 +220,28 @@ export function filterPilotGroups(
     });
   }
   return out;
+}
+
+export interface PilotSummary {
+  total: number;
+  demand: number;
+  bands: FleetBandCounts;
+}
+
+/**
+ * Fleet totals for the footer, counted from the same rows the list renders so
+ * the summary and the group chips can never disagree.
+ */
+export function summarizePilotGroups(groups: readonly PilotProjectGroup[]): PilotSummary {
+  const bands = emptyBandCounts();
+  let total = 0;
+  let demand = 0;
+  for (const group of groups) {
+    for (const row of group.rows) {
+      total++;
+      bands[row.band]++;
+      if (isDemandBand(row.band)) demand++;
+    }
+  }
+  return { total, demand, bands };
 }

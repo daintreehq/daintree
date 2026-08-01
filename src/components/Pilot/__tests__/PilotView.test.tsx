@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 
 // The palette body is a ScrollShadow, which observes its own scroller.
@@ -43,6 +43,20 @@ import { useScratchStore } from "@/store/scratchStore";
 
 const NOW = 1_830_000_000_000;
 
+/**
+ * The zero-data title. Named rather than inlined so the several tests that must
+ * distinguish "fleet clear" from "not reported yet" cannot drift apart — the
+ * assertion is that the states differ, not that the wording is any given string.
+ */
+const EMPTY_FLEET_COPY = "Start an agent in any project";
+
+/** Timer advance wrapped so the resulting state change reaches the DOM. */
+function advance(ms: number) {
+  act(() => {
+    vi.advanceTimersByTime(ms);
+  });
+}
+
 function run(overrides: Partial<FleetSnapshot["runs"][number]> = {}) {
   return {
     runId: "t1",
@@ -53,16 +67,37 @@ function run(overrides: Partial<FleetSnapshot["runs"][number]> = {}) {
   };
 }
 
-function seed(runs: FleetSnapshot["runs"] | null) {
+function seed(
+  runs: FleetSnapshot["runs"] | null,
+  health: Partial<Pick<FleetSnapshot, "degraded" | "lastSuccessfulAt">> = {}
+) {
   useFleetSnapshotStore.setState({
-    snapshot: runs === null ? null : { runs, changedAt: NOW },
+    snapshot:
+      runs === null
+        ? null
+        : { runs, changedAt: NOW, degraded: false, lastSuccessfulAt: NOW, ...health },
   });
+}
+
+/**
+ * The workspace identity main seeds into the view at creation. Read through
+ * `getViewWorkspaceId`, which is the only view-local identity in the renderer —
+ * the replicated current-project pointer answers for the whole app, not for
+ * this view.
+ */
+function seedViewWorkspace(id: string | null): void {
+  if (id === null) {
+    delete (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__;
+    return;
+  }
+  (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__ = { id };
 }
 
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   dispatchMock.mockClear();
+  seedViewWorkspace(null);
   seed(null);
   usePilotStore.setState({ isOpen: true, collapsedWorkspaceIds: [] });
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: only id/name are read
@@ -80,16 +115,24 @@ afterEach(() => {
 });
 
 describe("PilotView", () => {
-  it("shows a skeleton, not an all-clear, before any snapshot arrives", () => {
+  it("shows nothing at all for a fleet read that resolves inside the Doherty gate", () => {
     seed(null);
     render(<PilotView />);
 
+    // A read that lands in 80ms must not flash a skeleton on its way past.
+    advance(80);
+    expect(screen.queryByTestId("pilot-skeleton")).toBeNull();
+  });
+
+  it("shows a skeleton, not an all-clear, once the wait is worth reporting", () => {
+    seed(null);
+    render(<PilotView />);
+    advance(500);
+
     // Claiming "no agents running" from an unreported fleet would be a lie the
-    // user acts on — the two states must not render the same. Asserted on the
-    // visible copy, not a testid the empty branch no longer carries: a query
-    // for an id nothing renders passes whatever the component does.
+    // user acts on — the two states must not render the same.
     expect(screen.getByTestId("pilot-skeleton")).toBeTruthy();
-    expect(screen.queryByText("No agents running")).toBeNull();
+    expect(screen.queryByText(EMPTY_FLEET_COPY)).toBeNull();
   });
 
   it("claims all-clear only once a genuinely empty fleet is delivered", () => {
@@ -97,7 +140,7 @@ describe("PilotView", () => {
     render(<PilotView />);
 
     expect(screen.queryByTestId("pilot-skeleton")).toBeNull();
-    expect(screen.getByText("No agents running")).toBeTruthy();
+    expect(screen.getByText(EMPTY_FLEET_COPY)).toBeTruthy();
   });
 
   it("stays quiet when the fleet is busy but asking nothing", () => {
@@ -105,6 +148,73 @@ describe("PilotView", () => {
     render(<PilotView />);
 
     expect(screen.getByText(/Nothing needs you/)).toBeTruthy();
+  });
+
+  it("never calls an idle or exited run 'working' in the summary", () => {
+    // The row total is not a running-agent count. Reporting it as one is the
+    // fastest way for a supervision surface to stop being believed.
+    seed([
+      run({ runId: "a", agentState: "working", since: NOW - 60_000 }),
+      run({ runId: "b", agentState: "exited", since: NOW - 60_000 }),
+      run({ runId: "c", agentState: "idle", since: NOW - 60_000 }),
+    ]);
+    render(<PilotView />);
+
+    expect(screen.getByText("Nothing needs you · 1 agent working")).toBeTruthy();
+  });
+
+  it("writes the run's state out in words, not just a coloured glyph", () => {
+    // Waiting and idle are both hollow circles; hue is the only thing between
+    // them. The switcher never encodes status by colour alone and neither may
+    // this — the sentence beside the glyph carries the meaning.
+    seed([
+      run({ runId: "a", agentState: "waiting", title: "one", since: NOW - 60_000 }),
+      run({ runId: "b", agentState: "idle", title: "two", since: NOW - 60_000 }),
+    ]);
+    render(<PilotView />);
+
+    const rows = screen.getAllByTestId("pilot-row").map((r) => r.textContent ?? "");
+    expect(rows[0]).toContain("Needs you");
+    expect(rows[1]).toContain("Idle");
+  });
+
+  it("marks the workspace this view already owns", () => {
+    // Opening a run here costs nothing; opening one elsewhere swaps the whole
+    // view. Which is which is worth a word.
+    seedViewWorkspace("p1");
+    seed([
+      run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW - 60_000 }),
+      run({ runId: "b", workspaceId: "s1", agentState: "working", since: NOW - 60_000 }),
+    ]);
+    render(<PilotView />);
+
+    const headers = screen.getAllByTestId("pilot-group-header").map((h) => h.textContent ?? "");
+    expect(headers.filter((h) => h.includes("Current"))).toHaveLength(1);
+    expect(headers.find((h) => h.includes("Current"))).toContain("daintree");
+  });
+
+  it("says it cannot see the fleet rather than showing an endless skeleton", () => {
+    // A pty-host that is unreachable from boot never produces a first snapshot.
+    // Spinning forever tells the user nothing and looks like a hang.
+    seed([], { degraded: true, lastSuccessfulAt: null });
+    render(<PilotView />);
+
+    expect(screen.queryByTestId("pilot-skeleton")).toBeNull();
+    expect(screen.queryByText(EMPTY_FLEET_COPY)).toBeNull();
+    expect(screen.getByTestId("pilot-unavailable")).toBeTruthy();
+  });
+
+  it("captions retained runs as stale instead of presenting them as current", () => {
+    seed([run({ agentState: "waiting", title: "one", since: NOW - 60_000 })], {
+      degraded: true,
+      lastSuccessfulAt: NOW - 12 * 60_000,
+    });
+    render(<PilotView />);
+
+    // The rows still render — they are the best available answer — but the
+    // ticking ages must not make a dead feed look actively maintained.
+    expect(screen.getByTestId("pilot-row")).toBeTruthy();
+    expect(screen.getByTestId("pilot-stale").textContent).toContain("12m");
   });
 
   it("leads with the demand count when agents need the user", () => {
@@ -255,7 +365,10 @@ describe("PilotView", () => {
       );
     }
 
-    it("empties the search box before it closes the palette", () => {
+    it("closes on the first press even with a query typed", () => {
+      // The project switcher opens this and sits beside it, and closes on the
+      // first Escape. Two palettes that hand off to each other must not
+      // disagree about what the key does.
       seed([run({ agentState: "working", title: "auth refactor" })]);
       renderWithEscape();
 
@@ -263,11 +376,7 @@ describe("PilotView", () => {
       fireEvent.change(search, { target: { value: "auth" } });
       fireEvent.keyDown(search, { key: "Escape" });
 
-      expect((search as HTMLInputElement).value).toBe("");
-      // The dialog's backstop closes from a document-bubble listener and marks
-      // the event consumed, so anything that doesn't stop propagation on the
-      // input loses this outright.
-      expect(usePilotStore.getState().isOpen).toBe(true);
+      expect(usePilotStore.getState().isOpen).toBe(false);
     });
 
     it("closes once the box is already empty", () => {
@@ -293,7 +402,7 @@ describe("PilotView", () => {
 
       // A collapse made during one search is scoped to it. Carrying it forward
       // would hide matches the next search went looking for.
-      fireEvent.keyDown(search, { key: "Escape" });
+      fireEvent.change(search, { target: { value: "" } });
       fireEvent.change(search, { target: { value: "auth" } });
 
       expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
@@ -307,7 +416,7 @@ describe("PilotView", () => {
     fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "zzzz" } });
 
     expect(screen.getByText('No matches for "zzzz"')).toBeTruthy();
-    expect(screen.queryByText("No agents running")).toBeNull();
+    expect(screen.queryByText(EMPTY_FLEET_COPY)).toBeNull();
   });
 
   it("matches on project name as well as title", () => {
@@ -326,15 +435,17 @@ describe("PilotView", () => {
   it("advances a wait age as time passes without a new snapshot", async () => {
     seed([run({ agentState: "waiting", since: NOW - 60_000 })]);
     render(<PilotView />);
-    expect(screen.getByText("1m")).toBeTruthy();
+    // The age rides the status line, where it names the quantity it measures.
+    const age = () => screen.getByTestId("pilot-row").textContent ?? "";
+    expect(age()).toContain("1m");
 
     // The snapshot is unchanged and suppressed upstream, so only the component's
     // own clock can move this. A tick that never reaches the render is the
     // React Compiler no-op this guards against.
     await vi.advanceTimersByTimeAsync(120_000);
 
-    expect(screen.queryByText("1m")).toBeNull();
-    expect(screen.getByText("3m")).toBeTruthy();
+    expect(age()).not.toContain("1m");
+    expect(age()).toContain("3m");
   });
 
   it("re-pins the order on reopen rather than serving the previous session's", async () => {

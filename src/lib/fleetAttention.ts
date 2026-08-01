@@ -14,7 +14,7 @@ import type { ProjectRowTone } from "./projectRowStatus";
  * disagreeing about which agent is most urgent is worse than either ordering
  * being individually wrong.
  */
-export const FLEET_BANDS = ["blocked", "needs-you", "review", "running", "idle"] as const;
+export const FLEET_BANDS = ["blocked", "needs-you", "review", "running", "done", "idle"] as const;
 
 export type FleetBand = (typeof FLEET_BANDS)[number];
 
@@ -35,29 +35,62 @@ export const BAND_TONE: Record<FleetBand, ProjectRowTone> = {
   "needs-you": "waiting",
   review: "review",
   running: "working",
+  done: "muted",
   idle: "muted",
 };
 
 /**
  * Which band a run belongs to.
  *
- * `completed` maps to review unconditionally — whether the user has *seen* that
- * completion is an acknowledgement question, and acknowledgement is tracked per
- * workspace, not per run. Consumers that want an unacknowledged-only view have
- * to filter with a watermark they own; folding it in here would make this
- * function silently disagree with itself across surfaces.
+ * `acknowledgedAt` is the workspace's completion watermark: a completion at or
+ * before it has already been seen, so it stops being a hand-back and becomes a
+ * fact. Without it every finished run demands attention forever, and a user who
+ * has reviewed everything still reads "3 agents need you" — the switcher makes
+ * exactly this distinction (`getWorkspaceActivityStatus`) and the two surfaces
+ * have to agree about what is still outstanding.
+ *
+ * A completion with no `since` cannot be compared to the watermark and stays in
+ * `review`: unknown is not evidence of having been seen.
  */
-export function bandForRun(run: FleetRunRow): FleetBand {
+export function bandForRun(run: FleetRunRow, acknowledgedAt?: number): FleetBand {
   switch (run.agentState) {
     case "waiting":
       return run.waitingReason === "error" ? "blocked" : "needs-you";
     case "completed":
-      return "review";
+      return acknowledgedAt !== undefined && run.since !== undefined && run.since <= acknowledgedAt
+        ? "done"
+        : "review";
     case "working":
     case "directing":
       return "running";
     default:
       return "idle";
+  }
+}
+
+/**
+ * The band's own name for what the run is doing.
+ *
+ * Derived from the band rather than re-read from `agentState` so the visible
+ * label, the tone and the ordering can never disagree — an acknowledged
+ * completion must not still say "ready for review" while sorting as done.
+ * `running` and `idle` split on state because they each cover two situations
+ * the user can tell apart and would want to.
+ */
+export function bandLabel(band: FleetBand, run: FleetRunRow): string {
+  switch (band) {
+    case "blocked":
+      return "Blocked";
+    case "needs-you":
+      return "Needs you";
+    case "review":
+      return "Ready for review";
+    case "running":
+      return run.agentState === "directing" ? "Directing" : "Working";
+    case "done":
+      return "Finished";
+    default:
+      return run.agentState === "exited" ? "Exited" : "Idle";
   }
 }
 
@@ -86,42 +119,16 @@ export function compareWithinBand(a: FleetRunRow, b: FleetRunRow): number {
   return a.runId < b.runId ? -1 : 1;
 }
 
-export interface FleetBandGroup {
-  band: FleetBand;
-  runs: FleetRunRow[];
-}
-
 /**
- * Group runs into bands, worst-first, each internally oldest-first.
+ * Runs per band, for summary copy.
  *
- * Empty bands are omitted rather than rendered as a zero. A band heading
- * reading "Blocked 0" is a lit element making no demand, which is precisely
- * what a supervision surface must not spend attention on.
+ * Bands are counted rather than the raw run total because a raw total cannot be
+ * described truthfully: a fleet of eight rows holding two working agents and six
+ * exited ones is not "8 agents running", and a summary line that overstates what
+ * is live is the fastest way to stop being believed.
  */
-export function groupRunsByBand(runs: readonly FleetRunRow[]): FleetBandGroup[] {
-  const byBand = new Map<FleetBand, FleetRunRow[]>();
-  for (const run of runs) {
-    const band = bandForRun(run);
-    const bucket = byBand.get(band);
-    if (bucket) bucket.push(run);
-    else byBand.set(band, [run]);
-  }
+export type FleetBandCounts = Record<FleetBand, number>;
 
-  const groups: FleetBandGroup[] = [];
-  for (const band of FLEET_BANDS) {
-    const bucket = byBand.get(band);
-    if (!bucket || bucket.length === 0) continue;
-    bucket.sort(compareWithinBand);
-    groups.push({ band, runs: bucket });
-  }
-  return groups;
-}
-
-/** How many runs currently constitute a demand on the user. */
-export function countDemands(runs: readonly FleetRunRow[]): number {
-  let count = 0;
-  for (const run of runs) {
-    if (isDemandBand(bandForRun(run))) count++;
-  }
-  return count;
+export function emptyBandCounts(): FleetBandCounts {
+  return { blocked: 0, "needs-you": 0, review: 0, running: 0, done: 0, idle: 0 };
 }
