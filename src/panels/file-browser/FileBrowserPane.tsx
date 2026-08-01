@@ -39,6 +39,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { flushPanelPersistence } from "@/store/slices";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useExternalChangeTick } from "@/hooks/useExternalChangeTick";
+import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { FileTreeView } from "./FileTreeView";
 import { FileBrowserViewer } from "./FileBrowserViewer";
 import { useFileBrowserTree } from "./useFileBrowserTree";
@@ -321,9 +322,11 @@ export function FileBrowserPane({
     treeSnapshot,
   });
 
-  // Persist the last-known tree at going-away points only (#11367): the view
-  // being hidden (project switch, window close, app quit — `visibilitychange`
-  // is the reliable detach signal, see #9914 in `resource.ts`) and unmount,
+  // Persist the last-known tree at going-away points only (#11367): the
+  // document actually being hidden (window minimize, window close, app quit —
+  // `visibilitychange` is the reliable detach signal for those, see #9914 in
+  // `resource.ts`; a project switch is NOT one of them, since caching a child
+  // WebContentsView leaves page visibility alone) and unmount,
   // which records the outgoing tree (dialog close, re-root) for the *next*
   // restore — a dialog → grid promotion's replacement pane mounts before this
   // cleanup writes, so it still cold-fetches. Never on a change tick — the
@@ -423,25 +426,43 @@ export function FileBrowserPane({
     [location, onClose, basePath, rows]
   );
 
-  // The explicit half of the refresh signal, counted apart from the ambient
+  // The foreground half of the refresh signal, counted apart from the ambient
   // change tick so Refresh also re-reads the open file, not just the tree. It
   // then travels to the viewer BOTH ways, and both are load-bearing: merged
   // into `viewerRevision` below, and handed over on its own as the media
   // previews' reload key (#11586). Dropping the direct handoff makes Refresh
   // inert for media again; substituting the merged value there restarts
   // playback on every ambient write. Keep both.
-  const [manualRefreshNonce, setManualRefreshNonce] = useState(0);
+  const [surfaceRefreshNonce, setSurfaceRefreshNonce] = useState(0);
+  const refreshAll = useCallback(
+    (options?: { manual?: boolean }) => {
+      setSurfaceRefreshNonce((nonce) => nonce + 1);
+      refresh(options);
+    },
+    [refresh]
+  );
   const handleRefresh = useCallback(() => {
-    setManualRefreshNonce((nonce) => nonce + 1);
-    refresh({ manual: true });
-  }, [refresh]);
+    refreshAll({ manual: true });
+  }, [refreshAll]);
+
+  // Returning to a project the user left. A view swap is not a page load and
+  // `document.visibilityState` never moves for a cached child WebContentsView
+  // (`viewCacheState`), so without this the tree and whatever file is open in
+  // the viewer both sit on whatever they read on the way out — media and PDFs
+  // worst of all, since the change tick deliberately never reaches their reload
+  // key. Re-reads exactly what Refresh does, minus `manual`: the spinner
+  // reports a gesture, and coming back to a project isn't one.
+  const isDockParked = usePanelStore(
+    useCallback((state) => location === "dock" && state.activeDockTerminalId !== id, [location, id])
+  );
+  useProjectViewRevealed(() => refreshAll(), { enabled: !isDockParked });
 
   // One value per refresh *cycle*, not per directory listed. Deriving it from
   // the tree's per-listing commits would make a 500-directory refresh re-read
   // the open file 500 times. Carrying the nonce here as well as separately is
   // what re-runs the viewer's classification effect, so a media file stuck in
   // `status: "error"` remounts its preview on Refresh instead of staying dead.
-  const viewerRevision = `${changeTick ?? 0}:${manualRefreshNonce}`;
+  const viewerRevision = `${changeTick ?? 0}:${surfaceRefreshNonce}`;
 
   const handleToggleDotfiles = useCallback(() => {
     setFileBrowserView(id, { browserHideDotfiles: !hideDotfiles });
@@ -1065,7 +1086,7 @@ export function FileBrowserPane({
               // out of it: the media previews may only re-fetch on the explicit
               // half of that pair, and a merged string can't say which half
               // moved (#11586).
-              manualRefreshNonce={manualRefreshNonce}
+              surfaceRefreshNonce={surfaceRefreshNonce}
               onRefresh={handleRefresh}
               isRefreshing={isRefreshing}
               sidebarCollapsed={sidebarCollapsed}

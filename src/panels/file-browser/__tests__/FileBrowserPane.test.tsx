@@ -68,12 +68,44 @@ interface MockPanel {
 
 const mockPanel: MockPanel = { id: "fb-1", kind: "file-browser" };
 
+// Mutable so a dock test can make this panel the active dock panel (or not) —
+// the pane defers its reveal refresh while parked offscreen (#11588).
+const dockState = { activeDockTerminalId: null as string | null };
+
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: (selector: (state: unknown) => unknown) =>
     selector({
       panelsById: { "fb-1": mockPanel },
       setFileBrowserView: setFileBrowserViewMock,
+      activeDockTerminalId: dockState.activeDockTerminalId,
     }),
+}));
+
+// #11588: returning to a cached project view. A real listener registry rather
+// than a bare stub so unsubscribe-on-unmount is observable.
+//
+// `vi.hoisted`, not a plain const: this suite transitively pulls a module that
+// subscribes at module scope, so the factory's `subscribeProjectViewLifecycle`
+// runs while a module-scope `const` would still be in its TDZ. That throws
+// during collection — and vitest still exits 0, so the whole file silently
+// stops running while the summary reads green.
+type LifecyclePhase = "cached" | "active" | "revealed";
+const lifecycleListeners = vi.hoisted(() => new Set<(phase: LifecyclePhase) => void>());
+// Every runtime export, not just the one this pane imports: a factory is a
+// strict surface, and a module elsewhere in the graph reaching for a missing
+// name fails the whole file at collection rather than at the call.
+vi.mock("@/lib/viewCacheState", () => ({
+  subscribeProjectViewLifecycle: (listener: (phase: LifecyclePhase) => void) => {
+    lifecycleListeners.add(listener);
+    return () => {
+      lifecycleListeners.delete(listener);
+    };
+  },
+  // The real module's own safe default — the un-demoted answer.
+  isProjectViewCached: () => false,
+  __resetProjectViewCacheStateForTests: () => {
+    lifecycleListeners.clear();
+  },
 }));
 
 vi.mock("@/hooks/useWorktreeStore", () => ({
@@ -355,6 +387,8 @@ beforeEach(() => {
   dispatchMock.mockResolvedValue({ ok: true, result: { panelId: "file-1" } });
   worktreeTicks.git = undefined;
   worktreeTicks.fs = undefined;
+  lifecycleListeners.clear();
+  dockState.activeDockTerminalId = null;
   for (const name of ["matchMedia"] as const) {
     if (typeof window[name] !== "function") {
       Object.defineProperty(window, name, {
@@ -2042,5 +2076,161 @@ describe("FileBrowserPane refresh signal reaches both viewer paths (#11586)", ()
       URL.createObjectURL = realCreateObjectURL;
       URL.revokeObjectURL = realRevokeObjectURL;
     }
+  });
+});
+
+// #11588: a project switch is not a page load. Caching a view is
+// `removeChildView` + `setVisible(false)`, so `document.visibilityState` never
+// moves; the change tick keeps running but deliberately never reaches the media
+// previews' reload key. Coming back is the only moment the tree and the open
+// file can learn what happened while the project sat in the background.
+describe("FileBrowserPane re-reads when the project view is revealed (#11588)", () => {
+  const PDF_ROW = {
+    path: "docs/spec.pdf",
+    name: "spec.pdf",
+    isDirectory: false,
+    depth: 1,
+    isExpanded: false,
+    isLoading: false,
+  };
+
+  function paneElement(location: "grid" | "dock" = "grid") {
+    return (
+      <TooltipProvider>
+        <FileBrowserPane
+          id="fb-1"
+          title="Files"
+          worktreeId="wt-1"
+          isFocused
+          location={location}
+          onFocus={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  async function emit(phase: LifecyclePhase) {
+    await act(async () => {
+      for (const listener of Array.from(lifecycleListeners)) listener(phase);
+    });
+  }
+
+  it("re-lists the tree on reveal", async () => {
+    renderPane();
+
+    await emit("revealed");
+
+    expect(treeState.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not spin the toolbar icon: reveal is not a gesture", async () => {
+    // `manual` exists only to drive the Refresh spinner, and reporting a
+    // gesture nobody made would be a lie about who asked for the work.
+    renderPane();
+
+    await emit("revealed");
+
+    expect(treeState.refresh).toHaveBeenCalledWith(undefined);
+    expect(treeState.refresh).not.toHaveBeenCalledWith({ manual: true });
+  });
+
+  it("stays put on cached and active", async () => {
+    renderPane();
+
+    await emit("cached");
+    await emit("active");
+
+    expect(treeState.refresh).not.toHaveBeenCalled();
+  });
+
+  it("re-reads the open text file on reveal", async () => {
+    // The nonce reaches the viewer through `viewerRevision`; drop it from that
+    // formula and the tree still refreshes while the file on screen goes stale.
+    mockPanel.browserSelectedPath = "src/app.ts";
+    mockPanel.browserSidebarCollapsed = true;
+    renderPane();
+    await waitFor(() => expect(readMock).toHaveBeenCalledTimes(1));
+
+    await emit("revealed");
+
+    await waitFor(() => expect(readMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("re-navigates the open PDF on reveal", async () => {
+    // The surface with no other safety net: `revision` never reaches the PDF
+    // branch, so before this the only way to see the rewritten bytes was
+    // pressing Refresh.
+    treeState.rows = [...defaultRows, PDF_ROW];
+    mockPanel.browserSelectedPath = PDF_ROW.path;
+    mockPanel.browserSidebarCollapsed = true;
+    const { container } = renderPane();
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    const srcBefore = container.querySelector("iframe")?.getAttribute("src");
+
+    await emit("revealed");
+
+    await waitFor(() =>
+      expect(container.querySelector("iframe")?.getAttribute("src")).not.toBe(srcBefore)
+    );
+  });
+
+  it("leaves the open PDF alone on an ambient change tick", async () => {
+    // The invariant the reveal path must not trample: an agent writing any file
+    // in the worktree still must not throw away the reader's page and zoom.
+    treeState.rows = [...defaultRows, PDF_ROW];
+    mockPanel.browserSelectedPath = PDF_ROW.path;
+    mockPanel.browserSidebarCollapsed = true;
+    worktreeTicks.git = 100;
+    const { container, rerender } = renderPane();
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    const srcBefore = container.querySelector("iframe")?.getAttribute("src");
+
+    worktreeTicks.git = 200;
+    await act(async () => {
+      rerender(paneElement());
+    });
+
+    expect(container.querySelector("iframe")?.getAttribute("src")).toBe(srcBefore);
+  });
+
+  it("stops listening once the pane unmounts", () => {
+    const { unmount } = renderPane();
+
+    unmount();
+
+    expect(lifecycleListeners.size).toBe(0);
+  });
+
+  describe("dock parking", () => {
+    it("defers the refresh while parked offscreen, then runs it once on activation", async () => {
+      // A dock panel stays mounted in the offscreen parking container whether
+      // or not its popover is open, so an ungated reveal would re-list the tree
+      // and restart any media for something nobody can see.
+      dockState.activeDockTerminalId = "other-panel";
+      const { rerender } = render(paneElement("dock"));
+
+      await emit("revealed");
+      await emit("revealed");
+      expect(treeState.refresh).not.toHaveBeenCalled();
+
+      dockState.activeDockTerminalId = "fb-1";
+      await act(async () => {
+        rerender(paneElement("dock"));
+      });
+
+      // Two missed reveals owe one catch-up — the work is "list what is on disk
+      // now", not "replay every switch".
+      expect(treeState.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("refreshes immediately when the dock panel is the active one", async () => {
+      dockState.activeDockTerminalId = "fb-1";
+      render(paneElement("dock"));
+
+      await emit("revealed");
+
+      expect(treeState.refresh).toHaveBeenCalledTimes(1);
+    });
   });
 });

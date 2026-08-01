@@ -66,6 +66,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isClientAppError } from "@/utils/clientAppError";
 import { logError } from "@/utils/logger";
 import { useHeightHold } from "./useHeightHold";
+import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 
 export interface FilePaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -126,6 +127,17 @@ function isUnderRoot(filePath: string, rootPath: string): boolean {
 // content.
 type LoadState =
   "idle" | "loading" | "loaded" | "error" | "image" | "svg" | "video" | "audio" | "pdf";
+
+// Why a read is happening, which decides two things a single boolean used to
+// conflate. `explicit` is a gesture aimed at this pane (open, toolbar Refresh,
+// Retry): it earns the loading skeleton and re-requests every rendered surface.
+// `ambient` is the filesystem talking (change tick, focus regain): it must not
+// flash the skeleton, and must not move a reload key an unrelated write would
+// otherwise use to reset playback. `revealed` is returning to this project:
+// silent like ambient, because nobody asked for a skeleton, but forcing the
+// reload key like explicit, because everything that happened while the view sat
+// cached is precisely what this pane cannot otherwise see.
+type FileLoadIntent = "explicit" | "ambient" | "revealed";
 
 // Which surface a toolbar action aims the current file at. `reveal` is always
 // offered; `browser`/`editor` is the mode-dependent open button; `file-browser`
@@ -523,7 +535,15 @@ export function FilePane({
   }, []);
 
   const loadFile = useCallback(
-    (silent: boolean) => {
+    (intent: FileLoadIntent) => {
+      // Two independent questions, and reveal answers them differently from
+      // either of the other intents. Whether to show the skeleton: only an
+      // explicit gesture earns one, because only then is someone waiting on a
+      // surface they just asked for. Whether to re-request the rendered
+      // surface: everything but an ambient pass, so returning to a project
+      // moves the reload key that a background tick deliberately leaves alone.
+      const silent = intent !== "explicit";
+      const forceSurfaceReload = intent !== "ambient";
       if (!filePath) {
         requestRef.current++;
         setContent(null);
@@ -559,10 +579,10 @@ export function FilePane({
       if (isVideoFilePath(filePath)) {
         setContent(null);
         setSanitizedSvg(null);
-        // Only an explicit load (open, toolbar Refresh) re-requests the media —
-        // a silent background pass must not remount the player and reset
-        // playback while someone is watching.
-        if (!silent) setReloadNonce((nonce) => nonce + 1);
+        // Only a foreground load (open, toolbar Refresh, returning to this
+        // project) re-requests the media — an ambient background pass must not
+        // remount the player and reset playback while someone is watching.
+        if (forceSurfaceReload) setReloadNonce((nonce) => nonce + 1);
         setLoadState("video");
         setErrorCode(null);
         setErrorMessage(null);
@@ -574,10 +594,10 @@ export function FilePane({
       if (isAudioFilePath(filePath)) {
         setContent(null);
         setSanitizedSvg(null);
-        // Only an explicit load (open, toolbar Refresh) re-requests the media —
-        // a silent background pass must not remount the player and reset
-        // playback while someone is listening.
-        if (!silent) setReloadNonce((nonce) => nonce + 1);
+        // Only a foreground load (open, toolbar Refresh, returning to this
+        // project) re-requests the media — an ambient background pass must not
+        // remount the player and reset playback while someone is listening.
+        if (forceSurfaceReload) setReloadNonce((nonce) => nonce + 1);
         setLoadState("audio");
         setErrorCode(null);
         setErrorMessage(null);
@@ -589,10 +609,10 @@ export function FilePane({
       if (isPdfFilePath(filePath)) {
         setContent(null);
         setSanitizedSvg(null);
-        // Only an explicit load (open, toolbar Refresh) re-requests the
-        // document — a silent background pass must not remount the frame and
-        // throw away the reader's page and zoom.
-        if (!silent) setReloadNonce((nonce) => nonce + 1);
+        // Only a foreground load (open, toolbar Refresh, returning to this
+        // project) re-requests the document — an ambient background pass must
+        // not remount the frame and throw away the reader's page and zoom.
+        if (forceSurfaceReload) setReloadNonce((nonce) => nonce + 1);
         setLoadState("pdf");
         setErrorCode(null);
         setErrorMessage(null);
@@ -656,13 +676,16 @@ export function FilePane({
           setHtmlPreviewUrl(previewUrl ?? null);
           // Re-navigate the preview frame so a rewritten report — or an unchanged
           // entry file whose relative asset changed — reflects the latest bytes.
-          // The nonce is the sandboxed frame's only src input, so a silent pass
-          // only bumps it when the bytes actually moved: otherwise every worktree
-          // tick, most of them writes to unrelated files, would throw away the
-          // rendered page's scroll and in-page JS state. Explicit loads (open,
-          // toolbar Refresh) stay unconditional, keeping a manual path for an
-          // asset-only change. reloadNonce isn't a loadFile dep, so neither can
-          // re-trigger the load.
+          // The nonce is the sandboxed frame's only src input, so an ambient
+          // pass only bumps it when the bytes actually moved: otherwise every
+          // worktree tick, most of them writes to unrelated files, would throw
+          // away the rendered page's scroll and in-page JS state. Foreground
+          // loads (open, toolbar Refresh, returning to this project) stay
+          // unconditional — an entry file whose relative asset was rewritten
+          // while the project sat cached reads as unchanged bytes, so the
+          // bytes-changed gate is exactly what would leave it stale.
+          // reloadNonce isn't a loadFile dep, so neither can re-trigger the
+          // load.
           //
           // Markdown opts out of the bytes-changed gate: an image embedded in the
           // document is precisely the "unchanged file whose asset changed" case,
@@ -672,7 +695,7 @@ export function FilePane({
           // needs isHtml, and the media previews need their own loadStates — and
           // a changed image src reloads in place rather than remounting, so there
           // is no scroll or playback position to lose.
-          if (!silent || bytesChanged || isMarkdownFilePath(filePath)) {
+          if (forceSurfaceReload || bytesChanged || isMarkdownFilePath(filePath)) {
             setReloadNonce((nonce) => nonce + 1);
           }
           setLoadState("loaded");
@@ -705,7 +728,7 @@ export function FilePane({
   );
 
   useEffect(() => {
-    loadFile(false);
+    loadFile("explicit");
   }, [loadFile]);
 
   // Toolbar Refresh: spin the icon until the refreshed surface settles. Capture
@@ -716,7 +739,7 @@ export function FilePane({
   const handleToolbarRefresh = useCallback(() => {
     setRefreshingMode(viewMode);
     if (viewMode === "diff") retryDiff();
-    else loadFile(false);
+    else loadFile("explicit");
   }, [viewMode, retryDiff, loadFile]);
 
   useEffect(() => {
@@ -738,7 +761,7 @@ export function FilePane({
   // silently, so a file deleted mid-view can't keep reading as present.
   const wasDiffModeRef = useRef(viewMode === "diff");
   useEffect(() => {
-    if (wasDiffModeRef.current && viewMode !== "diff") loadFile(true);
+    if (wasDiffModeRef.current && viewMode !== "diff") loadFile("ambient");
     wasDiffModeRef.current = viewMode === "diff";
   }, [viewMode, loadFile]);
 
@@ -782,7 +805,7 @@ export function FilePane({
     // happened to the file before anything was watching it is exactly what the
     // pane cannot otherwise know about.
     if (previous.watchRoot === diffWorktreePath && previous.tick === changeTick) return;
-    loadFile(true);
+    loadFile("ambient");
   }, [filePath, effectiveRootPath, diffWorktreePath, changeTick, viewMode, loadFile]);
 
   // Which surfaces a background re-read may replace. Images and inlined SVG join
@@ -805,17 +828,46 @@ export function FilePane({
   const wasFocusedRef = useRef(isFocused);
   useEffect(() => {
     if (isFocused && !wasFocusedRef.current && refetchesOnFocus) {
-      loadFile(true);
+      loadFile("ambient");
     }
     wasFocusedRef.current = isFocused;
   }, [isFocused, refetchesOnFocus, loadFile]);
 
   useEffect(() => {
     if (!refetchesOnFocus) return;
-    const handleWindowFocus = () => loadFile(true);
+    const handleWindowFocus = () => loadFile("ambient");
     window.addEventListener("focus", handleWindowFocus);
     return () => window.removeEventListener("focus", handleWindowFocus);
   }, [refetchesOnFocus, loadFile]);
+
+  // Coming back to a project the user left is the one moment nothing else
+  // covers. A view swap is not a page load and produces no window focus event,
+  // and `document.visibilityState` never moved — a cached child WebContentsView
+  // reports "visible" the whole time it is away (`viewCacheState`). So the
+  // worktree tick is the only live signal, and it deliberately cannot reach
+  // video, audio or PDF: their reload key stays put on an ambient pass so an
+  // unrelated write can't reset playback or a reader's page. Those are exactly
+  // the surfaces that come back stale.
+  //
+  // Deliberately its own trigger rather than a branch of the change-tick effect
+  // above: that one is gated on read-versus-watch root identity, which a reveal
+  // has no opinion about, and folding this in would let a watch-root quirk
+  // swallow it.
+  //
+  // No `reloadsSilently` gate either — that predicate exists to skip surfaces a
+  // background re-read would be inert for, which is the opposite of what this
+  // needs. Diff is skipped though: it owns its own freshness (`useDiffContent`
+  // raises a stale banner) and leaving it already re-reads source, so re-reading
+  // here would only replace review content nobody asked to move.
+  const isDockParked = usePanelStore(
+    useCallback((state) => location === "dock" && state.activeDockTerminalId !== id, [location, id])
+  );
+  useProjectViewRevealed(
+    () => {
+      if (viewMode !== "diff") loadFile("revealed");
+    },
+    { enabled: !isDockParked }
+  );
 
   // Route Cmd+F to the source view's find bar while this pane is focused
   // (no-op in rendered markdown, matching the dialog).
@@ -1158,7 +1210,7 @@ export function FilePane({
             {!isUnsupportedVideoFilePath(filePath) && !isUnsupportedAudioFilePath(filePath) && (
               <button
                 type="button"
-                onClick={() => loadFile(false)}
+                onClick={() => loadFile("explicit")}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
               >
                 <RefreshCw className="w-3.5 h-3.5" />

@@ -41,13 +41,43 @@ const { setFileViewModeMock, setFilePanelPathMock } = vi.hoisted(() => ({
   setFileViewModeMock: vi.fn(),
   setFilePanelPathMock: vi.fn(),
 }));
+// Mutable so a dock test can make this panel the active dock panel (or not) —
+// the pane defers its reveal refresh while parked offscreen (#11588).
+const dockState = { activeDockTerminalId: null as string | null };
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: (selector: (state: unknown) => unknown) =>
     selector({
       panelsById,
       setFileViewMode: setFileViewModeMock,
       setFilePanelPath: setFilePanelPathMock,
+      activeDockTerminalId: dockState.activeDockTerminalId,
     }),
+}));
+// #11588: returning to a cached project view is the pane's only signal that the
+// file may have moved while nothing was watching. Mocked with a real listener
+// registry so unsubscribe-on-unmount is observable rather than assumed.
+//
+// `vi.hoisted`, not a plain const: a module-scope subscriber anywhere in the
+// import graph would call the factory's `subscribeProjectViewLifecycle` while a
+// plain const was still in its TDZ, throwing during collection — which vitest
+// reports as a green exit code with the file's tests silently never run.
+type LifecyclePhase = "cached" | "active" | "revealed";
+const lifecycleListeners = vi.hoisted(() => new Set<(phase: LifecyclePhase) => void>());
+// Every runtime export, not just the one this pane imports: a factory is a
+// strict surface, and a module elsewhere in the graph reaching for a missing
+// name fails the whole file at collection rather than at the call.
+vi.mock("@/lib/viewCacheState", () => ({
+  subscribeProjectViewLifecycle: (listener: (phase: LifecyclePhase) => void) => {
+    lifecycleListeners.add(listener);
+    return () => {
+      lifecycleListeners.delete(listener);
+    };
+  },
+  // The real module's own safe default — the un-demoted answer.
+  isProjectViewCached: () => false,
+  __resetProjectViewCacheStateForTests: () => {
+    lifecycleListeners.clear();
+  },
 }));
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (state: unknown) => unknown) => selector({ currentProject: null }),
@@ -231,6 +261,8 @@ afterEach(() => {
   setFileViewModeMock.mockReset();
   setFilePanelPathMock.mockReset();
   markdownViewerProps.current = null;
+  lifecycleListeners.clear();
+  dockState.activeDockTerminalId = null;
 });
 
 describe("FilePane restore-control wiring", () => {
@@ -2546,6 +2578,292 @@ describe("FilePane live disk refresh (#11451)", () => {
       await commitTick(rerender);
 
       expect(container.querySelector("iframe")).toBe(frameBefore);
+      expect(container.querySelector("iframe")?.getAttribute("src")).toBe(srcBefore);
+    });
+  });
+});
+
+// #11588: a project switch is not a page load. Caching a view is
+// `removeChildView` + `setVisible(false)`, so `document.visibilityState` never
+// moves and no `window` focus event fires; the worktree tick keeps running but
+// deliberately cannot reach video, audio or PDF. Coming back is the only moment
+// this pane can learn what happened while it was away.
+describe("FilePane re-reads when the project view is revealed (#11588)", () => {
+  const WORKTREE_ID = "wt-1";
+
+  function seedWorktree(): void {
+    worktreeState.worktrees.set(WORKTREE_ID, {
+      id: WORKTREE_ID,
+      path: "/repo",
+      worktreeChanges: { changes: [], lastUpdated: 100 },
+    });
+  }
+
+  function paneElement(options: { location?: "grid" | "dock"; fileViewMode?: string } = {}) {
+    return (
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title="index.ts"
+          isFocused={false}
+          location={options.location ?? "grid"}
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  async function renderPane(
+    options: {
+      filePath?: string;
+      fileViewMode?: string;
+      location?: "grid" | "dock";
+    } = {}
+  ) {
+    seedWorktree();
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: options.filePath ?? "/repo/src/index.ts",
+      worktreeId: WORKTREE_ID,
+      fileViewMode: options.fileViewMode,
+    };
+    const view = render(paneElement(options));
+    // Can't wait on readMock — image, media and PDF short-circuit before it.
+    await act(async () => {});
+    return view;
+  }
+
+  async function emit(phase: LifecyclePhase) {
+    await act(async () => {
+      for (const listener of Array.from(lifecycleListeners)) listener(phase);
+    });
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  it("re-reads the open file on reveal", async () => {
+    readMock.mockResolvedValue({ content: "v1" });
+    await renderPane({});
+    const readsBefore = readMock.mock.calls.length;
+
+    await emit("revealed");
+
+    expect(readMock.mock.calls.length).toBe(readsBefore + 1);
+  });
+
+  it("stays put on cached and active", async () => {
+    // `cached` is the way out, and a switch superseded mid-flight only ever
+    // reaches `active` — neither means this pane is on screen again.
+    readMock.mockResolvedValue({ content: "v1" });
+    await renderPane({});
+    const readsBefore = readMock.mock.calls.length;
+
+    await emit("cached");
+    await emit("active");
+
+    expect(readMock.mock.calls.length).toBe(readsBefore);
+  });
+
+  it("keeps the current content on screen instead of flashing the skeleton", async () => {
+    // Nobody asked for this read, so it must not look like a load in progress.
+    readMock.mockResolvedValue({ content: "v1" });
+    const { container } = await renderPane({});
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-testid="code-viewer-mock"]')?.getAttribute("data-content")
+      ).toBe("v1")
+    );
+
+    const pending = deferred<{ content: string }>();
+    readMock.mockReturnValueOnce(pending.promise);
+    await emit("revealed");
+
+    expect(container.querySelector('[role="status"][aria-label="Loading file"]')).toBeNull();
+    expect(
+      container.querySelector('[data-testid="code-viewer-mock"]')?.getAttribute("data-content")
+    ).toBe("v1");
+
+    await act(async () => {
+      pending.resolve({ content: "v2" });
+    });
+    expect(
+      container.querySelector('[data-testid="code-viewer-mock"]')?.getAttribute("data-content")
+    ).toBe("v2");
+  });
+
+  it("re-navigates rendered HTML on reveal even when the bytes are identical", async () => {
+    // The case the bytes-changed gate cannot see: the entry file is unchanged
+    // while a relative asset it pulls in was rewritten in the background.
+    const PREVIEW_URL = "daintree-html://tok/report.html";
+    readMock.mockResolvedValue({ content: "<h1>v1</h1>", htmlPreviewUrl: PREVIEW_URL });
+    const { container } = await renderPane({
+      filePath: "/repo/dist/report.html",
+      fileViewMode: "rendered",
+    });
+    const nonce = () =>
+      container
+        .querySelector('[data-testid="html-viewer-mock"]')
+        ?.getAttribute("data-reload-nonce");
+    await waitFor(() => expect(nonce()).toBeTruthy());
+    const before = nonce();
+
+    await emit("revealed");
+
+    await waitFor(() => expect(nonce()).not.toBe(before));
+  });
+
+  it("skips the re-read in diff mode", async () => {
+    // Diff owns its own freshness (it raises a stale banner) and leaving it
+    // already re-reads source, so pulling here would only move review content
+    // nobody asked to move.
+    worktreeState.worktrees.set(WORKTREE_ID, {
+      id: WORKTREE_ID,
+      path: "/repo",
+      worktreeChanges: { changes: [{ path: "/repo/src/index.ts", status: "modified" }] },
+    });
+    const retry = vi.fn();
+    useDiffContentMock.mockReturnValue({ content: "@@ diff", stale: false, retry });
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/src/index.ts",
+      worktreeId: WORKTREE_ID,
+      fileViewMode: "diff",
+    };
+    render(paneElement());
+    await act(async () => {});
+    const readsBefore = readMock.mock.calls.length;
+
+    await emit("revealed");
+
+    expect(readMock.mock.calls.length).toBe(readsBefore);
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it("stops listening once the pane unmounts", async () => {
+    readMock.mockResolvedValue({ content: "v1" });
+    const { unmount } = await renderPane({});
+
+    unmount();
+
+    expect(lifecycleListeners.size).toBe(0);
+  });
+
+  describe("dock parking", () => {
+    it("defers the re-read while parked offscreen, then runs it once on activation", async () => {
+      // A dock panel stays mounted in the offscreen parking container whether
+      // or not its popover is open, so an ungated reveal would re-read — and
+      // restart any media — for something nobody can see.
+      readMock.mockResolvedValue({ content: "v1" });
+      dockState.activeDockTerminalId = "other-panel";
+      const { rerender } = await renderPane({ location: "dock" });
+      const readsBefore = readMock.mock.calls.length;
+
+      await emit("revealed");
+      await emit("revealed");
+      expect(readMock.mock.calls.length).toBe(readsBefore);
+
+      dockState.activeDockTerminalId = "file-1";
+      await act(async () => {
+        rerender(paneElement({ location: "dock" }));
+      });
+
+      // Two missed reveals owe one catch-up: the work is "read what is on disk
+      // now", not "replay every switch".
+      expect(readMock.mock.calls.length).toBe(readsBefore + 1);
+    });
+
+    it("re-reads immediately when the dock panel is the active one", async () => {
+      readMock.mockResolvedValue({ content: "v1" });
+      dockState.activeDockTerminalId = "file-1";
+      await renderPane({ location: "dock" });
+      const readsBefore = readMock.mock.calls.length;
+
+      await emit("revealed");
+
+      expect(readMock.mock.calls.length).toBe(readsBefore + 1);
+    });
+  });
+
+  describe("media and PDF", () => {
+    // The surfaces with no other safety net: their reload key deliberately does
+    // not move on a worktree tick, so before this the only way to see new bytes
+    // was pressing Refresh.
+    const mediaFetchMock =
+      vi.fn<
+        (
+          input: string | URL | Request
+        ) => Promise<Pick<Response, "ok" | "status" | "headers" | "blob">>
+      >();
+    const realCreateObjectURL = URL.createObjectURL;
+    const realRevokeObjectURL = URL.revokeObjectURL;
+    beforeEach(() => {
+      mediaFetchMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        blob: () => Promise.resolve(new Blob(["x"])),
+      });
+      vi.stubGlobal("fetch", mediaFetchMock);
+      URL.createObjectURL = vi.fn(() => "blob:app://daintree/media-preview");
+      URL.revokeObjectURL = vi.fn();
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      mediaFetchMock.mockReset();
+      URL.createObjectURL = realCreateObjectURL;
+      URL.revokeObjectURL = realRevokeObjectURL;
+    });
+
+    it("re-fetches the video on reveal", async () => {
+      const { container } = await renderPane({ filePath: "/repo/media/demo.mp4" });
+      await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+      const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+      await emit("revealed");
+
+      await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+    });
+
+    it("re-fetches the audio on reveal", async () => {
+      // Its own nonce condition, separate from video's — a regression in one
+      // would leave the other's test green.
+      const { container } = await renderPane({ filePath: "/repo/media/track.mp3" });
+      await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+      const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+      await emit("revealed");
+
+      await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+    });
+
+    it("re-navigates the PDF frame on reveal", async () => {
+      const { container } = await renderPane({ filePath: "/repo/docs/spec.pdf" });
+      await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+      const srcBefore = container.querySelector("iframe")?.getAttribute("src");
+
+      await emit("revealed");
+
+      await waitFor(() =>
+        expect(container.querySelector("iframe")?.getAttribute("src")).not.toBe(srcBefore)
+      );
+    });
+
+    it("leaves the PDF frame alone on active", async () => {
+      const { container } = await renderPane({ filePath: "/repo/docs/spec.pdf" });
+      await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+      const srcBefore = container.querySelector("iframe")?.getAttribute("src");
+
+      await emit("active");
+
       expect(container.querySelector("iframe")?.getAttribute("src")).toBe(srcBefore);
     });
   });

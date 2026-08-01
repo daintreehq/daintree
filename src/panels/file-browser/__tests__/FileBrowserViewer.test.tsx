@@ -58,7 +58,7 @@ interface ViewerOpts {
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
   revision?: string;
-  manualRefreshNonce?: number;
+  surfaceRefreshNonce?: number;
   onRefresh?: () => void;
   isRefreshing?: boolean;
 }
@@ -76,7 +76,7 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         fileName={fileName}
         relativePath={filePath ? fileName : null}
         revision={opts.revision ?? "r1"}
-        manualRefreshNonce={opts.manualRefreshNonce ?? 0}
+        surfaceRefreshNonce={opts.surfaceRefreshNonce ?? 0}
         onRefresh={opts.onRefresh ?? vi.fn()}
         isRefreshing={opts.isRefreshing ?? false}
         sidebarCollapsed={opts.sidebarCollapsed ?? false}
@@ -297,7 +297,7 @@ describe("FileBrowserViewer video preview (#11382)", () => {
 
     const { container, rerender } = renderViewer("/repo/media/demo.webm", {
       revision: "r1",
-      manualRefreshNonce: 0,
+      surfaceRefreshNonce: 0,
     });
     await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
     const firstNode = container.querySelector("video");
@@ -305,7 +305,7 @@ describe("FileBrowserViewer video preview (#11382)", () => {
     expect(videoFetchMock).toHaveBeenCalledTimes(1);
 
     // A worktree write elsewhere: the player must be left completely alone.
-    rerender(viewerJsx("/repo/media/demo.webm", { revision: "r2", manualRefreshNonce: 0 }));
+    rerender(viewerJsx("/repo/media/demo.webm", { revision: "r2", surfaceRefreshNonce: 0 }));
     await act(async () => {});
     expect(container.querySelector("video")).toBe(firstNode);
     expect(container.querySelector("video")?.getAttribute("src")).toBe(firstSrc);
@@ -313,7 +313,7 @@ describe("FileBrowserViewer video preview (#11382)", () => {
 
     // Refresh pressed: exactly one more request, aimed at a different URL —
     // proof the nonce reached it, without pinning the leaf's `v=` spelling.
-    rerender(viewerJsx("/repo/media/demo.webm", { revision: "r2", manualRefreshNonce: 1 }));
+    rerender(viewerJsx("/repo/media/demo.webm", { revision: "r2", surfaceRefreshNonce: 1 }));
     await waitFor(() => expect(videoFetchMock).toHaveBeenCalledTimes(2));
     expect(String(videoFetchMock.mock.calls[1]?.[0])).not.toBe(
       String(videoFetchMock.mock.calls[0]?.[0])
@@ -396,14 +396,14 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
     URL.createObjectURL = vi.fn(() => `blob:app://daintree/audio-${objectUrlSequence++}`);
 
     const { container, rerender } = renderViewer("/repo/media/track.mp3", {
-      manualRefreshNonce: 0,
+      surfaceRefreshNonce: 0,
     });
     await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
     const firstNode = container.querySelector("audio");
     const firstSrc = firstNode?.getAttribute("src");
     expect(audioFetchMock).toHaveBeenCalledTimes(1);
 
-    rerender(viewerJsx("/repo/media/track.mp3", { manualRefreshNonce: 1 }));
+    rerender(viewerJsx("/repo/media/track.mp3", { surfaceRefreshNonce: 1 }));
     await waitFor(() => expect(audioFetchMock).toHaveBeenCalledTimes(2));
 
     // A different URL, so the nonce genuinely reached the request rather than
@@ -435,13 +435,13 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
 
     const { container, rerender } = renderViewer("/repo/media/track.mp3", {
       revision: "0:0",
-      manualRefreshNonce: 0,
+      surfaceRefreshNonce: 0,
     });
     await screen.findByText("This audio file couldn't be played");
     expect(container.querySelector("audio")).toBeNull();
 
     // Exactly what the pane emits for one Refresh press: both values move.
-    rerender(viewerJsx("/repo/media/track.mp3", { revision: "0:1", manualRefreshNonce: 1 }));
+    rerender(viewerJsx("/repo/media/track.mp3", { revision: "0:1", surfaceRefreshNonce: 1 }));
 
     await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
     expect(screen.queryByText("This audio file couldn't be played")).toBeNull();
@@ -476,7 +476,7 @@ describe("FileBrowserViewer PDF preview (#11427)", () => {
   it("re-navigates only on an explicit refresh, never on a revision tick (#11586)", async () => {
     const { container, rerender } = renderViewer("/repo/docs/spec.pdf", {
       revision: "r1",
-      manualRefreshNonce: 0,
+      surfaceRefreshNonce: 0,
     });
     await act(async () => {});
     const firstFrame = container.querySelector("iframe");
@@ -485,12 +485,12 @@ describe("FileBrowserViewer PDF preview (#11427)", () => {
     // An ambient write must not throw away the reader's page and zoom. Both a
     // changed src AND a remounted frame would do that, so pin the node too —
     // a remount carrying an identical src resets the reader just the same.
-    rerender(viewerJsx("/repo/docs/spec.pdf", { revision: "r2", manualRefreshNonce: 0 }));
+    rerender(viewerJsx("/repo/docs/spec.pdf", { revision: "r2", surfaceRefreshNonce: 0 }));
     await act(async () => {});
     expect(container.querySelector("iframe")).toBe(firstFrame);
     expect(container.querySelector("iframe")?.getAttribute("src")).toBe(firstSrc);
 
-    rerender(viewerJsx("/repo/docs/spec.pdf", { revision: "r2", manualRefreshNonce: 1 }));
+    rerender(viewerJsx("/repo/docs/spec.pdf", { revision: "r2", surfaceRefreshNonce: 1 }));
     await act(async () => {});
     const refreshed = container.querySelector("iframe");
     // Re-navigated in place rather than remounted: the same element takes a new
@@ -552,13 +552,13 @@ describe("FileBrowserViewer Refresh control (#11586)", () => {
     // it — the media tests above would all still pass.
     const { rerender } = renderViewer("/repo/src/notes.txt", {
       revision: "0:0",
-      manualRefreshNonce: 0,
+      surfaceRefreshNonce: 0,
     });
     await screen.findByTestId("code-viewer-mock");
     expect(readMock).toHaveBeenCalledTimes(1);
 
     // What the pane produces for a Refresh press on a worktree with no tick.
-    rerender(viewerJsx("/repo/src/notes.txt", { revision: "0:1", manualRefreshNonce: 1 }));
+    rerender(viewerJsx("/repo/src/notes.txt", { revision: "0:1", surfaceRefreshNonce: 1 }));
     await waitFor(() => expect(readMock).toHaveBeenCalledTimes(2));
   });
 });
