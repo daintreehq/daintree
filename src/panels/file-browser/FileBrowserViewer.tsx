@@ -38,6 +38,7 @@ import {
   toFileReadErrorCode,
 } from "@/components/FileViewer/fileReadErrors";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -62,6 +63,18 @@ export interface FileBrowserViewerProps {
    * reflected instead of leaving stale bytes on screen.
    */
   revision: string;
+  /**
+   * Changes only when the user presses Refresh, never on an ambient worktree
+   * tick — the half of `revision` the media branches can safely honour. Typed
+   * `number` rather than `string | number` so handing it the merged `revision`
+   * (which also carries the change tick) is a compile error, not a silent
+   * regression to restarting playback on every background write.
+   */
+  manualRefreshNonce: number;
+  /** Runs the pane's manual refresh — re-reads the tree and the open file. */
+  onRefresh: () => void;
+  /** Whether that refresh is still draining; spins the Refresh icon. */
+  isRefreshing: boolean;
   /** Whether the tree sidebar is collapsed; drives the disclosure toggle's icon and state. */
   sidebarCollapsed: boolean;
   /** Opens/closes the tree sidebar. Owned by the pane, which persists the state. */
@@ -111,6 +124,9 @@ export function FileBrowserViewer({
   fileName,
   relativePath,
   revision,
+  manualRefreshNonce,
+  onRefresh,
+  isRefreshing,
   sidebarCollapsed,
   onToggleSidebar,
   treeSidebarId,
@@ -363,7 +379,26 @@ export function FileBrowserViewer({
               copied={pathCopied}
               onCopy={handleCopyPath}
             />
-            <FileViewerToolbar.Actions>
+          </>
+        )}
+        {/* Outside the `filePath` gate, unlike the actions below it: Refresh
+            re-reads the tree as well as the open file, and a workspace-rooted
+            browser has no change tick at all (#11482), so a collapsed sidebar
+            with nothing selected would otherwise offer no way to refresh
+            anything. */}
+        <FileViewerToolbar.Actions>
+          {/* Only while the tree column is collapsed away. Its header owns the
+              Refresh the rest of the time, and two identical buttons in one
+              panel would read as two different actions — the same
+              one-home-per-control rule that keeps the two disclosure toggles in
+              each other's columns (#11496). */}
+          {sidebarCollapsed && (
+            <FileViewerToolbar.IconButton label="Refresh" onClick={onRefresh}>
+              <SpinningIcon icon={RefreshCw} active={isRefreshing} className="h-4 w-4" />
+            </FileViewerToolbar.IconButton>
+          )}
+          {filePath && (
+            <>
               <FileViewerToolbar.IconButton
                 label={reveal.label}
                 onClick={() => void handleExternalAction("reveal")}
@@ -376,9 +411,9 @@ export function FileBrowserViewer({
               >
                 <ExternalLink className="h-4 w-4" />
               </FileViewerToolbar.IconButton>
-            </FileViewerToolbar.Actions>
-          </>
-        )}
+            </>
+          )}
+        </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>
       {filePath && externalError && (
         <InlineStatusBanner
@@ -491,14 +526,16 @@ export function FileBrowserViewer({
       case "video":
         return (
           <div className="h-full w-full overflow-auto">
-            {/* Deliberately NOT keyed on `revision`: it ticks on every worktree
-                write, and remounting the player would reset playback whenever
-                an agent touches any file. A rewritten video shows its new bytes
-                on re-selection — continuity beats freshness mid-playback. */}
+            {/* Reloaded on `manualRefreshNonce`, never on `revision`: that
+                ticks on every worktree write, and re-fetching would reset
+                playback whenever an agent touches any file. Pressing Refresh
+                is the one gesture that outranks continuity, so it — and only
+                it — pulls the rewritten bytes (#11586). */}
             <FileVideoPreview
               filePath={filePath}
               rootPath={rootPath}
               label={fileName}
+              reloadKey={manualRefreshNonce}
               onError={(error) =>
                 setState({
                   status: "error",
@@ -513,13 +550,14 @@ export function FileBrowserViewer({
       case "audio":
         return (
           <div className="h-full w-full overflow-auto">
-            {/* Deliberately NOT keyed on `revision`, for the same reason as
-                video above: a worktree write elsewhere must not restart the
-                track someone is listening to. */}
+            {/* Same split as video above: a worktree write elsewhere must not
+                restart the track someone is listening to, while Refresh
+                still re-fetches it on demand. */}
             <FileAudioPreview
               filePath={filePath}
               rootPath={rootPath}
               label={fileName}
+              reloadKey={manualRefreshNonce}
               onError={(error) =>
                 setState({
                   status: "error",
@@ -532,10 +570,15 @@ export function FileBrowserViewer({
 
       case "pdf":
         return (
-          // Same reasoning as the video case: no `revision` key. Remounting the
-          // frame on every worktree write would throw away the reader's page
-          // and zoom; a rewritten PDF shows new bytes on re-selection.
-          <FilePdfPreview filePath={filePath} rootPath={rootPath} label={fileName} />
+          // Same split as the video case: re-navigating the frame on every
+          // worktree write would throw away the reader's page and zoom, so only
+          // an explicit Refresh moves the key.
+          <FilePdfPreview
+            filePath={filePath}
+            rootPath={rootPath}
+            label={fileName}
+            reloadKey={manualRefreshNonce}
+          />
         );
 
       case "html":
