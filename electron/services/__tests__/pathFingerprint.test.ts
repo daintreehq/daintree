@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
@@ -207,6 +207,39 @@ describe("fingerprintPaths", () => {
 
     expect(before).not.toBeNull();
     expect(after.every((value) => value === null)).toBe(true);
+  });
+
+  it("stops probing a root once a path inside it hangs, not only the root itself", async () => {
+    // A dead mount below a live root: the root keeps answering instantly, so
+    // the root-level probe never times out and only the member's own hang can
+    // stop the caller re-issuing it every poll. `realpath` is stubbed to never
+    // settle for that one path — the same shape as a disconnected share, which
+    // takes the OS a minute or more to give up on.
+    const member = path.join(root, "member.txt");
+    await fs.writeFile(member, "readable");
+
+    const beforeHang = await fingerprintPaths(root, [member]);
+
+    const realRealpath = fs.realpath;
+    const spy = vi
+      .spyOn(fs, "realpath")
+      .mockImplementation(((target: string, options?: unknown) =>
+        target === member
+          ? new Promise<string>(() => {})
+          : (realRealpath as (p: string, o?: unknown) => Promise<string>)(
+              target,
+              options
+            )) as typeof fs.realpath);
+    const duringHang = await fingerprintPaths(root, [member]).finally(() => spy.mockRestore());
+
+    // Nothing is stubbed any more and both paths are still on disk, so the only
+    // thing that can answer null now is the cooldown the hung member left on
+    // its root — and it covers the root, not just the path that hung.
+    const afterHang = await fingerprintPaths(root, [root, member]);
+
+    expect(beforeHang.every((value) => value !== null)).toBe(true);
+    expect(duringHang).toEqual([null]);
+    expect(afterHang).toEqual([null, null]);
   });
 
   it("returns nothing for an empty request without touching the filesystem", async () => {

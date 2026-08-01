@@ -94,7 +94,18 @@ async function fingerprintDirectory(target: string, mtime: bigint): Promise<Path
   return `d:${mtime}:${entries.length}:${digestEntries(names)}`;
 }
 
-async function fingerprintOne(target: string, rootRealPath: string): Promise<PathFingerprint> {
+/**
+ * `onHang` fires when a call under this path timed out, so the caller can put
+ * the whole root on cooldown. A dead mount below a live root — a network share
+ * inside a browsed folder, or the file a `FilePane` happens to hold — hangs here
+ * while the root itself keeps answering instantly, and nothing in the root-level
+ * probe would ever notice.
+ */
+async function fingerprintOne(
+  target: string,
+  rootRealPath: string,
+  onHang: () => void
+): Promise<PathFingerprint> {
   try {
     // Resolved before anything is read: `stat` follows symlinks — including
     // intermediate ones — so a symlink inside the root pointing out of it would
@@ -127,11 +138,13 @@ async function fingerprintOne(target: string, rootRealPath: string): Promise<Pat
     }
     // A socket, fifo or device has no content the file surfaces can render.
     return null;
-  } catch {
+  } catch (error) {
     // Every failure folds to the same "nothing readable" value on purpose. The
     // caller is diffing successive samples, and distinguishing ENOENT from
     // EACCES from a dead mount would only let a transient permission blip read
-    // as a change.
+    // as a change. A hang is still reported sideways, because giving up waiting
+    // does not release the libuv worker the syscall is sitting on.
+    if (error instanceof TimeoutError) onHang();
     return null;
   }
 }
@@ -204,7 +217,9 @@ export async function fingerprintPaths(
       const target = paths[index];
       results[index] =
         target !== undefined && path.isAbsolute(target)
-          ? await fingerprintOne(target, rootRealPath)
+          ? await fingerprintOne(target, rootRealPath, () =>
+              hungRoots.set(rootPath, Date.now() + ROOT_COOLDOWN_MS)
+            )
           : null;
     }
   });
