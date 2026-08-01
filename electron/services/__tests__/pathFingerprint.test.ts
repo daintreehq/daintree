@@ -79,20 +79,26 @@ describe("fingerprintPaths", () => {
     await fs.utimes(left, stamp, stamp);
     await fs.utimes(right, stamp, stamp);
 
-    const [leftStats, rightStats] = await Promise.all([fs.stat(left), fs.stat(right)]);
-    // Precondition: without this the assertion below could pass on a timestamp
-    // difference and prove nothing about the digest.
-    expect(leftStats.mtimeMs).toBe(rightStats.mtimeMs);
+    const [leftStats, rightStats] = await Promise.all([
+      fs.stat(left, { bigint: true }),
+      fs.stat(right, { bigint: true }),
+    ]);
+    // Precondition, at the same nanosecond precision the fingerprint uses:
+    // without this the assertion below could pass on a timestamp difference and
+    // prove nothing about the digest.
+    expect(leftStats.mtimeNs).toBe(rightStats.mtimeNs);
 
     const [leftPrint, rightPrint] = await fingerprintPaths(root, [left, right]);
     expect(leftPrint).not.toBeNull();
     expect(leftPrint).not.toBe(rightPrint);
   });
 
-  it("is insensitive to the order readdir happens to return entries in", async () => {
-    // The digest is order-independent by construction; this pins that a second
-    // sample of an untouched directory cannot drift just because the platform
-    // enumerated it differently.
+  it("is stable across repeated samples of an untouched wide directory", async () => {
+    // Names enough entries that an implementation depending on enumeration order
+    // has room to drift. It cannot force two different `readdir` orders, so it
+    // pins stability rather than proving order-independence — the digest's
+    // commutativity is what provides that, and the two-directory test above is
+    // what proves the digest is consulted at all.
     const wide = path.join(root, "wide");
     await fs.mkdir(wide);
     await Promise.all(

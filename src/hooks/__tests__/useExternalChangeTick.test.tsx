@@ -108,23 +108,24 @@ describe("useExternalChangeTick", () => {
     expect(fingerprint).not.toHaveBeenCalled();
   });
 
-  it("keeps its baseline when the caller re-derives an equivalent path list", async () => {
-    // Both panes rebuild this array every render; re-keying on identity would
-    // reset the baseline continuously and the tick would never fire.
-    const { result, rerender } = renderHook(
+  it("does not re-baseline when the caller rebuilds an equivalent path list", async () => {
+    // Both panes rebuild this array every render. Re-keying on array identity
+    // would restart the baseline continuously, and a change arriving between two
+    // rebuilds would be folded into the new baseline instead of reported.
+    const { rerender } = renderHook(
       ({ paths }: { paths: string[] }) => useExternalChangeTick("/root", paths, true),
-      { initialProps: { paths: ["/root/b", "/root/a"] } }
+      { initialProps: { paths: ["/root/a", "/root/b"] } }
     );
     await flush();
     expect(fingerprint).toHaveBeenCalledTimes(1);
 
-    rerender({ paths: ["/root/a", "/root/b", "/root/a"] });
-    fingerprint.mockResolvedValue(["fp-2", "fp-2"]);
-    await pollOnce();
+    // A fresh array with the same contents, and a duplicate the hook must fold
+    // away rather than treat as a new set.
+    rerender({ paths: ["/root/a", "/root/b", "/root/b"] });
+    await flush();
 
-    // A reordered, duplicate-bearing rebuild of the same set still compares
-    // against the earlier sample rather than starting over.
-    expect(result.current).toBeDefined();
+    // No new request: an unchanged set means the standing baseline still holds.
+    expect(fingerprint).toHaveBeenCalledTimes(1);
   });
 
   it("repeats the same request for an unchanged set", async () => {
@@ -202,6 +203,13 @@ describe("useExternalChangeTick", () => {
     expect(result.current).toBeUndefined();
     // The new set must not be stuck behind the abandoned request's latch.
     expect(fingerprint.mock.calls.some(([payload]) => payload.paths[0] === "/root/b")).toBe(true);
+
+    // The load-bearing half: without the guard the late answer overwrites the
+    // baseline under the OLD key, so B's next sample looks like B's first one
+    // and this genuine change is silently swallowed instead of reported.
+    fingerprint.mockResolvedValue(["changed-b"]);
+    await pollOnce();
+    expect(result.current).toBeDefined();
   });
 
   it("stops polling while hidden and diffs immediately on reveal", async () => {

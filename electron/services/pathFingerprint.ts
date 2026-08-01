@@ -46,12 +46,14 @@ export type PathFingerprint = string | null;
 /**
  * An order-independent digest of a directory's entries.
  *
- * XOR-folding each entry's own hash makes `readdir`'s platform-dependent
- * ordering irrelevant without paying for a sort, which is what a per-poll digest
- * of a wide directory would otherwise cost. Entry names within a directory are
- * unique, so the usual XOR hazard — a pair cancelling out — cannot arise. The
- * running sum and the count are folded in alongside so a permutation of hash
- * bits alone can't collide.
+ * XOR and modular addition are both commutative, so folding each entry's own
+ * hash makes `readdir`'s platform-dependent ordering irrelevant without paying
+ * for a sort — which is what a per-poll digest of a wide directory would
+ * otherwise cost. Entry names within a directory are unique, so the usual XOR
+ * hazard of a duplicated pair cancelling out cannot arise, and the running sum
+ * alongside it means two sets would have to collide under both folds at once.
+ * This is cache invalidation, not authentication: a collision costs a missed
+ * refresh, so incidental strength is enough and an adversary is not in scope.
  */
 function digestEntries(entries: string[]): string {
   const accumulator = Buffer.alloc(20);
@@ -164,12 +166,18 @@ export async function fingerprintPaths(
   if (paths.length === 0) return [];
   if (!path.isAbsolute(rootPath)) return paths.map(() => null);
 
-  const cooldownUntil = hungRoots.get(rootPath);
-  if (cooldownUntil !== undefined) {
-    // Evicted on expiry rather than left to accumulate, so a remounted share
-    // starts answering again on its own instead of staying dead until restart.
-    if (Date.now() < cooldownUntil) return paths.map(() => null);
-    hungRoots.delete(rootPath);
+  // Swept on every call rather than only when the same root comes back: a root
+  // that hung once and was then closed would otherwise sit in the map forever,
+  // and the map is only ever as large as the set of roots that timed out inside
+  // one cooldown window, so the walk is trivial.
+  if (hungRoots.size > 0) {
+    const now = Date.now();
+    for (const [hungRoot, until] of hungRoots) {
+      if (now >= until) hungRoots.delete(hungRoot);
+    }
+    // A remounted share therefore starts answering on its own rather than
+    // staying dead until the app restarts.
+    if (hungRoots.has(rootPath)) return paths.map(() => null);
   }
 
   const rootRealPath = await withTimeout(
