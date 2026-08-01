@@ -748,6 +748,11 @@ describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
     const results: Record<string, string> = {};
     for (const [name, run] of Object.entries(BRANCHES)) {
       results[name] = await run();
+      // Every resolved shutdown ends in TerminalProcess.kill(), which leaves a
+      // pending SIGKILL escalation (ProcessTreeKiller). Queued across runners,
+      // the next scenario's timer advance would fire the earlier ones and
+      // sigkillSweep the mock's pid — a real number — against the real OS.
+      vi.clearAllTimers();
     }
 
     expect(results.capturedAtExit).toBe(results.capturedOnData);
@@ -883,6 +888,12 @@ describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
     // makes "timeout points at the 2.5s budget" actionable rather than noise.
     const handles = createMockPty();
     const terminal = createAgentTerminal(handles);
+
+    // Age the terminal well past the upper bound first. Without this the
+    // terminal is born at the same instant the shutdown starts, so an
+    // implementation measuring from spawn time instead of from the shutdown
+    // would report the same small number and pass.
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_TIMEOUT_MS * 20);
 
     const promise = terminal.gracefulShutdown();
     await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
