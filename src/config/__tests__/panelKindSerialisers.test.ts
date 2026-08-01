@@ -145,14 +145,14 @@ describe("panelKindSerialisers", () => {
       });
 
       it("round-trips a non-default order through serialize and back", () => {
-        const panel = {
+        const panel: FileBrowserPanelData = {
           id: "fb1",
           kind: "file-browser",
           title: "Files",
-          cwd: "/repo",
+          location: "grid",
           browserSortKey: "size",
           browserSortDirection: "desc",
-        } as unknown as FileBrowserPanelData;
+        };
         const restored = deserialize()({ id: "fb1", ...serializeFileBrowser(panel) });
         expect(restored.browserSortKey).toBe("size");
         expect(restored.browserSortDirection).toBe("desc");
@@ -620,9 +620,9 @@ describe("file-browser sort survives the whole restore path (#11620)", () => {
       id: "fb1",
       kind: "file-browser",
       title: "Files",
-      cwd: "/repo",
+      location: "grid",
       ...panel,
-    } as unknown as FileBrowserPanelData);
+    });
     const options = getDeserializer("file-browser")!({ id: "fb1", ...saved });
     return createFileBrowserDefaults({
       kind: "file-browser",

@@ -255,12 +255,7 @@ describe("createFileBrowserDefaults", () => {
 
 describe("serializeFileBrowser sort fields (#11620)", () => {
   function base(): FileBrowserPanelData {
-    return {
-      id: "p1",
-      kind: "file-browser",
-      title: "Files",
-      cwd: "/repo",
-    } as unknown as FileBrowserPanelData;
+    return { ...basePanel };
   }
 
   it("persists neither field for the default name/ascending order", () => {

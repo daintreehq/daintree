@@ -33,6 +33,18 @@ function file(path: string): FileTreeNode {
   return { name: path.split("/").pop()!, path, isDirectory: false };
 }
 
+/**
+ * Long enough for any effect-driven re-request to have been enqueued and
+ * pumped, so "no further calls after this" is a real statement about the
+ * implementation rather than about the test's timing.
+ */
+const SETTLE_MS = 50;
+
+/** Give pending effects and their queued fetches a chance to fire. */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+}
+
 /** A deferred promise so a listing can be held open mid-flight. */
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -1624,9 +1636,13 @@ describe("useFileBrowserTree folder listing (#11620)", () => {
 
     const { result } = renderTree("src");
 
-    await waitFor(() => expect(result.current.listingStatus).toBe("ready"));
-    // [] not null: the folder really holds nothing.
-    expect(result.current.listingRows).toEqual([]);
+    // Waits on the rows, not on `listingStatus`: status is also "ready" while
+    // no folder has resolved yet, which is true on the very first render and
+    // would let this pass before anything had loaded.
+    await waitFor(() => expect(result.current.listingRows).toEqual([]));
+    // [] not null: the folder really holds nothing, which is a different answer
+    // from "not fetched yet".
+    expect(result.current.listingStatus).toBe("ready");
   });
 
   it("reports an error instead of pending forever when the folder can't be read", async () => {
@@ -1656,7 +1672,7 @@ describe("useFileBrowserTree folder listing (#11620)", () => {
 
     // A failed path is in neither the listings map nor the in-flight set, so
     // without an explicit guard this would refire on every render.
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await settle();
     expect(listDirectory.mock.calls.filter((c) => c[0].dirPath === "src")).toHaveLength(
       afterFailure
     );
@@ -1847,7 +1863,7 @@ describe("useFileBrowserTree listing recovery and revalidation (#11620)", () => 
     );
 
     await waitFor(() => expect(result.current.rows.length).toBeGreaterThan(0));
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await settle();
 
     expect(listDirectory.mock.calls.filter((c) => c[0].dirPath === "bad")).toHaveLength(1);
   });

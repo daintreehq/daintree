@@ -96,18 +96,18 @@ const RadioGroupContext = createContext<((value: string) => void) | null>(null);
 // none of them in jsdom, where every element measures zero. Render them all —
 // what this suite owns is which body the viewer picks, not how it windows.
 vi.mock("react-virtuoso", () => ({
-  Virtuoso: forwardRef(function VirtuosoStub(
+  Virtuoso: forwardRef(function VirtuosoStub<Row>(
     props: {
-      data: unknown[];
+      data: Row[];
       context: unknown;
-      itemContent: (index: number, row: never, context: unknown) => ReactNode;
+      itemContent: (index: number, row: Row, context: unknown) => ReactNode;
     },
-    _ref
+    _ref: unknown
   ) {
     return (
       <div>
         {props.data.map((row, index) => (
-          <div key={index}>{props.itemContent(index, row as never, props.context)}</div>
+          <div key={index}>{props.itemContent(index, row, props.context)}</div>
         ))}
       </div>
     );
