@@ -11,7 +11,7 @@ import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
 import { resolveTreeKey, type FlatTreeRow } from "./fileBrowserTree";
-import { UNKNOWN_FILE_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
+import { FILE_TREE_ICON_CLASS, UNKNOWN_FILE_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
 import { INSERT_FILE_REFERENCE_COMBO, matchesInsertFileReferenceCombo } from "./fileReference";
 
 export interface FileTreeViewProps {
@@ -501,7 +501,7 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
         to monochrome; see `src/index.css`.
       */}
       <RowIcon
-        className={cn("file-tree-entry-icon h-3.5 w-3.5 shrink-0", rowIconColor)}
+        className={cn(FILE_TREE_ICON_CLASS, "h-3.5 w-3.5 shrink-0", rowIconColor)}
         aria-hidden="true"
       />
       <span className={cn("truncate", isSelected && "font-medium")}>{row.name}</span>

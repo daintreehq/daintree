@@ -8,6 +8,7 @@ import { ContextMenuItem } from "@/components/ui/context-menu";
 import { FILE_DRAG_MIME, decodeFileDragPaths } from "@/lib/fileDragPayload";
 import { FileTreeView } from "../FileTreeView";
 import type { FlatTreeRow } from "../fileBrowserTree";
+import { FILE_TREE_ICON_CLASS, getFileTypeIcon } from "../fileTypeIcons";
 
 // `isMac` reads navigator.platform, which jsdom reports as neither — drive it
 // explicitly so both modifier branches of the insert shortcut are covered.
@@ -456,23 +457,40 @@ describe("FileTreeView row icons", () => {
     }
   });
 
-  it("tints classified files and leaves folders and unknowns neutral", () => {
+  it("paints each file with the color its own resolution asked for", () => {
     const { getByRole } = renderTree({ rows: MIXED, rowContextMenu: undefined });
 
-    // Lucide stamps its own `lucide-<name>` class on every icon, so compare the
-    // color utilities rather than the whole class attribute.
-    const colorsOf = (name: string) =>
-      iconOf(getByRole("treeitem", { name }))
-        .getAttribute("class")
-        ?.match(/\btext-[a-z][a-z0-9-]*\b/g) ?? [];
-
-    for (const name of ["clip.mp4", "index.json", "logo.png", "bundle.zip", "main.ts"]) {
-      expect(colorsOf(name).some((token) => token.startsWith("text-category-"))).toBe(true);
+    // Compared against the resolver rather than against a literal token, so a
+    // renderer that hardcoded one hue for every row would fail here.
+    for (const entry of MIXED.filter((candidate) => !candidate.isDirectory)) {
+      const className = iconOf(getByRole("treeitem", { name: entry.name })).getAttribute("class");
+      expect(className?.split(/\s+/)).toContain(getFileTypeIcon(entry.name).colorClass);
     }
-    // A folder is one shape for the whole tree, so a hue on it sorts nothing —
-    // it shares the unclassified file's neutral.
-    expect(colorsOf("src")).toEqual(colorsOf("mystery.qqq"));
-    expect(colorsOf("src").some((token) => token.startsWith("text-category-"))).toBe(false);
+  });
+
+  it("leaves folders on the unclassified file's neutral", () => {
+    const { getByRole } = renderTree({ rows: MIXED, rowContextMenu: undefined });
+    const classesOf = (name: string) =>
+      iconOf(getByRole("treeitem", { name })).getAttribute("class")?.split(/\s+/) ?? [];
+
+    // A folder is one shape for the whole tree, so a hue on it sorts nothing.
+    expect(classesOf("src")).toContain(getFileTypeIcon("mystery.qqq").colorClass);
+    expect(classesOf("src").some((token) => token.startsWith("text-category-"))).toBe(false);
+    // ...but it must still be a folder, not the generic file glyph.
+    expect(iconOf(getByRole("treeitem", { name: "src" })).innerHTML).not.toBe(
+      iconOf(getByRole("treeitem", { name: "mystery.qqq" })).innerHTML
+    );
+  });
+
+  it("marks every entry icon for the increased-contrast repaint", () => {
+    const { getByRole } = renderTree({ rows: MIXED, rowContextMenu: undefined });
+
+    // The stylesheet's `prefers-contrast: more` rule keys off this class; the
+    // contract test guards the other half.
+    for (const entry of MIXED) {
+      const className = iconOf(getByRole("treeitem", { name: entry.name })).getAttribute("class");
+      expect(className?.split(/\s+/)).toContain(FILE_TREE_ICON_CLASS);
+    }
   });
 
   it("never dims an entry icon into invisibility or reaches for the accent", () => {
@@ -482,6 +500,7 @@ describe("FileTreeView row icons", () => {
       const className = iconOf(getByRole("treeitem", { name: entry.name })).getAttribute("class");
       // The `/30`-`/40` alpha is exactly the "near invisible" complaint.
       expect(className).not.toMatch(/text-[a-z-]+\/\d/);
+      expect(className).not.toMatch(/\bopacity-/);
       // Accent restraint: never dozens of rows at once.
       expect(className).not.toMatch(/accent/);
     }

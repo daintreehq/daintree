@@ -64,6 +64,14 @@ type CategoryColor = `text-${(typeof WORKTREE_COLOR_PALETTE)[number]}`;
 /** The neutral every unrecognized file falls back to — deliberately outside the categorical palette. */
 export const UNKNOWN_FILE_COLOR_CLASS = "text-text-secondary";
 
+/**
+ * Marker class on every tree entry icon, file and folder alike. Carries no
+ * styling of its own — it exists so `@media (prefers-contrast: more)` in
+ * `src/index.css` can repaint the whole set monochrome. Exported so the
+ * component and the stylesheet's contract test agree on one spelling.
+ */
+export const FILE_TREE_ICON_CLASS = "file-tree-entry-icon";
+
 export interface FileTypeIcon {
   category: FileTypeCategory;
   Icon: LucideIcon;
@@ -74,22 +82,35 @@ export interface FileTypeIcon {
   colorClass: CategoryColor | typeof UNKNOWN_FILE_COLOR_CLASS;
 }
 
+/**
+ * Fifteen categories over eight hues, so seven pairs share a color. Pairing is
+ * by *inner mark*, not by meaning: almost every glyph here is a page outline
+ * with a symbol inside it, so the silhouette can't separate them and the
+ * symbol has to. Each pair below is a padlock against text lines, a gear
+ * against a play triangle — never two marks that read alike at 14px, which is
+ * why `document` sits beside `lock` rather than beside `spreadsheet`.
+ */
 const CATEGORIES: Record<FileTypeCategory, FileTypeIcon> = {
   source: { category: "source", Icon: FileCode, colorClass: "text-category-blue" },
+  font: { category: "font", Icon: FileType, colorClass: "text-category-blue" },
   script: { category: "script", Icon: FileTerminal, colorClass: "text-category-cyan" },
-  data: { category: "data", Icon: FileBraces, colorClass: "text-category-amber" },
-  config: { category: "config", Icon: FileCog, colorClass: "text-category-violet" },
-  lock: { category: "lock", Icon: FileLock, colorClass: "text-category-indigo" },
-  image: { category: "image", Icon: FileImage, colorClass: "text-category-pink" },
-  video: { category: "video", Icon: FilePlay, colorClass: "text-category-violet" },
   audio: { category: "audio", Icon: FileMusic, colorClass: "text-category-cyan" },
+  data: { category: "data", Icon: FileBraces, colorClass: "text-category-amber" },
+  spreadsheet: {
+    category: "spreadsheet",
+    Icon: FileSpreadsheet,
+    colorClass: "text-category-amber",
+  },
+  config: { category: "config", Icon: FileCog, colorClass: "text-category-violet" },
+  video: { category: "video", Icon: FilePlay, colorClass: "text-category-violet" },
+  lock: { category: "lock", Icon: FileLock, colorClass: "text-category-indigo" },
+  document: { category: "document", Icon: FileText, colorClass: "text-category-indigo" },
+  image: { category: "image", Icon: FileImage, colorClass: "text-category-pink" },
+  key: { category: "key", Icon: FileKey, colorClass: "text-category-pink" },
   archive: { category: "archive", Icon: FileArchive, colorClass: "text-category-orange" },
-  document: { category: "document", Icon: FileText, colorClass: "text-category-teal" },
-  spreadsheet: { category: "spreadsheet", Icon: FileSpreadsheet, colorClass: "text-category-teal" },
-  database: { category: "database", Icon: Database, colorClass: "text-category-amber" },
-  font: { category: "font", Icon: FileType, colorClass: "text-category-pink" },
-  key: { category: "key", Icon: FileKey, colorClass: "text-category-indigo" },
   binary: { category: "binary", Icon: Binary, colorClass: "text-category-orange" },
+  // The only glyph that isn't a page at all, so it needs no partner to tell it apart.
+  database: { category: "database", Icon: Database, colorClass: "text-category-teal" },
   unknown: { category: "unknown", Icon: File, colorClass: UNKNOWN_FILE_COLOR_CLASS },
 };
 
@@ -404,6 +425,8 @@ const BASENAME_CATEGORIES: Record<string, FileTypeCategory> = {
   "podfile.lock": "lock",
   "package.resolved": "lock",
   "gradle.lockfile": "lock",
+  // Ends in `.hcl`, so without an exact entry it would read as Terraform config.
+  ".terraform.lock.hcl": "lock",
 
   // manifests and tool config — extensionless or extension-misleading
   dockerfile: "config",
@@ -430,8 +453,8 @@ const BASENAME_CATEGORIES: Record<string, FileTypeCategory> = {
   "build.gradle.kts": "config",
   "settings.gradle": "config",
   "settings.gradle.kts": "config",
-  gradlew: "config",
-  "gradlew.bat": "config",
+  // The wrapper launchers are executables, not Gradle configuration.
+  gradlew: "script",
   codeowners: "config",
   ".gitignore": "config",
   ".gitattributes": "config",
@@ -470,8 +493,11 @@ const BASENAME_CATEGORIES: Record<string, FileTypeCategory> = {
 const BASENAME_PATTERNS: ReadonlyArray<readonly [RegExp, FileTypeCategory]> = [
   // .env, .env.local, .env.production.local
   [/^\.env(\..+)?$/, "config"],
-  // vite.config.ts, jest.config.mjs, tailwind.config.js
-  [/\.config\.[^.]+$/, "config"],
+  // vite.config.ts, jest.config.mjs, tailwind.config.js. The trailing format is
+  // enumerated rather than left open: `.config.` is a common enough infix that
+  // an open suffix would swallow `photo.config.png` and `payload.config.exe`,
+  // whose own extensions are the stronger signal.
+  [/\.config\.([cm]?[jt]s|jsonc?|json5|ya?ml|toml|ini)$/, "config"],
   // tsconfig.json, tsconfig.build.json, jsconfig.json
   [/^[jt]sconfig(\..+)?\.json$/, "config"],
   // .prettierrc, .eslintrc.json, .babelrc.cjs, .npmrc, .yarnrc.yml
@@ -499,8 +525,13 @@ function basenameOf(filePath: string): string {
 export function getFileTypeIcon(filePath: string): FileTypeIcon {
   const basename = basenameOf(filePath);
 
-  const exact = BASENAME_CATEGORIES[basename];
-  if (exact) return CATEGORIES[exact];
+  // `Object.hasOwn` rather than a bare lookup: these tables are plain objects,
+  // so a file genuinely named `constructor` or `__proto__` would otherwise read
+  // an inherited member, index CATEGORIES with a function, and hand back
+  // `undefined` from a signature that promises it never does.
+  if (Object.hasOwn(BASENAME_CATEGORIES, basename)) {
+    return CATEGORIES[BASENAME_CATEGORIES[basename]!];
+  }
 
   for (const [pattern, category] of BASENAME_PATTERNS) {
     if (pattern.test(basename)) return CATEGORIES[category];
@@ -510,8 +541,10 @@ export function getFileTypeIcon(filePath: string): FileTypeIcon {
   // `.gitignore` is a whole name, not an entry with a `gitignore` suffix.
   const dotIndex = basename.lastIndexOf(".");
   if (dotIndex > 0) {
-    const byExtension = EXTENSION_CATEGORIES[basename.slice(dotIndex + 1)];
-    if (byExtension) return CATEGORIES[byExtension];
+    const extension = basename.slice(dotIndex + 1);
+    if (Object.hasOwn(EXTENSION_CATEGORIES, extension)) {
+      return CATEGORIES[EXTENSION_CATEGORIES[extension]!];
+    }
   }
 
   return CATEGORIES.unknown;

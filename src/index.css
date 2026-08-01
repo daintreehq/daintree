@@ -2773,13 +2773,16 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
    * for restrained chroma, not for maximum contrast. Under Increase Contrast
    * the hue is the expendable half of the signal — the glyph shapes already
    * carry the type — so repaint every entry icon with the solid text token.
-   * !important for the same reason as the rule above: the Tailwind
-   * `text-category-*` utility has equal specificity (0,1,0) and wins on source
-   * order.
    *
-   * There is deliberately no `forced-colors: active` counterpart: these icons
-   * paint from `currentColor`, and that mode already forces `color` to a
-   * system keyword, so the same flattening happens with no rule at all. */
+   * Unlike the rule above, !important is belt-and-braces here rather than
+   * load-bearing: this rule is unlayered and Tailwind's `text-category-*`
+   * utility lives in the `utilities` layer, so unlayered author CSS already
+   * outranks it whatever the specificity. It stays because moving this rule
+   * into a layer during some later refactor would silently reverse that.
+   *
+   * There is deliberately no counterpart in the Windows High Contrast block
+   * below: these icons paint from `currentColor`, and that mode already forces
+   * `color` to a system keyword, so the flattening happens with no rule. */
   .file-tree-entry-icon {
     color: var(--color-daintree-text) !important;
   }
