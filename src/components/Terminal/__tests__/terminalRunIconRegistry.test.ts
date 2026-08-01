@@ -31,14 +31,16 @@ describe("resolveTerminalRunIcon", () => {
     );
   });
 
-  it("resolves a component for every process tool in the registry", () => {
+  it("resolves a renderable component for every process tool in the registry", () => {
     // The brand glob is the only icon source now that PROCESS_RUN_ICON_MAP is
     // gone, so a registry key with no matching brand file would silently fall
-    // back to the generic terminal glyph.
-    const unresolved = Object.keys(PROCESS_TOOL_REGISTRY).filter(
-      (iconId) => resolveTerminalRunIcon(iconId) === undefined
+    // back to the generic terminal glyph. Checking it is a function rather than
+    // merely defined also catches a brand file whose default export is not a
+    // component — that value is truthy and would reach JSX.
+    const unrenderable = Object.keys(PROCESS_TOOL_REGISTRY).filter(
+      (iconId) => typeof resolveTerminalRunIcon(iconId) !== "function"
     );
-    expect(unresolved).toEqual([]);
+    expect(unrenderable).toEqual([]);
   });
 
   it("resolves every built-in agent by both its registry id and its icon id", () => {

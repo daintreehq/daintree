@@ -27,9 +27,11 @@ export { type DetectionResult } from "./types.js";
 const MAX_PROCESS_TREE_DEPTH = 8;
 const MAX_PROCESS_TREE_NODES = 128;
 // Probes are NOT free: an unseen PID costs an `lsof`/PowerShell subprocess.
-// Kept small because the signal only matters for CLIs that rewrite their own
-// title, which sit at the top of the tree.
-const MAX_IMAGE_PATH_PROBES = 16;
+// Bounded by depth rather than by count — a count budget would starve a
+// title-rewriting agent sitting behind many siblings, and the signal only
+// matters for CLIs that rewrite their own title, which sit at the top of the
+// tree. Depth 2 is exactly what the pre-BFS scan probed. #8790
+const MAX_IMAGE_PATH_PROBE_DEPTH = 2;
 
 export class ProcessDetector {
   // Require N consecutive polls agreeing on a new agent/icon state before
@@ -594,10 +596,13 @@ export class ProcessDetector {
 
     let bestMatch: DetectedProcessCandidate | null = null;
     let order = 0;
-    const probedPids = new Set<number>();
-    let visitedCount = 0;
+    // Every node the walk reached, probed or not. Eviction diffs against this
+    // rather than against `probedPids`: a live PID we chose not to probe this
+    // pass has NOT disappeared, and evicting it would throw away a valid
+    // cached basename and re-spawn the probe on the next pass.
+    const visitedPids = new Set<number>();
     // Guards against a cycle in an inconsistent `ps` snapshot and against
-    // probing the same PID twice when a node appears under two parents.
+    // visiting the same PID twice when a node appears under two parents.
     const scheduled = new Set<number>([this.ptyPid]);
 
     let frontier = liveChildren.filter((proc) => {
@@ -607,10 +612,16 @@ export class ProcessDetector {
     });
 
     for (let depth = 1; depth <= MAX_PROCESS_TREE_DEPTH && frontier.length > 0; depth++) {
-      const level = frontier.slice(0, MAX_PROCESS_TREE_NODES - visitedCount);
-      visitedCount += level.length;
+      // Direct children are always scanned in full — they are the cheap,
+      // highest-signal identities, and truncating them could drop an agent
+      // that the pre-BFS scan always examined. The budget bounds descent.
+      const level =
+        depth === 1
+          ? frontier
+          : frontier.slice(0, Math.max(0, MAX_PROCESS_TREE_NODES - visitedPids.size));
 
       for (const proc of level) {
+        visitedPids.add(proc.pid);
         const command = proc.command || proc.comm;
         const candidate = buildDetectedCandidate(proc.comm, command, order++);
         if (candidate) {
@@ -625,10 +636,9 @@ export class ProcessDetector {
         //
         // Budgeted separately from the traversal: descending the cached tree is
         // pure Map lookups, but each unseen PID costs a probe subprocess on
-        // macOS/Windows. BFS visits shallowest-first, so the budget lands on the
-        // nodes where a title-rewriting agent actually sits.
-        if (this.imagePathProbe && probedPids.size < MAX_IMAGE_PATH_PROBES) {
-          probedPids.add(proc.pid);
+        // macOS/Windows. Deeper nodes are build tools, which don't rewrite
+        // their titles, so they identify fine from comm/argv alone.
+        if (this.imagePathProbe && depth <= MAX_IMAGE_PATH_PROBE_DEPTH) {
           const imageBasename = this.imagePathProbe.readBasename(proc.pid);
           if (imageBasename) {
             const imageCandidate = buildDetectedCandidate(imageBasename, command, order++);
@@ -643,7 +653,7 @@ export class ProcessDetector {
       // claude's Node worker processes when the claude parent renamed its comm.
       // The whole breadth level is still evaluated first so sibling ordering is
       // unchanged; only the descent below it is skipped.
-      if (bestMatch?.priority === 0 || visitedCount >= MAX_PROCESS_TREE_NODES) {
+      if (bestMatch?.priority === 0 || visitedPids.size >= MAX_PROCESS_TREE_NODES) {
         break;
       }
 
@@ -680,7 +690,7 @@ export class ProcessDetector {
     const primaryProcess = processes[0];
     const primaryCommand = primaryProcess?.command;
 
-    this.evictDisappearedImagePathPids(probedPids);
+    this.evictDisappearedImagePathPids(visitedPids);
 
     return this.mergeWithShellEvidence(bestMatch, {
       isBusy,
@@ -689,21 +699,24 @@ export class ProcessDetector {
   }
 
   /**
-   * Evict ImagePathProbe entries for PIDs that were probed last pass but are
-   * absent this pass. Without this, a recycled PID could return the prior
+   * Evict ImagePathProbe entries for PIDs that were reachable last pass but
+   * are absent this pass. Without this, a recycled PID could return the prior
    * process's cached basename for up to 30s (the probe's eviction TTL) plus
    * the cache hard-max window, causing a brief misidentification before the
-   * background refresh writes the new value. Diffing here is O(N) per pass
-   * where N is bounded by MAX_IMAGE_PATH_PROBES.
+   * background refresh writes the new value.
+   *
+   * Takes every PID the walk VISITED, not just the ones it probed: a live node
+   * below the probe depth is still alive, and evicting it would discard a good
+   * cached basename. Diffing is O(N) per pass, N bounded by the node budget.
    */
-  private evictDisappearedImagePathPids(currentProbedPids: Set<number>): void {
+  private evictDisappearedImagePathPids(currentVisitedPids: Set<number>): void {
     if (!this.imagePathProbe) return;
     for (const pid of this.previouslyProbedPids) {
-      if (!currentProbedPids.has(pid)) {
+      if (!currentVisitedPids.has(pid)) {
         this.imagePathProbe.evict(pid);
       }
     }
-    this.previouslyProbedPids = currentProbedPids;
+    this.previouslyProbedPids = currentVisitedPids;
   }
 
   /**

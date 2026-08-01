@@ -45,7 +45,7 @@ export function buildDetectedCandidate(
           priority: getProcessToolPriority(processIconId),
         }
       : null;
-    for (const candidate of candidates) {
+    for (const [index, candidate] of candidates.entries()) {
       const lowerCandidate = candidate.toLowerCase();
       const candidateAgent = AGENT_CLI_NAMES[lowerCandidate];
       if (candidateAgent) {
@@ -54,6 +54,11 @@ export function buildDetectedCandidate(
         effectiveName = candidate;
         break;
       }
+      // Only argv[0] and the token it executes can name the tool. Anything
+      // further along is an argument: `npm run docker` runs a script the user
+      // happened to call "docker", and `node server.js vite` passes "vite" to
+      // a server. Both used to report the wrong tool.
+      if (index > 1) continue;
       const candidateIcon = PROCESS_ICON_MAP[lowerCandidate];
       if (candidateIcon) {
         const priority = getProcessToolPriority(candidateIcon);

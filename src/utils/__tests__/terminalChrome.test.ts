@@ -80,17 +80,17 @@ describe("deriveTerminalRuntimeIdentity", () => {
 });
 
 describe("deriveTerminalChrome", () => {
-  it("labels every process tool from the registry rather than echoing its icon id", () => {
+  it("labels every process tool with the label the registry declares", () => {
     // A missing label used to surface the raw icon id as the tab's text.
-    const echoed = Object.keys(PROCESS_TOOL_REGISTRY).filter(
-      (iconId) => deriveTerminalChrome({ detectedProcessId: iconId }).label === iconId
+    // Comparing against the registry checks the consumer resolves through it —
+    // a hardcoded label map here would drift the moment a tool is added.
+    const actual = Object.keys(PROCESS_TOOL_REGISTRY).map(
+      (iconId) => `${iconId}=${deriveTerminalChrome({ detectedProcessId: iconId }).label}`
     );
-    // `npm`, `tmux` and friends legitimately label themselves lowercase, so
-    // compare against the registry rather than asserting they always differ.
-    const expected = Object.entries(PROCESS_TOOL_REGISTRY)
-      .filter(([iconId, config]) => config.label === iconId)
-      .map(([iconId]) => iconId);
-    expect(echoed.sort()).toEqual(expected.sort());
+    const expected = Object.entries(PROCESS_TOOL_REGISTRY).map(
+      ([iconId, config]) => `${iconId}=${config.label}`
+    );
+    expect(actual).toEqual(expected);
   });
 
   it("returns generic terminal chrome for empty runtime state", () => {

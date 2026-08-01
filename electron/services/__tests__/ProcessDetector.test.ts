@@ -423,7 +423,10 @@ describe("ProcessDetector", () => {
     // which put the real tool out of reach of the old two-level scan. #11612
     const cache = createCacheMock();
     cache.setChildren(100, [{ pid: 200, comm: "npm", command: "npm run dev" }]);
-    cache.setChildren(200, [{ pid: 300, comm: "sh", command: "sh -c vite --host" }]);
+    // The wrapper's argv names a script, not the tool, so only reaching the
+    // depth-3 node can identify Vite. Naming it in the `sh -c` argv would let
+    // the old grandchild-only scan pass this test too.
+    cache.setChildren(200, [{ pid: 300, comm: "sh", command: "sh -c ./scripts/start-dev.sh" }]);
     cache.setChildren(300, [{ pid: 400, comm: "vite", command: "vite --host" }]);
     const callback = vi.fn();
 
@@ -570,10 +573,94 @@ describe("ProcessDetector", () => {
       cache as never
     );
     detector.start();
+    // The cycle guard is per-pass, so count expansions within one pass — but
+    // the callback needs a second poll to clear hysteresis.
+    cache.getChildren.mockClear();
+    cache.emitRefresh();
+
+    // Termination alone is guaranteed by the depth cap; what proves the guard
+    // works is that the revisited PID is never expanded twice in a pass.
+    const expansionsOf200 = cache.getChildren.mock.calls.filter(([pid]) => pid === 200);
+    expect(expansionsOf200).toHaveLength(1);
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({ detected: true, processIconId: "npm" }),
+      expect.any(Number)
+    );
+  });
+
+  it("does not let an argument to a script masquerade as the tool", () => {
+    // `npm run docker` runs a package script the user named "docker"; the tool
+    // actually running is whatever that script spawns.
+    const cache = createCacheMock();
+    cache.setChildren(100, [{ pid: 200, comm: "npm", command: "npm run docker" }]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-script-name",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
     cache.emitRefresh();
 
     expect(callback).toHaveBeenCalledWith(
-      expect.objectContaining({ detected: true, processIconId: "npm" }),
+      expect.objectContaining({ detected: true, processIconId: "npm", processName: "npm" }),
+      expect.any(Number)
+    );
+  });
+
+  it("does not let a runtime's positional argument masquerade as the tool", () => {
+    const cache = createCacheMock();
+    cache.setChildren(100, [
+      { pid: 200, comm: "node", command: "node server.js vite --port 3000" },
+    ]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-positional-arg",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
+    cache.emitRefresh();
+
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({ detected: true, processIconId: "node", processName: "node" }),
+      expect.any(Number)
+    );
+  });
+
+  it("scans every direct child for an agent even past the descent budget", () => {
+    // The node budget bounds how deep the walk expands, not whether a direct
+    // child is looked at — dropping one could hide an agent entirely.
+    const cache = createCacheMock();
+    const siblings = Array.from({ length: 200 }, (_, i) => ({
+      pid: 1000 + i,
+      comm: "sh",
+      command: "sh -c worker",
+    }));
+    cache.setChildren(100, [
+      ...siblings,
+      { pid: 5000, comm: "claude", command: "claude --resume" },
+    ]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-wide-agent",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
+    cache.emitRefresh();
+
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({ detected: true, agentType: "claude" }),
       expect.any(Number)
     );
   });
@@ -1994,6 +2081,29 @@ describe("extractScriptBasenameFromCommand", () => {
     ).toMatchObject({
       agentType: "claude",
       processIconId: "claude",
+      processName: "claude",
+    });
+  });
+
+  it("prefers the tool a package manager is executing over the package manager", () => {
+    // The shell-observation path is a separate implementation from the
+    // process-tree walk and has to make the same call. #11612
+    expect(detectCommandIdentity("npx vitest --watch")).toMatchObject({
+      processIconId: "vitest",
+      processName: "vitest",
+    });
+  });
+
+  it("keeps the package manager when its argument is a script name, not a tool", () => {
+    expect(detectCommandIdentity("npm run docker")).toMatchObject({
+      processIconId: "npm",
+      processName: "npm",
+    });
+  });
+
+  it("keeps an agent ahead of any tool named later in the command", () => {
+    expect(detectCommandIdentity("npx claude --resume")).toMatchObject({
+      agentType: "claude",
       processName: "claude",
     });
   });

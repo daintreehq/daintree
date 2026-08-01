@@ -32,12 +32,28 @@ function fail(file: string, message: string): void {
   failures++;
 }
 
-const brandFiles = readdirSync(BRANDS_DIR).filter((name) => name.endsWith("Icon.tsx"));
+// `isFile()` because the Vite glob resolves modules: a directory or dangling
+// symlink named `*Icon.tsx` would satisfy a name-only check but import as
+// nothing.
+const brandFiles = readdirSync(BRANDS_DIR, { withFileTypes: true })
+  .filter((entry) => entry.isFile() && entry.name.endsWith("Icon.tsx"))
+  .map((entry) => entry.name);
 
 // Mirrors `src/config/agentIcons.ts`: key = filename minus `Icon.tsx`, lowercased.
 const brandIconIds = new Map<string, string>();
 for (const file of brandFiles) {
-  brandIconIds.set(file.replace(/Icon\.tsx$/, "").toLowerCase(), file);
+  const iconId = file.replace(/Icon\.tsx$/, "").toLowerCase();
+  const existing = brandIconIds.get(iconId);
+  if (existing !== undefined) {
+    // Two files differing only by case collapse to one glob key, and which one
+    // wins is filesystem-dependent.
+    fail(
+      path.join(BRANDS_DIR, file),
+      `${file} and ${existing} both resolve to the id "${iconId}".`
+    );
+    continue;
+  }
+  brandIconIds.set(iconId, file);
 }
 
 const entries = Object.entries(PROCESS_TOOL_REGISTRY) as [string, ProcessToolConfig][];
@@ -97,11 +113,21 @@ for (const [iconId, config] of entries) {
   }
 }
 
-// The glob resolves default exports; the barrel is what named imports elsewhere
-// reach. A file present but unexported drifts the two apart.
+// The glob imports the DEFAULT export; the barrel is what named imports
+// elsewhere reach. A file missing either drifts the two apart — and a missing
+// default silently yields an undefined component rather than an error.
 const barrel = readFileSync(BARREL_FILE, "utf8");
 for (const [iconId, file] of brandIconIds) {
   const componentName = file.replace(/\.tsx$/, "");
+
+  if (!/^export default \w+;?$/m.test(readFileSync(path.join(BRANDS_DIR, file), "utf8"))) {
+    fail(
+      path.join(BRANDS_DIR, file),
+      `${componentName} has no default export. The brands glob imports defaults, so ` +
+        `"${iconId}" would resolve to undefined and fall back to the terminal glyph.`
+    );
+  }
+
   if (!new RegExp(`\\bexport\\s*\\{[^}]*\\b${componentName}\\b[^}]*\\}`).test(barrel)) {
     fail(
       BARREL_FILE,

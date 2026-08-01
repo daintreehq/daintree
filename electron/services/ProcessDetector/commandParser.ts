@@ -125,7 +125,7 @@ export function detectCommandIdentity(command: string | undefined): CommandIdent
   const candidates = extractCommandNameCandidates(command);
   let iconMatch: { name: string; icon: string; priority: number } | null = null;
 
-  for (const candidate of candidates) {
+  for (const [index, candidate] of candidates.entries()) {
     const lowerCandidate = candidate.toLowerCase();
     const candidateAgent = AGENT_CLI_NAMES[lowerCandidate];
     if (candidateAgent) {
@@ -136,10 +136,13 @@ export function detectCommandIdentity(command: string | undefined): CommandIdent
       };
     }
 
+    // Same executable-position rule as the process-tree path: only argv[0] and
+    // the token it runs can name the tool, so `npm run docker` stays npm.
+    if (index > 1) continue;
     const candidateIcon = PROCESS_ICON_MAP[lowerCandidate];
     if (candidateIcon) {
-      // Same tier preference as the process-tree path, so a typed `npx vitest`
-      // reports Vitest rather than npm. Strict `<` keeps argv order on ties.
+      // Tier preference, so a typed `npx vitest` reports Vitest rather than
+      // npm. Strict `<` keeps argv order on ties.
       const priority = getProcessToolPriority(candidateIcon);
       if (!iconMatch || priority < iconMatch.priority) {
         iconMatch = { name: candidate, icon: candidateIcon, priority };
