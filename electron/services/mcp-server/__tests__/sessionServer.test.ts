@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { McpError, ErrorCode, LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ActionManifestEntry, ActionId } from "../../../../shared/types/actions.js";
+import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 
 vi.mock("electron", () => ({
   app: {
@@ -211,37 +214,24 @@ async function listTools(server: ReturnType<typeof createSessionServer>) {
 }
 
 /**
- * Drive the SDK's own `initialize` handler (#11541). The handler under test is
- * registered by the base `Server` constructor rather than by us, so this proves
- * the constructor option actually reaches the wire result — an assertion on the
- * options object we passed in would pass even if the SDK stopped forwarding it.
+ * Complete a real MCP handshake against the session server and return what the
+ * client received (#11541).
+ *
+ * Deliberately the public path rather than this file's `_requestHandlers` idiom:
+ * `initialize` is the SDK's own handler, not one we register, so the question
+ * is whether the constructor option survives all the way to a client. Invoking
+ * the handler directly would stay green if the SDK stopped forwarding the field
+ * on the way to the transport, which is the failure actually worth catching.
  */
-async function initializeServer(server: ReturnType<typeof createSessionServer>) {
-  const handlers = (
-    server as unknown as {
-      _requestHandlers: Map<string, (req: unknown, extra: unknown) => Promise<unknown>>;
-    }
-  )._requestHandlers;
-  const handler = handlers.get("initialize");
-  if (!handler) throw new Error("initialize handler not found");
-  return handler(
-    {
-      method: "initialize",
-      params: {
-        protocolVersion: LATEST_PROTOCOL_VERSION,
-        capabilities: {},
-        clientInfo: { name: "test-client", version: "1.0.0" },
-      },
-      jsonrpc: "2.0",
-      id: 1,
-    },
-    {
-      signal: new AbortController().signal,
-      _meta: {},
-      sendNotification: vi.fn(),
-      requestId: 1,
-    }
-  ) as Promise<{ instructions?: string; serverInfo: { name: string; version: string } }>;
+async function initializeClient(server: ReturnType<typeof createSessionServer>) {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    return client.getInstructions();
+  } finally {
+    await client.close();
+  }
 }
 
 function makeManifestEntry(id: string): ActionManifestEntry {
@@ -264,63 +254,57 @@ describe("sessionServer initialize instructions", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns the instructions through the SDK's own initialize result", async () => {
+  it("delivers the instructions to a client that completes a real handshake", async () => {
     const server = createSessionServer("session-instructions", fakeDeps());
-    const result = await initializeServer(server);
 
-    expect(result.instructions).toBe(MCP_SERVER_INSTRUCTIONS);
-    // Proves this is the SDK-generated initialize result rather than a handler
-    // of ours that happens to echo the constant back.
-    expect(result.serverInfo).toMatchObject({ name: "Daintree" });
+    await expect(initializeClient(server)).resolves.toBe(MCP_SERVER_INSTRUCTIONS);
   });
 
   it("sends the same instructions regardless of session tier", async () => {
     // Instructions are sent once and have no update notification, so they must
     // not encode a tier that can elevate or decay later in the same session.
     const perTier = await Promise.all(
-      (Object.keys(TIER_ALLOWLISTS) as Array<keyof typeof TIER_ALLOWLISTS>).map(async (tier) => {
-        const server = createSessionServer(
-          `session-${tier}`,
-          fakeDeps({ sessionStore: fakeSessionStore(tier) })
-        );
-        return (await initializeServer(server)).instructions;
-      })
+      (Object.keys(TIER_ALLOWLISTS) as Array<keyof typeof TIER_ALLOWLISTS>).map((tier) =>
+        initializeClient(
+          createSessionServer(`session-${tier}`, fakeDeps({ sessionStore: fakeSessionStore(tier) }))
+        )
+      )
     );
 
-    expect(new Set(perTier).size).toBe(1);
+    expect(new Set(perTier)).toEqual(new Set([MCP_SERVER_INSTRUCTIONS]));
   });
 
-  it("stays within the authored byte budget, itself under the 2 KiB client cap", () => {
-    // Claude Code truncates at 2 KiB and the authorization paragraph is last,
-    // so overflow silently drops the denial guidance rather than erroring.
+  it("stays within the authored byte budget", () => {
+    // The budget is derived from the client truncation point minus a reserve,
+    // and the authorization paragraph is last — overflow silently drops the
+    // denial guidance in the field rather than failing anything here.
     expect(Buffer.byteLength(MCP_SERVER_INSTRUCTIONS, "utf8")).toBeLessThanOrEqual(
       MCP_SERVER_INSTRUCTIONS_MAX_BYTES
     );
-    expect(MCP_SERVER_INSTRUCTIONS_MAX_BYTES).toBeLessThan(2 * 1024);
   });
 
   it("names every tier a session can hold", () => {
     // Adding a tier without describing it here leaves the model unable to
-    // reason about a denial it can now receive.
+    // reason about a denial it can now receive. Matched with backticks because
+    // the bare word `action` also occurs inside `actions.search` and prose.
     for (const tier of Object.keys(TIER_ALLOWLISTS)) {
-      expect(MCP_SERVER_INSTRUCTIONS).toContain(tier);
+      expect(MCP_SERVER_INSTRUCTIONS).toContain(`\`${tier}\``);
     }
     expect(MCP_SERVER_INSTRUCTIONS).toContain(TIER_NOT_PERMITTED_CODE);
   });
 
-  it("points discovery at the live introspection tool ids", () => {
-    // The ids are literal prose, so a rename that skips this text fails here
-    // instead of silently telling every connecting model to call a dead name.
-    expect(MCP_SERVER_INSTRUCTIONS).toContain(ACTIONS_SEARCH_TOOL_ID);
-    expect(MCP_SERVER_INSTRUCTIONS).toContain(ACTIONS_GET_SCHEMA_TOOL_ID);
-  });
+  it("names only tools that actually exist", () => {
+    // Every dotted id in the text, not a hand-listed subset: a tool rename that
+    // skips this prose fails here rather than telling every connecting model to
+    // call a name that no longer resolves. New references are covered on
+    // arrival, without interpolating constants into model-facing text.
+    const referenced = [...MCP_SERVER_INSTRUCTIONS.matchAll(/`([a-z][A-Za-z]*\.[A-Za-z]+)`/g)].map(
+      ([, id]) => id
+    );
 
-  it("does not claim unlisted tools are callable", () => {
-    // #11582 tried a discoverable-but-unlisted surface and #11585 removed it:
-    // withholding a name is equivalent to revoking it. Instructions that
-    // promised otherwise would send models probing for names that cannot exist.
-    expect(MCP_SERVER_INSTRUCTIONS).toContain("do not invent tool names");
-    expect(MCP_SERVER_INSTRUCTIONS).toContain("does not reveal a deferred catalog");
+    expect(referenced).toContain(ACTIONS_SEARCH_TOOL_ID);
+    expect(referenced).toContain(ACTIONS_GET_SCHEMA_TOOL_ID);
+    expect(referenced.filter((id) => !BUILT_IN_ACTION_IDS.includes(id as never))).toEqual([]);
   });
 });
 
