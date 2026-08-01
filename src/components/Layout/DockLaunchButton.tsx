@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { BrandMark, Workflow } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import { cn } from "@/lib/utils";
@@ -502,11 +503,10 @@ function DockLaunchOption({
         onPointerEnter={() => onHover(index)}
         onClick={() => onActivate(row)}
         className={cn(
-          "relative w-full flex items-center px-2 py-1.5 rounded-[var(--radius-md)] text-left text-sm transition-colors",
-          isDimmed && "opacity-70",
-          isSelected
-            ? "bg-overlay-raised before:absolute before:left-0 before:top-1 before:bottom-1 before:w-[2px] before:bg-daintree-accent before:content-['']"
-            : "hover:bg-overlay-subtle"
+          PALETTE_ROW_CLASS,
+          "relative w-full flex items-center px-2 py-1.5 rounded-[var(--radius-md)] text-left text-sm",
+          "hover:bg-overlay-subtle",
+          isDimmed && "opacity-70"
         )}
       >
         <DockLaunchOptionIcon row={row} />
