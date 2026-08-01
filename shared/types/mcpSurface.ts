@@ -98,6 +98,7 @@ export const McpSurfaceResultSchema = z.object({
   tier: z.enum(TIER_VALUES).describe("The authorization tier this session is on"),
   hash: z
     .string()
+    .regex(/^[0-9a-f]{64}$/)
     .describe("Hex SHA-256 of the surface; compare it later to detect drift without diffing"),
   tools: z
     .array(
@@ -120,5 +121,8 @@ export const McpSurfaceResultSchema = z.object({
           .describe("Present only when the tool is on its way out"),
       })
     )
-    .describe("Every tool this session can call, sorted by id"),
+    // Not "every tool this session can call": a per-tool approval can widen
+    // dispatch beyond this list for a few minutes without ever appearing in
+    // `tools/list`, and this reports the listing.
+    .describe("Every tool `tools/list` advertises to this session, sorted by id"),
 });

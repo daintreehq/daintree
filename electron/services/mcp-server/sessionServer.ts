@@ -875,15 +875,19 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           emitToolCallStarted(false);
           try {
             const manifest = await resolveManifest(MCP_SURFACE_TOOL_ID);
-            // Re-read the tier rather than reusing the one captured at dispatch
-            // start: an elevation or decay can land while the manifest fetch is
-            // in flight, and reporting the stale tier would hand the caller a
-            // hash for a surface `tools/list` no longer serves.
-            const result = buildSurfaceManifest(
-              manifest,
-              sessionStore.getTier(sessionId),
-              app.getVersion()
-            );
+            // Build against the tier captured at dispatch start — the one the
+            // permission gate above actually authorized this call at — rather
+            // than re-reading after the await. Re-reading looks fresher but is
+            // not safe: `getTier` falls back to `workbench` once a revoked
+            // session's entry is gone, and workbench is a PEER of `external`,
+            // not a subset, so an external caller whose session was revoked
+            // mid-fetch would be handed a report naming workbench tools its own
+            // allowlist deliberately withholds. Using the gate's tier makes the
+            // report describe exactly what the caller was authorized against,
+            // and keeps it consistent with the audit record, which logs the
+            // same value. A tier that changes mid-call fires
+            // `notifications/tools/list_changed`, so a client re-reads anyway.
+            const result = buildSurfaceManifest(manifest, tier, app.getVersion());
             outcome = { kind: "result", value: { ok: true, result } };
             return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,

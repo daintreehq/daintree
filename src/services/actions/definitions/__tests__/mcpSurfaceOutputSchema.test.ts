@@ -4,6 +4,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-type-assertion */
 import { describe, expect, it, vi } from "vitest";
 import type { ActionId } from "@shared/types/actions";
+import { McpSurfaceResultSchema } from "@shared/types/mcpSurface";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 // ActionService pulls in the shortcut-hint store, keybinding service, and notify
@@ -63,12 +64,15 @@ describe("mcp.surface emits a manifest outputSchema (#11549)", () => {
     expect(schemaOf().type).toBe("object");
   });
 
-  it("advertises every top-level field a client reads", () => {
+  it("generates the schema from the shared source of truth, not a second copy", () => {
+    // Cross-layer rather than a literal field list: the advertised JSON Schema
+    // must carry exactly the keys the published zod schema declares. A field
+    // added to one side alone is the drift this catches — and unlike a
+    // hardcoded array, it cannot be made green by editing it in lockstep.
     const props = Object.keys((schemaOf().properties as Record<string, unknown>) ?? {}).sort();
 
-    // The four scalars plus the list — a client that cannot see one of these
-    // cannot do the startup check the tool exists for.
-    expect(props).toEqual(["appVersion", "hash", "manifestVersion", "tier", "tools"]);
+    expect(props).toEqual(Object.keys(McpSurfaceResultSchema.shape).sort());
+    expect(props.length).toBeGreaterThan(0);
   });
 
   it("requires every top-level field, so none is optional to a strict client", () => {
@@ -79,17 +83,18 @@ describe("mcp.surface emits a manifest outputSchema (#11549)", () => {
     expect([...required].sort()).toEqual([...props].sort());
   });
 
-  it("advertises the per-tool fields, with deprecation as the only optional one", () => {
+  it("marks deprecation as the only optional per-tool field", () => {
+    // Presence is the deprecation signal, so it is the one field that may be
+    // absent; every other one is emitted for every tool. Stated as the
+    // difference between the two sets rather than as two copied lists.
     const tools = (schemaOf().properties as Record<string, { items?: Record<string, unknown> }>)
       .tools;
     const items = tools?.items ?? {};
-    const props = Object.keys((items.properties as Record<string, unknown>) ?? {}).sort();
-    const required = ((items.required as string[] | undefined) ?? []).sort();
+    const props = Object.keys((items.properties as Record<string, unknown>) ?? {});
+    const required = new Set((items.required as string[] | undefined) ?? []);
 
-    expect(props).toEqual(["deprecated", "id", "idempotentHint", "kind", "readOnlyHint", "tier"]);
-    // Presence is the deprecation signal, so it is the one field that may be
-    // absent; everything else is always emitted.
-    expect(required).toEqual(["id", "idempotentHint", "kind", "readOnlyHint", "tier"]);
+    expect(props.filter((p) => !required.has(p))).toEqual(["deprecated"]);
+    expect(required.size).toBeGreaterThan(0);
   });
 });
 
@@ -110,7 +115,9 @@ describe("mcp.surface registration", () => {
     registerIntrospectionActions(registry, {} as ActionCallbacks);
     const def = registry.get("mcp.surface" as ActionId)!() as AnyActionDefinition;
 
-    await expect(def.run(undefined as never, {} as never)).rejects.toThrow(/main-process path/);
+    // Asserts the rejection, not the sentence: the wording is prose, and a
+    // test that pinned it would break on a rewrite that changed nothing.
+    await expect(def.run(undefined as never, {} as never)).rejects.toThrow();
   });
 
   it("takes no arguments, so a startup check needs nothing but the call", () => {

@@ -23,11 +23,83 @@ export const MCP_SURFACE_TOOL_ID = "mcp.surface";
  */
 export const MCP_SURFACE_MANIFEST_VERSION = 1;
 
+/** JSON Schema keywords whose value is itself a schema. */
+const SCHEMA_VALUED_KEYS = new Set([
+  "items",
+  "additionalProperties",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+  "contains",
+  "propertyNames",
+  "not",
+  "if",
+  "then",
+  "else",
+]);
+
+/** Keywords whose value is a map of name → schema. */
+const SCHEMA_MAP_KEYS = new Set([
+  "properties",
+  "patternProperties",
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+]);
+
+/** Keywords whose value is an array of schemas. */
+const SCHEMA_LIST_KEYS = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
+
+/**
+ * Keywords that document a schema without constraining it. Stripped before
+ * hashing so rewording a `.describe()` cannot read as a compatibility break —
+ * the same promise the tool's own description gets, applied one level down.
+ */
+const SCHEMA_PROSE_KEYS = new Set(["description", "title", "$comment", "examples"]);
+
+/**
+ * A schema reduced to what a caller's compatibility actually depends on.
+ *
+ * Walks by keyword rather than blindly deleting every key named `description`,
+ * because a schema is free to declare a *property* called `description` — that
+ * one is part of the contract, and only the annotation slot beside it is prose.
+ * Unrecognised keywords are copied verbatim, so a constraint this function has
+ * never heard of is kept rather than silently dropped from the digest.
+ *
+ * `required` is sorted: it is a set in JSON Schema semantics, so its emitted
+ * order is an artifact of the generator, not a contract. Every other array
+ * keeps its order — `enum`, `prefixItems`, and `allOf` all mean something
+ * different when reordered.
+ */
+function toCompatibilityShape(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(toCompatibilityShape);
+  if (node === null || typeof node !== "object") return node;
+
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (SCHEMA_PROSE_KEYS.has(key)) continue;
+    if (key === "required" && Array.isArray(value)) {
+      out[key] = [...(value as unknown[])].sort();
+    } else if (SCHEMA_VALUED_KEYS.has(key) || SCHEMA_LIST_KEYS.has(key)) {
+      out[key] = toCompatibilityShape(value);
+    } else if (SCHEMA_MAP_KEYS.has(key) && value !== null && typeof value === "object") {
+      out[key] = Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([name, schema]) => [
+          name,
+          toCompatibilityShape(schema),
+        ])
+      );
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 /**
  * Recursively key-sorted JSON, so the hash preimage depends on the surface's
  * content rather than on the order a JSON Schema generator happened to emit
- * object keys in. Arrays keep their order — a reordered `enum` or `required`
- * list is a real schema change.
+ * object keys in. Arrays keep their order — {@link toCompatibilityShape} has
+ * already normalised the one array whose order is meaningless.
  *
  * Deliberately a local copy rather than a reuse of `sessionDedup`'s
  * `canonicalArgsHash`: this canonical form is part of a published client
@@ -59,9 +131,14 @@ function canonicalJson(value: unknown): string {
  *
  * In-app sessions get the real minimum. It is degenerate at `workbench` (where
  * everything reachable is workbench-tier by definition) and informative above
- * it, where it says which tools would survive a demotion. The `?? tier` fallback
- * covers a tool permitted by no static allowlist, which reports the tier that
- * actually surfaced it rather than inventing a rung.
+ * it, where it says which tools would survive a demotion.
+ *
+ * The `?? tier` fallback is unreachable today and safe if it ever is not:
+ * reaching here means `shouldExposeTool` already returned true, so the id is in
+ * `TIER_ALLOWLISTS[tier]` and `minimumPermittingTier` finds it at or below
+ * `tier`. Were exposure ever widened past the static allowlists, `tier` would
+ * still be a tier that genuinely permits the tool — an over-approximation of
+ * the minimum, never a false claim that it is permitted at all.
  */
 function resolveToolTier(entry: ActionManifestEntry, tier: McpTier): McpSurfaceTool["tier"] {
   if (tier === "external") return "external";
@@ -113,14 +190,21 @@ export function buildSurfaceManifest(
     };
     tools.push(tool);
 
-    // The digest covers more than the payload: argument and result schemas are
-    // what a client's own calls are built against, so a changed parameter is a
-    // genuine incompatibility even though the schemas themselves stay on
-    // `tools/list` rather than bloating this response.
+    // The digest covers more than the payload, because a client's compatibility
+    // depends on more than the payload:
     //
-    // Descriptions are deliberately excluded. They are model-facing prose that
-    // is reworded often, and a compatibility check that cried drift on every
-    // wording edit is one clients would learn to ignore.
+    // - Argument and result schemas are what its own calls are built against,
+    //   so a changed parameter is a genuine incompatibility. They stay on
+    //   `tools/list` rather than bloating this response.
+    // - `danger` and the two remaining annotations decide whether a call
+    //   returns straight away or first blocks on a host confirmation dialog.
+    //   A tool moving from `safe` to `confirm` changes the invocation contract
+    //   completely while leaving every reported field identical (#11549 review).
+    //
+    // Descriptions are deliberately excluded, here and inside the schemas (see
+    // `toCompatibilityShape`). They are model-facing prose that is reworded
+    // often, and a compatibility check that cried drift on every wording edit
+    // is one clients would learn to ignore.
     hashRows.push([
       tool.id,
       tool.tier,
@@ -128,8 +212,11 @@ export function buildSurfaceManifest(
       tool.readOnlyHint,
       tool.idempotentHint,
       tool.deprecated ?? null,
-      buildToolInputSchema(entry),
-      buildToolOutputSchema(entry) ?? null,
+      entry.danger,
+      annotations.destructiveHint ?? null,
+      annotations.openWorldHint ?? null,
+      toCompatibilityShape(buildToolInputSchema(entry)),
+      toCompatibilityShape(buildToolOutputSchema(entry) ?? null),
     ]);
   }
 

@@ -3,11 +3,7 @@ import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 import { McpSurfaceResultSchema } from "../../../../shared/types/mcpSurface.js";
 import { TIER_ALLOWLISTS, type McpTier } from "../shared.js";
 import { shouldExposeTool } from "../tierAuth.js";
-import {
-  buildSurfaceManifest,
-  MCP_SURFACE_MANIFEST_VERSION,
-  MCP_SURFACE_TOOL_ID,
-} from "../surfaceManifest.js";
+import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "../surfaceManifest.js";
 
 const APP_VERSION = "9.9.9";
 
@@ -73,12 +69,37 @@ describe("buildSurfaceManifest", () => {
     expect(b.hash).toBe(a.hash);
   });
 
-  it("stamps the shape version, app version, and caller tier", () => {
+  it("stamps a usable shape version, the app version it was given, and the caller tier", () => {
     const result = buildSurfaceManifest(realisticManifest(), "action", APP_VERSION);
 
-    expect(result.manifestVersion).toBe(MCP_SURFACE_MANIFEST_VERSION);
+    // Asserting equality against the imported constant would compare the
+    // implementation with itself. What a client needs is that the field is a
+    // version it can compare — a positive integer, not a float or a string.
+    expect(Number.isInteger(result.manifestVersion)).toBe(true);
+    expect(result.manifestVersion).toBeGreaterThan(0);
     expect(result.appVersion).toBe(APP_VERSION);
     expect(result.tier).toBe("action");
+  });
+
+  it("returns an empty, still-valid surface for an empty manifest", () => {
+    const result = buildSurfaceManifest([], "workbench", APP_VERSION);
+
+    expect(result.tools).toEqual([]);
+    expect(McpSurfaceResultSchema.safeParse(result).success).toBe(true);
+    // A zero-tool surface is a real answer, so its hash must still be a hash.
+    expect(result.hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("advertises exactly the top-level fields the published schema declares", () => {
+    // Cross-layer: the builder's own output against the schema shipped as the
+    // tool's outputSchema. A field added to one and not the other is the drift
+    // this catches — neither side is a copy of the other.
+    const advertised = Object.keys(McpSurfaceResultSchema.shape).sort();
+    const emitted = Object.keys(
+      buildSurfaceManifest(realisticManifest(), "system", APP_VERSION)
+    ).sort();
+
+    expect(emitted).toEqual(advertised);
   });
 
   it("satisfies the schema published as the tool's outputSchema", () => {
@@ -92,13 +113,24 @@ describe("buildSurfaceManifest", () => {
 describe("per-tool tier", () => {
   it("reports the minimum in-app rung for a ladder caller", () => {
     const result = buildSurfaceManifest(realisticManifest(), "system", APP_VERSION);
-    const byId = new Map(result.tools.map((t) => [t.id, t.tier]));
 
-    // A `system` session sees all three rungs, and each tool reports the lowest
-    // one that would still permit it — the demotion answer.
-    expect(byId.get("actions.list")).toBe("workbench");
-    expect(byId.get("terminal.new")).toBe("action");
-    expect(byId.get("git.commit")).toBe("system");
+    // Derived from the live allowlists rather than hardcoded, so moving a tool
+    // between rungs cannot make this pass by being edited in lockstep. The
+    // invariant: the reported rung permits the tool, and every rung below it
+    // does not — that is what "minimum" means, and it is the demotion answer.
+    const rungs = ["workbench", "action", "system"] as const;
+    expect(result.tools.length).toBeGreaterThan(0);
+    for (const tool of result.tools) {
+      const reported = rungs.indexOf(tool.tier as (typeof rungs)[number]);
+      expect(reported).toBeGreaterThanOrEqual(0);
+      expect(TIER_ALLOWLISTS[rungs[reported]!].has(tool.id)).toBe(true);
+      for (const lower of rungs.slice(0, reported)) {
+        expect(TIER_ALLOWLISTS[lower].has(tool.id)).toBe(false);
+      }
+    }
+    // Guard the guard: an all-workbench fixture would satisfy the loop
+    // vacuously, so prove the fixture actually spans rungs.
+    expect(new Set(result.tools.map((t) => t.tier)).size).toBeGreaterThan(1);
   });
 
   it("reports `external` for every tool an external caller sees", () => {
@@ -144,6 +176,38 @@ describe("hints", () => {
     const [tool] = buildSurfaceManifest(manifest, "action", APP_VERSION).tools;
 
     expect(tool).toMatchObject({ readOnlyHint: true, idempotentHint: true });
+  });
+
+  it("overrides the two hints independently", () => {
+    // Both hints default off `kind`, so a bug that coupled them would survive
+    // any test that only ever moves them together.
+    const oneOverride = (mcpAnnotations: Record<string, boolean>) =>
+      buildSurfaceManifest(
+        [entry({ id: "terminal.new", kind: "command", mcpAnnotations })],
+        "action",
+        APP_VERSION
+      ).tools[0]!;
+
+    expect(oneOverride({ readOnlyHint: true })).toMatchObject({
+      readOnlyHint: true,
+      idempotentHint: false,
+    });
+    expect(oneOverride({ idempotentHint: true })).toMatchObject({
+      readOnlyHint: false,
+      idempotentHint: true,
+    });
+  });
+
+  it("honors an override that turns a hint OFF for a query", () => {
+    // `false` must beat the kind-derived default, not be swallowed as absent by
+    // a `??`-style fallback.
+    const [tool] = buildSurfaceManifest(
+      [entry({ id: "actions.list", kind: "query", mcpAnnotations: { idempotentHint: false } })],
+      "workbench",
+      APP_VERSION
+    ).tools;
+
+    expect(tool).toMatchObject({ readOnlyHint: true, idempotentHint: false });
   });
 });
 
@@ -242,6 +306,16 @@ describe("hash", () => {
     );
   });
 
+  it("changes when a tool starts requiring host confirmation", () => {
+    // `safe` → `confirm` rewrites the invocation contract — the call now blocks
+    // on a user dialog — while leaving every reported field identical. A client
+    // that trusted the hash to spot that would be silently wrong.
+    const base = [entry({ id: "actions.list" })];
+    const gated = [entry({ id: "actions.list", danger: "confirm" })];
+
+    expect(hashOf(gated, "workbench")).not.toBe(hashOf(base, "workbench"));
+  });
+
   it("ignores description edits, so wording changes never read as drift", () => {
     const base = realisticManifest();
     const reworded = base.map((e) => ({
@@ -251,6 +325,97 @@ describe("hash", () => {
     }));
 
     expect(hashOf(reworded)).toBe(hashOf(base));
+  });
+
+  it("ignores prose INSIDE a schema, down to nested properties", () => {
+    // Argument descriptions reach the wire through the same JSON Schema the
+    // hash covers, and they are maintained continuously — hashing them would
+    // reintroduce exactly the churn the tool-level exclusion prevents.
+    const schema = (prose: string): ActionManifestEntry[] => [
+      entry({
+        id: "actions.list",
+        inputSchema: {
+          type: "object",
+          description: prose,
+          properties: {
+            limit: { type: "number", description: prose, title: prose },
+            nested: {
+              type: "object",
+              properties: { deep: { type: "string", description: prose } },
+            },
+          },
+          required: ["limit"],
+        },
+      }),
+    ];
+
+    expect(hashOf(schema("before"))).toBe(hashOf(schema("after")));
+  });
+
+  it("still hashes a PROPERTY named description, which is contract not prose", () => {
+    // The annotation slot and a field that happens to be called `description`
+    // live one level apart; stripping by name alone would erase the field.
+    const withProperty = (type: string): ActionManifestEntry[] => [
+      entry({
+        id: "actions.list",
+        inputSchema: { type: "object", properties: { description: { type } } },
+      }),
+    ];
+
+    expect(hashOf(withProperty("string"))).not.toBe(hashOf(withProperty("number")));
+  });
+
+  it("ignores the order a generator emitted `required` in", () => {
+    // `required` is a set in JSON Schema semantics; its order is an artifact.
+    const req = (required: string[]): ActionManifestEntry[] => [
+      entry({
+        id: "actions.list",
+        inputSchema: {
+          type: "object",
+          properties: { a: { type: "string" }, b: { type: "string" } },
+          required,
+        },
+      }),
+    ];
+
+    expect(hashOf(req(["a", "b"]))).toBe(hashOf(req(["b", "a"])));
+  });
+
+  it("still distinguishes a reordered `enum`, whose order is not an artifact", () => {
+    const withEnum = (values: string[]): ActionManifestEntry[] => [
+      entry({
+        id: "actions.list",
+        inputSchema: { type: "object", properties: { mode: { enum: values } } },
+      }),
+    ];
+
+    // Guard against over-normalising: sorting every array would erase this.
+    expect(hashOf(withEnum(["a", "b"]))).not.toBe(hashOf(withEnum(["b", "a"])));
+  });
+
+  it("pins the published digest for a frozen surface", () => {
+    // The hash is a client-facing contract: a refactor that changed every
+    // digest would keep every relative assertion above green while silently
+    // breaking every client that stored one. This fixture is deliberately
+    // hand-frozen — update it only alongside a MCP_SURFACE_MANIFEST_VERSION
+    // bump and a note in the PR, never to make a failing run pass.
+    const frozen: ActionManifestEntry[] = [
+      entry({
+        id: "actions.list",
+        kind: "query",
+        danger: "safe",
+        inputSchema: {
+          type: "object",
+          properties: { limit: { type: "number" } },
+          required: ["limit"],
+        },
+      }),
+      entry({ id: "terminal.new", kind: "command", danger: "safe" }),
+    ];
+
+    expect(buildSurfaceManifest(frozen, "action", APP_VERSION).hash).toBe(
+      "00c81d0089fa582bd988cf8fa8280cd703b69b523846f190b5fce5cf2340055b"
+    );
   });
 
   it("ignores the key order a schema generator happened to emit", () => {
@@ -273,10 +438,6 @@ describe("hash", () => {
   });
 });
 
-describe("tier allowlist registration", () => {
-  it("is reachable from every in-app tier and from external", () => {
-    for (const tier of ["workbench", "action", "system", "external"] as const) {
-      expect(TIER_ALLOWLISTS[tier].has(MCP_SURFACE_TOOL_ID)).toBe(true);
-    }
-  });
-});
+// Registration is not asserted here: mirroring the allowlist arrays would only
+// restate them. The real guard is that `tools/list` serves `mcp.surface` at
+// every tier, which sessionServer.test.ts checks against the live handler.
