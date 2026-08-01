@@ -663,7 +663,18 @@ export function FilePane({
           // toolbar Refresh) stay unconditional, keeping a manual path for an
           // asset-only change. reloadNonce isn't a loadFile dep, so neither can
           // re-trigger the load.
-          if (!silent || bytesChanged) setReloadNonce((nonce) => nonce + 1);
+          //
+          // Markdown opts out of the bytes-changed gate: an image embedded in the
+          // document is precisely the "unchanged file whose asset changed" case,
+          // and bytesChanged only ever sees the markdown text (#11587). Bumping
+          // freely is safe here because for a markdown file the nonce reaches
+          // nothing but MarkdownViewer's cacheBust — the frame this rule protects
+          // needs isHtml, and the media previews need their own loadStates — and
+          // a changed image src reloads in place rather than remounting, so there
+          // is no scroll or playback position to lose.
+          if (!silent || bytesChanged || isMarkdownFilePath(filePath)) {
+            setReloadNonce((nonce) => nonce + 1);
+          }
           setLoadState("loaded");
           setErrorCode(null);
           setErrorMessage(null);

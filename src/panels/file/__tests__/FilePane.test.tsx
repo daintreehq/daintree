@@ -3,6 +3,9 @@ import type { ReactNode } from "react";
 import { render, act, screen, waitFor, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitStatus } from "@shared/types/git";
+// Type-only: erased before the vi.mock factory runs, so it cannot pull the real
+// module in ahead of its own mock.
+import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
 
 // FilePane forwards a fixed prop list to ContentPanel; #10991 was a dropped
 // `showRestoreControl`, which hid the inline "Move to grid" button on a docked
@@ -122,12 +125,15 @@ vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 // chain (FilePane → MarkdownViewer.onRendered → the height pin) is observable;
 // without this the wiring could be deleted with every test still green.
 // cacheBust rides along for #11587: without it a rewritten embedded image keeps
-// a byte-identical daintree-file:// src and never refetches.
+// a byte-identical daintree-file:// src and never refetches. Picked off the real
+// prop type rather than hand-written, so renaming either prop fails here instead
+// of silently capturing undefined forever.
+type CapturedMarkdownProps = Pick<MarkdownViewerProps, "onRendered" | "cacheBust">;
 const markdownViewerProps = vi.hoisted(() => ({
   current: null as { onRendered?: () => void; cacheBust?: string } | null,
 }));
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({
-  MarkdownViewer: (props: { onRendered?: () => void; cacheBust?: string }) => {
+  MarkdownViewer: (props: CapturedMarkdownProps) => {
     markdownViewerProps.current = props;
     return <div data-testid="markdown-viewer-mock" />;
   },
@@ -947,13 +953,13 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
 
   // #11587: images embedded in the document resolve to daintree-file:// URLs
   // built from path + root alone, so a rewritten image stays invisible unless the
-  // pane advances a token. Refresh is the user-facing path that has to move it.
-  it("advances the rendered document's cache token when the pane re-reads the file", async () => {
+  // pane advances a token. Refresh is the explicit path that has to move it.
+  it("advances the rendered document's cache token on an explicit Refresh", async () => {
     renderPane("/repo/docs/spec.md", "rendered");
     await screen.findByTestId("markdown-viewer-mock");
     const before = markdownViewerProps.current?.cacheBust;
-    // The token must exist before it can be meaningfully compared — an
-    // unthreaded prop would leave both sides undefined and pass a bare !==.
+    // Both sides must be real values: an unthreaded prop would leave them
+    // undefined, and a bare inequality would never notice.
     expect(before).toBeDefined();
 
     await act(async () => {
@@ -963,6 +969,30 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     });
 
     await waitFor(() => expect(markdownViewerProps.current?.cacheBust).not.toBe(before));
+    expect(markdownViewerProps.current?.cacheBust).toBeDefined();
+  });
+
+  // The failure #11587 actually reports: an agent rewrites ./img/arch.png while
+  // spec.md itself is untouched. The silent re-read sees identical markdown, so a
+  // bytes-changed gate would hold the token still and the stale image would stay
+  // on screen. Only markdown opts out of that gate — this is what pins it.
+  it("advances the token on a silent re-read even when the markdown bytes are unchanged", async () => {
+    renderPane("/repo/docs/spec.md", "rendered");
+    await screen.findByTestId("markdown-viewer-mock");
+    const before = markdownViewerProps.current?.cacheBust;
+    expect(before).toBeDefined();
+    const readsBefore = readMock.mock.calls.length;
+
+    // A loaded file reloads silently, so window focus regain re-reads it. The
+    // mocked read returns the same content both times — exactly the asset-only
+    // rewrite this has to survive.
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => expect(readMock.mock.calls.length).toBeGreaterThan(readsBefore));
+    await waitFor(() => expect(markdownViewerProps.current?.cacheBust).not.toBe(before));
+    expect(markdownViewerProps.current?.cacheBust).toBeDefined();
   });
 
   // The toolbar's open button follows the view: rendered HTML opens in the

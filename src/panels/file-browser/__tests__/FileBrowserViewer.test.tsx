@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { render, act, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Type-only: erased before the vi.mock factory runs, so it cannot pull the real
+// module in ahead of its own mock.
+import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
 
 // FileBrowserViewer is the read-only preview beside the tree. #11319 adds a
 // Source/Rendered toggle for markdown, mirroring FilePane. Mock the heavy leaf
@@ -23,7 +26,7 @@ vi.mock("@/services/ActionService", () => ({
 // observable — without it the mode plumbing could be deleted and stay green.
 // cacheBust rides along for the same reason (#11587).
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({
-  MarkdownViewer: (props: { viewMode: string; cacheBust?: string }) => (
+  MarkdownViewer: (props: Pick<MarkdownViewerProps, "viewMode" | "cacheBust">) => (
     <div
       data-testid="markdown-viewer-mock"
       data-view-mode={props.viewMode}

@@ -141,10 +141,11 @@ export function MarkdownDocument({
         // as the file itself.
         if (HTTPish.test(url) || url.startsWith("data:")) return defaultUrlTransform(url);
         const local = buildDaintreeFileUrl(resolveAgainstFile(filePath, url), rootPath);
-        // Undefined-checked rather than truthy: "" is a token a host may hold
-        // before its first refresh, and dropping it there would make the very
-        // first rewrite invisible. The protocol handler reads only path/root,
-        // so `v` is inert to it.
+        // Undefined-checked rather than truthy, matching FileImagePreview and
+        // ZoomableImage: the token is opaque, so only "no host is tracking
+        // freshness" suppresses it — "" is a value like any other, and folding
+        // it in with absent would make a host that legitimately reached "" stop
+        // busting. The protocol handler reads only path/root, so `v` is inert.
         return cacheBust === undefined ? local : `${local}&v=${encodeURIComponent(cacheBust)}`;
       }
       return defaultUrlTransform(url);

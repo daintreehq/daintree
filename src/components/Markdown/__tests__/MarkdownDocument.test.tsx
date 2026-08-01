@@ -179,27 +179,45 @@ describe("MarkdownDocument", () => {
     expect(screen.getByRole("link", { name: "spec" }).getAttribute("href")).not.toContain("v=");
   });
 
-  it("rebuilds local image sources when only the cache token changes", () => {
+  it("treats an empty token as a value to carry, not as an absent one", () => {
+    // The distinction the `=== undefined` check exists to make. A truthiness
+    // check would swallow "" and silently stop busting for a host that reached
+    // it — with only the undefined and non-empty cases covered, that swap would
+    // leave every other test in this file green.
+    const { container } = render(
+      <MarkdownDocument {...FIXTURE_PROPS} cacheBust="" content={"![diagram](./img/arch.png)"} />
+    );
+
+    const url = new URL(container.querySelector("img")!.getAttribute("src") ?? "");
+    expect(url.searchParams.has("v")).toBe(true);
+    expect(url.searchParams.get("v")).toBe("");
+  });
+
+  it("rebuilds local image sources in place when only the cache token changes", () => {
     // The regression guard for #11587: a rewritten image keeps the same path and
     // root, so the src is byte-identical and Chromium never refetches it. This
-    // fails if the token is dropped from the urlTransform memo's dependencies.
+    // fails if the token is dropped from the urlTransform memo's dependencies —
+    // the stale closure would keep emitting the first token.
     const content = "![diagram](./img/arch.png)";
     const { container, rerender } = render(
       <MarkdownDocument {...FIXTURE_PROPS} cacheBust="rev-1" content={content} />
     );
-    const before = container.querySelector("img")!.getAttribute("src") ?? "";
+    const imgBefore = container.querySelector("img")!;
+    const before = imgBefore.getAttribute("src") ?? "";
 
     rerender(<MarkdownDocument {...FIXTURE_PROPS} cacheBust="rev-2" content={content} />);
-    const after = container.querySelector("img")!.getAttribute("src") ?? "";
+    const imgAfter = container.querySelector("img")!;
+    const after = imgAfter.getAttribute("src") ?? "";
 
     expect(after).not.toBe(before);
     const afterUrl = new URL(after);
     expect(afterUrl.searchParams.get("v")).toBe("rev-2");
     // Only the token moved: still the same file under the same containment root.
-    expect(afterUrl.searchParams.get("path")).toBe(
-      new URL(before).searchParams.get("path")
-    );
+    expect(afterUrl.searchParams.get("path")).toBe(new URL(before).searchParams.get("path"));
     expect(afterUrl.searchParams.get("root")).toBe(new URL(before).searchParams.get("root"));
+    // The whole reason for busting the src rather than keying the document: the
+    // element is reused, so the reader's scroll position survives the swap.
+    expect(imgAfter).toBe(imgBefore);
   });
 
   it("opens external links through browser.openExternal instead of navigating", () => {
