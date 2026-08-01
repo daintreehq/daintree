@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
@@ -24,6 +24,12 @@ import {
 import { PilotRunState } from "./PilotRunState";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import {
+  usePaletteTreeNavigation,
+  type NavigablePaletteTreeRow,
+  type PaletteTreeGroupInput,
+} from "@/hooks/usePaletteTreeNavigation";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { CircleHelp, FileText } from "@/components/icons";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
@@ -52,13 +58,10 @@ function runDomId(runId: string): string {
   return `pilot-option-run-${runId}`;
 }
 
-/**
- * Selection styling, lifted verbatim from the switcher's rows so one palette
- * doesn't invent a second vocabulary for "this is the row Enter will act on".
- */
+/** Layout only; the selected treatment comes from the shared row class. */
 const ROW_BASE = cn(
-  "relative flex w-full cursor-pointer items-center rounded-[var(--radius-md)] border border-transparent text-left transition-colors",
-  "before:absolute before:top-2 before:bottom-2 before:left-0 before:w-[2px] before:rounded-r before:bg-daintree-accent before:opacity-0 before:transition-opacity before:content-[''] aria-selected:before:opacity-100"
+  PALETTE_ROW_CLASS,
+  "flex w-full cursor-pointer items-center rounded-[var(--radius-md)] text-left"
 );
 
 /**
@@ -113,36 +116,8 @@ function groupSummary(group: PilotProjectGroup): string {
   return rest > 0 ? `${lead} · ${rest} more` : lead;
 }
 
-function rowTone(isSelected: boolean): string {
-  return isSelected
-    ? "bg-overlay-raised border-overlay text-daintree-text"
-    : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text";
-}
-
-/**
- * One project and the runs of it that are currently on screen.
- *
- * The rendered structure and the arrow-key domain are derived from this single
- * value in one pass — the flat nav list below is `groups.flatMap(g => g.rows)`,
- * never an independently re-filtered array. Two lists built separately is how a
- * highlight ends up addressing a row that isn't on screen (the switcher's
- * #11071); deriving both from one source makes drift unrepresentable.
- *
- * A project is structure, not content: it is not a navigation stop and not a
- * selection target, so only its runs appear here as selectable rows.
- */
-interface PilotGroupNode {
-  group: PilotProjectGroup;
-  isCollapsed: boolean;
-  /** Empty while collapsed, so a hidden run can never be selected. */
-  visibleRows: PilotRow[];
-}
-
-interface PilotNavRow {
-  domId: string;
-  workspaceId: string;
-  row: PilotRow;
-}
+/** The resting tone. Selected is the shared row class's to own, off the attribute. */
+const ROW_TONE = "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text";
 
 const TILE_BASE =
   "flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-lg)] text-base";
@@ -303,7 +278,7 @@ function RunRow({
       // The header's own column structure — same padding, the chevron column,
       // then a tile-width column — rather than a hand-computed indent, so
       // titles line up with the project title above them by construction.
-      className={cn(ROW_BASE, rowTone(isSelected), "gap-2 py-1.5 pr-3 pl-3")}
+      className={cn(ROW_BASE, ROW_TONE, "gap-2 py-1.5 pr-3 pl-3")}
     >
       {/*
         State rides the chevron column, so every agent's spinner or amber circle
@@ -571,91 +546,57 @@ export function PilotView() {
 
   const isSearching = query.trim().length > 0;
 
-  const groupNodes = useMemo<PilotGroupNode[]>(
+  /**
+   * The tree, in the shared model's shape.
+   *
+   * A project is structure, not content: its header is `navigable: false`, so
+   * the arrow keys walk agents and never stop on a heading on the way past.
+   * That kept the common case — compare what is working against what is waiting
+   * — from costing an extra keystroke per project, and kept Enter from sitting
+   * one mistake away from collapsing a group instead of opening the run.
+   */
+  const paletteGroups = useMemo<PaletteTreeGroupInput<PilotProjectGroup, PilotRow>[]>(
     () =>
-      visibleGroups.map((group) => {
+      visibleGroups.map((group) => ({
+        groupId: group.workspaceId,
+        group,
+        header: {
+          rowId: `group:${group.workspaceId}`,
+          // The runs container's id, which is what the disclosure button
+          // `aria-controls`. Safe only because the header is not navigable, so
+          // this id never reaches `aria-activedescendant`. Making headers
+          // navigable here would first have to give the header element an id
+          // of its own — pointing the active descendant at a role-less
+          // container is the dangling reference #11071 was about.
+          domId: groupDomId(group.workspaceId),
+          navigable: false,
+        },
         // A collapsed group that contains a match opens itself — making someone
         // click to reveal the thing they just searched for is the search
         // failing to do its job.
-        const isCollapsed = isSearching
+        isCollapsed: isSearching
           ? searchCollapsed.includes(group.workspaceId)
-          : collapsedIds.includes(group.workspaceId);
-        return { group, isCollapsed, visibleRows: isCollapsed ? [] : group.rows };
-      }),
+          : collapsedIds.includes(group.workspaceId),
+        items: group.rows.map((row) => ({
+          rowId: row.run.runId,
+          domId: runDomId(row.run.runId),
+          navigable: true,
+          item: row,
+        })),
+      })),
     [visibleGroups, isSearching, searchCollapsed, collapsedIds]
   );
 
-  // The arrow-key domain, derived from exactly what is rendered. Agents only:
-  // a project is a heading, not a stop on the way to one.
-  const navRows = useMemo<PilotNavRow[]>(
-    () =>
-      groupNodes.flatMap((node) =>
-        node.visibleRows.map((row) => ({
-          domId: runDomId(row.run.runId),
-          workspaceId: node.group.workspaceId,
-          row,
-        }))
-      ),
-    [groupNodes]
-  );
-
-  /**
-   * The selected ROW is the state; its index is derived. Tracking an index
-   * instead would let it outlive the row it pointed at — this list shrinks
-   * under the open dialog whenever an agent exits or a group collapses, and the
-   * index would then address a different row than the user selected, with Enter
-   * committing that one (the switcher's #11071).
-   */
-  const [selectedDomId, setSelectedDomId] = useState<string | null>(null);
-  /**
-   * The project the keyboard last collapsed, so Right can re-open it.
-   *
-   * A ref, not state: nothing renders from it, and it must not re-run the memos
-   * that build the list — it only ever answers "what did Left just close".
-   */
-  const lastCollapsedRef = useRef<string | null>(null);
-  /** Unmoved, the highlight sits on the most urgent agent — the list's top. */
-  const selectedIndex = useMemo(() => {
-    if (navRows.length === 0) return -1;
-    const index = selectedDomId ? navRows.findIndex((row) => row.domId === selectedDomId) : -1;
-    return index >= 0 ? index : 0;
-  }, [navRows, selectedDomId]);
-  const selectedRow = selectedIndex >= 0 ? navRows[selectedIndex] : undefined;
-
-  // A new query re-ranks the list, so fall back to the top match, and the
-  // search-scoped collapses belong to the query that produced them. Closing
-  // drops both so a reopen doesn't restore state from a fleet that has moved on.
+  // The search-scoped collapses belong to the query that produced them, and
+  // closing drops them so a reopen doesn't restore state from a fleet that has
+  // moved on. The selection resets alongside, inside the navigation model.
   useEffect(() => {
-    setSelectedDomId(null);
     setSearchCollapsed([]);
   }, [query, isOpen]);
 
   useEffect(() => {
     if (!isOpen) setQuery("");
   }, [isOpen]);
-
-  // Keyed on the id rather than the row object: the row is rebuilt on every
-  // snapshot, and re-running this each tick would fight the user's own scroll.
-  const selectedRowDomId = selectedRow?.domId;
-  useEffect(() => {
-    if (selectedRowDomId === undefined) return;
-    document.getElementById(selectedRowDomId)?.scrollIntoView({ block: "nearest" });
-  }, [selectedRowDomId]);
-
-  const step = useCallback(
-    (delta: number) => {
-      if (navRows.length === 0) return;
-      // Resolve the current row from the id inside the updater so two calls
-      // batched into one tick compose instead of collapsing into one.
-      setSelectedDomId((previousId) => {
-        const current = previousId ? navRows.findIndex((row) => row.domId === previousId) : -1;
-        const from = current >= 0 ? current : 0;
-        const next = (from + delta + navRows.length) % navRows.length;
-        return navRows[next]!.domId;
-      });
-    },
-    [navRows]
-  );
 
   const setGroupCollapsed = useCallback(
     (workspaceId: string, collapsed: boolean) => {
@@ -672,112 +613,34 @@ export function PilotView() {
     [isSearching, collapsedIds, toggleCollapsed]
   );
 
-  const activate = useCallback((row: PilotNavRow) => {
-    setSelectedDomId(row.domId);
+  const activate = useCallback((row: NavigablePaletteTreeRow<PilotProjectGroup, PilotRow>) => {
+    if (row.kind !== "item") return;
     void actionService.dispatch("pilot.openRun", {
-      runId: row.row.run.runId,
-      workspaceId: row.workspaceId,
+      runId: row.item.run.runId,
+      workspaceId: row.groupId,
     });
   }, []);
 
   /**
-   * `allowCaretKeys` is true where a caret exists to protect, and the list's
-   * structural keys stand down for it.
+   * `shouldPreserveInputCaretKey` is true where a caret exists to protect, and
+   * the list's structural keys stand down for it.
    *
    * Home/End/←/→ are structural keys, but they are also the search box's
    * editing keys, and the box owns focus by default. While the query is
    * non-empty they stay with the caret; an empty box has nothing to edit, so
    * they navigate. Search force-expands every matching group anyway, which is
    * where collapse would matter least.
-   *
-   * ←/→ act on the group holding the SELECTED RUN rather than on a selected
-   * project, because a project is never selected. Collapsing moves the
-   * selection to the next still-visible run so the highlight cannot end up
-   * inside a group that just closed.
    */
-  const handleNavigationKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLElement>, allowCaretKeys: boolean) => {
-      const consume = () => {
-        e.preventDefault();
-        e.stopPropagation();
-      };
+  const navigation = usePaletteTreeNavigation<PilotProjectGroup, PilotRow>({
+    groups: paletteGroups,
+    isActive: isOpen,
+    selectionScopeKey: query,
+    onActivate: activate,
+    onGroupCollapsedChange: setGroupCollapsed,
+    shouldPreserveInputCaretKey: () => query.length > 0,
+  });
 
-      // Expand runs BEFORE the empty-list guard, because collapsing the last
-      // expanded project is exactly what empties the list — and the disclosures
-      // are not tab stops, so bailing here would strand a keyboard user with
-      // every project shut and no way to reopen one.
-      if (e.key === "ArrowRight" && !allowCaretKeys) {
-        const target =
-          lastCollapsedRef.current ??
-          selectedRow?.workspaceId ??
-          groupNodes.find((node) => node.isCollapsed)?.group.workspaceId;
-        if (target !== undefined) {
-          consume();
-          setGroupCollapsed(target, false);
-          lastCollapsedRef.current = null;
-        }
-        return;
-      }
-
-      // Nothing listed means nothing to navigate or open. Swallowing the key
-      // anyway would leave the region eating Enter and the arrows during
-      // loading and empty states, where the browser's own behaviour is the
-      // only useful one left.
-      if (navRows.length === 0) return;
-
-      switch (e.key) {
-        case "ArrowDown":
-          consume();
-          step(1);
-          break;
-        case "ArrowUp":
-          consume();
-          step(-1);
-          break;
-        case "Home":
-          if (allowCaretKeys) break;
-          consume();
-          setSelectedDomId(navRows[0]!.domId);
-          break;
-        case "End":
-          if (allowCaretKeys) break;
-          consume();
-          setSelectedDomId(navRows[navRows.length - 1]!.domId);
-          break;
-        case "ArrowLeft": {
-          if (allowCaretKeys || !selectedRow) break;
-          consume();
-          lastCollapsedRef.current = selectedRow.workspaceId;
-          setGroupCollapsed(selectedRow.workspaceId, true);
-          // The highlight needs no explicit move: a hidden row is no longer in
-          // `navRows`, so `selectedIndex` falls back to the first visible one.
-          break;
-        }
-        case "Enter":
-          consume();
-          if (selectedRow) activate(selectedRow);
-          break;
-      }
-    },
-    [step, navRows, selectedRow, groupNodes, setGroupCollapsed, activate]
-  );
-
-  const handleInputKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
-      // Escape is deliberately NOT intercepted to clear the query first. The
-      // project switcher — which opens this and sits beside it — closes on the
-      // first Escape, and two adjacent palettes that hand off to each other
-      // must not disagree about what the key does.
-      handleNavigationKeyDown(e, query.length > 0);
-    },
-    [handleNavigationKeyDown, query]
-  );
-
-  const handleBodyKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => handleNavigationKeyDown(e, false),
-    [handleNavigationKeyDown]
-  );
+  const { selectedRow, activeDescendantId, renderGroups } = navigation;
 
   /**
    * What the surface can honestly claim right now.
@@ -812,14 +675,15 @@ export function PilotView() {
             : "";
 
   // Every selectable row is an agent now, so the verb never changes.
-  const actionLabel = selectedRow === undefined ? null : "Open";
+  const actionLabel = selectedRow === null ? null : "Open";
 
-  const hasTree = groupNodes.length > 0;
+  const hasTree = renderGroups.length > 0;
   // Stale counts as well as live: retained runs are real rows, so a query that
   // matches none of them is a true statement about the query rather than a claim
   // that the fleet is clear. `loading` and `unavailable` stay out — they already
   // render the skeleton and the can't-reach-host message.
-  const showEmpty = (status.kind === "live" || status.kind === "stale") && groupNodes.length === 0;
+  const showEmpty =
+    (status.kind === "live" || status.kind === "stale") && renderGroups.length === 0;
   const showSkeleton = useDeferredLoading(status.kind === "loading", UI_DOHERTY_THRESHOLD);
 
   return (
@@ -834,7 +698,7 @@ export function PilotView() {
           className="bg-overlay-soft border-[var(--border-overlay)]"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={handleInputKeyDown}
+          onKeyDown={navigation.handleInputKeyDown}
           placeholder="Search agents…"
           aria-label="Search agents"
           // The role is constant, not conditional on there being results. A
@@ -846,7 +710,7 @@ export function PilotView() {
           aria-expanded={hasTree}
           aria-haspopup="listbox"
           aria-controls={LIST_ID}
-          aria-activedescendant={selectedRow?.domId}
+          aria-activedescendant={activeDescendantId}
           data-testid="pilot-search"
         />
       </AppPaletteDialog.Header>
@@ -855,8 +719,8 @@ export function PilotView() {
         maxHeight={PALETTE_MAX_HEIGHT}
         className="p-0"
         ariaLabel="Agents"
-        activeDescendant={selectedRow?.domId}
-        onNavigationKeyDown={handleBodyKeyDown}
+        activeDescendant={activeDescendantId}
+        onNavigationKeyDown={navigation.handleBodyKeyDown}
       >
         {showSkeleton && (
           /*
@@ -930,48 +794,40 @@ export function PilotView() {
           id={LIST_ID}
           {...(hasTree ? { role: "listbox", "aria-label": "Agents by project" } : {})}
         >
-          {groupNodes.map((node, groupIndex) => {
-            const groupId = groupDomId(node.group.workspaceId);
-            return (
-              // `role="group"` is a permitted listbox child and carries the
-              // project's name as the label for every option inside it, which
-              // is how a screen reader still hears which project a run belongs
-              // to now that the header itself is not an item.
-              <div
-                key={groupId}
-                role="group"
-                aria-label={node.group.name}
-                // The scroller spaces siblings equally, so after a long run list
-                // the next project arrives with no more separation than one more
-                // agent. Only between groups — a leading gap would push the list
-                // off its own top edge.
-                className={groupIndex > 0 ? "mt-2" : undefined}
-              >
-                <GroupHeader
-                  group={node.group}
-                  isCollapsed={node.isCollapsed}
-                  groupId={groupId}
-                  onToggle={() => setGroupCollapsed(node.group.workspaceId, !node.isCollapsed)}
-                />
-                <div id={groupId}>
-                  {node.visibleRows.map((row) => {
-                    const domId = runDomId(row.run.runId);
-                    return (
-                      <RunRow
-                        key={domId}
-                        row={row}
-                        isSelected={domId === selectedRow?.domId}
-                        domId={domId}
-                        onActivate={() =>
-                          activate({ domId, workspaceId: node.group.workspaceId, row })
-                        }
-                      />
-                    );
-                  })}
-                </div>
+          {renderGroups.map(({ header, items }, groupIndex) => (
+            // `role="group"` is a permitted listbox child and carries the
+            // project's name as the label for every option inside it, which
+            // is how a screen reader still hears which project a run belongs
+            // to now that the header itself is not an item.
+            <div
+              key={header.domId}
+              role="group"
+              aria-label={header.group.name}
+              // The scroller spaces siblings equally, so after a long run list
+              // the next project arrives with no more separation than one more
+              // agent. Only between groups — a leading gap would push the list
+              // off its own top edge.
+              className={groupIndex > 0 ? "mt-2" : undefined}
+            >
+              <GroupHeader
+                group={header.group}
+                isCollapsed={header.isCollapsed}
+                groupId={header.domId}
+                onToggle={() => setGroupCollapsed(header.groupId, !header.isCollapsed)}
+              />
+              <div id={header.domId}>
+                {items.map((row) => (
+                  <RunRow
+                    key={row.domId}
+                    row={row.item}
+                    isSelected={row.rowId === selectedRow?.rowId}
+                    domId={row.domId}
+                    onActivate={() => navigation.activateRow(row.rowId)}
+                  />
+                ))}
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       </AppPaletteDialog.Body>
 
