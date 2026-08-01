@@ -30,10 +30,16 @@ export function useProjectViewRevealed(
   // One bit, not a count: the work is "read the current state", so a consumer
   // hidden across several switches owes exactly one catch-up on the way back.
   const pendingRef = useRef(false);
-  const enabledRef = useRef(enabled);
 
+  // `enabled` is read here rather than mirrored into a ref, because an effect
+  // event sees the latest COMMITTED props while a ref assigned from a passive
+  // effect lags the commit that changed it. That gap is reachable: a consumer
+  // can go hidden and take a synchronous `revealed` from main before its effect
+  // runs, which a lagging ref would answer with "still visible" — running the
+  // refresh against something nobody can see AND consuming the reveal, so the
+  // catch-up on the way back never happens either.
   const handleReveal = useEffectEvent(() => {
-    if (!enabledRef.current) {
+    if (!enabled) {
       pendingRef.current = true;
       return;
     }
@@ -54,7 +60,6 @@ export function useProjectViewRevealed(
   }, []);
 
   useEffect(() => {
-    enabledRef.current = enabled;
     if (enabled) flushPending();
   }, [enabled]);
 }

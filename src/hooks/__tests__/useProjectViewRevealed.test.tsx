@@ -4,14 +4,25 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 type LifecyclePhase = "cached" | "active" | "revealed";
 
-const listeners = new Set<(phase: LifecyclePhase) => void>();
+// Hoisted, not a plain const: the factory below closes over it, and a
+// module-scope subscriber anywhere in the graph would reach it while a plain
+// const was still in its TDZ — which fails collection, not the test.
+const listeners = vi.hoisted(() => new Set<(phase: LifecyclePhase) => void>());
 
 const subscribeProjectViewLifecycleMock = vi.hoisted(() =>
   vi.fn<(cb: (phase: LifecyclePhase) => void) => () => void>()
 );
 
+// Every runtime export, not just the one the hook imports today: a factory is a
+// strict surface, so the day anything in this graph reaches for a missing name
+// the file fails at collection — and vitest still exits 0, silently skipping
+// every test below while the summary reads green.
 vi.mock("@/lib/viewCacheState", () => ({
   subscribeProjectViewLifecycle: subscribeProjectViewLifecycleMock,
+  isProjectViewCached: () => false,
+  __resetProjectViewCacheStateForTests: () => {
+    listeners.clear();
+  },
 }));
 
 import { useProjectViewRevealed } from "../useProjectViewRevealed";
@@ -98,6 +109,25 @@ describe("useProjectViewRevealed", () => {
 
     rerender({ enabled: true });
     expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs the deferred catch-up against the newest callback, not the one that missed the reveal", () => {
+    // The deferral's own stale-closure risk, which the immediate path can't
+    // cover: a parked pane misses a reveal, then its file or root changes
+    // before it comes back. Flushing the closure captured at reveal time would
+    // refresh the identity that is no longer on screen.
+    const stale = vi.fn();
+    const fresh = vi.fn();
+    const { rerender } = renderHook(({ cb, enabled }) => useProjectViewRevealed(cb, { enabled }), {
+      initialProps: { cb: stale, enabled: false },
+    });
+
+    emit("revealed");
+    rerender({ cb: fresh, enabled: false });
+    rerender({ cb: fresh, enabled: true });
+
+    expect(stale).not.toHaveBeenCalled();
+    expect(fresh).toHaveBeenCalledTimes(1);
   });
 
   it("does not run a catch-up on enable when no reveal was missed", () => {
