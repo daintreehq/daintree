@@ -27,10 +27,12 @@ export interface TerminalGracefulShutdownHost {
  *
  * Success collapses into a single `captured` — whether the id arrived
  * mid-stream or on the last-chance match at exit doesn't explain anything,
- * because nothing went wrong. Failure stays granular for the opposite reason.
+ * because nothing went wrong. Failure stays granular for the opposite reason:
+ * each bucket points at a different suspect.
  */
 export type GracefulShutdownOutcome =
   | "already-exited"
+  | "already-killed"
   | "agent-not-live"
   | "no-resume-config"
   | "no-quit-signal"
@@ -85,8 +87,16 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
     });
   };
 
-  if (terminal.isExited || terminal.wasKilled) {
+  // Split rather than folded into one bucket: `wasKilled` is set when a kill
+  // is *requested*, while `isExited` means the process is actually gone. A
+  // terminal that is only `wasKilled` has something else tearing it down
+  // concurrently — a different suspect from one that had already exited.
+  if (terminal.isExited) {
     logOutcome("already-exited", false);
+    return null;
+  }
+  if (terminal.wasKilled) {
+    logOutcome("already-killed", false);
     return null;
   }
 
