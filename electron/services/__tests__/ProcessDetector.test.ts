@@ -10,6 +10,7 @@ import {
   setPluginProcessToolRegistry,
 } from "../../../shared/config/pluginProcessToolRegistry.js";
 import { AGENT_CLI_NAMES } from "../ProcessDetector/registries.js";
+import { buildDetectedCandidate } from "../ProcessDetector/candidateHelpers.js";
 
 type ProcessNode = { pid: number; comm: string; command?: string };
 
@@ -258,7 +259,7 @@ describe("ProcessDetector", () => {
     detector.start();
     cache.emitRefresh();
 
-    // Basename python3 maps to process icon "python" via PROCESS_ICON_MAP;
+    // Basename python3 maps to process icon "python" via getProcessIconMap();
     // argv[1] is not in AGENT_CLI_NAMES so the basename match stands.
     expect(callback).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2293,5 +2294,24 @@ describe("plugin-contributed process detections (#11613)", () => {
     setPluginProcessToolRegistry({ "acme-cli": "sparkles" });
     // `npm` is package-manager tier and loses to anything more specific.
     expect(detectCommandIdentity("npm exec acme-cli")?.processIconId).toBe("sparkles");
+  });
+
+  it("never resolves an inherited Object member as a detection", () => {
+    // Both lookup tables are null-prototype (`registries.ts`) precisely so a
+    // process literally named `constructor`/`toString` indexes nothing instead
+    // of hitting an inherited function and being reported as a detected agent.
+    for (const name of ["constructor", "toString", "valueOf"]) {
+      expect(buildDetectedCandidate(name, undefined, 0), name).toBeNull();
+    }
+
+    setPluginProcessToolRegistry({ "acme-cli": "sparkles" });
+
+    // The merged map is rebuilt from the plugin snapshot here — proven by the
+    // plugin command resolving — so the nulls below are the prototype guard
+    // holding across the rebuild, not a registry that was never populated.
+    expect(buildDetectedCandidate("acme-cli", undefined, 0)).not.toBeNull();
+    for (const name of ["constructor", "toString", "valueOf"]) {
+      expect(buildDetectedCandidate(name, undefined, 0), name).toBeNull();
+    }
   });
 });

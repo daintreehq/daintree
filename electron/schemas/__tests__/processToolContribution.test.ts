@@ -142,6 +142,36 @@ describe("contributes.processTools (#11613)", () => {
     }
   });
 
+  it("rejects shells and launcher wrappers, which run a tool rather than being one", () => {
+    // A plugin owning one of these wins the equal-tier tie for a command it
+    // never launched (`sudo vite` reports the plugin), and `bash` would tag
+    // nearly every pane the process-tree walk visits.
+    for (const command of [
+      "sh",
+      "bash",
+      "zsh",
+      "fish",
+      "dash",
+      "pwsh",
+      "powershell",
+      "cmd",
+      "env",
+      "sudo",
+      "nohup",
+      "xargs",
+    ]) {
+      expect(parseProcessTools([{ command, iconId: "sparkles" }]).success, command).toBe(false);
+    }
+  });
+
+  it("still accepts tool-shaped launchers a plugin could legitimately brand", () => {
+    // The reservation covers shells and prefix runners only — it must not
+    // swallow the version managers and runners that are real, brandable tools.
+    for (const command of ["mise", "direnv", "asdf", "nix-shell"]) {
+      expect(parseProcessTools([{ command, iconId: "sparkles" }]).success, command).toBe(true);
+    }
+  });
+
   it("is strict: fields the host would silently ignore are rejected", () => {
     for (const extra of [{ label: "Acme" }, { tier: "tool" }, { commands: ["acme-cli"] }]) {
       const result = parseProcessTools([{ command: "acme-cli", iconId: "sparkles", ...extra }]);

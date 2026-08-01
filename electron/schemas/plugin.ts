@@ -327,6 +327,57 @@ const PROCESS_TOOL_COMMAND_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 const RESERVED_PROCESS_TOOL_COMMANDS = new Set(["__proto__", "constructor", "prototype"]);
 
 /**
+ * Shells and launcher wrappers — names that identify the process *running* a
+ * tool rather than a tool. None of them appear in `PROCESS_TOOL_ICON_BY_COMMAND`
+ * or `AGENT_CLI_NAMES`, so the manifest-level built-in collision checks never
+ * see them, yet claiming one is a wider version of the `exec`/`dlx`/`x` hole
+ * {@link BINARY_EXEC_SUBCOMMANDS} already closes:
+ *
+ *   - `sudo vite` yields candidates `[sudo, vite]`, both at tool tier (an
+ *     unregistered plugin icon id ranks there), and the leftmost wins the tie —
+ *     the plugin reports itself instead of Vite.
+ *   - `bash -c "vite build"` is worse: the quoted string never resolves to a
+ *     registry key, so `bash` is the only match there is.
+ *   - The process-tree walk turns every subshell node into a candidate, so a
+ *     plugin owning `bash` tags nearly every pane and outranks the
+ *     package-manager tier wherever it appears.
+ *
+ * Deliberately limited to shells and prefix runners. Tool-shaped launchers a
+ * plugin could plausibly want to brand (`mise`, `direnv`, `npx`) stay claimable;
+ * `exec`/`dlx`/`x` are handled by the neighbouring refinement.
+ */
+const RESERVED_PROCESS_TOOL_LAUNCHERS = new Set([
+  // Shells. The process-tree walk sees these as the parent of everything a
+  // user types, and `-c` hides the real command inside a quoted string.
+  "sh",
+  "bash",
+  "zsh",
+  "fish",
+  "dash",
+  "ash",
+  "ksh",
+  "csh",
+  "tcsh",
+  "nu",
+  "pwsh",
+  "powershell",
+  "cmd",
+  // Prefix runners: argv[0] is the wrapper, the tool sits somewhere right of it.
+  "env",
+  "sudo",
+  "doas",
+  "su",
+  "command",
+  "nohup",
+  "setsid",
+  "xargs",
+  "time",
+  "timeout",
+  "nice",
+  "stdbuf",
+]);
+
+/**
  * `contributes.processTools` manifest entry (#11613). One command name mapped
  * to the icon a terminal tab shows while that command runs. `iconId` is a
  * generic plugin icon id (`shared/config/pluginIconIds.ts`) — advisory, matching
@@ -365,6 +416,14 @@ export const ProcessToolContributionSchema = z
       .refine((command) => !BINARY_EXEC_SUBCOMMANDS.has(command), {
         message:
           "command cannot be a package-manager exec subcommand (exec, dlx, x) — those name the launcher, not a tool",
+      })
+      // Same failure, wider blast radius: a shell or prefix runner sits to the
+      // left of the real binary in argv and above it in the process tree, so a
+      // plugin owning one wins the equal-tier tie for commands it never
+      // launched — every pane, in the `bash` case.
+      .refine((command) => !RESERVED_PROCESS_TOOL_LAUNCHERS.has(command), {
+        message:
+          "command cannot be a shell or launcher wrapper (sh, bash, zsh, cmd, env, sudo, xargs, …) — those name the process that runs a tool, not the tool",
       }),
     iconId: z.string().min(1).max(64),
   })

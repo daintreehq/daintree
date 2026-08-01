@@ -43,7 +43,7 @@ test.describe.serial("Core: Process Icon Badge", () => {
     });
 
     await test.step("Run a bounded node script and wait for SENTINEL_READY", async () => {
-      // Run a bounded `node` process — `node` is in PROCESS_ICON_MAP, so
+      // Run a bounded `node` process — `node` is in getProcessIconMap(), so
       // either the process-tree detector or the shell-command fallback should
       // commit the "node" icon within the hysteresis window (~3s baseline).
       // SENTINEL_READY lets us confirm the script is actually executing.
