@@ -956,6 +956,9 @@ describe("restartTerminal stale flow state cleared (#9899)", () => {
     await usePanelStore.getState().restartTerminal("test-1");
 
     const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
+    // Assert survival first — `after?.x` would read undefined for a panel that
+    // vanished, which is not what this test is about.
+    expect(after).toBeDefined();
     expect(after?.sessionLostOnRestore).toBeUndefined();
   });
 });

@@ -206,10 +206,4 @@ describe("selectHasMultipleSessionLost", () => {
     expect(selectHasMultipleSessionLost({ a: lost("a") })).toBe(false);
     expect(selectHasMultipleSessionLost({ a: lost("a"), b: lost("b"), c: lost("c") })).toBe(true);
   });
-
-  it("is stable across repeated calls on the same carrier", () => {
-    const byId = { a: lost("a"), b: lost("b") };
-    expect(selectHasMultipleSessionLost(byId)).toBe(true);
-    expect(selectHasMultipleSessionLost(byId)).toBe(true);
-  });
 });

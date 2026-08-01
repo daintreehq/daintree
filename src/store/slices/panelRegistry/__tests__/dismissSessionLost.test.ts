@@ -230,12 +230,17 @@ describe("dismissAllSessionLost", () => {
     expect(Object.keys(usePanelStore.getState().panelsById).sort()).toEqual(["t-1", "t-2", "t-3"]);
   });
 
-  it("notifies subscribers exactly once for the whole sweep", () => {
-    seed([
+  // One notification for the whole sweep, and every flagged panel replaced
+  // rather than edited: a single notification alone would still be emitted by
+  // an implementation that mutated each panel in place and then handed back a
+  // fresh carrier, which React memo boundaries reading a panel would miss.
+  it("notifies once and replaces each flagged panel object", () => {
+    const before = [
       ptyPanel("t-1", { sessionLostOnRestore: true }),
       ptyPanel("t-2", { sessionLostOnRestore: true }),
       ptyPanel("t-3", { sessionLostOnRestore: true }),
-    ]);
+    ];
+    seed(before);
 
     const notified = vi.fn();
     const unsubscribe = usePanelStore.subscribe(notified);
@@ -243,6 +248,10 @@ describe("dismissAllSessionLost", () => {
     unsubscribe();
 
     expect(notified).toHaveBeenCalledTimes(1);
+    for (const panel of before) {
+      expect(usePanelStore.getState().panelsById[panel.id]).not.toBe(panel);
+      expect(panel.sessionLostOnRestore).toBe(true);
+    }
   });
 
   // A hydration/spawn batch publishes `panelsById` before appending ids
