@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { GitStatus } from "@shared/types/git";
 import { GIT_STATUS_PRESENTATION, getGitStatusPresentation } from "../gitStatusPresentation";
 
-const ALL_STATUSES = Object.keys(GIT_STATUS_PRESENTATION) as GitStatus[];
+const ALL_STATUSES = Object.keys(GIT_STATUS_PRESENTATION).filter(
+  (key): key is GitStatus => key in GIT_STATUS_PRESENTATION
+);
 
 describe("getGitStatusPresentation", () => {
   it("resolves every status the type admits", () => {
@@ -34,7 +36,9 @@ describe("getGitStatusPresentation", () => {
   });
 
   it("falls back rather than leaving a changed row unmarked", () => {
-    // `status` crosses IPC, so a value outside the union can arrive at runtime.
+    // The assertion is deliberately unsafe: a value the union forbids but IPC
+    // can still deliver is the entire scenario under test.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- exercising an out-of-union runtime value
     const rogue = getGitStatusPresentation("something-new" as GitStatus);
 
     expect(rogue).toBe(getGitStatusPresentation("untracked"));

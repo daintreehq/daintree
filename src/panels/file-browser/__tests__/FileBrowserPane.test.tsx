@@ -2306,10 +2306,13 @@ describe("FileBrowserPane git status derivation", () => {
     renderPane();
 
     await waitFor(() => expect(treeProps.gitStatusIndex).toBeTruthy());
-    const index = treeProps.gitStatusIndex as FileBrowserGitStatusIndex;
 
-    expect(getFileBrowserRowGitStatus(index, "src/app.ts", false)).toBe("modified");
-    expect(getFileBrowserRowGitStatus(index, "src", true)).toBe("modified");
+    // Passed straight through: the lookup already accepts a missing index, so a
+    // null one fails these assertions rather than needing a cast to rule out.
+    expect(getFileBrowserRowGitStatus(treeProps.gitStatusIndex, "src/app.ts", false)).toBe(
+      "modified"
+    );
+    expect(getFileBrowserRowGitStatus(treeProps.gitStatusIndex, "src", true)).toBe("modified");
   });
 
   it("summarises the changed files when nothing is selected", async () => {

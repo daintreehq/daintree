@@ -706,7 +706,8 @@ describe("FileTreeView git status markers", () => {
     // aria-hidden content, so the decorative marker letter drops out and only
     // the spelled-out status is announced. Raw textContent would run the two
     // together and assert a string no user ever hears.
-    const announced = target.cloneNode(true) as HTMLElement;
+    const announced = target.cloneNode(true);
+    if (!(announced instanceof HTMLElement)) return null;
     for (const hidden of announced.querySelectorAll('[aria-hidden="true"]')) hidden.remove();
     return announced.textContent;
   }
