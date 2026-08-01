@@ -38,10 +38,13 @@ function useAnchoredPaletteContext(): AnchoredPaletteContextValue {
 }
 
 /**
- * Close when a foreign overlay stacks above an open palette. Compares
- * consecutive reads rather than a snapshot taken at open, so only growth after
- * the palette was already open counts — the palette itself never claims a slot
- * (see the `modal` note below), so it cannot trip its own watcher.
+ * Close when a foreign overlay stacks above an open palette.
+ *
+ * The baseline is re-established every time the palette opens (and every time a
+ * palette opts in), then compared against, so an overlay that was already up —
+ * or one raised in the same commit as the open — is never mistaken for
+ * something stacking on top. The palette itself never claims a slot (see the
+ * `modal` note below), so it cannot trip its own watcher either.
  */
 function useForeignOverlayDismissal(
   isOpen: boolean,
@@ -49,16 +52,26 @@ function useForeignOverlayDismissal(
   onOpenChange: (open: boolean) => void
 ) {
   // Selector returns a constant while disabled, so a palette that doesn't opt
-  // in never re-renders on unrelated overlay traffic.
+  // in never re-renders on unrelated overlay traffic. The null baseline below
+  // is what keeps that sentinel from reading as "the stack just emptied".
   const overlayStackLength = useUIStore((state) => (enabled ? state.overlayStack.length : 0));
-  const previousLengthRef = useRef(overlayStackLength);
+  const baselineRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (isOpen && overlayStackLength > previousLengthRef.current && overlayStackLength > 0) {
-      onOpenChange(false);
+    if (!enabled || !isOpen) {
+      baselineRef.current = null;
+      return;
     }
-    previousLengthRef.current = overlayStackLength;
-  }, [isOpen, overlayStackLength, onOpenChange]);
+    if (baselineRef.current === null) {
+      baselineRef.current = overlayStackLength;
+      return;
+    }
+    if (overlayStackLength > baselineRef.current) {
+      onOpenChange(false);
+      return;
+    }
+    baselineRef.current = overlayStackLength;
+  }, [enabled, isOpen, overlayStackLength, onOpenChange]);
 }
 
 export interface AppPalettePopoverProps {
@@ -109,7 +122,13 @@ type PopoverContentProps = React.ComponentPropsWithoutRef<typeof PopoverContent>
 
 export interface AppPalettePopoverContentProps extends Omit<
   PopoverContentProps,
-  "onOpenAutoFocus" | "onCloseAutoFocus" | "onPointerDownOutside" | "aria-label"
+  | "onOpenAutoFocus"
+  | "onCloseAutoFocus"
+  | "onPointerDownOutside"
+  | "aria-label"
+  // Derived from `modal`. A caller free to set it independently could
+  // advertise a non-trapped, pointer-permeable surface as modal.
+  | "aria-modal"
 > {
   /**
    * Radix renders the content as `role="dialog"`. Without a name a screen
@@ -122,10 +141,15 @@ export interface AppPalettePopoverContentProps extends Omit<
   /** Called when the first Escape spends itself clearing a non-empty query. */
   onClearQuery: () => void;
   /**
-   * Keep Radix's focus return to the trigger even when the palette was
-   * dismissed by pointer. Off by default — a pointer dismissal that restores
-   * focus leaves the trigger wearing a focus-visible ring nobody asked for
-   * (#6119). Keyboard dismissal always restores, per WAI-ARIA.
+   * Leave Radix's own close-autofocus policy alone when the palette was
+   * dismissed by pointer, rather than cancelling it. Off by default — letting
+   * a pointer dismissal restore focus leaves the trigger wearing a
+   * focus-visible ring nobody asked for (#6119). Keyboard dismissal always
+   * keeps the default return, per WAI-ARIA.
+   *
+   * This only decides whether the shell suppresses; it cannot manufacture a
+   * restore Radix wasn't going to perform (non-modal content does not focus the
+   * trigger after an outside interaction).
    */
   restoreFocusOnPointerDismiss?: boolean;
   /**
@@ -143,6 +167,7 @@ function AppPalettePopoverContent({
   restoreFocusOnPointerDismiss = false,
   onCloseAutoFocus,
   onEscapeKeyDown,
+  onInteractOutside,
   onFocus,
   onMouseDown,
   children,
@@ -154,6 +179,9 @@ function AppPalettePopoverContent({
     inputRef.current?.focus({ preventScroll: true });
   }, [inputRef]);
 
+  // Set in onPointerDownOutside, read in onCloseAutoFocus.
+  const wasPointerCloseRef = useRef(false);
+
   // Second focus attempt behind `onOpenAutoFocus`. `PopoverContent` renders
   // nothing until its lazily imported Radix chunk resolves, so on a cold open
   // this frame can fire before the input exists; on a warm one it runs after
@@ -161,26 +189,42 @@ function AppPalettePopoverContent({
   // covers both orders alone — dropping either regresses one of them.
   useEffect(() => {
     if (!isOpen) return;
+    // A dismissal that got vetoed, or one reversed mid-exit, can leave the
+    // pointer flag armed with no close-autofocus to consume it.
+    wasPointerCloseRef.current = false;
     const frame = requestAnimationFrame(focusInput);
     return () => cancelAnimationFrame(frame);
   }, [isOpen, focusInput]);
 
-  // Set in onPointerDownOutside, read in onCloseAutoFocus.
-  const wasPointerCloseRef = useRef(false);
-
   const handleOpenAutoFocus = useCallback(
     (event: Event) => {
+      const element = inputRef.current;
+      // Nothing to hand focus to yet — leave Radix's own autofocus alone rather
+      // than cancelling it and stranding focus on nothing.
+      if (!element) return;
       // Radix would otherwise focus the content wrapper; the search box is what
       // the user is about to type into.
       event.preventDefault();
-      focusInput();
+      element.focus({ preventScroll: true });
     },
-    [focusInput]
+    [inputRef]
   );
 
   const handlePointerDownOutside = useCallback(() => {
     wasPointerCloseRef.current = true;
   }, []);
+
+  const handleInteractOutside = useCallback(
+    (event: Parameters<NonNullable<PopoverContentProps["onInteractOutside"]>>[0]) => {
+      onInteractOutside?.(event);
+      // Radix fires this after `onPointerDownOutside` and dismisses only if
+      // nobody vetoed. A vetoed interaction leaves the palette open with no
+      // close coming, so disarm — otherwise the next keyboard dismissal is
+      // misread as a pointer one and loses its focus return.
+      if (event.defaultPrevented) wasPointerCloseRef.current = false;
+    },
+    [onInteractOutside]
+  );
 
   const handleCloseAutoFocus = useCallback(
     (event: Event) => {
@@ -244,8 +288,10 @@ function AppPalettePopoverContent({
     (event: React.MouseEvent<HTMLDivElement>) => {
       onMouseDown?.(event);
       if (event.defaultPrevented) return;
+      // `Element`, not `HTMLElement`: a header adornment can be an SVG icon,
+      // and the click lands on the glyph rather than a wrapper.
       const target = event.target;
-      if (!(target instanceof HTMLElement)) return;
+      if (!(target instanceof Element)) return;
       // The input's own mousedown is left untouched so caret placement and
       // drag-select still work inside the field.
       if (target === inputRef.current) return;
@@ -253,7 +299,11 @@ function AppPalettePopoverContent({
       // input, and Radix's focus scope wrapper is tabIndex={-1}, so clicking it
       // parks focus on the content: Escape then dead-ends, because the content
       // vetoes the close while only the input clears the query.
-      if (!target.closest(`[${PALETTE_HEADER_ATTR}]`)) return;
+      const header = target.closest(`[${PALETTE_HEADER_ATTR}]`);
+      // React events from a portal nested inside this one still bubble through
+      // here, and that portal may carry its own stamped header — so the match
+      // has to actually live in this content, not merely in the React tree.
+      if (!header || !event.currentTarget.contains(header)) return;
       event.preventDefault();
       focusInput();
     },
@@ -261,7 +311,11 @@ function AppPalettePopoverContent({
   );
 
   return (
+    // Consumer props first: everything below is shell-owned policy, and a
+    // spread object can carry a key the prop types omit. Positioning, class
+    // names and data attributes still come through untouched.
     <PopoverContent
+      {...props}
       aria-label={ariaLabel}
       // Radix does not set this itself. `aria-modal="false"` is noise, so the
       // non-modal form carries nothing rather than a negation.
@@ -269,10 +323,10 @@ function AppPalettePopoverContent({
       onOpenAutoFocus={handleOpenAutoFocus}
       onCloseAutoFocus={handleCloseAutoFocus}
       onPointerDownOutside={handlePointerDownOutside}
+      onInteractOutside={handleInteractOutside}
       onEscapeKeyDown={handleEscapeKeyDown}
       onFocus={handleFocus}
       onMouseDown={handleMouseDown}
-      {...props}
     >
       {children}
     </PopoverContent>

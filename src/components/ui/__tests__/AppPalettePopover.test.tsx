@@ -25,6 +25,7 @@ interface CapturedContentProps {
 }
 
 let rootProps: { open?: boolean; modal?: boolean } = {};
+let rootOpenChange: ((open: boolean) => void) | null = null;
 let contentProps: CapturedContentProps = {};
 
 vi.mock("@/components/ui/popover", () => ({
@@ -32,6 +33,7 @@ vi.mock("@/components/ui/popover", () => ({
     children,
     open,
     modal,
+    onOpenChange,
   }: {
     children: ReactNode;
     open?: boolean;
@@ -39,12 +41,14 @@ vi.mock("@/components/ui/popover", () => ({
     onOpenChange?: (open: boolean) => void;
   }) => {
     rootProps = { open, modal };
+    rootOpenChange = onOpenChange ?? null;
     return <>{children}</>;
   },
   PopoverTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
   // Content renders unconditionally so the shell's handlers stay reachable
   // without driving Radix's presence machinery. tabIndex mirrors the real
-  // focus-scope wrapper, which is what focus parks on.
+  // focus-scope wrapper, which is what focus parks on. ARIA is rendered rather
+  // than only captured, so those assertions read the DOM a screen reader sees.
   PopoverContent: ({
     children,
     onFocus,
@@ -56,6 +60,9 @@ vi.mock("@/components/ui/popover", () => ({
     return (
       <div
         data-testid="content"
+        role="dialog"
+        aria-label={typeof rest["aria-label"] === "string" ? rest["aria-label"] : undefined}
+        aria-modal={rest["aria-modal"] === true ? true : undefined}
         tabIndex={-1}
         onFocus={onFocus}
         onMouseDown={onMouseDown}
@@ -80,9 +87,12 @@ interface HarnessProps {
   onFocus?: React.FocusEventHandler<HTMLDivElement>;
   onMouseDown?: React.MouseEventHandler<HTMLDivElement>;
   onKeyDown?: React.KeyboardEventHandler<HTMLDivElement>;
+  onInteractOutside?: (event: Event) => void;
   onOpenChange?: (open: boolean) => void;
   align?: "start" | "center" | "end";
   sideOffset?: number;
+  /** Omits the search box, reproducing a cold open before the chunk resolves. */
+  withInput?: boolean;
 }
 
 function Harness({
@@ -95,6 +105,7 @@ function Harness({
   onOpenChange,
   align,
   sideOffset,
+  withInput = true,
   ...contentOverrides
 }: HarnessProps) {
   const [openState, setOpen] = useState(initialOpen);
@@ -127,11 +138,15 @@ function Harness({
         {/* The real Header, so the marker the shell's mousedown delegation
             looks for is the one the shell actually stamps. */}
         <AppPaletteDialog.Header label="Test">
-          <AppPaletteDialog.Input
-            inputRef={inputRef}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
+          {withInput ? (
+            <AppPaletteDialog.Input
+              inputRef={inputRef}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          ) : (
+            <span data-testid="header-adornment">no input yet</span>
+          )}
         </AppPaletteDialog.Header>
         <button type="button" data-testid="row">
           A row
@@ -175,29 +190,59 @@ function input(container: HTMLElement): HTMLInputElement {
 
 beforeEach(() => {
   rootProps = {};
+  rootOpenChange = null;
   contentProps = {};
   useUIStore.setState({ overlayStack: [] });
 });
 
 describe("AppPalettePopover", () => {
   it("forwards the open state and the required modal choice to the popover root", () => {
-    const { unmount } = render(<Harness modal={true} />);
-    expect(rootProps).toEqual({ open: true, modal: true });
+    const { unmount } = render(<Harness modal={true} open={false} />);
+    // The closed case matters: a shell that hardcoded `open` would still pass
+    // every other test in this file.
+    expect(rootProps).toEqual({ open: false, modal: true });
     unmount();
 
-    render(<Harness modal={false} />);
+    render(<Harness modal={false} open={true} />);
     expect(rootProps).toEqual({ open: true, modal: false });
   });
 
+  it("hands Radix's own open changes back to the consumer", () => {
+    const onOpenChange = vi.fn();
+    render(<Harness onOpenChange={onOpenChange} />);
+
+    act(() => rootOpenChange?.(false));
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+
+    act(() => rootOpenChange?.(true));
+    expect(onOpenChange).toHaveBeenLastCalledWith(true);
+  });
+
   it("names the content and mirrors aria-modal onto the modal form only", () => {
-    const { unmount } = render(<Harness modal={true} />);
-    expect(contentProps["aria-label"]).toBe("Test palette");
-    expect(contentProps["aria-modal"]).toBe(true);
+    const { unmount, getByTestId } = render(<Harness modal={true} />);
+    const modalContent = getByTestId("content");
+    expect(modalContent.getAttribute("aria-label")).toBe("Test palette");
+    expect(modalContent.getAttribute("aria-modal")).toBe("true");
     unmount();
 
-    render(<Harness modal={false} />);
+    const nonModal = render(<Harness modal={false} />);
     // `aria-modal="false"` is noise, so the non-modal form carries nothing.
-    expect(contentProps["aria-modal"]).toBeUndefined();
+    expect(nonModal.getByTestId("content").hasAttribute("aria-modal")).toBe(false);
+  });
+
+  it("keeps shell-owned policy when a consumer spread tries to override it", () => {
+    // Prop types omit these, but a spread object carries whatever it likes.
+    const smuggled = {
+      "aria-modal": false,
+      "aria-label": "Hijacked",
+      onEscapeKeyDown: undefined,
+    } as Partial<HarnessProps>;
+    const { getByTestId } = render(<Harness modal={true} {...smuggled} />);
+
+    const content = getByTestId("content");
+    expect(content.getAttribute("aria-modal")).toBe("true");
+    expect(content.getAttribute("aria-label")).toBe("Test palette");
+    expect(contentProps.onEscapeKeyDown).toBeTypeOf("function");
   });
 
   it("forwards positioning props through to the popover content", () => {
@@ -259,6 +304,20 @@ describe("AppPalettePopover", () => {
       cancel.mockRestore();
     });
 
+    it("leaves Radix's autofocus alone when the input has not mounted yet", () => {
+      // The cold open: the lazy Radix chunk resolves after the open frame, so
+      // this handler can run with nothing to focus. Cancelling Radix's default
+      // there would strand focus on nothing at all.
+      render(<Harness withInput={false} />);
+
+      expect(fireOpenAutoFocus().preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("survives the open frame firing before the input exists", () => {
+      // Same cold path, the RAF half — it must no-op rather than throw.
+      expect(() => render(<Harness withInput={false} />)).not.toThrow();
+    });
+
     it("hands focus back to the search box when it parks on the content wrapper", () => {
       const { container, getByTestId } = render(<Harness />);
       input(container).blur();
@@ -302,6 +361,20 @@ describe("AppPalettePopover", () => {
       expect(fireEvent.mouseDown(getByTestId("row"))).toBe(true);
     });
 
+    it("redirects when the click lands on a non-HTML header adornment", () => {
+      // Header adornments are Lucide glyphs; an SVG target is not an
+      // HTMLElement, so a narrower type guard would silently skip it.
+      const { container } = render(<Harness />);
+      const header = container.querySelector("[data-palette-header]");
+      if (!(header instanceof HTMLElement)) throw new Error("header not found");
+      const glyph = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      header.appendChild(glyph);
+      input(container).blur();
+
+      expect(fireEvent.mouseDown(glyph)).toBe(false);
+      expect(document.activeElement).toBe(input(container));
+    });
+
     it("defers to a consumer handler that already cancelled the event", () => {
       const onMouseDown = vi.fn((event: React.MouseEvent<HTMLDivElement>) => {
         event.preventDefault();
@@ -339,13 +412,14 @@ describe("AppPalettePopover", () => {
     });
 
     it("reads the live query, not a render-stale copy", () => {
-      // Radix dismisses from a capture listener that beats React's re-render,
-      // so a closed-over query would be a keystroke behind.
+      // Written straight to the DOM with no React change event, which is what
+      // Radix's capture listener sees when it beats the re-render. A shell
+      // reading a closed-over `query` would still see "" here and let the
+      // palette close on a press that should have cleared.
       const { container } = render(<Harness initialQuery="" />);
-      fireEvent.change(input(container), { target: { value: "review" } });
+      input(container).value = "review";
 
       expect(fireEscape().preventDefault).toHaveBeenCalledTimes(1);
-      expect(input(container).value).toBe("");
     });
 
     it("leaves a composing keystroke to the IME candidate window", () => {
@@ -362,8 +436,11 @@ describe("AppPalettePopover", () => {
       // Chromium can emit 229 before `isComposing` flips true.
       const { container } = render(<Harness initialQuery="review" />);
 
-      fireEscape({ isComposing: false, keyCode: 229 });
+      const { preventDefault } = fireEscape({ isComposing: false, keyCode: 229 });
 
+      // Both halves: Radix is blocked from dismissing AND the query survives.
+      // Asserting only the query would pass if the guard were deleted.
+      expect(preventDefault).toHaveBeenCalledTimes(1);
       expect(input(container).value).toBe("review");
     });
 
@@ -415,13 +492,46 @@ describe("AppPalettePopover", () => {
       expect(fireCloseAutoFocus().preventDefault).not.toHaveBeenCalled();
     });
 
-    it("keeps the return when the consumer opts in, and still clears the flag", () => {
+    it("keeps the return when the consumer opts in", () => {
       render(<Harness restoreFocusOnPointerDismiss={true} />);
       act(() => contentProps.onPointerDownOutside?.());
 
       expect(fireCloseAutoFocus().preventDefault).not.toHaveBeenCalled();
-      // A stale flag here would taint the next close if the prop ever flipped.
+    });
+
+    it("does not leave the flag armed after an opted-in pointer dismissal", () => {
+      const { rerender } = render(<Harness restoreFocusOnPointerDismiss={true} />);
+      act(() => contentProps.onPointerDownOutside?.());
+      fireCloseAutoFocus();
+
+      // Flipping the policy is what exposes a stale flag: repeating the close
+      // under the same prop value could never tell the two apart.
+      rerender(<Harness restoreFocusOnPointerDismiss={false} />);
+
       expect(fireCloseAutoFocus().preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("disarms when the consumer vetoes the outside interaction", () => {
+      // The switcher holds itself open for a row's context menu. The palette
+      // never closed, so a later keyboard dismissal must keep its focus return.
+      render(<Harness onInteractOutside={(event) => event.preventDefault()} />);
+      act(() => contentProps.onPointerDownOutside?.());
+      act(() => {
+        const event = new Event("interactOutside", { cancelable: true });
+        contentProps.onInteractOutside?.(event);
+      });
+
+      expect(fireCloseAutoFocus().preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("still suppresses when the outside interaction is allowed through", () => {
+      render(<Harness />);
+      act(() => contentProps.onPointerDownOutside?.());
+      act(() => {
+        contentProps.onInteractOutside?.(new Event("interactOutside", { cancelable: true }));
+      });
+
+      expect(fireCloseAutoFocus().preventDefault).toHaveBeenCalledTimes(1);
     });
 
     it("notifies the consumer before Radix restores focus", () => {
@@ -470,6 +580,37 @@ describe("AppPalettePopover", () => {
       render(<Harness dismissOnForeignOverlay={true} onOpenChange={onOpenChange} />);
 
       expect(onOpenChange).not.toHaveBeenCalled();
+    });
+
+    it("re-baselines rather than closing when a palette opts in mid-flight", () => {
+      // The disabled selector reads a sentinel 0, so a naive diff would see the
+      // pre-existing overlay appear the instant the option is switched on.
+      const onOpenChange = vi.fn();
+      const { rerender } = render(
+        <Harness dismissOnForeignOverlay={false} onOpenChange={onOpenChange} />
+      );
+      act(() => useUIStore.getState().addOverlayClaim("existing"));
+
+      rerender(<Harness dismissOnForeignOverlay={true} onOpenChange={onOpenChange} />);
+
+      expect(onOpenChange).not.toHaveBeenCalled();
+    });
+
+    it("re-baselines on each open so a stale count cannot close the next one", () => {
+      const onOpenChange = vi.fn();
+      const { rerender } = render(
+        <Harness dismissOnForeignOverlay={true} open={true} onOpenChange={onOpenChange} />
+      );
+
+      rerender(<Harness dismissOnForeignOverlay={true} open={false} onOpenChange={onOpenChange} />);
+      act(() => useUIStore.getState().addOverlayClaim("while-closed"));
+      rerender(<Harness dismissOnForeignOverlay={true} open={true} onOpenChange={onOpenChange} />);
+
+      expect(onOpenChange).not.toHaveBeenCalled();
+
+      // The watcher is still live, not merely silenced.
+      act(() => useUIStore.getState().addOverlayClaim("after-reopen"));
+      expect(onOpenChange).toHaveBeenCalledWith(false);
     });
   });
 
