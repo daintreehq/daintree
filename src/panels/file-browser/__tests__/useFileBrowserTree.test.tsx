@@ -4,7 +4,7 @@ import { act, render, renderHook, waitFor } from "@testing-library/react";
 import type { FileTreeNode } from "@shared/types";
 import type { FileBrowserListDirectoryPayload } from "@shared/types/ipc/fileBrowser";
 import { useFileBrowserTree } from "../useFileBrowserTree";
-import type { FileBrowserSource } from "../fileBrowserTree";
+import type { FileBrowserSortOrder, FileBrowserSource } from "../fileBrowserTree";
 
 const listDirectory =
   vi.fn<(payload: FileBrowserListDirectoryPayload) => Promise<FileTreeNode[]>>();
@@ -44,6 +44,15 @@ const SETTLE_MS = 50;
 function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
 }
+
+/**
+ * Declared as a typed const rather than inline: `renderHook` infers its prop
+ * type from `initialProps`, so inline literals would narrow `sort` to exactly
+ * the initial value and reject the re-sort the test exists to perform.
+ */
+const INITIAL_SORT_PROPS: { sort: FileBrowserSortOrder } = {
+  sort: { key: "name", direction: "asc" },
+};
 
 /** A deferred promise so a listing can be held open mid-flight. */
 function deferred<T>() {
@@ -1978,7 +1987,7 @@ describe("useFileBrowserTree listing recovery and revalidation (#11620)", () => 
     );
 
     const { result, rerender } = renderHook(
-      (props: { sort: { key: "name" | "size"; direction: "asc" | "desc" } }) =>
+      (props: { sort: FileBrowserSortOrder }) =>
         useFileBrowserTree({
           source: wtSource("wt-1"),
           expandedPaths: [],
@@ -1988,7 +1997,7 @@ describe("useFileBrowserTree listing recovery and revalidation (#11620)", () => 
           selectedPath: "src",
           sort: props.sort,
         }),
-      { initialProps: { sort: { key: "name" as const, direction: "asc" as const } } }
+      { initialProps: INITIAL_SORT_PROPS }
     );
 
     await waitFor(() => expect(result.current.listingRows).not.toBeNull());

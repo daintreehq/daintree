@@ -624,10 +624,13 @@ describe("file-browser sort survives the whole restore path (#11620)", () => {
       ...panel,
     });
     const options = getDeserializer("file-browser")!({ id: "fb1", ...saved });
+    // `options` spreads last-wins, and the deserializer types `kind` as the open
+    // `PanelKind` union — pinning the discriminant after the spread is what
+    // keeps this a file-browser options object rather than widening it.
     return createFileBrowserDefaults({
+      ...options,
       kind: "file-browser",
       worktreeId: "wt-1",
-      ...options,
     });
   }
 
