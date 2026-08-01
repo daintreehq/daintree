@@ -89,10 +89,17 @@ describe("help prompt outputs", () => {
       expect(AGENTS).toMatch(/`daintree-docs`/);
     });
 
-    it("AGENTS.md frames Codex at the action tier with sandbox caveat", () => {
+    it("AGENTS.md routes operational work through the tier-gated MCP rather than the shell", () => {
       expect(AGENTS).toContain("TIER_NOT_PERMITTED");
       expect(AGENTS).toMatch(/spawn\/close\/kill terminals/);
-      expect(AGENTS).toMatch(/Codex sandbox blocks file writes and arbitrary shell/);
+      // Asserted as an invariant, not as one sentence: Codex help sessions are
+      // NOT write-sandboxed (`buildCodexLaunchArgs` injects MCP config and
+      // nothing else, and the session dir is writable by design), so the prompt
+      // must carry the restraint itself and must not claim a sandbox enforces
+      // it. Pinning the old exact wording is what let that false claim survive.
+      expect(AGENTS).not.toMatch(/sandbox blocks file writes/i);
+      expect(AGENTS).toMatch(/read-only/i);
+      expect(AGENTS).toMatch(/shell/i);
     });
 
     it("AGENTS.md keeps the absent-MCP fallback caveat", () => {
