@@ -987,3 +987,50 @@ describe("pruneListings retains what the selection needs", () => {
     expect([...pruneListings(listings, new Set(), "", ["src"]).keys()]).toEqual(["", "src"]);
   });
 });
+
+describe("sortFileNodes stays a valid total order", () => {
+  // A comparator that is not antisymmetric is undefined behaviour for
+  // Array.prototype.sort, so these are laws, not preferences. Corrupt metadata
+  // is the realistic source: a hand-edited or migrated record can carry a value
+  // the filesystem would never produce.
+  const ODD_VALUES = [undefined, 0, 1, 1024, Number.NaN, Infinity, -Infinity];
+
+  function nodesFor(key: "size" | "modified") {
+    return ODD_VALUES.map((value, index) =>
+      file(`f${index}.ts`, value === undefined ? {} : { [key]: value })
+    );
+  }
+
+  for (const key of ["size", "modified"] as const) {
+    for (const direction of ["asc", "desc"] as const) {
+      it(`is antisymmetric for ${key}/${direction} across corrupt values`, () => {
+        const nodes = nodesFor(key);
+        const sorted = sortFileNodes(nodes, { key, direction });
+        // Sorting is deterministic and stable across repeats — the observable
+        // consequence of a consistent comparator.
+        expect(sortFileNodes(nodes, { key, direction }).map((n) => n.name)).toEqual(
+          sorted.map((n) => n.name)
+        );
+        // And reversing the input cannot change the result of a total order.
+        expect(sortFileNodes([...nodes].reverse(), { key, direction }).map((n) => n.name)).toEqual(
+          sorted.map((n) => n.name)
+        );
+      });
+    }
+  }
+
+  it("treats a NaN size as unknown rather than as a value", () => {
+    // NaN compares false against everything including itself; left in-band it
+    // would make the comparator report `a > b` and `b > a` at once.
+    const nodes = [file("nan.ts", { size: Number.NaN }), file("real.ts", { size: 5 })];
+    expect(sortFileNodes(nodes, { key: "size", direction: "asc" }).at(-1)?.name).toBe("nan.ts");
+    expect(sortFileNodes(nodes, { key: "size", direction: "desc" }).at(-1)?.name).toBe("nan.ts");
+  });
+
+  it("treats an infinite mtime as unknown rather than as the newest file", () => {
+    const nodes = [file("inf.ts", { mtimeMs: Infinity }), file("real.ts", { mtimeMs: 5 })];
+    expect(sortFileNodes(nodes, { key: "modified", direction: "desc" }).at(-1)?.name).toBe(
+      "inf.ts"
+    );
+  });
+});

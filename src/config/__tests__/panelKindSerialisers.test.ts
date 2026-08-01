@@ -649,9 +649,30 @@ describe("file-browser sort survives the whole restore path (#11620)", () => {
   }
 
   it("keeps the restored record sparse for the default order", () => {
-    const restored = restore({ browserSortKey: "name", browserSortDirection: "asc" });
+    // Handed the defaults EXPLICITLY, bypassing the serializer that would
+    // already have stripped them — otherwise a factory that wrongly
+    // materializes "name"/"asc" would still pass this.
+    const restored = createFileBrowserDefaults({
+      kind: "file-browser",
+      worktreeId: "wt-1",
+      browserSortKey: "name",
+      browserSortDirection: "asc",
+    });
     expect("browserSortKey" in restored).toBe(false);
     expect("browserSortDirection" in restored).toBe(false);
+  });
+
+  it("materializes a non-default order handed straight to the factory", () => {
+    // The mirror of the above: the factory must copy what it is given, not
+    // pass everything through a filter that happens to drop it.
+    expect(
+      createFileBrowserDefaults({
+        kind: "file-browser",
+        worktreeId: "wt-1",
+        browserSortKey: "type",
+        browserSortDirection: "desc",
+      })
+    ).toMatchObject({ browserSortKey: "type", browserSortDirection: "desc" });
   });
 
   it("restores nothing for a panel that was never sorted", () => {

@@ -465,10 +465,21 @@ export function useFileBrowserTree({
         }
       } catch (error) {
         if (generation !== generationRef.current) return;
-        if (dirPath !== rootPath) {
-          // Recorded rather than surfaced: the tree still shows nothing for this
-          // directory, exactly as before, but a folder listing pointed at it can
-          // now tell a failure from a fetch still in flight (#11620).
+        // Recorded rather than surfaced: the tree still shows nothing for this
+        // directory, exactly as before, but a folder listing pointed at it can
+        // now tell a failure from a fetch still in flight (#11620).
+        //
+        // Only for a directory something still wants, tested the same way the
+        // success path tests it. A request that fails *after* the user collapsed
+        // its directory would otherwise leave a failure nothing goes on to
+        // clear — the prune's clearing pass has already run for that collapse —
+        // and the expansion effect would then refuse to re-request it, making
+        // re-expanding the folder silently do nothing.
+        const stillWanted =
+          dirPath === rootPath ||
+          retainedPathsRef.current.includes(dirPath) ||
+          expandedSetRef.current.has(dirPath);
+        if (dirPath !== rootPath && stillWanted) {
           setFailedListings((previous) => {
             if (previous.has(dirPath)) return previous;
             const next = new Set(previous);
@@ -873,15 +884,21 @@ export function useFileBrowserTree({
   // on screen is a *refresh* that failed, and blanking readable content for an
   // error banner is the thing the tree's own root-error branch refuses to do —
   // the last-known contents stay, exactly as a non-root directory failure is
-  // already silent for the tree. Only a folder with nothing to show at all
-  // reports the error, because that is the only case where the error is the
-  // whole story.
+  // already silent for the tree. Only a folder with nothing to show reports the
+  // error, because that is the only case where the error is the whole story.
+  //
+  // "Nothing to show" means no rows, not merely no listing: a folder cached as
+  // empty whose re-read then fails has nothing to protect, and reporting it as
+  // ready would put "Nothing in this folder yet" on screen for a folder we in
+  // fact failed to read — a confident claim built on a failure.
   const listingStatus: FolderListingStatus =
-    listingPath === null || listingRows !== null
+    listingPath === null || (listingRows !== null && listingRows.length > 0)
       ? "ready"
       : failedListings.has(listingPath)
         ? "error"
-        : "pending";
+        : listingRows !== null
+          ? "ready"
+          : "pending";
 
   // Would toggling the dotfile filter off reveal anything at this root? A
   // root-level dot entry that the junk list is *not* already hiding.

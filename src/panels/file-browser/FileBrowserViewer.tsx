@@ -526,8 +526,14 @@ export function FileBrowserViewer({
                   reports no change at all — and leaves no way to set a
                   direction outright. Two groups cost one extra label and make
                   both halves readable and directly settable. */}
+              {/* Each group carries its own `aria-label`: Radix renders these as
+                  `role="group"`, and the visible label above is a sibling
+                  element, not an association — without it both groups announce
+                  as unnamed containers and the two halves become
+                  indistinguishable. */}
               <DropdownMenuLabel>Sort by</DropdownMenuLabel>
               <DropdownMenuRadioGroup
+                aria-label="Sort by"
                 value={sort.key}
                 onValueChange={(value) =>
                   onSortChange({ ...sort, key: toSortKey(value, sort.key) })
@@ -542,6 +548,7 @@ export function FileBrowserViewer({
               <DropdownMenuSeparator />
               <DropdownMenuLabel>Order</DropdownMenuLabel>
               <DropdownMenuRadioGroup
+                aria-label="Order"
                 value={sort.direction}
                 onValueChange={(value) =>
                   onSortChange({ ...sort, direction: value === "desc" ? "desc" : "asc" })

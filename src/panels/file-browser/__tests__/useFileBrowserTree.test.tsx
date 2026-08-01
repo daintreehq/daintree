@@ -1776,8 +1776,11 @@ describe("useFileBrowserTree folder listing (#11620)", () => {
       })
     );
 
-    await waitFor(() => expect(result.current.listingStatus).toBe("ready"));
-    expect(result.current.listingRows).toEqual([]);
+    // Waits on the rows, not on `listingStatus`: status is also "ready" while
+    // no folder is selected at all, which is true on the very first render and
+    // would let this assert against a tree that had not loaded anything yet.
+    await waitFor(() => expect(result.current.listingRows).toEqual([]));
+    expect(result.current.listingStatus).toBe("ready");
     // Filtered-empty, not zero-data: offering "Show dotfiles" here actually helps.
     expect(result.current.listingHasHiddenDotfiles).toBe(true);
   });
@@ -1982,5 +1985,153 @@ describe("useFileBrowserTree listing recovery and revalidation (#11620)", () => 
     );
     // Sorting is a client-side reorder of cached rows — it must cost no IPC.
     expect(listDirectory.mock.calls).toHaveLength(callsBefore);
+  });
+});
+
+describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
+  beforeEach(() => {
+    listDirectory.mockReset();
+  });
+
+  it("retries a directory whose request failed only after it was collapsed", async () => {
+    // The prune's failure-clearing pass runs on collapse. A rejection that
+    // lands after it would leave a failure nothing clears, and the expansion
+    // effect would then refuse to re-request it — re-expanding the folder would
+    // silently do nothing.
+    const gate = deferred<FileTreeNode[]>();
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === "bad" ? gate.promise : [dir("bad")]
+    );
+
+    const { rerender } = renderHook(
+      (props: { expandedPaths: string[] }) =>
+        useFileBrowserTree({
+          source: wtSource("wt-1"),
+          expandedPaths: props.expandedPaths,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
+          changeTick: undefined,
+        }),
+      { initialProps: { expandedPaths: ["bad"] } }
+    );
+
+    await waitFor(() =>
+      expect(listDirectory.mock.calls.filter((c) => c[0].dirPath === "bad")).toHaveLength(1)
+    );
+
+    // Collapse while the request is still in flight, THEN let it reject.
+    rerender({ expandedPaths: [] });
+    await act(async () => {
+      gate.reject(new Error("EACCES"));
+      await gate.promise.catch(() => {});
+    });
+
+    rerender({ expandedPaths: ["bad"] });
+
+    await waitFor(() =>
+      expect(listDirectory.mock.calls.filter((c) => c[0].dirPath === "bad")).toHaveLength(2)
+    );
+  });
+
+  it("reports an error when a folder cached as empty then fails to re-read", async () => {
+    // An empty cached listing has nothing to protect, so claiming "ready" would
+    // put "this folder is empty" on screen for a folder we in fact failed to
+    // read — a confident claim built on a failure.
+    let failNext = false;
+    listDirectory.mockImplementation(async (payload) => {
+      if (payload.dirPath === "src") {
+        if (failNext) throw new Error("EACCES");
+        return [];
+      }
+      return [dir("src")];
+    });
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        source: wtSource("wt-1"),
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+        selectedPath: "src",
+      })
+    );
+
+    await waitFor(() => expect(result.current.listingRows).toEqual([]));
+    expect(result.current.listingStatus).toBe("ready");
+
+    failNext = true;
+    act(() => result.current.refresh({ manual: true }));
+
+    await waitFor(() => expect(result.current.listingStatus).toBe("error"));
+  });
+
+  it("keeps showing a populated listing whose re-read failed", async () => {
+    // The other half of the same rule: real rows on screen are not blanked for
+    // an error banner, matching the tree's own root-error branch.
+    let failNext = false;
+    listDirectory.mockImplementation(async (payload) => {
+      if (payload.dirPath === "src") {
+        if (failNext) throw new Error("EACCES");
+        return [file("src/a.ts")];
+      }
+      return [dir("src")];
+    });
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        source: wtSource("wt-1"),
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+        selectedPath: "src",
+      })
+    );
+
+    await waitFor(() => expect(result.current.listingRows?.length).toBe(1));
+
+    failNext = true;
+    act(() => result.current.refresh({ manual: true }));
+    await waitFor(() => expect(result.current.isRefreshing).toBe(false));
+
+    expect(result.current.listingStatus).toBe("ready");
+    expect(result.current.listingRows?.map((r) => r.path)).toEqual(["src/a.ts"]);
+  });
+
+  it("accepts a listing that lands while it is the selection's parent, not the listed folder", async () => {
+    // The completion guard must agree with what the prune retains. A result
+    // arriving after the user clicked into a file must still be accepted, or
+    // the parent that identifies that file is never cached at all.
+    const gate = deferred<FileTreeNode[]>();
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === "src" ? gate.promise : [dir("src")]
+    );
+
+    const { result, rerender } = renderHook(
+      (props: { selectedPath: string }) =>
+        useFileBrowserTree({
+          source: wtSource("wt-1"),
+          expandedPaths: [],
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
+          changeTick: undefined,
+          selectedPath: props.selectedPath,
+        }),
+      { initialProps: { selectedPath: "src" } }
+    );
+
+    await waitFor(() => expect(result.current.listingStatus).toBe("pending"));
+
+    // Selection moves to a child before the parent's listing lands, so "src" is
+    // now selectionParent rather than listingPath.
+    rerender({ selectedPath: "src/a.ts" });
+    await act(async () => {
+      gate.resolve([file("src/a.ts")]);
+      await gate.promise;
+    });
+
+    await waitFor(() => expect(result.current.selectedNode?.path).toBe("src/a.ts"));
+    expect(result.current.selectedNode?.isDirectory).toBe(false);
   });
 });
