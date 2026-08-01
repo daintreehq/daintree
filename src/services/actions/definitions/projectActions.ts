@@ -5,6 +5,8 @@ import { pickAgentVisibleProjectSettings } from "@shared/types";
 import { z } from "zod";
 import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { usePilotStore } from "@/store/pilotStore";
 import { actionService } from "@/services/ActionService";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
@@ -12,6 +14,7 @@ import { notify, EVENT_KIND_TO_SETTING_KEY, EVENT_KIND_LABEL } from "@/lib/notif
 import type { NotificationEventKind } from "@/lib/notify";
 import { switchToLastProject } from "@/lib/projectHistoryNav";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 
 /**
  * Wire shape of `project.getSettings`.
@@ -119,11 +122,16 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       // from a click payload, and a parse both narrows the type and rejects a
       // malformed dispatch instead of trusting it.
       const { runId, workspaceId } = openRunArgs.parse(args);
-      const projectState = useProjectStore.getState();
-      const currentId = projectState.currentProject?.id ?? null;
 
-      // Already here: focus directly. Going through a project switch would tear
-      // down and rebuild a view that is already the active one.
+      // The workspace THIS view owns, not the one the app is globally pointed
+      // at. `currentProject` is replicated to every view including cached ones,
+      // and it is null outright in a scratch view — reading it here sent a run
+      // that was already on screen through a cross-workspace switch, and sent
+      // every scratch run to `switchProject`, which rejects a scratch id.
+      const currentId = getViewWorkspaceId();
+
+      // Already here: focus directly. Going through a switch would tear down
+      // and rebuild a view that is already the active one.
       //
       // Focus BEFORE closing, and only close on success. An agent can exit
       // between the list rendering and the click, and `panel.focus` rejects on
@@ -140,9 +148,21 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       // incoming view applies once its state has hydrated. Closing first is
       // right here: the view holding this dialog is about to be replaced.
       usePilotStore.getState().close();
-      await projectState.switchProject(workspaceId, {
-        focusIntent: { intent: "focus-panel", panelId: runId },
-      });
+      const focusIntent = { intent: "focus-panel", panelId: runId } as const;
+
+      // Projects and scratches are disjoint id spaces with separate stores,
+      // switch handlers and current-pointers (#11518), so the destination has
+      // to be routed by kind — `switchProject` rejects a scratch id outright.
+      //
+      // Routed on the id's SHAPE, not on whether the scratch store happens to
+      // list it. That store hydrates asynchronously, so a membership test
+      // answers "has the list loaded yet" during the boot window and sends a
+      // scratch down the project path exactly when the fleet first renders.
+      if (isScratchWorkspaceId(workspaceId)) {
+        await useScratchStore.getState().switchScratch(workspaceId, { focusIntent });
+        return;
+      }
+      await useProjectStore.getState().switchProject(workspaceId, { focusIntent });
     },
   }));
 

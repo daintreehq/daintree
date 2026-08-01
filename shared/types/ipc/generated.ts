@@ -1366,7 +1366,12 @@ export interface GeneratedIpcInvokeMap {
     result: import("./scratch.js").ScratchSaveAsProjectResult;
   };
   "scratch:switch": {
-    args: [scratchId: string];
+    args: [
+      scratchId: string,
+      options?:
+        | { focusIntent?: import("./project.js").ProjectFocusOnActivateIntent | undefined }
+        | undefined,
+    ];
     result: import("../scratch.js").Scratch;
   };
   "scratch:update": {

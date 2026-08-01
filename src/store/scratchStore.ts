@@ -20,7 +20,10 @@ interface ScratchStoreState {
   isLoading: boolean;
   loadScratches: () => Promise<void>;
   createScratch: (name?: string) => Promise<Scratch>;
-  switchScratch: (scratchId: string) => Promise<void>;
+  switchScratch: (
+    scratchId: string,
+    options?: { focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent }
+  ) => Promise<void>;
   removeScratch: (scratchId: string) => Promise<void>;
   renameScratch: (scratchId: string, name: string) => Promise<void>;
   setCurrentScratch: (scratch: Scratch | null) => void;
@@ -72,8 +75,8 @@ export const useScratchStore = create<ScratchStoreState>((set, get) => ({
     return scratch;
   },
 
-  switchScratch: async (scratchId: string) => {
-    const switched = await scratchClient.switch(scratchId);
+  switchScratch: async (scratchId: string, options) => {
+    const switched = await scratchClient.switch(scratchId, options);
     set((state) => ({
       currentScratch: switched,
       scratches: state.scratches.map((s) => (s.id === switched.id ? switched : s)),

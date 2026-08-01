@@ -42,10 +42,13 @@ export const scratchClient = {
   remove(scratchId: string): Promise<void> {
     return api()?.remove(scratchId) ?? Promise.resolve();
   },
-  switch(scratchId: string): Promise<Scratch> {
+  switch(
+    scratchId: string,
+    options?: { focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent }
+  ): Promise<Scratch> {
     const a = api();
     if (!a) return Promise.reject(new Error("scratch IPC unavailable"));
-    return a.switch(scratchId);
+    return a.switch(scratchId, options);
   },
   saveAsProject(scratchId: string): Promise<ScratchSaveAsProjectResult> {
     const a = api();

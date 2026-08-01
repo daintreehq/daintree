@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "crypto";
 import path from "path";
+import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../shared/utils/workspaceIds.js";
 
 export const UTF8_BOM = "\uFEFF";
 
@@ -46,20 +47,18 @@ export function mintProjectId(normalizedPath: string, isTaken: (id: string) => b
 }
 
 export function isValidProjectId(projectId: string): boolean {
-  return /^[0-9a-f]{64}$/.test(projectId);
+  return isProjectWorkspaceId(projectId);
 }
 
-const SCRATCH_STATE_ID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-
 /**
- * Shape of a scratch id. Owned here rather than in `scratchStorePaths` so the
- * state-directory gate below can accept it without importing that module (which
- * pulls in `electron`); `isValidScratchId` delegates to this, keeping one
+ * Shape of a scratch id. The patterns themselves live in `shared/` because the
+ * renderer has to route on them too — `pilot.openRun` picks between the project
+ * and scratch switch handlers — and this module cannot be imported there (it
+ * pulls in node `crypto`). `isValidScratchId` delegates here, keeping one
  * source of truth for the shape.
  */
 export function isValidScratchStateId(id: string): boolean {
-  return SCRATCH_STATE_ID_PATTERN.test(id);
+  return isScratchWorkspaceId(id);
 }
 
 /**
