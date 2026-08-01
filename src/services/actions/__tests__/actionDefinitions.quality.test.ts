@@ -8,7 +8,12 @@ import { BUILT_IN_ACTION_IDS, DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/co
 import type { ActionId } from "@shared/types/actions";
 import type { ActionRegistry, ActionCallbacks } from "../actionTypes";
 import { DEFAULT_KEYBINDINGS } from "../../defaultKeybindings";
-import { WORKBENCH_TIER_TOOLS } from "@shared/config/helpAssistantTierAllowlists";
+import {
+  WORKBENCH_TIER_TOOLS,
+  ACTION_TIER_ADDONS,
+  SYSTEM_TIER_ADDONS,
+} from "@shared/config/helpAssistantTierAllowlists";
+import { MCP_EXTERNAL_TIER_TOOLS } from "@shared/config/mcpExternalTierAllowlist";
 
 /**
  * Action IDs that exist in BuiltInKeyAction but are intentionally NOT in the
@@ -114,6 +119,87 @@ async function createRegistryWithAudit(): Promise<{
 
   return { registry, duplicates };
 }
+
+// #11585 — the external MCP surface is budgeted in BOTH dimensions, because the
+// failure it guards against is measured in bytes, not tools. The old surface was
+// 100 tools AND ~128 KB of schema; 23 tools carrying novel-length descriptions
+// would reproduce the same truncation with a count that looks fine. The cohort
+// is derived from the real allowlist rather than restated here, so this cannot
+// drift from the gate it is budgeting.
+describe("external MCP tool surface budget (#11585)", () => {
+  // Descriptions are the bulk of the text an MCP client re-reads every model
+  // turn. This ceiling sits a little above the current total rather than at an
+  // arbitrary round number, so a description that doubles trips it while
+  // ordinary wording edits do not. The tool COUNT is budgeted in
+  // tierAuth.test.ts, against the allowlist that is the actual gate — it is not
+  // duplicated here.
+  const MAX_DESCRIPTION_BYTES = 16_000;
+
+  it("keeps the advertised description payload small", async () => {
+    const { registry } = await createRegistryWithAudit();
+
+    const totalBytes = MCP_EXTERNAL_TIER_TOOLS.reduce((sum, id) => {
+      const def = registry.get(id as ActionId)?.();
+      // A missing definition means the allowlist names an id the registry no
+      // longer has — surface that as a failure rather than a zero-byte entry.
+      expect(def, `${id} is allowlisted but absent from the action registry`).toBeDefined();
+      return sum + Buffer.byteLength(def!.description ?? "", "utf8");
+    }, 0);
+
+    expect(totalBytes).toBeLessThanOrEqual(MAX_DESCRIPTION_BYTES);
+  });
+
+  it("names only real actions that can actually be advertised and dispatched", async () => {
+    const { registry } = await createRegistryWithAudit();
+    const builtInIds = new Set<string>(BUILT_IN_ACTION_IDS);
+
+    // A duplicate is invisible in production — the allowlist becomes a Set — so
+    // it can only ever be a mistake, and it silently inflates the array length
+    // the count budget reads.
+    expect(new Set(MCP_EXTERNAL_TIER_TOOLS).size).toBe(MCP_EXTERNAL_TIER_TOOLS.length);
+
+    for (const id of MCP_EXTERNAL_TIER_TOOLS) {
+      expect(builtInIds.has(id), `${id} is not a built-in action id`).toBe(true);
+
+      const def = registry.get(id as ActionId)?.();
+      // `restricted` actions are refused by ActionService regardless of tier, so
+      // allowlisting one advertises a tool that can never run.
+      expect(def?.danger, `${id} is restricted and cannot run`).not.toBe("restricted");
+      // `hidden` is the one thing that still withholds a tier-permitted tool
+      // from tools/list. An allowlisted id marked hidden would be listed nowhere
+      // yet callable — exactly the advertised-vs-callable split this cut exists
+      // to remove, and the tier tests use synthetic entries so they cannot see it.
+      expect(def?.mcpVisibility, `${id} is allowlisted but hidden from tools/list`).not.toBe(
+        "hidden"
+      );
+    }
+  });
+
+  // The same trap from the other direction, and at every tier rather than just
+  // external: `shouldExposeTool` withholds `hidden` while `isTierPermitted`
+  // ignores visibility, so a hidden action added to ANY allowlist is unlisted
+  // yet callable. `actions.persistedStores` is the only hidden action today and
+  // it is deliberately in no tier — this is what keeps that true. The tier
+  // suites build synthetic manifest entries, so only a live-registry check here
+  // can see it.
+  it("no tier allowlist permits an action hidden from tools/list", async () => {
+    const { registry } = await createRegistryWithAudit();
+
+    const hidden = [...registry.keys()].filter(
+      (id) => registry.get(id as ActionId)?.().mcpVisibility === "hidden"
+    );
+    // Guard the guard: with no hidden actions at all this proves nothing.
+    expect(hidden.length).toBeGreaterThan(0);
+
+    const everyTierTool = new Set<string>([
+      ...WORKBENCH_TIER_TOOLS,
+      ...ACTION_TIER_ADDONS,
+      ...SYSTEM_TIER_ADDONS,
+      ...MCP_EXTERNAL_TIER_TOOLS,
+    ]);
+    expect(hidden.filter((id) => everyTierTool.has(id))).toEqual([]);
+  });
+});
 
 describe("registry-vs-union drift", () => {
   it("every runtime registry key appears in BUILT_IN_ACTION_IDS", async () => {

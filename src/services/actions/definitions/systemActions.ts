@@ -230,7 +230,6 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      mcpVisibility: "discoverable",
       mcpOutputSchema: true,
       resultSchema: z.object({
         profile: z.enum(["performance", "balanced", "efficiency"]),
@@ -254,7 +253,6 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    mcpVisibility: "discoverable",
     resultSchema: z.record(z.string(), z.string()),
     run: async () => {
       return await cliAvailabilityClient.get();

@@ -81,18 +81,19 @@ describe("worktree resource action definitions", () => {
     expect(def.danger).toBe(expectedDanger);
   });
 
+  // These were marked `discoverable` on the theory that omitting them from
+  // tools/list still left them reachable through the meta-tools. #11585 found
+  // that no client can do that, so the marking meant they were invisible to the
+  // in-app assistant for no benefit. Their tier placement is the real control,
+  // and it is unchanged — the annotation is simply gone.
   it.each([
     "worktree.resource.provision",
     "worktree.resource.teardown",
     "worktree.resource.resume",
     "worktree.resource.pause",
-  ] as const)("%s is a discoverable MCP tool (kept off the eager tools/list)", (id) => {
+    "worktree.resource.status",
+  ] as const)("%s is listed whenever its tier permits it", (id) => {
     const def = registry.get(id)!();
-    expect(def.mcpVisibility).toBe("discoverable");
-  });
-
-  it("status keeps its eager (unclassified) MCP visibility", () => {
-    const def = registry.get("worktree.resource.status")!();
     expect(def.mcpVisibility).toBeUndefined();
   });
 

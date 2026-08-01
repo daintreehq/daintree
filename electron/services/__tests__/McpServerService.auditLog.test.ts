@@ -546,7 +546,7 @@ describe("McpServerService", () => {
 
     it("records error and confirmation-pending dispatches separately", async () => {
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
-        if (payload.actionId === "worktree.delete" && !payload.confirmed) {
+        if (payload.actionId === "recipe.run" && !payload.confirmed) {
           return {
             ok: false,
             error: { code: "CONFIRMATION_REQUIRED", message: "Need confirm" },
@@ -560,9 +560,9 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "worktree.delete" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            id: "recipe.run" as ActionId,
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
           createManifestEntry({
@@ -578,14 +578,14 @@ describe("McpServerService", () => {
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
-      await client.callTool({ name: "worktree.delete", arguments: { worktreeId: "wt" } });
+      await client.callTool({ name: "recipe.run", arguments: { recipeId: "r" } });
       await client.callTool({ name: "actions.list", arguments: {} });
 
       const records = getAuditRecords(service);
       expect(records).toHaveLength(2);
       const byTool = Object.fromEntries(records.map((r) => [r.toolId, r]));
-      expect(byTool["worktree.delete"].result).toBe("confirmation-pending");
-      expect(byTool["worktree.delete"].errorCode).toBe("CONFIRMATION_REQUIRED");
+      expect(byTool["recipe.run"].result).toBe("confirmation-pending");
+      expect(byTool["recipe.run"].errorCode).toBe("CONFIRMATION_REQUIRED");
       expect(byTool["actions.list"].result).toBe("error");
       expect(byTool["actions.list"].errorCode).toBe("EXECUTION_ERROR");
     });
@@ -598,9 +598,9 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "worktree.delete" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            id: "recipe.run" as ActionId,
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
         ],
@@ -611,7 +611,7 @@ describe("McpServerService", () => {
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
-      await client.callTool({ name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+      await client.callTool({ name: "recipe.run", arguments: { recipeId: "r-1" } });
 
       const records = getAuditRecords(service);
       expect(records).toHaveLength(1);
@@ -628,9 +628,9 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "worktree.delete" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            id: "recipe.run" as ActionId,
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
         ],
@@ -641,7 +641,7 @@ describe("McpServerService", () => {
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
-      await client.callTool({ name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+      await client.callTool({ name: "recipe.run", arguments: { recipeId: "r-1" } });
 
       const records = getAuditRecords(service);
       expect(records).toHaveLength(1);
@@ -661,9 +661,9 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "worktree.delete" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            id: "recipe.run" as ActionId,
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
         ],
@@ -674,7 +674,7 @@ describe("McpServerService", () => {
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
-      await client.callTool({ name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+      await client.callTool({ name: "recipe.run", arguments: { recipeId: "r-1" } });
 
       const records = getAuditRecords(service);
       expect(records).toHaveLength(1);

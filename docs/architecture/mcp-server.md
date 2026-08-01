@@ -164,11 +164,17 @@ type McpTier = "workbench" | "action" | "system" | "external";
 | `workbench` | `WORKBENCH_TIER_TOOLS` — read-only / low-risk introspection (the help-assistant baseline). |
 | `action` | workbench ∪ `ACTION_TIER_ADDONS` (includes `terminal.waitUntilIdle`). |
 | `system` | workbench ∪ action ∪ `SYSTEM_TIER_ADDONS`. |
-| `external` | `MCP_TOOL_ALLOWLIST` — the full vetted tool set for API-key callers, and the only surface they can reach. Nothing widens it: adding an entry to that list is the sole way to expose a tool externally (#11537 removed the never-reachable `fullToolSurface` opt-in that used to promise otherwise). |
+| `external` | `MCP_TOOL_ALLOWLIST` — 23 orchestration tools for API-key callers, and the only surface they can reach. Nothing widens it: adding an entry to that list is the sole way to expose a tool externally (#11537 removed the never-reachable `fullToolSurface` opt-in that used to promise otherwise). |
 
-`shouldExposeTool` (used by `tools/list`) and `isTierPermitted` (used by `tools/call`) are the two gates, and they enforce different things. `isTierPermitted` owns tier membership and nothing else. `shouldExposeTool` layers the **advertisement-only** filters — `danger === "restricted"`, `mcpVisibility` `hidden` or `discoverable` — on top and then defers to `isTierPermitted`, so membership can never drift between the two. Those metadata filters keep a tool out of `tools/list` but do not by themselves block dispatch: a `discoverable` tool that is tier-permitted (e.g. `worktree.resource.teardown`) is deliberately callable once an agent finds it via the meta-tools. `restricted` actions are the exception that really is unreachable — `ActionService.dispatch` rejects them independently of tier.
+The `external` surface is deliberately small (#11585). It stood at 100 entries / ~128 KB of schema, past what MCP clients tolerate — Cursor caps the tool count across all connected servers and silently truncates the overflow; GitHub Copilot's 128-tool cap is a hard error. Either way the truncation picked our tools for us. The selection rule is **what only Daintree can do**: terminal and agent orchestration, worktrees, recipes, skills, live IDE context. An external agent driving Daintree over MCP is sitting in a terminal with its own shell and its own `gh`, so git plumbing, forge reads and writes, file reads, and project queries are its job. Those remain fully available to the in-app assistant through the workbench/action/system tiers, which no third-party client cap applies to.
 
-The introspection tools (`actions.list`, `actions.search`, `actions.getSchema`) are narrowed by a third gate, `filterIntrospectionResultForSession`, applied in main to the dispatch result (#11525). It layers `isTierPermitted`'s allowlist — widened by any live per-tool or native automation grant — on top of the `hidden`/`restricted` ceilings, so discovery returns what the session can actually call. It deliberately does **not** reuse `shouldExposeTool`: dropping `discoverable` entries there would defeat progressive disclosure, which depends on search and schema lookup surfacing precisely the actions `tools/list` omits.
+Two consequences worth knowing. `git.push` keeps its bespoke MCP plumbing (branch/commit preview in the confirm dialog, cwd pinning against a mid-modal worktree switch, the headless-safe confirm path) — it is reachable at `system`, just not externally. And because MCP resources authorize through their backing action (`RESOURCE_BACKING_ACTIONS`), external sessions no longer read `daintree://project/current/issues` or `daintree://worktree/{id}/pulse`; terminal-scrollback and agent-state resources are unaffected.
+
+`shouldExposeTool` (used by `tools/list`) and `isTierPermitted` (used by `tools/call`) are the two gates. `isTierPermitted` owns tier membership and nothing else. `shouldExposeTool` layers two ceilings — `danger === "restricted"` and `mcpVisibility: "hidden"` — on top and then defers to `isTierPermitted`, so membership can never drift between the two. `restricted` actions are unreachable regardless of tier: `ActionService.dispatch` rejects them independently.
+
+There is deliberately **no** third state where a tool is withheld from `tools/list` but left dispatchable. `mcpVisibility: "discoverable"` used to be exactly that, on the theory that the meta-tools kept omitted tools reachable. #11585 established that they do not: shipped clients build their tool registry from `tools/list` and reject an unlisted name before it ever becomes a request, so withholding a name is indistinguishable from revoking it. The value was removed. To take a tool away from a caller class, cut it from that tier's allowlist — which revokes it at both gates, visibly.
+
+The introspection tools (`actions.list`, `actions.search`, `actions.getSchema`) are narrowed by a third gate, `filterIntrospectionResultForSession`, applied in main to the dispatch result (#11525). It layers `isTierPermitted`'s allowlist — widened by any live per-tool or native automation grant — on top of the `hidden`/`restricted` ceilings, so discovery returns what the session can actually call. Introspection therefore _describes_ the session's surface (argument shapes, enabled state, live grants) rather than reaching past it.
 
 ### Risk bands and `danger`
 
@@ -276,17 +282,16 @@ Two narrow exceptions, both genuinely domain data rather than execution status: 
 
 The `forge.*` tools are how an agent reads and mutates the project's issues, pull requests, and reviews over MCP. Every action is defined in [`src/services/actions/definitions/forgeActions.ts`](../../src/services/actions/definitions/forgeActions.ts); the `run()` bodies stay provider-agnostic and provider routing (GitHub, GitLab, …) is resolved at the IPC layer in `electron/ipc/handlers/forge.ts`. For how a provider is selected and normalized, see [`forge-provider-abstraction.md`](./forge-provider-abstraction.md) — this section documents only the MCP-facing contract (id, args, tier, `danger`, rate limit, dedup). No forge action sets `mcpVisibility`, so they all take the eager `tools/list` path and surface whenever the caller's tier permits them.
 
-The tables below are the authoritative `forge.*` surface, derived from three sources that must stay in sync: `forgeActions.ts` (`kind`, `danger`, `argsSchema`), `shared/config/helpAssistantTierAllowlists.ts` (tier membership — `WORKBENCH_TIER_TOOLS` reads, `SYSTEM_TIER_ADDONS` writes), and `electron/services/mcp-server/shared.ts` (`MCP_TOOL_ALLOWLIST` for the external surface, `RATE_LIMIT_TOOL_MAP` for the bucket, `MCP_DEDUP_ALLOWLIST` for dedup). Location arguments follow the repo-wide convention below: every repo-scoped forge action takes `worktreeId?` / `worktreePath?` (with `cwd?` still accepted as a legacy alias), the three browser-open list actions (`forge.openIssues`/`forge.openPRs`/`forge.openCommits`) take `projectId?` / `projectPath?` and resolve against the current project's path, and `forge.validateToken` takes no location arg.
+The tables below are the authoritative `forge.*` surface, derived from three sources that must stay in sync: `forgeActions.ts` (`kind`, `danger`, `argsSchema`), `shared/config/helpAssistantTierAllowlists.ts` (tier membership — `WORKBENCH_TIER_TOOLS` reads, `SYSTEM_TIER_ADDONS` writes), and `electron/services/mcp-server/shared.ts` (`RATE_LIMIT_TOOL_MAP` for the bucket, `MCP_DEDUP_ALLOWLIST` for dedup). The external surface is no longer one of them: `shared/config/mcpExternalTierAllowlist.ts` contains no `forge.*` ids at all (#11585), so forge is a help-assistant-only surface and tier membership is decided entirely by the two lists above. Location arguments follow the repo-wide convention below: every repo-scoped forge action takes `worktreeId?` / `worktreePath?` (with `cwd?` still accepted as a legacy alias), the three browser-open list actions (`forge.openIssues`/`forge.openPRs`/`forge.openCommits`) take `projectId?` / `projectPath?` and resolve against the current project's path, and `forge.validateToken` takes no location arg.
 
-Three axes are independent — do not infer one from another:
+Two axes are independent — do not infer one from another:
 
 - **`danger`** gates the user-facing confirm. `danger:"confirm"` dispatches the call unconfirmed so the human approves it host-side in the native `McpConfirmDialog` before the mutation fires (see [Risk bands and `danger`](#risk-bands-and-danger)); `danger:"safe"` does not. It says nothing about rate limit. `forge.createIssue` is `safe` while `forge.closeIssue` is `confirm`; `forge.approvePR` is `confirm` yet on the `standard` bucket while `forge.createPR` is `confirm` on `mutation`.
-- **Rate limit** is the token bucket (`standard` 30/min, `mutation` 10/min). It is set per-id in `RATE_LIMIT_TOOL_MAP`, not derived from `danger` or write-intent — the browser-open commands `forge.openIssue`/`forge.openPR` are `safe` but `mutation`-bucketed because an LLM retry would pop a duplicate browser tab.
-- **External** marks whether the action is in `MCP_TOOL_ALLOWLIST` and therefore reachable by `external` (API-key) callers. All writes require the `system` tier; the twelve marked `External: no` are reachable _only_ via a `system`-tier session (the in-app help assistant), never by an external API key, even though they pass the `system` floor. There is no setting that changes this — see [Tier model](#tier-model-sharedts).
+- **Rate limit** is the token bucket (`standard` 30/min, `mutation` 10/min). It is set per-id in `RATE_LIMIT_TOOL_MAP`, not derived from `danger` or write-intent — the browser-open commands `forge.openIssue`/`forge.openPR` are `safe` but `mutation`-bucketed because an LLM retry would pop a duplicate browser tab. There used to be a third, **External**, marking whether an action was in `MCP_TOOL_ALLOWLIST`. It is gone because the answer is now uniformly no: #11585 removed every `forge.*` id from the external surface, so reads and writes alike are reachable only through an in-app session at their stated tier, never by an API key. There is no setting that changes this — see [Tier model](#tier-model-sharedts).
 
 ### Forge reads (`workbench` tier)
 
-All seven are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline) and in `MCP_TOOL_ALLOWLIST`, so they are reachable at every tier including `external`. All are `kind:"query"`, `danger:"safe"`, on the `standard` bucket, and not deduped.
+All seven are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline), so they are reachable at `workbench` and above — but not at `external`. All are `kind:"query"`, `danger:"safe"`, on the `standard` bucket, and not deduped.
 
 | Action ID | Key args |
 | --- | --- |
@@ -311,37 +316,39 @@ The two list actions are the only **strict** action schemas in the codebase (#11
 
 Every action below is in `SYSTEM_TIER_ADDONS` and requires the `system` tier (or a per-tool grant) to dispatch. All are `kind:"command"` except `forge.validateToken`, which is a non-mutating `query` that still lives in the system tier. Rows are in `SYSTEM_TIER_ADDONS` order.
 
-| Action ID | Danger | Rate limit | Dedup | External | Key args |
-| --- | --- | --- | --- | --- | --- |
-| `forge.openIssues` | safe | standard | no | yes | `projectPath?`, `query?`, `state?` |
-| `forge.openPRs` | safe | standard | no | yes | `projectPath?`, `query?`, `state?` |
-| `forge.openCommits` | safe | standard | no | yes | `projectPath?`, `branch?` |
-| `forge.openIssue` | safe | mutation | no | yes | `issueNumber`, `cwd?` |
-| `forge.openPR` | safe | mutation | no | yes | `prNumber`, `cwd?` |
-| `forge.assignIssue` | safe | mutation | no | yes | `issueNumber`, `username`, `cwd?` |
-| `forge.unassignIssue` | safe | standard | no | no | `issueNumber`, `username`, `cwd?` |
-| `forge.approvePR` | confirm | standard | yes | no | `prNumber`, `body?`, `cwd?` |
-| `forge.requestChanges` | confirm | standard | yes | no | `prNumber`, `body`, `cwd?` |
-| `forge.dismissReview` | confirm | standard | no | no | `prNumber`, `reviewId`, `message`, `cwd?` |
-| `forge.requestReviewers` | confirm | standard | no | no | `prNumber`, `users?`, `teams?` (at least one), `cwd?` |
-| `forge.createPR` | confirm | mutation | yes | yes | `head`, `base`, `title`, `body?`, `draft?`, `cwd?` |
-| `forge.closePR` | confirm | mutation | no | yes | `prNumber`, `cwd?` |
-| `forge.reopenPR` | confirm | mutation | no | yes | `prNumber`, `cwd?` |
-| `forge.mergePR` | confirm | mutation | yes | yes | `prNumber`, `mergeMethod?`, `commitTitle?`, `commitMessage?`, `cwd?` |
-| `forge.convertPRToDraft` | confirm | mutation | no | yes | `prNumber`, `cwd?` |
-| `forge.markPRReadyForReview` | confirm | mutation | no | yes | `prNumber`, `cwd?` |
-| `forge.commentOnPR` | confirm | mutation | yes | yes | `prNumber`, `body`, `cwd?` |
-| `forge.editPR` | confirm | mutation | no | yes | `prNumber`, `title?`, `body?` (at least one), `cwd?` |
-| `forge.createIssue` | safe | standard | yes | no | `title`, `body?`, `labels?`, `cwd?` |
-| `forge.closeIssue` | confirm | standard | no | no | `issueNumber`, `stateReason?`, `cwd?` |
-| `forge.reopenIssue` | safe | standard | no | no | `issueNumber`, `cwd?` |
-| `forge.editIssue` | confirm | standard | no | no | `issueNumber`, `title?`, `body?` (at least one), `cwd?` |
-| `forge.addIssueComment` | safe | standard | yes | no | `issueNumber`, `body`, `cwd?` |
-| `forge.addIssueLabel` | safe | standard | no | no | `issueNumber`, `label`, `cwd?` |
-| `forge.removeIssueLabel` | safe | standard | no | no | `issueNumber`, `label`, `cwd?` |
-| `forge.validateToken` | safe | standard | no | yes | `providerId`, `token` |
+| Action ID | Danger | Rate limit | Dedup | Key args |
+| --- | --- | --- | --- | --- |
+| `forge.openIssues` | safe | standard | no | `projectPath?`, `query?`, `state?` |
+| `forge.openPRs` | safe | standard | no | `projectPath?`, `query?`, `state?` |
+| `forge.openCommits` | safe | standard | no | `projectPath?`, `branch?` |
+| `forge.openIssue` | safe | mutation | no | `issueNumber`, `cwd?` |
+| `forge.openPR` | safe | mutation | no | `prNumber`, `cwd?` |
+| `forge.assignIssue` | safe | mutation | no | `issueNumber`, `username`, `cwd?` |
+| `forge.unassignIssue` | safe | standard | no | `issueNumber`, `username`, `cwd?` |
+| `forge.approvePR` | confirm | standard | yes | `prNumber`, `body?`, `cwd?` |
+| `forge.requestChanges` | confirm | standard | yes | `prNumber`, `body`, `cwd?` |
+| `forge.dismissReview` | confirm | standard | no | `prNumber`, `reviewId`, `message`, `cwd?` |
+| `forge.requestReviewers` | confirm | standard | no | `prNumber`, `users?`, `teams?` (at least one), `cwd?` |
+| `forge.createPR` | confirm | mutation | yes | `head`, `base`, `title`, `body?`, `draft?`, `cwd?` |
+| `forge.closePR` | confirm | mutation | no | `prNumber`, `cwd?` |
+| `forge.reopenPR` | confirm | mutation | no | `prNumber`, `cwd?` |
+| `forge.mergePR` | confirm | mutation | yes | `prNumber`, `mergeMethod?`, `commitTitle?`, `commitMessage?`, `cwd?` |
+| `forge.convertPRToDraft` | confirm | mutation | no | `prNumber`, `cwd?` |
+| `forge.markPRReadyForReview` | confirm | mutation | no | `prNumber`, `cwd?` |
+| `forge.commentOnPR` | confirm | mutation | yes | `prNumber`, `body`, `cwd?` |
+| `forge.editPR` | confirm | mutation | no | `prNumber`, `title?`, `body?` (at least one), `cwd?` |
+| `forge.createIssue` | safe | standard | yes | `title`, `body?`, `labels?`, `cwd?` |
+| `forge.closeIssue` | confirm | standard | no | `issueNumber`, `stateReason?`, `cwd?` |
+| `forge.reopenIssue` | safe | standard | no | `issueNumber`, `cwd?` |
+| `forge.editIssue` | confirm | standard | no | `issueNumber`, `title?`, `body?` (at least one), `cwd?` |
+| `forge.addIssueComment` | safe | standard | yes | `issueNumber`, `body`, `cwd?` |
+| `forge.addIssueLabel` | safe | standard | no | `issueNumber`, `label`, `cwd?` |
+| `forge.removeIssueLabel` | safe | standard | no | `issueNumber`, `label`, `cwd?` |
+| `forge.validateToken` | safe | standard | no | `providerId`, `token` |
 
-The twelve `External: no` actions — `forge.unassignIssue`, `forge.approvePR`, `forge.requestChanges`, `forge.dismissReview`, `forge.requestReviewers`, `forge.createIssue`, `forge.closeIssue`, `forge.reopenIssue`, `forge.editIssue`, `forge.addIssueComment`, `forge.addIssueLabel`, `forge.removeIssueLabel` — are deliberately absent from `MCP_TOOL_ALLOWLIST`: the curated default-deny external surface (lesson #6318) is narrower than the full `system` addon set, so an API-key caller cannot reach them — and there is no opt-in that lifts that floor, so promoting one is an edit to `MCP_TOOL_ALLOWLIST_ENTRIES` and nothing else. Keep these three lists in lockstep when adding a forge action; the `forge.rateLimit` test and the tier snapshots guard against drift.
+No forge action — read or write — is reachable at the `external` tier. The table used to carry an `External` column because the split ran down the middle of this list; #11585 removed the whole forge surface from `MCP_TOOL_ALLOWLIST`, so the column was uniformly `no` and is gone. The reasoning is not that forge writes are too dangerous for an API-key caller (the `system` tier runs them under the same confirm gate) but that an external agent driving Daintree over MCP already has `gh` or its provider's own tooling, and every slot on a capped surface has to earn its place against something only Daintree can do. That also retired a real drift hazard: forge placement used to be curated by hand in two files with nothing linking them, which shipped a tool invisible to one caller class twice (#10696, #11545). There is now one forge list.
+
+Adding a forge action is therefore an edit to `SYSTEM_TIER_ADDONS` (or `WORKBENCH_TIER_TOOLS` for a read) and nothing else; the `forge.rateLimit` test and the tier snapshots guard against drift.
 
 ## Submitting input (`terminal.sendCommand`)
 

@@ -113,7 +113,6 @@ export function registerAppConfigActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    mcpVisibility: "discoverable",
     resultSchema: z.object({
       enabled: z.boolean(),
       inactiveThresholdHours: z.number(),

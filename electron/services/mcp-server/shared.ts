@@ -28,6 +28,7 @@ import {
   SYSTEM_TIER_ADDONS as SYSTEM_TIER_ADDONS_LIST,
   WORKBENCH_TIER_TOOLS as WORKBENCH_TIER_TOOLS_LIST,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
+import { MCP_EXTERNAL_TIER_TOOLS } from "../../../shared/config/mcpExternalTierAllowlist.js";
 import { safeSerializeToolResult } from "../../utils/safeSerializeToolResult.js";
 import { buildToolCallTextResult } from "./toolCallResult.js";
 
@@ -362,141 +363,11 @@ export function unionSet(...sets: ReadonlySet<string>[]): ReadonlySet<string> {
   return out;
 }
 
-/**
- * The one and only tool surface reachable by an `external` (api-key) session,
- * and the sole seam for widening it — each entry is a deliberate, individually
- * vetted addition. There is no opt-in that lifts this floor: a `fullToolSurface`
- * flag used to short-circuit both tier gates and trust the author-set `danger` /
- * `mcpVisibility` fields as the ceiling, which exposed 335 of 426 actions to any
- * api-key caller (#10701). The MCP spec is explicit that tool annotations are
- * untrusted UX hints, not an access-control boundary; this server-side allowlist
- * is the enforceable one. The flag was never reachable from the UI or IPC and
- * was removed outright in #11537 rather than left dormant.
- */
-const MCP_TOOL_ALLOWLIST_ENTRIES = [
-  ACTIONS_LIST_TOOL,
-  "actions.getContext",
-  "actions.search",
-  "actions.getSchema",
-
-  "agent.launch",
-  "agent.terminal",
-  "agent.getState",
-  "agent.listToolbar",
-  "agent.listAvailable",
-  "agentSessionHistory.list",
-  // Read-only bookmark metadata (#11288); mutation actions stay off the MCP surface.
-  "session.bookmarks.list",
-
-  "git.getProjectPulse",
-  "git.getFileDiff",
-  "git.listCommits",
-  "git.getStagingStatus",
-  "git.stageFile",
-  "git.unstageFile",
-  "git.stageAll",
-  "git.unstageAll",
-  "git.commit",
-  "git.push",
-
-  "forge.getRepoStats",
-  "forge.listIssues",
-  "forge.listPRs",
-  "forge.getIssue",
-  "forge.listIssueComments",
-  "forge.getPR",
-  "forge.getCIStatus",
-  "forge.openIssues",
-  "forge.openPRs",
-  "forge.openCommits",
-  "forge.openIssue",
-  "forge.openPR",
-  "forge.assignIssue",
-  "forge.createPR",
-  "forge.closePR",
-  "forge.reopenPR",
-  "forge.mergePR",
-  "forge.convertPRToDraft",
-  "forge.markPRReadyForReview",
-  "forge.commentOnPR",
-  "forge.editPR",
-  "forge.validateToken",
-
-  "terminal.list",
-  "terminal.getOutput",
-  "terminal.getStatus",
-  "terminal.sendCommand",
-  "terminal.inject",
-  "terminal.new",
-  "terminal.rename",
-  "terminal.waitUntilIdle",
-  "terminal.waitUntilIdleBatch",
-  "terminal.arm",
-  "terminal.disarm",
-  "terminal.disarmAll",
-
-  // Read-only fleet-run supervision snapshot (#10930). The broadcast itself is
-  // deliberately NOT exposed — external orchestrators fan out
-  // `terminal.sendCommand` per terminal (see CLAUDE.tasks.md guidance).
-  "fleet.getRunStatus",
-
-  "worktree.list",
-  "worktree.getCurrent",
-  "worktree.reviewReadiness",
-  "worktree.refresh",
-  "worktree.createWithRecipe",
-  "worktree.listBranches",
-  "worktree.getDefaultPath",
-  "worktree.getAvailableBranch",
-  "worktree.delete",
-  "worktree.setActive",
-  "worktree.resource.status",
-  "worktree.resource.provision",
-  "worktree.resource.pause",
-  "worktree.resource.resume",
-  "worktree.resource.teardown",
-
-  "workflow.startWorkOnIssue",
-  "workflow.prepBranchForReview",
-
-  "files.search",
-  "file.view",
-  "file.read",
-  "file.openInEditor",
-  "file.openPanel",
-
-  "copyTree.generate",
-  "copyTree.generateAndCopyFile",
-  "copyTree.injectToTerminal",
-
-  "slashCommands.list",
-
-  "skills.search",
-  "skills.load",
-
-  "project.getAll",
-  "project.getCurrent",
-  "project.getSettings",
-  "project.getStats",
-  "project.detectRunners",
-  "project.runCheck",
-  "project.update",
-  "project.saveSettings",
-  "project.muteNotifications",
-
-  "recipe.list",
-  "recipe.run",
-
-  "system.checkCommand",
-  "system.checkDirectory",
-  "system.getResourceProfileSnapshot",
-
-  "cliAvailability.get",
-
-  "hibernation.getConfig",
-] as const satisfies readonly BuiltInActionId[];
-
-const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set(MCP_TOOL_ALLOWLIST_ENTRIES);
+// The external tier surface lives in `shared/config/mcpExternalTierAllowlist.ts`
+// alongside the three help-assistant tier lists, so all four are curated in one
+// place and the renderer can budget-test the surface without an IPC round-trip.
+// See that file for the selection rule and why the size is a hard constraint.
+const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set(MCP_EXTERNAL_TIER_TOOLS);
 
 export const TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
   workbench: WORKBENCH_TOOLS,
@@ -760,7 +631,13 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
 
       lines.push("");
       lines.push("Please:");
-      lines.push("1. Read the current git status (`git.getStagingStatus`) to see what changed.");
+      // Tier-agnostic on purpose: `git.getStagingStatus` is a workbench/system
+      // tool, so naming it unconditionally would tell an external session to
+      // call something it will be refused for (#11585). Same shape as the
+      // `start_issue` prompt's "GitHub tools or `gh`" phrasing.
+      lines.push(
+        "1. Read the current git status (`git.getStagingStatus` if available, otherwise `git status`) to see what changed."
+      );
       lines.push(
         "2. Identify the root cause (error message, missing prerequisite, infinite loop, etc.)."
       );

@@ -924,7 +924,7 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "git.getProjectPulse" as ActionId,
+            id: "terminal.getStatus" as ActionId,
             title: "Get Log Entries",
             description: "Returns log entries",
             kind: "query",
@@ -951,7 +951,7 @@ describe("McpServerService", () => {
       transports.push(transport);
 
       const result = await client.listTools();
-      const objectTool = result.tools.find((t) => t.name === "git.getProjectPulse");
+      const objectTool = result.tools.find((t) => t.name === "terminal.getStatus");
       const primitiveTool = result.tools.find((t) => t.name === "worktree.createWithRecipe");
       const noSchemaTool = result.tools.find((t) => t.name === "actions.list");
 
@@ -968,7 +968,7 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "git.getProjectPulse" as ActionId,
+            id: "terminal.getStatus" as ActionId,
             title: "Get Log Entries",
             description: "Returns log entries",
             kind: "query",
@@ -984,7 +984,7 @@ describe("McpServerService", () => {
 
       await client.listTools();
       const result = (await client.callTool({
-        name: "git.getProjectPulse",
+        name: "terminal.getStatus",
         arguments: {},
       })) as {
         content: Array<{ type: string; text: string }>;
@@ -1095,7 +1095,7 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "git.getProjectPulse" as ActionId,
+            id: "terminal.getStatus" as ActionId,
             title: "Get Log Entries",
             description: "Returns log entries",
             kind: "query",
@@ -1114,7 +1114,7 @@ describe("McpServerService", () => {
 
       await client.listTools();
       const result = (await client.callTool({
-        name: "git.getProjectPulse",
+        name: "terminal.getStatus",
         arguments: {},
       })) as {
         content: Array<{ type: string; text: string }>;

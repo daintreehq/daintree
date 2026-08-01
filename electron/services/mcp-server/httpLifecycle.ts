@@ -1622,6 +1622,15 @@ export class HttpLifecycle {
     if (callerWcId !== undefined && callerWcId !== pinnedWcId) {
       throw new Error("Caller is not the pinned renderer for this session");
     }
+    // Same floor `issueNativeGrant` enforces: a grant may only name a tool some
+    // non-external help tier already permits. Without this the single-tool path
+    // could mint a grant for an id in NO tier at all (`actions.persistedStores`),
+    // and the call gate honours a grant over failed tier membership — so the
+    // authorization contract would rest on the UI never offering the button
+    // rather than on the main process refusing (#11585).
+    if (minimumPermittingTier(toolId) === null) {
+      throw new Error(`Unknown or non-grantable tool: ${toolId}`);
+    }
     const entry = this.deps.sessionStore.grantCache.issueGrant(sessionId, toolId);
     return {
       sessionId,

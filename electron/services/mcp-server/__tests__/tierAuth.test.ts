@@ -310,11 +310,6 @@ describe("shouldExposeTool", () => {
     expect(shouldExposeTool(entry, "workbench")).toBe(true);
   });
 
-  it("excludes discoverable entries from tools/list", () => {
-    const entry = makeEntry({ id: "actions.list", mcpVisibility: "discoverable" });
-    expect(shouldExposeTool(entry, "workbench")).toBe(false);
-  });
-
   it("excludes hidden entries from tools/list", () => {
     const entry = makeEntry({ id: "actions.list", mcpVisibility: "hidden" });
     expect(shouldExposeTool(entry, "workbench")).toBe(false);
@@ -336,18 +331,15 @@ describe("shouldExposeTool", () => {
     expect(shouldExposeTool(entry, "workbench")).toBe(false);
   });
 
-  // The metadata filters are advertisement-only and layer on top of the tier
-  // floor: an id the external tier *does* permit must still be withheld from
-  // tools/list when its manifest entry opts out. Guards against a refactor that
-  // reorders the gates so membership short-circuits the visibility checks.
-  it.each(["hidden", "discoverable"] as const)(
-    "withholds an external-allowlisted tool marked %s",
-    (mcpVisibility) => {
-      const entry = makeEntry({ id: "actions.search", mcpVisibility });
-      expect(TIER_ALLOWLISTS.external.has(entry.id)).toBe(true);
-      expect(shouldExposeTool(entry, "external")).toBe(false);
-    }
-  );
+  // The metadata ceilings layer on top of the tier floor: an id the external
+  // tier *does* permit must still be withheld from tools/list when its manifest
+  // entry opts out. Guards against a refactor that reorders the gates so
+  // membership short-circuits the visibility check.
+  it("withholds an external-allowlisted tool marked hidden", () => {
+    const entry = makeEntry({ id: "actions.search", mcpVisibility: "hidden" });
+    expect(TIER_ALLOWLISTS.external.has(entry.id)).toBe(true);
+    expect(shouldExposeTool(entry, "external")).toBe(false);
+  });
 
   it("withholds an external-allowlisted tool marked restricted", () => {
     const entry = makeEntry({ id: "actions.search", danger: "restricted" });
@@ -437,36 +429,146 @@ describe("external tool surface invariants (#10701, #11537)", () => {
   });
 });
 
-// The two forge tool surfaces are curated by hand in separate files —
-// WORKBENCH_TIER_TOOLS in shared/config/helpAssistantTierAllowlists.ts and
-// MCP_TOOL_ALLOWLIST_ENTRIES here in mcp-server/shared.ts — with nothing
-// linking them. Adding a read to only one has shipped a tool invisible to the
-// other caller class before (#10696, #11545).
-//
-// The subset check below is one-directional by necessity: the two lists
-// diverge deliberately in the other direction (external carries forge writes
-// the workbench tier withholds, and `forge.validateToken` is external-only),
-// so equality would be wrong. It catches the workbench-only direction — the
-// one that has actually bitten — but says nothing about a tool absent from
-// both, hence the per-tool sentinel that follows it.
-describe("forge tool exposure across the two curated allowlists", () => {
-  it("every forge tool at the workbench tier is also reachable externally", () => {
-    const workbenchForgeTools = [...TIER_ALLOWLISTS.workbench].filter((id) =>
-      id.startsWith("forge.")
-    );
+// #11585 — the external surface has a size ceiling, and it is a product
+// constraint rather than a style preference. At 100 entries it exceeded what MCP
+// clients tolerate: Cursor caps the tool count across every connected server and
+// silently truncates the overflow, and Copilot's 128-tool cap is a hard error.
+// Both pick which of our tools survive, and neither tells us. A budget here is
+// what keeps "just add one more" from walking the surface back over the line.
+describe("external tool surface budget (#11585)", () => {
+  // Sized just above the current 23 so a considered addition or two fits, but
+  // "just add one more" hits a wall well before the surface drifts back toward
+  // the client caps. The description payload is budgeted separately in
+  // actionDefinitions.quality.test.ts, where the live registry text is reachable.
+  const EXTERNAL_BUDGET_MAX = 26;
 
-    // Guard the guard: an empty cohort would make this vacuously pass.
-    expect(workbenchForgeTools.length).toBeGreaterThan(0);
-
-    expect(workbenchForgeTools.filter((id) => !TIER_ALLOWLISTS.external.has(id))).toEqual([]);
+  it(`advertises at most ${EXTERNAL_BUDGET_MAX} tools`, () => {
+    expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);
   });
 
-  // Sentinel for the read added in #11545. The subset invariant above still
-  // passes if this id is dropped from both lists, which would silently undo
-  // the feature — an agent could post a comment but not read the thread again.
-  it("permits forge.listIssueComments at both the workbench and external tiers", () => {
+  // Guards the opposite failure: a bad merge or an over-eager cut emptying the
+  // list would make every assertion above vacuous rather than red.
+  it("still carries a usable orchestration surface", () => {
+    expect(TIER_ALLOWLISTS.external.size).toBeGreaterThanOrEqual(15);
+    for (const id of ["actions.list", "agent.launch", "terminal.sendCommand", "worktree.list"]) {
+      expect(isTierPermitted("external", id)).toBe(true);
+    }
+  });
+
+  // The cut is a real revocation, not a listing trick: `tools/call` must reject
+  // these too. Each id names a prior deliberate decision that #11585 supersedes
+  // — the apiKey back-compat guarantee (git/worktree mutations) and #11544's
+  // CI-status routes — so a future reader sees the reversal was intentional.
+  //
+  // Every one of them stays reachable for the in-app assistant, which is not
+  // subject to any third-party client's cap. The paired internal-tier assertion
+  // is what makes this a boundary rather than a deletion.
+  const CUT_FROM_EXTERNAL_KEPT_INTERNALLY = [
+    // Caller has its own shell git. `git.push` keeps its bespoke MCP plumbing
+    // (branch/commit preview, cwd pinning, headless-safe confirm) at `system`.
+    { id: "git.push", keptAt: "system" },
+    { id: "git.commit", keptAt: "system" },
+    { id: "git.getFileDiff", keptAt: "workbench" },
+    // D2 destructive, and not needed to drive work forward.
+    { id: "worktree.delete", keptAt: "system" },
+    // #11544's two CI-status routes. An external agent has `gh`; the in-app
+    // assistant does not, so both stay at workbench.
+    { id: "forge.getCIStatus", keptAt: "workbench" },
+    { id: "worktree.reviewReadiness", keptAt: "workbench" },
+    // Caller has its own filesystem and `gh`.
+    { id: "file.read", keptAt: "workbench" },
+    { id: "forge.listIssues", keptAt: "workbench" },
+    { id: "project.getCurrent", keptAt: "workbench" },
+    { id: "worktree.resource.provision", keptAt: "action" },
+  ] as const;
+
+  it.each(CUT_FROM_EXTERNAL_KEPT_INTERNALLY)(
+    "$id is denied externally but still reachable at the $keptAt tier",
+    ({ id, keptAt }) => {
+      // Pin to ground truth first, so a rename turns this into a red test
+      // rather than a vacuous "unknown string is absent from a set".
+      expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
+
+      expect(isTierPermitted("external", id)).toBe(false);
+      expect(shouldExposeTool(makeEntry({ id }), "external")).toBe(false);
+
+      expect(isTierPermitted(keptAt, id)).toBe(true);
+      expect(shouldExposeTool(makeEntry({ id }), keptAt)).toBe(true);
+    }
+  );
+
+  // The cut is purely subtractive: it authorizes nothing new. `terminal.close`
+  // is the id that nearly slipped in — #11540's draft core set had it, on the
+  // theory that closing is recoverable and an orchestrator should be able to
+  // clean up after itself. Neither half holds here. Nothing binds a panel to the
+  // session that created it, and `terminal.list` returns the user's own shells
+  // and other agents' terminals alike, so an external caller could trash a
+  // terminal it has no relationship to; trash is then purged after 20s
+  // (TRASH_TTL_MS), killing the PTY, with no restore action on this surface.
+  it("authorizes no terminal-destroying tool externally", () => {
+    for (const id of [
+      "terminal.close",
+      "terminal.closeAll",
+      "terminal.kill",
+      "terminal.killAll",
+      "terminal.restart",
+    ]) {
+      // Pin to ground truth: a renamed id must fail loudly, not vacuously pass.
+      expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
+      expect(isTierPermitted("external", id)).toBe(false);
+      expect(shouldExposeTool(makeEntry({ id }), "external")).toBe(false);
+    }
+    // The in-app assistant, which has a human watching, keeps them.
+    expect(isTierPermitted("action", "terminal.close")).toBe(true);
+  });
+
+  // A cut PR that quietly widens is the failure #10710 documents, so assert the
+  // direction outright rather than trusting the id list to be read carefully.
+  it("authorizes nothing the in-app assistant cannot already reach", () => {
+    expect([...TIER_ALLOWLISTS.external].filter((id) => !TIER_ALLOWLISTS.system.has(id))).toEqual(
+      []
+    );
+  });
+});
+
+// Forge used to be curated by hand in two separate files — WORKBENCH_TIER_TOOLS
+// in shared/config/helpAssistantTierAllowlists.ts and the external allowlist
+// in mcp-server/shared.ts — with nothing linking them, and adding a read to only
+// one shipped a tool invisible to the other caller class twice (#10696, #11545).
+//
+// #11585 removed the whole forge surface from `external` and so retired that
+// drift risk in the only way that actually works: one curated forge list, at the
+// help-assistant tiers. The rationale is that an external agent driving Daintree
+// over MCP already has `gh` or its provider's own tools, whereas the in-app
+// assistant does not. The assertions below lock that split so a future "why not
+// just add it back externally?" has to argue with a red test.
+describe("forge tool exposure is help-assistant-only (#11585)", () => {
+  it("no forge tool is reachable at the external tier", () => {
+    expect([...TIER_ALLOWLISTS.external].filter((id) => id.startsWith("forge."))).toEqual([]);
+  });
+
+  // Measured against the real registry, not against another tier: `system` is
+  // built as a union that already contains `workbench`, so "workbench forge ⊆
+  // system forge" is true by construction and would stay green while the whole
+  // surface drained away. The cut moved forge's only home to the in-app tiers,
+  // so this is now the assertion carrying that weight.
+  it("keeps every forge action reachable by the in-app assistant", () => {
+    const allForgeActions = BUILT_IN_ACTION_IDS.filter((id) => id.startsWith("forge."));
+    const systemForgeTools = [...TIER_ALLOWLISTS.system].filter((id) => id.startsWith("forge."));
+
+    expect(allForgeActions.length).toBeGreaterThan(0);
+    // No exemptions: every forge action in the registry is an MCP tool at the
+    // system tier. Carrying a placeholder exclusion here would blind the check
+    // the day an id matching it actually appears.
+    expect(new Set(systemForgeTools)).toEqual(new Set(allForgeActions));
+  });
+
+  // Sentinel for the read added in #11545: an agent that can post a comment must
+  // still be able to read the thread. The cohort checks above stay green if this
+  // id is dropped from every list, which would silently undo the feature.
+  it("permits forge.listIssueComments at the workbench and system tiers", () => {
     const entry = makeEntry({ id: "forge.listIssueComments", kind: "query", danger: "safe" });
-    for (const tier of ["workbench", "external"] as const) {
+    for (const tier of ["workbench", "system"] as const) {
       expect(isTierPermitted(tier, "forge.listIssueComments")).toBe(true);
       expect(shouldExposeTool(entry, tier)).toBe(true);
     }
@@ -528,11 +630,13 @@ describe("buildAnnotations", () => {
 // help OVERLAYS, plus the system/external boundaries the assistant relies on.
 // The distinction is load-bearing: `action` leaves irreversible mutations
 // (git.push, worktree.delete) TIER_NOT_PERMITTED so the overlays need a
-// human-approved scoped grant, while `system` (the assistant) and `external`
-// permit them subject only to the confirm gate. These assertions lock those
-// invariants against allowlist drift (e.g. someone promoting git.push into the
-// action tier). They test the runtime gate `isTierPermitted`, not the raw
-// allowlist arrays, so they fail closed if the tier wiring itself regresses.
+// human-approved scoped grant, while `system` (the assistant) permits them
+// subject only to the confirm gate. `external` used to permit them too — #11585
+// removed them from that surface entirely, so `system` is now the only tier that
+// reaches them. These assertions lock those invariants against allowlist drift
+// (e.g. someone promoting git.push into the action tier). They test the runtime
+// gate `isTierPermitted`, not the raw allowlist arrays, so they fail closed if
+// the tier wiring itself regresses.
 describe("help-session tier policy (#10640)", () => {
   // The conductor's working tool set — orchestration, terminal driving, branch
   // setup, recipes, and reads — all resolve under `action`.
@@ -582,31 +686,44 @@ describe("help-session tier policy (#10640)", () => {
     }
   );
 
-  it("auto-permits those same mutations under the external tier — the default we are moving the assistant off of", () => {
-    // Documents the security contrast that motivates pinning the assistant to
-    // `action`: on `external` (the api-key fallback) these run subject only to
-    // the confirm gate, with no tier floor in front of them.
+  it("withholds those same mutations from the external tier too (#11585)", () => {
+    // `external` used to auto-permit these, subject only to the confirm gate,
+    // which was the security contrast that motivated pinning the assistant to
+    // `action` in the first place. #11585 closed it from the other side: an
+    // api-key caller has its own shell git and does not need ours, so the
+    // mutations now live only where a human is in the loop. `system` remains the
+    // one tier that reaches them.
     for (const toolId of ["git.push", "git.commit", "worktree.delete"]) {
-      expect(isTierPermitted("external", toolId)).toBe(true);
+      expect(isTierPermitted("external", toolId)).toBe(false);
+      expect(isTierPermitted("system", toolId)).toBe(true);
     }
   });
 });
 
 // agent.listToolbar and agent.listAvailable are the narrow, read-only discovery
-// surfaces for toolbar state and the effective launch registry. They must be reachable by every tier — including external
-// api-key consumers and workbench help sessions — WITHOUT exposing the broad
-// `agentSettings.get` (which leaks custom flags, dangerous args, global env, and
-// presets). These assertions pin that exact boundary: the safe alternative is
-// reachable everywhere the leaky one must stay walled off from external.
+// surfaces for toolbar state and the effective launch registry. Both must be
+// reachable by every in-app tier WITHOUT exposing the broad `agentSettings.get`
+// (which leaks custom flags, dangerous args, global env, and presets).
+//
+// They part ways at `external` (#11585). `agent.listAvailable` stays: it answers
+// which agent ids `agent.launch` will actually accept, including user- and
+// plugin-contributed ones, and nothing outside Daintree can answer that.
+// `agent.listToolbar` reports which buttons the user has surfaced in the UI —
+// real for the in-app assistant, not worth a slot on a capped external surface.
 describe("narrow agent discovery tier reachability", () => {
   it.each(["agent.listToolbar", "agent.listAvailable"] as const)(
-    "permits %s at every tier",
+    "permits %s at every in-app tier",
     (toolId) => {
-      for (const tier of ["workbench", "action", "system", "external"] as const) {
+      for (const tier of ["workbench", "action", "system"] as const) {
         expect(isTierPermitted(tier, toolId)).toBe(true);
       }
     }
   );
+
+  it("keeps only the launch-registry read on the external tier", () => {
+    expect(isTierPermitted("external", "agent.listAvailable")).toBe(true);
+    expect(isTierPermitted("external", "agent.listToolbar")).toBe(false);
+  });
 
   it("keeps the broad agentSettings.get off the external tier so the narrow alternative is the only external path", () => {
     expect(isTierPermitted("external", "agentSettings.get")).toBe(false);
@@ -750,20 +867,24 @@ describe("filterIntrospectionResultForSession", () => {
       ).toEqual(["terminal.list", "worktree.list"]);
     });
 
-    // Progressive disclosure (#8502) depends on `discoverable` entries being
-    // reachable through introspection even though tools/list omits them. A
-    // filter built on shouldExposeTool would silently delete this whole class.
-    it("keeps permitted discoverable entries that tools/list omits", () => {
-      const entry = makeEntry({ id: "terminal.list", mcpVisibility: "discoverable" });
-      expect(shouldExposeTool(entry, "workbench")).toBe(false);
-      const result = listResult([entry]);
+    // The filter authorizes against the session's EFFECTIVE surface — its static
+    // tier widened by live grants — which is why it cannot be rebuilt on
+    // shouldExposeTool. A tool the user has approved must stay introspectable
+    // for as long as the grant lasts, even though the static tier still says no.
+    it("keeps a granted entry the static tier gate would withhold", () => {
+      const entry = makeEntry({ id: "git.push" });
+      // Ground truth: git.push is off the external tier since #11585, so the
+      // static gate rejects it and only the grant can explain the result below.
+      expect(shouldExposeTool(entry, "external")).toBe(false);
+
+      const granted = new Set([...permitted, "git.push"]);
       expect(
         ids(
-          filterIntrospectionResultForSession("actions.list", result, permitted, {
+          filterIntrospectionResultForSession("actions.list", listResult([entry]), granted, {
             callerLimit: 20,
           })
         )
-      ).toEqual(["terminal.list"]);
+      ).toEqual(["git.push"]);
     });
 
     // Main is the authorization boundary; it re-applies the ceilings rather
@@ -878,8 +999,8 @@ describe("filterIntrospectionResultForSession", () => {
       expect(filtered).toEqual({ ok: true, result: { ok: true, entry } });
     });
 
-    it("keeps a permitted discoverable entry reachable", () => {
-      const entry = makeEntry({ id: "worktree.list", mcpVisibility: "discoverable" });
+    it("keeps a core-marked entry reachable (visibility is not the gate)", () => {
+      const entry = makeEntry({ id: "worktree.list", mcpVisibility: "core" });
       const filtered = filterIntrospectionResultForSession(
         "actions.getSchema",
         { ok: true as const, result: { ok: true, entry } },
