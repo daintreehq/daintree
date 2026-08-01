@@ -88,6 +88,19 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 vi.mock("@/store/accessibilityAnnouncerStore", () => ({
   useAnnouncerStore: { getState: () => ({ announce: vi.fn() }) },
 }));
+// The live signal for a file no worktree contains (#11590). Mocked so a test can
+// drive the tick directly, and so the real hook's IPC poll never runs here —
+// without this the pane would depend on a `window.electron` jsdom doesn't have.
+const { externalChangeTickMock } = vi.hoisted(() => ({
+  externalChangeTickMock: vi.fn<(root: string, paths: readonly string[]) => number | undefined>(
+    () => undefined
+  ),
+}));
+vi.mock("@/hooks/useExternalChangeTick", () => ({
+  NO_WATCHED_PATHS: Object.freeze([]),
+  useExternalChangeTick: (root: string, paths: readonly string[], enabled: boolean) =>
+    enabled ? externalChangeTickMock(root, paths) : undefined,
+}));
 const { readMock, searchMock } = vi.hoisted(() => ({
   readMock: vi.fn(),
   searchMock: vi.fn(),
@@ -176,6 +189,8 @@ beforeEach(() => {
   useDiffContentMock.mockReturnValue({ content: undefined, stale: false, retry: vi.fn() });
   worktreeState.worktrees.clear();
   worktreeState.workingTreeChangedAtById.clear();
+  externalChangeTickMock.mockReset();
+  externalChangeTickMock.mockReturnValue(undefined);
   // Reset per test so a prior test's read call can't satisfy a later
   // toHaveBeenCalledWith assertion (cross-test contamination).
   readMock.mockReset();
@@ -1992,9 +2007,9 @@ describe("FilePane live disk refresh (#11451)", () => {
     expect(readMock.mock.calls.length).toBe(initialReads + 1);
   });
 
-  it("stays quiet for a file outside every known worktree", async () => {
-    // No watcher covers it, so there is no tick to resolve — it must degrade to
-    // no live signal rather than reading on every unrelated worktree update.
+  it("ignores unrelated worktree ticks for a file outside every known worktree", async () => {
+    // A worktree that doesn't contain the file says nothing about it, so its
+    // ticks must not reach this pane — the external signal below is what does.
     seedWorktree(OUTER_ID, "/repo", { git: 100 });
     readMock.mockResolvedValue({ content: "v1" });
     const { rerender } = await renderPane({ filePath: "/elsewhere/notes.txt" });
@@ -2007,6 +2022,32 @@ describe("FilePane live disk refresh (#11451)", () => {
     await commitTick(rerender);
 
     expect(readMock).not.toHaveBeenCalled();
+  });
+
+  it("re-reads a file outside every known worktree on its external tick (#11590)", async () => {
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    readMock.mockResolvedValue({ content: "v1" });
+    const { rerender } = await renderPane({ filePath: "/elsewhere/notes.txt" });
+    expect(readMock).toHaveBeenCalled();
+    // The file itself is what gets watched — its parent has no worktree, so
+    // nothing else could report a rewrite of it.
+    expect(externalChangeTickMock.mock.calls[0]?.[1]).toEqual(["/elsewhere/notes.txt"]);
+    readMock.mockClear();
+
+    externalChangeTickMock.mockReturnValue(500);
+    await commitTick(rerender);
+
+    expect(readMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a file inside a worktree on the worktree's own signal", async () => {
+    // The host's recursive watcher already covers it, so polling would be
+    // duplicate work — the hook must not even be enabled here.
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    readMock.mockResolvedValue({ content: "v1" });
+    await renderPane({ filePath: "/repo/src/index.ts" });
+
+    expect(externalChangeTickMock).not.toHaveBeenCalled();
   });
 
   it("re-reads once, not twice, when a tick lands together with leaving Diff", async () => {

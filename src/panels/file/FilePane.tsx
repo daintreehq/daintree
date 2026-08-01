@@ -60,6 +60,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { NO_WATCHED_PATHS, useExternalChangeTick } from "@/hooks/useExternalChangeTick";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isClientAppError } from "@/utils/clientAppError";
@@ -316,9 +317,9 @@ export function FilePane({
   // filesystem tick misses nothing but says nothing about git. Whichever moved
   // most recently wins, matching FileBrowserPane (#11330). Scalar for the same
   // reason as `localChangeStatus` — an object would re-render on every poll.
-  // `undefined` when the file is in no known worktree: no watcher covers it, so
-  // there is simply no live signal to give.
-  const changeTick = useWorktreeStore(
+  // `undefined` when the file is in no known worktree — `externalChangeTick`
+  // below is what covers that case.
+  const worktreeChangeTick = useWorktreeStore(
     useCallback(
       (state): number | undefined => {
         if (!diffWorktreePath) return undefined;
@@ -444,6 +445,25 @@ export function FilePane({
       parentDirectory(filePath)
     );
   }, [filePath, worktreePath, projectPath]);
+
+  // The live signal for a file no worktree contains: a scratch folder, a
+  // worktree-less project, a path picked from anywhere else on disk. Polled
+  // from main rather than watched, and only while this view is visible, so the
+  // cost is one stat every couple of seconds per visible pane (#11590). Rooted
+  // at the same path the pane reads through, which for a file outside every
+  // project is its own parent directory.
+  const watchedPaths = useMemo(() => (filePath ? [filePath] : NO_WATCHED_PATHS), [filePath]);
+  const externalChangeTick = useExternalChangeTick(
+    effectiveRootPath,
+    watchedPaths,
+    Boolean(filePath) && !diffWorktreePath
+  );
+
+  // One tick contract for the effect below, whichever side supplied it. The
+  // worktree store stays authoritative wherever it has an answer — its tick
+  // rides the host's recursive watcher, which is finer and cheaper than a poll,
+  // so the external signal only ever fills the gap where there is no worktree.
+  const changeTick = worktreeChangeTick ?? externalChangeTick;
 
   const [content, setContent] = useState<string | null>(null);
   const [sanitizedSvg, setSanitizedSvg] = useState<string | null>(null);
@@ -738,7 +758,10 @@ export function FilePane({
     // and raises a stale banner — and leaving Diff already re-reads source, so a
     // tick on either side of that transition would only duplicate the work.
     if (viewMode === "diff" || previous.viewMode === "diff") return;
-    if (!filePath || !diffWorktreePath || changeTick === undefined) return;
+    // No `diffWorktreePath` requirement: a file outside every worktree now has
+    // a tick of its own, and demanding a containing worktree here is exactly
+    // what left those files frozen at whatever they read when opened (#11590).
+    if (!filePath || changeTick === undefined) return;
     // What the pane reads, versus what it watches. Only a change to the former
     // implies an explicit load already happened — `loadFile` is keyed on those
     // two alone, so acquiring a watcher moves `watchRoot` while leaving the read

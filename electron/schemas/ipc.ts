@@ -572,6 +572,29 @@ export const FileBrowserStatPathsPayloadSchema = z.object({
   paths: z.array(z.string().min(1).max(4096)).max(32),
 });
 
+// Capped at the widest tree the file browser polls in one sample: its root plus
+// the directories it has expanded. A caller with more expanded than this sends
+// the closest ones to the root — the cap is what keeps a restored 500-directory
+// panel from turning one poll into 500 stats.
+export const FileWatchFingerprintPayloadSchema = z.object({
+  rootPath: z
+    .string()
+    .min(1)
+    .max(4096)
+    // eslint-disable-next-line no-control-regex
+    .regex(/^[^\x00]*$/, "Null bytes not allowed"),
+  paths: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .max(4096)
+        // eslint-disable-next-line no-control-regex
+        .regex(/^[^\x00]*$/, "Null bytes not allowed")
+    )
+    .max(32),
+});
+
 export const FileReadPayloadSchema = z.object({
   path: z
     .string()
