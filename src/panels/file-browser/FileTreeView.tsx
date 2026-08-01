@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import { ChevronDown, ChevronRight, File, Folder, FolderOpen } from "lucide-react";
+import { ChevronDown, ChevronRight, Folder, FolderOpen } from "lucide-react";
 import { join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
@@ -11,6 +11,7 @@ import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
 import { resolveTreeKey, type FlatTreeRow } from "./fileBrowserTree";
+import { FILE_TREE_ICON_CLASS, UNKNOWN_FILE_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
 import { INSERT_FILE_REFERENCE_COMBO, matchesInsertFileReferenceCombo } from "./fileReference";
 
 export interface FileTreeViewProps {
@@ -429,6 +430,15 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
 
   const Chevron = row.isExpanded ? ChevronDown : ChevronRight;
   const FolderIcon = row.isExpanded ? FolderOpen : Folder;
+  // Files carry their type; folders keep the folder shape (#11596). Resolved
+  // per render rather than memoized: it is an object lookup, and Virtuoso only
+  // ever renders the visible window.
+  //
+  // Folders stay neutral deliberately — they are one shape for the whole tree,
+  // so a hue on them would sort nothing.
+  const fileIcon = row.isDirectory ? null : getFileTypeIcon(row.name);
+  const RowIcon = fileIcon?.Icon ?? FolderIcon;
+  const rowIconColor = fileIcon?.colorClass ?? UNKNOWN_FILE_COLOR_CLASS;
 
   const menuItems = context.rowContextMenu?.(row);
   const rowSurface = (
@@ -480,11 +490,20 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
       ) : (
         context.hasDirectories && <span className="h-4 w-4 shrink-0" />
       )}
-      {row.isDirectory ? (
-        <FolderIcon className="h-3.5 w-3.5 shrink-0 text-daintree-text/40" aria-hidden="true" />
-      ) : (
-        <File className="h-3.5 w-3.5 shrink-0 text-daintree-text/30" aria-hidden="true" />
-      )}
+      {/*
+        Rendered bare, never wrapped: the row's first element child is the
+        chevron gutter when folders are present and this icon when they are
+        not, and the tree's layout contract is asserted on exactly that.
+
+        Solid color rather than the old `/30`–`/40` alpha — at 14px an
+        alpha-reduced stroke is barely a shape cue, let alone a type cue. The
+        FILE_TREE_ICON_CLASS marker is what `prefers-contrast: more` repaints
+        to monochrome; see `src/index.css`.
+      */}
+      <RowIcon
+        className={cn(FILE_TREE_ICON_CLASS, "h-3.5 w-3.5 shrink-0", rowIconColor)}
+        aria-hidden="true"
+      />
       <span className={cn("truncate", isSelected && "font-medium")}>{row.name}</span>
       {showLoadingSpinner && (
         // Subdued via `text-daintree-text/40` (Spinner strokes currentColor) so

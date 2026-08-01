@@ -8,6 +8,7 @@ import { ContextMenuItem } from "@/components/ui/context-menu";
 import { FILE_DRAG_MIME, decodeFileDragPaths } from "@/lib/fileDragPayload";
 import { FileTreeView } from "../FileTreeView";
 import type { FlatTreeRow } from "../fileBrowserTree";
+import { FILE_TREE_ICON_CLASS, getFileTypeIcon } from "../fileTypeIcons";
 
 // `isMac` reads navigator.platform, which jsdom reports as neither — drive it
 // explicitly so both modifier branches of the insert shortcut are covered.
@@ -409,6 +410,102 @@ describe("FileTreeView context-menu interactions", () => {
     expect(
       mixed.getByRole("treeitem", { name: "README.md" }).firstElementChild?.tagName.toLowerCase()
     ).toBe("span");
+  });
+});
+
+describe("FileTreeView row icons", () => {
+  // One row per visibly different kind of file, plus a folder and an
+  // unclassifiable name.
+  const MIXED = [
+    row("src", true),
+    row("clip.mp4"),
+    row("index.json"),
+    row("logo.png"),
+    row("bundle.zip"),
+    row("main.ts"),
+    row("mystery.qqq"),
+  ];
+
+  /** The row's icon: the direct <svg> child, past the chevron gutter if present. */
+  function iconOf(element: Element): SVGElement {
+    const svg = element.querySelector(":scope > svg");
+    if (!(svg instanceof SVGElement)) {
+      throw new Error(`no direct <svg> child on row ${element.getAttribute("aria-label")}`);
+    }
+    return svg;
+  }
+
+  it("gives each file kind its own glyph", () => {
+    const { getByRole } = renderTree({ rows: MIXED, rowContextMenu: undefined });
+
+    const shapes = ["clip.mp4", "index.json", "logo.png", "bundle.zip", "main.ts"].map(
+      (name) => iconOf(getByRole("treeitem", { name })).innerHTML
+    );
+
+    // The bug this fixes was every row drawing the same glyph.
+    expect(new Set(shapes).size).toBe(shapes.length);
+  });
+
+  it("keeps every entry icon decorative and unwrapped", () => {
+    const { getByRole } = renderTree({ rows: MIXED, rowContextMenu: undefined });
+
+    for (const entry of MIXED) {
+      // Wrapping the icon would break the tree's first-child layout contract
+      // asserted above, so assert the direct-child relationship per row.
+      const icon = iconOf(getByRole("treeitem", { name: entry.name }));
+      // The row already announces the filename; a second spoken label would
+      // just repeat the extension on every arrow-key move.
+      expect(icon.getAttribute("aria-hidden")).toBe("true");
+    }
+  });
+
+  it("paints each file with the color its own resolution asked for", () => {
+    const { getByRole } = renderTree({ rows: MIXED, rowContextMenu: undefined });
+
+    // Compared against the resolver rather than against a literal token, so a
+    // renderer that hardcoded one hue for every row would fail here.
+    for (const entry of MIXED.filter((candidate) => !candidate.isDirectory)) {
+      const className = iconOf(getByRole("treeitem", { name: entry.name })).getAttribute("class");
+      expect(className?.split(/\s+/)).toContain(getFileTypeIcon(entry.name).colorClass);
+    }
+  });
+
+  it("leaves folders on the unclassified file's neutral", () => {
+    const { getByRole } = renderTree({ rows: MIXED, rowContextMenu: undefined });
+    const classesOf = (name: string) =>
+      iconOf(getByRole("treeitem", { name })).getAttribute("class")?.split(/\s+/) ?? [];
+
+    // A folder is one shape for the whole tree, so a hue on it sorts nothing.
+    expect(classesOf("src")).toContain(getFileTypeIcon("mystery.qqq").colorClass);
+    expect(classesOf("src").some((token) => token.startsWith("text-category-"))).toBe(false);
+    // ...but it must still be a folder, not the generic file glyph.
+    expect(iconOf(getByRole("treeitem", { name: "src" })).innerHTML).not.toBe(
+      iconOf(getByRole("treeitem", { name: "mystery.qqq" })).innerHTML
+    );
+  });
+
+  it("marks every entry icon for the increased-contrast repaint", () => {
+    const { getByRole } = renderTree({ rows: MIXED, rowContextMenu: undefined });
+
+    // The stylesheet's `prefers-contrast: more` rule keys off this class; the
+    // contract test guards the other half.
+    for (const entry of MIXED) {
+      const className = iconOf(getByRole("treeitem", { name: entry.name })).getAttribute("class");
+      expect(className?.split(/\s+/)).toContain(FILE_TREE_ICON_CLASS);
+    }
+  });
+
+  it("never dims an entry icon into invisibility or reaches for the accent", () => {
+    const { getByRole } = renderTree({ rows: MIXED, rowContextMenu: undefined });
+
+    for (const entry of MIXED) {
+      const className = iconOf(getByRole("treeitem", { name: entry.name })).getAttribute("class");
+      // The `/30`-`/40` alpha is exactly the "near invisible" complaint.
+      expect(className).not.toMatch(/text-[a-z-]+\/\d/);
+      expect(className).not.toMatch(/\bopacity-/);
+      // Accent restraint: never dozens of rows at once.
+      expect(className).not.toMatch(/accent/);
+    }
   });
 });
 
