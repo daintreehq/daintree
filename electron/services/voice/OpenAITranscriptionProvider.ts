@@ -94,10 +94,9 @@ const RECONNECT_CAP_MS = 3_000;
 // We send `turn_detection: null`, so the server never auto-commits the input
 // buffer. We drive segmentation ourselves with a client-side VAD side-chain
 // (Silero v5, on a worker thread): commit at actual end-of-speech after a short
-// holdover, and
-// clear the server buffer on speech onset so accumulated silence between
-// utterances isn't transcribed. This replaces the old blind 2s interval, which
-// cut words mid-pause and added up to ~2s of latency at end-of-speech.
+// holdover, and clear the server buffer on speech onset so accumulated silence
+// between utterances isn't transcribed. This replaces the old blind 2s interval,
+// which cut words mid-pause and added up to ~2s of latency at end-of-speech.
 //
 // Backstop: while speech runs continuously past this window with no detected
 // pause, force a commit so the segment streams back and the server-side buffer
