@@ -67,7 +67,7 @@ Both share:
 - **Answer workflow:** Search the `daintree-docs` MCP first, never fabricate
 - **Tone:** Concise, actionable, grounded in documentation
 - **Scope boundary:** If a question is outside docs, search GitHub issues or offer to file one
-- **Forge access:** Search/view issues without confirmation; creating an issue requires user approval of the draft text and goes through the tier-gated `daintree` MCP (`forge.createIssue`, a `system`-tier tool), never the forge CLI
+- **Forge access:** Search/view issues without confirmation, never write through a forge CLI. Creating an issue requires user approval of the exact draft; because `forge.createIssue` has no repository argument and targets the active worktree's repo, Daintree feedback is handed to the user to file by default and filed directly only when the active worktree is itself a `daintreehq/daintree` checkout
 - **Topic coverage:** 11 documentation areas (getting started, panels, agents, worktrees, keybindings, actions, context injection, recipes, themes, browser/devpreview, workflows)
 
 ### Editing the prompts

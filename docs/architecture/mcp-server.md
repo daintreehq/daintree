@@ -248,9 +248,11 @@ tools/call(actionId, args)
   │
   ├─5 Dispatch:
   │      ├─ main-process short-circuits (never via rendererBridge):
-  │      │    terminal.waitUntilIdle / waitUntilIdleBatch → handleWaitUntilIdle
-  │      │    project.runCheck → projectCheck.ts
+  │      │    terminal.waitUntilIdle      → handleWaitUntilIdle
+  │      │    terminal.waitUntilIdleBatch → handleWaitUntilIdleBatch
   │      │    skills.search / skills.load → skills.ts
+  │      │    project.runCheck            → projectCheck.ts
+  │      │    help.displayImage           → inline handler in sessionServer.ts
   │      └─ else → rendererBridge.dispatchAction(actionId, args, confirmed)
   │              ├─ danger:"confirm" & unconfirmed → renderer surfaces the
   │              │  native ConfirmDialog, dispatches only after human approval
@@ -280,7 +282,7 @@ A tool with no meaningful active-worktree default opts out with `{ requireSelect
 
 Aliases collapse inside the zod schema (a whole-object `.transform()`), not in the MCP bridge, because every surface — MCP, palette, keybindings, context menus — funnels through `ActionService.dispatch`, which validates `argsSchema` before the handler runs. `z.toJSONSchema(..., { io: "input" })` unwraps the transform and still advertises every alias property with its own description; `locationArgs.test.ts` asserts that, so a zod upgrade that changed it fails loudly instead of silently emptying the advertised surface. Never wrap a `resultSchema` in `.transform()` — the matching `io: "output"` call collapses a transformed schema to an empty object, erasing the advertised output shape.
 
-**Errors.** Throw for anything the caller must treat as a failure. A value returned from `run()` is serialized by the bridge as a _successful_ tool result, so an inline `{ ok: false }` or an `error` string beside the data is invisible to an agent checking `isError`; only a throw (→ `EXECUTION_ERROR`) or a dispatch-gate rejection becomes a tool error. One transport-level exception sits outside that rule: a response whose promised `structuredContent` was dropped for size is flagged `isError` even though `run()` succeeded — see [Payload and registry budgets](#payload-and-registry-budgets-11526-11585). Error messages must be static — never interpolate the rejected input, and never surface a caught `ZodError.message`, which in zod 4 carries the offending values inline.
+**Errors.** Throw for anything the caller must treat as a failure. A value returned from `run()` is serialized by the bridge as a _successful_ tool result, so an inline `{ ok: false }` or an `error` string beside the data is invisible to an agent checking `isError`; only a throw (→ `EXECUTION_ERROR`) or a dispatch-gate rejection becomes a tool error. One transport-level exception sits outside that rule: a response whose promised `structuredContent` the result helper had to omit — because the text was truncated, because it nested too deeply, or because it could not be reproduced as bounded transport-safe JSON — is flagged `isError` even though `run()` succeeded. See [Payload and registry budgets](#payload-and-registry-budgets-11526-11585). Error messages must be static — never interpolate the rejected input, and never surface a caught `ZodError.message`, which in zod 4 carries the offending values inline.
 
 Two narrow exceptions, both genuinely domain data rather than execution status: a **per-item failure inside a batch result**, where the other entries are still useful (`terminal.getStatuses`), and a **lookup miss** where "not found" is the answer the caller asked for (`actions.getSchema`). A new per-item failure should carry `{ code, message }` rather than a bare string so a caller can branch on the code; the existing terminal batch surfaces still return a bare `error` string and have not been migrated.
 
@@ -299,7 +301,7 @@ A tool registry is charged to the model's context on every request, so an oversi
 
 Both are **test thresholds, not runtime constants** — nothing rejects a call or a listing for exceeding them; the unit suite fails in CI instead. Both derive their input from the real allowlist rather than restating it, so neither can drift from the gate it budgets. Note what they do _not_ measure: only top-level `description` bytes are summed, while a real `tools/list` response also ships input schemas, annotations, optional output schemas, and examples. Those can grow without moving either number, so the thresholds are a regression tripwire on the roster, not a bound on the serialized listing.
 
-The help-assistant tiers (`workbench` / `action` / `system`) are outside **these tests** and were not cut by #11585 — but they are not exempt from client limits. They are cumulative and substantially larger than the external roster (at time of writing 58 / 108 / 147 tools), so a help client with its own registry ceiling still applies it; the `system` tier alone exceeds the Copilot figure above. What #11585 changed is the `external` roster only. Do not read "the surface was cut to a couple dozen tools" as a statement about any help tier.
+The help-assistant tiers (`workbench` / `action` / `system`) are outside **these tests** and were not cut by #11585 — but they are not exempt from client limits. They are cumulative and each is several times the size of the external roster; the `system` tier is comfortably past the Copilot figure above, by a margin no plausible edit closes. So a help client that enforces its own registry ceiling still enforces it here — there is simply no test standing guard. Derive the current totals from `HELP_TIER_CUMULATIVE` in [`shared/config/helpAssistantTierAllowlists.ts`](../../shared/config/helpAssistantTierAllowlists.ts) rather than trusting a number written down here, for the same reason the external count isn't restated above. What #11585 changed is the `external` roster only: do not read "the surface was cut to a couple dozen tools" as a statement about any help tier.
 
 ### Payload budget — what one `tools/call` returns
 
