@@ -8,7 +8,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -95,8 +95,8 @@ function seed(panels: PanelInstance[], panelIds?: string[]) {
 }
 
 function signalOf(id: string): boolean | undefined {
-  return (usePanelStore.getState().panelsById[id] as PtyPanelData | undefined)
-    ?.sessionLostOnRestore;
+  const panel = usePanelStore.getState().panelsById[id];
+  return panel && isPtyPanel(panel) ? panel.sessionLostOnRestore : undefined;
 }
 
 beforeEach(() => {
@@ -140,8 +140,8 @@ describe("dismissSessionLost", () => {
 
     usePanelStore.getState().dismissSessionLost("t-1");
 
-    const after = usePanelStore.getState().panelsById["t-1"] as PtyPanelData;
-    const { sessionLostOnRestore: _dropped, ...expected } = before as PtyPanelData;
+    const after = usePanelStore.getState().panelsById["t-1"];
+    const { sessionLostOnRestore: _dropped, ...expected } = before;
     expect(after).toEqual({ ...expected, sessionLostOnRestore: undefined });
   });
 
