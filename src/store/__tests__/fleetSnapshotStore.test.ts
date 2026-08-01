@@ -28,7 +28,7 @@ const { useFleetSnapshotStore, setupFleetSnapshotListeners, cleanupFleetSnapshot
 const NOW = 1_830_001;
 
 function snapshot(runs: FleetSnapshot["runs"] = [], changedAt = NOW): FleetSnapshot {
-  return { runs, changedAt };
+  return { runs, changedAt, degraded: false, lastSuccessfulAt: changedAt };
 }
 
 function makeRun(runId: string): FleetSnapshot["runs"][number] {
@@ -112,6 +112,26 @@ describe("fleetSnapshotStore", () => {
     await vi.waitFor(() => expect(getSnapshotMock.mock.results[0]!.value).resolves.toBeDefined());
 
     expect(useFleetSnapshotStore.getState().snapshot!.runs[0]!.runId).toBe("fresh");
+  });
+
+  it("replaces a previous subscription's snapshot when re-subscribing", async () => {
+    // After a teardown and re-subscribe the store still holds the OLD view's
+    // snapshot. Guarding the pull on "is the store empty" rejects the very
+    // payload that exists to replace it, and the view keeps rendering
+    // pre-remount data until the fleet next happens to change.
+    getSnapshotMock.mockResolvedValue(snapshot([makeRun("old")]));
+    setupFleetSnapshotListeners();
+    await vi.waitFor(() =>
+      expect(useFleetSnapshotStore.getState().snapshot!.runs[0]!.runId).toBe("old")
+    );
+
+    cleanupFleetSnapshotListeners();
+    getSnapshotMock.mockResolvedValue(snapshot([makeRun("current")]));
+    setupFleetSnapshotListeners();
+
+    await vi.waitFor(() =>
+      expect(useFleetSnapshotStore.getState().snapshot!.runs[0]!.runId).toBe("current")
+    );
   });
 
   it("keeps the store null when main has computed nothing yet", async () => {

@@ -146,26 +146,29 @@ describe("FleetSnapshotService", () => {
     service.stop();
   });
 
-  it("never publishes a false all-clear when a pty-host shard is unreachable", async () => {
+  it("retains the last known runs, marked stale, when a pty-host shard is unreachable", async () => {
     // PtyClient substitutes [] for a failed shard, so a total outage looks
-    // exactly like an idle machine. Broadcasting that would tell every view the
-    // fleet is clear because the host stopped answering.
+    // exactly like an idle machine. Publishing that as the run list would tell
+    // every view the fleet is clear because the host stopped answering.
     const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
     const service = new FleetSnapshotService(client as never);
     service.refresh();
     await vi.runOnlyPendingTimersAsync();
     expect(lastSnapshot().runs).toHaveLength(1);
+    expect(lastSnapshot().degraded).toBe(false);
 
     client.setFleet([], true);
     service.refresh();
     await vi.runOnlyPendingTimersAsync();
 
-    expect(broadcastMock).toHaveBeenCalledTimes(1);
-    expect(service.getLastBroadcast()?.runs).toHaveLength(1);
+    const stale = lastSnapshot();
+    expect(stale.degraded).toBe(true);
+    expect(stale.runs).toHaveLength(1);
+    expect(stale.lastSuccessfulAt).toBe(NOW);
     service.stop();
   });
 
-  it("resumes broadcasting once every shard answers again", async () => {
+  it("reports degradation once, not on every poll", async () => {
     const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
     const service = new FleetSnapshotService(client as never);
     service.refresh();
@@ -174,47 +177,155 @@ describe("FleetSnapshotService", () => {
     client.setFleet([], true);
     service.refresh();
     await vi.runOnlyPendingTimersAsync();
+    const afterFirstDegraded = broadcastMock.mock.calls.length;
 
-    client.setFleet([]);
     service.refresh();
     await vi.runOnlyPendingTimersAsync();
 
-    expect(broadcastMock).toHaveBeenCalledTimes(2);
-    expect(lastSnapshot().runs).toEqual([]);
+    // The state is "stale since X", which does not change while it persists.
+    expect(broadcastMock).toHaveBeenCalledTimes(afterFirstDegraded);
     service.stop();
   });
 
-  it("lets a newer compute win when an older one resolves late", async () => {
-    let releaseOld: (v: unknown) => void = () => {};
-    let releaseNew: (v: unknown) => void = () => {};
-    const client = {
-      getAllTerminalsWithCompletenessAsync: vi
-        .fn()
-        .mockImplementationOnce(() => new Promise((r) => (releaseOld = r)))
-        .mockImplementationOnce(() => new Promise((r) => (releaseNew = r))),
-    };
+  it("says it has never seen the fleet when the very first read is degraded", async () => {
+    const client = makePtyClient();
+    client.setFleet([], true);
     const service = new FleetSnapshotService(client as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    // Empty runs AND a null last-success is the "cannot tell you" state, which
+    // a renderer must not confuse with an idle fleet.
+    const snapshot = lastSnapshot();
+    expect(snapshot.degraded).toBe(true);
+    expect(snapshot.runs).toEqual([]);
+    expect(snapshot.lastSuccessfulAt).toBeNull();
+    service.stop();
+  });
+
+  it("re-broadcasts on recovery even when the runs are unchanged", async () => {
+    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    const service = new FleetSnapshotService(client as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    const afterHealthy = broadcastMock.mock.calls.length;
+
+    client.setFleet([], true);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    const afterDegraded = broadcastMock.mock.calls.length;
+    // Asserted as a TRANSITION, not just as a final state: checking only that
+    // the last snapshot is healthy-with-one-run passes even if both the
+    // degradation and the recovery were suppressed and this is still the very
+    // first broadcast.
+    expect(afterDegraded).toBe(afterHealthy + 1);
+
+    // Same fleet as the first healthy read: suppression would normally drop it,
+    // but the renderer is currently captioning those rows as stale.
+    client.setFleet([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(broadcastMock).toHaveBeenCalledTimes(afterDegraded + 1);
+    expect(lastSnapshot().degraded).toBe(false);
+    expect(lastSnapshot().runs).toHaveLength(1);
+    // An unchanged fleet keeps its original change time — recovery is news
+    // about reachability, not about the fleet having moved.
+    expect(lastSnapshot().changedAt).toBe(NOW);
+    service.stop();
+  });
+
+  it("dates staleness from the last successful read, not the last broadcast", async () => {
+    // The healthy poll that changes nothing is suppressed, but it still proves
+    // the fleet was readable. Stamping degradation from the last BROADCAST
+    // instead would report data as far older than it is — and the whole point
+    // of the caption is telling the user how much to trust what they see.
+    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    const service = new FleetSnapshotService(client as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    vi.setSystemTime(NOW + 60_000);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    vi.setSystemTime(NOW + 120_000);
+    client.setFleet([], true);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(lastSnapshot().degraded).toBe(true);
+    expect(lastSnapshot().lastSuccessfulAt).toBe(NOW + 60_000);
+    service.stop();
+  });
+
+  it("reports degraded when there is no pty client at all", async () => {
+    const service = new FleetSnapshotService(null);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    // No client is not "no agents" — it is the same inability to see the fleet,
+    // and staying silent strands a boot-time renderer on the loading path.
+    expect(lastSnapshot().degraded).toBe(true);
+    expect(lastSnapshot().lastSuccessfulAt).toBeNull();
+    service.stop();
+  });
+
+  it("reports degraded when the read rejects outright", async () => {
+    const fn = vi.fn().mockRejectedValue(new Error("host gone"));
+    const service = new FleetSnapshotService({
+      getAllTerminalsWithCompletenessAsync: fn,
+    } as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(lastSnapshot().degraded).toBe(true);
+    service.stop();
+  });
+
+  it("does not broadcast from a rejection that settles after stop()", async () => {
+    let reject: (e: unknown) => void = () => {};
+    const fn = vi.fn().mockImplementation(() => new Promise((_r, rj) => (reject = rj)));
+    const service = new FleetSnapshotService({
+      getAllTerminalsWithCompletenessAsync: fn,
+    } as never);
+
+    service.refresh();
+    service.stop();
+    reject(new Error("host gone"));
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(broadcastMock).not.toHaveBeenCalled();
+  });
+
+  it("coalesces triggers that arrive while a read is outstanding", async () => {
+    let release: (v: unknown) => void = () => {};
+    const fn = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((r) => (release = r)))
+      .mockResolvedValue({ terminals: [], degraded: false });
+    const service = new FleetSnapshotService({
+      getAllTerminalsWithCompletenessAsync: fn,
+    } as never);
 
     service.refresh();
     service.refresh();
+    service.refresh();
+    service.refresh();
+    // Every read fans out to every PTY shard, so overlapping them multiplies
+    // the most expensive call in the service.
+    expect(fn).toHaveBeenCalledTimes(1);
 
-    releaseNew({
+    release({
       terminals: [terminal({ agentState: "waiting", lastStateChange: NOW })],
       degraded: false,
     });
     await vi.runOnlyPendingTimersAsync();
-    expect(broadcastMock).toHaveBeenCalledTimes(1);
-    expect(lastSnapshot().runs[0].agentState).toBe("waiting");
 
-    // The stale in-flight result must not overwrite the newer fleet.
-    releaseOld({
-      terminals: [terminal({ agentState: "working", lastStateChange: NOW - 1000 })],
-      degraded: false,
-    });
-    await vi.runOnlyPendingTimersAsync();
-
-    expect(broadcastMock).toHaveBeenCalledTimes(1);
-    expect(service.getLastBroadcast()?.runs[0].agentState).toBe("waiting");
+    // Three coalesced triggers become exactly one more read, and the healthy
+    // result that was already outstanding still published.
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(broadcastMock.mock.calls[0][1].runs[0].agentState).toBe("waiting");
     service.stop();
   });
 

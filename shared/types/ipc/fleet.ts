@@ -69,9 +69,26 @@ export interface FleetSnapshot {
    * died four minutes ago both read as four minutes old, and the reassuring
    * interpretation is the wrong one.
    *
-   * Distinguishing those two needs a delivery heartbeat, which is a separate
-   * signal from a change timestamp and is not built yet. Until it is, no
-   * consumer may present this as freshness.
+   * {@link lastSuccessfulAt} is the freshness signal. Use that.
    */
   changedAt: number;
+  /**
+   * At least one PTY shard failed to answer the read behind this snapshot, so
+   * `runs` is the last complete view rather than the current one.
+   *
+   * The flag exists because an incomplete read and an idle fleet are the same
+   * empty list, and only one of them may render as "nothing is running". A
+   * degraded snapshot is retained data — present it as stale, never as clear.
+   */
+  degraded: boolean;
+  /**
+   * When a COMPLETE read last succeeded (epoch ms), or null if one never has.
+   *
+   * Tracked on every healthy poll but only put on the wire when something is
+   * actually broadcast, so it never defeats the unchanged-payload suppression
+   * the way a per-poll heartbeat would. Null alongside `degraded` is the "we
+   * have never been able to see the fleet" state, which is a different thing
+   * to tell the user than "this is twelve minutes old".
+   */
+  lastSuccessfulAt: number | null;
 }

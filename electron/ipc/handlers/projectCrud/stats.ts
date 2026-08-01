@@ -46,9 +46,9 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
   });
 
   // The run-grained sibling of the counts above, on the same source and the
-  // same cadence. Registered here so the two can never be started apart — a
-  // surface reading runs and a surface reading counts must describe the same
-  // fleet at the same moment.
+  // same cadence. Registered here so the two can never be started apart, and so
+  // one lifecycle owns both. They sample independently, so a surface reading
+  // runs and one reading counts can differ across a single transition.
   const fleetSnapshotService = new FleetSnapshotService(deps.ptyClient);
   fleetSnapshotServiceInstance = fleetSnapshotService;
   fleetSnapshotService.start();

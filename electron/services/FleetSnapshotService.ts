@@ -18,8 +18,10 @@ const DEBOUNCE_MS = 200;
  * 5s poll, same 200ms debounce on the same three events, same unchanged-payload
  * suppression, same cold-start replay. The two differ only in projection —
  * that one reduces `getAllTerminalsAsync()` to per-project counts, this one
- * keeps the runs. They read the same source on the same cadence, so a surface
- * built on either sees the same fleet at the same moment.
+ * keeps the runs. They read the same source on the same cadence but sample it
+ * independently, so two surfaces can briefly disagree across one transition;
+ * collapsing them into a single read with two projections is the fix, and is
+ * deliberately not attempted here.
  *
  * Main is the only process that can answer this question. Each project renders
  * in its own `WebContentsView` with its own V8 context and is LRU-evicted under
@@ -35,6 +37,16 @@ export class FleetSnapshotService {
   private lastBroadcast: FleetSnapshot | null = null;
   private pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
   private generation = 0;
+  private inFlight: Promise<void> | null = null;
+  private rerunRequested = false;
+  /**
+   * When a complete read last succeeded, updated on every healthy poll whether
+   * or not it produced a broadcast. Kept off the broadcast path deliberately —
+   * a timestamp that advanced every five seconds would change the payload every
+   * five seconds and defeat suppression entirely. It only reaches a renderer
+   * when something else already justified a send.
+   */
+  private lastSuccessfulReadAt: number | null = null;
 
   constructor(private ptyClient: PtyClient | undefined | null) {}
 
@@ -67,7 +79,7 @@ export class FleetSnapshotService {
   }
 
   refresh(): void {
-    void this.computeAndBroadcast();
+    this.scheduleCompute();
   }
 
   getLastBroadcast(): FleetSnapshot | null {
@@ -118,7 +130,7 @@ export class FleetSnapshotService {
 
   private armPollInterval(): void {
     const clear = setAlignedInterval(() => {
-      void this.computeAndBroadcast();
+      this.scheduleCompute();
     }, this.pollIntervalMs);
     this.intervalSlot.value = toDisposable(clear);
   }
@@ -127,8 +139,35 @@ export class FleetSnapshotService {
     if (this.debounceTimer !== null) clearTimeout(this.debounceTimer);
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
-      void this.computeAndBroadcast();
+      this.scheduleCompute();
     }, DEBOUNCE_MS);
+  }
+
+  /**
+   * One read at a time; overlapping triggers collapse into a single re-run.
+   *
+   * The aligned interval, the event debounce and an explicit `refresh()` can all
+   * fire while a read is outstanding, and each read fans out to every PTY shard.
+   * Letting them overlap multiplied the most expensive RPC in the service and
+   * made the outcome order-dependent: a slow COMPLETE read that started first
+   * would be discarded by a fast DEGRADED one that started second, throwing away
+   * the only healthy answer. Coalescing keeps at most one read outstanding and
+   * guarantees exactly one more afterwards, so the last trigger is never lost.
+   */
+  private scheduleCompute(): void {
+    if (this.inFlight !== null) {
+      this.rerunRequested = true;
+      return;
+    }
+    const gen = this.generation;
+    this.inFlight = this.computeOnce(gen).finally(() => {
+      this.inFlight = null;
+      if (!this.rerunRequested) return;
+      this.rerunRequested = false;
+      // A `stop()` while the read was outstanding bumps the generation. Chasing
+      // the coalesced trigger anyway would restart polling on a stopped service.
+      if (this.generation === gen) this.scheduleCompute();
+    });
   }
 
   /**
@@ -162,10 +201,14 @@ export class FleetSnapshotService {
     return true;
   }
 
-  private async computeAndBroadcast(): Promise<void> {
-    if (!this.ptyClient) return;
-
-    const gen = ++this.generation;
+  private async computeOnce(gen: number): Promise<void> {
+    // No client is not "no agents" — it is the same inability to see the fleet
+    // that a failed shard produces, and leaving it unpublished strands a
+    // boot-time renderer on the loading path forever.
+    if (!this.ptyClient) {
+      this.publishDegraded();
+      return;
+    }
 
     try {
       const { terminals: allTerminals, degraded } =
@@ -173,11 +216,14 @@ export class FleetSnapshotService {
       if (this.generation !== gen) return;
 
       // A shard that failed to answer contributed an empty list, not a true
-      // zero. Publishing that would tell every view the fleet is clear because
-      // the host stopped talking — the one reading a supervision surface must
-      // never produce. Hold the last known-good snapshot instead and let its
-      // age speak; the next healthy poll supersedes it.
-      if (degraded) return;
+      // zero. Publishing that as the run list would tell every view the fleet is
+      // clear because the host stopped talking — the one claim a supervision
+      // surface must never make. Retain the last known-good runs and mark them
+      // stale so the renderer can say so; the next healthy poll supersedes it.
+      if (degraded) {
+        this.publishDegraded();
+        return;
+      }
 
       const availability = getAgentAvailabilityStore();
       const runs: FleetRunRow[] = [];
@@ -216,13 +262,53 @@ export class FleetSnapshotService {
 
       if (this.generation !== gen) return;
 
-      if (this.lastBroadcast !== null && this.runsEqual(runs, this.lastBroadcast.runs)) return;
+      const now = Date.now();
+      this.lastSuccessfulReadAt = now;
 
-      const snapshot: FleetSnapshot = { runs, changedAt: Date.now() };
-      this.lastBroadcast = snapshot;
-      typedBroadcast<"fleet:snapshot-updated">(CHANNELS.FLEET_SNAPSHOT_UPDATED, snapshot);
+      const previous = this.lastBroadcast;
+      // Recovering from degraded is itself news even when the runs are
+      // identical: the renderer is currently captioning them as stale.
+      if (previous !== null && !previous.degraded && this.runsEqual(runs, previous.runs)) return;
+
+      const unchanged = previous !== null && this.runsEqual(runs, previous.runs);
+      this.publish({
+        runs,
+        changedAt: unchanged ? previous.changedAt : now,
+        degraded: false,
+        lastSuccessfulAt: now,
+      });
     } catch (error) {
       console.error("[FleetSnapshotService] Failed to compute fleet snapshot:", error);
+      // An unexpected rejection is one more way the fleet became unreadable.
+      // Logging alone left the renderer unable to distinguish it from a read
+      // that simply hadn't finished. Generation-guarded so a rejection settling
+      // after `stop()` cannot broadcast from a stopped service.
+      if (this.generation === gen) this.publishDegraded();
     }
+  }
+
+  /**
+   * Report that the fleet can no longer be read completely, retaining whatever
+   * was last known good.
+   *
+   * Sent once per degradation rather than every poll — the state is "stale since
+   * `lastSuccessfulAt`", which does not change while it persists. With no prior
+   * snapshot the runs are empty AND `lastSuccessfulAt` is null, which is the
+   * renderer's cue to say it cannot tell rather than to render an empty fleet.
+   */
+  private publishDegraded(): void {
+    const previous = this.lastBroadcast;
+    if (previous?.degraded === true) return;
+    this.publish({
+      runs: previous?.runs ?? [],
+      changedAt: previous?.changedAt ?? Date.now(),
+      degraded: true,
+      lastSuccessfulAt: this.lastSuccessfulReadAt,
+    });
+  }
+
+  private publish(snapshot: FleetSnapshot): void {
+    this.lastBroadcast = snapshot;
+    typedBroadcast<"fleet:snapshot-updated">(CHANNELS.FLEET_SNAPSHOT_UPDATED, snapshot);
   }
 }
