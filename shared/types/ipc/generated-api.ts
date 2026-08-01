@@ -162,6 +162,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["file-browser:stat-paths"]["args"]
     ): Promise<IpcInvokeMap["file-browser:stat-paths"]["result"]>;
   };
+  fileWatch: {
+    fingerprint(
+      ...args: IpcInvokeMap["file-watch:fingerprint"]["args"]
+    ): Promise<IpcInvokeMap["file-watch:fingerprint"]["result"]>;
+  };
   forgeAudit: {
     clearLog(
       ...args: IpcInvokeMap["forge-audit:clear-log"]["args"]

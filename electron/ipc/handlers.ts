@@ -32,6 +32,7 @@ import { registerMenuHandlers } from "./handlers/menu.js";
 import { registerFilesHandlers } from "./handlers/files.js";
 import { registerDiffMediaHandlers } from "./handlers/diffMedia.js";
 import { registerFileBrowserHandlers } from "./handlers/fileBrowser.js";
+import { registerFileWatchHandlers } from "./handlers/fileWatch.js";
 import { registerSlashCommandHandlers } from "./handlers/slashCommands.js";
 import { registerGeminiHandlers } from "./handlers/gemini.js";
 import { registerEventsHandlers } from "./handlers/events.js";
@@ -128,6 +129,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerFilesHandlers());
     register(() => registerDiffMediaHandlers());
     register(() => registerFileBrowserHandlers(deps));
+    register(() => registerFileWatchHandlers());
     register(() => registerCopyTreeHandlers(deps));
     register(() => registerAiHandlers(deps));
     register(() => registerSlashCommandHandlers());

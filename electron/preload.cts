@@ -60,6 +60,7 @@ import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.
 import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
 import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
+import { buildFileWatchPreloadBindings } from "./ipc/handlers/fileWatch.preload.js";
 import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
@@ -1363,6 +1364,9 @@ function buildElectronApi(): ElectronAPI {
 
     // File browser API — lazy directory listings for the read-only browser panel
     fileBrowser: buildFileBrowserPreloadBindings(_unwrappingInvoke),
+
+    // File watch API — the change signal for paths no git watcher covers
+    fileWatch: buildFileWatchPreloadBindings(_unwrappingInvoke),
 
     // Watchdog API — surfaces the main-process deadlock detector's disabled
     // state to the renderer and exposes a manual restart path.

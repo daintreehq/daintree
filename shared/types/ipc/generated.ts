@@ -361,6 +361,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./fileBrowser.js").FileBrowserStatPathsPayload];
     result: import("./fileBrowser.js").FileBrowserStatPathsResult;
   };
+  "file-watch:fingerprint": {
+    args: [payload: import("./fileWatch.js").FileWatchFingerprintPayload];
+    result: import("./fileWatch.js").FileWatchFingerprintResult;
+  };
   "forge-audit:clear-log": {
     args: [];
     result: void;

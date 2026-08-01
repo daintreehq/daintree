@@ -85,6 +85,8 @@ export const CHANNELS = {
   FILE_BROWSER_LIST_DIRECTORY: "file-browser:list-directory",
   FILE_BROWSER_STAT_PATHS: "file-browser:stat-paths",
 
+  FILE_WATCH_FINGERPRINT: "file-watch:fingerprint",
+
   TERMINAL_ACTIVITY: "terminal:activity",
 
   ARTIFACT_DETECTED: "artifact:detected",

@@ -245,6 +245,9 @@ export type {
   FileReadPayload,
   FileReadResult,
   FileReadErrorCode,
+  // Live-change signal for paths no worktree covers
+  FileWatchFingerprintPayload,
+  FileWatchFingerprintResult,
   // Diff media (image compare) types
   DiffMediaReadFileVersionsPayload,
   DiffMediaSide,

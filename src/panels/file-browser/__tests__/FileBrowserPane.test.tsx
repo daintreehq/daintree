@@ -205,6 +205,20 @@ vi.mock("../useWorkspaceRootPath", () => ({
   useWorkspaceRootPath: () => workspaceRootPathMock(),
 }));
 
+// The live signal for a root no worktree covers (#11590). Mocked so a test can
+// drive the tick directly and so the real hook's IPC poll never runs here —
+// without this the pane would depend on a `window.electron` jsdom doesn't have.
+const { externalChangeTickMock } = vi.hoisted(() => ({
+  externalChangeTickMock: vi.fn<(root: string, paths: readonly string[]) => number | undefined>(
+    () => undefined
+  ),
+}));
+vi.mock("@/hooks/useExternalChangeTick", () => ({
+  NO_WATCHED_PATHS: Object.freeze([]),
+  useExternalChangeTick: (root: string, paths: readonly string[], enabled: boolean) =>
+    enabled ? externalChangeTickMock(root, paths) : undefined,
+}));
+
 const { copyContextWithFeedbackMock } = vi.hoisted(() => ({
   copyContextWithFeedbackMock: vi.fn<
     typeof import("@/hooks/useWorktreeActions").copyContextWithFeedback
@@ -303,6 +317,8 @@ beforeEach(() => {
   copyContextWithFeedbackMock.mockClear();
   workspaceRootPathMock.mockReset();
   workspaceRootPathMock.mockReturnValue("");
+  externalChangeTickMock.mockReset();
+  externalChangeTickMock.mockReturnValue(undefined);
   // Module-global and never reset by the store itself, so a message left by an
   // earlier test would satisfy the next one's announcement assertion.
   useAnnouncerStore.setState({ polite: null, assertive: null });
@@ -327,6 +343,7 @@ beforeEach(() => {
   mockPanel.browserShowIgnored = undefined;
   mockPanel.browserSidebarWidth = undefined;
   mockPanel.browserWorkspaceRooted = undefined;
+  mockPanel.browserExpandedPaths = undefined;
   treeArgs.changeTick = undefined;
   treeProps.onActivate = undefined;
   treeProps.onInsertFileReference = undefined;
@@ -1331,9 +1348,9 @@ describe("promoted workspace-rooted browser (#11489)", () => {
   });
 
   it("ignores the placement worktree's change ticks once workspace-rooted", () => {
-    // Both tick maps are keyed by worktree, so a workspace source has no tick at
-    // all — following the placement worktree's would refresh the tree on writes
-    // in a folder this panel isn't showing.
+    // Both worktree tick maps are keyed by worktree id, so following the
+    // placement worktree's would refresh the tree on writes in a folder this
+    // panel isn't showing. Its own signal comes from the external tick instead.
     worktreeTicks.git = 120;
     worktreeTicks.fs = 450;
     workspaceRootPathMock.mockReturnValue("/scratches/one");
@@ -1341,6 +1358,47 @@ describe("promoted workspace-rooted browser (#11489)", () => {
     renderPane({ worktreeId: "wt-1" });
 
     expect(treeArgs.changeTick).toBeUndefined();
+  });
+
+  it("takes its tick from the external signal once workspace-rooted (#11590)", () => {
+    worktreeTicks.git = 120;
+    worktreeTicks.fs = 450;
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    mockPanel.browserWorkspaceRooted = true;
+    externalChangeTickMock.mockReturnValue(777);
+    renderPane({ worktreeId: "wt-1" });
+
+    // Not either worktree tick: the external signal is the only one describing
+    // the folder this panel is actually showing.
+    expect(treeArgs.changeTick).toBe(777);
+  });
+
+  it("watches the browsed root and the selected file, in that priority order", () => {
+    // The selected file has to be in the watched set: an in-place rewrite moves
+    // neither its parent directory's mtime nor that parent's child-name digest,
+    // so nothing else in the set can see it — and the viewer beside the tree is
+    // what's showing it.
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    mockPanel.browserWorkspaceRooted = true;
+    mockPanel.browserRootPath = "src";
+    mockPanel.browserSelectedPath = "src/notes.md";
+    mockPanel.browserExpandedPaths = ["src/deep"];
+    renderPane({ worktreeId: "wt-1" });
+
+    const [root, watched] = externalChangeTickMock.mock.calls[0] ?? [];
+    expect(root).toBe("/scratches/one");
+    expect(watched?.slice(0, 2)).toEqual(["/scratches/one/src", "/scratches/one/src/notes.md"]);
+    expect(watched).toContain("/scratches/one/src/deep");
+  });
+
+  it("does not poll externally when the source is a worktree", () => {
+    // The workspace host's recursive watcher already covers a worktree, and a
+    // second signal for it would be pure duplicate work.
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    mockPanel.browserWorkspaceRooted = false;
+    renderPane({ worktreeId: "wt-1" });
+
+    expect(externalChangeTickMock).not.toHaveBeenCalled();
   });
 });
 

@@ -38,6 +38,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { flushPanelPersistence } from "@/store/slices";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useExternalChangeTick } from "@/hooks/useExternalChangeTick";
 import { FileTreeView } from "./FileTreeView";
 import { FileBrowserViewer } from "./FileBrowserViewer";
 import { useFileBrowserTree } from "./useFileBrowserTree";
@@ -258,13 +259,48 @@ export function FileBrowserPane({
       [sourceWorktreeId]
     )
   );
-  // A single monotonic signal for "re-read the tree/file": whichever moved most
+  // A single monotonic signal for "re-read the tree": whichever moved most
   // recently. `|| undefined` so a never-changed worktree keeps the "no tick"
   // identity the hook expects. Both sources are worktree-store maps, so a
-  // workspace root has no tick at all and refreshes on demand only (#11482).
-  const changeTick = Math.max(gitChangeTick ?? 0, fsChangeTick ?? 0) || undefined;
+  // workspace root gets nothing from them (#11482) — `externalChangeTick` below
+  // is what covers it.
+  const worktreeChangeTick = Math.max(gitChangeTick ?? 0, fsChangeTick ?? 0) || undefined;
 
   const stableExpandedPaths = useMemo(() => expandedPaths ?? EMPTY_PATHS, [expandedPaths]);
+
+  // What a workspace-rooted panel watches, in the order that decides who
+  // survives the hook's per-sample cap.
+  //
+  // The tree's own root comes first — that is the re-rooted subdirectory when
+  // there is one, not the workspace folder above it, or a write directly into
+  // the browsed folder would be invisible. The selected file comes second and
+  // ahead of every directory: an in-place rewrite moves neither its parent's
+  // mtime nor that parent's child-name digest, so nothing else in this set can
+  // see it, and it is what the viewer beside the tree is showing. Expanded
+  // directories fill the rest; a collapsed subtree isn't rendered and is re-read
+  // from scratch when it reopens.
+  const watchedPaths = useMemo(() => {
+    if (!basePath || isWorktreeSource) return EMPTY_PATHS;
+    const treeRoot = join(basePath, rootPath);
+    const selectedFile = selectedPath === null ? [] : [join(basePath, selectedPath)];
+    return [
+      treeRoot,
+      ...selectedFile,
+      ...stableExpandedPaths.map((relative) => join(basePath, relative)),
+    ];
+  }, [basePath, isWorktreeSource, rootPath, selectedPath, stableExpandedPaths]);
+
+  // Polled from main rather than watched: a scratch or worktree-less project has
+  // no workspace host to hang a watcher on, and the poll is its own reconcile
+  // (#11590).
+  const externalChangeTick = useExternalChangeTick(
+    basePath,
+    watchedPaths,
+    Boolean(basePath) && !isWorktreeSource
+  );
+
+  // One tick contract for `useFileBrowserTree`, whichever side supplied it.
+  const changeTick = worktreeChangeTick ?? externalChangeTick;
 
   const {
     rows,
