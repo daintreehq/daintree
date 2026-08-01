@@ -115,7 +115,7 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
       id: "workflow.focusNextAttention",
       title: "Focus Next Attention",
       description:
-        "Move keyboard focus to the agent most in need of attention, preferring one blocked on the user over one merely working. Use this to triage a fleet by hand. It changes what the user sees and reports only counts — read an agent status snapshot for the actual state of each terminal.",
+        "Move keyboard focus to the agent most in need of attention, preferring one blocked on the user over one merely working. Use this to triage a fleet by hand. It changes what the user sees, and reports whether anything was focused, which state that agent was in, and how many are waiting or working — read an agent status snapshot for the state of each terminal.",
       category: "worktree",
       kind: "command",
       danger: "safe",

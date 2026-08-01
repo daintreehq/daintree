@@ -17,7 +17,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       id: "recipe.list",
       title: "List Recipes",
       description:
-        "List the saved recipes for the current project — named multi-terminal setups the user has configured. Use this to discover recipe ids before running one. It never fails; an empty list means the project has no recipes rather than that recipes are unavailable.",
+        "List the saved recipes for the current project — named multi-terminal setups the user has configured. Use this to discover recipe ids before running one. It never fails, and it reports whether recipes are still loading: an empty list while loading means not read yet, not that the project has none.",
       category: "recipes",
       kind: "query",
       danger: "safe",
@@ -28,7 +28,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
             .string()
             .optional()
             .describe(
-              "Restricts the listing to recipes available in one worktree, using an id from the worktree-listing capability. Defaults to the active worktree."
+              "Restricts the listing to recipes available in one worktree, using an id from the worktree-listing capability. Omit it to list every recipe in the project rather than the active worktree's."
             ),
         })
         .optional(),
@@ -65,7 +65,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       id: "recipe.run",
       title: "Run Recipe",
       description:
-        "Launch every terminal a saved recipe defines, in one worktree, as a repeatable multi-pane setup. Launch a single agent or a plain terminal instead when only one pane is wanted. This creates several panels at once and starts their configured commands or agents, so it can consume substantial resources and may partly succeed — check what actually started rather than assuming all of it did.",
+        "Launch the terminals a saved recipe defines, in one worktree, as a repeatable multi-pane setup. Launch a single agent or a plain terminal instead when only one pane is wanted. This creates several panels at once and starts their configured commands or agents. An automated caller gets at most the first three of them; the rest come back as failures, so check what actually started.",
       category: "recipes",
       kind: "command",
       danger: "confirm",

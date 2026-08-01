@@ -277,7 +277,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "files.search",
       title: "Search Files",
       description:
-        "Find files by name or glob within a worktree. This matches paths only, never file contents — use a source-reading capability to search inside files. Results are capped and truncated silently rather than paged, so a full-looking result may not be exhaustive when the pattern is broad.",
+        "Find files whose name or path contains the query, within a worktree. Matching is plain substring, not glob, and never looks at file contents — use a source-reading capability to search inside files. Results are capped and truncated silently rather than paged, so a full-looking result may not be exhaustive when the query is broad.",
       category: "files",
       kind: "query",
       danger: "safe",
@@ -285,7 +285,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       argsSchema: FileSearchPayloadSchema,
       examples: [
         {
-          args: { query: "*.test.ts" },
+          args: { query: ".test.ts" },
           description: "Search for test files from the active worktree root",
         },
         {

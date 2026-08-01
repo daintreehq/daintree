@@ -127,7 +127,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.kill",
     title: "Kill Terminal",
     description:
-      "Permanently destroy a panel and any process behind it, immediately, with no trash step and no recovery. This is not limited to terminals — whatever panel the id names is removed. Identify it explicitly: an automated caller cannot see what the user has focused, and destroying the wrong pane cannot be undone. Close it instead when recoverability matters.",
+      "Permanently destroy a panel and any process behind it, with no trash step and no recovery. This is not limited to terminals — whatever panel the id names is removed. A panel running an agent session is left untouched unless the call itself is marked confirmed, so read back its state rather than assuming it went. Identify it explicitly: an automated caller cannot see what the user has focused. Close it instead when recoverability matters.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -136,7 +136,12 @@ export function registerTerminalLifecycleActions(
     keywords: ["terminate", "stop", "remove", "delete"],
     argsSchema: z.object({
       terminalId: z.string().optional(),
-      confirmed: z.boolean().optional(),
+      confirmed: z
+        .boolean()
+        .optional()
+        .describe(
+          "Acknowledges losing a running agent session. Without it, a panel running an agent is left alone and a confirmation is staged for the user instead, so the call returns having changed nothing."
+        ),
     }),
     run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
@@ -169,7 +174,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restart",
     title: "Restart Terminal",
     description:
-      "Begin restarting a terminal's process in place, keeping the pane. This returns before the restart has finished, so the terminal is not ready yet when it does — watch its status before sending anything. Whatever was running is terminated and unsaved in-process state is lost. A panel with no process is ignored rather than reported as an error.",
+      "Begin restarting a terminal's process in place, keeping the pane. This returns before the restart has finished, so the terminal is not ready yet when it does — watch its status before sending anything. A terminal running an agent session is left untouched unless the call itself is marked confirmed; otherwise whatever was running is terminated and unsaved in-process state is lost. A panel with no process is ignored rather than reported as an error.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -179,7 +184,12 @@ export function registerTerminalLifecycleActions(
     keywords: ["relaunch", "reset", "rerun", "process"],
     argsSchema: z.object({
       terminalId: z.string().optional(),
-      confirmed: z.boolean().optional(),
+      confirmed: z
+        .boolean()
+        .optional()
+        .describe(
+          "Acknowledges interrupting a running agent session. Without it, a terminal running an agent is left alone and a confirmation is staged for the user instead, so the call returns having changed nothing."
+        ),
     }),
     run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
@@ -471,7 +481,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.killAll",
     title: "Kill All Terminals",
     description:
-      "Permanently destroy every panel in the project at once — across all worktrees, of every kind, including trashed and backgrounded ones — with no trash step and no recovery. This takes the user's own shells and other agents' running work with it; only tooling-internal and dialog-hosted panels are spared. There is essentially never a reason for an automated caller to use this.",
+      "Permanently destroy every panel in the project at once — across all worktrees, of every kind, including trashed and backgrounded ones — with no trash step and no recovery. This takes the user's own shells and other agents' running work with it; only tooling-internal and dialog-hosted panels are spared. While any agent session is running it destroys nothing unless the call itself is marked confirmed. There is essentially never a reason for an automated caller to use this.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -479,7 +489,16 @@ export function registerTerminalLifecycleActions(
     dangerRationale:
       "Permanently kills every user-facing terminal. All scrollback and session state are lost.",
     keywords: ["terminate", "stop", "remove", "delete"],
-    argsSchema: z.object({ confirmed: z.boolean().optional() }).optional(),
+    argsSchema: z
+      .object({
+        confirmed: z
+          .boolean()
+          .optional()
+          .describe(
+            "Acknowledges losing every running agent session. Without it, nothing is destroyed while any agent is running — a confirmation is staged for the user and the call returns having changed nothing."
+          ),
+      })
+      .optional(),
     run: async (args: unknown) => {
       // Don't reuse bulkCloseAll() — it indiscriminately removes every panel,
       // including the tooling-internal assistant terminal. Filter those out

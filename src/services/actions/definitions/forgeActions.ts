@@ -567,7 +567,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.dismissReview",
       title: "Dismiss Pull Request Review",
       description:
-        "Dismiss a submitted review on a pull request, clearing the block it placed on merging. This is publicly visible, usually needs elevated permissions, and requires a message explaining why. Identify the review from a prior review-thread lookup — dismissing the wrong one silently unblocks a merge someone intended to gate.",
+        "Dismiss a submitted review on a pull request, clearing the block it placed on merging. This is publicly visible, usually needs elevated permissions, and requires a message explaining why. Identify the review by the forge's own review id, which nothing on this surface can list — dismissing the wrong one silently unblocks a merge someone intended to gate.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -580,7 +580,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
           .number()
           .int()
           .positive()
-          .describe("Review id to dismiss, from a prior review-thread lookup"),
+          .describe(
+            "Review id to dismiss, as assigned by the forge. Nothing on this surface lists reviews, so read it from the forge itself."
+          ),
         message: z.string().trim().min(1).describe("Reason for dismissing the review"),
       }),
       resultSchema: ForgeReviewResultSchema,
@@ -864,7 +866,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getCIStatus",
       title: "Get CI Status",
       description:
-        "Fetch the roll-up CI verdict for one pull request from the active forge provider. Read the overall state for the answer: the accompanying counts cover required checks only, so a zero total means nothing is gating the merge, not that no checks ran — only a neutral state means that. Values are provider-cached and can lag by around a minute, so poll for a settled verdict rather than treating a single success as final.",
+        "Fetch the roll-up CI verdict for one pull request from the active forge provider. Read the overall state for the answer: the accompanying counts cover required checks only, and a zero total also appears when the required-check list could not be read in full, so it is never evidence that nothing gates the merge. Values are provider-cached and can lag by around a minute, so poll for a settled verdict rather than treating a single success as final.",
       category: "forge",
       kind: "query",
       danger: "safe",

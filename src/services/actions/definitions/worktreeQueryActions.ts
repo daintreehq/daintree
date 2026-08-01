@@ -51,7 +51,7 @@ export function registerWorktreeQueryActions(
     id: "worktree.getCurrent",
     title: "Get Current Worktree",
     description:
-      "Get the worktree currently in use, which is what most work should be scoped to. Use the full worktree listing only when you genuinely need the others. It never fails: an empty result means no worktree is active, which is the case a caller most often needs to handle before acting.",
+      "Get the worktree currently in use, which is what most work should be scoped to. Use the full worktree listing only when you genuinely need the others. An empty result means no worktree is active, or the active one can no longer be found — either way, handle it before acting.",
     category: "worktree",
     kind: "query",
     danger: "safe",
@@ -206,7 +206,7 @@ export function registerWorktreeQueryActions(
       id: "worktree.getAvailableBranch",
       title: "Get Available Branch Name",
       description:
-        "Turn a desired branch name into one that is actually free, appending a numeric suffix when the name is taken. Use this before creating a branch or worktree so creation does not fail on a collision. It only reserves nothing — the name can still be taken between this call and the one that uses it.",
+        "Turn a desired branch name into one that is actually free, appending a numeric suffix when the name is taken. Use this before creating a branch or worktree so creation does not fail on a collision. It reserves nothing — the name can still be taken between this call and the one that uses it.",
       category: "worktree",
       kind: "query",
       danger: "safe",

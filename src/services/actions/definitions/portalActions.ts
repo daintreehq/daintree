@@ -21,7 +21,7 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     id: "portal.toggle",
     title: "Toggle Portal",
     description:
-      "Show or hide the portal browser panel, whichever it currently is not. This changes what the user sees without closing any tab or discarding page state. Because it toggles rather than sets, calling it without knowing the current state can hide a panel the user is using.",
+      "Show or hide the portal browser panel, whichever it currently is not. This changes what the user sees without closing any tab or discarding page state. Because it toggles rather than sets, calling it without knowing the current state can hide a panel the user is using. Opening is suppressed while a dialog or overlay owns the viewport, so the call can do nothing at all.",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -181,7 +181,7 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     id: "portal.newTab",
     title: "New Portal Tab",
     description:
-      "Open a new empty tab in the portal browser for the user to work in. This adds a tab that consumes resources until closed. Open a specific address instead when the destination is already known.",
+      "Open a new tab in the portal browser for the user to work in. It loads the user's configured default address when they have set one, and is blank otherwise. This adds a tab that consumes resources until closed. Open a specific address instead when the destination is already known.",
     category: "portal",
     kind: "command",
     danger: "safe",

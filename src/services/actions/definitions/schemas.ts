@@ -111,7 +111,7 @@ export const FileSearchPayloadSchema = z.object({
   query: z
     .string()
     .describe(
-      "Matched against file names and paths, not file contents. Use a source-reading capability to search inside files."
+      "Matched as a plain substring against file names and paths — not as a glob, and not file contents. Use a source-reading capability to search inside files."
     ),
   limit: z
     .number()
@@ -388,13 +388,13 @@ export const TerminalStatusEntrySchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found; absent on entries that carry an error instead."
+      "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found; absent only when the terminal itself could not be resolved."
     ),
   error: z
     .string()
     .optional()
     .describe(
-      "Set when this specific terminal could not be read, leaving the rest of the batch valid. Entries carrying it have no status fields."
+      "Set when the terminal was not found, and also stamped on every resolved entry when the batched output fetch fails — in that case the status fields are still populated and only the recent output is missing. Its presence therefore does not by itself mean this terminal was unreadable, and it never fails the call as a whole."
     ),
 });
 

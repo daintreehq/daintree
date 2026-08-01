@@ -250,7 +250,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .boolean()
         .optional()
         .describe(
-          "Keeps the terminal out of the saved session, so it does not come back after a restart. Use for throwaway work the user should not inherit."
+          "Keeps the terminal out of the saved session, so it does not come back after a restart. It also hides the panel from terminal listings, status snapshots and agent-state reads, and spares it from bulk close and kill — so the launching caller cannot find or poll the terminal afterwards. Use for throwaway work the user should not inherit."
         ),
       removeOnExit: z
         .boolean()

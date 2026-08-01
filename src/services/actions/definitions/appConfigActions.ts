@@ -22,7 +22,7 @@ export function registerAppConfigActions(
     id: "agentSettings.get",
     title: "Get Agent Settings",
     description:
-      "Read the stored per-agent configuration, such as each agent's model and launch flags, plus the global overrides. Use this before changing a setting so unrelated values are preserved. Agents that have never been configured are simply absent from the result rather than appearing with defaults, so absence means unconfigured.",
+      "Read the stored per-agent configuration, such as each agent's model and launch flags, plus the global overrides. Use this to see how an agent is currently set up; a write merges into the stored entry, so unrelated values survive without reading first. Agents that have never been configured are simply absent from the result rather than appearing with defaults, so absence means unconfigured.",
     category: "settings",
     kind: "query",
     danger: "safe",

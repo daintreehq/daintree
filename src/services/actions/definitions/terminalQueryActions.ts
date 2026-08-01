@@ -101,7 +101,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getOutput",
     title: "Get Terminal Output",
     description:
-      "Read the trailing scrollback of one terminal, for inspecting what an agent or command actually printed. Use the terminal status snapshot instead when watching several terminals — it fetches output tails for a whole fleet in one call, and reading them one at a time is the common mistake here. Output is returned verbatim and may be truncated to the requested tail; a terminal that no longer exists comes back as an error field in the result rather than failing the call.",
+      "Read the trailing scrollback of one terminal, for inspecting what an agent or command actually printed. Use the terminal status snapshot instead when watching several terminals — it fetches output tails for a whole fleet in one call, and reading them one at a time is the common mistake here. Output has ANSI codes stripped by default and may be truncated to the requested tail; a terminal that no longer exists comes back as an error field in the result rather than failing the call.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -111,7 +111,7 @@ export function registerTerminalQueryActions(
         .string()
         .min(1)
         .describe(
-          "Identifies the terminal to act on, using a panel id from the terminal-listing capability. An id no longer tracked resolves as idle rather than failing."
+          "Identifies the terminal to act on, using a panel id from the terminal-listing capability. An id no longer tracked comes back as an error field in the result rather than failing the call."
         ),
       maxLines: z
         .number()
@@ -193,7 +193,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getStatus",
     title: "Get Terminal Status",
     description:
-      "Take a point-in-time snapshot of agent and process state across many terminals at once, optionally with recent output tails. This is the batched polling path: prefer it over listing terminals for agent state or reading each terminal's output in turn. It never blocks and never fails as a whole — a terminal that cannot be read carries its own error while the rest stay valid — so use the blocking wait instead when the goal is to proceed the moment an agent finishes.",
+      "Take a point-in-time snapshot of agent and process state across many terminals at once, optionally with recent output tails. This is the batched polling path: prefer it over listing terminals for agent state or reading each terminal's output in turn. It never blocks and never fails as a whole — an entry's own error can mean that terminal was missing or that the shared output fetch failed — so use the blocking wait instead when the goal is to proceed the moment an agent finishes.",
     category: "terminal",
     kind: "query",
     danger: "safe",

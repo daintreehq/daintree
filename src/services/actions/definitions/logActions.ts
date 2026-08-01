@@ -216,7 +216,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "errors.recent",
     title: "Recent Errors",
     description:
-      "List recent entries from the diagnostics error log, covering runtime and inter-process failures, newest first. This is a separate store from the user's notification inbox, so a full picture usually means reading both. It never fails; an empty list means nothing was recorded rather than that logging is off.",
+      "List recent entries from the diagnostics error log, covering runtime and inter-process failures, newest first. This is a separate store from the user's notification inbox, so a full picture usually means reading both. Dismissed entries are left out by default, so an empty list means nothing was recorded or everything recorded has been dismissed.",
     category: "errors",
     kind: "query",
     danger: "safe",
@@ -271,7 +271,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "notifications.recent",
     title: "Recent Notifications",
     description:
-      "List recent entries from the notification inbox — the completion, waiting and informational messages the user actually saw — newest first. This is a separate store from the diagnostics error log, so a full picture of what went wrong usually means reading both. It never fails; an empty list means nothing was notified.",
+      "List recent entries from the notification inbox — the completion, waiting and informational messages raised for the user, including quiet ones that never surfaced as a toast — newest first. This is a separate store from the diagnostics error log, so a full picture of what went wrong usually means reading both. It never fails; an empty list means nothing was notified.",
     category: "diagnostics",
     kind: "query",
     danger: "safe",

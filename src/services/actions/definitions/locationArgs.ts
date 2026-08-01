@@ -70,12 +70,23 @@ const worktreeIdField = selectorField(
   "Identifies the worktree to act on, using an id from the worktree-listing capability. Omit this and the path to target the active worktree; the call fails when neither is given and no worktree is active."
 );
 
+/**
+ * The `requireSelector: true` variant. The default text above promises an
+ * active-worktree fallback that these tools do not have — they reject in the
+ * schema transform before any resolution runs, whether or not a worktree is
+ * active — and one of them (the default-path tool) says so in its own
+ * description, so emitting the fallback text here contradicted it on the wire.
+ */
+const worktreeIdRequiredField = selectorField(
+  "Identifies the worktree to act on, using an id from the worktree-listing capability. This action has no active-worktree fallback: supply this or the path, or the call is rejected."
+);
+
 const worktreePathField = selectorField(
-  "Identifies the worktree to act on by absolute root path, as an alternative to its id. The id wins when both are given, and an unknown path fails rather than falling back to the active worktree."
+  "Identifies the worktree to act on by absolute root path, as an alternative to its id. The id wins when both are given, and the path is used as given — it is never silently replaced by the active worktree."
 );
 
 const projectIdField = selectorField(
-  "Identifies the project to act on, using an id from the project-listing capability. Omit this and the path to target the active project; an id that names no open project fails."
+  "Identifies the project to act on, using an id from the project-listing capability. Omit this and the path to target the active project; an id naming no open project is rejected rather than silently retargeted, as long as the set of open projects is known."
 );
 
 const projectPathField = selectorField(
@@ -206,7 +217,7 @@ export function withWorktreeLocation<T extends z.ZodRawShape>(
   const { legacy = [], requireSelector = false, pagination } = options;
 
   const shape: Record<string, z.ZodTypeAny> = {
-    worktreeId: worktreeIdField,
+    worktreeId: requireSelector ? worktreeIdRequiredField : worktreeIdField,
     worktreePath: worktreePathField,
   };
   for (const alias of legacy) {

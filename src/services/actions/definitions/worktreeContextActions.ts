@@ -213,7 +213,7 @@ export function registerWorktreeContextActions(
       id: "worktree.copyContext",
       title: "Copy Worktree Context (Alias)",
       description:
-        "Alias for generating a worktree context bundle; behaves identically to the copy-tree capability.",
+        "Alias for generating a worktree context bundle. It accepts a subset of the copy-tree capability's arguments — path scoping is not available here, so use that capability directly for a scoped copy.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -657,7 +657,7 @@ export function registerWorktreeContextActions(
       id: "worktree.reviewReadiness",
       title: "Review Readiness",
       description:
-        "Judge whether a worktree is ready to commit, push and merge, and list what is blocking it. This is a read-only summary that runs no git or forge operation itself. Signals that depend on forge data report as unknown rather than as passing when that data has not arrived, so an unknown is genuinely unknown and should not be read as a green light.",
+        "Judge whether a worktree is ready to commit, push and merge, and list what is blocking it. This is a read-only summary: it reads git state and performs no git or forge mutation. Signals that depend on forge data report as unknown rather than as passing when that data has not arrived, so an unknown is genuinely unknown and should not be read as a green light.",
       category: "worktree",
       kind: "query",
       danger: "safe",

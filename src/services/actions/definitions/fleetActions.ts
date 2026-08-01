@@ -241,7 +241,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     palette: { mode: "hidden" },
     title: "Fleet: Kill",
     description:
-      "Remove every armed terminal panel. This destroys those terminals and their running work with no trash step and no recovery, so it always requires confirmation.",
+      "Remove every armed terminal panel. This destroys those terminals with no trash step: their running processes and scrollback are unrecoverable, though a journaled agent session can still be resumed afterwards. It always requires confirmation.",
     category: "terminal",
     kind: "command",
     danger: "confirm",

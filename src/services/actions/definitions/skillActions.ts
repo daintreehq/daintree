@@ -17,7 +17,7 @@ export function registerSkillActions(actions: ActionRegistry, _callbacks: Action
       id: "skills.search",
       title: "Search skills",
       description:
-        "Find plugin-contributed skills: reusable written instructions and workflows, such as a review rubric or a test-driven-development procedure, that plugins ship for an agent to follow. This returns names and summaries only; load a skill by id to read its actual instructions. Omitting a query lists everything available, which is the cheapest way to see what exists.",
+        "Find plugin-contributed skills: reusable written instructions and workflows, such as a review rubric or a test-driven-development procedure, that plugins ship for an agent to follow. This returns names and summaries only; load a skill by id to read its actual instructions. Omitting a query lists available skills, but only up to the capped result limit, and the result never says whether more were left out.",
       category: "agent",
       kind: "query",
       danger: "safe",
@@ -27,7 +27,9 @@ export function registerSkillActions(actions: ActionRegistry, _callbacks: Action
           query: z
             .string()
             .optional()
-            .describe("Keywords to match. Omit or pass an empty string to list all skills."),
+            .describe(
+              "Keywords to match. Omit or pass an empty string to list skills unfiltered, still bounded by the result limit."
+            ),
           limit: z
             .number()
             .int()

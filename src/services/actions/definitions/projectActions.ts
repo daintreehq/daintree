@@ -295,7 +295,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.saveSettings",
     title: "Save Project Settings",
     description:
-      "Persist a project's settings, replacing the stored values with the ones supplied. This writes immediately and has no undo, and settings drive real behaviour such as run commands and worktree naming — read the current settings first so unrelated fields are not lost.",
+      "Persist a project's settings, merging the supplied fields over the stored ones so anything omitted is kept. This writes immediately and has no undo, and settings drive real behaviour such as run commands and worktree naming. The MCP tier and agent-exposure keys are stripped from every write, so setting those reports success and changes nothing.",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -511,7 +511,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.detectRunners",
     title: "Detect Runners",
     description:
-      "Detect the runnable commands a project defines — its test, lint, build and dev scripts — by inspecting its manifest files. Use this to discover the right command to run rather than guessing one. It reads declared scripts only, so a project that drives tooling some other way returns nothing.",
+      "Detect the runnable commands a project defines, by inspecting its manifest files. Use this to discover the right command to run rather than guessing one. It returns every script it finds, publish and deploy included, and for some frameworks synthesizes conventional commands that are declared nowhere — check what a command actually does before running it.",
     category: "project",
     kind: "query",
     danger: "safe",
