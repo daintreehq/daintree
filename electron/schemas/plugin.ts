@@ -356,7 +356,7 @@ export const ProcessToolContributionSchema = z
       // that works, rather than rewriting the author's value behind their back.
       .refine((command) => stripCommandExecutableExtension(command) === command, {
         message:
-          "command must omit the executable/script extension (write \"acme\", not \"acme.exe\" or \"acme.py\") — detection strips it before matching",
+          'command must omit the executable/script extension (write "acme", not "acme.exe" or "acme.py") — detection strips it before matching',
       })
       // `npm exec vite` puts the launcher subcommand at argv[1] and the real
       // binary at argv[2]. A plugin owning `exec` would match first and win the

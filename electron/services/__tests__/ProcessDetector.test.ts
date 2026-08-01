@@ -2220,7 +2220,9 @@ describe("plugin-contributed process detections (#11613)", () => {
 
   function runTreeDetection(terminalId: string) {
     const cache = createCacheMock();
-    cache.setChildren(100, [{ pid: 200, comm: "acme-cli", command: "/usr/local/bin/acme-cli run" }]);
+    cache.setChildren(100, [
+      { pid: 200, comm: "acme-cli", command: "/usr/local/bin/acme-cli run" },
+    ]);
     const callback = vi.fn();
     const detector = new ProcessDetector(terminalId, Date.now(), 100, callback, cache as never);
     detector.start();
