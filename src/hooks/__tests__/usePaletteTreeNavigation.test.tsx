@@ -207,7 +207,30 @@ describe("usePaletteTreeNavigation", () => {
 
       act(() => result.current.step(1));
       expect(result.current.selectedRowId).toBeNull();
-      expect(result.current.selectedRowIndex).toBe(-1);
+      expect(result.current.selectedNavigableIndex).toBe(-1);
+    });
+
+    it("wraps a delta larger than the list rather than running off the end", () => {
+      // A single `+ length` in the modulo only rescues a delta of -1; this is a
+      // shared API that may be handed a page-sized jump.
+      const { result } = setup([["a", ["a1", "a2", "a3"]]]);
+
+      act(() => result.current.step(-4));
+      expect(result.current.selectedRowId).toBe("i:a3");
+
+      act(() => result.current.step(7));
+      expect(result.current.selectedRowId).toBe("i:a1");
+    });
+
+    it("counts the navigable sequence, not the rows that include headers", () => {
+      const { result } = setup([
+        ["a", ["a1"]],
+        ["b", ["b1"]],
+      ]);
+
+      act(() => result.current.step(1));
+      // Third entry in `rows` (h:a, i:a1, h:b, i:b1) but second navigable one.
+      expect(result.current.selectedNavigableIndex).toBe(1);
     });
   });
 
@@ -220,7 +243,27 @@ describe("usePaletteTreeNavigation", () => {
 
       expect(result.current.selectedRowId).toBe("i:a3");
       // Its position moved, which is exactly what a stored index would have missed.
-      expect(result.current.selectedRowIndex).toBe(2);
+      expect(result.current.selectedNavigableIndex).toBe(1);
+    });
+
+    it("commits a fallback selection when Enter activates it", () => {
+      // The highlight can be a DERIVED fallback: the stored row vanished and
+      // the first navigable one took over. Activating without storing that id
+      // leaves the next list change move the highlight off the row the user
+      // just acted on — palettes that stay open on a failed activation show it.
+      const onActivate = makeActivateSpy();
+      const { result, rerender } = setup([["a", ["a1", "a2"]]], { onActivate });
+
+      act(() => result.current.selectRow("i:a2"));
+      rerender({ groups: buildGroups([["a", ["a1"]]]), scope: undefined });
+      expect(result.current.selectedRowId).toBe("i:a1");
+
+      act(() => result.current.handleBodyKeyDown(keyEvent("Enter").event));
+      expect(onActivate.mock.calls[0]![0].rowId).toBe("i:a1");
+
+      // A row arriving above the activated one must not steal the highlight.
+      rerender({ groups: buildGroups([["a", ["a0", "a1"]]]), scope: undefined });
+      expect(result.current.selectedRowId).toBe("i:a1");
     });
 
     it("falls back to the first navigable row when the selected row is gone", () => {
@@ -349,6 +392,34 @@ describe("usePaletteTreeNavigation", () => {
       act(() => result.current.handleBodyKeyDown(keyEvent("ArrowRight").event));
 
       expect(onGroupCollapsedChange).toHaveBeenLastCalledWith("a", false);
+    });
+
+    it("remembers the keyboard-collapsed group across a selection-scope change", () => {
+      // A new query re-ranks the list but says nothing about which group the
+      // keyboard last shut, so → must still reopen that one rather than
+      // whichever group happens to sit first.
+      const onGroupCollapsedChange = vi.fn();
+      const { result, rerender } = setup(
+        [
+          ["a", ["a1"], { collapsed: true }],
+          ["b", ["b1"]],
+        ],
+        { onGroupCollapsedChange, selectionScopeKey: "q1" }
+      );
+
+      act(() => result.current.selectRow("i:b1"));
+      act(() => result.current.handleBodyKeyDown(keyEvent("ArrowLeft").event));
+
+      rerender({
+        groups: buildGroups([
+          ["a", ["a1"], { collapsed: true }],
+          ["b", ["b1"], { collapsed: true }],
+        ]),
+        scope: "q2",
+      });
+      act(() => result.current.handleBodyKeyDown(keyEvent("ArrowRight").event));
+
+      expect(onGroupCollapsedChange).toHaveBeenLastCalledWith("b", false);
     });
 
     it("leaves the horizontal arrows alone when no collapse handler is supplied", () => {

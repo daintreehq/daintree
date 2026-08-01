@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach, beforeAll, afterAll } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import type { ResumeSessionItem } from "@/services/resumeSessionItems";
 
 const paletteState = {
@@ -35,14 +36,18 @@ vi.mock("@/hooks/useKeybinding", () => ({
 }));
 
 // jsdom ships none of these, and the palette body's scroll-shadow hook and the
-// dialog's motion query both reach for them on mount.
-globalThis.ResizeObserver ??= class implements ResizeObserver {
+// dialog's motion query both reach for them on mount. Stubbed through vitest
+// rather than assigned onto `globalThis`: neither is a jsdom-owned key, so a
+// raw assignment survives environment teardown and leaks into whatever file
+// this worker runs next — an always-false motion query is exactly the kind of
+// thing that then passes for the wrong reason.
+class ResizeObserverStub implements ResizeObserver {
   observe(): void {}
   unobserve(): void {}
   disconnect(): void {}
-};
-Element.prototype.scrollIntoView ??= function scrollIntoView(): void {};
-globalThis.matchMedia ??= function matchMedia(query: string): MediaQueryList {
+}
+
+function matchMediaStub(query: string): MediaQueryList {
   const list: MediaQueryList = {
     matches: false,
     media: query,
@@ -54,7 +59,20 @@ globalThis.matchMedia ??= function matchMedia(query: string): MediaQueryList {
     dispatchEvent: () => false,
   };
   return list;
-};
+}
+
+const originalScrollIntoView = Element.prototype.scrollIntoView;
+
+beforeAll(() => {
+  vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+  vi.stubGlobal("matchMedia", matchMediaStub);
+  Element.prototype.scrollIntoView = function scrollIntoView(): void {};
+});
+
+afterAll(() => {
+  vi.unstubAllGlobals();
+  Element.prototype.scrollIntoView = originalScrollIntoView;
+});
 
 const { ResumeSessionsPalette } = await import("@/components/Terminal/ResumeSessionsPalette");
 
@@ -82,7 +100,7 @@ function rowFor(id: string): HTMLElement {
 
 describe("ResumeSessionsPalette", () => {
   beforeEach(() => {
-    cleanup();
+    vi.clearAllMocks();
     const items = [makeItem("a"), makeItem("b"), makeItem("c", { isStale: true })];
     paletteState.results = items;
     paletteState.visibleResults = items;
@@ -130,6 +148,14 @@ describe("ResumeSessionsPalette", () => {
     expect(rowFor("a").ariaSelected).toBe("true");
     expect(rowFor("b").ariaSelected).toBe("false");
     expect(selectedClass).toBe(unselectedClass);
+
+    // Identical class lists alone would also hold if the row simply stopped
+    // carrying any selected treatment, so pin that it still composes the
+    // shared definition. Referencing the constant rather than restating its
+    // utilities keeps this honest if the recipe itself changes.
+    const applied = new Set(selectedClass.split(/\s+/));
+    const missing = PALETTE_ROW_CLASS.split(/\s+/).filter((token) => !applied.has(token));
+    expect(missing).toEqual([]);
   });
 
   it("keeps a stale row visually distinct from a merely unselected one", () => {

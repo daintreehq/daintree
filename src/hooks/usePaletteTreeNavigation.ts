@@ -20,7 +20,13 @@ import type { KeyboardEvent, KeyboardEventHandler } from "react";
 
 /** What every row carries, header or item. */
 export interface PaletteTreeRowIdentity {
-  /** Stable across re-renders; this is what selection is keyed on. */
+  /**
+   * Stable across re-renders; this is what selection is keyed on.
+   *
+   * Must be unique across the WHOLE tree, not just within its group: selection
+   * and activation resolve it by first match, so a group-local id reused under
+   * another group would make the second row act as the first.
+   */
   rowId: string;
   /** The element's DOM id, for `aria-activedescendant` and scrolling. */
   domId: string;
@@ -124,8 +130,12 @@ export interface UsePaletteTreeNavigationResult<TGroup, TItem> {
   renderGroups: readonly PaletteTreeRenderGroup<TGroup, TItem>[];
   rows: readonly PaletteTreeRow<TGroup, TItem>[];
   selectedRowId: string | null;
-  /** -1 when nothing is navigable, so callers can gate on a row existing. */
-  selectedRowIndex: number;
+  /**
+   * Position among the NAVIGABLE rows — the sequence the arrows walk, headers
+   * excluded — so it lines up with a flat `results`-style array. Not an index
+   * into `rows`, which counts headers. -1 when nothing is navigable.
+   */
+  selectedNavigableIndex: number;
   selectedRow: NavigablePaletteTreeRow<TGroup, TItem> | null;
   /** Undefined unless it names a row that is actually rendered. */
   activeDescendantId: string | undefined;
@@ -215,15 +225,17 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
   const selectedRow =
     selectedNavigableIndex >= 0 ? (navigableRows[selectedNavigableIndex] ?? null) : null;
 
-  const selectedRowIndex = useMemo(
-    () => (selectedRow ? rows.findIndex((row) => row.rowId === selectedRow.rowId) : -1),
-    [rows, selectedRow]
-  );
-
   useEffect(() => {
     setSelectedRowId(null);
-    lastCollapsedGroupIdRef.current = null;
   }, [selectionScopeKey, isActive]);
+
+  // Disclosure history is NOT selection state: a new query re-ranks the list
+  // but says nothing about which group the keyboard last closed, and dropping
+  // the memory there would send the next → to the first collapsed group
+  // instead of the one the user just shut. Only closing forgets it.
+  useEffect(() => {
+    lastCollapsedGroupIdRef.current = null;
+  }, [isActive]);
 
   // Keyed on the id rather than the row object: rows are rebuilt whenever their
   // content refreshes, and re-running this each tick would fight the user's own
@@ -244,7 +256,10 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
           ? navigableRows.findIndex((row) => row.rowId === previousId)
           : -1;
         const from = current >= 0 ? current : 0;
-        const next = (from + delta + navigableRows.length) % navigableRows.length;
+        // Normalised both ways: a single `+ length` only rescues a delta of -1,
+        // and this is a shared API that may be handed a page-sized jump.
+        const size = navigableRows.length;
+        const next = (((from + delta) % size) + size) % size;
         return navigableRows[next]!.rowId;
       });
     },
@@ -336,7 +351,16 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
         }
         case "Enter":
           consume();
-          if (selectedRow) onActivate(selectedRow);
+          if (selectedRow) {
+            // Commit the id, not just the activation. The highlight may be a
+            // DERIVED fallback — the stored row disappeared and the first
+            // navigable one took over — and activating without storing would
+            // leave the next list change move the highlight off the row the
+            // user just acted on. Palettes that stay open on a failed
+            // activation are where that shows.
+            setSelectedRowId(selectedRow.rowId);
+            onActivate(selectedRow);
+          }
           break;
       }
     },
@@ -363,7 +387,7 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
     renderGroups,
     rows,
     selectedRowId: selectedRow?.rowId ?? null,
-    selectedRowIndex,
+    selectedNavigableIndex,
     selectedRow,
     activeDescendantId,
     selectRow,

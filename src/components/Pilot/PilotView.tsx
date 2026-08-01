@@ -562,6 +562,12 @@ export function PilotView() {
         group,
         header: {
           rowId: `group:${group.workspaceId}`,
+          // The runs container's id, which is what the disclosure button
+          // `aria-controls`. Safe only because the header is not navigable, so
+          // this id never reaches `aria-activedescendant`. Making headers
+          // navigable here would first have to give the header element an id
+          // of its own — pointing the active descendant at a role-less
+          // container is the dangling reference #11071 was about.
           domId: groupDomId(group.workspaceId),
           navigable: false,
         },
