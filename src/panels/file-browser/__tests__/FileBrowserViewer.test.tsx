@@ -53,6 +53,8 @@ vi.mock("@/components/ui/SpinningIcon", () => ({
 
 import { FileBrowserViewer } from "../FileBrowserViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { GitStatus } from "@shared/types/git";
+import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 
 interface ViewerOpts {
   sidebarCollapsed?: boolean;
@@ -61,6 +63,23 @@ interface ViewerOpts {
   surfaceRefreshNonce?: number;
   onRefresh?: () => void;
   isRefreshing?: boolean;
+  /**
+   * Defaults to `null` — "no git status available" — because that is what a
+   * workspace-rooted browser passes, and it keeps every pre-existing case in
+   * this suite on the generic placeholder it was written against.
+   */
+  changedFiles?: readonly WorkingTreeFileChange[] | null;
+  onSelectChangedFile?: (relativePath: string) => void;
+}
+
+function change(relativePath: string, status: GitStatus = "modified"): WorkingTreeFileChange {
+  return {
+    path: `/repo/${relativePath}`,
+    relativePath,
+    status,
+    insertions: null,
+    deletions: null,
+  };
 }
 
 // Defaults live here, never on the component: the props are required there so a
@@ -82,6 +101,8 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         sidebarCollapsed={opts.sidebarCollapsed ?? false}
         onToggleSidebar={opts.onToggleSidebar ?? vi.fn()}
         treeSidebarId="file-tree-column"
+        changedFiles={opts.changedFiles ?? null}
+        onSelectChangedFile={opts.onSelectChangedFile ?? vi.fn()}
       />
     </TooltipProvider>
   );
@@ -560,5 +581,54 @@ describe("FileBrowserViewer Refresh control (#11586)", () => {
     // What the pane produces for a Refresh press on a worktree with no tick.
     rerender(viewerJsx("/repo/src/notes.txt", { revision: "0:1", surfaceRefreshNonce: 1 }));
     await waitFor(() => expect(readMock).toHaveBeenCalledTimes(2));
+  });
+});
+
+// With nothing selected the pane answers "what did the agent just change in
+// here" (#11614). The three states are distinct on purpose: no git status at
+// all, a snapshot saying clean, and a snapshot with changes.
+describe("FileBrowserViewer idle body", () => {
+  it("summarises the changed files instead of a placeholder", () => {
+    renderViewer(null, {
+      changedFiles: [change("src/app.ts"), change("docs/notes.md", "added")],
+    });
+
+    expect(screen.getByRole("button", { name: /Read src\/app\.ts/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Read docs\/notes\.md/ })).toBeTruthy();
+    expect(screen.queryByText("Nothing selected")).toBeNull();
+  });
+
+  it("opens a summarised file through the pane's selection callback", () => {
+    const onSelectChangedFile = vi.fn();
+    renderViewer(null, { changedFiles: [change("src/app.ts")], onSelectChangedFile });
+
+    screen.getByRole("button", { name: /Read src\/app\.ts/ }).click();
+
+    expect(onSelectChangedFile).toHaveBeenCalledWith("src/app.ts");
+  });
+
+  it("says the worktree is clean when the snapshot reports no changes", () => {
+    renderViewer(null, { changedFiles: [] });
+
+    expect(screen.getByText("Worktree is clean")).toBeTruthy();
+    expect(screen.queryByText("Nothing selected")).toBeNull();
+  });
+
+  it("keeps the generic placeholder when no git status is available", () => {
+    // A workspace-rooted browser has no worktree behind it, and a worktree whose
+    // snapshot hasn't arrived is equally unknown. Neither may claim "clean".
+    renderViewer(null, { changedFiles: null });
+
+    expect(screen.getByText("Nothing selected")).toBeTruthy();
+    expect(screen.queryByText("Worktree is clean")).toBeNull();
+  });
+
+  it("shows the selected file rather than the summary once one is picked", async () => {
+    readMock.mockResolvedValue({ content: "hello" });
+    renderViewer("/repo/src/app.ts", { changedFiles: [change("src/app.ts")] });
+
+    await screen.findByTestId("code-viewer-mock");
+
+    expect(screen.queryByRole("button", { name: /Read src\/app\.ts/ })).toBeNull();
   });
 });
