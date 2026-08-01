@@ -321,7 +321,7 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
 
   function add(term: string): boolean {
     if (result.length >= MAX_KEYTERMS) return false;
-    const capped = term.length > MAX_KEYTERM_LENGTH ? term.slice(0, MAX_KEYTERM_LENGTH) : term;
+    const capped = capTermLength(term, MAX_KEYTERM_LENGTH);
     const key = capped.toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
@@ -421,6 +421,19 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
 const OPENAI_FORBIDDEN_KEYWORD_CHARS = /[<>\r\n]/;
 
 /**
+ * Truncates to at most `maxLength` UTF-16 code units without splitting a
+ * surrogate pair. A bare `slice` on "…99 chars…😀" leaves a lone high surrogate,
+ * which serializes as a malformed `\ud83d` the server may reject or replace.
+ */
+function capTermLength(term: string, maxLength: number): string {
+  if (term.length <= maxLength) return term;
+  const cut = term.slice(0, maxLength);
+  // A trailing high surrogate (D800-DBFF) means the pair was split — drop it.
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
+/**
  * Sanitizes assembled keyterms for OpenAI's `transcription.keywords` array.
  *
  * Offending terms are DROPPED WHOLE rather than stripped: deleting `<` from
@@ -449,8 +462,7 @@ export function sanitizeOpenAIKeywords(terms: readonly string[]): string[] {
     if (trimmed.length === 0) continue;
     if (OPENAI_FORBIDDEN_KEYWORD_CHARS.test(trimmed)) continue;
 
-    const capped =
-      trimmed.length > MAX_KEYTERM_LENGTH ? trimmed.slice(0, MAX_KEYTERM_LENGTH) : trimmed;
+    const capped = capTermLength(trimmed, MAX_KEYTERM_LENGTH);
     // Dedup after trimming/capping so two terms that collapse to the same wire
     // value don't burn two slots.
     const key = capped.toLowerCase();

@@ -222,6 +222,27 @@ function vadCommitSegment(
   worker.emitSpeechEnd();
 }
 
+// ── Capture logger output ────────────────────────────────────────────────────
+//
+// Keyterms carry the user's branch names, custom dictionary and terminal output,
+// and main-process logs are readable by agents. Capturing every log argument
+// lets the privacy tests assert that no keyterm content ever reaches a log,
+// at the real call sites rather than only inside the summarizer.
+
+const logCalls = vi.hoisted(() => [] as unknown[][]);
+
+vi.mock("../../../utils/logger.js", () => ({
+  logDebug: (...args: unknown[]) => void logCalls.push(args),
+  logInfo: (...args: unknown[]) => void logCalls.push(args),
+  logWarn: (...args: unknown[]) => void logCalls.push(args),
+  logError: (...args: unknown[]) => void logCalls.push(args),
+}));
+
+/** Everything written to the logger this test, flattened to one string. */
+function loggedText(): string {
+  return logCalls.map((args) => args.map((a) => JSON.stringify(a) ?? "").join(" ")).join("\n");
+}
+
 // Import the service AFTER vi.mock so the mocked `ws` is used.
 const { OpenAITranscriptionProvider, summarizeEchoedSession } =
   await import("../OpenAITranscriptionProvider.js");
@@ -295,6 +316,7 @@ describe("OpenAITranscriptionProvider", () => {
     constructError = null;
     vadWorkers.length = 0;
     throwOnVadConstruct = false;
+    logCalls.length = 0;
     vi.useFakeTimers();
   });
 
@@ -344,8 +366,13 @@ describe("OpenAITranscriptionProvider", () => {
     expect(sessionUpdate.session.type).toBe("transcription");
     expect(sessionUpdate.session.audio.input).toMatchObject({
       format: { type: "audio/pcm", rate: 24000 },
-      transcription: { model: "gpt-live-transcribe", languages: ["en"], delay: "low" },
+      transcription: { model: "gpt-live-transcribe", languages: ["en"] },
     });
+    // `delay` must be present and a valid tier. The specific tier is tuning, so
+    // asserting the literal here would just restate the provider's constant.
+    expect(["minimal", "low", "medium", "high", "xhigh"]).toContain(
+      (sessionUpdate.session.audio.input.transcription as { delay: string }).delay
+    );
     // `languages` (array) supersedes the deprecated singular `language`, and the
     // two are mutually exclusive on the wire — sending both is invalid.
     expect(sessionUpdate.session.audio.input.transcription).not.toHaveProperty("language");
@@ -360,6 +387,9 @@ describe("OpenAITranscriptionProvider", () => {
     socket.simulateMessage("session.updated");
     await expect(startPromise).resolves.toEqual({ ok: true });
     expect(statuses).toEqual(["connecting", "recording"]);
+    // Ready sessions own a VAD worker and a heartbeat — stop so neither
+    // outlives the test.
+    service.stop();
   });
 
   it("sends the configured language as a one-element languages array", async () => {
@@ -383,6 +413,24 @@ describe("OpenAITranscriptionProvider", () => {
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
+    expect(readTranscription(socket).languages).toEqual(["en"]);
+    service.stop();
+  });
+
+  it.each([
+    ["a number", 42],
+    ["an object", { code: "en" }],
+    ["an array", ["en"]],
+    ["null", null],
+  ])("falls back to en without throwing when language is %s", async (_label, language) => {
+    // Persisted settings are cast, not validated, and setSettings takes an
+    // arbitrary patch — a non-string here would otherwise throw inside the
+    // WebSocket `open` handler, outside any try/catch.
+    const service = new OpenAITranscriptionProvider();
+    void service.start({ ...BASE_SETTINGS, language } as unknown as VoiceInputSettings);
+    await Promise.resolve();
+    const socket = latestInstance();
+    expect(() => socket.simulateOpen()).not.toThrow();
     expect(readTranscription(socket).languages).toEqual(["en"]);
     service.stop();
   });
@@ -428,6 +476,51 @@ describe("OpenAITranscriptionProvider", () => {
     const transcription = readTranscription(socket);
     expect(transcription).not.toHaveProperty("prompt");
     expect(transcription).not.toHaveProperty("keywords");
+    service.stop();
+  });
+
+  it("never logs keyterm content, on the outbound payload or either server echo", async () => {
+    // Guards the real call sites, not just summarizeEchoedSession: reverting any
+    // of them to logging the raw session object must fail this test. The echo
+    // carries a DIFFERENT sentinel per field so leaking only one is still caught.
+    const sentTerm = "secret-branch-name";
+    const echoedKeyword = "echoed-keyword-sentinel";
+    const echoedPrompt = "echoed-prompt-sentinel";
+
+    const service = new OpenAITranscriptionProvider();
+    void service.start({ ...BASE_SETTINGS, keyterms: [sentTerm] });
+    await Promise.resolve();
+    const socket = latestInstance();
+    socket.simulateOpen();
+
+    const echo = {
+      session: {
+        audio: {
+          input: {
+            transcription: {
+              model: "gpt-live-transcribe",
+              languages: ["en"],
+              delay: "low",
+              keywords: [echoedKeyword],
+              prompt: `Keywords: ${echoedPrompt}`,
+            },
+            turn_detection: null,
+          },
+        },
+      },
+    };
+    socket.simulateMessage("session.created", echo);
+    socket.simulateMessage("session.updated", echo);
+
+    // The term really was sent — otherwise this test would pass vacuously.
+    expect(socket.sent[0]).toContain(sentTerm);
+    const logs = loggedText();
+    expect(logs).not.toContain(sentTerm);
+    expect(logs).not.toContain(echoedKeyword);
+    expect(logs).not.toContain(echoedPrompt);
+    // The diagnostic itself must survive redaction — a key named `keywordCount`
+    // is blanked by the logger's "key" substring rule.
+    expect(logs).toContain("biasTermCount");
     service.stop();
   });
 
@@ -1599,10 +1692,47 @@ describe("summarizeEchoedSession", () => {
       model: "gpt-live-transcribe",
       languages: ["en"],
       delay: "low",
-      keywordCount: 2,
+      biasTermCount: 2,
       hasPrompt: true,
       turnDetectionNull: true,
     });
+  });
+
+  it("reduces a non-scalar model/delay to a type marker instead of forwarding it", () => {
+    // Config fields are forwarded for diagnostics, so an unexpected echo shape
+    // must not become a channel for arbitrary content reaching the log.
+    const hostile = {
+      audio: {
+        input: {
+          transcription: {
+            model: { leaked: SECRET_TERM },
+            languages: [{ leaked: SECRET_TERM }],
+            delay: ["a", "b"],
+          },
+          turn_detection: null,
+        },
+      },
+    };
+    expect(JSON.stringify(summarizeEchoedSession(hostile))).not.toContain(SECRET_TERM);
+  });
+
+  it("reduces an oversized model string to a length marker", () => {
+    const hostile = {
+      audio: {
+        input: {
+          transcription: { model: `${SECRET_TERM}${"x".repeat(500)}` },
+          turn_detection: null,
+        },
+      },
+    };
+    expect(JSON.stringify(summarizeEchoedSession(hostile))).not.toContain(SECRET_TERM);
+  });
+
+  it("does not throw on a transcription of the wrong type", () => {
+    for (const transcription of ["nope", 42, [], null]) {
+      const payload = { audio: { input: { transcription, turn_detection: null } } };
+      expect(() => summarizeEchoedSession(payload)).not.toThrow();
+    }
   });
 
   it("never leaks keyword or prompt contents", () => {
@@ -1622,7 +1752,7 @@ describe("summarizeEchoedSession", () => {
     const noPrompt = {
       audio: { input: { transcription: { model: "m", prompt: "" }, turn_detection: null } },
     };
-    expect(summarizeEchoedSession(noPrompt)).toMatchObject({ hasPrompt: false, keywordCount: 0 });
+    expect(summarizeEchoedSession(noPrompt)).toMatchObject({ hasPrompt: false, biasTermCount: 0 });
   });
 
   it.each([

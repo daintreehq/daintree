@@ -1127,6 +1127,34 @@ describe("MigrationRunner", () => {
     expect(voiceInput.language).toBe("en");
   });
 
+  it("runs migration027 from v26 under the full barrel, upgrading the transcription model (#11597)", async () => {
+    // The read-time net in `getVoiceSettings` would also repair this value, so
+    // only a store-level run like this one proves the migration body actually
+    // works — nothing here can mask a no-op.
+    const store = createMockStore(storePath, {
+      _schemaVersion: 26,
+      voiceInput: {
+        transcriptionModel: "gpt-realtime-whisper",
+        transcriptionProvider: "deepgram",
+        deepgramApiKey: "dg-key",
+        enabled: true,
+        language: "es",
+      },
+    });
+    const runner = new MigrationRunner(store as never);
+
+    await runner.runMigrations(migrations);
+
+    expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+    const voiceInput = store.data.voiceInput as Record<string, unknown>;
+    expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
+    // A Deepgram user's provider choice must survive the model upgrade (#9175).
+    expect(voiceInput.transcriptionProvider).toBe("deepgram");
+    expect(voiceInput.deepgramApiKey).toBe("dg-key");
+    expect(voiceInput.enabled).toBe(true);
+    expect(voiceInput.language).toBe("es");
+  });
+
   it("runs migration021 from v20 under the full barrel, merging disabledBuiltins (#9284)", async () => {
     const store = createMockStore(storePath, {
       _schemaVersion: 20,

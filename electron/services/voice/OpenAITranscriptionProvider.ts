@@ -155,13 +155,28 @@ export function summarizeEchoedSession(session: unknown): Record<string, unknown
   };
 
   return {
-    model: t.model,
-    languages: t.languages,
-    delay: t.delay,
-    keywordCount: Array.isArray(t.keywords) ? t.keywords.length : 0,
+    // Type-guarded rather than forwarded raw: an unexpected echo shape (an
+    // object or a long string where a short scalar belongs) must not become a
+    // channel for arbitrary content reaching the log.
+    model: shortScalar(t.model),
+    languages: Array.isArray(t.languages) ? t.languages.map(shortScalar) : shortScalar(t.languages),
+    delay: shortScalar(t.delay),
+    biasTermCount: Array.isArray(t.keywords) ? t.keywords.length : 0,
     hasPrompt: typeof t.prompt === "string" && t.prompt.length > 0,
     turnDetectionNull: turnDetection === null,
   };
+}
+
+/**
+ * Renders an echoed config value as a short scalar for logging. Anything that
+ * isn't a small string/number/boolean becomes a type marker, so a malformed or
+ * oversized echo can't smuggle content into the log.
+ */
+function shortScalar(value: unknown): string | number | boolean {
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "string") return value.length <= 64 ? value : `(string:${value.length})`;
+  if (value === null || value === undefined) return "(unset)";
+  return `(${Array.isArray(value) ? "array" : typeof value})`;
 }
 
 /**
@@ -471,7 +486,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       const keytermPrompt = formatKeytermPrompt(keywords);
       // `languages` (array) supersedes the deprecated singular `language`. Never
       // send both. Our settings hold a single code, so this is a 1-element array.
-      const languages = [settings.language?.trim() || "en"];
+      // Type-checked, not just nullish-checked: persisted settings are cast, not
+      // validated, and the setter takes an arbitrary patch — a non-string here
+      // would throw inside this `open` handler, outside any try/catch.
+      const language = typeof settings.language === "string" ? settings.language.trim() : "";
+      const languages = [language || "en"];
       // `turn_detection` MUST be explicitly `null`. It is not enough to omit it:
       // when absent the server applies a default VAD, and then silently produces
       // no transcription — it still acks `input_audio_buffer.committed` but
@@ -507,11 +526,14 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       // identifiers, and these logs are readable by agents. The fields below are
       // the ones that actually cause "commits acked but no transcription items"
       // regressions (especially the explicit `turn_detection: null`).
+      // `biasTermCount`, not `keywordCount`: the logger redacts any key whose
+      // name contains "key", which would blank the count and defeat the whole
+      // diagnostic.
       logInfo(`${P} → session.update`, {
         model: transcription.model,
         languages: transcription.languages,
         delay: transcription.delay,
-        keywordCount: keywords.length,
+        biasTermCount: keywords.length,
         hasPrompt: keytermPrompt.length > 0,
         turnDetectionNull: sessionUpdate.session.audio.input.turn_detection === null,
       });

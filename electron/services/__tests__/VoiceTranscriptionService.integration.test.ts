@@ -31,6 +31,11 @@ describe("VoiceTranscriptionService integration", () => {
         customDictionary: [],
         transcriptionProvider: "openai",
         transcriptionModel: "gpt-live-transcribe",
+        // Non-empty so an opt-in run actually exercises the new `keywords` +
+        // `prompt` fields — with an empty list both are omitted and the live
+        // server never sees them. A rejected keyword fails the whole
+        // session.update, so this is the only place that failure surfaces.
+        keyterms: ["Daintree", "PtyClient", "AC-42"],
         correctionEnabled: false,
         correctionModel: "gpt-5.6-luna",
         correctionCustomInstructions: "",

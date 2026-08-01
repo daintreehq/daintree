@@ -430,9 +430,17 @@ test.describe.serial("E2E: Voice Input — Settings Migration", () => {
     expect(onDisk.voiceInput.correctionModel).toBe("gpt-5.6-luna");
   });
 
-  test("migration 027 moves a schema-26 install off the retired gpt-realtime-whisper", async () => {
-    // Backdated to 26 so the numbered migration actually runs — without that the
-    // store is already marked current and only the read-time net would fire.
+  test("a schema-26 install on the retired model comes back upgraded and intact", async () => {
+    // Backdated to 26 so the numbered migrations actually run — session 1 stamps
+    // the CURRENT version, and a store already marked current skips every one.
+    //
+    // Scope note: this is an integration smoke, NOT proof that migration 027's
+    // body works. `runMigration` reads settings over IPC, which runs the
+    // read-time normalizer in `getVoiceSettings`, so a no-op migration would
+    // still surface the new model here. The migration body is proven by the
+    // full-barrel test in StoreMigrations.test.ts, where nothing masks it. What
+    // this test uniquely covers is the real Electron boot path: the runner
+    // advances the schema and nothing else in voiceInput is destroyed en route.
     const { migrated, onDisk } = await runMigration(
       {
         enabled: true,
@@ -441,7 +449,7 @@ test.describe.serial("E2E: Voice Input — Settings Migration", () => {
         customDictionary: ["Daintree"],
         transcriptionProvider: "deepgram",
         deepgramApiKey: "dg-existing",
-        transcriptionModel: "gpt-live-transcribe",
+        transcriptionModel: "gpt-realtime-whisper",
         correctionEnabled: false,
         correctionModel: "gpt-5.6-luna",
         correctionCustomInstructions: "",
@@ -453,7 +461,9 @@ test.describe.serial("E2E: Voice Input — Settings Migration", () => {
 
     expect(migrated.transcriptionModel).toBe("gpt-live-transcribe");
     expect(onDisk.voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
-    expect(onDisk._schemaVersion).toBe(27);
+    // Advancement, not a hard-coded latest — the exact number is the migration
+    // registry's business and moves with every future migration.
+    expect(onDisk._schemaVersion).toBeGreaterThan(26);
     // The provider — not the model — selects the backend, so a Deepgram user's
     // choice must survive the model upgrade untouched (#9175).
     expect(migrated.transcriptionProvider).toBe("deepgram");
@@ -603,7 +613,8 @@ test.describe.serial("E2E: Voice Input — OpenAI Realtime IPC Lifecycle", () =>
     const transcription = audio.input.transcription as Record<string, unknown>;
     expect(transcription.model).toBe("gpt-live-transcribe");
     expect(transcription.languages).toEqual(["en"]);
-    expect(transcription.delay).toBe("low");
+    // Presence and validity are the contract; the exact tier is tuning.
+    expect(["minimal", "low", "medium", "high", "xhigh"]).toContain(transcription.delay);
     // `languages` (array) supersedes the deprecated singular `language`; the two
     // are mutually exclusive on the wire and must never both be sent.
     expect(transcription).not.toHaveProperty("language");

@@ -505,12 +505,10 @@ describe("sanitizeOpenAIKeywords", () => {
   });
 
   it("lets later safe terms fill capacity freed by rejected entries", () => {
-    const terms = ["bad<term", ...Array.from({ length: 50 }, (_, i) => `term${i}`)];
-    const result = sanitizeOpenAIKeywords(terms);
-    expect(result).toHaveLength(50);
-    expect(result).not.toContain("bad<term");
-    expect(result[0]).toBe("term0");
-    expect(result[49]).toBe("term49");
+    // A rejected term must consume no slot: sanitizing with and without the bad
+    // prefix has to yield exactly the same list, even past the count cap.
+    const safe = Array.from({ length: 60 }, (_, i) => `term${i}`);
+    expect(sanitizeOpenAIKeywords(["bad<term", ...safe])).toEqual(sanitizeOpenAIKeywords(safe));
   });
 
   it("trims surrounding whitespace and drops empty results", () => {
@@ -532,14 +530,57 @@ describe("sanitizeOpenAIKeywords", () => {
   });
 
   it("caps term length and dedups terms that collide only after capping", () => {
+    // Two distinct inputs sharing a long prefix must collapse to one entry once
+    // both are capped — asserted against the cap's own output rather than a
+    // repeated literal, so retuning the bound doesn't invalidate the invariant.
     const long = "a".repeat(150);
-    const result = sanitizeOpenAIKeywords([long, `${long}bbb`]);
-    expect(result).toEqual(["a".repeat(100)]);
+    const [capped] = sanitizeOpenAIKeywords([long]);
+    expect(capped.length).toBeLessThan(long.length);
+    expect(sanitizeOpenAIKeywords([long, `${long}bbb`])).toEqual([capped]);
   });
 
-  it("caps the total number of terms", () => {
-    const result = sanitizeOpenAIKeywords(Array.from({ length: 200 }, (_, i) => `term${i}`));
-    expect(result).toHaveLength(50);
+  it("does not split a surrogate pair when capping", () => {
+    // A bare slice at the boundary leaves a lone high surrogate, which
+    // serializes as malformed UTF-8 the server may reject.
+    const [capped] = sanitizeOpenAIKeywords(["a".repeat(150) + "😀"]);
+    expect(JSON.stringify(capped)).not.toMatch(/\\ud[89ab][0-9a-f]{2}/i);
+  });
+
+  it("keeps a non-BMP character intact when it straddles the cap boundary", () => {
+    const emoji = "😀";
+    // Pad so the emoji's surrogate pair spans the cap: the pair is dropped
+    // whole, never halved.
+    const [capped] = sanitizeOpenAIKeywords(["a".repeat(99) + emoji + "b".repeat(50)]);
+    expect(JSON.stringify(capped)).not.toMatch(/\\ud[89ab][0-9a-f]{2}/i);
+  });
+
+  it("caps the total number of terms to a stable prefix of the input", () => {
+    const input = Array.from({ length: 200 }, (_, i) => `term${i}`);
+    const result = sanitizeOpenAIKeywords(input);
+    expect(result.length).toBeLessThan(input.length);
+    // Order-preserving prefix — the cap drops the tail, it doesn't reshuffle.
+    expect(result).toEqual(input.slice(0, result.length));
+  });
+
+  it("frees capacity when a duplicate collapses, not just when a term is rejected", () => {
+    const unique = Array.from({ length: 200 }, (_, i) => `term${i}`);
+    const withDupes = ["term0", "TERM0", ...unique];
+    // Duplicates must not consume slots that unique terms could have used.
+    expect(sanitizeOpenAIKeywords(withDupes)).toEqual(sanitizeOpenAIKeywords(unique));
+  });
+
+  it("rejects a forbidden character that sits beyond the length cap", () => {
+    // Rejection must run on the whole trimmed term, before capping — otherwise
+    // capping would hide the character and let the term through.
+    expect(sanitizeOpenAIKeywords(["a".repeat(150) + "<"])).toEqual([]);
+  });
+
+  it("preserves non-ASCII terms and dedups them case-insensitively", () => {
+    expect(sanitizeOpenAIKeywords(["Kubernetes", "café", "CAFÉ", "日本語"])).toEqual([
+      "Kubernetes",
+      "café",
+      "日本語",
+    ]);
   });
 
   it("returns an empty array when every term is unsafe", () => {
