@@ -10,24 +10,30 @@ import { UNKNOWN_FILE_COLOR_CLASS, getFileTypeIcon } from "../fileTypeIcons";
 // table back. Copying `png -> image` here would just restate the source and
 // would have to be edited in lockstep with it, which proves nothing.
 
-/** Members of each group must agree with each other and differ from the others. */
-const GROUPS = {
-  image: ["logo.png", "shot.JPEG", "icon.svg", "still.webp"],
-  video: ["clip.mp4", "reel.MOV", "capture.mkv"],
-  audio: ["track.mp3", "voice.wav", "sting.flac"],
-  archive: ["bundle.zip", "release.tar.gz", "lib.jar"],
-  source: ["main.ts", "app.tsx", "server.py", "lib.rs"],
-  script: ["deploy.sh", "setup.bash", "build.ps1"],
-  data: ["index.json", "records.jsonl", "shape.geojson"],
-  document: ["notes.md", "manual.pdf", "LICENSE"],
-  spreadsheet: ["rows.csv", "budget.xlsx"],
-  database: ["schema.sql", "cache.sqlite3"],
-  font: ["Inter.woff2", "mono.ttf"],
-  key: ["server.pem", "client.p12"],
-  binary: ["app.exe", "core.dylib", "mod.wasm"],
-  config: ["settings.toml", "values.yaml", "Makefile"],
-  lock: ["yarn.lock", "Cargo.lock", "poetry.lock"],
-} as const;
+/**
+ * Members of each group must agree with each other and differ from the others.
+ *
+ * A list rather than a keyed object so the group labels stay plain data — the
+ * labels are only there to name the test cases, and are deliberately NOT
+ * asserted against the resolver's own category names.
+ */
+const GROUPS = [
+  { label: "image", samples: ["logo.png", "shot.JPEG", "icon.svg", "still.webp"] },
+  { label: "video", samples: ["clip.mp4", "reel.MOV", "capture.mkv"] },
+  { label: "audio", samples: ["track.mp3", "voice.wav", "sting.flac"] },
+  { label: "archive", samples: ["bundle.zip", "release.tar.gz", "lib.jar"] },
+  { label: "source", samples: ["main.ts", "app.tsx", "server.py", "lib.rs"] },
+  { label: "script", samples: ["deploy.sh", "setup.bash", "build.ps1"] },
+  { label: "data", samples: ["index.json", "records.jsonl", "shape.geojson"] },
+  { label: "document", samples: ["notes.md", "manual.pdf", "LICENSE"] },
+  { label: "spreadsheet", samples: ["rows.csv", "budget.xlsx"] },
+  { label: "database", samples: ["schema.sql", "cache.sqlite3"] },
+  { label: "font", samples: ["Inter.woff2", "mono.ttf"] },
+  { label: "key", samples: ["server.pem", "client.p12"] },
+  { label: "binary", samples: ["app.exe", "core.dylib", "mod.wasm"] },
+  { label: "config", samples: ["settings.toml", "values.yaml", "Makefile"] },
+  { label: "lock", samples: ["yarn.lock", "Cargo.lock", "poetry.lock"] },
+] as const;
 
 /**
  * A name no table can claim, so its result IS the fallback. Comparing against
@@ -36,18 +42,16 @@ const GROUPS = {
  */
 const FALLBACK = getFileTypeIcon("mystery.qqq");
 
-const GROUP_NAMES = Object.keys(GROUPS) as Array<keyof typeof GROUPS>;
-
 /** The first name in each group, as the group's representative. */
-function representative(group: keyof typeof GROUPS) {
-  return getFileTypeIcon(GROUPS[group][0]);
+function representative(group: (typeof GROUPS)[number]) {
+  return getFileTypeIcon(group.samples[0]);
 }
 
 describe("getFileTypeIcon grouping", () => {
-  for (const group of GROUP_NAMES) {
-    it(`resolves every ${group} name to one identity`, () => {
+  for (const group of GROUPS) {
+    it(`resolves every ${group.label} name to one identity`, () => {
       const first = representative(group);
-      for (const name of GROUPS[group]) {
+      for (const name of group.samples) {
         const entry = getFileTypeIcon(name);
         expect(entry.category).toBe(first.category);
         expect(entry.Icon).toBe(first.Icon);
@@ -57,19 +61,19 @@ describe("getFileTypeIcon grouping", () => {
   }
 
   it("gives every group a distinct category and a distinct glyph", () => {
-    const categories = GROUP_NAMES.map((group) => representative(group).category);
-    const icons = GROUP_NAMES.map((group) => representative(group).Icon);
+    const categories = GROUPS.map((group) => representative(group).category);
+    const icons = GROUPS.map((group) => representative(group).Icon);
 
-    expect(new Set(categories).size).toBe(GROUP_NAMES.length);
+    expect(new Set(categories).size).toBe(GROUPS.length);
     // Shape is the primary signal, so no two categories may share a glyph —
     // hues are allowed to repeat, glyphs are not.
-    expect(new Set(icons).size).toBe(GROUP_NAMES.length);
+    expect(new Set(icons).size).toBe(GROUPS.length);
   });
 
   it("separates unrecognized files from every classified group", () => {
     expect(FALLBACK.colorClass).toBe(UNKNOWN_FILE_COLOR_CLASS);
 
-    for (const group of GROUP_NAMES) {
+    for (const group of GROUPS) {
       expect(representative(group).Icon).not.toBe(FALLBACK.Icon);
       expect(representative(group).category).not.toBe(FALLBACK.category);
     }
@@ -124,7 +128,7 @@ describe("getFileTypeIcon name normalization", () => {
 
   it("treats a leading dot as part of the name, not an extension", () => {
     // `.env` must not resolve as an `env` extension — it has none.
-    expect(getFileTypeIcon(".env").category).not.toBe("unknown");
+    expect(getFileTypeIcon(".env").category).not.toBe(FALLBACK.category);
     expect(getFileTypeIcon(".env")).toEqual(getFileTypeIcon(".env.production"));
   });
 });
@@ -202,7 +206,11 @@ describe("getFileTypeIcon coverage", () => {
 
 describe("getFileTypeIcon palette", () => {
   const ALLOWED = new Set(WORKTREE_COLOR_PALETTE.map((token) => `text-${token}`));
-  const ALL_NAMES = [...Object.values(GROUPS).flat(), "mystery.qqq", "yarn.lock", "vite.config.ts"];
+  const ALL_NAMES = [
+    ...GROUPS.flatMap((group) => [...group.samples]),
+    "mystery.qqq",
+    "vite.config.ts",
+  ];
 
   it("draws every classified hue from the CVD-proven palette", () => {
     for (const name of ALL_NAMES) {
@@ -230,7 +238,7 @@ describe("getFileTypeIcon palette", () => {
 });
 
 describe("getFileTypeIcon components", () => {
-  const REPRESENTATIVES = [...GROUP_NAMES.map((group) => GROUPS[group][0]), "mystery.qqq"];
+  const REPRESENTATIVES: string[] = [...GROUPS.map((group) => group.samples[0]), "mystery.qqq"];
 
   it("returns icons that paint from currentColor so one class can tint them", () => {
     for (const name of REPRESENTATIVES) {

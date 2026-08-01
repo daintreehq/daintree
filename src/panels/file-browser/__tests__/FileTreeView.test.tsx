@@ -429,8 +429,10 @@ describe("FileTreeView row icons", () => {
   /** The row's icon: the direct <svg> child, past the chevron gutter if present. */
   function iconOf(element: Element): SVGElement {
     const svg = element.querySelector(":scope > svg");
-    expect(svg).toBeTruthy();
-    return svg as SVGElement;
+    if (!(svg instanceof SVGElement)) {
+      throw new Error(`no direct <svg> child on row ${element.getAttribute("aria-label")}`);
+    }
+    return svg;
   }
 
   it("gives each file kind its own glyph", () => {

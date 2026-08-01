@@ -14,7 +14,7 @@ const INDEX_CSS = path.join(REPO_ROOT, "src/index.css");
 // glyph shapes already carry the type, and the hue is the expendable half.
 // jsdom never evaluates media queries, so the rule is guarded here in source.
 
-/** CSS with every `/* … *​/` comment blanked, so a marker quoted in prose can't match. */
+/** CSS with every block comment blanked, so a marker quoted in prose can't match. */
 function stripComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, "");
 }
