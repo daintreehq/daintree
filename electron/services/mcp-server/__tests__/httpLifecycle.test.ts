@@ -36,7 +36,7 @@ import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { HttpLifecycle } from "../httpLifecycle.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
-import { minimumPermittingTier, TIER_ALLOWLISTS } from "../shared.js";
+import { minimumPermittingTier } from "../shared.js";
 
 type BearerTestHandle = {
   touchBearer: (
