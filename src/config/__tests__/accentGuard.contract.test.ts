@@ -127,15 +127,12 @@ const DURABLE_ALLOWLIST = new Set([
   // PanelPalette selected-row left-edge accent stripe (single primary anchor per active focus region)
   "src/components/PanelPalette/PanelPalette.tsx",
 
-  // Dock launcher filtered-result selected-row left-edge accent stripe (single
-  // primary anchor per active focus region)
-  "src/components/Layout/DockLaunchMenuItems.tsx",
-
   // The one definition of the palette selected-row left-edge accent stripe,
   // shared by every palette row (single primary anchor per active focus region).
-  // PilotView, ProjectSwitcherPalette, ResumeSessionsPalette, QuickSwitcherItem
-  // and ActionPaletteItem all take the stripe from here rather than spelling it
-  // out themselves, which is why none of them appears in a bucket any more.
+  // PilotView, ProjectSwitcherPalette, ResumeSessionsPalette, QuickSwitcherItem,
+  // ActionPaletteItem and DockLaunchButton all take the stripe from here rather
+  // than spelling it out themselves, which is why none of them appears in a
+  // bucket any more.
   "src/components/ui/paletteRowStyles.ts",
 
   // PluginQuickPickDialog selected-row left-edge accent stripe (single primary anchor per active focus region)

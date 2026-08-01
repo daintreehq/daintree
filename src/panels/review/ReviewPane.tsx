@@ -24,6 +24,15 @@ export function ReviewPane({
 }: ReviewPaneProps) {
   const isDialog = location === "dialog";
 
+  // Both roots below carry `data-panel-id`/`data-panel-location`. ContentPanel
+  // is the only other writer of that pair, and review is the one built-in kind
+  // that renders no ContentPanel — so without these its root is invisible to
+  // every consumer that resolves a panel through the DOM: Cmd+W's grid/dock
+  // ancestor gate (useGlobalKeybindings), grid navigation, type-anywhere,
+  // optimistic close, and the e2e panel helpers. Pass `location` through rather
+  // than hardcoding "grid": a dialog-hosted review must report "dialog" so it
+  // stays out of the grid/dock selectors, exactly as ContentPanel does.
+
   // ReviewHubContent wires its Close button as `onClick={onClose}`, so React
   // would hand the MouseEvent straight through as `force` — a truthy object
   // that routes the panel handler to permanent removal instead of the
@@ -83,6 +92,8 @@ export function ReviewPane({
     return (
       <div
         ref={setContainerEl}
+        data-panel-id={id}
+        data-panel-location={location}
         tabIndex={-1}
         className="flex h-full w-full items-center justify-center"
       >
@@ -104,6 +115,8 @@ export function ReviewPane({
     // `flex-1 min-h-0` only bounds its scroller once this root is bounded too.
     <div
       ref={setContainerEl}
+      data-panel-id={id}
+      data-panel-location={location}
       tabIndex={-1}
       className="flex h-full min-h-0 w-full flex-1 flex-col bg-daintree-bg"
     >

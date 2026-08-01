@@ -297,6 +297,68 @@ describe("buildDockLaunchModel — bands and recipes", () => {
   });
 });
 
+describe("buildDockLaunchModel — browse rows", () => {
+  const mru = [{ id: "agent.claude", score: 1, lastAccessedAt: 1000 }];
+
+  it("orders rows exactly as the launcher renders its bands", () => {
+    const model = build({ mruEntries: mru, recipes: [recipe({ id: "r-1", name: "Deploy" })] });
+
+    // The launcher navigates this array with a single selectedIndex, so a band
+    // ordering that drifts from the render order would move the highlight to a
+    // row the user isn't looking at.
+    const bands: string[] = [];
+    for (const row of model.browseRows) {
+      if (bands[bands.length - 1] !== row.band) bands.push(row.band);
+    }
+    expect(bands).toEqual(["recent", "agents", "dock-panels", "grid-panels", "recipes"]);
+  });
+
+  it("keys a recency row apart from its twin in the agent group", () => {
+    const model = build({ mruEntries: mru });
+
+    const claudeRows = model.browseRows.filter((row) => row.item?.key === "agent:claude");
+    expect(claudeRows).toHaveLength(2);
+    expect(new Set(claudeRows.map((row) => row.rowKey)).size).toBe(2);
+  });
+
+  it("gives every row a unique key so selection can never light two at once", () => {
+    const model = build({
+      mruEntries: mru,
+      pinnedCount: 1,
+      recipes: [recipe({ id: "r-1", name: "Deploy" })],
+    });
+
+    const keys = model.browseRows.map((row) => row.rowKey);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("splits the agent bands the same way the Pinned/Other groups do", () => {
+    const model = build({ pinnedCount: 1 });
+    const bands = model.browseRows.filter((row) => row.item?.category === "agent");
+
+    expect(bands.map((row) => row.band)).toEqual(["pinned", "other"]);
+  });
+
+  it("collapses the panel bands when every panel shares one destination", () => {
+    const model = build({ surface: "grid" });
+    const panelBands = new Set(
+      model.browseRows.filter((row) => row.item?.category === "panel").map((row) => row.band)
+    );
+    expect([...panelBands]).toEqual(["panels"]);
+  });
+
+  it("carries the create-recipe cue as an item-less row when there are none", () => {
+    const withNone = build();
+    const cue = withNone.browseRows.filter((row) => row.item === undefined);
+    expect(cue).toHaveLength(1);
+    expect(cue[0]!.band).toBe("recipes");
+
+    // With recipes present the cue is gone, so it can't be navigated to.
+    const withSome = build({ recipes: [recipe({ id: "r-1", name: "Deploy" })] });
+    expect(withSome.browseRows.every((row) => row.item !== undefined)).toBe(true);
+  });
+});
+
 describe("activateDockLaunchItem", () => {
   const ctx = {
     cwd: "/repo",
