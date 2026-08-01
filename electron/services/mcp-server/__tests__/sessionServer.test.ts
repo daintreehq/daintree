@@ -298,9 +298,9 @@ describe("sessionServer initialize instructions", () => {
     // skips this prose fails here rather than telling every connecting model to
     // call a name that no longer resolves. New references are covered on
     // arrival, without interpolating constants into model-facing text.
-    const referenced = [...MCP_SERVER_INSTRUCTIONS.matchAll(/`([a-z][A-Za-z]*\.[A-Za-z]+)`/g)].map(
-      ([, id]) => id
-    );
+    const referenced = [
+      ...MCP_SERVER_INSTRUCTIONS.matchAll(/`([a-z][A-Za-z]*(?:\.[A-Za-z]+)+)`/g),
+    ].map(([, id]) => id);
 
     expect(referenced).toContain(ACTIONS_SEARCH_TOOL_ID);
     expect(referenced).toContain(ACTIONS_GET_SCHEMA_TOOL_ID);
