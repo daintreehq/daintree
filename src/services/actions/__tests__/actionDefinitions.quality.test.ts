@@ -437,11 +437,10 @@ describe("LLM-facing tool descriptions (#11542)", () => {
     // the promise that the schema carries the detail instead. An advertised
     // argument with no description breaks that trade: the caller is left with
     // a name and a type, which is exactly the state this issue set out to fix.
+    const external = new Set<string>(MCP_EXTERNAL_TIER_TOOLS);
     const violations: string[] = [];
     for (const { id, def } of rows) {
-      if (!MCP_EXTERNAL_TIER_TOOLS.includes(id as (typeof MCP_EXTERNAL_TIER_TOOLS)[number])) {
-        continue;
-      }
+      if (!external.has(id)) continue;
       if (!def.argsSchema) continue;
       const emitted = z
         .object({
