@@ -449,6 +449,22 @@ describe("PilotView", () => {
     expect(screen.queryByText(EMPTY_FLEET_COPY)).toBeNull();
   });
 
+  it("still answers a search that matches nothing while the feed is stale", () => {
+    // Retained runs are real rows, so a query matching none of them is a true
+    // statement about the query. Leaving the body blank under the stale caption
+    // makes a normal no-match read like the search itself gave up.
+    seed([run({ agentState: "working", title: "auth refactor" })], {
+      degraded: true,
+      lastSuccessfulAt: NOW - 12 * 60_000,
+    });
+    render(<PilotView />);
+
+    fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "zzzz" } });
+
+    expect(screen.getByTestId("pilot-stale")).toBeTruthy();
+    expect(screen.getByText('No matches for "zzzz"')).toBeTruthy();
+  });
+
   it("matches on project name as well as title", () => {
     seed([
       run({ runId: "a", workspaceId: "p1", agentState: "working", title: "one" }),

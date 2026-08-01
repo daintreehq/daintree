@@ -6,6 +6,7 @@ import {
   type PilotRowContext,
 } from "../pilotRows";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import { FLEET_BANDS, type FleetBand } from "@/lib/fleetAttention";
 
 const NOW = 1_700_000_000_000;
 
@@ -417,6 +418,31 @@ describe("filterPilotGroups", () => {
       "auth"
     );
     expect(filtered[0]!.demandCount).toBe(1);
+  });
+
+  it("demotes the top band when the query filters the worst row out", () => {
+    // An inherited band renders a header about a run that is no longer on
+    // screen: the group would read "0 agents blocked" in danger red above a row
+    // that is only working.
+    const unfiltered = buildPilotGroups(
+      [
+        run({
+          runId: "a",
+          agentState: "waiting",
+          waitingReason: "error",
+          title: "auth refactor",
+        }),
+        run({ runId: "b", agentState: "working", title: "docs pass" }),
+      ],
+      ctx()
+    );
+    const [filtered] = filterPilotGroups(unfiltered, "docs");
+
+    const severity = (band: FleetBand): number => FLEET_BANDS.indexOf(band);
+    expect(filtered!.rows.map((r) => r.run.runId)).toEqual(["b"]);
+    expect(severity(filtered!.topBand)).toBeGreaterThan(severity(unfiltered[0]!.topBand));
+    // The band is whatever the worst surviving row is, never a remembered one.
+    expect(filtered!.topBand).toBe(filtered!.rows[0]!.band);
   });
 });
 

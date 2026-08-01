@@ -815,7 +815,12 @@ export function PilotView() {
   const actionLabel = selectedRow === undefined ? null : "Open";
 
   const hasTree = groupNodes.length > 0;
-  const showEmpty = status.kind === "live" && groupNodes.length === 0;
+  // Stale counts as well as live: retained runs are real rows, so a query that
+  // matches none of them is a true statement about the query rather than a claim
+  // that the fleet is clear. `loading` and `unavailable` stay out — they already
+  // render the skeleton and the can't-reach-host message.
+  const showEmpty =
+    (status.kind === "live" || status.kind === "stale") && groupNodes.length === 0;
   const showSkeleton = useDeferredLoading(status.kind === "loading", UI_DOHERTY_THRESHOLD);
 
   return (

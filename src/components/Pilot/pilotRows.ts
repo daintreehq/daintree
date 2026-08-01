@@ -252,6 +252,12 @@ export function filterPilotGroups(
       ...group,
       rows,
       demandCount: rows.filter((r) => isDemandBand(r.band)).length,
+      // Recomputed, never inherited: a query that filters the blocked run out of
+      // a project leaves a group whose header would otherwise still announce
+      // "0 agents blocked" in danger red over a row that is merely running.
+      // `filter` preserves the band-sorted order, so the first survivor is still
+      // the worst one left.
+      topBand: rows[0]?.band ?? "idle",
     });
   }
   return out;
