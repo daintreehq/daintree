@@ -319,6 +319,13 @@ AppPaletteDialog.Header = function AppPaletteHeader({
 const BODY_NAVIGATION_KEYS = new Set([
   "ArrowUp",
   "ArrowDown",
+  // Horizontal arrows carry the disclosure half of the tree pattern for palettes
+  // whose list has collapsible groups (`PilotView`). Withholding them left the
+  // region able to move between rows but not in or out of a group, which is
+  // half a keyboard. Flat-list palettes have no case for them and ignore them,
+  // uncancelled, exactly as they did before.
+  "ArrowLeft",
+  "ArrowRight",
   "Home",
   "End",
   "Enter",

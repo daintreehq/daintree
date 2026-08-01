@@ -24,7 +24,6 @@ const switchProject = vi.fn(async () => {});
  */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: openRun uses no callbacks
 const NO_CALLBACKS = {} as ActionCallbacks;
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: run() ignores ctx
 const NO_CTX = {} as ActionContext;
 
 function seedProject(currentProjectId: string | null): void {

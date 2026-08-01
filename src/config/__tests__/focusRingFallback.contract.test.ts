@@ -392,13 +392,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     reason: "Parent shows focus: wrapper at line 477 has `focus-within:border-daintree-accent`",
   },
   {
-    file: "src/components/Pilot/PilotView.tsx",
-    fragment:
-      "min-w-0 flex-1 bg-transparent text-sm text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden",
-    reason:
-      "Parent shows focus: the search wrapper carries `focus-within:border-daintree-accent focus-within:ring-1`",
-  },
-  {
     file: "src/components/Worktree/WorktreeSidebarSearchBar.tsx",
     fragment:
       "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder-daintree-text/40 focus:outline-hidden",

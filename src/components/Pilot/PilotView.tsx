@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, Search } from "lucide-react";
-import { Radar } from "@/components/icons";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getProjectGradient } from "@/lib/colorUtils";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { usePilotStore } from "@/store/pilotStore";
@@ -17,99 +17,241 @@ import {
   type PilotRow,
 } from "./pilotRows";
 import { PilotRunState, runStateLabel } from "./PilotRunState";
-import { AppDialog } from "@/components/ui/AppDialog";
+import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { useEffectiveCombo } from "@/hooks/useKeybinding";
+// Leaf import, not the `@/hooks` barrel: palette suites routinely mock that
+// barrel and throw on an export they don't list.
+import { useOverlayClaim } from "@/hooks/useOverlayState";
+
+/** Matches the project switcher, which this opens from and sits beside. */
+const PALETTE_WIDTH = "w-[484px] max-w-[calc(100vw-2rem)]";
+const TREE_ID = "pilot-tree";
 
 /** Ages are minute-grained, so a 30s tick keeps them honest without churn. */
 const AGE_TICK_MS = 30_000;
 
-function RunRow({ row }: { row: PilotRow }) {
+/**
+ * The tree is flat in the DOM — every node is a sibling, depth carried by
+ * `aria-level` — matching `FileTreeView`. The nested alternative puts each
+ * group's children inside the group's own `treeitem`, where name-from-contents
+ * folds the whole subtree into the header's accessible name.
+ */
+function groupDomId(workspaceId: string): string {
+  return `pilot-option-group-${workspaceId}`;
+}
+
+function runDomId(runId: string): string {
+  return `pilot-option-run-${runId}`;
+}
+
+/**
+ * Selection styling, lifted verbatim from the switcher's rows so one palette
+ * doesn't invent a second vocabulary for "this is the row Enter will act on".
+ * The accent bar is the region's single load-bearing signal: the search input
+ * holds focus, so the bar is the only thing saying where the keyboard is.
+ */
+const ROW_BASE = cn(
+  "relative flex w-full cursor-pointer items-center rounded-[var(--radius-md)] border border-transparent text-left transition-colors",
+  "before:absolute before:top-1.5 before:bottom-1.5 before:left-0 before:w-[2px] before:rounded-r before:bg-daintree-accent before:opacity-0 before:transition-opacity before:content-[''] aria-selected:before:opacity-100"
+);
+
+/** One phrasing of the demand, so the header chip and the footer can't disagree. */
+function demandPhrase(count: number): string {
+  return count === 1 ? "1 needs you" : `${count} need you`;
+}
+
+/** Only ever read aloud — the visible header renders the bare number. */
+function agentCount(count: number): string {
+  return count === 1 ? "1 agent" : `${count} agents`;
+}
+
+function rowTone(isSelected: boolean): string {
+  return isSelected
+    ? "bg-overlay-raised border-overlay text-daintree-text"
+    : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text";
+}
+
+/**
+ * A visible node of the tree, and simultaneously one step of the arrow-key
+ * domain. Never re-filter this into a narrower array to render from: a second
+ * list is how a highlight ends up addressing a row that isn't on screen
+ * (the switcher's #11071).
+ */
+type PilotNavRow =
+  | {
+      kind: "group";
+      domId: string;
+      workspaceId: string;
+      group: PilotProjectGroup;
+      isCollapsed: boolean;
+    }
+  | { kind: "run"; domId: string; workspaceId: string; row: PilotRow };
+
+function GroupHeader({
+  group,
+  isCollapsed,
+  isSelected,
+  domId,
+  onActivate,
+  onHover,
+}: {
+  group: PilotProjectGroup;
+  isCollapsed: boolean;
+  isSelected: boolean;
+  domId: string;
+  onActivate: () => void;
+  onHover: () => void;
+}) {
+  return (
+    <div
+      id={domId}
+      role="treeitem"
+      aria-level={1}
+      aria-expanded={!isCollapsed}
+      aria-selected={isSelected}
+      // Pinned rather than computed from contents: the bare count and the
+      // demand chip would otherwise read as "daintree 2 2 need you".
+      aria-label={
+        group.demandCount > 0
+          ? `${group.name}, ${agentCount(group.rows.length)}, ${demandPhrase(group.demandCount)}`
+          : `${group.name}, ${agentCount(group.rows.length)}`
+      }
+      data-testid="pilot-group-header"
+      onClick={onActivate}
+      onPointerMove={onHover}
+      className={cn(ROW_BASE, rowTone(isSelected), "gap-2 py-1.5 pr-3 pl-2")}
+    >
+      {/*
+        A span, not a button: `aria-expanded` on the row already exposes the
+        disclosure, and a nested control would be a second tab stop inside a
+        tree that navigates by active descendant.
+      */}
+      <ChevronRight
+        aria-hidden="true"
+        className={cn(
+          "size-3.5 shrink-0 text-daintree-text/40 transition-transform duration-150 ease-out",
+          !isCollapsed && "rotate-90"
+        )}
+      />
+
+      <span
+        aria-hidden="true"
+        className="flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[11px] shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))]"
+        style={{
+          background: group.color
+            ? `var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), ${getProjectGradient(group.color)}`
+            : "var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), var(--color-daintree-sidebar)",
+        }}
+      >
+        <span className="leading-none select-none">{group.emoji}</span>
+      </span>
+
+      <span className="min-w-0 truncate text-sm font-semibold text-daintree-text">
+        {group.name}
+      </span>
+      {/*
+        The total rides beside the name rather than the far edge: pushed right
+        it sat against the demand chip, where "3 need you 3" reads as one
+        garbled string instead of two separate facts.
+      */}
+      <span aria-hidden="true" className="shrink-0 text-[11px] tabular-nums text-daintree-text/40">
+        {group.rows.length}
+      </span>
+
+      <span className="flex-1" />
+
+      {group.demandCount > 0 && (
+        <span aria-hidden="true" className="shrink-0 text-[11px] text-activity-waiting">
+          {demandPhrase(group.demandCount)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function RunRow({
+  row,
+  isSelected,
+  domId,
+  onActivate,
+  onHover,
+}: {
+  row: PilotRow;
+  isSelected: boolean;
+  domId: string;
+  onActivate: () => void;
+  onHover: () => void;
+}) {
   const { run } = row;
+  const subtitle = [row.worktreeLabel, row.agentLabel].filter(Boolean).join(" · ");
 
   return (
-    <button
-      type="button"
+    <div
+      id={domId}
+      role="treeitem"
+      aria-level={2}
+      aria-selected={isSelected}
       data-testid="pilot-row"
-      onClick={() => {
-        void actionService.dispatch("pilot.openRun", {
-          runId: run.runId,
-          workspaceId: run.workspaceId,
-        });
-      }}
-      className="flex w-full items-center gap-3 rounded-[var(--radius-md)] py-1.5 pr-2 pl-7 text-left transition-colors duration-150 ease-out hover:bg-overlay-subtle"
+      onClick={onActivate}
+      onPointerMove={onHover}
+      // Indented to sit under the header's project tile — the chevron column
+      // plus its gap, so the run rows read as belonging to the row above. The
+      // min-height holds the list's rhythm even: a run whose worktree and agent
+      // are both already implied by its title has no second line, and mixing
+      // one- and two-line rows in one column reads as ragged.
+      className={cn(ROW_BASE, rowTone(isSelected), "min-h-9 gap-2.5 py-1.5 pr-3 pl-7")}
     >
       <PilotRunState agentState={run.agentState} waitingReason={run.waitingReason} />
       <span className="sr-only">{runStateLabel(run.agentState, run.waitingReason)}</span>
 
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm text-daintree-text">{row.title}</span>
-        {(row.worktreeLabel || row.agentLabel) && (
-          <span className="block truncate text-xs text-daintree-text/50">
-            {[row.worktreeLabel, row.agentLabel].filter(Boolean).join(" · ")}
+        <span
+          className={cn(
+            "block truncate text-sm leading-tight",
+            isSelected ? "text-daintree-text" : "text-daintree-text/85"
+          )}
+        >
+          {row.title}
+        </span>
+        {subtitle && (
+          <span className="mt-0.5 block truncate text-[11px] leading-none text-daintree-text/50">
+            {subtitle}
           </span>
         )}
       </span>
 
-      <span className="shrink-0 text-xs tabular-nums text-daintree-text/50">{row.age ?? ""}</span>
-    </button>
+      {row.age && (
+        <span className="shrink-0 text-[11px] tabular-nums text-daintree-text/50">{row.age}</span>
+      )}
+    </div>
   );
 }
 
-function ProjectGroup({
-  group,
-  isCollapsed,
-  onToggle,
-}: {
-  group: PilotProjectGroup;
-  isCollapsed: boolean;
-  onToggle: () => void;
-}) {
-  const listId = `pilot-group-${group.workspaceId}`;
-
+/**
+ * `actionLabel` is null when nothing is listed, and the key hints go with it —
+ * a footer offering "↵ Open" over a loading or empty list is chrome promising
+ * a key that visibly does nothing.
+ */
+function PilotFooter({ actionLabel, summary }: { actionLabel: string | null; summary: string }) {
   return (
-    <section data-testid="pilot-project-group">
-      {/*
-        The whole header is the toggle, not just the chevron — a 16px hit target
-        for the primary structural control of the list fails every hit-size
-        guideline. Disclosure pattern: aria-expanded + aria-controls.
-      */}
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={!isCollapsed}
-        aria-controls={listId}
-        data-testid="pilot-group-header"
-        className="flex w-full items-center gap-1.5 rounded-[var(--radius-md)] px-2 py-1 text-left transition-colors duration-150 ease-out hover:bg-overlay-subtle"
-      >
-        <ChevronRight
-          aria-hidden="true"
-          className={cn(
-            "size-3.5 shrink-0 text-daintree-text/40 transition-transform duration-150 ease-out",
-            !isCollapsed && "rotate-90"
-          )}
-        />
-        {group.emoji && (
-          <span aria-hidden="true" className="text-sm">
-            {group.emoji}
-          </span>
+    <div className="flex w-full items-center justify-between">
+      <div className="flex items-center gap-3">
+        {actionLabel !== null && (
+          <>
+            <span>
+              <kbd className={KBD_CLASS}>↵</kbd>
+              <span className="ml-1.5">{actionLabel}</span>
+            </span>
+            <span className="text-daintree-text/50">
+              <kbd className={KBD_CLASS}>↑↓</kbd>
+              <span className="ml-1.5">Navigate</span>
+            </span>
+          </>
         )}
-        <span className="truncate text-sm font-medium text-daintree-text/90">{group.name}</span>
-        <span className="shrink-0 text-xs tabular-nums text-daintree-text/40">
-          {group.rows.length}
-        </span>
-        {group.demandCount > 0 && (
-          <span className="shrink-0 text-xs text-state-waiting">{group.demandCount} need you</span>
-        )}
-      </button>
-
-      {!isCollapsed && (
-        <div id={listId} role="group" aria-label={group.name} className="flex flex-col">
-          {group.rows.map((row) => (
-            <RunRow key={row.run.runId} row={row} />
-          ))}
-        </div>
-      )}
-    </section>
+      </div>
+      {summary && <span className="truncate text-daintree-text/50">{summary}</span>}
+    </div>
   );
 }
 
@@ -121,6 +263,9 @@ export function PilotView() {
   const snapshot = useFleetSnapshotStore((s) => s.snapshot);
   const projects = useProjectStore((s) => s.projects);
   const scratches = useScratchStore((s) => s.scratches);
+  const pilotShortcut = useEffectiveCombo("pilot.toggle");
+
+  useOverlayClaim("pilot", isOpen);
 
   const [query, setQuery] = useState("");
   /**
@@ -168,11 +313,12 @@ export function PilotView() {
   }, []);
 
   const workspaces = useMemo(() => {
-    const map = new Map<string, { name: string; emoji?: string }>();
+    const map = new Map<string, { name: string; emoji?: string; color?: string }>();
     for (const project of projects) {
       map.set(project.id, {
         name: project.name,
         ...(project.emoji ? { emoji: project.emoji } : {}),
+        ...(project.color ? { color: project.color } : {}),
       });
     }
     for (const scratch of scratches) map.set(scratch.id, { name: scratch.name });
@@ -190,17 +336,6 @@ export function PilotView() {
     return buildPilotGroups(snapshot.runs, { workspaces, agentNames, nowMs });
   }, [snapshot, workspaces, nowMs]);
 
-  /**
-   * Position is frozen for as long as the dialog stays open.
-   *
-   * Ordering is derived from live agent state, so without this a run changing
-   * state reorders the list under the cursor — the classic sort-thrash misclick,
-   * and the one that matters most here because every row is a navigation target.
-   * The ORDER is pinned on open; the rows themselves keep updating in place, so
-   * a state circle or an age still moves the instant it changes. A run that
-   * appears while the dialog is open is appended to its project rather than
-   * sorted into it, for the same reason.
-   */
   /**
    * Position, pinned for as long as the dialog stays open.
    *
@@ -302,6 +437,228 @@ export function PilotView() {
   );
 
   const isSearching = query.trim().length > 0;
+
+  const navRows = useMemo<PilotNavRow[]>(() => {
+    const out: PilotNavRow[] = [];
+    for (const group of visibleGroups) {
+      // A collapsed group that contains a match opens itself — making someone
+      // click to reveal the thing they just searched for is the search failing
+      // to do its job.
+      const isCollapsed = isSearching
+        ? searchCollapsed.includes(group.workspaceId)
+        : collapsedIds.includes(group.workspaceId);
+      out.push({
+        kind: "group",
+        domId: groupDomId(group.workspaceId),
+        workspaceId: group.workspaceId,
+        group,
+        isCollapsed,
+      });
+      if (isCollapsed) continue;
+      for (const row of group.rows) {
+        out.push({
+          kind: "run",
+          domId: runDomId(row.run.runId),
+          workspaceId: group.workspaceId,
+          row,
+        });
+      }
+    }
+    return out;
+  }, [visibleGroups, isSearching, searchCollapsed, collapsedIds]);
+
+  /**
+   * The selected ROW is the state; its index is derived. Tracking an index
+   * instead would let it outlive the row it pointed at — this list shrinks
+   * under the open dialog whenever an agent exits or a group collapses, and the
+   * index would then address a different row than the user selected, with Enter
+   * committing that one (the switcher's #11071).
+   */
+  const [selectedDomId, setSelectedDomId] = useState<string | null>(null);
+  /**
+   * Where the highlight sits before anyone has moved it: the first RUN, not the
+   * first row. Open-then-Enter should reach the most urgent agent — landing on
+   * a project header would make that reflex collapse the group holding it.
+   */
+  const defaultIndex = useMemo(() => {
+    const firstRun = navRows.findIndex((row) => row.kind === "run");
+    return firstRun >= 0 ? firstRun : 0;
+  }, [navRows]);
+  const selectedIndex = useMemo(() => {
+    if (navRows.length === 0) return -1;
+    const index = selectedDomId ? navRows.findIndex((row) => row.domId === selectedDomId) : -1;
+    return index >= 0 ? index : defaultIndex;
+  }, [navRows, selectedDomId, defaultIndex]);
+  const selectedRow = selectedIndex >= 0 ? navRows[selectedIndex] : undefined;
+
+  // A new query re-ranks the list, so fall back to the top match, and the
+  // search-scoped collapses belong to the query that produced them. Closing
+  // drops both so a reopen doesn't restore state from a fleet that has moved on.
+  //
+  // Keyed on the query VALUE rather than the input's onChange because Escape
+  // also clears the box. Both routes happen to end in a keystroke today, so
+  // this is not fixing a reachable bug — it just stops the invariant depending
+  // on every future caller remembering to reset alongside `setQuery`.
+  useEffect(() => {
+    setSelectedDomId(null);
+    setSearchCollapsed([]);
+  }, [query, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) setQuery("");
+  }, [isOpen]);
+
+  // Keyed on the id rather than the row object: the row is rebuilt on every
+  // snapshot, and re-running this each tick would fight the user's own scroll.
+  const selectedRowDomId = selectedRow?.domId;
+  useEffect(() => {
+    if (selectedRowDomId === undefined) return;
+    document.getElementById(selectedRowDomId)?.scrollIntoView({ block: "nearest" });
+  }, [selectedRowDomId]);
+
+  const step = useCallback(
+    (delta: number) => {
+      if (navRows.length === 0) return;
+      // Resolve the current row from the id inside the updater so two calls
+      // batched into one tick compose instead of collapsing into one.
+      setSelectedDomId((previousId) => {
+        const current = previousId ? navRows.findIndex((row) => row.domId === previousId) : -1;
+        const from = current >= 0 ? current : defaultIndex;
+        const next = (from + delta + navRows.length) % navRows.length;
+        return navRows[next]!.domId;
+      });
+    },
+    [navRows, defaultIndex]
+  );
+
+  const setGroupCollapsed = useCallback(
+    (workspaceId: string, collapsed: boolean) => {
+      if (isSearching) {
+        setSearchCollapsed((ids) => {
+          const has = ids.includes(workspaceId);
+          if (collapsed === has) return ids;
+          return collapsed ? [...ids, workspaceId] : ids.filter((id) => id !== workspaceId);
+        });
+      } else if (collapsedIds.includes(workspaceId) !== collapsed) {
+        toggleCollapsed(workspaceId);
+      }
+    },
+    [isSearching, collapsedIds, toggleCollapsed]
+  );
+
+  const activate = useCallback(
+    (row: PilotNavRow) => {
+      // Selecting first is what keeps the highlight out of a group the very
+      // next line is about to hide — a click on a header can arrive while the
+      // selection sits on one of that header's runs.
+      setSelectedDomId(row.domId);
+      if (row.kind === "group") {
+        setGroupCollapsed(row.workspaceId, !row.isCollapsed);
+        return;
+      }
+      void actionService.dispatch("pilot.openRun", {
+        runId: row.row.run.runId,
+        workspaceId: row.workspaceId,
+      });
+    },
+    [setGroupCollapsed]
+  );
+
+  /**
+   * `allowCaretKeys` is true where a caret exists to protect, and the tree's
+   * structural keys stand down for it.
+   *
+   * Home/End/←/→ are the tree's structural keys, but they are also the search
+   * box's editing keys, and the box owns focus by default. While the query is
+   * non-empty they stay with the caret; an empty box has nothing to edit, so
+   * they navigate. Search force-expands every matching group anyway, which is
+   * where collapse would matter least.
+   */
+  const handleNavigationKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLElement>, allowCaretKeys: boolean) => {
+      const consume = () => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
+
+      // Nothing listed means nothing to navigate or open. Swallowing the key
+      // anyway would leave the region eating Enter and the arrows during
+      // loading and empty states, where the browser's own behaviour is the
+      // only useful one left.
+      if (navRows.length === 0) return;
+
+      switch (e.key) {
+        case "ArrowDown":
+          consume();
+          step(1);
+          break;
+        case "ArrowUp":
+          consume();
+          step(-1);
+          break;
+        case "Home":
+          if (allowCaretKeys) break;
+          consume();
+          setSelectedDomId(navRows[0]!.domId);
+          break;
+        case "End":
+          if (allowCaretKeys) break;
+          consume();
+          setSelectedDomId(navRows[navRows.length - 1]!.domId);
+          break;
+        case "ArrowRight": {
+          if (allowCaretKeys || selectedRow?.kind !== "group") break;
+          consume();
+          if (selectedRow.isCollapsed) {
+            setGroupCollapsed(selectedRow.workspaceId, false);
+            break;
+          }
+          const child = navRows[selectedIndex + 1];
+          if (child?.kind === "run") setSelectedDomId(child.domId);
+          break;
+        }
+        case "ArrowLeft": {
+          if (allowCaretKeys || !selectedRow) break;
+          consume();
+          if (selectedRow.kind === "run") {
+            setSelectedDomId(groupDomId(selectedRow.workspaceId));
+            break;
+          }
+          if (!selectedRow.isCollapsed) setGroupCollapsed(selectedRow.workspaceId, true);
+          break;
+        }
+        case "Enter":
+          consume();
+          if (selectedRow) activate(selectedRow);
+          break;
+      }
+    },
+    [step, navRows, selectedRow, selectedIndex, setGroupCollapsed, activate]
+  );
+
+  const handleInputKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+      // Escape empties the box before it closes the palette, and it has to be
+      // stopped HERE to do so. `AppPaletteDialog` closes from a document-bubble
+      // backstop that also marks the event consumed, so the escape stack never
+      // gets a turn — a `useEscapeStack` claim looks right and never runs.
+      if (e.key === "Escape" && query !== "") {
+        e.preventDefault();
+        e.stopPropagation();
+        setQuery("");
+        return;
+      }
+      handleNavigationKeyDown(e, query.length > 0);
+    },
+    [handleNavigationKeyDown, query]
+  );
+
+  const handleBodyKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => handleNavigationKeyDown(e, false),
+    [handleNavigationKeyDown]
+  );
+
   const demandCount = snapshot ? countDemands(snapshot.runs) : 0;
   const runCount = snapshot?.runs.length ?? 0;
 
@@ -314,96 +671,119 @@ export function PilotView() {
           ? `Nothing needs you · ${runCount} ${runCount === 1 ? "agent" : "agents"} running`
           : "";
 
+  const actionLabel =
+    selectedRow === undefined
+      ? null
+      : selectedRow.kind === "run"
+        ? "Open"
+        : selectedRow.isCollapsed
+          ? "Expand"
+          : "Collapse";
+
+  const activeDescendant = selectedRow?.domId;
+  const hasTree = snapshot !== null && navRows.length > 0;
+
+  /**
+   * Combobox semantics, but only while there is a popup to be a combobox for.
+   *
+   * Loading, empty-fleet and no-match all render no tree, and axe-core requires
+   * BOTH `aria-expanded` and `aria-controls` on `role="combobox"` — so keeping
+   * the role while dropping the dangling IDREF just trades one violation for
+   * another. Standing the whole role down leaves an ordinary search box, which
+   * is what it actually is when nothing is listed.
+   */
+  const comboboxProps = hasTree
+    ? ({
+        role: "combobox",
+        "aria-expanded": true,
+        "aria-haspopup": "tree",
+        "aria-controls": TREE_ID,
+        "aria-activedescendant": activeDescendant,
+      } as const)
+    : {};
+
   return (
-    <AppDialog
+    <AppPaletteDialog
       isOpen={isOpen}
       onClose={close}
-      size="lg"
-      // Content-hugging between bounds rather than a fixed frame: Spotlight,
-      // Alfred, Raycast, Linear and Slack all shrink to fit a short list and cap
-      // at a max, and a half-empty 500px frame reads as broken. The floor keeps
-      // a one-agent fleet looking deliberate. Height snaps — never animate it
-      // while someone is typing in the field above.
-      maxHeight="max-h-[min(32rem,80vh)]"
-      className="min-h-[16rem]"
-      data-testid="pilot-dialog"
+      ariaLabel="All agents"
+      className={PALETTE_WIDTH}
     >
-      <AppDialog.Header>
-        <AppDialog.Title icon={<Radar className="size-4" aria-hidden="true" />}>
-          All agents
-        </AppDialog.Title>
-        {summary && <p className="mt-0.5 text-xs text-daintree-text/50">{summary}</p>}
-      </AppDialog.Header>
+      <AppPaletteDialog.Header label="All agents" shortcut={pilotShortcut} className="pb-2">
+        <AppPaletteDialog.Input
+          className="bg-overlay-soft border-[var(--border-overlay)]"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={handleInputKeyDown}
+          placeholder="Search agents…"
+          aria-label="Search agents"
+          {...comboboxProps}
+          data-testid="pilot-search"
+        />
+      </AppPaletteDialog.Header>
 
-      <div className="shrink-0 border-b border-daintree-border px-4 pb-3">
-        <div className="flex items-center gap-2 rounded-[var(--radius-md)] border border-transparent bg-overlay-subtle px-2.5 py-1.5 transition-colors duration-150 ease-out focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent">
-          <Search className="size-3.5 shrink-0 text-daintree-text/40" aria-hidden="true" />
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setSearchCollapsed([]);
-            }}
-            placeholder="Search agents"
-            aria-label="Search agents by title"
-            data-testid="pilot-search"
-            className="min-w-0 flex-1 bg-transparent text-sm text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden"
-          />
-        </div>
-      </div>
-
-      <AppDialog.BodyScroll className="p-2">
+      <AppPaletteDialog.Body
+        maxHeight="max-h-[60vh]"
+        className="p-0"
+        ariaLabel="Agents"
+        activeDescendant={activeDescendant}
+        onNavigationKeyDown={handleBodyKeyDown}
+      >
         {snapshot === null ? (
-          <Skeleton className="flex flex-col gap-2 p-2" data-testid="pilot-skeleton">
+          <Skeleton className="flex flex-col gap-2 p-4" data-testid="pilot-skeleton">
             {Array.from({ length: 4 }, (_, i) => (
-              <SkeletonBone key={i} className="h-9 w-full" />
+              <SkeletonBone key={i} className="h-8 w-full" />
             ))}
           </Skeleton>
-        ) : visibleGroups.length === 0 ? (
-          <div
-            className="flex h-full flex-col items-center justify-center gap-1 px-6 py-10 text-center"
-            data-testid="pilot-empty"
-          >
-            <p className="text-sm text-daintree-text/70">
-              {isSearching ? "No agents match your search" : "No agents running"}
+        ) : !hasTree ? (
+          /*
+           * Deliberately quiet, and deliberately not a call to action. An empty
+           * fleet here is overwhelmingly the completed-work state — everything
+           * finished — which the empty-state rule says stays quiet rather than
+           * nudging. Pilot also cannot start an agent: launching is per-project,
+           * and this surface spans them all, so a CTA would name an action it
+           * has no way to perform. The usual teaching gate (`hasEverLaunchedAgent`)
+           * is no help either — it lives in a per-project-view store and would
+           * answer only for whichever project happens to be active.
+           */
+          <AppPaletteDialog.Empty query={query} emptyMessage="No agents running">
+            <p className="mt-2 text-xs text-daintree-text/40">
+              Agents you start in any project show up here
             </p>
-            <p className="text-xs text-daintree-text/50">
-              {isSearching
-                ? "Try a different title, worktree or project"
-                : "Agents you start in any project show up here"}
-            </p>
-          </div>
+          </AppPaletteDialog.Empty>
         ) : (
-          <div className="flex flex-col gap-2">
-            {visibleGroups.map((group) => (
-              <ProjectGroup
-                key={group.workspaceId}
-                group={group}
-                // A collapsed group that contains a match opens itself — making
-                // someone click to reveal the thing they just searched for is
-                // the search failing to do its job.
-                isCollapsed={
-                  isSearching
-                    ? searchCollapsed.includes(group.workspaceId)
-                    : collapsedIds.includes(group.workspaceId)
-                }
-                onToggle={() => {
-                  if (isSearching) {
-                    setSearchCollapsed((ids) =>
-                      ids.includes(group.workspaceId)
-                        ? ids.filter((id) => id !== group.workspaceId)
-                        : [...ids, group.workspaceId]
-                    );
-                    return;
-                  }
-                  toggleCollapsed(group.workspaceId);
-                }}
-              />
-            ))}
+          // No padding of its own: the palette body's scroller already carries
+          // `p-2`, and a second layer here would inset every row twice.
+          <div id={TREE_ID} role="tree" aria-label="Agents by project">
+            {navRows.map((navRow, index) =>
+              navRow.kind === "group" ? (
+                <GroupHeader
+                  key={navRow.domId}
+                  group={navRow.group}
+                  isCollapsed={navRow.isCollapsed}
+                  isSelected={index === selectedIndex}
+                  domId={navRow.domId}
+                  onActivate={() => activate(navRow)}
+                  onHover={() => setSelectedDomId(navRow.domId)}
+                />
+              ) : (
+                <RunRow
+                  key={navRow.domId}
+                  row={navRow.row}
+                  isSelected={index === selectedIndex}
+                  domId={navRow.domId}
+                  onActivate={() => activate(navRow)}
+                  onHover={() => setSelectedDomId(navRow.domId)}
+                />
+              )
+            )}
           </div>
         )}
-      </AppDialog.BodyScroll>
-    </AppDialog>
+      </AppPaletteDialog.Body>
+
+      <AppPaletteDialog.Footer>
+        <PilotFooter actionLabel={actionLabel} summary={summary} />
+      </AppPaletteDialog.Footer>
+    </AppPaletteDialog>
   );
 }

@@ -10,7 +10,10 @@ export interface PilotRow {
   title: string;
   /** Worktree label, or null when it would only repeat the project name. */
   worktreeLabel: string | null;
-  /** Agent's display name, or null before detection commits. */
+  /**
+   * Agent's display name — null before detection commits, and also null when
+   * the title already IS that name (an untitled run falls back to it).
+   */
   agentLabel: string | null;
   /** Compact age of the current state, or null when the run never recorded one. */
   age: string | null;
@@ -20,6 +23,8 @@ export interface PilotProjectGroup {
   workspaceId: string;
   name: string;
   emoji: string | null;
+  /** Project tile colour, so the header carries the same identity as the switcher's rows. */
+  color: string | null;
   rows: PilotRow[];
   /** Runs in this project that constitute a demand on the user. */
   demandCount: number;
@@ -35,20 +40,23 @@ function directoryLabel(cwd: string): string | null {
 }
 
 /**
- * Drop a worktree label that only repeats the project name.
+ * Drop a label that only repeats something already on the row.
  *
- * A run in the project's own root worktree has a cwd whose last segment IS the
- * project folder, so the row would render "Daintree · daintree" — a separator
- * promising a second fact and then not delivering one.
+ * Two ways a row earns a redundant line. A run in the project's own root
+ * worktree has a cwd whose last segment IS the project folder, so it would read
+ * "Daintree · daintree". An untitled run falls back to its agent's name for the
+ * title, so the agent label under it would read "Claude / Claude". Both are a
+ * separator promising a second fact and then not delivering one.
  */
-function disambiguatingLabel(label: string | null, projectName: string): string | null {
+function disambiguatingLabel(label: string | null, against: string): string | null {
   if (label === null) return null;
-  return label.toLowerCase() === projectName.toLowerCase() ? null : label;
+  return label.toLowerCase() === against.toLowerCase() ? null : label;
 }
 
 export interface PilotWorkspaceMeta {
   name: string;
   emoji?: string;
+  color?: string;
 }
 
 export interface PilotRowContext {
@@ -106,12 +114,13 @@ export function buildPilotGroups(
 
     const rows: PilotRow[] = sorted.map((run) => {
       const agentLabel = run.agentId ? (ctx.agentNames.get(run.agentId) ?? run.agentId) : null;
+      const title = run.title?.trim() || agentLabel || "Untitled";
       return {
         run,
         band: bandForRun(run),
-        title: run.title?.trim() || agentLabel || "Untitled",
+        title,
         worktreeLabel: disambiguatingLabel(directoryLabel(run.cwd), name),
-        agentLabel,
+        agentLabel: disambiguatingLabel(agentLabel, title),
         age: run.since !== undefined ? formatWaitAge(run.since, ctx.nowMs) : null,
       };
     });
@@ -120,6 +129,7 @@ export function buildPilotGroups(
       workspaceId,
       name,
       emoji: meta?.emoji ?? null,
+      color: meta?.color ?? null,
       rows,
       demandCount: rows.filter((r) => isDemandBand(r.band)).length,
       topBand: rows[0]?.band ?? "idle",
