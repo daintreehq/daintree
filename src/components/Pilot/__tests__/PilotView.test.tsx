@@ -631,6 +631,21 @@ describe("PilotView", () => {
       expect(screen.getAllByTestId("pilot-row")).toHaveLength(3);
     });
 
+    it("can reopen a project after collapsing every one of them", () => {
+      // Collapsing the last expanded project empties the list. The disclosures
+      // are not tab stops, so if Right bailed on an empty list the keyboard
+      // user would be shut out of their own fleet with no way back.
+      seedTwoProjects();
+      render(<PilotView />);
+
+      press("ArrowLeft");
+      press("ArrowLeft");
+      expect(screen.queryByTestId("pilot-row")).toBeNull();
+
+      press("ArrowRight");
+      expect(screen.getAllByTestId("pilot-row").length).toBeGreaterThan(0);
+    });
+
     it("moves the highlight out of a group it collapses", () => {
       seedTwoProjects();
       render(<PilotView />);

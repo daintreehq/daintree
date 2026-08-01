@@ -15,6 +15,7 @@ import type { NotificationEventKind } from "@/lib/notify";
 import { switchToLastProject } from "@/lib/projectHistoryNav";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
+import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 
 /**
  * Wire shape of `project.getSettings`.
@@ -139,7 +140,15 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       // where they started with the overview gone and nothing explaining why.
       if (workspaceId === currentId) {
         const result = await actionService.dispatch("panel.focus", { panelId: runId });
-        if (result.ok) usePilotStore.getState().close();
+        if (result.ok) {
+          // Closing a palette normally returns the keyboard to whatever opened
+          // it. Here that would undo the line above: the restore fires from the
+          // exit animation and hands focus back to the panel the user was
+          // trying to leave. Set only on the success path — on failure the
+          // dialog stays open and the flag would leak to another palette.
+          suppressPaletteFocusRestore();
+          usePilotStore.getState().close();
+        }
         return;
       }
 

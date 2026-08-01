@@ -24,6 +24,7 @@ import {
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { usePaletteStore } from "@/store/paletteStore";
+import { consumePaletteFocusRestoreSuppression } from "./paletteFocusRestore";
 import {
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
@@ -58,6 +59,13 @@ export function AppPaletteDialog({
   const restoreFocus = useCallback(() => {
     const el = previousFocusRef.current;
     previousFocusRef.current = null;
+    // A caller placed focus deliberately (the fleet overview focusing the run
+    // it opened); putting it back would undo that. Overlays are still cleared —
+    // only the focus move is skipped.
+    if (consumePaletteFocusRestoreSuppression()) {
+      clearDialogOverlays();
+      return;
+    }
     if (!el) return;
     // Palette-to-palette handoff: the next palette will install its
     // own focus, so skip restore entirely — and skip the overlay clear

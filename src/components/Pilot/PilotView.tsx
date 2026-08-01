@@ -702,6 +702,23 @@ export function PilotView() {
         e.stopPropagation();
       };
 
+      // Expand runs BEFORE the empty-list guard, because collapsing the last
+      // expanded project is exactly what empties the list — and the disclosures
+      // are not tab stops, so bailing here would strand a keyboard user with
+      // every project shut and no way to reopen one.
+      if (e.key === "ArrowRight" && !allowCaretKeys) {
+        const target =
+          lastCollapsedRef.current ??
+          selectedRow?.workspaceId ??
+          groupNodes.find((node) => node.isCollapsed)?.group.workspaceId;
+        if (target !== undefined) {
+          consume();
+          setGroupCollapsed(target, false);
+          lastCollapsedRef.current = null;
+        }
+        return;
+      }
+
       // Nothing listed means nothing to navigate or open. Swallowing the key
       // anyway would leave the region eating Enter and the arrows during
       // loading and empty states, where the browser's own behaviour is the
@@ -727,17 +744,6 @@ export function PilotView() {
           consume();
           setSelectedDomId(navRows[navRows.length - 1]!.domId);
           break;
-        case "ArrowRight": {
-          if (allowCaretKeys || !selectedRow) break;
-          consume();
-          // Re-open what Left just closed. Collapsing necessarily pushes the
-          // selection into a different project, so without this the pair is
-          // one-way: Right would only ever re-expand a group that is already
-          // open, and a keyboard user could never undo a collapse.
-          setGroupCollapsed(lastCollapsedRef.current ?? selectedRow.workspaceId, false);
-          lastCollapsedRef.current = null;
-          break;
-        }
         case "ArrowLeft": {
           if (allowCaretKeys || !selectedRow) break;
           consume();
@@ -753,7 +759,7 @@ export function PilotView() {
           break;
       }
     },
-    [step, navRows, selectedRow, setGroupCollapsed, activate]
+    [step, navRows, selectedRow, groupNodes, setGroupCollapsed, activate]
   );
 
   const handleInputKeyDown = useCallback(
@@ -808,7 +814,7 @@ export function PilotView() {
   // Every selectable row is an agent now, so the verb never changes.
   const actionLabel = selectedRow === undefined ? null : "Open";
 
-  const hasTree = navRows.length > 0;
+  const hasTree = groupNodes.length > 0;
   const showEmpty = status.kind === "live" && groupNodes.length === 0;
   const showSkeleton = useDeferredLoading(status.kind === "loading", UI_DOHERTY_THRESHOLD);
 

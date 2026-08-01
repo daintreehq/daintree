@@ -13,6 +13,9 @@ vi.mock("@/store/viewWorkspaceId", () => ({
   getViewWorkspaceId: () => viewWorkspaceId.current,
 }));
 
+const suppressPaletteFocusRestore = vi.hoisted(() => vi.fn());
+vi.mock("@/components/ui/paletteFocusRestore", () => ({ suppressPaletteFocusRestore }));
+
 import { registerProjectActions } from "../../../services/actions/definitions/projectActions";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -141,6 +144,26 @@ describe("pilot.openRun", () => {
     seedScratches([SCRATCH_C]);
     await openRun({ runId: "t8", workspaceId: SCRATCH_C });
     expect(usePilotStore.getState().isOpen).toBe(false);
+  });
+
+  it("stops the closing palette from taking the focus back", async () => {
+    // A palette normally returns the keyboard to whatever opened it, and that
+    // restore fires from the exit animation — AFTER the run is focused. Without
+    // suppressing it, opening a run in the current workspace hands focus
+    // straight back to the panel the user was trying to leave.
+    await openRun({ runId: "t1", workspaceId: PROJECT_HERE });
+
+    expect(suppressPaletteFocusRestore).toHaveBeenCalled();
+  });
+
+  it("leaves focus restoration alone when the run could not be focused", async () => {
+    // The dialog stays open on failure, so nothing consumes the one-shot flag —
+    // setting it here would leak into an unrelated palette's next close.
+    dispatchMock.mockResolvedValue({ ok: false });
+
+    await openRun({ runId: "gone", workspaceId: PROJECT_HERE });
+
+    expect(suppressPaletteFocusRestore).not.toHaveBeenCalled();
   });
 
   it("stays open when the run no longer exists to focus", async () => {
