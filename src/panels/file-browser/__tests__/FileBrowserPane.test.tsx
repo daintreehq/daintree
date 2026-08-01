@@ -1994,6 +1994,36 @@ describe("FileBrowserPane Refresh reachability and media wiring (#11586)", () =>
     expect(refreshButtons()).toHaveLength(1);
   });
 
+  it("hands its Refresh to the viewer while a file is open, rather than showing two", () => {
+    // The one layout where both headers are on screen at once. The viewer's
+    // copy sits beside that file's own actions and takes the slot the sort menu
+    // holds in the list layouts; the tree header stands down so the panel never
+    // offers two buttons named "Refresh" wired to the same handler.
+    mockPanel.browserSelectedPath = "src/app.ts";
+    renderPane();
+
+    const treeColumn = document.getElementById(
+      screen.getByTestId("file-browser-sidebar-toggle").getAttribute("aria-controls")!
+    )!;
+    expect(refreshButtons()).toHaveLength(1);
+    expect(treeColumn.contains(refreshButtons()[0]!)).toBe(false);
+  });
+
+  it("keeps the tree's Refresh when the viewer that would own it is collapsed", () => {
+    // A file is selected, but there is no viewer toolbar to hand it to — the
+    // handoff above must not strand the layout with no Refresh at all.
+    mockPanel.browserSelectedPath = "src/app.ts";
+    mockPanel.browserViewerCollapsed = true;
+    renderPane();
+
+    // The viewer column is unmounted — its tree toggle is the tell — so the
+    // toolbar that would own Refresh for the open file doesn't exist, and the
+    // tree column is the only place the remaining one can be.
+    expect(screen.queryByTestId("file-browser-sidebar-toggle")).toBeNull();
+    expect(screen.getByTestId("file-tree-view")).toBeTruthy();
+    expect(refreshButtons()).toHaveLength(1);
+  });
+
   it("runs the pane's manual refresh from the viewer with nothing selected", () => {
     // Nothing selected is not a dead layout: Refresh re-reads the tree, and a
     // browser whose source reports no change tick (a workspace root, #11482)

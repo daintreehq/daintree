@@ -17,7 +17,6 @@ import {
   FileType,
   type LucideIcon,
 } from "lucide-react";
-import type { WORKTREE_COLOR_PALETTE } from "@shared/theme/worktreeColors";
 
 /**
  * File-type icons for the browser tree (#11596).
@@ -27,17 +26,17 @@ import type { WORKTREE_COLOR_PALETTE } from "@shared/theme/worktreeColors";
  * filename-only — no MIME sniffing, no stat, no extra IPC — because the tree
  * already has the basename and nothing else is worth a round trip per row.
  *
- * Colors come from the existing `category-*` theme tokens, never the accent:
- * accent restraint allows one load-bearing accent signal per focus region, and
- * a tree tinting dozens of rows at once is exactly what that forbids. The hues
- * are limited to the eight-token CVD-safe subset `WORKTREE_COLOR_PALETTE`
- * already proven distinguishable under all three dichromacies across every
- * built-in theme, so this map inherits that proof instead of restating it.
- *
- * At `h-3.5` shape carries the signal and color only reinforces it — which is
- * why hues repeat across categories whose glyphs look nothing alike (a gear
- * and a play triangle both sit on violet), and why dropping to monochrome
- * under `prefers-contrast: more` costs nothing but the reinforcement.
+ * Glyphs only: every icon paints the same neutral. The categories originally
+ * carried `category-*` hues, and measuring the result on this repo is what
+ * removed them — 80% of tracked files resolve to `source` alone, and 95% of
+ * directories come out a single hue, so the code discriminated nothing in the
+ * folders anyone actually browses and turned into a rainbow only in the root.
+ * Three costs for that: the eight `category-*` hues already mean worktree
+ * identity, agent state and action-palette category elsewhere in the app, so a
+ * fourth meaning collided with all three; the tinted column competed with the
+ * git status markers in the same rows, which are the load-bearing signal here;
+ * and a saturated glyph beside a 70%-alpha filename put the metadata above the
+ * content. Grey costs a channel that was carrying no information anyway.
  */
 
 /** Category identity. Exposed so callers can group rows without matching on icon identity. */
