@@ -50,6 +50,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -134,12 +135,13 @@ export interface FileBrowserViewerProps {
   folderHasHiddenDotfiles: boolean;
   /** Turns the dotfile filter off; offered from the filtered-empty state. */
   onShowDotfiles: () => void;
-  /** Selecting an entry in the listing — a folder steps in, a file opens. */
+  /**
+   * Selecting an entry in the listing — a folder steps in, a file opens. The
+   * listing's only click gesture; re-rooting and opening in a panel live in the
+   * row's context menu and in the tree, which is why no activate/root callback
+   * is threaded through here (see `FolderListingView`).
+   */
   onSelectEntry: (path: string) => void;
-  /** Double-click on a listing file: open it in its own panel. */
-  onActivateEntry: (path: string) => void;
-  /** Double-click on a listing folder: re-root the browser there. */
-  onRootFolder: (path: string) => void;
   /** Menu items for a listing row's right-click menu — the tree's own callback. */
   rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
   /** Absolute base the listing's relative paths hang off, for drags (#11576). */
@@ -157,16 +159,19 @@ const SORT_OPTIONS: Array<{ value: FileBrowserSortKey; label: string }> = [
   { value: "type", label: "Type" },
 ];
 
+/** Narrow a menu value back to a known key, falling back to the current one. */
+function toSortKey(value: string, fallback: FileBrowserSortKey): FileBrowserSortKey {
+  return SORT_OPTIONS.find((option) => option.value === value)?.value ?? fallback;
+}
+
 /**
- * Picking the key already in use flips direction; picking a different one keeps
- * the current direction. Mirrors the review hub's sort menu (`applySortChange`)
- * so the two menus in the app behave identically — re-picking as "toggle" is
- * the only way a single radio group can express direction at all.
+ * The sort control's accessible name. Spells out both halves because the arrow
+ * icon that shows the direction is decorative — the name is the only place a
+ * screen reader can learn which way the list runs.
  */
-function nextSort(current: FileBrowserSortOrder, value: string): FileBrowserSortOrder {
-  const key = SORT_OPTIONS.find((option) => option.value === value)?.value ?? current.key;
-  if (key !== current.key) return { key, direction: current.direction };
-  return { key, direction: current.direction === "asc" ? "desc" : "asc" };
+function sortLabel(sort: FileBrowserSortOrder): string {
+  const key = SORT_OPTIONS.find((option) => option.value === sort.key)?.label ?? "Name";
+  return `Sort files (${key}, ${sort.direction === "asc" ? "ascending" : "descending"})`;
 }
 
 /** Which external surface a toolbar action aims the current file at. */
@@ -221,8 +226,6 @@ export function FileBrowserViewer({
   folderHasHiddenDotfiles,
   onShowDotfiles,
   onSelectEntry,
-  onActivateEntry,
-  onRootFolder,
   rowContextMenu,
   basePath,
   sort,
@@ -498,43 +501,54 @@ export function FileBrowserViewer({
                 <DropdownMenuTrigger asChild>
                   <button
                     type="button"
-                    aria-label="Sort files"
+                    // Carries the current order, not just the verb: the arrow
+                    // below is decorative, so without this a screen reader
+                    // could never tell which way the list is sorted.
+                    aria-label={sortLabel(sort)}
                     data-testid="file-browser-sort-menu"
                     className="toolbar-icon-button rounded p-1.5 text-daintree-text/60"
                   >
                     {sort.direction === "asc" ? (
-                      <ArrowUpNarrowWide className="h-4 w-4" />
+                      <ArrowUpNarrowWide className="h-4 w-4" aria-hidden="true" />
                     ) : (
-                      <ArrowDownNarrowWide className="h-4 w-4" />
+                      <ArrowDownNarrowWide className="h-4 w-4" aria-hidden="true" />
                     )}
                   </button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Sort files</TooltipContent>
+              <TooltipContent side="bottom">{sortLabel(sort)}</TooltipContent>
             </Tooltip>
             <DropdownMenuContent align="end" className="min-w-[180px]">
+              {/* Key and direction are two labelled radio groups rather than one
+                  group that reverses when its active item is re-picked. The
+                  compact version hides the direction behind a gesture nothing
+                  announces — the checked item stays checked, so a screen reader
+                  reports no change at all — and leaves no way to set a
+                  direction outright. Two groups cost one extra label and make
+                  both halves readable and directly settable. */}
               <DropdownMenuLabel>Sort by</DropdownMenuLabel>
-              {/* One radio group, no separate direction control: re-picking the
-                  active key flips it, which keeps the menu to a single list of
-                  choices instead of a key list plus a direction list that can
-                  disagree. The arrow marks which key carries the direction. */}
               <DropdownMenuRadioGroup
                 value={sort.key}
-                onValueChange={(value) => onSortChange(nextSort(sort, value))}
+                onValueChange={(value) =>
+                  onSortChange({ ...sort, key: toSortKey(value, sort.key) })
+                }
               >
                 {SORT_OPTIONS.map((option) => (
                   <DropdownMenuRadioItem key={option.value} value={option.value}>
-                    <span className="flex flex-1 items-center gap-2">
-                      {option.label}
-                      {sort.key === option.value &&
-                        (sort.direction === "asc" ? (
-                          <ArrowUpNarrowWide className="ml-auto h-3 w-3 text-daintree-text/40" />
-                        ) : (
-                          <ArrowDownNarrowWide className="ml-auto h-3 w-3 text-daintree-text/40" />
-                        ))}
-                    </span>
+                    {option.label}
                   </DropdownMenuRadioItem>
                 ))}
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Order</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={sort.direction}
+                onValueChange={(value) =>
+                  onSortChange({ ...sort, direction: value === "desc" ? "desc" : "asc" })
+                }
+              >
+                <DropdownMenuRadioItem value="asc">Ascending</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="desc">Descending</DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -652,6 +666,7 @@ export function FileBrowserViewer({
    */
   function renderFolderBody() {
     if (folderPath === null) return null;
+    const folderName = folderPath.split("/").pop() ?? folderPath;
 
     if (folderStatus === "error") {
       return (
@@ -705,7 +720,10 @@ export function FileBrowserViewer({
             scale="canvas"
             className="w-full"
             {...(canRevealDotfiles ? {} : { icon: <FolderTree className="h-6 w-6" /> })}
-            title={canRevealDotfiles ? "Dotfiles are hidden here" : "This folder is empty"}
+            title={canRevealDotfiles ? "Dotfiles are hidden here" : "Nothing in this folder yet"}
+            {...(canRevealDotfiles
+              ? {}
+              : { description: "Add a file to it and it'll show up here." })}
             action={
               canRevealDotfiles ? (
                 <button
@@ -725,13 +743,10 @@ export function FileBrowserViewer({
     return (
       <FolderListingView
         rows={folderRows}
-        selectedPath={null}
         onSelect={onSelectEntry}
-        onActivateFile={onActivateEntry}
-        onRootFolder={onRootFolder}
-        rowContextMenu={rowContextMenu}
+        {...(rowContextMenu ? { rowContextMenu } : {})}
         basePath={basePath}
-        label={`Contents of ${fileName}`}
+        label={`Contents of ${folderName}`}
       />
     );
   }

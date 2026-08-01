@@ -22,12 +22,17 @@ const UNKNOWN = "—";
 
 export interface FolderListingViewProps {
   rows: FolderListingRow[];
-  selectedPath: string | null;
-  /** Selecting an entry — a folder re-points this listing, a file opens it in the viewer. */
+  /**
+   * Selecting an entry, which is this surface's whole click contract: a folder
+   * re-points the listing at itself, a file opens in the viewer.
+   *
+   * Deliberately no double-click counterpart to the tree's (#11496). Selecting
+   * is what replaces the listing's contents, so the first click of any
+   * double-click unmounts the row before the second arrives — a dblclick
+   * handler here could never fire. Re-rooting a folder from this surface lives
+   * in the row's context menu ("Set as root"), which is reachable.
+   */
   onSelect: (path: string) => void;
-  /** Double-click: re-root on a folder, open in a panel on a file. Mirrors the tree. */
-  onActivateFile?: (path: string) => void;
-  onRootFolder?: (path: string) => void;
   /** Same callback the tree uses, so both surfaces offer the identical menu. */
   rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
   /**
@@ -57,24 +62,14 @@ export interface FolderListingViewProps {
  */
 export function FolderListingView({
   rows,
-  selectedPath,
   onSelect,
-  onActivateFile,
-  onRootFolder,
   rowContextMenu,
   basePath,
   label,
 }: FolderListingViewProps) {
   const context: ListingContext = useMemo(
-    () => ({
-      selectedPath,
-      onSelect,
-      onActivateFile,
-      onRootFolder,
-      rowContextMenu,
-      basePath,
-    }),
-    [selectedPath, onSelect, onActivateFile, onRootFolder, rowContextMenu, basePath]
+    () => ({ onSelect, rowContextMenu, basePath }),
+    [onSelect, rowContextMenu, basePath]
   );
 
   return (
@@ -121,10 +116,7 @@ export function FolderListingView({
 }
 
 interface ListingContext {
-  selectedPath: string | null;
   onSelect: (path: string) => void;
-  onActivateFile?: ((path: string) => void) | undefined;
-  onRootFolder?: ((path: string) => void) | undefined;
   rowContextMenu?: ((row: FileEntryLike) => React.ReactNode) | undefined;
   basePath: string;
 }
@@ -139,45 +131,25 @@ function computeRowKey(_index: number, row: FolderListingRow): string {
 }
 
 function renderRow(_index: number, row: FolderListingRow, context: ListingContext) {
-  return (
-    <FolderListingRowView
-      row={row}
-      isSelected={context.selectedPath === row.path}
-      context={context}
-    />
-  );
+  return <FolderListingRowView row={row} context={context} />;
 }
 
 interface FolderListingRowViewProps {
   row: FolderListingRow;
-  isSelected: boolean;
   context: ListingContext;
 }
 
-function FolderListingRowView({ row, isSelected, context }: FolderListingRowViewProps) {
-  const { onSelect, onActivateFile, onRootFolder } = context;
+function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
+  const { onSelect } = context;
 
-  // Single click selects, exactly as in the tree. On a folder that also
-  // re-points this listing at it — the tree's click toggles expansion, and
-  // stepping into the folder is the listing's equivalent of that "look inside"
-  // gesture, since a flat listing has nothing to expand.
+  // Single click selects, and selecting is the whole gesture here: a folder
+  // re-points this listing at itself (the flat equivalent of the tree's
+  // expand-on-click "look inside"), and a file opens in the viewer. Either way
+  // the listing's contents change, which is why there is no double-click
+  // counterpart — see the note on `onSelect` in the props above.
   const handleClick = useCallback(() => {
     onSelect(row.path);
   }, [onSelect, row.path]);
-
-  // Same split as the tree's double-click (#11496): a folder re-roots the whole
-  // browser, a file opens in its own panel.
-  const handleDoubleClick = row.isDirectory
-    ? onRootFolder
-      ? () => {
-          onRootFolder(row.path);
-        }
-      : undefined
-    : onActivateFile
-      ? () => {
-          onActivateFile(row.path);
-        }
-      : undefined;
 
   // Byte-for-byte the tree's drag contract (#11576), down to the single MIME
   // type and the absent `text/plain`: a row dragged from either column has to
@@ -201,22 +173,16 @@ function FolderListingRowView({ row, isSelected, context }: FolderListingRowView
   const menuItems = context.rowContextMenu?.(row);
   const rowSurface = (
     <div
-      // `aria-current`, not `aria-selected`: the latter is only meaningful
-      // inside a role that owns selection, which this group deliberately isn't.
-      {...(isSelected && { "aria-current": true })}
       aria-label={row.name}
       draggable={context.basePath !== ""}
       onDragStart={handleDragStart}
       onClick={handleClick}
-      onDoubleClick={handleDoubleClick}
       className={cn(
         "flex h-7 w-full cursor-default select-none items-center gap-3 rounded px-2 font-mono text-xs",
-        // Neutral surface lift, not an accent fill — the same restraint the
-        // tree's selection follows, and both columns can be showing a selection
-        // at once.
-        "transition-colors duration-150 ease-out",
-        isSelected ? "bg-overlay-subtle text-daintree-text" : "text-daintree-text/70",
-        !isSelected && "hover:bg-tint/5",
+        // Neutral hover, no selected state: clicking a row always replaces what
+        // this listing is showing, so no row is ever the standing selection —
+        // a highlight would only ever paint for the frame before it unmounts.
+        "text-daintree-text/70 transition-colors duration-150 ease-out hover:bg-tint/5",
         "data-[state=open]:bg-overlay-raised data-[state=open]:text-daintree-text"
       )}
     >
@@ -225,7 +191,7 @@ function FolderListingRowView({ row, isSelected, context }: FolderListingRowView
           className={cn(FILE_TREE_ICON_CLASS, "h-3.5 w-3.5 shrink-0", rowIconColor)}
           aria-hidden="true"
         />
-        <span className={cn("truncate", isSelected && "font-medium")}>{row.name}</span>
+        <span className="truncate">{row.name}</span>
       </span>
       <span className="w-20 shrink-0 text-right tabular-nums text-daintree-text/50">
         {formatSize(row)}

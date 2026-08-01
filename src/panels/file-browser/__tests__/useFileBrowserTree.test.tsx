@@ -1782,3 +1782,205 @@ describe("useFileBrowserTree folder listing (#11620)", () => {
     expect(result.current.listingHasHiddenDotfiles).toBe(true);
   });
 });
+
+describe("useFileBrowserTree listing recovery and revalidation (#11620)", () => {
+  beforeEach(() => {
+    listDirectory.mockReset();
+  });
+
+  it("recovers a failed folder listing when the user refreshes", () => {
+    // End to end, not just the callback wiring: fail, assert the error state,
+    // then drive the same refresh the viewer's Retry runs and assert real rows.
+    let failNext = true;
+    listDirectory.mockImplementation(async (payload) => {
+      if (payload.dirPath === "src") {
+        if (failNext) throw new Error("EACCES");
+        return [file("src/a.ts")];
+      }
+      return [dir("src")];
+    });
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        source: wtSource("wt-1"),
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+        selectedPath: "src",
+      })
+    );
+
+    return waitFor(() => expect(result.current.listingStatus).toBe("error"))
+      .then(() => {
+        failNext = false;
+        act(() => result.current.refresh({ manual: true }));
+        return waitFor(() => expect(result.current.listingStatus).toBe("ready"));
+      })
+      .then(() => {
+        expect(result.current.listingRows?.map((r) => r.path)).toEqual(["src/a.ts"]);
+      });
+  });
+
+  it("does not re-request a failed expanded directory every time a sibling lands", async () => {
+    // A restored tree with one unreadable directory used to re-enqueue it on
+    // every listing commit, because a failed path is in neither the listings
+    // map nor the in-flight set.
+    listDirectory.mockImplementation(async (payload) => {
+      if (payload.dirPath === "bad") throw new Error("EACCES");
+      if (payload.dirPath === "a") return [file("a/1.ts")];
+      if (payload.dirPath === "b") return [file("b/1.ts")];
+      return [dir("bad"), dir("a"), dir("b")];
+    });
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        source: wtSource("wt-1"),
+        expandedPaths: ["bad", "a", "b"],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+      })
+    );
+
+    await waitFor(() => expect(result.current.rows.length).toBeGreaterThan(0));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(listDirectory.mock.calls.filter((c) => c[0].dirPath === "bad")).toHaveLength(1);
+  });
+
+  it("retries a failed directory after it is collapsed and re-expanded", async () => {
+    // Collapsing clears the recorded failure, so the natural try-again gesture
+    // works rather than being refused forever by the skip above.
+    listDirectory.mockImplementation(async (payload) => {
+      if (payload.dirPath === "bad") throw new Error("EACCES");
+      return [dir("bad")];
+    });
+
+    const { result, rerender } = renderHook(
+      (props: { expandedPaths: string[] }) =>
+        useFileBrowserTree({
+          source: wtSource("wt-1"),
+          expandedPaths: props.expandedPaths,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
+          changeTick: undefined,
+        }),
+      { initialProps: { expandedPaths: ["bad"] } }
+    );
+
+    await waitFor(() =>
+      expect(listDirectory.mock.calls.filter((c) => c[0].dirPath === "bad")).toHaveLength(1)
+    );
+
+    rerender({ expandedPaths: [] });
+    rerender({ expandedPaths: ["bad"] });
+
+    await waitFor(() =>
+      expect(listDirectory.mock.calls.filter((c) => c[0].dirPath === "bad")).toHaveLength(2)
+    );
+    void result;
+  });
+
+  it("re-reads a selected collapsed folder that was seeded from a snapshot", async () => {
+    // The snapshot is structure-only, so its rows carry no size or mtime. If
+    // the restore revalidation skipped the selected folder, the listing would
+    // sit on those metadata-less rows indefinitely.
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === "src"
+        ? [{ name: "a.ts", path: "src/a.ts", isDirectory: false, size: 42, mtimeMs: 1_700_000 }]
+        : [dir("src")]
+    );
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        source: wtSource("wt-1"),
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+        selectedPath: "src",
+        treeSnapshot: {
+          worktreeId: "wt-1",
+          basePath: "/repo/wt-1",
+          rootPath: "",
+          listings: [
+            { dirPath: "", nodes: [{ name: "src", path: "src", isDirectory: true }] },
+            { dirPath: "src", nodes: [{ name: "a.ts", path: "src/a.ts", isDirectory: false }] },
+          ],
+        },
+      })
+    );
+
+    // Seeded rows paint immediately with no metadata...
+    await waitFor(() => expect(result.current.listingRows).not.toBeNull());
+    // ...and the live re-read replaces them with real size/mtime.
+    await waitFor(() => expect(result.current.listingRows?.[0]?.size).toBe(42));
+    expect(result.current.listingRows?.[0]?.mtimeMs).toBe(1_700_000);
+  });
+
+  it("keeps a selected file's parent listing when the folder stops being listed", async () => {
+    // Selecting a file out of a folder listing flips that folder from "being
+    // listed" to "merely the parent". Dropping it there would forget the file's
+    // kind on the very click that selected it.
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === "src" ? [file("src/a.ts")] : [dir("src")]
+    );
+
+    const { result, rerender } = renderHook(
+      (props: { selectedPath: string }) =>
+        useFileBrowserTree({
+          source: wtSource("wt-1"),
+          expandedPaths: [],
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
+          changeTick: undefined,
+          selectedPath: props.selectedPath,
+        }),
+      { initialProps: { selectedPath: "src" } }
+    );
+
+    await waitFor(() => expect(result.current.listingRows).not.toBeNull());
+    rerender({ selectedPath: "src/a.ts" });
+
+    await waitFor(() => expect(result.current.listingPath).toBeNull());
+    // The kind still resolves, which is what keeps the viewer on the file.
+    expect(result.current.selectedNode?.isDirectory).toBe(false);
+  });
+
+  it("re-orders an on-screen listing without re-fetching it", async () => {
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === "src"
+        ? [
+            { name: "a.ts", path: "src/a.ts", isDirectory: false, size: 1 },
+            { name: "b.ts", path: "src/b.ts", isDirectory: false, size: 900 },
+          ]
+        : [dir("src")]
+    );
+
+    const { result, rerender } = renderHook(
+      (props: { sort: { key: "name" | "size"; direction: "asc" | "desc" } }) =>
+        useFileBrowserTree({
+          source: wtSource("wt-1"),
+          expandedPaths: [],
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
+          changeTick: undefined,
+          selectedPath: "src",
+          sort: props.sort,
+        }),
+      { initialProps: { sort: { key: "name" as const, direction: "asc" as const } } }
+    );
+
+    await waitFor(() => expect(result.current.listingRows).not.toBeNull());
+    const callsBefore = listDirectory.mock.calls.length;
+
+    rerender({ sort: { key: "size", direction: "desc" } });
+
+    await waitFor(() =>
+      expect(result.current.listingRows?.map((r) => r.name)).toEqual(["b.ts", "a.ts"])
+    );
+    // Sorting is a client-side reorder of cached rows — it must cost no IPC.
+    expect(listDirectory.mock.calls).toHaveLength(callsBefore);
+  });
+});

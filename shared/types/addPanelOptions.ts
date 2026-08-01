@@ -6,6 +6,8 @@ import type {
   ViewportPresetId,
   FileViewMode,
   DiffSource,
+  FileBrowserSortDirection,
+  FileBrowserSortKey,
   FileBrowserTreeSnapshot,
 } from "./panel.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
@@ -291,6 +293,16 @@ export interface FileBrowserPanelOptions extends AddPanelOptionsBase {
    * decides this, so openers never pass it.
    */
   browserWorkspaceRooted?: boolean;
+  /**
+   * Order to restore the tree and folder listing in (#11620); absent = the
+   * `name`/`asc` default. Present here, not just on the panel record, because
+   * restoring a panel goes snapshot → deserializer → *these options* →
+   * `createFileBrowserDefaults`, and a field this type does not name is
+   * dropped on that last hop no matter how faithfully it was persisted.
+   */
+  browserSortKey?: FileBrowserSortKey;
+  /** Direction for `browserSortKey`; absent = `asc`. */
+  browserSortDirection?: FileBrowserSortDirection;
 }
 
 /**

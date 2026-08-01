@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { forwardRef, type ReactNode } from "react";
+import { createContext, forwardRef, useContext, type ReactNode } from "react";
 import { fireEvent, render, act, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Type-only: erased before the vi.mock factory runs, so it cannot pull the real
@@ -63,6 +63,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     asChild ? <>{children}</> : <button type="button">{children}</button>,
   DropdownMenuContent: ({ children }: { children: ReactNode }) => <div role="menu">{children}</div>,
   DropdownMenuLabel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenuSeparator: () => <hr />,
   DropdownMenuRadioGroup: ({
     children,
     value,
@@ -72,24 +73,24 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     value: string;
     onValueChange: (v: string) => void;
   }) => (
-    <div data-value={value} data-onvaluechange={registerValueChange(onValueChange)}>
-      {children}
-    </div>
+    <RadioGroupContext.Provider value={onValueChange}>
+      <div data-value={value}>{children}</div>
+    </RadioGroupContext.Provider>
   ),
-  DropdownMenuRadioItem: ({ children, value }: { children: ReactNode; value: string }) => (
-    <div role="menuitemradio" onClick={() => currentValueChange?.(value)}>
-      {children}
-    </div>
-  ),
+  DropdownMenuRadioItem: ({ children, value }: { children: ReactNode; value: string }) => {
+    const onValueChange = useContext(RadioGroupContext);
+    return (
+      <div role="menuitemradio" onClick={() => onValueChange?.(value)}>
+        {children}
+      </div>
+    );
+  },
 }));
 
-// The radio group owns the change handler but the items are what get clicked,
-// so the handler is stashed as the group renders and read back by the item.
-let currentValueChange: ((value: string) => void) | null = null;
-function registerValueChange(handler: (value: string) => void): string {
-  currentValueChange = handler;
-  return "registered";
-}
+// Context, not a module-level stash: there are two radio groups now (key and
+// direction), and a single shared handler would route every click to whichever
+// group rendered last — passing the tests for the wrong reason.
+const RadioGroupContext = createContext<((value: string) => void) | null>(null);
 
 // The folder listing (#11620) virtualizes its rows, and a real Virtuoso renders
 // none of them in jsdom, where every element measures zero. Render them all —
@@ -142,8 +143,6 @@ interface ViewerOpts {
   folderHasHiddenDotfiles?: boolean;
   onShowDotfiles?: () => void;
   onSelectEntry?: (path: string) => void;
-  onActivateEntry?: (path: string) => void;
-  onRootFolder?: (path: string) => void;
   rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
   sort?: FileBrowserSortOrder;
   onSortChange?: (sort: FileBrowserSortOrder) => void;
@@ -186,8 +185,6 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         folderHasHiddenDotfiles={opts.folderHasHiddenDotfiles ?? false}
         onShowDotfiles={opts.onShowDotfiles ?? vi.fn()}
         onSelectEntry={opts.onSelectEntry ?? vi.fn()}
-        onActivateEntry={opts.onActivateEntry ?? vi.fn()}
-        onRootFolder={opts.onRootFolder ?? vi.fn()}
         {...(opts.rowContextMenu ? { rowContextMenu: opts.rowContextMenu } : {})}
         basePath="/repo"
         sort={opts.sort ?? { key: "name", direction: "asc" }}
@@ -751,13 +748,13 @@ describe("folder-selected state (#11620)", () => {
     // The #10083 trap: branching on a Doherty-gated flag would paint "This
     // folder is empty" for the first 400ms of every folder load.
     renderViewer(null, { folderPath: "src", folderRows: null, folderStatus: "pending" });
-    expect(screen.queryByText("This folder is empty")).toBeNull();
+    expect(screen.queryByText("Nothing in this folder yet")).toBeNull();
     expect(screen.queryByText("Nothing selected")).toBeNull();
   });
 
   it("shows the empty state for a folder that really holds nothing", () => {
     renderViewer(null, { folderPath: "src", folderRows: [], folderStatus: "ready" });
-    expect(screen.getByText("This folder is empty")).toBeTruthy();
+    expect(screen.getByText("Nothing in this folder yet")).toBeTruthy();
   });
 
   it("offers Show dotfiles only when unhiding them would reveal something", () => {
@@ -816,26 +813,43 @@ describe("folder-selected state (#11620)", () => {
 describe("sort menu (#11620)", () => {
   it("stays available with no selection, since it also orders the tree", () => {
     renderViewer(null);
-    expect(screen.getByRole("button", { name: "Sort files" })).toBeTruthy();
+    expect(screen.getByTestId("file-browser-sort-menu")).toBeTruthy();
   });
 
-  it("flips direction when the active key is re-picked", async () => {
-    const onSortChange = vi.fn();
-    renderViewer(null, { sort: { key: "name", direction: "asc" }, onSortChange });
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Name/ }));
-    expect(onSortChange).toHaveBeenCalledWith({ key: "name", direction: "desc" });
+  it("names the current key and direction so the arrow icon isn't the only cue", () => {
+    // The arrow is aria-hidden, so the accessible name is the only place a
+    // screen reader can learn which way the list runs.
+    renderViewer(null, { sort: { key: "size", direction: "desc" } });
+    expect(screen.getByRole("button", { name: "Sort files (Size, descending)" })).toBeTruthy();
   });
 
-  it("keeps the current direction when a different key is picked", async () => {
+  it("changes the key without disturbing the direction", () => {
     const onSortChange = vi.fn();
     renderViewer(null, { sort: { key: "name", direction: "desc" }, onSortChange });
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Size/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Size" }));
     expect(onSortChange).toHaveBeenCalledWith({ key: "size", direction: "desc" });
   });
 
-  it("offers exactly the four documented sort keys", async () => {
+  it("changes the direction without disturbing the key", () => {
+    const onSortChange = vi.fn();
+    renderViewer(null, { sort: { key: "modified", direction: "asc" }, onSortChange });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Descending" }));
+    expect(onSortChange).toHaveBeenCalledWith({ key: "modified", direction: "desc" });
+  });
+
+  it("can set a direction outright rather than only reversing the current one", () => {
+    // The reason this is a radio group and not a re-pick-to-flip gesture:
+    // choosing the direction already in effect is a no-op the user can rely on,
+    // not a silent reversal.
+    const onSortChange = vi.fn();
+    renderViewer(null, { sort: { key: "name", direction: "asc" }, onSortChange });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Ascending" }));
+    expect(onSortChange).toHaveBeenCalledWith({ key: "name", direction: "asc" });
+  });
+
+  it("offers the four documented keys and both directions", () => {
     renderViewer(null);
-    const items = await screen.findAllByRole("menuitemradio");
-    expect(items.map((i) => i.textContent?.trim())).toEqual(["Name", "Modified", "Size", "Type"]);
+    const names = screen.getAllByRole("menuitemradio").map((i) => i.textContent?.trim());
+    expect(names).toEqual(["Name", "Modified", "Size", "Type", "Ascending", "Descending"]);
   });
 });

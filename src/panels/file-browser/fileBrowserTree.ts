@@ -165,14 +165,21 @@ function compareByKey(a: FileTreeNode, b: FileTreeNode, key: FileBrowserSortKey)
   }
 }
 
-/** Ascending, with `undefined` always last regardless of the caller's direction. */
+/**
+ * Ascending, with unknown values always last regardless of the caller's
+ * direction. Anything non-finite counts as unknown: `NaN` compares false
+ * against everything including itself, which would make this comparator
+ * non-antisymmetric and hand V8 an inconsistent ordering to act on.
+ */
 function compareOptionalNumbers(a: number | undefined, b: number | undefined): number {
-  if (a === undefined && b === undefined) return 0;
+  const knownA = a !== undefined && Number.isFinite(a);
+  const knownB = b !== undefined && Number.isFinite(b);
+  if (!knownA && !knownB) return 0;
   // Signalled to the caller as a fixed order by `sortFileNodes`, which skips
-  // the direction flip whenever this returns a non-zero for a missing value.
-  if (a === undefined) return Number.POSITIVE_INFINITY;
-  if (b === undefined) return Number.NEGATIVE_INFINITY;
-  return a === b ? 0 : a < b ? -1 : 1;
+  // the direction flip whenever this returns a non-finite result.
+  if (!knownA) return Number.POSITIVE_INFINITY;
+  if (!knownB) return Number.NEGATIVE_INFINITY;
+  return a === b ? 0 : (a as number) < (b as number) ? -1 : 1;
 }
 
 /**

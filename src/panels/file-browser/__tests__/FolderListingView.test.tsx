@@ -32,6 +32,19 @@ function row(path: string, extra: Partial<FolderListingRow> = {}): FolderListing
   return { path, name: path.split("/").pop()!, isDirectory: false, ...extra };
 }
 
+/** The em-dash the listing renders for a column it has no value for. */
+const UNKNOWN = "—";
+
+/**
+ * `[name, size, modified]` as actually rendered for one row. Reading all three
+ * cells is what makes the unknown-metadata assertions mean something: checking
+ * only that "0 B" is absent would also pass for a blank or missing cell.
+ */
+function cellsOf(name: string): string[] {
+  const rowEl = screen.getByLabelText(name);
+  return Array.from(rowEl.children).map((cell) => cell.textContent?.trim() ?? "");
+}
+
 function renderListing(
   rows: FolderListingRow[],
   props: Partial<Parameters<typeof FolderListingView>[0]> = {}
@@ -39,7 +52,6 @@ function renderListing(
   return render(
     <FolderListingView
       rows={rows}
-      selectedPath={null}
       onSelect={vi.fn()}
       basePath="/repo"
       label="Contents of src"
@@ -72,11 +84,19 @@ describe("FolderListingView", () => {
     expect(container.querySelector("[role='columnheader']")).toBeNull();
   });
 
-  it("renders a file's byte size and an em-dash when the size is unknown", () => {
+  it("renders a file's byte size, and an em-dash in the row that has none", () => {
     renderListing([row("src/known.ts", { size: 2048 }), row("src/unknown.ts")]);
-    expect(screen.getByText("2 KB")).toBeTruthy();
-    // A snapshot-restored row has no size; it must not read as "0 B".
-    expect(screen.queryByText("0 B")).toBeNull();
+    expect(cellsOf("known.ts")).toEqual(["known.ts", "2 KB", UNKNOWN]);
+    // A snapshot-restored row has neither size nor mtime; both cells must say
+    // "unknown" rather than "0 B" / a fabricated date.
+    expect(cellsOf("unknown.ts")).toEqual(["unknown.ts", UNKNOWN, UNKNOWN]);
+  });
+
+  it("renders a modified time when the row carries one", () => {
+    renderListing([row("src/a.ts", { size: 1, mtimeMs: Date.now() - 60_000 })]);
+    const [, , modified] = cellsOf("a.ts");
+    expect(modified).not.toBe(UNKNOWN);
+    expect(modified).toMatch(/minute/);
   });
 
   it("reports a folder's item count rather than a byte size", () => {
@@ -89,11 +109,11 @@ describe("FolderListingView", () => {
     expect(screen.getByText("1 item")).toBeTruthy();
   });
 
-  it("shows nothing rather than zero for a folder whose contents are unknown", () => {
+  it("shows an em-dash rather than zero for a folder whose contents are unknown", () => {
     // Never walked, never counted — "0 items" would be a claim the listing has
     // no basis for, since counting means listing.
     renderListing([row("src/pkg", { isDirectory: true })]);
-    expect(screen.queryByText("0 items")).toBeNull();
+    expect(cellsOf("pkg")).toEqual(["pkg", UNKNOWN, UNKNOWN]);
   });
 
   it("selects a row on single click", () => {
@@ -101,29 +121,6 @@ describe("FolderListingView", () => {
     renderListing([row("src/a.ts")], { onSelect });
     fireEvent.click(screen.getByLabelText("a.ts"));
     expect(onSelect).toHaveBeenCalledWith("src/a.ts");
-  });
-
-  it("opens a file in its own panel on double click, mirroring the tree", () => {
-    const onActivateFile = vi.fn();
-    renderListing([row("src/a.ts")], { onActivateFile });
-    fireEvent.doubleClick(screen.getByLabelText("a.ts"));
-    expect(onActivateFile).toHaveBeenCalledWith("src/a.ts");
-  });
-
-  it("re-roots the browser on a folder double click, mirroring the tree", () => {
-    const onRootFolder = vi.fn();
-    const onActivateFile = vi.fn();
-    renderListing([row("src/pkg", { isDirectory: true })], { onRootFolder, onActivateFile });
-    fireEvent.doubleClick(screen.getByLabelText("pkg"));
-    expect(onRootFolder).toHaveBeenCalledWith("src/pkg");
-    // A folder must never take the file path — the two gestures are distinct.
-    expect(onActivateFile).not.toHaveBeenCalled();
-  });
-
-  it("marks the selected row as current without claiming list-selection semantics", () => {
-    renderListing([row("src/a.ts"), row("src/b.ts")], { selectedPath: "src/a.ts" });
-    expect(screen.getByLabelText("a.ts").getAttribute("aria-current")).toBe("true");
-    expect(screen.getByLabelText("b.ts").getAttribute("aria-current")).toBeNull();
   });
 
   it("makes rows draggable when a base path resolves", () => {
@@ -162,5 +159,31 @@ describe("FolderListingView", () => {
     renderListing([row("src/z.ts"), row("src/a.ts")]);
     const names = screen.getAllByText(/\.ts$/).map((node) => node.textContent);
     expect(names).toEqual(["z.ts", "a.ts"]);
+  });
+});
+
+describe("FolderListingView has no double-click gesture", () => {
+  it("treats a real double-click as nothing but its two clicks", () => {
+    // A native double-click is click, click, dblclick. If a dblclick handler
+    // existed it would fire a third, different action here; the row exposes
+    // only selection, so the gesture degrades to two ordinary selects rather
+    // than half-invoking something that can't work.
+    const onSelect = vi.fn();
+    renderListing([row("src/a.ts")], { onSelect });
+    const rowEl = screen.getByLabelText("a.ts");
+    fireEvent.click(rowEl);
+    fireEvent.click(rowEl);
+    fireEvent.doubleClick(rowEl);
+    expect(onSelect.mock.calls).toEqual([["src/a.ts"], ["src/a.ts"]]);
+  });
+
+  it("re-points on a single click, which is what makes a second click land elsewhere", () => {
+    const onSelect = vi.fn();
+    renderListing([row("src/pkg", { isDirectory: true })], { onSelect });
+    fireEvent.click(screen.getByLabelText("pkg"));
+    // One selection per click; the pane re-points the listing off the back of
+    // it, which is the behaviour that rules a double-click out.
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith("src/pkg");
   });
 });

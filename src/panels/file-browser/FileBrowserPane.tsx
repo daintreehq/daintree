@@ -1251,8 +1251,6 @@ export function FileBrowserPane({
               folderHasHiddenDotfiles={hideDotfiles && listingHasHiddenDotfiles}
               onShowDotfiles={handleShowDotfiles}
               onSelectEntry={handleSelect}
-              onActivateEntry={handleActivate}
-              onRootFolder={handleSetRoot}
               rowContextMenu={rowContextMenu}
               basePath={basePath}
               sort={sort}

@@ -50,5 +50,14 @@ export function createFileBrowserDefaults(
     ...(width != null &&
       width !== FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH && { browserSidebarWidth: width }),
     ...(workspaceRooted && { browserWorkspaceRooted: true }),
+    // Same sparse rule as the serializer wrote them with (#11620): "name" and
+    // "asc" are the defaults the reader falls back to, so materializing them
+    // would only make the record less sparse than it was persisted. Both must
+    // be copied here even though sort is a runtime toolbar toggle rather than
+    // a spawn-time option — restoring a panel routes the deserialized snapshot
+    // through this factory, and a field it does not copy is silently dropped.
+    ...(options.browserSortKey != null &&
+      options.browserSortKey !== "name" && { browserSortKey: options.browserSortKey }),
+    ...(options.browserSortDirection === "desc" && { browserSortDirection: "desc" as const }),
   };
 }

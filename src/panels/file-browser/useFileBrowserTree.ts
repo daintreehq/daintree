@@ -348,11 +348,25 @@ export function useFileBrowserTree({
     isRowPathVisible(selectedPath, rootPath, isVisible)
       ? selectedPath
       : null;
+  /**
+   * Directories the viewer depends on that expansion alone would not keep: the
+   * folder being listed, and the parent that resolves what the selection is.
+   * One set, so the prune, the fetch-completion guard and the refresh cannot
+   * drift apart — a guard stricter than the prune drops results for entries
+   * that are then kept forever stale, and a prune stricter than the guard
+   * evicts what is on screen.
+   */
+  const retainedPaths = useMemo(
+    () => [listingPath, selectionParent].filter((path): path is string => path !== null),
+    [listingPath, selectionParent]
+  );
+
   // Read inside `fetchDirectory`'s completion guard and the prune, both of
-  // which run outside the render that knows the current listing target. Kept in
-  // sync in the same layout effect as `expandedSetRef` so the two are never
-  // read at different vintages.
+  // which run outside the render that knows the current targets. Kept in sync
+  // in the same layout effect as `expandedSetRef` so the two are never read at
+  // different vintages.
   const listingPathRef = useRef(listingPath);
+  const retainedPathsRef = useRef(retainedPaths);
 
   // Set when a refresh could not run because its targets were already in
   // flight. Without it, a tick that arrives mid-flight is consumed by a request
@@ -416,12 +430,16 @@ export function useFileBrowserTree({
         // A directory collapsed while its listing was in flight has already
         // been pruned; re-inserting it here would resurrect a cache entry the
         // user closed, and re-expanding later would show that stale snapshot
-        // instead of re-reading. The folder the viewer is listing is exempt: it
-        // is on screen without being expanded (#11620), so dropping its result
-        // here would leave it pending forever.
+        // instead of re-reading.
+        //
+        // Tested against the same retained set the prune keeps, not just
+        // against expansion: the viewer depends on two unexpanded directories
+        // (#11620), and a guard stricter than the prune would drop a result for
+        // a listing that is about to be kept — leaving it permanently stale
+        // with nothing queued to replace it.
         if (
           dirPath !== rootPath &&
-          dirPath !== listingPathRef.current &&
+          !retainedPathsRef.current.includes(dirPath) &&
           !expandedSetRef.current.has(dirPath)
         )
           return;
@@ -600,7 +618,8 @@ export function useFileBrowserTree({
     pumpRef.current = pump;
     treeSnapshotRef.current = treeSnapshot;
     listingPathRef.current = listingPath;
-  }, [listings, expandedSet, isVisible, pump, treeSnapshot, listingPath]);
+    retainedPathsRef.current = retainedPaths;
+  }, [listings, expandedSet, isVisible, pump, treeSnapshot, listingPath, retainedPaths]);
 
   // Cancel a pending root retry synchronously when the identity changes or the
   // panel unmounts. The generation bump that would invalidate the retry lives in
@@ -711,7 +730,19 @@ export function useFileBrowserTree({
       // honours the concurrency ceiling. The refs read here are published in a
       // layout effect, so they are current before this passive effect runs.
       enqueueTargets(
-        refreshTargets(seeded, expandedSetRef.current, rootPath, isVisibleRef.current),
+        // The listed folder is revalidated alongside the root and the seeded
+        // expansions: a snapshot can carry a selected-but-collapsed folder
+        // (the prune keeps it), and its seeded rows are structure-only — no
+        // size, no mtime. Leaving it out of the revalidation would paint that
+        // folder's listing as a column of em-dashes until something unrelated
+        // happened to refresh it.
+        refreshTargets(
+          seeded,
+          expandedSetRef.current,
+          rootPath,
+          isVisibleRef.current,
+          listingPathRef.current
+        ),
         generationRef.current
       );
       pumpRef.current();
@@ -729,6 +760,13 @@ export function useFileBrowserTree({
     const pendingTargets: string[] = [];
     for (const dirPath of expandedSet) {
       if (listings.has(dirPath) || inFlightRef.current.has(dirPath)) continue;
+      // A directory whose last fetch failed is in neither of those, so without
+      // this it would be re-requested every time any sibling listing lands and
+      // rebuilds the map. On a restored tree with hundreds of expansions and
+      // one unreadable directory, that is hundreds of redundant calls against
+      // a shared IPC rate limit. Collapsing it clears the flag (see the prune
+      // effect), and an explicit Refresh re-queues it directly.
+      if (failedListings.has(dirPath)) continue;
       // Only fetch directories the tree can actually reach. A persisted
       // expansion whose parent is collapsed (or gone) would otherwise fire a
       // request for a folder the user cannot see.
@@ -742,7 +780,16 @@ export function useFileBrowserTree({
     if (pendingTargets.length === 0) return;
     enqueueTargets(pendingTargets, generationRef.current);
     pump();
-  }, [expandedSet, listings, hasLoadedRoot, rootPath, isVisible, enqueueTargets, pump]);
+  }, [
+    expandedSet,
+    listings,
+    failedListings,
+    hasLoadedRoot,
+    rootPath,
+    isVisible,
+    enqueueTargets,
+    pump,
+  ]);
 
   // The folder the viewer is listing is fetched on demand, the same way an
   // expansion is — selecting a folder from the keyboard, or from the listing
@@ -774,15 +821,22 @@ export function useFileBrowserTree({
   // folder on screen in the viewer is retained even when collapsed (#11620) —
   // it is being read right now, so it is not the unused cache entry this drops.
   useEffect(() => {
-    const retained = [listingPath, selectionParent].filter((path): path is string => path !== null);
     setListings((previous) => {
-      const next = pruneListings(previous, expandedSet, rootPath, retained);
+      const next = pruneListings(previous, expandedSet, rootPath, retainedPaths);
       return next.size === previous.size ? previous : next;
     });
-    // Both retained paths are plain strings, so they belong in the dep list
-    // directly — the array above is rebuilt inside the effect rather than
-    // memoized, since a fresh array each render would re-run this every pass.
-  }, [expandedSet, rootPath, listingPath, selectionParent]);
+    // Collapsing a directory clears any recorded failure for it, so the natural
+    // collapse-then-expand gesture retries rather than being refused forever by
+    // the expansion effect's skip below.
+    setFailedListings((previous) => {
+      if (previous.size === 0) return previous;
+      const next = new Set<string>();
+      for (const path of previous) {
+        if (expandedSet.has(path) || retainedPaths.includes(path)) next.add(path);
+      }
+      return next.size === previous.size ? previous : next;
+    });
+  }, [expandedSet, rootPath, retainedPaths]);
 
   // Live updates. The tick is the worktree's own change signal, so this
   // inherits its coalescing.
@@ -814,6 +868,14 @@ export function useFileBrowserTree({
   // "loaded and empty" into one value, and the consumer needs them apart to
   // pick between a skeleton and an empty state (#10083). The gate belongs in
   // the consumer, deciding only whether the skeleton paints.
+  //
+  // Rows win over a recorded failure deliberately. A failure with rows already
+  // on screen is a *refresh* that failed, and blanking readable content for an
+  // error banner is the thing the tree's own root-error branch refuses to do —
+  // the last-known contents stay, exactly as a non-root directory failure is
+  // already silent for the tree. Only a folder with nothing to show at all
+  // reports the error, because that is the only case where the error is the
+  // whole story.
   const listingStatus: FolderListingStatus =
     listingPath === null || listingRows !== null
       ? "ready"

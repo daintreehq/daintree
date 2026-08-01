@@ -608,3 +608,55 @@ describe("panelKindSerialisers", () => {
     });
   });
 });
+
+describe("file-browser sort survives the whole restore path (#11620)", () => {
+  // The deserializer is only the middle of the restore chain: a restored panel
+  // is rebuilt as snapshot → deserializer → panel *options* → the creation
+  // factory. A field the factory does not copy is dropped there no matter how
+  // faithfully it was persisted, which is invisible to a test that stops at the
+  // deserializer.
+  function restore(panel: Partial<FileBrowserPanelData>): Partial<FileBrowserPanelData> {
+    const saved = serializeFileBrowser({
+      id: "fb1",
+      kind: "file-browser",
+      title: "Files",
+      cwd: "/repo",
+      ...panel,
+    } as unknown as FileBrowserPanelData);
+    const options = getDeserializer("file-browser")!({ id: "fb1", ...saved });
+    return createFileBrowserDefaults({
+      kind: "file-browser",
+      worktreeId: "wt-1",
+      ...options,
+    });
+  }
+
+  const KEYS = ["name", "modified", "size", "type"] as const;
+  const DIRECTIONS = ["asc", "desc"] as const;
+
+  for (const key of KEYS) {
+    for (const direction of DIRECTIONS) {
+      it(`round-trips ${key}/${direction} through serialize → deserialize → create`, () => {
+        const restored = restore({ browserSortKey: key, browserSortDirection: direction });
+        // Read the way the pane reads it, so the sparse absence of a default is
+        // treated as the default rather than as a loss.
+        expect({
+          key: restored.browserSortKey ?? "name",
+          direction: restored.browserSortDirection ?? "asc",
+        }).toEqual({ key, direction });
+      });
+    }
+  }
+
+  it("keeps the restored record sparse for the default order", () => {
+    const restored = restore({ browserSortKey: "name", browserSortDirection: "asc" });
+    expect("browserSortKey" in restored).toBe(false);
+    expect("browserSortDirection" in restored).toBe(false);
+  });
+
+  it("restores nothing for a panel that was never sorted", () => {
+    const restored = restore({});
+    expect(restored.browserSortKey).toBeUndefined();
+    expect(restored.browserSortDirection).toBeUndefined();
+  });
+});
