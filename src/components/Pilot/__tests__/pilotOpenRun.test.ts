@@ -72,10 +72,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   dispatchMock.mockResolvedValue({ ok: true });
   usePilotStore.setState({ isOpen: true });
-  useProjectStore.setState(
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: only switchProject is read
-    { switchProject } as Partial<ReturnType<typeof useProjectStore.getState>>
-  );
+  // Carrier: only `switchProject` is read by the action under test.
+  useProjectStore.setState({ switchProject } as Partial<
+    ReturnType<typeof useProjectStore.getState>
+  >);
   seedScratches([]);
   seedView(PROJECT_HERE);
 });

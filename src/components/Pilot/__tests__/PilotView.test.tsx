@@ -293,12 +293,22 @@ describe("PilotView", () => {
     render(<PilotView />);
     expect(screen.getAllByTestId("pilot-row")).toHaveLength(1);
 
-    const header = screen.getByTestId("pilot-group-header");
-    expect(header.getAttribute("aria-expanded")).toBe("true");
-    fireEvent.click(header);
+    const toggle = screen.getByTestId("pilot-group-toggle");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(toggle);
 
     expect(screen.queryByTestId("pilot-row")).toBeNull();
-    expect(screen.getByTestId("pilot-group-header").getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByTestId("pilot-group-header")).toBeTruthy();
+    expect(screen.getByTestId("pilot-group-toggle").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("keeps the project out of the tab order", () => {
+    // The search box owns the keyboard. A focusable disclosure inside the list
+    // would put a tab stop between the query and the results.
+    seed([run({ agentState: "working", since: NOW - 10_000 })]);
+    render(<PilotView />);
+
+    expect(screen.getByTestId("pilot-group-toggle").getAttribute("tabindex")).toBe("-1");
   });
 
   it("filters rows by title and drops projects left with nothing", () => {
@@ -354,7 +364,7 @@ describe("PilotView", () => {
 
     // Collapsing during a search must actually collapse — a header whose
     // aria-expanded never moves is a dead control.
-    fireEvent.click(screen.getByTestId("pilot-group-header"));
+    fireEvent.click(screen.getByTestId("pilot-group-toggle"));
     expect(screen.queryByTestId("pilot-row")).toBeNull();
 
     // ...and it must not leak into the persisted set, or the group would
@@ -417,7 +427,7 @@ describe("PilotView", () => {
 
       const search = screen.getByTestId("pilot-search");
       fireEvent.change(search, { target: { value: "auth" } });
-      fireEvent.click(screen.getByTestId("pilot-group-header"));
+      fireEvent.click(screen.getByTestId("pilot-group-toggle"));
       expect(screen.queryByTestId("pilot-row")).toBeNull();
 
       // A collapse made during one search is scoped to it. Carrying it forward
@@ -504,11 +514,11 @@ describe("PilotView", () => {
   });
 
   describe("keyboard navigation", () => {
-    /** The row the highlight is on, as the tree reports it. */
-    function selected(): { level: string | null; text: string } {
+    /** The row the highlight is on, as the listbox reports it. */
+    function selected(): { role: string | null; text: string } {
       const el = document.querySelector('[aria-selected="true"]');
       if (!el) throw new Error("nothing selected");
-      return { level: el.getAttribute("aria-level"), text: el.textContent ?? "" };
+      return { role: el.getAttribute("role"), text: el.textContent ?? "" };
     }
 
     function press(key: string): void {
@@ -523,39 +533,55 @@ describe("PilotView", () => {
       ]);
     }
 
-    it("opens with the first agent selected rather than a project header", () => {
+    it("opens with the first agent selected", () => {
       seedTwoProjects();
       render(<PilotView />);
 
-      // Landing on the header would make the reflexive open-then-Enter collapse
-      // the project instead of opening the agent the user came for.
-      expect(selected()).toMatchObject({ level: "2", text: expect.stringContaining("alpha") });
+      expect(selected()).toMatchObject({ role: "option", text: expect.stringContaining("alpha") });
     });
 
-    it("walks headers and agents as one list", () => {
+    it("walks agents only, stepping over the projects between them", () => {
       seedTwoProjects();
       render(<PilotView />);
 
       press("ArrowDown");
       expect(selected().text).toContain("bravo");
+      // Straight into the next project's first agent. A project is a heading,
+      // so stopping on it would cost a keystroke per project on the way to the
+      // agent the user actually came for.
       press("ArrowDown");
-      // The next project's header is a stop of its own — it has to be, or there
-      // is no keyboard path to collapse it.
-      expect(selected()).toMatchObject({ level: "1", text: expect.stringContaining("spike") });
-      press("ArrowDown");
-      expect(selected().text).toContain("charlie");
+      expect(selected()).toMatchObject({
+        role: "option",
+        text: expect.stringContaining("charlie"),
+      });
+    });
+
+    it("never lets a project become the selected row", () => {
+      seedTwoProjects();
+      render(<PilotView />);
+
+      // Walk the whole list twice and assert nothing but agents is ever
+      // selectable — the header carries no `aria-selected` at all.
+      for (let i = 0; i < 8; i++) {
+        expect(selected().role).toBe("option");
+        press("ArrowDown");
+      }
+      expect(screen.getAllByTestId("pilot-group-header").length).toBeGreaterThan(0);
+      expect(
+        screen.getAllByTestId("pilot-group-header").some((h) => h.hasAttribute("aria-selected"))
+      ).toBe(false);
     });
 
     it("wraps at both ends", () => {
       seedTwoProjects();
       render(<PilotView />);
 
-      press("ArrowUp");
-      expect(selected()).toMatchObject({ level: "1", text: expect.stringContaining("daintree") });
+      // Up from the first agent lands on the last one, across the project
+      // boundary — the list wraps as agents, not as agents-and-projects.
       press("ArrowUp");
       expect(selected().text).toContain("charlie");
       press("ArrowDown");
-      expect(selected()).toMatchObject({ level: "1", text: expect.stringContaining("daintree") });
+      expect(selected().text).toContain("alpha");
     });
 
     it("opens the selected agent on Enter", () => {
@@ -571,35 +597,35 @@ describe("PilotView", () => {
       });
     });
 
-    it("toggles the project on Enter when a header is selected", () => {
+    it("always opens an agent on Enter, whatever is selected", () => {
       seedTwoProjects();
       render(<PilotView />);
 
-      press("ArrowUp");
-      expect(selected().level).toBe("1");
+      // Every selectable row is an agent, so Enter has exactly one meaning —
+      // it can no longer land on a project and collapse it by accident.
       press("Enter");
 
-      // Only the other project's agent survives the collapse.
-      expect(screen.getAllByTestId("pilot-row").map((r) => r.textContent ?? "")).toEqual([
-        expect.stringContaining("charlie"),
-      ]);
-      // Enter on a header must not also dispatch a navigation.
-      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", {
+        runId: "a",
+        workspaceId: "p1",
+      });
     });
 
-    it("collapses with Left and expands with Right", () => {
+    it("collapses with Left and expands with Right, acting on the selected agent's project", () => {
       seedTwoProjects();
       render(<PilotView />);
+      expect(selected().text).toContain("alpha");
 
-      // Left from an agent goes to its parent, mirroring the tree pattern.
-      press("ArrowLeft");
-      expect(selected()).toMatchObject({ level: "1", text: expect.stringContaining("daintree") });
-
+      // No project is ever selected, so the disclosure keys act on the group
+      // holding the current agent rather than on a highlighted header.
       press("ArrowLeft");
       expect(screen.getAllByTestId("pilot-row")).toHaveLength(1);
-      expect(screen.getAllByTestId("pilot-group-header")[0]!.getAttribute("aria-expanded")).toBe(
+      expect(screen.getAllByTestId("pilot-group-toggle")[0]!.getAttribute("aria-expanded")).toBe(
         "false"
       );
+
+      // Selection followed the collapse out to a still-visible agent.
+      expect(selected().text).toContain("charlie");
 
       press("ArrowRight");
       expect(screen.getAllByTestId("pilot-row")).toHaveLength(3);
@@ -610,11 +636,14 @@ describe("PilotView", () => {
       render(<PilotView />);
       expect(selected().text).toContain("alpha");
 
-      fireEvent.click(screen.getAllByTestId("pilot-group-header")[0]!);
+      fireEvent.click(screen.getAllByTestId("pilot-group-toggle")[0]!);
 
-      // "alpha" has left the tree. A highlight still pointing at it would leave
+      // "alpha" has left the list. A highlight still pointing at it would leave
       // Enter committing a row that isn't on screen.
-      expect(selected()).toMatchObject({ level: "1", text: expect.stringContaining("daintree") });
+      expect(selected()).toMatchObject({
+        role: "option",
+        text: expect.stringContaining("charlie"),
+      });
     });
 
     it("leaves the caret alone while there is a query to edit", () => {
@@ -642,9 +671,6 @@ describe("PilotView", () => {
       // already; the disclosure half has to as well, or the region is half a
       // keyboard.
       const region = screen.getByRole("group", { name: "Agents" });
-      fireEvent.keyDown(region, { key: "ArrowLeft" });
-      expect(selected()).toMatchObject({ level: "1", text: expect.stringContaining("daintree") });
-
       fireEvent.keyDown(region, { key: "ArrowLeft" });
       expect(screen.getAllByTestId("pilot-row")).toHaveLength(1);
 
