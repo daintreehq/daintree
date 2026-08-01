@@ -561,8 +561,8 @@ describe("McpServerService", () => {
         getManifest: () => [
           createManifestEntry({
             id: "recipe.run" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
           createManifestEntry({
@@ -578,7 +578,7 @@ describe("McpServerService", () => {
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
-      await client.callTool({ name: "recipe.run", arguments: { worktreeId: "wt" } });
+      await client.callTool({ name: "recipe.run", arguments: { recipeId: "r" } });
       await client.callTool({ name: "actions.list", arguments: {} });
 
       const records = getAuditRecords(service);
@@ -599,8 +599,8 @@ describe("McpServerService", () => {
         getManifest: () => [
           createManifestEntry({
             id: "recipe.run" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
         ],
@@ -629,8 +629,8 @@ describe("McpServerService", () => {
         getManifest: () => [
           createManifestEntry({
             id: "recipe.run" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
         ],
@@ -662,8 +662,8 @@ describe("McpServerService", () => {
         getManifest: () => [
           createManifestEntry({
             id: "recipe.run" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
         ],

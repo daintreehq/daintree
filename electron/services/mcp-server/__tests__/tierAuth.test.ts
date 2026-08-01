@@ -436,7 +436,11 @@ describe("external tool surface invariants (#10701, #11537)", () => {
 // Both pick which of our tools survive, and neither tells us. A budget here is
 // what keeps "just add one more" from walking the surface back over the line.
 describe("external tool surface budget (#11585)", () => {
-  const EXTERNAL_BUDGET_MAX = 30;
+  // Sized just above the current 23 so a considered addition or two fits, but
+  // "just add one more" hits a wall well before the surface drifts back toward
+  // the client caps. The description payload is budgeted separately in
+  // actionDefinitions.quality.test.ts, where the live registry text is reachable.
+  const EXTERNAL_BUDGET_MAX = 26;
 
   it(`advertises at most ${EXTERNAL_BUDGET_MAX} tools`, () => {
     expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);
@@ -493,26 +497,42 @@ describe("external tool surface budget (#11585)", () => {
     }
   );
 
-  // The one id this cut ADDS externally. Called out on its own because a
-  // widening buried in a shrink is exactly what escapes review (#10710): an
-  // orchestrator that can open terminals should be able to close the ones it
-  // opened, but only the recoverable close — trash, not kill.
-  it("adds terminal.close externally while the unrecoverable variants stay internal", () => {
-    expect(isTierPermitted("external", "terminal.close")).toBe(true);
+  // The cut is purely subtractive: it authorizes nothing new. `terminal.close`
+  // is the id that nearly slipped in — #11540's draft core set had it, on the
+  // theory that closing is recoverable and an orchestrator should be able to
+  // clean up after itself. Neither half holds here. Nothing binds a panel to the
+  // session that created it, and `terminal.list` returns the user's own shells
+  // and other agents' terminals alike, so an external caller could trash a
+  // terminal it has no relationship to; trash is then purged after 20s
+  // (TRASH_TTL_MS), killing the PTY, with no restore action on this surface.
+  it("authorizes no terminal-destroying tool externally", () => {
     for (const id of [
+      "terminal.close",
+      "terminal.closeAll",
       "terminal.kill",
       "terminal.killAll",
-      "terminal.closeAll",
       "terminal.restart",
     ]) {
+      // Pin to ground truth: a renamed id must fail loudly, not vacuously pass.
       expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
       expect(isTierPermitted("external", id)).toBe(false);
+      expect(shouldExposeTool(makeEntry({ id }), "external")).toBe(false);
     }
+    // The in-app assistant, which has a human watching, keeps them.
+    expect(isTierPermitted("action", "terminal.close")).toBe(true);
+  });
+
+  // A cut PR that quietly widens is the failure #10710 documents, so assert the
+  // direction outright rather than trusting the id list to be read carefully.
+  it("authorizes nothing the in-app assistant cannot already reach", () => {
+    expect([...TIER_ALLOWLISTS.external].filter((id) => !TIER_ALLOWLISTS.system.has(id))).toEqual(
+      []
+    );
   });
 });
 
 // Forge used to be curated by hand in two separate files — WORKBENCH_TIER_TOOLS
-// in shared/config/helpAssistantTierAllowlists.ts and MCP_TOOL_ALLOWLIST_ENTRIES
+// in shared/config/helpAssistantTierAllowlists.ts and the external allowlist
 // in mcp-server/shared.ts — with nothing linking them, and adding a read to only
 // one shipped a tool invisible to the other caller class twice (#10696, #11545).
 //
@@ -527,17 +547,19 @@ describe("forge tool exposure is help-assistant-only (#11585)", () => {
     expect([...TIER_ALLOWLISTS.external].filter((id) => id.startsWith("forge."))).toEqual([]);
   });
 
-  it("keeps the full forge surface for the in-app assistant", () => {
-    const workbenchForgeTools = [...TIER_ALLOWLISTS.workbench].filter((id) =>
-      id.startsWith("forge.")
-    );
+  // Measured against the real registry, not against another tier: `system` is
+  // built as a union that already contains `workbench`, so "workbench forge ⊆
+  // system forge" is true by construction and would stay green while the whole
+  // surface drained away. The cut moved forge's only home to the in-app tiers,
+  // so this is now the assertion carrying that weight.
+  it("keeps every forge action reachable by the in-app assistant", () => {
+    const allForgeActions = BUILT_IN_ACTION_IDS.filter((id) => id.startsWith("forge."));
     const systemForgeTools = [...TIER_ALLOWLISTS.system].filter((id) => id.startsWith("forge."));
 
-    // Guard the guard: an empty cohort would make the assertions vacuous.
-    expect(workbenchForgeTools.length).toBeGreaterThan(0);
-    // Writes land at `system`, so it must be a strict superset of the reads.
-    expect(systemForgeTools.length).toBeGreaterThan(workbenchForgeTools.length);
-    expect(workbenchForgeTools.filter((id) => !TIER_ALLOWLISTS.system.has(id))).toEqual([]);
+    expect(allForgeActions.length).toBeGreaterThan(0);
+    // `forge.rateLimit` is renderer-internal plumbing, not an MCP tool.
+    const expected = allForgeActions.filter((id) => id !== "forge.rateLimit");
+    expect(new Set(systemForgeTools)).toEqual(new Set(expected));
   });
 
   // Sentinel for the read added in #11545: an agent that can post a comment must

@@ -70,11 +70,16 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   "terminal.sendCommand",
   "terminal.inject",
   "terminal.new",
-  // The one id this cut *adds* externally. Recoverable (moves the terminal to
-  // trash) and already guarded against unbound agent dispatch by
-  // `requireExplicitTerminalIdForAgentDispatch`, so it completes the terminal
-  // lifecycle without `kill` / `closeAll` / `restart`, which stay internal.
-  "terminal.close",
+  // `terminal.close` is deliberately NOT here, though #11540's draft core set
+  // included it. The argument for it was that closing is recoverable, so an
+  // orchestrator that opens terminals should be able to close them. That does
+  // not survive contact with this caller class: `terminal.list` enumerates every
+  // panel in the view — the user's own shells and other agents' terminals
+  // included — and nothing binds a panel to the session that created it, so
+  // "close the ones it opened" is not an invariant we actually have. Recovery is
+  // worse: trash is purged after TRASH_TTL_MS (20s), which kills the PTY, and no
+  // restore action is on this surface. Adding it back needs session-scoped panel
+  // ownership first, not just an id argument.
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
 

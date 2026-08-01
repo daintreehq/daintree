@@ -123,35 +123,51 @@ async function createRegistryWithAudit(): Promise<{
 // is derived from the real allowlist rather than restated here, so this cannot
 // drift from the gate it is budgeting.
 describe("external MCP tool surface budget (#11585)", () => {
-  const MAX_TOOLS = 30;
-  const MAX_DESCRIPTION_BYTES = 24_000;
+  // Descriptions are the bulk of the text an MCP client re-reads every model
+  // turn. This ceiling sits a little above the current total rather than at an
+  // arbitrary round number, so a description that doubles trips it while
+  // ordinary wording edits do not. The tool COUNT is budgeted in
+  // tierAuth.test.ts, against the allowlist that is the actual gate — it is not
+  // duplicated here.
+  const MAX_DESCRIPTION_BYTES = 16_000;
 
-  it("stays within the tool-count and description-byte budget", async () => {
+  it("keeps the advertised description payload small", async () => {
     const { registry } = await createRegistryWithAudit();
 
-    const descriptions = MCP_EXTERNAL_TIER_TOOLS.map((id) => {
+    const totalBytes = MCP_EXTERNAL_TIER_TOOLS.reduce((sum, id) => {
       const def = registry.get(id as ActionId)?.();
       // A missing definition means the allowlist names an id the registry no
       // longer has — surface that as a failure rather than a zero-byte entry.
       expect(def, `${id} is allowlisted but absent from the action registry`).toBeDefined();
-      return def!.description ?? "";
-    });
+      return sum + Buffer.byteLength(def!.description ?? "", "utf8");
+    }, 0);
 
-    expect(MCP_EXTERNAL_TIER_TOOLS.length).toBeLessThanOrEqual(MAX_TOOLS);
-
-    const totalBytes = descriptions.reduce((sum, d) => sum + Buffer.byteLength(d, "utf8"), 0);
     expect(totalBytes).toBeLessThanOrEqual(MAX_DESCRIPTION_BYTES);
   });
 
-  it("names only real, dispatchable actions", async () => {
+  it("names only real actions that can actually be advertised and dispatched", async () => {
     const { registry } = await createRegistryWithAudit();
     const builtInIds = new Set<string>(BUILT_IN_ACTION_IDS);
 
+    // A duplicate is invisible in production — the allowlist becomes a Set — so
+    // it can only ever be a mistake, and it silently inflates the array length
+    // the count budget reads.
+    expect(new Set(MCP_EXTERNAL_TIER_TOOLS).size).toBe(MCP_EXTERNAL_TIER_TOOLS.length);
+
     for (const id of MCP_EXTERNAL_TIER_TOOLS) {
       expect(builtInIds.has(id), `${id} is not a built-in action id`).toBe(true);
+
+      const def = registry.get(id as ActionId)?.();
       // `restricted` actions are refused by ActionService regardless of tier, so
-      // allowlisting one would advertise a tool that can never run.
-      expect(registry.get(id as ActionId)?.().danger).not.toBe("restricted");
+      // allowlisting one advertises a tool that can never run.
+      expect(def?.danger, `${id} is restricted and cannot run`).not.toBe("restricted");
+      // `hidden` is the one thing that still withholds a tier-permitted tool
+      // from tools/list. An allowlisted id marked hidden would be listed nowhere
+      // yet callable — exactly the advertised-vs-callable split this cut exists
+      // to remove, and the tier tests use synthetic entries so they cannot see it.
+      expect(def?.mcpVisibility, `${id} is allowlisted but hidden from tools/list`).not.toBe(
+        "hidden"
+      );
     }
   });
 });

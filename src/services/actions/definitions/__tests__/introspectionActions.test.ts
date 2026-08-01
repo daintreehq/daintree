@@ -1058,7 +1058,7 @@ describe("search → getSchema roundtrip", () => {
     });
     vi.mocked(actionService.get).mockReturnValueOnce(pushEntry);
 
-    // Step 2: search finds the discoverable tool
+    // Step 2: search finds it, without schemas
     const searchDef = registry.get("actions.search")!();
     const searchResult = (await searchDef.run({ query: "push" } as never, stubCtx)) as {
       results: ActionManifestEntry[];

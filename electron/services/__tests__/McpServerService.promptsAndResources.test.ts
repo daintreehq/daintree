@@ -17,6 +17,8 @@ import type {
   ActionDanger,
 } from "../../../shared/types/actions.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { BUILT_IN_ACTION_IDS } from "../../../shared/config/actionIds.js";
+import { TIER_ALLOWLISTS } from "../mcp-server/shared.js";
 
 const testHomeDir = vi.hoisted(
   () => `${process.cwd()}/.vitest-mcp-home-${Math.random().toString(36).slice(2)}`
@@ -459,6 +461,45 @@ describe("McpServerService", () => {
   });
 
   describe("prompts", () => {
+    // Prompts render tier-agnostically — the same text goes to an api-key
+    // session and to the in-app assistant. So naming a tool unconditionally is
+    // a bug the moment that tool leaves the external surface: the model is told
+    // to call something it will be refused for, and burns a turn finding out.
+    // #11585 cut git.* from external and left exactly one such reference behind.
+    it("never instructs an external caller to call a tool it cannot reach", async () => {
+      const { window } = createMockWindow();
+      await service.start(window);
+      // No headers → global apiKey → external tier.
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const { prompts } = await client.listPrompts();
+      expect(prompts.length).toBeGreaterThan(0);
+
+      for (const prompt of prompts) {
+        const args = Object.fromEntries(
+          (prompt.arguments ?? []).map((a) => [a.name, a.required ? "1" : ""])
+        );
+        const rendered = await client.getPrompt({ name: prompt.name, arguments: args });
+        const text = rendered.messages
+          .map((m) => (typeof m.content === "object" && "text" in m.content ? m.content.text : ""))
+          .join("\n");
+
+        // Backticked `namespace.action` tokens are how prompts name tools.
+        for (const [, id] of text.matchAll(/`([a-z][a-zA-Z]*\.[a-zA-Z.]+)`/g)) {
+          if (!BUILT_IN_ACTION_IDS.includes(id as never)) continue; // `git status`, filenames, etc.
+          if (TIER_ALLOWLISTS.external.has(id)) continue;
+          // Naming an unreachable tool is allowed only alongside a fallback the
+          // caller can actually run, e.g. "`git.getStagingStatus` if available,
+          // otherwise `git status`".
+          expect(
+            /if available/i.test(text),
+            `prompt "${prompt.name}" names ${id}, which the external tier cannot call, with no fallback`
+          ).toBe(true);
+        }
+      }
+    });
+
     it("advertises the prompts capability and lists the starter prompts with argument metadata", async () => {
       const { window } = createMockWindow();
       await service.start(window);
@@ -889,8 +930,17 @@ describe("McpServerService", () => {
     // which is what makes this a boundary rather than a regression.
     it("external tier keeps terminal/agent resources but loses issues and pulse (#11585)", async () => {
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
+        // A worktree AND an agent-bearing terminal, so the pulse URI is one the
+        // enumerator WOULD emit and the agent URI is one it should still emit.
+        // With neither present the assertions below would pass on an empty list.
+        if (payload.actionId === "worktree.list") {
+          return { ok: true, result: [{ id: "wt-1", branch: "feature/foo" }] };
+        }
         if (payload.actionId === "terminal.list") {
-          return { ok: true, result: [{ id: "term-1", title: "shell", agentId: null }] };
+          return {
+            ok: true,
+            result: [{ id: "term-1", title: "agent: claude", agentId: "agent-claude-1" }],
+          };
         }
         return { ok: true, result: [] };
       });
@@ -905,7 +955,16 @@ describe("McpServerService", () => {
 
       const uris = (await client.listResources()).resources.map((r) => r.uri);
       expect(uris).toContain("daintree://terminal/term-1/scrollback");
+      expect(uris).toContain("daintree://agent/agent-claude-1/state");
       expect(uris).not.toContain("daintree://project/current/issues");
+      expect(uris).not.toContain("daintree://worktree/wt-1/pulse");
+
+      const patterns = (await client.listResourceTemplates()).resourceTemplates.map(
+        (t) => t.uriTemplate
+      );
+      expect(patterns).toContain("daintree://terminal/{id}/scrollback");
+      expect(patterns).toContain("daintree://agent/{id}/state");
+      expect(patterns).not.toContain("daintree://worktree/{id}/pulse");
 
       await expect(
         client.readResource({ uri: "daintree://project/current/issues" })
@@ -913,9 +972,10 @@ describe("McpServerService", () => {
       await expect(client.readResource({ uri: "daintree://worktree/wt-1/pulse" })).rejects.toThrow(
         /not permitted/i
       );
-      expect(dispatchMock).not.toHaveBeenCalledWith(
-        expect.objectContaining({ actionId: "forge.listIssues" })
-      );
+      // Refused before the renderer is touched, not after an empty read.
+      for (const actionId of ["forge.listIssues", "git.getProjectPulse"]) {
+        expect(dispatchMock).not.toHaveBeenCalledWith(expect.objectContaining({ actionId }));
+      }
     });
 
     it("readResource for project issues dispatches forge.listIssues", async () => {

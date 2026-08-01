@@ -498,15 +498,15 @@ describe("McpServerService", () => {
         }),
         createManifestEntry({
           id: "recipe.run" as ActionId,
-          title: "Delete Worktree",
-          description: "Delete a worktree",
+          title: "Run Recipe",
+          description: "Run a saved recipe",
           danger: "confirm",
           inputSchema: {
             type: "object",
             properties: {
-              worktreeId: { type: "string" },
+              recipeId: { type: "string" },
             },
-            required: ["worktreeId"],
+            required: ["recipeId"],
           },
           requiresArgs: true,
         }),
@@ -532,7 +532,7 @@ describe("McpServerService", () => {
     expect(safeTool?.inputSchema.additionalProperties).toBe(false);
     expect(dangerousTool?.inputSchema.additionalProperties).toBe(false);
     expect(dangerousTool?.inputSchema.properties).toEqual({
-      worktreeId: { type: "string" },
+      recipeId: { type: "string" },
     });
     expect(dangerousTool?.inputSchema.properties?._meta).toBeUndefined();
 
@@ -551,7 +551,7 @@ describe("McpServerService", () => {
     // primary signal clients use to detect that a host confirmation will be
     // required on the next `tools/call` for this tool.
     expect(dangerousTool?.annotations).toEqual({
-      title: "Delete Worktree",
+      title: "Run Recipe",
       readOnlyHint: false,
       idempotentHint: false,
       destructiveHint: true,
@@ -565,8 +565,8 @@ describe("McpServerService", () => {
         // Query that requires UX confirmation but is not destructive.
         createManifestEntry({
           id: "terminal.new" as ActionId,
-          title: "Generate Context",
-          description: "Generate worktree context",
+          title: "New Terminal",
+          description: "Open a terminal",
           kind: "query",
           danger: "confirm",
           mcpAnnotations: { destructiveHint: false },
@@ -599,14 +599,14 @@ describe("McpServerService", () => {
     transports.push(transport);
 
     const result = await client.listTools();
-    const generate = result.tools.find((t) => t.name === "terminal.new");
+    const newTerminal = result.tools.find((t) => t.name === "terminal.new");
     const readOnlyCmd = result.tools.find((t) => t.name === "terminal.inject");
     const queryFalse = result.tools.find((t) => t.name === "terminal.getOutput");
 
     // Override flips destructiveHint off; readOnlyHint/idempotentHint still
     // come from the `kind: "query"` default. openWorldHint now defaults to true.
-    expect(generate?.annotations).toEqual({
-      title: "Generate Context",
+    expect(newTerminal?.annotations).toEqual({
+      title: "New Terminal",
       readOnlyHint: true,
       idempotentHint: true,
       destructiveHint: false,
@@ -642,8 +642,8 @@ describe("McpServerService", () => {
         // openWorldHint defaults to true; explicit false override must win.
         createManifestEntry({
           id: "recipe.run" as ActionId,
-          title: "Reset All Keybindings",
-          description: "Local-only destructive action",
+          title: "Run Recipe",
+          description: "Local-only confirm-gated action",
           category: "settings",
           kind: "command",
           danger: "confirm",
@@ -652,8 +652,8 @@ describe("McpServerService", () => {
         // No override — must default to true (spec-conservative).
         createManifestEntry({
           id: "agent.launch" as ActionId,
-          title: "Some GitHub Tool",
-          description: "Tool without openWorldHint override",
+          title: "Launch Agent",
+          description: "Tool without an openWorldHint override",
           category: "github",
           kind: "command",
           danger: "safe",
@@ -672,10 +672,10 @@ describe("McpServerService", () => {
 
     const result = await client.listTools();
     const localTool = result.tools.find((t) => t.name === "recipe.run");
-    const ghTool = result.tools.find((t) => t.name === "agent.launch");
+    const openWorldTool = result.tools.find((t) => t.name === "agent.launch");
 
     expect(localTool?.annotations?.openWorldHint).toBe(false);
-    expect(ghTool?.annotations?.openWorldHint).toBe(true);
+    expect(openWorldTool?.annotations?.openWorldHint).toBe(true);
   });
 
   it("defaults openWorldHint to true for all categories per spec", async () => {
@@ -683,15 +683,15 @@ describe("McpServerService", () => {
       getManifest: () => [
         createManifestEntry({
           id: "recipe.list" as ActionId,
-          title: "List PRs",
-          description: "List pull requests",
+          title: "List Recipes",
+          description: "List recipes",
           category: "github",
           kind: "query",
         }),
         createManifestEntry({
           id: "terminal.getStatus" as ActionId,
-          title: "Check Command",
-          description: "Check if a command exists",
+          title: "Terminal Status",
+          description: "Read terminal status",
           category: "system",
           kind: "query",
         }),
@@ -710,11 +710,11 @@ describe("McpServerService", () => {
     transports.push(transport);
 
     const result = await client.listTools();
-    const ghTool = result.tools.find((t) => t.name === "recipe.list");
+    const queryTool = result.tools.find((t) => t.name === "recipe.list");
     const systemTool = result.tools.find((t) => t.name === "terminal.getStatus");
     const wtTool = result.tools.find((t) => t.name === "worktree.createWithRecipe");
 
-    expect(ghTool?.annotations?.openWorldHint).toBe(true);
+    expect(queryTool?.annotations?.openWorldHint).toBe(true);
     expect(systemTool?.annotations?.openWorldHint).toBe(true);
     expect(wtTool?.annotations?.openWorldHint).toBe(true);
   });
@@ -744,15 +744,15 @@ describe("McpServerService", () => {
       getManifest: () => [
         createManifestEntry({
           id: "recipe.run" as ActionId,
-          title: "Delete Worktree",
-          description: "Delete a worktree",
+          title: "Run Recipe",
+          description: "Run a saved recipe",
           danger: "confirm",
           inputSchema: {
             type: "object",
             properties: {
-              worktreeId: { type: "string" },
+              recipeId: { type: "string" },
             },
-            required: ["worktreeId"],
+            required: ["recipeId"],
           },
           requiresArgs: true,
         }),
@@ -777,7 +777,7 @@ describe("McpServerService", () => {
     const unconfirmed = getTextResult(
       await client.callTool({
         name: "recipe.run",
-        arguments: { worktreeId: "wt-123" },
+        arguments: { recipeId: "r-123" },
       })
     );
 
@@ -791,7 +791,7 @@ describe("McpServerService", () => {
       1,
       expect.objectContaining({
         actionId: "recipe.run",
-        args: { worktreeId: "wt-123" },
+        args: { recipeId: "r-123" },
         confirmed: false,
       })
     );
@@ -891,8 +891,8 @@ describe("McpServerService", () => {
       getManifest: () => [
         createManifestEntry({
           id: "recipe.run" as ActionId,
-          title: "Delete Worktree",
-          description: "Delete a worktree",
+          title: "Run Recipe",
+          description: "Run a saved recipe",
           danger: "confirm",
         }),
       ],
@@ -911,7 +911,7 @@ describe("McpServerService", () => {
       await client.callTool({
         name: "recipe.run",
         arguments: {
-          worktreeId: "wt-123",
+          recipeId: "r-123",
           _meta: { confirmed: true },
         },
       })
@@ -924,7 +924,7 @@ describe("McpServerService", () => {
       1,
       expect.objectContaining({
         actionId: "recipe.run",
-        args: { worktreeId: "wt-123" },
+        args: { recipeId: "r-123" },
         confirmed: false,
       })
     );
@@ -974,8 +974,8 @@ describe("McpServerService", () => {
         getManifest: () => [
           createManifestEntry({
             id: "recipe.run" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
         ],
@@ -992,7 +992,7 @@ describe("McpServerService", () => {
       const result = getTextResult(
         await client.callTool({
           name: "recipe.run",
-          arguments: { worktreeId: "wt-123" },
+          arguments: { recipeId: "r-123" },
         })
       );
 
@@ -1006,7 +1006,7 @@ describe("McpServerService", () => {
         1,
         expect.objectContaining({
           actionId: "recipe.run",
-          args: { worktreeId: "wt-123" },
+          args: { recipeId: "r-123" },
           confirmed: false,
         })
       );
@@ -1037,8 +1037,8 @@ describe("McpServerService", () => {
         getManifest: () => [
           createManifestEntry({
             id: "recipe.run" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
         ],
@@ -1055,7 +1055,7 @@ describe("McpServerService", () => {
       const result = getTextResult(
         await client.callTool({
           name: "recipe.run",
-          arguments: { worktreeId: "wt-123" },
+          arguments: { recipeId: "r-123" },
         })
       );
 
@@ -1090,8 +1090,8 @@ describe("McpServerService", () => {
         getManifest: () => [
           createManifestEntry({
             id: "recipe.run" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
         ],
@@ -1108,7 +1108,7 @@ describe("McpServerService", () => {
       const result = getTextResult(
         await client.callTool({
           name: "recipe.run",
-          arguments: { worktreeId: "wt-123" },
+          arguments: { recipeId: "r-123" },
         })
       );
 
@@ -1147,8 +1147,8 @@ describe("McpServerService", () => {
         getManifest: () => [
           createManifestEntry({
             id: "recipe.run" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
         ],
@@ -1165,7 +1165,7 @@ describe("McpServerService", () => {
       const result = getTextResult(
         await client.callTool({
           name: "recipe.run",
-          arguments: { worktreeId: "wt-1" },
+          arguments: { recipeId: "r-1" },
         })
       );
 

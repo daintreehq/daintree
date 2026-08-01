@@ -631,7 +631,13 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
 
       lines.push("");
       lines.push("Please:");
-      lines.push("1. Read the current git status (`git.getStagingStatus`) to see what changed.");
+      // Tier-agnostic on purpose: `git.getStagingStatus` is a workbench/system
+      // tool, so naming it unconditionally would tell an external session to
+      // call something it will be refused for (#11585). Same shape as the
+      // `start_issue` prompt's "GitHub tools or `gh`" phrasing.
+      lines.push(
+        "1. Read the current git status (`git.getStagingStatus` if available, otherwise `git status`) to see what changed."
+      );
       lines.push(
         "2. Identify the root cause (error message, missing prerequisite, infinite loop, etc.)."
       );

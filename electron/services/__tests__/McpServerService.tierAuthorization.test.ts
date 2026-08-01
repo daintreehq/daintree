@@ -587,10 +587,16 @@ describe("McpServerService", () => {
         "terminal.inject",
         "terminal.sendCommand",
         "recipe.run",
-        "git.commit",
         "agent.getState",
-        // Without this entry, dropping project.runCheck from
-        // MCP_TOOL_ALLOWLIST_ENTRIES would leave the external-tier test green.
+        // Ids the RENDERER offers but the external tier must refuse. They have to
+        // be in this fixture or the "not listed" assertions below pass for the
+        // wrong reason — a manifest that never contained them proves nothing
+        // about the server's filter. These are the #11585 cuts.
+        "git.commit",
+        "git.push",
+        "worktree.delete",
+        "forge.getCIStatus",
+        "worktree.reviewReadiness",
         "project.runCheck",
       ];
       return ids.map((id) =>
@@ -724,19 +730,30 @@ describe("McpServerService", () => {
       transports.push(transport);
 
       const ids = (await client.listTools()).tools.map((t) => t.name);
-      for (const id of ["git.commit", "git.push", "worktree.delete"]) {
+      const CUT = ["git.commit", "git.push", "worktree.delete"];
+
+      // Guard the guard: the renderer manifest DOES offer these, so their
+      // absence below is the server's filter at work rather than a fixture that
+      // never had them.
+      const offered = manifestForAllAllowlistedTools().map((e) => e.id);
+      for (const id of CUT) {
+        expect(offered).toContain(id);
         expect(ids).not.toContain(id);
       }
 
       // Withholding from tools/list is not the mechanism — the allowlist cut is.
       // A client that cached the old surface must be refused at dispatch, with
-      // no renderer round-trip. This is the assertion #11582 could not make.
-      const denied = (await client.callTool({
-        name: "git.commit",
-        arguments: { message: "wip" },
-      })) as TextToolResult;
-      expect(denied.isError).toBe(true);
-      expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
+      // no renderer round-trip. This is the assertion #11582 could not make, and
+      // it has to run for every cut id: listing and calling authorize through
+      // different functions, so one proves nothing about the other.
+      for (const id of CUT) {
+        const denied = (await client.callTool({
+          name: id,
+          arguments: {},
+        })) as TextToolResult;
+        expect(denied.isError).toBe(true);
+        expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
+      }
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
@@ -1617,17 +1634,27 @@ describe("McpServerService", () => {
       transports.push(transport);
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
-      expect(ids).not.toContain("forge.getCIStatus");
-      expect(ids).not.toContain("worktree.reviewReadiness");
+      const CI_ROUTES = ["forge.getCIStatus", "worktree.reviewReadiness"];
 
-      // Unlisted AND undispatchable — the cut is an access decision, so a stale
-      // client holding the old name is refused before the renderer is touched.
-      const denied = (await client.callTool({
-        name: "forge.getCIStatus",
-        arguments: {},
-      })) as TextToolResult;
-      expect(denied.isError).toBe(true);
-      expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
+      // `tierManifest` offers both, so absence here is the server filtering
+      // rather than a fixture that never carried them.
+      const offered = tierManifest().map((e) => e.id);
+      for (const id of CI_ROUTES) {
+        expect(offered).toContain(id);
+        expect(ids).not.toContain(id);
+      }
+
+      // Unlisted AND undispatchable, for both routes — the cut is an access
+      // decision, so a stale client holding either name is refused before the
+      // renderer is touched.
+      for (const id of CI_ROUTES) {
+        const denied = (await client.callTool({
+          name: id,
+          arguments: {},
+        })) as TextToolResult;
+        expect(denied.isError).toBe(true);
+        expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
+      }
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
