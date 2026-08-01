@@ -46,6 +46,11 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   "actions.getContext",
   "actions.search",
   "actions.getSchema",
+  // Only Daintree can answer what its own surface currently is, and this caller
+  // class needs it most: the external contract is the one that just shrank from
+  // 100 tools to this list, and a third-party client written against the old
+  // shape has no other way to find out (#11549).
+  "mcp.surface",
 
   "agent.launch",
   // `agent.launch` accepts user- and plugin-contributed agent ids, and only

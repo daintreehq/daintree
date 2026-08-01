@@ -9,6 +9,10 @@ export const WORKBENCH_TIER_TOOLS = [
   "actions.getContext",
   "actions.search",
   "actions.getSchema",
+  // Reports the caller's own tool surface as data (#11549) — a read of what
+  // `tools/list` already told this session, so it grants nothing the caller
+  // does not already hold and belongs at the lowest tier.
+  "mcp.surface",
 
   "project.getAll",
   "project.getCurrent",

@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext, ActionManifestEntry } from "@shared/types/actions";
 import { z } from "zod";
 import { PersistedStoreInfoSchema } from "./schemas";
+import { McpSurfaceResultSchema } from "@shared/types/mcpSurface";
 import {
   ACTIONS_LIST_DEFAULT_LIMIT,
   ACTIONS_LIST_MAX_LIMIT,
@@ -126,6 +127,31 @@ export function registerIntrospectionActions(
         offset,
         hasMore: offset + page.length < total,
       };
+    },
+  }));
+
+  // Registered here purely for manifest registration — schema, description,
+  // tier, and audit metadata. Execution is short-circuited in the MCP CallTool
+  // handler (electron/services/mcp-server/sessionServer.ts) and runs against the
+  // main process, because the caller's authorization tier exists only there:
+  // the renderer has no idea which MCP session dispatched it. Same pattern as
+  // `skills.search`. `run()` throws if the renderer ever invokes it directly.
+  actions.set("mcp.surface", () => ({
+    id: "mcp.surface",
+    title: "Get MCP Surface",
+    description:
+      "Report this session's tool surface as data: its authorization tier, a stable hash, and per-tool tier, kind, read-only and idempotency hints, and deprecation. Call it once at startup to check the surface matches what this client was built against, then re-read the hash to detect drift without diffing everything. It describes exactly what tools/list returns for this session.",
+    category: "introspection",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    mcpVisibility: "core",
+    mcpOutputSchema: true,
+    resultSchema: McpSurfaceResultSchema,
+    run: async () => {
+      throw new Error(
+        "mcp.surface must be invoked through the MCP main-process path, not renderer dispatch."
+      );
     },
   }));
 

@@ -69,6 +69,21 @@ export type BuiltInActionId = BuiltInKeyAction | BuiltInRuntimeActionId;
 
 export type ActionId = BuiltInActionId | (string & {});
 
+/**
+ * Marks an action as on its way out, so a client can migrate before the removal
+ * rather than after it (#11549). Surfaced through the `mcp.surface` manifest —
+ * deliberately not through the tool description, which is model-facing prose an
+ * automated compatibility check cannot read.
+ *
+ * Presence is the whole signal: an action carrying this is deprecated, and one
+ * without it is not. `reason` is required because a deprecation nobody can act
+ * on is just a warning, and `replacedBy` names the successor when there is one.
+ */
+export interface ActionDeprecation {
+  reason: string;
+  replacedBy?: ActionId;
+}
+
 export interface ActionExample {
   args: Record<string, unknown>;
   description: string;
@@ -273,6 +288,12 @@ export interface ActionDefinition<
    * revokes it at both the listing and dispatch gates, visibly.
    */
   mcpVisibility?: McpVisibility;
+  /**
+   * Marks the action as deprecated. Projected onto {@link ActionManifestEntry}
+   * and reported by `mcp.surface` so an MCP client can migrate ahead of the
+   * removal. See {@link ActionDeprecation}.
+   */
+  deprecated?: ActionDeprecation;
 }
 
 export interface ActionManifestEntry {
@@ -305,6 +326,8 @@ export interface ActionManifestEntry {
   band?: RiskBand;
   /** MCP listing visibility. Layered on the tier allowlist, never a substitute. */
   mcpVisibility?: McpVisibility;
+  /** Set when the action is deprecated. Reported by `mcp.surface` (#11549). */
+  deprecated?: ActionDeprecation;
   /**
    * Projected from {@link ActionDefinition.palette}. Palette-only — these are
    * read by the action-palette layer and ignored by `dispatch()`/MCP. See
