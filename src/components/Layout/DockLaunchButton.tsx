@@ -121,11 +121,27 @@ export function DockLaunchButton({
     (next: string) => {
       queryRef.current = next;
       setQuery(next);
+      // Deliberately NOT resetting the selection here: the hook's own effect
+      // reconciles it, and calling its setter with the pre-query results would
+      // stamp the old list's first row as the item to follow — after which the
+      // effect chases that row into the new results instead of settling on the
+      // top match. `activeIndex` below covers the frame before it lands.
     },
     [setQuery]
   );
 
-  const selectedRow = results[selectedIndex];
+  // The hook reconciles `selectedIndex` in an effect, so the render right after
+  // the results change still holds the old index — which browsing can now leave
+  // well past the end of a narrowed list, where the old menu always left it at
+  // 0. Fall back to the top row (not the last) so this frame agrees with where
+  // that effect settles; unhandled, it highlights nothing and Enter no-ops.
+  const activeIndex =
+    selectedIndex >= 0 && selectedIndex < results.length
+      ? selectedIndex
+      : results.length > 0
+        ? 0
+        : -1;
+  const selectedRow = activeIndex >= 0 ? results[activeIndex] : undefined;
   const activeDescendant = selectedRow ? getOptionId(selectedRow.rowKey) : undefined;
 
   const focusInput = useCallback(() => {
@@ -225,12 +241,11 @@ export function DockLaunchButton({
         return;
       }
       if (event.key === "Enter") {
-        // No row (or an out-of-range index): swallow the key rather than
-        // letting it escape to whatever is behind the launcher.
+        // No rows at all: swallow the key rather than letting it escape to
+        // whatever is behind the launcher.
         event.preventDefault();
         event.stopPropagation();
-        const row = results[selectedIndex];
-        if (row) activateRow(row);
+        if (selectedRow) activateRow(selectedRow);
         return;
       }
 
@@ -242,7 +257,7 @@ export function DockLaunchButton({
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       event.stopPropagation();
     },
-    [activateRow, results, selectedIndex, selectNext, selectPrevious, setSelectedIndex]
+    [activateRow, results.length, selectedRow, selectNext, selectPrevious, setSelectedIndex]
   );
 
   return (
@@ -291,6 +306,18 @@ export function DockLaunchButton({
           event.preventDefault();
           focusInput();
         }}
+        onFocus={(event) => {
+          // A focus trap hauls focus back to the content wrapper whenever
+          // something outside steals it — a panel launched moments ago
+          // re-focusing itself on its own frame, say. The wrapper is
+          // tabIndex={-1} and owns no keys, so leaving focus parked there makes
+          // the next keystroke vanish; hand it to the search box instead.
+          if (event.target === event.currentTarget) focusInput();
+        }}
+        // Catch-all behind the input's own handler, for the frame before the
+        // refocus above lands and for focus legitimately sitting on the results
+        // region. Bubble phase, so the input and body still get first refusal.
+        onKeyDown={handleNavigationKeyDown}
         onPointerDownOutside={() => {
           wasPointerCloseRef.current = true;
         }}
@@ -365,7 +392,7 @@ export function DockLaunchButton({
                   key={row.rowKey}
                   row={row}
                   index={index}
-                  isSelected={index === selectedIndex}
+                  isSelected={index === activeIndex}
                   showBandLabel={row.band !== results[index - 1]?.band}
                   optionId={getOptionId(row.rowKey)}
                   onHover={setSelectedIndex}

@@ -175,6 +175,12 @@ test.describe.serial("Core: Dock launcher search", () => {
 
     await openLauncher(window);
     await searchBox(window).fill("review");
+    // Enter confirms whatever `selectedIndex` points at, so pin the row itself
+    // first — otherwise a failure here can't tell "launched the wrong thing"
+    // apart from "launched nothing".
+    await expect(window.locator(SELECTED_OPTION)).toContainText("Review", { timeout: T_MEDIUM });
+    expect(await searchBoxHasFocus(window)).toBe(true);
+
     // Typing and confirming in quick succession must rank against the query the
     // user actually typed, not the previous one.
     await window.keyboard.press("Enter");

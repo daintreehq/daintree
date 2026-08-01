@@ -129,18 +129,33 @@ vi.mock("@/components/ui/popover", () => ({
     onCloseAutoFocus,
     onPointerDownOutside,
     onEscapeKeyDown,
+    onFocus,
+    onKeyDown,
   }: {
     children: ReactNode;
     onOpenAutoFocus?: (e: { preventDefault: () => void }) => void;
     onCloseAutoFocus?: (e: { preventDefault: () => void }) => void;
     onPointerDownOutside?: () => void;
     onEscapeKeyDown?: (e: { preventDefault: () => void }) => void;
+    onFocus?: React.FocusEventHandler<HTMLDivElement>;
+    onKeyDown?: React.KeyboardEventHandler<HTMLDivElement>;
   }) => {
     popoverOpenAutoFocusSpy = onOpenAutoFocus ?? null;
     popoverCloseAutoFocusSpy = onCloseAutoFocus ?? null;
     popoverPointerDownOutsideSpy = onPointerDownOutside ?? null;
     popoverEscapeKeyDownSpy = onEscapeKeyDown ?? null;
-    return <div data-testid="dock-launcher-content">{children}</div>;
+    // Radix renders FocusScope/DismissableLayer with asChild, so these land on
+    // the same node the focus trap parks focus on. tabIndex mirrors that.
+    return (
+      <div
+        data-testid="dock-launcher-content"
+        tabIndex={-1}
+        onFocus={onFocus}
+        onKeyDown={onKeyDown}
+      >
+        {children}
+      </div>
+    );
   },
 }));
 
@@ -478,6 +493,40 @@ describe("DockLaunchButton", () => {
       expect(input.getAttribute("aria-activedescendant")).toBeTruthy();
     });
 
+    it("snaps the selection back to the top result on every query change", () => {
+      // The hook reconciles selectedIndex in an effect, a frame behind. Left to
+      // it, the render right after a query change still holds the old index —
+      // highlighting nothing when it points past the narrowed list, or the
+      // wrong row when it happens to stay in range. Neither was reachable
+      // before browsing carried a selection of its own.
+      const { container } = renderButton();
+      const input = searchInput(container);
+
+      // Walk to the end of the browse list, then narrow.
+      fireEvent.keyDown(input, { key: "End" });
+      expect(container.querySelectorAll(SELECTED_OPTION)).toHaveLength(1);
+
+      fireEvent.change(input, { target: { value: "e" } });
+      const rows = options(container);
+      expect(rows.length).toBeGreaterThan(1);
+      expect(selectedOption(container)).toBe(rows[0]);
+      expect(input.getAttribute("aria-activedescendant")).toBe(rows[0]!.id);
+    });
+
+    it("Enter launches the top result after narrowing from deep in the browse list", () => {
+      // Type-then-confirm in quick succession must fire on the row the user is
+      // looking at, not on wherever the previous selection happened to sit.
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({ onLaunchAgent });
+      const input = searchInput(container);
+
+      fireEvent.keyDown(input, { key: "End" });
+      fireEvent.change(input, { target: { value: "claude" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+    });
+
     it("Enter launches the top result", () => {
       const onLaunchAgent = vi.fn();
       const { container } = renderButton({ onLaunchAgent });
@@ -713,6 +762,46 @@ describe("DockLaunchButton", () => {
       // The focus is deferred a frame, so poll rather than racing it — a frame
       // awaited here would be scheduled before the effect's own.
       await waitFor(() => expect(document.activeElement).toBe(searchInput(container)));
+    });
+
+    it("hands focus back to the input when the focus trap parks it on the content", () => {
+      // The modal FocusScope hauls focus onto the tabIndex={-1} content wrapper
+      // whenever anything outside steals it. Left there, the wrapper owns no
+      // keys and the next keystroke disappears.
+      const { container, getByTestId } = renderButton();
+      const content = getByTestId("dock-launcher-content");
+
+      searchInput(container).blur();
+      fireEvent.focus(content);
+
+      expect(document.activeElement).toBe(searchInput(container));
+    });
+
+    it("still navigates when a key arrives with focus on the content", () => {
+      // Covers the frame before the refocus above lands: the catch-all handler
+      // on the content means Enter can never silently do nothing.
+      const onLaunchAgent = vi.fn();
+      const { container, getByTestId } = renderButton({ onLaunchAgent });
+      const content = getByTestId("dock-launcher-content");
+
+      const rows = options(container);
+      fireEvent.keyDown(content, { key: "ArrowDown" });
+      expect(selectedOption(container)).toBe(rows[1]);
+
+      // Back to Claude, the one launchable agent in this fixture.
+      fireEvent.keyDown(content, { key: "Home" });
+      fireEvent.keyDown(content, { key: "Enter" });
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+    });
+
+    it("does not double-handle a key the input already consumed", () => {
+      // The input's capture handler stops propagation, so the content catch-all
+      // must not move the selection a second time.
+      const { container } = renderButton();
+      const rows = options(container);
+
+      fireEvent.keyDown(searchInput(container), { key: "ArrowDown" });
+      expect(selectedOption(container)).toBe(rows[1]);
     });
 
     it("keeps focus in the input when the header around it is clicked", () => {
