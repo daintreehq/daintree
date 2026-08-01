@@ -267,8 +267,8 @@ import {
 } from "../sidebarWidth";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-function renderPane(props: { worktreeId?: string } = { worktreeId: "wt-1" }) {
-  return render(
+function paneJsx(props: { worktreeId?: string } = { worktreeId: "wt-1" }) {
+  return (
     <TooltipProvider>
       <FileBrowserPane
         id="fb-1"
@@ -281,6 +281,10 @@ function renderPane(props: { worktreeId?: string } = { worktreeId: "wt-1" }) {
       />
     </TooltipProvider>
   );
+}
+
+function renderPane(props: { worktreeId?: string } = { worktreeId: "wt-1" }) {
+  return render(paneJsx(props));
 }
 
 function classToken(el: Element, predicate: (cls: string) => boolean): string | undefined {
@@ -312,6 +316,10 @@ beforeEach(() => {
   treeState.rootError = null;
   treeState.isInitialLoading = false;
   treeState.captureSnapshot = () => null;
+  // Created once in `vi.hoisted`, so without these the manual-refresh call
+  // counts and the spinner state would leak between tests.
+  treeState.refresh.mockClear();
+  treeState.isRefreshing = false;
   mockPanel.browserSidebarCollapsed = undefined;
   mockPanel.browserViewerCollapsed = undefined;
   mockPanel.browserSelectedPath = undefined;
@@ -1778,5 +1786,111 @@ describe("FileBrowserPane row activation (#11496)", () => {
     await activate("src/app.ts");
 
     expect(notifyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("FileBrowserPane Refresh reachability and media wiring (#11586)", () => {
+  // Refresh used to live only in the tree header, which unmounts with the tree
+  // column — so the viewer-only layout had no way to refresh at all. The viewer
+  // now grows its own, gated so exactly one is reachable in every layout.
+  const AUDIO_ROW = {
+    path: "media/track.mp3",
+    name: "track.mp3",
+    isDirectory: false,
+    depth: 1,
+    isExpanded: false,
+    isLoading: false,
+  };
+
+  function refreshButtons(): HTMLElement[] {
+    return screen.queryAllByRole("button", { name: "Refresh" });
+  }
+
+  it("keeps exactly one Refresh reachable in each of the three layouts", () => {
+    const { rerender } = renderPane();
+
+    // Both columns: the tree header owns it, and the viewer must not add a
+    // second identical control beside it.
+    expect(refreshButtons()).toHaveLength(1);
+    const treeColumn = document.getElementById(
+      screen.getByTestId("file-browser-sidebar-toggle").getAttribute("aria-controls")!
+    )!;
+    expect(treeColumn.contains(refreshButtons()[0]!)).toBe(true);
+
+    // Viewer collapsed: the tree header is still mounted and still owns it.
+    mockPanel.browserViewerCollapsed = true;
+    rerender(paneJsx());
+    expect(refreshButtons()).toHaveLength(1);
+
+    // Sidebar collapsed: the tree header is gone, so the viewer's takes over —
+    // this is the layout that had no Refresh at all.
+    mockPanel.browserViewerCollapsed = undefined;
+    mockPanel.browserSidebarCollapsed = true;
+    rerender(paneJsx());
+    expect(screen.queryByTestId("file-tree-view")).toBeNull();
+    expect(refreshButtons()).toHaveLength(1);
+  });
+
+  it("runs the pane's manual refresh from the viewer with nothing selected", () => {
+    // A workspace-rooted browser has no change tick (#11482), so with the tree
+    // hidden and no file selected this button is the only freshness signal
+    // there is.
+    mockPanel.browserSidebarCollapsed = true;
+    renderPane();
+    expect(treeArgs.changeTick).toBeUndefined();
+
+    act(() => {
+      fireEvent.click(refreshButtons()[0]!);
+    });
+
+    expect(treeState.refresh).toHaveBeenCalledTimes(1);
+    expect(treeState.refresh).toHaveBeenCalledWith({ manual: true });
+  });
+
+  it("refetches the open media preview when the viewer's Refresh is pressed", async () => {
+    // The end-to-end shape of the bug: the pane merges its change tick and its
+    // manual nonce into one `revision` string, and the media branches ignore
+    // that string wholesale. Handing the nonce over separately is what makes
+    // this pass — passing `revision` through instead would refetch on every
+    // ambient worktree write, which is the thing the merge was avoiding.
+    let objectUrlSequence = 0;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      blob: () => Promise.resolve(new Blob(["x"])),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    URL.createObjectURL = vi.fn(() => `blob:app://daintree/pane-audio-${objectUrlSequence++}`);
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      treeState.rows = [...defaultRows, AUDIO_ROW];
+      mockPanel.browserSelectedPath = AUDIO_ROW.path;
+      mockPanel.browserSidebarCollapsed = true;
+      const { container } = renderPane();
+
+      await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+      const firstSrc = container.querySelector("audio")?.getAttribute("src");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(String(fetchMock.mock.calls[0]?.[0])).toContain("v=0");
+
+      act(() => {
+        fireEvent.click(refreshButtons()[0]!);
+      });
+
+      // The tree refreshes and the preview re-requests — one gesture, both
+      // halves, no rerender needed because the nonce is the pane's own state.
+      expect(treeState.refresh).toHaveBeenCalledWith({ manual: true });
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      expect(String(fetchMock.mock.calls[1]?.[0])).toContain("v=1");
+      await waitFor(() =>
+        expect(container.querySelector("audio")?.getAttribute("src")).not.toBe(firstSrc)
+      );
+      // Media never round-trips through the text-read IPC path.
+      expect(readMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

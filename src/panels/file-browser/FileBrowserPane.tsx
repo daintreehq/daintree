@@ -1018,6 +1018,13 @@ export function FileBrowserPane({
               fileName={selectedFileName}
               relativePath={selectedNode?.isDirectory === false ? (selectedPath ?? null) : null}
               revision={viewerRevision}
+              // Handed over separately from `revision` rather than pulled back
+              // out of it: the media previews may only re-fetch on the explicit
+              // half of that pair, and a merged string can't say which half
+              // moved (#11586).
+              manualRefreshNonce={manualRefreshNonce}
+              onRefresh={handleRefresh}
+              isRefreshing={isRefreshing}
               sidebarCollapsed={sidebarCollapsed}
               onToggleSidebar={handleToggleSidebar}
               treeSidebarId={treeSidebarId}
