@@ -819,8 +819,7 @@ export function PilotView() {
   // matches none of them is a true statement about the query rather than a claim
   // that the fleet is clear. `loading` and `unavailable` stay out — they already
   // render the skeleton and the can't-reach-host message.
-  const showEmpty =
-    (status.kind === "live" || status.kind === "stale") && groupNodes.length === 0;
+  const showEmpty = (status.kind === "live" || status.kind === "stale") && groupNodes.length === 0;
   const showSkeleton = useDeferredLoading(status.kind === "loading", UI_DOHERTY_THRESHOLD);
 
   return (
