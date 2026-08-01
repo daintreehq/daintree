@@ -345,6 +345,7 @@ export const BUILT_IN_ACTION_IDS = [
   "actions.persistedStores",
   "actions.search",
   "actions.getSchema",
+  "mcp.surface",
 
   // -- terminalLifecycleActions --
   "terminal.restart",

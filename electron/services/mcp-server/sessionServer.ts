@@ -83,6 +83,7 @@ import {
   ACTIONS_SEARCH_DEFAULT_LIMIT,
 } from "./tierAuth.js";
 import { buildToolCallResult } from "./toolCallResult.js";
+import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
@@ -376,32 +377,46 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     }
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    // Prefer a live fetch so runtime action-set changes (plugin enable/disable)
-    // are reflected. On failure (renderer bridge unavailable / timed out /
-    // destroyed) fall back to the last-known cached manifest instead of failing
-    // the whole tools/list (#9892). For pinned sessions (#7003) getCachedManifest
-    // always returns null, so they correctly fail closed rather than serve
-    // another window's tool surface. `=== null` (not `!manifest`) so an empty
-    // manifest — a valid zero-tool surface — is not misread as "unavailable".
-    //
-    // Snapshot the fallback BEFORE the await: getCachedManifest() reads the
-    // live session→WebContents map, and a pinned session can be torn down
-    // (map entry deleted) while requestManifest() is in flight. Reading it
-    // after the await would then see the session as unpinned and return the
-    // shared cache — another window's tool surface — defeating #7003. Taken
-    // synchronously here, the request is still in flight so the pin holds.
+  /**
+   * The action manifest this session's tool surface is built from.
+   *
+   * Prefer a live fetch so runtime action-set changes (plugin enable/disable)
+   * are reflected. On failure (renderer bridge unavailable / timed out /
+   * destroyed) fall back to the last-known cached manifest instead of failing
+   * the whole request (#9892). For pinned sessions (#7003) getCachedManifest
+   * always returns null, so they correctly fail closed rather than serve
+   * another window's tool surface. `=== null` (not `!manifest`) so an empty
+   * manifest — a valid zero-tool surface — is not misread as "unavailable".
+   *
+   * Snapshot the fallback BEFORE the await: getCachedManifest() reads the live
+   * session→WebContents map, and a pinned session can be torn down (map entry
+   * deleted) while requestManifest() is in flight. Reading it after the await
+   * would then see the session as unpinned and return the shared cache —
+   * another window's tool surface — defeating #7003. Taken synchronously here,
+   * the request is still in flight so the pin holds.
+   *
+   * Shared by `tools/list` and `mcp.surface` so the two cannot describe
+   * different manifests: a surface report built off a stale cache while the
+   * listing served a live fetch would be exactly the drift the report exists to
+   * detect (#11549).
+   */
+  const resolveManifest = async (
+    label: string
+  ): Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]> => {
     const cachedFallback = getCachedManifest();
-    let manifest: import("../../../shared/types/actions.js").ActionManifestEntry[];
     try {
-      manifest = await requestManifest();
+      return await requestManifest();
     } catch (err) {
       if (cachedFallback === null) {
         throw new McpError(ErrorCode.InternalError, "Action manifest unavailable");
       }
-      console.warn("[MCP] tools/list using cached manifest after live fetch failed:", err);
-      manifest = cachedFallback;
+      console.warn(`[MCP] ${label} using cached manifest after live fetch failed:`, err);
+      return cachedFallback;
     }
+  };
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const manifest = await resolveManifest("tools/list");
     const tier = sessionStore.getTier(sessionId);
     const tools = manifest
       .filter((entry) => shouldExposeTool(entry, tier))
@@ -841,6 +856,50 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: EXECUTION_ERROR_CODE,
               message: formatErrorMessage(err, `${actionId} failed`),
+            });
+          }
+        }
+
+        // Short-circuit: mcp.surface runs entirely in the main process (#11549).
+        // The action manifest entry (renderer) carries schema/tier/audit, but
+        // the answer cannot be built there: the caller's authorization tier is
+        // session state that only main holds, and the renderer has no idea
+        // which MCP session dispatched it. Building it here also means the
+        // report and `tools/list` apply one `shouldExposeTool` gate to one
+        // manifest, rather than a renderer-side enumeration that a post-dispatch
+        // filter then has to narrow back down (#11525).
+        //
+        // Read-only and never `danger: "confirm"` — it reports what this session
+        // was already told, so the strip shows a plain in-flight row.
+        if (actionId === MCP_SURFACE_TOOL_ID) {
+          emitToolCallStarted(false);
+          try {
+            const manifest = await resolveManifest(MCP_SURFACE_TOOL_ID);
+            // Build against the tier captured at dispatch start — the one the
+            // permission gate above actually authorized this call at — rather
+            // than re-reading after the await. Re-reading looks fresher but is
+            // not safe: `getTier` falls back to `workbench` once a revoked
+            // session's entry is gone, and workbench is a PEER of `external`,
+            // not a subset, so an external caller whose session was revoked
+            // mid-fetch would be handed a report naming workbench tools its own
+            // allowlist deliberately withholds. Using the gate's tier makes the
+            // report describe exactly what the caller was authorized against,
+            // and keeps it consistent with the audit record, which logs the
+            // same value. A tier that changes mid-call fires
+            // `notifications/tools/list_changed`, so a client re-reads anyway.
+            const result = buildSurfaceManifest(manifest, tier, app.getVersion());
+            outcome = { kind: "result", value: { ok: true, result } };
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) {
+              throw err;
+            }
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "mcp.surface failed"),
             });
           }
         }

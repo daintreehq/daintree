@@ -751,6 +751,7 @@ export class ActionService {
       keywords: definition.keywords?.slice(),
       ...(definition.mcpAnnotations ? { mcpAnnotations: { ...definition.mcpAnnotations } } : {}),
       ...(definition.mcpVisibility ? { mcpVisibility: definition.mcpVisibility } : {}),
+      ...(definition.deprecated ? { deprecated: { ...definition.deprecated } } : {}),
       ...(definition.pluginId ? { pluginId: definition.pluginId } : {}),
       ...(definition.examples ? { examples: structuredClone(definition.examples) } : {}),
       ...(definition.dangerRationale ? { dangerRationale: definition.dangerRationale } : {}),

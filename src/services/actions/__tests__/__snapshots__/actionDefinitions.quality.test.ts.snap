@@ -2708,6 +2708,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "title": "Set Verbose Logging",
   },
   {
+    "category": "introspection",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Report this session's tool surface as data: its authorization tier, a stable hash, and per-tool tier, kind, read-only and idempotency hints, and deprecation. Call it once at startup to check the surface matches what this client was built against, then re-read the hash to detect drift without diffing everything. It describes exactly what tools/list returns for this session.",
+    "examples": undefined,
+    "id": "mcp.surface",
+    "keywords": undefined,
+    "kind": "query",
+    "requiresArgs": false,
+    "title": "Get MCP Surface",
+  },
+  {
     "category": "app",
     "danger": "safe",
     "dangerRationale": undefined,

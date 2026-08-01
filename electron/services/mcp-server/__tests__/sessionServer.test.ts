@@ -3917,3 +3917,223 @@ describe("sessionServer introspection tier filtering", () => {
     }
   });
 });
+
+describe("mcp.surface short-circuit (#11549)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const SURFACE = "mcp.surface";
+
+  function surfaceManifest(): ActionManifestEntry[] {
+    return [
+      makeManifestEntry("actions.list"),
+      makeManifestEntry(SURFACE),
+      { ...makeManifestEntry("terminal.new"), kind: "command" as const },
+      { ...makeManifestEntry("git.commit"), kind: "command" as const, danger: "confirm" as const },
+      { ...makeManifestEntry("actions.persistedStores"), mcpVisibility: "hidden" as const },
+    ];
+  }
+
+  async function readSurface(
+    tier: "workbench" | "action" | "system" | "external",
+    overrides?: Partial<SessionServerDeps>
+  ) {
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore(tier),
+      requestManifest: vi.fn().mockResolvedValue(surfaceManifest()),
+      ...overrides,
+    });
+    const server = createSessionServer(`session-surface-${tier}`, deps);
+    await server.connect(makeMockTransport());
+    const result = await callTool(server, { name: SURFACE });
+    return { deps, server, result };
+  }
+
+  it("answers from main without dispatching to the renderer", async () => {
+    const dispatchAction = vi.fn();
+    const { result } = await readSurface("workbench", { dispatchAction });
+
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      manifestVersion: expect.any(Number),
+      appVersion: "0.0.0-test",
+      tier: "workbench",
+      hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+  });
+
+  // The one invariant the whole feature rests on: a report that disagreed with
+  // the listing would send clients chasing drift that does not exist, or hide
+  // drift that does.
+  it("reports exactly the tool ids tools/list serves at the same tier", async () => {
+    for (const tier of ["workbench", "action", "system", "external"] as const) {
+      const { server, result } = await readSurface(tier);
+      const listed = ((await listTools(server)) as { tools: Array<{ name: string }> }).tools
+        .map((t) => t.name)
+        .sort();
+      const reported = (result.structuredContent as { tools: Array<{ id: string }> }).tools.map(
+        (t) => t.id
+      );
+
+      // Two empty lists compare equal, so pin the listing to something real
+      // first — a short-circuit that returned nothing would otherwise pass.
+      // `mcp.surface` is the anchor: allowlisted at all four tiers, so its
+      // absence means the registration itself regressed.
+      expect(listed).toContain(SURFACE);
+      expect(listed.length).toBeGreaterThan(1);
+      expect(reported).toEqual(listed);
+    }
+  });
+
+  it("omits a tool hidden from tools/list even though its tier permits it", async () => {
+    const { result } = await readSurface("workbench");
+    const ids = (result.structuredContent as { tools: Array<{ id: string }> }).tools.map(
+      (t) => t.id
+    );
+
+    expect(ids).not.toContain("actions.persistedStores");
+  });
+
+  it("ignores a live grant, so the hash tracks the listing rather than a timer", async () => {
+    const sessionStore = fakeSessionStore("workbench");
+    const granted = { ...makeManifestEntry("git.commit"), kind: "command" as const };
+    const deps = fakeDeps({
+      sessionStore,
+      requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("actions.list"), granted]),
+    });
+    const server = createSessionServer("session-surface-grant", deps);
+    await server.connect(makeMockTransport());
+
+    const before = await callTool(server, { name: SURFACE });
+    sessionStore.grantCache.issueGrant("session-surface-grant", "git.commit");
+    const after = await callTool(server, { name: SURFACE });
+
+    const ids = (r: { structuredContent?: unknown }) =>
+      (r.structuredContent as { tools: Array<{ id: string }> }).tools.map((t) => t.id);
+    expect(ids(after)).toEqual(ids(before));
+    expect(ids(after)).not.toContain("git.commit");
+    expect((after.structuredContent as { hash: string }).hash).toBe(
+      (before.structuredContent as { hash: string }).hash
+    );
+    sessionStore.grantCache.dispose();
+  });
+
+  it("builds against the tier the call was authorized at, not a later re-read", async () => {
+    // A session revoked mid-fetch makes `getTier` fall back to `workbench`, and
+    // workbench is a PEER of `external`, not a subset. Re-reading the tier after
+    // the await would hand this external caller a workbench report naming tools
+    // its own allowlist withholds. The gate's tier is the only coherent answer.
+    const sessionStore = fakeSessionStore("external");
+    const deps = fakeDeps({
+      sessionStore,
+      requestManifest: vi.fn().mockImplementation(async () => {
+        vi.mocked(sessionStore.getTier).mockReturnValue("workbench");
+        return surfaceManifest();
+      }),
+    });
+    const server = createSessionServer("session-surface-revoked", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: SURFACE });
+    const reported = result.structuredContent as {
+      tier: string;
+      tools: Array<{ id: string }>;
+    };
+
+    expect(reported.tier).toBe("external");
+    // `git.commit` is workbench-unreachable but system-tier in-app, and is not
+    // on the external allowlist — the concrete tool the leak would have added.
+    expect(reported.tools.map((t) => t.id)).not.toContain("git.commit");
+  });
+
+  it("writes one audit record and settles the activity strip exactly once", async () => {
+    const appendAuditRecord = vi.fn();
+    const notifyToolCallStarted = vi.fn();
+    const notifyToolCallSettled = vi.fn();
+    await readSurface("workbench", {
+      appendAuditRecord,
+      notifyToolCallStarted,
+      notifyToolCallSettled,
+    });
+
+    expect(notifyToolCallStarted).toHaveBeenCalledTimes(1);
+    expect(notifyToolCallSettled).toHaveBeenCalledTimes(1);
+    expect(appendAuditRecord).toHaveBeenCalledTimes(1);
+    expect(appendAuditRecord.mock.calls[0]![0]).toMatchObject({
+      toolId: SURFACE,
+      tier: "workbench",
+      outcome: { kind: "result" },
+    });
+    // A read never asks the user for anything, so the strip must show a plain
+    // in-flight row rather than an awaiting-confirmation one.
+    expect(notifyToolCallStarted.mock.calls[0]![0]).toMatchObject({ danger: false });
+  });
+
+  it("audits a failed build as a throw rather than a silent success", async () => {
+    const appendAuditRecord = vi.fn();
+    const deps = fakeDeps({
+      requestManifest: vi.fn().mockRejectedValue(new Error("renderer gone")),
+      getCachedManifest: vi.fn(() => null),
+      appendAuditRecord,
+    });
+    const server = createSessionServer("session-surface-audit-fail", deps);
+    await server.connect(makeMockTransport());
+
+    await expect(callTool(server, { name: SURFACE })).rejects.toThrow();
+
+    expect(appendAuditRecord).toHaveBeenCalledTimes(1);
+    expect(appendAuditRecord.mock.calls[0]![0]).toMatchObject({
+      toolId: SURFACE,
+      outcome: { kind: "throw" },
+    });
+  });
+
+  it("falls back to the cached manifest when the live fetch fails", async () => {
+    const deps = fakeDeps({
+      requestManifest: vi.fn().mockRejectedValue(new Error("renderer gone")),
+      getCachedManifest: vi.fn(() => surfaceManifest()),
+    });
+    const server = createSessionServer("session-surface-cached", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: SURFACE });
+
+    expect(result.isError).not.toBe(true);
+    expect(
+      (result.structuredContent as { tools: Array<{ id: string }> }).tools.length
+    ).toBeGreaterThan(0);
+  });
+
+  it("fails closed for a pinned session whose renderer is gone", async () => {
+    // getCachedManifest returns null for pinned sessions (#7003), so there is no
+    // safe fallback — serving another window's surface would be worse than an error.
+    const deps = fakeDeps({
+      requestManifest: vi.fn().mockRejectedValue(new Error("renderer gone")),
+      getCachedManifest: vi.fn(() => null),
+    });
+    const server = createSessionServer("session-surface-pinned", deps);
+    await server.connect(makeMockTransport());
+
+    await expect(callTool(server, { name: SURFACE })).rejects.toThrow(/manifest unavailable/i);
+  });
+
+  it("is refused before the short-circuit when the tier does not permit it", async () => {
+    // The short-circuit sits AFTER the tier gate. Proven by driving a real
+    // denied call rather than by restating the allowlist: `git.commit` stands in
+    // for a tool this tier lacks, and the refusal must be the tier error, not a
+    // surface report.
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("workbench"),
+      requestManifest: vi.fn().mockResolvedValue(surfaceManifest()),
+    });
+    const server = createSessionServer("session-surface-denied", deps);
+    await server.connect(makeMockTransport());
+
+    const denied = await callTool(server, { name: "git.commit" });
+
+    expect(denied.isError).toBe(true);
+    expect(JSON.stringify(denied.content)).toContain(TIER_NOT_PERMITTED_CODE);
+  });
+});
