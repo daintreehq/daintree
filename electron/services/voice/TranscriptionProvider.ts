@@ -49,9 +49,10 @@ export interface TranscriptionProvider {
   /**
    * Whether the backend performs server-side voice-activity detection / turn
    * detection. When `false` the provider must drive utterance segmentation
-   * itself (e.g. OpenAI's fixed commit cadence, since `gpt-realtime-whisper`
-   * does not support server VAD). When `true` the backend emits finalized
-   * segments on its own, so no client-side commit timer exists.
+   * itself (e.g. OpenAI's client-side VAD side-chain, which drives the commit
+   * cadence because that provider sends `turn_detection: null`). When `true`
+   * the backend emits finalized segments on its own, so no client-side commit
+   * timer exists.
    */
   readonly hasServerVAD: boolean;
   start(settings: VoiceInputSettings): Promise<VoiceStartResult>;

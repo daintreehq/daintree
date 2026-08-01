@@ -2154,14 +2154,24 @@ export interface ElectronAPI extends GeneratedElectronAPI {
 export type MicPermissionStatus =
   "granted" | "denied" | "not-determined" | "restricted" | "unknown";
 
-export type VoiceTranscriptionModel = "gpt-realtime-whisper";
+/**
+ * The transcription model is single-valued: `gpt-live-transcribe` replaced the
+ * retired `gpt-realtime-whisper`, and the provider — not the model — is what
+ * selects the backend, so there is no user-facing model choice. Kept as a named
+ * type (rather than inlining the literal) so the persisted setting and this
+ * union stay recognizably one concept. Widening this to a real union would also
+ * mean replacing the single-target normalizer in `getVoiceSettings` with
+ * valid-choice preservation.
+ */
+export type VoiceTranscriptionModel = "gpt-live-transcribe";
 
 /**
  * Transcription backend. Each provider owns its own WebSocket protocol, audio
  * framing, and turn-detection behavior:
  *
- * - "openai": OpenAI Realtime (`gpt-realtime-whisper`). No server VAD, so the
- *   provider drives segmentation with a client-side commit cadence.
+ * - "openai": OpenAI Realtime (`gpt-live-transcribe`). Segmentation is driven by
+ *   a client-side VAD side-chain — see the `turn_detection` note in
+ *   `OpenAITranscriptionProvider`.
  * - "deepgram": Deepgram Nova-3 streaming. Native server-side VAD / endpointing,
  *   so no client commit timer is needed.
  */
@@ -2232,7 +2242,8 @@ export interface VoiceInputSettings {
    * Runtime-only. Context keyterms (custom dictionary + project/branch/terminal
    * context) assembled at session start and frozen for the session's lifetime.
    * Deepgram injects them into the streaming URL as repeated `keyterm=` params;
-   * OpenAI passes them through the transcription prompt. Populated by the
+   * OpenAI sends them as a native `keywords` array plus a bounded free-form
+   * prompt, both built from the same sanitized list. Populated by the
    * voice-input start handler — never persisted to the store or supplied by the
    * renderer. Reconnects reuse this snapshot.
    */

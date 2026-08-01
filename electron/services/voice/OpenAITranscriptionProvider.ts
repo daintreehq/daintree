@@ -13,7 +13,7 @@ import {
   type VoiceTranscriptionEvent,
 } from "./TranscriptionProvider.js";
 import type { VadWorkerInbound, VadWorkerOutbound } from "./openaiVadWorkerProtocol.js";
-import { formatKeytermPrompt } from "../voiceContextKeyterms.js";
+import { formatKeytermPrompt, sanitizeOpenAIKeywords } from "../voiceContextKeyterms.js";
 
 const P = "[VoiceTranscription:openai]";
 
@@ -32,21 +32,41 @@ function resolveVadWorkerPath(): string {
   return path.join(electronDir, "services", "voice", "openaiVadWorker.js");
 }
 
-// `gpt-realtime-whisper` is a transcription model — it must be passed as
+/**
+ * Wire shape of `session.audio.input.transcription` for `gpt-live-transcribe`.
+ *
+ * Hand-typed on purpose: the installed `openai` SDK's `AudioTranscription` has
+ * no `keywords` field and its `model` union predates `gpt-live-transcribe`, so
+ * there is nothing to lean on. Declaring `language?: never` makes reintroducing
+ * the deprecated singular field a compile error — `languages` and `language` are
+ * mutually exclusive on the wire and must never both be sent.
+ */
+type OpenAITranscriptionDelay = "minimal" | "low" | "medium" | "high" | "xhigh";
+
+interface OpenAITranscriptionConfig {
+  model: string;
+  languages: string[];
+  delay: OpenAITranscriptionDelay;
+  keywords?: string[];
+  prompt?: string;
+  language?: never;
+}
+
+// `gpt-live-transcribe` is a transcription model — it must be passed as
 // `transcription.model`, NOT as the realtime session `model` query param.
 // The session connects via `?intent=transcription` instead.
 const OPENAI_REALTIME_URL =
   process.env.DAINTREE_REALTIME_WS_URL ?? "wss://api.openai.com/v1/realtime?intent=transcription";
-const OPENAI_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
-// `gpt-realtime-whisper` does NOT support `transcription.prompt`. The GA
-// Realtime server hard-rejects a session.update that carries it with
-// "The 'prompt' parameter is not supported for this model" and kills the
-// session — it does NOT silently ignore it. Only `gpt-4o-transcribe` /
-// `gpt-4o-mini-transcribe` honor `prompt`, and neither is wired here, so keyterm
-// biasing is off for OpenAI. (Keyterms still feed Deepgram's URL params and stay
-// assembled on the snapshot for when a prompt-capable model is added.) Flip this
-// when wiring such a model.
-const MODEL_SUPPORTS_PROMPT: boolean = false;
+const OPENAI_TRANSCRIPTION_MODEL = "gpt-live-transcribe";
+// How long the server buffers audio before emitting a partial
+// `...transcription.delta`. Higher tiers cut word-error rate and partial
+// "flapping" at the cost of how quickly interim text appears. We render those
+// partials live as the user speaks, so a sluggish tier is directly felt —
+// hence "low". This does NOT trade away final accuracy or add latency after our
+// explicit `input_audio_buffer.commit`: the final `...completed` is transcribed
+// from the whole frozen buffer regardless. It is therefore a different axis to
+// VAD_MAX_SEGMENT_MS below (client-side segmentation), and the two do not fight.
+const OPENAI_TRANSCRIPTION_DELAY: OpenAITranscriptionDelay = "low";
 const CONNECT_TIMEOUT_MS = 10_000;
 // Backstop for the drain: if a committed segment's `conversation.item.done`
 // never arrives (server error, dropped frame), force-close after this long
@@ -71,13 +91,12 @@ const RECONNECT_MAX_ATTEMPTS = 5;
 const RECONNECT_INITIAL_MS = 150;
 const RECONNECT_MULTIPLIER = 1.5;
 const RECONNECT_CAP_MS = 3_000;
-// `gpt-realtime-whisper` does not support server VAD (`turn_detection` must be
-// null), so the server never auto-commits the input buffer. We drive
-// segmentation ourselves with a client-side VAD side-chain (Silero v5, on a
-// worker thread): commit at actual end-of-speech after a short holdover, and
-// clear the server buffer on speech onset so accumulated silence between
-// utterances isn't transcribed. This replaces the old blind 2s interval, which
-// cut words mid-pause and added up to ~2s of latency at end-of-speech.
+// We send `turn_detection: null`, so the server never auto-commits the input
+// buffer. We drive segmentation ourselves with a client-side VAD side-chain
+// (Silero v5, on a worker thread): commit at actual end-of-speech after a short
+// holdover, and clear the server buffer on speech onset so accumulated silence
+// between utterances isn't transcribed. This replaces the old blind 2s interval,
+// which cut words mid-pause and added up to ~2s of latency at end-of-speech.
 //
 // Backstop: while speech runs continuously past this window with no detected
 // pause, force a commit so the segment streams back and the server-side buffer
@@ -104,6 +123,67 @@ const TRANSIENT_OPENAI_CODES = new Set<string>(["rate_limit_exceeded", "server_e
 // (and to decide reconnect-vs-fatal for the brand-new failure modes we now
 // surface explicitly).
 const TRANSIENT_CLOSE_CODES = new Set<number>([1006, 1011, 1012, 1013]);
+
+/**
+ * Reduces a server-echoed `session` object to the diagnostic fields worth
+ * logging. Pure function — exported for unit testing.
+ *
+ * The echo replays the `prompt` and `keywords` we sent, which are built from the
+ * user's branch names, project terms, custom dictionary and terminal output.
+ * Main-process logs are readable by agents, so the contents must never be
+ * logged — only their presence and size. Everything else here (model,
+ * languages, delay, and above all whether `turn_detection` came back null) is
+ * the ground truth for diagnosing a session that acks commits but transcribes
+ * nothing.
+ */
+export function summarizeEchoedSession(session: unknown): Record<string, unknown> {
+  if (typeof session !== "object" || session === null) return { session: "(absent)" };
+
+  const input = (session as { audio?: { input?: unknown } }).audio?.input;
+  if (typeof input !== "object" || input === null) return { sessionShape: "(no audio.input)" };
+
+  const { transcription, turn_detection: turnDetection } = input as {
+    transcription?: unknown;
+    turn_detection?: unknown;
+  };
+  const t = (typeof transcription === "object" && transcription !== null ? transcription : {}) as {
+    model?: unknown;
+    languages?: unknown;
+    delay?: unknown;
+    keywords?: unknown;
+    prompt?: unknown;
+  };
+
+  return {
+    // Type-guarded rather than forwarded raw: an unexpected echo shape (an
+    // object or a long string where a short scalar belongs) must not become a
+    // channel for arbitrary content reaching the log.
+    model: shortScalar(t.model),
+    // Bounded before mapping: we only ever send one language, so a large echoed
+    // array is malformed and must not drive unbounded work here.
+    languages: Array.isArray(t.languages)
+      ? t.languages.slice(0, MAX_LOGGED_LANGUAGES).map(shortScalar)
+      : shortScalar(t.languages),
+    delay: shortScalar(t.delay),
+    biasTermCount: Array.isArray(t.keywords) ? t.keywords.length : 0,
+    hasPrompt: typeof t.prompt === "string" && t.prompt.length > 0,
+    turnDetectionNull: turnDetection === null,
+  };
+}
+
+/**
+ * Renders an echoed config value as a short scalar for logging. Anything that
+ * isn't a small string/number/boolean becomes a type marker, so a malformed or
+ * oversized echo can't smuggle content into the log.
+ */
+const MAX_LOGGED_LANGUAGES = 8;
+
+function shortScalar(value: unknown): string | number | boolean {
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "string") return value.length <= 64 ? value : `(string:${value.length})`;
+  if (value === null || value === undefined) return "(unset)";
+  return `(${Array.isArray(value) ? "array" : typeof value})`;
+}
 
 /**
  * Classifies an OpenAI Realtime `error` event payload into a structured
@@ -403,21 +483,37 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       }
       this.startHeartbeat(connection, mySessionId);
       logInfo(`${P} WebSocket opened, sending session.update`);
-      // Keyterm biasing via `transcription.prompt`, assembled at session start
-      // and frozen on the settings snapshot, so reconnects reuse the same prompt.
-      // Only sent when the model supports it (see MODEL_SUPPORTS_PROMPT) —
-      // `gpt-realtime-whisper` hard-rejects a `prompt` field, so we omit it.
-      const keytermPrompt = MODEL_SUPPORTS_PROMPT
-        ? formatKeytermPrompt([...(settings.keyterms ?? [])])
-        : "";
-      // `turn_detection` MUST be explicitly `null` for `gpt-realtime-whisper`
-      // (VAD is not supported for this model). It is not enough to omit it:
-      // when absent the server applies a default VAD that this model can't
-      // use, and then silently produces no transcription — it still acks
-      // `input_audio_buffer.committed` but emits no `conversation.item.added`
-      // / `conversation.item.done`. With it set to `null`, each manual commit
-      // yields a transcribed item. (An explicit non-null `turn_detection`
-      // block, by contrast, is hard-rejected with an error event.)
+      // Keyterm biasing, assembled at session start and frozen on the settings
+      // snapshot, so a reconnect deterministically rebuilds the same fields.
+      // `keywords` takes the literal terms; `prompt` carries the same terms as
+      // bounded free-form context. Both derive from ONE sanitized list so a term
+      // rejected from `keywords` can't sneak back in via `prompt`.
+      const keywords = sanitizeOpenAIKeywords(settings.keyterms ?? []);
+      const keytermPrompt = formatKeytermPrompt(keywords);
+      // `languages` (array) supersedes the deprecated singular `language`. Never
+      // send both. Our settings hold a single code, so this is a 1-element array.
+      // Type-checked, not just nullish-checked: persisted settings are cast, not
+      // validated, and the setter takes an arbitrary patch — a non-string here
+      // would throw inside this `open` handler, outside any try/catch.
+      const language = typeof settings.language === "string" ? settings.language.trim() : "";
+      const languages = [language || "en"];
+      // `turn_detection` MUST be explicitly `null`. It is not enough to omit it:
+      // when absent the server applies a default VAD, and then silently produces
+      // no transcription — it still acks `input_audio_buffer.committed` but
+      // emits no `conversation.item.added` / `conversation.item.done`. With it
+      // set to `null`, each manual commit yields a transcribed item. Whether
+      // `gpt-live-transcribe` would accept a server-VAD block is unverified and
+      // deliberately not attempted here: every documented example for this model
+      // still shows `null`, and our client-side Silero side-chain is the tested
+      // path. Revisit only as its own change, with the error response checked.
+      const transcription: OpenAITranscriptionConfig = {
+        model: OPENAI_TRANSCRIPTION_MODEL,
+        languages,
+        delay: OPENAI_TRANSCRIPTION_DELAY,
+        // Omit rather than send `[]` / `""` when nothing survived sanitization.
+        ...(keywords.length > 0 ? { keywords } : {}),
+        ...(keytermPrompt ? { prompt: keytermPrompt } : {}),
+      };
       const sessionUpdate = {
         type: "session.update",
         session: {
@@ -425,20 +521,28 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           audio: {
             input: {
               format: { type: "audio/pcm", rate: 24000 },
-              transcription: {
-                model: OPENAI_TRANSCRIPTION_MODEL,
-                language: settings.language || "en",
-                ...(keytermPrompt ? { prompt: keytermPrompt } : {}),
-              },
+              transcription,
               turn_detection: null,
             },
           },
         },
       };
-      // Log the exact payload — the session config (especially the explicit
-      // `turn_detection: null`) is the most common cause of "commits acked
-      // but no transcription items" regressions.
-      logInfo(`${P} → session.update`, { session: sessionUpdate.session });
+      // Log the session SHAPE, never its contents — `keywords`/`prompt` carry
+      // the user's branch names, project terms, custom dictionary and terminal
+      // identifiers, and these logs are readable by agents. The fields below are
+      // the ones that actually cause "commits acked but no transcription items"
+      // regressions (especially the explicit `turn_detection: null`).
+      // `biasTermCount`, not `keywordCount`: the logger redacts any key whose
+      // name contains "key", which would blank the count and defeat the whole
+      // diagnostic.
+      logInfo(`${P} → session.update`, {
+        model: transcription.model,
+        languages: transcription.languages,
+        delay: transcription.delay,
+        biasTermCount: keywords.length,
+        hasPrompt: keytermPrompt.length > 0,
+        turnDetectionNull: sessionUpdate.session.audio.input.turn_detection === null,
+      });
       try {
         connection.send(JSON.stringify(sessionUpdate));
       } catch (err) {
@@ -682,14 +786,15 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   ): void {
     switch (type) {
       case "session.created":
-        logInfo(`${P} ← session.created`, { session: payload.session });
+        logInfo(`${P} ← session.created`, summarizeEchoedSession(payload.session));
         return;
 
       case "session.updated":
         this.clearConnectTimeout();
         // Log the session config the server actually applied — this is ground
         // truth for whether `turn_detection`, model, and format took effect.
-        logInfo(`${P} ← session.updated — session ready`, { session: payload.session });
+        // Summarized, not raw: the echo replays our `prompt`/`keywords`.
+        logInfo(`${P} ← session.updated — session ready`, summarizeEchoedSession(payload.session));
         if (this.preConnectBuffer.length > 0 && this.connection) {
           logInfo(`${P} Flushing ${this.preConnectBuffer.length} buffered audio chunks`);
           // Detach the buffer before flushing so its state stays consistent even
@@ -723,9 +828,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
       case "input_audio_buffer.speech_started":
       case "input_audio_buffer.speech_stopped":
-        // VAD signals — not expected for gpt-realtime-whisper (no turn
-        // detection), but log them if they appear; their presence would mean
-        // the server applied a VAD default we didn't ask for.
+        // VAD signals — not expected, since we send `turn_detection: null`, but
+        // log them if they appear; their presence would mean the server applied
+        // a VAD default we didn't ask for.
         logInfo(`${P} ← ${type}`, { payload });
         return;
 
