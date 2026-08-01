@@ -106,7 +106,11 @@ export function FleetPickerContent({
 
   return (
     <div className="flex flex-1 flex-col min-h-0" data-testid={`${testIdPrefix}-root`}>
-      <div className="px-4 py-3 border-b border-daintree-border shrink-0">
+      {/* Hand-rolled rather than `AppPaletteDialog.Header`: this content also
+          mounts inside the fleet-count popover, which has no palette header of
+          its own. Padding and rule token track the palette header so the two
+          hosts still read as the same surface. */}
+      <div className="px-3 pt-2 pb-1 border-b border-border-strong shrink-0">
         <AppPaletteDialog.Input
           inputPrefix={
             <Search className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />

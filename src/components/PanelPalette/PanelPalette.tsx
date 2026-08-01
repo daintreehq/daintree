@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
+import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
@@ -168,7 +169,7 @@ export function PanelPalette({
       elements.push(
         <div
           key={`header-${key}`}
-          className="px-3 pt-3 pb-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none"
+          className={cn(PALETTE_SECTION_LABEL_CLASS, "px-3 pt-3 pb-1")}
           aria-hidden="true"
         >
           {SECTION_LABELS[key]}

@@ -38,11 +38,27 @@ import {
 
 export { KBD_CLASS };
 
+/**
+ * One width for the whole palette family. Palettes are opened from the same
+ * keyboard reflex and often in sequence, so a per-palette width reads as the
+ * surface jumping around rather than as a deliberate size. Popover-hosted
+ * palettes take this too, which is what keeps the project switcher identical
+ * whether it opens as a dropdown or as a modal.
+ */
+export const PALETTE_SURFACE_WIDTH = "w-[484px] max-w-[calc(100vw-2rem)]";
+
 export interface AppPaletteDialogProps {
   isOpen: boolean;
   onClose: () => void;
   children: React.ReactNode;
   ariaLabel: string;
+  /**
+   * Extra classes for the palette box — sizing and layout only. The surface
+   * itself is NOT overridable from here: `surface-overlay` is a handwritten
+   * rule emitted after the generated utilities, so a `bg-*` or `border-*`
+   * passed in loses the cascade and silently does nothing. That is deliberate —
+   * one material for the whole family is the point.
+   */
   className?: string;
 }
 
@@ -235,7 +251,16 @@ export function AppPaletteDialog({
         aria-label={ariaLabel}
         tabIndex={-1}
         className={cn(
-          "w-full max-w-xl mx-4 bg-surface-dialog border border-border-default rounded-[var(--radius-xl)] shadow-[var(--theme-shadow-dialog)] overflow-hidden origin-top",
+          // `surface-overlay` is the floating-surface material shared with every
+          // Radix popover, so a palette looks identical whether it opens as a
+          // modal or as a dropdown (the project switcher renders both). It also
+          // carries the border and the performance-mode / light-polarity
+          // fallbacks, which a hand-rolled `bg-*` + `border-*` pair does not.
+          // `shadow-modal` sits one step above the popovers' `shadow-overlay`:
+          // same inset top lip, deeper drop, because this one floats over a
+          // scrim.
+          PALETTE_SURFACE_WIDTH,
+          "mx-4 surface-overlay shadow-modal rounded-[var(--radius-lg)] overflow-hidden origin-top",
           // Tailwind v4 scale-* emits the individual `scale` property, which
           // `transform` in a transition list does NOT cover — the palette
           // zoom only animates when `scale` is listed explicitly.
@@ -249,8 +274,11 @@ export function AppPaletteDialog({
             transitionDuration: isVisible
               ? `${UI_PALETTE_ENTER_DURATION}ms`
               : `${UI_PALETTE_EXIT_DURATION}ms`,
+            // No `--scroll-shadow-color` here: `surface-overlay` sets it per
+            // polarity (sidebar plane on dark, elevated on light). Overriding it
+            // inline would repaint the scroll fade in a colour the surface no
+            // longer uses.
             transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
-            "--scroll-shadow-color": "var(--color-surface-dialog)",
           } as CSSProperties
         }
         onClick={(e) => e.stopPropagation()}
@@ -291,7 +319,11 @@ AppPaletteDialog.Header = function AppPaletteHeader({
     <div
       {...{ [PALETTE_HEADER_ATTR]: "" }}
       className={cn(
-        "relative overflow-hidden px-3 pt-2 pb-1 border-b border-border-strong",
+        // `pb-2`, not `pb-1`: the project switcher and pilot both overrode the
+        // tighter default to give the search box room above the rule, and they
+        // are the two surfaces the family is modelled on. Promoted to the
+        // default so every palette breathes the same.
+        "relative overflow-hidden px-3 pt-2 pb-2 border-b border-border-strong",
         className
       )}
     >
@@ -346,6 +378,20 @@ const BODY_NAVIGATION_KEYS = new Set([
   "Backspace",
 ]);
 
+/**
+ * Hairline between sections inside a palette body. Same weight and token as the
+ * header and footer rules, so a palette's internal structure reads as one
+ * system instead of a stack of differently-drawn breaks. Accepts the usual div
+ * props — `hidden` is the one palettes actually reach for, to drop a separator
+ * while a search collapses its sections into a single ranked list.
+ */
+AppPaletteDialog.Divider = function AppPaletteDivider({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) {
+  return <div aria-hidden="true" className={cn("h-px bg-border-strong", className)} {...props} />;
+};
+
 interface AppPaletteBodyProps {
   children: React.ReactNode;
   className?: string;
@@ -370,7 +416,11 @@ interface AppPaletteBodyProps {
 AppPaletteDialog.Body = function AppPaletteBody({
   children,
   className,
-  maxHeight = "max-h-[50vh]",
+  // 60vh, matching what the project switcher and pilot already asked for. The
+  // dialog is top-anchored at 15vh, so header + 60vh + footer still clears the
+  // viewport, and a shorter default made otherwise-identical palettes scroll at
+  // different list lengths.
+  maxHeight = "max-h-[60vh]",
   ariaLabel,
   activeDescendant,
   onNavigationKeyDown,
@@ -506,6 +556,19 @@ function DefaultKeyboardHints() {
   );
 }
 
+// The search box IS the palette, not a form field sitting inside one, so it
+// takes a recessed wash over the dialog surface rather than the standalone
+// `surface-input` fill. Alpha-based, so it reads the same over a dialog and
+// over the dock launcher's popover.
+//
+// The focus lift that pairs with it is deliberately neutral rather than accent:
+// the selection rail in `PALETTE_ROW_CLASS` is this region's single accent
+// anchor, and the input holds focus the whole time a palette is open, so an
+// accent ring here would be a permanently competing signal. Tailwind needs the
+// variants written out at each use site, so they live inline below.
+const PALETTE_INPUT_SURFACE =
+  "bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)]";
+
 interface AppPaletteInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   inputRef?: React.Ref<HTMLInputElement>;
   /**
@@ -528,8 +591,9 @@ AppPaletteDialog.Input = function AppPaletteInput({
       <div
         className={cn(
           "flex w-full items-center gap-1.5 pl-2 pr-3 py-1.5",
-          "bg-surface-input border border-daintree-border rounded-[var(--radius-md)]",
-          "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
+          PALETTE_INPUT_SURFACE,
+          // Neutral focus — see `PALETTE_INPUT_SURFACE`.
+          "focus-within:border-border-interactive focus-within:ring-1 focus-within:ring-border-interactive/30"
         )}
       >
         {inputPrefix}
@@ -553,9 +617,10 @@ AppPaletteDialog.Input = function AppPaletteInput({
       type="text"
       className={cn(
         "w-full px-3 py-2 text-sm",
-        "bg-surface-input border border-daintree-border rounded-[var(--radius-md)]",
+        PALETTE_INPUT_SURFACE,
         "text-daintree-text placeholder:text-text-placeholder",
-        "focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/20",
+        // Neutral focus — see `PALETTE_INPUT_SURFACE`.
+        "focus:outline-hidden focus:border-border-interactive focus:ring-1 focus:ring-border-interactive/30",
         className
       )}
       {...props}

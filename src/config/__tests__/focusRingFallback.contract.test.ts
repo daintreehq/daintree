@@ -377,7 +377,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     file: "src/components/ui/AppPaletteDialog.tsx",
     fragment: "focus:outline-hidden focus:border-transparent focus:ring-0",
     reason:
-      "Parent shows focus: wrapper at line 421 has `focus-within:border-daintree-accent focus-within:ring-1`",
+      "Parent shows focus: the prefixed-input wrapper carries `focus-within:border-border-interactive focus-within:ring-1`. Neutral rather than accent by design — the palette's selection rail owns the region's single accent anchor.",
   },
   {
     file: "src/components/Settings/ColorSchemePicker.tsx",

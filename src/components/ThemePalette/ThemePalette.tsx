@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useAppThemeStore, injectSchemeToDOM } from "@/store/appThemeStore";
@@ -40,10 +41,13 @@ function ThemeListItem({
       role="option"
       aria-selected={isSelected}
       className={cn(
-        "group relative w-full text-left px-3 py-2 rounded-[var(--radius-md)] border flex items-center gap-3 transition-colors",
-        "border-daintree-border/40 hover:border-daintree-border/60 hover:bg-surface",
-        isSelected &&
-          "border-overlay bg-overlay-raised text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:bg-daintree-accent before:content-['']"
+        // Was a hand-rolled copy of the shared row: a visible resting outline,
+        // a JS-ternary selected state and a rail that popped instead of fading.
+        // `PALETTE_ROW_CLASS` is the same visual driven off `aria-selected`, so
+        // this row now matches every other palette in the family.
+        PALETTE_ROW_CLASS,
+        "group w-full text-left px-3 py-2 rounded-[var(--radius-md)] flex items-center gap-3",
+        "hover:bg-overlay-subtle"
       )}
     >
       <PaletteStrip scheme={scheme} />

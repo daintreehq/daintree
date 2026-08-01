@@ -103,8 +103,9 @@ vi.mock("@/components/ui/AppPaletteDialog", async () => {
   Dialog.Input = Input;
   Dialog.Body = Body;
   Dialog.Footer = Footer;
+  Dialog.Divider = (props: React.HTMLAttributes<HTMLDivElement>) => <div {...props} />;
 
-  return { AppPaletteDialog: Dialog, KBD_CLASS: "kbd" };
+  return { AppPaletteDialog: Dialog, KBD_CLASS: "kbd", PALETTE_SURFACE_WIDTH: "w-[484px]" };
 });
 
 vi.mock("@/components/ui/popover", () => ({
