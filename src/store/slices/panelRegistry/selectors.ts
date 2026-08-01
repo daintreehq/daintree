@@ -133,6 +133,40 @@ export function getNarrowPanels(
   return _prevNarrowResult;
 }
 
+let _prevSessionLostById: Record<string, PanelInstance> | null = null;
+let _prevSessionLostResult = false;
+
+/**
+ * True when more than one PTY panel is still carrying an unacknowledged
+ * `sessionLostOnRestore` signal — the gate for offering "Dismiss all" on the
+ * session-lost banner (issue #11589). Below the threshold the per-pane close
+ * control already covers the whole set, so the extra button would be noise.
+ *
+ * Reads `panelsById` directly rather than an ordered id list: during a
+ * hydration/spawn batch the carrier is published before ids are appended, so
+ * an id-driven scan can miss freshly restored panels (#9655) — precisely the
+ * moment a restart leaves many panes flagged at once.
+ *
+ * Memoized on the `panelsById` identity (same pattern as
+ * `selectOrderedTerminals`) so many flagged panes share one scan per store
+ * snapshot, and short-circuits at the second hit.
+ */
+export function selectHasMultipleSessionLost(panelsById: Record<string, PanelInstance>): boolean {
+  if (panelsById === _prevSessionLostById) {
+    return _prevSessionLostResult;
+  }
+  let seen = 0;
+  for (const panel of Object.values(panelsById)) {
+    if (isPtyPanel(panel) && panel.sessionLostOnRestore) {
+      seen += 1;
+      if (seen > 1) break;
+    }
+  }
+  _prevSessionLostById = panelsById;
+  _prevSessionLostResult = seen > 1;
+  return _prevSessionLostResult;
+}
+
 export function _resetSelectorCacheForTests(): void {
   _prevById = null;
   _prevIds = null;
@@ -140,4 +174,6 @@ export function _resetSelectorCacheForTests(): void {
   _prevNarrowById = null;
   _prevNarrowIds = null;
   _prevNarrowResult = null;
+  _prevSessionLostById = null;
+  _prevSessionLostResult = false;
 }

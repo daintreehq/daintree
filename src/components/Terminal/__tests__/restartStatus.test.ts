@@ -266,12 +266,11 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
     expect(result).toEqual({ type: "none" });
   });
 
-  it("returns none once dismissed — the banner is dismissable (issue #10823)", () => {
-    const result = getRestartBannerVariant({
-      ...restored,
-      sessionLostOnRestore: true,
-      dismissedSessionLost: true,
-    });
+  it("returns none once dismissal consumed the signal (issues #10823, #11589)", () => {
+    // The banner is dismissable, and dismissing it clears `sessionLostOnRestore`
+    // in the panel store rather than setting a second flag — so a cleared signal
+    // is exactly what an acknowledged banner looks like to this policy.
+    const result = getRestartBannerVariant({ ...restored, sessionLostOnRestore: undefined });
     expect(result).toEqual({ type: "none" });
   });
 
@@ -286,14 +285,15 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
   });
 
   it("surfaces exit-error after the lost-session banner is dismissed (#10823)", () => {
-    // The dedicated dismiss flag means acknowledging the lost session must not
-    // silently suppress a crash banner for the fresh session that followed.
+    // Acknowledging the lost session clears only `sessionLostOnRestore` and
+    // never touches `dismissedRestartPrompt`, so a crash of the fresh session
+    // that followed must still get its own banner.
     const result = getRestartBannerVariant({
       ...restored,
       isExited: true,
       exitCode: 1,
-      sessionLostOnRestore: true,
-      dismissedSessionLost: true,
+      sessionLostOnRestore: undefined,
+      dismissedRestartPrompt: false,
     });
     expect(result).toEqual({ type: "exit-error", exitCode: 1 });
   });

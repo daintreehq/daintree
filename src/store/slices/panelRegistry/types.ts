@@ -269,6 +269,20 @@ export interface PanelRegistrySlice {
   clearReconnectError: (id: string) => void;
   setScrollbackRestoreError: (id: string, error: TerminalScrollbackRestoreError) => void;
   clearScrollbackRestoreError: (id: string) => void;
+  /**
+   * Acknowledge the "Session no longer reachable" signal for one panel by
+   * clearing `sessionLostOnRestore` (issue #11589). Lives in the store rather
+   * than component state so the acknowledgement survives the unmount a
+   * worktree switch causes.
+   */
+  dismissSessionLost: (id: string) => void;
+  /**
+   * Acknowledge the session-lost signal on every PTY panel carrying it, across
+   * all worktrees in this project view (issue #11589). Scoping to the active
+   * worktree would leave banners waiting behind a worktree switch — the exact
+   * behaviour this fixes.
+   */
+  dismissAllSessionLost: () => void;
 
   // Tab grouping methods - TabGroup is the single source of truth
   /** Get all panels in a group, ordered by group's panelIds array. Location param is deprecated. */

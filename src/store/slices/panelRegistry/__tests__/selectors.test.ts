@@ -6,6 +6,7 @@ import {
   getNarrowPanels,
   getRenderablePanel,
   isPanelRenderEligible,
+  selectHasMultipleSessionLost,
 } from "../selectors";
 
 // Adapter selectors that narrow the legacy `TerminalInstance` carrier to the
@@ -158,5 +159,57 @@ describe("getNarrowPanels", () => {
     const second = getNarrowPanels({ a: panel("a") }, ids);
     expect(second).not.toBe(first);
     expect(second.map((p) => p.id)).toEqual(["a"]);
+  });
+});
+
+// Gate for the banner's "Dismiss all" control (#11589). Scans the carrier
+// rather than an ordered id list so a hydration batch that hasn't appended its
+// ids yet still counts — the post-restart burst this control exists for.
+describe("selectHasMultipleSessionLost", () => {
+  const lost = (id: string, overrides: Partial<PanelInstance> = {}) =>
+    panel(id, { sessionLostOnRestore: true, ...overrides } as Partial<PanelInstance>);
+
+  it("is false with no flagged panels", () => {
+    expect(selectHasMultipleSessionLost({ a: panel("a"), b: panel("b") })).toBe(false);
+  });
+
+  it("is false with exactly one flagged panel", () => {
+    expect(selectHasMultipleSessionLost({ a: lost("a"), b: panel("b") })).toBe(false);
+  });
+
+  it("is true with two flagged panels", () => {
+    expect(selectHasMultipleSessionLost({ a: lost("a"), b: lost("b") })).toBe(true);
+  });
+
+  it("counts flagged panels across different worktrees", () => {
+    expect(
+      selectHasMultipleSessionLost({
+        a: lost("a", { worktreeId: "wt-1" }),
+        b: lost("b", { worktreeId: "wt-2" }),
+      })
+    ).toBe(true);
+  });
+
+  it("ignores non-PTY panels carrying the field", () => {
+    expect(
+      selectHasMultipleSessionLost({
+        a: lost("a"),
+        b: lost("b", { kind: "browser" }),
+      })
+    ).toBe(false);
+  });
+
+  it("recomputes when the carrier identity changes", () => {
+    expect(selectHasMultipleSessionLost({ a: lost("a"), b: lost("b") })).toBe(true);
+    expect(selectHasMultipleSessionLost({ a: lost("a") })).toBe(false);
+  });
+
+  it("returns the cached verdict for an identity-equal carrier", () => {
+    const byId = { a: lost("a"), b: lost("b") };
+    expect(selectHasMultipleSessionLost(byId)).toBe(true);
+    // Mutating in place is invisible to the memo — proves the cache was hit
+    // rather than the scan re-running.
+    delete (byId as Record<string, PanelInstance>).b;
+    expect(selectHasMultipleSessionLost(byId)).toBe(true);
   });
 });
