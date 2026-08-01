@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode, LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ActionManifestEntry, ActionId } from "../../../../shared/types/actions.js";
 
@@ -29,10 +29,18 @@ import {
   unwrapDispatchResult,
   RESOLVED_WORKSPACE_META_KEY,
   withResolvedWorkspace,
+  MCP_SERVER_INSTRUCTIONS,
+  MCP_SERVER_INSTRUCTIONS_MAX_BYTES,
+  TIER_ALLOWLISTS,
 } from "../shared.js";
 import type { DispatchedWorkspaceRef } from "../shared.js";
 import { TOOL_RESULT_TEXT_MAX_BYTES } from "../toolCallResult.js";
-import { isTierPermitted, shouldExposeTool } from "../tierAuth.js";
+import {
+  isTierPermitted,
+  shouldExposeTool,
+  ACTIONS_SEARCH_TOOL_ID,
+  ACTIONS_GET_SCHEMA_TOOL_ID,
+} from "../tierAuth.js";
 import { SessionBindingError, RendererBridgeUnavailableError } from "../rendererBridge.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
@@ -202,6 +210,40 @@ async function listTools(server: ReturnType<typeof createSessionServer>) {
   ) as Promise<{ tools: Array<{ name: string }> }>;
 }
 
+/**
+ * Drive the SDK's own `initialize` handler (#11541). The handler under test is
+ * registered by the base `Server` constructor rather than by us, so this proves
+ * the constructor option actually reaches the wire result — an assertion on the
+ * options object we passed in would pass even if the SDK stopped forwarding it.
+ */
+async function initializeServer(server: ReturnType<typeof createSessionServer>) {
+  const handlers = (
+    server as unknown as {
+      _requestHandlers: Map<string, (req: unknown, extra: unknown) => Promise<unknown>>;
+    }
+  )._requestHandlers;
+  const handler = handlers.get("initialize");
+  if (!handler) throw new Error("initialize handler not found");
+  return handler(
+    {
+      method: "initialize",
+      params: {
+        protocolVersion: LATEST_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: "test-client", version: "1.0.0" },
+      },
+      jsonrpc: "2.0",
+      id: 1,
+    },
+    {
+      signal: new AbortController().signal,
+      _meta: {},
+      sendNotification: vi.fn(),
+      requestId: 1,
+    }
+  ) as Promise<{ instructions?: string; serverInfo: { name: string; version: string } }>;
+}
+
 function makeManifestEntry(id: string): ActionManifestEntry {
   return {
     id: id as ActionId,
@@ -216,6 +258,71 @@ function makeManifestEntry(id: string): ActionManifestEntry {
     inputSchema: { type: "object", properties: {} },
   };
 }
+
+describe("sessionServer initialize instructions", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns the instructions through the SDK's own initialize result", async () => {
+    const server = createSessionServer("session-instructions", fakeDeps());
+    const result = await initializeServer(server);
+
+    expect(result.instructions).toBe(MCP_SERVER_INSTRUCTIONS);
+    // Proves this is the SDK-generated initialize result rather than a handler
+    // of ours that happens to echo the constant back.
+    expect(result.serverInfo).toMatchObject({ name: "Daintree" });
+  });
+
+  it("sends the same instructions regardless of session tier", async () => {
+    // Instructions are sent once and have no update notification, so they must
+    // not encode a tier that can elevate or decay later in the same session.
+    const perTier = await Promise.all(
+      (Object.keys(TIER_ALLOWLISTS) as Array<keyof typeof TIER_ALLOWLISTS>).map(async (tier) => {
+        const server = createSessionServer(
+          `session-${tier}`,
+          fakeDeps({ sessionStore: fakeSessionStore(tier) })
+        );
+        return (await initializeServer(server)).instructions;
+      })
+    );
+
+    expect(new Set(perTier).size).toBe(1);
+  });
+
+  it("stays within the authored byte budget, itself under the 2 KiB client cap", () => {
+    // Claude Code truncates at 2 KiB and the authorization paragraph is last,
+    // so overflow silently drops the denial guidance rather than erroring.
+    expect(Buffer.byteLength(MCP_SERVER_INSTRUCTIONS, "utf8")).toBeLessThanOrEqual(
+      MCP_SERVER_INSTRUCTIONS_MAX_BYTES
+    );
+    expect(MCP_SERVER_INSTRUCTIONS_MAX_BYTES).toBeLessThan(2 * 1024);
+  });
+
+  it("names every tier a session can hold", () => {
+    // Adding a tier without describing it here leaves the model unable to
+    // reason about a denial it can now receive.
+    for (const tier of Object.keys(TIER_ALLOWLISTS)) {
+      expect(MCP_SERVER_INSTRUCTIONS).toContain(tier);
+    }
+    expect(MCP_SERVER_INSTRUCTIONS).toContain(TIER_NOT_PERMITTED_CODE);
+  });
+
+  it("points discovery at the live introspection tool ids", () => {
+    // The ids are literal prose, so a rename that skips this text fails here
+    // instead of silently telling every connecting model to call a dead name.
+    expect(MCP_SERVER_INSTRUCTIONS).toContain(ACTIONS_SEARCH_TOOL_ID);
+    expect(MCP_SERVER_INSTRUCTIONS).toContain(ACTIONS_GET_SCHEMA_TOOL_ID);
+  });
+
+  it("does not claim unlisted tools are callable", () => {
+    // #11582 tried a discoverable-but-unlisted surface and #11585 removed it:
+    // withholding a name is equivalent to revoking it. Instructions that
+    // promised otherwise would send models probing for names that cannot exist.
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("do not invent tool names");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("does not reveal a deferred catalog");
+  });
+});
 
 describe("sessionServer tools/list handler", () => {
   // The external tier is gated by the curated MCP_TOOL_ALLOWLIST and nothing

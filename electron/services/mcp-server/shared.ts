@@ -379,6 +379,55 @@ export const TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
 export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
 
 /**
+ * Authoring budget for {@link MCP_SERVER_INSTRUCTIONS}, enforced by test rather
+ * than by runtime truncation (#11541).
+ *
+ * Claude Code hard-truncates server instructions at 2 KiB, and the tail is the
+ * authorization paragraph — the one sentence whose loss would leave a model
+ * guessing at why a call was denied. Silently cutting controlled static text is
+ * strictly worse than failing an author's edit, so this is a ceiling the suite
+ * asserts, not a bound `truncateText` applies. The 512-byte gap under 2048 is
+ * headroom for a future paragraph, not slack to spend on prose.
+ */
+export const MCP_SERVER_INSTRUCTIONS_MAX_BYTES = 1_536;
+
+/**
+ * The `instructions` string sent once in the MCP `initialize` result (#11541).
+ * Clients fold it into the model's system prompt at session start, so this is
+ * the only place to establish cross-cutting workflow rules before the model has
+ * picked a tool. Per the MCP spec, it deliberately does not restate tool
+ * descriptions — every line here is guidance no single tool's description
+ * carries.
+ *
+ * Deliberately static and tier-agnostic even though the tier is knowable at
+ * construction (`httpLifecycle.ts` resolves it before `createSessionServer`).
+ * `instructions` is sent once and has no update notification, while in-app tiers
+ * elevate and decay mid-session and grants widen the surface transiently — a
+ * tier-specific sentence would silently rot, whereas the generic tier-model
+ * sentence stays true for the life of the session.
+ *
+ * Tool ids and `TIER_NOT_PERMITTED` appear as literal prose rather than
+ * interpolated constants on purpose: the suite asserts they match the exported
+ * source-of-truth ids, so renaming a tool fails a test that names this text as
+ * newly-lying instead of silently rewriting what the model is told.
+ *
+ * On the discovery paragraph: it must not imply a deferred catalog. #11582
+ * tried withholding tools from `tools/list` while keeping them dispatchable and
+ * it does not work — no shipped client sends `tools/call` for a name it never
+ * received — so #11585 made the listing and the callable set the same boundary.
+ * Telling a model otherwise would send it probing for names that cannot exist.
+ */
+export const MCP_SERVER_INSTRUCTIONS = [
+  "Daintree orchestrates IDE-owned worktrees, recipes, and agent terminals. Use it for that coordination; when repository, file, git, or forge tools are not exposed, use your own shell.",
+
+  "`tools/list` is the advertised baseline; do not invent tool names. When its full schemas are too large to reason over, use `actions.search` with task keywords for a lightweight ranked view of the current session's already-authorized actions, then `actions.getSchema` for one action's exact input and output schema. Discovery reduces context; it does not reveal a deferred catalog or widen access.",
+
+  "Resolve the active worktree and terminal IDs before acting. `terminal.sendCommand` returns once the text is submitted, not when the command or agent turn finishes — wait with `terminal.waitUntilIdle` or `terminal.waitUntilIdleBatch` rather than polling in a tight loop, then check `agentState`, `waitingReason`, and `exitCode` before your next turn or any irreversible step.",
+
+  "Authorization is tiered: in-app `workbench`, `action`, and `system` tiers progressively widen access, while `external` has a separate curated surface; calls outside the current authorized surface return `TIER_NOT_PERMITTED`.",
+].join("\n\n");
+
+/**
  * Creation-tool allowlist for per-session idempotency dedup. LLMs replay
  * tool calls during multi-step planning, especially across reconnects.
  * Inside the TTL window a duplicate call returns the original result

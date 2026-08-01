@@ -35,6 +35,7 @@ import {
   truncateText,
   readStringField,
   RESOURCE_BACKING_ACTIONS,
+  MCP_SERVER_INSTRUCTIONS,
   TIER_NOT_PERMITTED_CODE,
   CONFIRMATION_REQUIRED_CODE,
   MCP_DEDUP_ALLOWLIST,
@@ -367,6 +368,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         resources: { subscribe: true, listChanged: false },
         prompts: {},
       },
+      // The SDK folds this into the `initialize` result on its own, so no
+      // handler of ours is involved (#11541). Passed at construction because
+      // that result is built once, at the handshake, and instructions have no
+      // update notification — there is no later seam to set them from.
+      instructions: MCP_SERVER_INSTRUCTIONS,
     }
   );
 
