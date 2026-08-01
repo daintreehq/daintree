@@ -180,13 +180,21 @@ export function DockLaunchButton({
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
       if (nextOpen) {
+        // The palette hook follows the selected row across result changes, and
+        // closing only resets the query — so the anchor still points wherever
+        // browsing ended. A reopened popover mounts its scroller at the top and
+        // the active row never changes id, so the scroll effect below won't
+        // re-run: without this the highlight sits offscreen and Enter launches
+        // a row the user can't see. Re-anchoring to the top row is enough; the
+        // hook re-follows from there once the user types.
+        setSelectedIndex(0);
         setOpen(true);
         setTooltipOpen(false);
       } else {
         closeLauncher();
       }
     },
-    [closeLauncher]
+    [closeLauncher, setSelectedIndex]
   );
 
   const activateRow = useCallback(
@@ -300,6 +308,11 @@ export function DockLaunchButton({
         align="start"
         sideOffset={4}
         className="w-[22rem] p-0"
+        // Radix renders this as role="dialog". Without a name a screen reader
+        // announces a generic dialog before reaching the combobox; match the
+        // visible header so speech control can target it by the word on screen.
+        aria-label="Launch"
+        aria-modal={true}
         onOpenAutoFocus={(event) => {
           // Radix would otherwise focus the content wrapper; the search box is
           // what the user is about to type into.
@@ -322,6 +335,14 @@ export function DockLaunchButton({
           wasPointerCloseRef.current = true;
         }}
         onEscapeKeyDown={(event) => {
+          // This document-capture listener runs ahead of the input's own
+          // composition guard, so the IME check has to be repeated: mid-
+          // composition Escape belongs to the candidate window, and letting it
+          // through would wipe the query or close the launcher underneath it.
+          if (event.isComposing || event.keyCode === 229) {
+            event.preventDefault();
+            return;
+          }
           // The dismissable layer listens on document with capture, so a
           // stopPropagation from the input would be too late. Spend the first
           // Escape clearing the query and block the close here — whitespace
@@ -362,10 +383,13 @@ export function DockLaunchButton({
               onKeyDownCapture={handleNavigationKeyDown}
               placeholder="Search agents, panels, and recipes"
               role="combobox"
-              aria-expanded={true}
+              // The listbox only exists when something matched, so claiming it
+              // is expanded — or pointing aria-controls at an unrendered id —
+              // would leave the combobox describing a popup that isn't there.
+              aria-expanded={results.length > 0}
               aria-haspopup="listbox"
               aria-label="Search agents, panels, and recipes"
-              aria-controls={listboxId}
+              aria-controls={results.length > 0 ? listboxId : undefined}
               aria-activedescendant={activeDescendant}
               autoComplete="off"
               spellCheck={false}

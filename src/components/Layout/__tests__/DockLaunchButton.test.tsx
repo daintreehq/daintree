@@ -451,14 +451,14 @@ describe("DockLaunchButton", () => {
       expect(queryByText("Claude")).toBeNull();
     });
 
-    it("dims a blocked agent in the results and keeps its setup tooltip", () => {
+    it("explains a blocked agent in the results with its setup tooltip", () => {
       // A filtered row that looks ordinary but silently opens Settings is worse
-      // than the unfiltered one, which dims and explains itself.
+      // than the unfiltered one, which explains itself before you click. The
+      // dimming that accompanies it is styling, so it isn't asserted here.
       const { container, getByText } = renderButton();
       fireEvent.change(searchInput(container), { target: { value: "gemini" } });
 
       const row = getByText("Gemini").closest("button");
-      expect(row?.className).toContain("opacity-70");
       expect(row?.getAttribute("title")).toContain("blocked by endpoint security");
     });
 
@@ -491,6 +491,23 @@ describe("DockLaunchButton", () => {
       fireEvent.change(input, { target: { value: "e" } });
       expect(input.getAttribute("aria-activedescendant")).toBe(selectedOption(container)?.id);
       expect(input.getAttribute("aria-activedescendant")).toBeTruthy();
+    });
+
+    it("stops advertising a listbox once nothing matches", () => {
+      // The listbox is only rendered alongside results, so an unconditional
+      // expanded/controls pair leaves the combobox naming an element that isn't
+      // in the document — a dangling IDREF a screen reader can't resolve.
+      const { container } = renderButton();
+      const input = searchInput(container);
+
+      expect(input.getAttribute("aria-expanded")).toBe("true");
+      expect(document.getElementById(input.getAttribute("aria-controls")!)).not.toBeNull();
+
+      fireEvent.change(input, { target: { value: "zzqqxxvv" } });
+
+      expect(options(container)).toHaveLength(0);
+      expect(input.getAttribute("aria-expanded")).toBe("false");
+      expect(input.getAttribute("aria-controls")).toBeNull();
     });
 
     it("snaps the selection back to the top result on every query change", () => {
@@ -1149,6 +1166,26 @@ describe("DockLaunchButton", () => {
 
       fireEvent.change(input, { target: { value: "" } });
       expect(getByText("Recently launched")).toBeTruthy();
+    });
+
+    it("re-anchors the selection to the top row on reopen", () => {
+      // Closing only clears the query, so the hook's follow-anchor still points
+      // at wherever browsing ended. A reopened popover mounts its scroller at
+      // the top and the active row keeps its id, so the scroll effect never
+      // re-runs — leaving the highlight offscreen while Enter still launches
+      // the row the user walked to in the previous session.
+      const { container } = renderButton({ agents: MANY });
+      const input = searchInput(container);
+
+      fireEvent.keyDown(input, { key: "End" });
+      const before = options(container);
+      expect(selectedOption(container)).toBe(before[before.length - 1]);
+
+      act(() => popoverOpenChangeSpy!(false));
+      act(() => popoverOpenChangeSpy!(true));
+
+      expect(selectedOption(container)).toBe(options(container)[0]);
+      expect(container.querySelectorAll(SELECTED_OPTION)).toHaveLength(1);
     });
   });
 });

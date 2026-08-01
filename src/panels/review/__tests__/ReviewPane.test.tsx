@@ -115,9 +115,7 @@ describe("ReviewPane panel DOM contract", () => {
     (location) => {
       // Derive the id from the case so a hardcoded attribute can't satisfy this.
       const id = `review-${location}-panel`;
-      render(
-        <ReviewPane id={id} worktreeId="wt-1" onClose={vi.fn()} location={location} />
-      );
+      render(<ReviewPane id={id} worktreeId="wt-1" onClose={vi.fn()} location={location} />);
 
       const root = screen.getByTestId("review-hub-close").closest(PANEL_ROOT);
 
@@ -130,8 +128,9 @@ describe("ReviewPane panel DOM contract", () => {
   it("answers the grid/dock gate for a grid pane but not a dialog-hosted one", () => {
     // The consequence that matters: Cmd+W closes a focused grid panel, while a
     // dialog-hosted review must fall through to the escape stack (AppDialog owns
-    // that layer). Both come from the same prop, so a hardcoded "grid" would
-    // pass the case above and still break the dialog by trashing the panel.
+    // that layer). Asserting the selector match rather than the attribute value
+    // pins what the consumers actually run, so a drift between the two — the
+    // gate's selector widening, or a new location joining it — surfaces here.
     const grid = render(
       <ReviewPane id="review-grid" worktreeId="wt-1" onClose={vi.fn()} location="grid" />
     );
