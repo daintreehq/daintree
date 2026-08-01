@@ -191,20 +191,7 @@ describe("FileBrowserViewer rendered-markdown image freshness (#11587)", () => {
     await waitFor(() => expect(currentViewMode()).toBe("rendered"));
     expect(currentCacheBust()).toBe("r1");
 
-    rerender(
-      <TooltipProvider>
-        <FileBrowserViewer
-          filePath="/repo/docs/spec.md"
-          rootPath="/repo"
-          fileName="spec.md"
-          relativePath="spec.md"
-          revision="r2"
-          sidebarCollapsed={false}
-          onToggleSidebar={vi.fn()}
-          treeSidebarId="file-tree-column"
-        />
-      </TooltipProvider>
-    );
+    rerender(viewerJsx("/repo/docs/spec.md", { revision: "r2" }));
     await waitFor(() => expect(currentCacheBust()).toBe("r2"));
   });
 });
