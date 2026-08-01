@@ -8,7 +8,6 @@ import { usePilotStore } from "@/store/pilotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import { getAgentConfig } from "@shared/config/agentRegistry";
 import { actionService } from "@/services/ActionService";
 import { BAND_TONE, type FleetBand } from "@/lib/fleetAttention";
 import { UI_ANIMATION_DURATION, UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
@@ -23,6 +22,7 @@ import {
   type PilotWorkspaceMeta,
 } from "./pilotRows";
 import { PilotRunState } from "./PilotRunState";
+import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { CircleHelp, FileText } from "@/components/icons";
@@ -276,7 +276,9 @@ function RunRow({
   // State first, then how long it has been that way, then where it is running.
   // The age sat on the trailing edge before, where a bare "2h" beside a title
   // named no quantity — runtime, wait, and time-since-finish all read the same.
-  const detail = [row.age, row.worktreeLabel, row.agentLabel].filter(Boolean).join(" · ");
+  // The agent's name is deliberately absent: the brand icon carries identity,
+  // which is the same reason the tab strip's `compact` title drops it.
+  const detail = [row.age, row.worktreeLabel].filter(Boolean).join(" · ");
 
   return (
     <div
@@ -295,12 +297,19 @@ function RunRow({
     >
       <span aria-hidden="true" className="size-3.5 shrink-0" />
       {/*
-        A tile-width column, not a flush glyph. Left flush, the 14px glyph
-        stands in for the header's 32px tile and every run title starts LEFT of
-        its own project's title — the child outdenting itself.
+        The panel's own brand mark, in a tile-width column so run titles line up
+        with the project title above them. Same component, chrome and preset
+        colour the panel header and dock render, so one agent looks like itself
+        everywhere — a generic glyph here would make the row the only surface
+        that cannot tell Claude from Codex.
       */}
       <span className="flex w-8 shrink-0 items-center justify-center">
-        <PilotRunState band={row.band} agentState={row.run.agentState} />
+        <TerminalIcon
+          chrome={row.chrome}
+          className="h-4 w-4"
+          brandColor={row.presetColor ?? row.chrome.color}
+          userChosen={row.presetColor !== undefined}
+        />
       </span>
 
       <span className="min-w-0 flex-1">
@@ -316,6 +325,15 @@ function RunRow({
           <span className={ROW_TONE_CLASS[row.tone]}>{row.statusLabel}</span>
           {detail && <span className="text-daintree-text/50">{` · ${detail}`}</span>}
         </span>
+      </span>
+
+      {/*
+        State on the trailing edge, matching the dock row — the leading slot is
+        identity, the trailing slot is what that identity is doing right now.
+        Redundant with the status word on the line above by design.
+      */}
+      <span className="flex shrink-0 items-center">
+        <PilotRunState band={row.band} agentState={row.run.agentState} />
       </span>
     </div>
   );
@@ -431,15 +449,11 @@ export function PilotView() {
 
   const liveGroups = useMemo(() => {
     if (!snapshot) return [];
-    const agentNames = new Map<string, string>();
-    for (const run of snapshot.runs) {
-      if (run.agentId && !agentNames.has(run.agentId)) {
-        agentNames.set(run.agentId, getAgentConfig(run.agentId)?.name ?? run.agentId);
-      }
-    }
+    // Agent names now come from the chrome descriptor each row derives, which
+    // is the same resolution the panel header uses — a second lookup here
+    // would be a second chance to disagree with it.
     return buildPilotGroups(snapshot.runs, {
       workspaces,
-      agentNames,
       currentWorkspaceId: getViewWorkspaceId(),
       nowMs,
     });

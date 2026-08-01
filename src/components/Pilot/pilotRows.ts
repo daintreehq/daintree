@@ -11,23 +11,27 @@ import {
 } from "@/lib/fleetAttention";
 import { formatWaitAge, type ProjectRowTone } from "@/lib/projectRowStatus";
 import { isSubsequenceMatch } from "@/lib/projectSwitcherSearch";
+import { composeTitledPanel } from "@/utils/terminalTitleDisplay";
+import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 
 export interface PilotRow {
   run: FleetRunRow;
   band: FleetBand;
-  /** Panel title — what the agent calls its own work. Falls back to the agent name. */
+  /**
+   * The title the panel header and tab strip show for this run, composed by
+   * the app's one title pipeline rather than re-derived here.
+   */
   title: string;
+  /** Icon/colour identity, so the row renders the panel's own brand mark. */
+  chrome: TerminalChromeDescriptor;
+  /** Preset colour when the user picked one, which `BrandMark` treats as deliberate. */
+  presetColor: string | undefined;
   /** What the run is doing, in the same words the switcher uses for the same state. */
   statusLabel: string;
   /** Status colour for {@link statusLabel}. Always a status token, never the accent. */
   tone: ProjectRowTone;
   /** Worktree label, or null when it would only repeat the project name. */
   worktreeLabel: string | null;
-  /**
-   * Agent's display name — null before detection commits, and also null when
-   * the title already IS that name (an untitled run falls back to it).
-   */
-  agentLabel: string | null;
   /** Compact age of the current state, or null when the run never recorded one. */
   age: string | null;
 }
@@ -85,7 +89,6 @@ export interface PilotWorkspaceMeta {
 
 export interface PilotRowContext {
   workspaces: ReadonlyMap<string, PilotWorkspaceMeta>;
-  agentNames: ReadonlyMap<string, string>;
   /** Workspace this renderer view owns, so its group can be marked as already here. */
   currentWorkspaceId: string | null;
   nowMs: number;
@@ -140,17 +143,47 @@ export function buildPilotGroups(
     });
 
     const rows: PilotRow[] = sorted.map((run) => {
-      const agentLabel = run.agentId ? (ctx.agentNames.get(run.agentId) ?? run.agentId) : null;
-      const title = run.title?.trim() || agentLabel || "Untitled";
       const band = bandForRun(run, acknowledgedAt);
+      const chrome = deriveTerminalChrome({
+        kind: "terminal",
+        ...(run.agentId !== undefined ? { detectedAgentId: run.agentId } : {}),
+        ...(run.launchAgentId !== undefined ? { launchAgentId: run.launchAgentId } : {}),
+        ...(run.everDetectedAgent !== undefined
+          ? { everDetectedAgent: run.everDetectedAgent }
+          : {}),
+        ...(run.agentState !== undefined ? { agentState: run.agentState } : {}),
+        ...(run.agentPresetColor !== undefined ? { agentPresetColor: run.agentPresetColor } : {}),
+      });
+      // Composed through the app's one title pipeline, not assembled here.
+      // Reading `lastObservedTitle` directly is what made rows read "Claude
+      // Code" — the agent naming itself, which the pipeline recognises as an
+      // identity echo and suppresses. `compact` because the brand icon beside
+      // the title already carries identity, so a prefix would only push the
+      // task out of the truncation window.
+      const title =
+        composeTitledPanel(
+          {
+            title: run.title ?? chrome.label,
+            ...(run.titleMode !== undefined ? { titleMode: run.titleMode } : {}),
+            ...(run.lastObservedTitle !== undefined
+              ? { lastObservedTitle: run.lastObservedTitle }
+              : {}),
+            ...(run.agentId !== undefined ? { detectedAgentId: run.agentId } : {}),
+            ...(run.agentState !== undefined ? { agentState: run.agentState } : {}),
+            cwd: run.cwd,
+          },
+          "compact"
+        ).trim() || chrome.label;
+
       return {
         run,
         band,
         title,
+        chrome,
+        presetColor: run.agentPresetColor,
         statusLabel: bandLabel(band, run),
         tone: BAND_TONE[band],
         worktreeLabel: disambiguatingLabel(directoryLabel(run.cwd), name),
-        agentLabel: disambiguatingLabel(agentLabel, title),
         age: run.since !== undefined ? formatWaitAge(run.since, ctx.nowMs) : null,
       };
     });
@@ -210,7 +243,9 @@ export function filterPilotGroups(
         projectMatches ||
         isSubsequenceMatch(needle, row.title) ||
         (row.worktreeLabel !== null && isSubsequenceMatch(needle, row.worktreeLabel)) ||
-        (row.agentLabel !== null && isSubsequenceMatch(needle, row.agentLabel))
+        // The agent's name is on the row as an icon rather than as text, but
+        // "codex" is still a plausible thing to type when looking for one.
+        isSubsequenceMatch(needle, row.chrome.label)
     );
     if (rows.length === 0) continue;
     out.push({

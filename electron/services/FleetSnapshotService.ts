@@ -193,7 +193,12 @@ export class FleetSnapshotService {
         x.since !== y.since ||
         x.spawnedAt !== y.spawnedAt ||
         x.title !== y.title ||
-        x.cwd !== y.cwd
+        x.lastObservedTitle !== y.lastObservedTitle ||
+        x.titleMode !== y.titleMode ||
+        x.cwd !== y.cwd ||
+        x.launchAgentId !== y.launchAgentId ||
+        x.everDetectedAgent !== y.everDetectedAgent ||
+        x.agentPresetColor !== y.agentPresetColor
       ) {
         return false;
       }
@@ -247,12 +252,25 @@ export class FleetSnapshotService {
             ? { since: terminal.lastStateChange }
             : {}),
           spawnedAt: terminal.spawnedAt,
-          // The last OSC title the agent set is what the agent calls its own
-          // work; `title` may still be the launch label. Prefer the former.
-          ...(terminal.lastObservedTitle !== undefined || terminal.title !== undefined
-            ? { title: terminal.lastObservedTitle ?? terminal.title }
+          // Both titles ride across unmerged. `getTerminalDisplayTitle` composes
+          // them in the renderer, and that decision needs each one separately.
+          ...(terminal.title !== undefined ? { title: terminal.title } : {}),
+          ...(terminal.lastObservedTitle !== undefined
+            ? { lastObservedTitle: terminal.lastObservedTitle }
             : {}),
+          ...(terminal.titleMode !== undefined ? { titleMode: terminal.titleMode } : {}),
           cwd: terminal.cwd,
+          // Chrome ingredients, so a row can render the same brand icon the
+          // panel header and dock do rather than a generic glyph.
+          ...(terminal.launchAgentId !== undefined
+            ? { launchAgentId: terminal.launchAgentId }
+            : {}),
+          ...(terminal.everDetectedAgent !== undefined
+            ? { everDetectedAgent: terminal.everDetectedAgent }
+            : {}),
+          ...(terminal.agentPresetColor !== undefined
+            ? { agentPresetColor: terminal.agentPresetColor }
+            : {}),
         });
       }
 

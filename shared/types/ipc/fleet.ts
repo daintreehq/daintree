@@ -1,5 +1,6 @@
 import type { AgentState, WaitingReason } from "../agent.js";
 import type { BuiltInAgentId } from "../../config/agentIds.js";
+import type { PanelTitleMode } from "../panel.js";
 
 /**
  * One agent run: a single agent terminal living in a single worktree.
@@ -43,9 +44,35 @@ export interface FleetRunRow {
    */
   since?: number;
   spawnedAt: number;
-  /** Terminal title, preferring the last meaningful OSC title the agent set. */
+  /**
+   * The panel's own title — its identity, not its task.
+   *
+   * Deliberately NOT pre-merged with `lastObservedTitle`. Composing the two is
+   * `getTerminalDisplayTitle`'s job and it is not a `??`: it strips identity
+   * affixes, drops titles that merely echo the agent's own name ("Claude
+   * Code"), suppresses cwd echoes and useless strings, and yields to a
+   * user-locked title. Collapsing them here would hand the renderer a string
+   * that has already lost the inputs that decision needs.
+   */
   title?: string;
+  /** Raw OSC title the agent last set. Ingredient, never displayed as-is. */
+  lastObservedTitle?: string;
+  /** `"user"` means the title was set by hand and no task may override it. */
+  titleMode?: PanelTitleMode;
   cwd: string;
+  /**
+   * Launch-time agent affinity, which carries chrome through the window before
+   * detection commits — without it a run shows a generic terminal glyph for its
+   * first seconds and then pops into its brand.
+   *
+   * Deliberately a bare string: it arrives from the PTY host unvalidated, and
+   * the chrome resolver already treats an unrecognised id as no id.
+   */
+  launchAgentId?: string;
+  /** Detection has committed at least once, so a later gap is a demotion. */
+  everDetectedAgent?: boolean;
+  /** User-chosen preset colour, which outranks the agent's default brand hue. */
+  agentPresetColor?: string;
 }
 
 /**

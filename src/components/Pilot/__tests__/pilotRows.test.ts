@@ -22,7 +22,6 @@ function run(overrides: Partial<FleetRunRow> = {}): FleetRunRow {
 function ctx(overrides: Partial<PilotRowContext> = {}): PilotRowContext {
   return {
     workspaces: new Map([["p1", { kind: "project", name: "daintree", emoji: "🌳" }]]),
-    agentNames: new Map([["claude", "Claude Code"]]),
     currentWorkspaceId: null,
     nowMs: NOW,
     ...overrides,
@@ -46,15 +45,89 @@ describe("buildPilotGroups", () => {
 
     expect(row.title).toBe("Fix the palette wait-age tick");
     expect(row.worktreeLabel).toBe("issue-11518-scratch-rows");
-    expect(row.agentLabel).toBe("Claude Code");
     expect(row.age).toBe("2m");
+    // Identity rides an icon, not a text label — the same trade the tab strip's
+    // compact title makes, and why the agent's name is not in the detail line.
+    expect(row.chrome.agentId).toBe("claude");
+    expect(row.chrome.iconId).toBe("claude");
+  });
+
+  it("drops a task the agent can no longer be running", () => {
+    // Raw passthrough kept the last OSC title forever, so an exited agent went
+    // on advertising work that had stopped. The pipeline ties tasks to a live
+    // agent and falls back to identity once it is gone.
+    const [group] = buildPilotGroups(
+      [
+        run({
+          agentState: "exited",
+          agentId: "claude",
+          title: "Claude",
+          lastObservedTitle: "Fix the auth redirect",
+        }),
+      ],
+      ctx()
+    );
+
+    expect(group!.rows[0]!.title).toBe("Claude");
+  });
+
+  it("ignores an OSC title that just names the folder the agent is in", () => {
+    // Codex idles with its cwd as the title. Where an agent is, is not what it
+    // is doing — and the row already says where.
+    const [group] = buildPilotGroups(
+      [
+        run({
+          agentState: "working",
+          agentId: "claude",
+          title: "Claude",
+          cwd: "/Users/dev/daintree-worktrees/pilot-mode",
+          lastObservedTitle: "pilot-mode",
+        }),
+      ],
+      ctx()
+    );
+
+    expect(group!.rows[0]!.title).toBe("Claude");
+  });
+
+  it("prefers the agent's live task over the panel's identity title", () => {
+    const [group] = buildPilotGroups(
+      [
+        run({
+          agentState: "working",
+          agentId: "claude",
+          title: "Claude",
+          lastObservedTitle: "Fix the auth redirect",
+        }),
+      ],
+      ctx()
+    );
+
+    expect(group!.rows[0]!.title).toBe("Fix the auth redirect");
+  });
+
+  it("never lets a task override a title the user set by hand", () => {
+    const [group] = buildPilotGroups(
+      [
+        run({
+          agentState: "working",
+          agentId: "claude",
+          title: "Release prep",
+          titleMode: "user",
+          lastObservedTitle: "Fix the auth redirect",
+        }),
+      ],
+      ctx()
+    );
+
+    expect(group!.rows[0]!.title).toBe("Release prep");
   });
 
   it("falls back to the agent name when the run has no title", () => {
     const [group] = buildPilotGroups([run({ agentState: "working", agentId: "claude" })], ctx());
 
     // Never an empty cell — the row still has to say what it is.
-    expect(group!.rows[0]!.title).toBe("Claude Code");
+    expect(group!.rows[0]!.title).toBe("Claude");
   });
 
   it("falls back again when neither a title nor an agent name is known", () => {
@@ -69,7 +142,7 @@ describe("buildPilotGroups", () => {
       ctx()
     );
 
-    expect(group!.rows[0]!.title).toBe("Claude Code");
+    expect(group!.rows[0]!.title).toBe("Claude");
   });
 
   it("carries the project name and emoji onto the group", () => {

@@ -163,6 +163,26 @@ describe("PilotView", () => {
     expect(screen.getByText("Nothing needs you · 1 agent working")).toBeTruthy();
   });
 
+  it("renders each run's own brand mark, not one generic glyph for all agents", () => {
+    // `TerminalIcon` stamps the resolved id/colour on the DOM, so two different
+    // agents must not come out identical the way a shared terminal glyph would.
+    seed([
+      run({ runId: "a", agentId: "claude", agentState: "working", since: NOW - 60_000 }),
+      run({ runId: "b", agentId: "codex", agentState: "working", since: NOW - 60_000 }),
+    ]);
+    render(<PilotView />);
+
+    const iconIds = screen
+      .getAllByTestId("pilot-row")
+      .map((row) =>
+        row.querySelector("[data-terminal-icon-id]")?.getAttribute("data-terminal-icon-id")
+      );
+
+    expect(iconIds).toHaveLength(2);
+    expect(iconIds[0]).toBeTruthy();
+    expect(new Set(iconIds).size).toBe(2);
+  });
+
   it("writes the run's state out in words, not just a coloured glyph", () => {
     // Waiting and idle are both hollow circles; hue is the only thing between
     // them. The switcher never encodes status by colour alone and neither may
