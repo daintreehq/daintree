@@ -22,10 +22,12 @@ const notifySpawnFailuresMock = vi.fn();
 const actionDispatchMock = vi.fn();
 const recordActionMruMock = vi.fn();
 const addPanelMock = vi.fn();
-let dropdownCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
-let dropdownPointerDownOutsideSpy: (() => void) | null = null;
-let dropdownEscapeKeyDownSpy: ((e: { preventDefault: () => void }) => void) | null = null;
-let dropdownOpenChangeSpy: ((open: boolean) => void) | null = null;
+let popoverCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
+let popoverPointerDownOutsideSpy: (() => void) | null = null;
+let popoverEscapeKeyDownSpy: ((e: { preventDefault: () => void }) => void) | null = null;
+let popoverOpenAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
+let popoverOpenChangeSpy: ((open: boolean) => void) | null = null;
+let popoverModal: boolean | undefined = undefined;
 
 // See dockLaunchItems.test.ts — avoid the real registry's eager TerminalPane import.
 vi.mock("@/registry", () => ({
@@ -90,8 +92,9 @@ vi.mock("@/services/ActionService", () => ({
 
 // Mock UI primitives so the test focuses on this component's behavior, not
 // Radix's pointer-event semantics inside jsdom. Mirrors AgentButton.test.tsx.
-// Radix's real focus/dismiss behaviour (pointer-move focus steal, document-level
-// Escape capture) is covered by e2e/full/panels/core-dock-launcher-search.spec.ts.
+// Radix's real focus/dismiss behaviour (mount autofocus winning the lazy-chunk
+// race, document-level Escape capture, the modal focus trap) is covered by
+// e2e/full/panels/core-dock-launcher-search.spec.ts.
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
   TooltipContent: ({ children }: { children: ReactNode }) => (
@@ -101,75 +104,86 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
-vi.mock("@/components/ui/dropdown-menu", () => ({
+vi.mock("@/components/ui/popover", () => ({
   // Content is rendered unconditionally (not gated on `open`) so the existing
-  // item-level assertions keep working without an open step; open/close is
+  // row-level assertions keep working without an open step; open/close is
   // exercised through the captured onOpenChange.
-  DropdownMenu: ({
+  Popover: ({
     children,
     onOpenChange,
+    modal,
   }: {
     children: ReactNode;
     open?: boolean;
+    modal?: boolean;
     onOpenChange?: (open: boolean) => void;
   }) => {
-    dropdownOpenChangeSpy = onOpenChange ?? null;
+    popoverOpenChangeSpy = onOpenChange ?? null;
+    popoverModal = modal;
     return <>{children}</>;
   },
-  DropdownMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
-  DropdownMenuContent: ({
+  PopoverTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  PopoverContent: ({
     children,
+    onOpenAutoFocus,
     onCloseAutoFocus,
     onPointerDownOutside,
     onEscapeKeyDown,
   }: {
     children: ReactNode;
+    onOpenAutoFocus?: (e: { preventDefault: () => void }) => void;
     onCloseAutoFocus?: (e: { preventDefault: () => void }) => void;
     onPointerDownOutside?: () => void;
     onEscapeKeyDown?: (e: { preventDefault: () => void }) => void;
   }) => {
-    dropdownCloseAutoFocusSpy = onCloseAutoFocus ?? null;
-    dropdownPointerDownOutsideSpy = onPointerDownOutside ?? null;
-    dropdownEscapeKeyDownSpy = onEscapeKeyDown ?? null;
+    popoverOpenAutoFocusSpy = onOpenAutoFocus ?? null;
+    popoverCloseAutoFocusSpy = onCloseAutoFocus ?? null;
+    popoverPointerDownOutsideSpy = onPointerDownOutside ?? null;
+    popoverEscapeKeyDownSpy = onEscapeKeyDown ?? null;
     return <div data-testid="dock-launcher-content">{children}</div>;
   },
-  DropdownMenuItem: ({
-    children,
-    onSelect,
-    disabled,
-    title,
-    className,
-    onPointerMove,
-    id,
-    ...rest
-  }: {
-    children: ReactNode;
-    onSelect?: () => void;
-    disabled?: boolean;
-    title?: string;
-    className?: string;
-    onPointerMove?: (e: unknown) => void;
-    id?: string;
-    [key: string]: unknown;
-  }) => (
-    <button
-      type="button"
-      onClick={() => onSelect?.()}
-      disabled={disabled}
-      title={title}
-      className={className}
-      id={id}
-      onPointerMove={onPointerMove}
-      data-selected-row={rest["data-selected-row"] as string | undefined}
-    >
-      {children}
-    </button>
-  ),
-  DropdownMenuLabel: ({ children }: { children: ReactNode }) => (
-    <div data-testid="dock-launcher-label">{children}</div>
-  ),
-  DropdownMenuSeparator: () => <hr data-testid="dock-launcher-separator" />,
 }));
+
+// The palette chrome is a shared, separately-tested surface; stubbing it keeps
+// this suite on the launcher's own wiring and off ScrollShadow's ResizeObserver
+// and the dialog escape-stack. Props are spread through so the input's ARIA and
+// key handling stay under test.
+vi.mock("@/components/ui/AppPaletteDialog", () => {
+  const AppPaletteDialog = {
+    Header: ({ label, children }: { label: string; children: ReactNode }) => (
+      <div data-testid="dock-launcher-header">
+        <span>{label}</span>
+        {children}
+      </div>
+    ),
+    Input: ({
+      inputRef,
+      ...props
+    }: {
+      inputRef?: React.Ref<HTMLInputElement>;
+    } & React.InputHTMLAttributes<HTMLInputElement>) => (
+      <input ref={inputRef} type="text" {...props} />
+    ),
+    Body: ({
+      children,
+      onNavigationKeyDown,
+    }: {
+      children: ReactNode;
+      ariaLabel: string;
+      activeDescendant?: string;
+      onNavigationKeyDown: React.KeyboardEventHandler<HTMLDivElement>;
+    }) => (
+      <div data-testid="dock-launcher-body" onKeyDown={onNavigationKeyDown}>
+        {children}
+      </div>
+    ),
+    Footer: () => <div data-testid="dock-launcher-footer" />,
+    Empty: ({ query }: { query: string }) => (
+      <div data-testid="dock-launcher-empty">{query.trim() ? "no matches" : "nothing"}</div>
+    ),
+  };
+  return { AppPaletteDialog };
+});
 
 import { DockLaunchButton } from "../DockLaunchButton";
 import type { DockLaunchAgent } from "../DockLaunchMenuItems";
@@ -191,12 +205,27 @@ function renderButton(props: Partial<Parameters<typeof DockLaunchButton>[0]> = {
   );
 }
 
+const OPTION = '[role="option"]';
+const SELECTED_OPTION = '[role="option"][aria-selected="true"]';
+
+function options(container: HTMLElement): HTMLButtonElement[] {
+  return Array.from(container.querySelectorAll<HTMLButtonElement>(OPTION));
+}
+
+function selectedOption(container: HTMLElement): HTMLElement | null {
+  return container.querySelector<HTMLElement>(SELECTED_OPTION);
+}
+
 /** The launcher's search box — the only textbox inside the menu. */
 function searchInput(container: HTMLElement): HTMLInputElement {
   const input = container.querySelector("input");
   if (!input) throw new Error("search input not found");
   return input;
 }
+
+// jsdom implements no layout, so it ships no scrollIntoView at all. The
+// launcher scrolls the active option into view on every selection move.
+Element.prototype.scrollIntoView = vi.fn();
 
 beforeEach(() => {
   mockRecipes = [];
@@ -210,10 +239,12 @@ beforeEach(() => {
   actionDispatchMock.mockReset();
   recordActionMruMock.mockReset();
   addPanelMock.mockReset();
-  dropdownCloseAutoFocusSpy = null;
-  dropdownPointerDownOutsideSpy = null;
-  dropdownEscapeKeyDownSpy = null;
-  dropdownOpenChangeSpy = null;
+  popoverCloseAutoFocusSpy = null;
+  popoverPointerDownOutsideSpy = null;
+  popoverEscapeKeyDownSpy = null;
+  popoverOpenAutoFocusSpy = null;
+  popoverOpenChangeSpy = null;
+  popoverModal = undefined;
 });
 
 describe("DockLaunchButton", () => {
@@ -226,14 +257,14 @@ describe("DockLaunchButton", () => {
     mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
     const { getAllByTestId } = renderButton();
 
-    const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
+    const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
     expect(labels).toEqual(["Launch agent", "Open in dock", "Open in grid", "Launch recipe"]);
   });
 
   it("splits agents into Pinned/Other groups when pinnedCount is a strict subset", () => {
     const { getAllByTestId, container } = renderButton({ pinnedCount: 1 });
 
-    const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
+    const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
     expect(labels.slice(0, 2)).toEqual(["Pinned", "Other"]);
 
     // Assert document order so a regression that puts both agents under one
@@ -246,7 +277,7 @@ describe("DockLaunchButton", () => {
 
   it("keeps a flat Launch agent group when all agents are pinned", () => {
     const { getAllByTestId } = renderButton({ pinnedCount: AGENTS.length });
-    const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
+    const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
     expect(labels[0]).toBe("Launch agent");
   });
 
@@ -286,11 +317,15 @@ describe("DockLaunchButton", () => {
       ],
     });
 
-    expect(getByText("Claude").getAttribute("title")).toBeNull();
-    expect(getByText("Gemini").getAttribute("title")).toBe(
+    // The name sits in its own span for truncation, so the warning lives on the
+    // row itself.
+    expect(getByText("Claude").closest("button")?.getAttribute("title")).toBeNull();
+    expect(getByText("Gemini").closest("button")?.getAttribute("title")).toBe(
       "Gemini is blocked by endpoint security. Click to configure."
     );
-    expect(getByText("Codex").getAttribute("title")).toBe("Codex needs setup. Click to configure.");
+    expect(getByText("Codex").closest("button")?.getAttribute("title")).toBe(
+      "Codex needs setup. Click to configure."
+    );
   });
 
   it("treats unauthenticated agents as launchable (CLI handles auth at runtime)", () => {
@@ -366,7 +401,7 @@ describe("DockLaunchButton", () => {
 
       fireEvent.change(searchInput(container), { target: { value: "review" } });
 
-      const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
+      const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
       expect(labels).toEqual(["Search results"]);
       expect(queryByText("Open in dock")).toBeNull();
       expect(queryByText("Claude")).toBeNull();
@@ -427,8 +462,20 @@ describe("DockLaunchButton", () => {
       const { container } = renderButton();
       fireEvent.change(searchInput(container), { target: { value: "e" } });
 
-      const selected = container.querySelectorAll("[data-selected-row='true']");
-      expect(selected).toHaveLength(1);
+      expect(container.querySelectorAll(SELECTED_OPTION)).toHaveLength(1);
+    });
+
+    it("points aria-activedescendant at the selected option in both modes", () => {
+      const { container } = renderButton();
+      const input = searchInput(container);
+
+      // Browsing and searching share one selection, so the input must name the
+      // active option either way — not only once a query narrows the list.
+      expect(input.getAttribute("aria-activedescendant")).toBe(selectedOption(container)?.id);
+
+      fireEvent.change(input, { target: { value: "e" } });
+      expect(input.getAttribute("aria-activedescendant")).toBe(selectedOption(container)?.id);
+      expect(input.getAttribute("aria-activedescendant")).toBeTruthy();
     });
 
     it("Enter launches the top result", () => {
@@ -448,10 +495,10 @@ describe("DockLaunchButton", () => {
       const input = searchInput(container);
 
       fireEvent.change(input, { target: { value: "e" } });
-      const firstName = container.querySelector("[data-selected-row='true']")?.textContent;
+      const firstName = selectedOption(container)?.textContent;
 
       fireEvent.keyDown(input, { key: "ArrowDown" });
-      const moved = container.querySelector("[data-selected-row='true']");
+      const moved = selectedOption(container);
       expect(moved?.textContent).not.toBe(firstName);
 
       // Actually confirm it — the previous version never pressed Enter, so it
@@ -476,20 +523,52 @@ describe("DockLaunchButton", () => {
       expect(actionDispatchMock).not.toHaveBeenCalled();
     });
 
-    it("leaves arrow keys to the menu while unfiltered so items stay reachable", () => {
-      // The unfiltered bands have no selected-row styling, so swallowing arrows
-      // here would strand keyboard users with an invisible selection.
+    it("drives the unfiltered bands with the same selection as the results", () => {
+      // A Popover has no roving focus to fall through to, so the browse list is
+      // navigated by selectedIndex exactly as the filtered list is. Arrows that
+      // escaped to the container here would move nothing at all.
       const { container } = renderButton();
       const input = searchInput(container);
 
-      const menuSaw = vi.fn();
-      container.addEventListener("keydown", menuSaw);
-      input.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true })
-      );
-      container.removeEventListener("keydown", menuSaw);
+      const rows = options(container);
+      expect(rows.length).toBeGreaterThan(1);
+      expect(selectedOption(container)).toBe(rows[0]);
 
-      expect(menuSaw).toHaveBeenCalledTimes(1);
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(selectedOption(container)).toBe(rows[1]);
+      expect(container.querySelectorAll(SELECTED_OPTION)).toHaveLength(1);
+
+      fireEvent.keyDown(input, { key: "ArrowUp" });
+      expect(selectedOption(container)).toBe(rows[0]);
+
+      fireEvent.keyDown(input, { key: "End" });
+      expect(selectedOption(container)).toBe(rows[rows.length - 1]);
+
+      fireEvent.keyDown(input, { key: "Home" });
+      expect(selectedOption(container)).toBe(rows[0]);
+    });
+
+    it("Enter launches the selected row while unfiltered", () => {
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({ onLaunchAgent });
+      const input = searchInput(container);
+
+      // Claude is the first agent and the first browse row.
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+    });
+
+    it("keeps the recency band navigable without highlighting its twin", () => {
+      // The band repeats agents listed again below, so the two rows must be
+      // keyed apart — sharing an id would light both up at once.
+      mockMruEntries = [{ id: "agent.claude", score: 1, lastAccessedAt: 1000 }];
+      const { container } = renderButton();
+
+      const rows = options(container);
+      const claudeRows = rows.filter((row) => row.textContent?.includes("Claude"));
+      expect(claudeRows).toHaveLength(2);
+      expect(claudeRows[0]!.id).not.toBe(claudeRows[1]!.id);
+      expect(container.querySelectorAll(SELECTED_OPTION)).toHaveLength(1);
     });
 
     it("does not swallow modified keys, so app shortcuts still work", () => {
@@ -541,7 +620,7 @@ describe("DockLaunchButton", () => {
       // The menu already looks unfiltered, so Escape must close rather than
       // being spent clearing invisible whitespace.
       const event = { preventDefault: vi.fn() };
-      dropdownEscapeKeyDownSpy!(event);
+      popoverEscapeKeyDownSpy!(event);
       expect(event.preventDefault).not.toHaveBeenCalled();
     });
 
@@ -563,67 +642,87 @@ describe("DockLaunchButton", () => {
       expect(menuSaw).not.toHaveBeenCalled();
     });
 
-    it("stops printable keys reaching Radix's typeahead", () => {
+    it("stops plain typing escaping to the app behind the launcher", () => {
+      // A letter that reached the dock's own key handling would act on the
+      // panel underneath while the user is only filling the search box.
       const { container } = renderButton();
       const input = searchInput(container);
 
-      const menuSaw = vi.fn();
-      container.addEventListener("keydown", menuSaw);
+      const outsideSaw = vi.fn();
+      container.addEventListener("keydown", outsideSaw);
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true }));
-      container.removeEventListener("keydown", menuSaw);
+      container.removeEventListener("keydown", outsideSaw);
 
-      expect(menuSaw).not.toHaveBeenCalled();
+      expect(outsideSaw).not.toHaveBeenCalled();
     });
 
-    it("shows a recovery cue when nothing matches", () => {
-      const { container, getByText } = renderButton();
+    it("shows a recovery cue and no options when nothing matches", () => {
+      const { container, getByTestId } = renderButton();
       fireEvent.change(searchInput(container), { target: { value: "zzzzqqqq" } });
-      expect(getByText("Try a different search")).toBeTruthy();
+
+      expect(getByTestId("dock-launcher-empty")).toBeTruthy();
+      expect(options(container)).toHaveLength(0);
     });
 
-    it("first Escape clears the query and blocks the menu close; second closes", () => {
+    it("first Escape clears the query and blocks the close; second closes", () => {
       const { container } = renderButton();
       const input = searchInput(container);
       fireEvent.change(input, { target: { value: "review" } });
 
-      // With a query present the content handler vetoes dismissal...
+      // Radix dismisses from a document-capture listener that beats any handler
+      // on the input, so the content handler both vetoes the close and clears.
       const withQuery = { preventDefault: vi.fn() };
-      dropdownEscapeKeyDownSpy!(withQuery);
+      act(() => popoverEscapeKeyDownSpy!(withQuery));
       expect(withQuery.preventDefault).toHaveBeenCalledTimes(1);
-
-      // ...and the input clears it.
-      fireEvent.keyDown(input, { key: "Escape" });
       expect(input.value).toBe("");
 
-      // Now empty, Escape is left alone so the menu actually closes.
+      // Now empty, Escape is left alone so the launcher actually closes.
       const whenEmpty = { preventDefault: vi.fn() };
-      dropdownEscapeKeyDownSpy!(whenEmpty);
+      act(() => popoverEscapeKeyDownSpy!(whenEmpty));
       expect(whenEmpty.preventDefault).not.toHaveBeenCalled();
     });
 
-    it("moves focus to the input once the menu is open", async () => {
-      // Radix's mount autofocus lands on the first item synchronously, so the
-      // launcher re-focuses on the next frame. e2e covers the real race; here we
-      // only pin that opening drives focus to the search box at all.
+    it("opens modal so Tab cannot leave the launcher", () => {
+      renderButton();
+      expect(popoverModal).toBe(true);
+    });
+
+    it("takes over the mount autofocus and drives it into the input", () => {
+      // Radix would otherwise focus the content wrapper. This is the handler
+      // that covers a cold open, where the lazy Radix chunk resolves after the
+      // open-state frame has already come and gone.
       const { container } = renderButton();
+      expect(popoverOpenAutoFocusSpy).toBeTruthy();
+
+      const event = { preventDefault: vi.fn() };
+      act(() => popoverOpenAutoFocusSpy!(event));
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(searchInput(container));
+    });
+
+    it("re-focuses the input a frame after opening", async () => {
+      // Second attempt behind the mount handler, for the warm open where the
+      // content is already mounted when `open` flips.
+      const { container } = renderButton();
+      searchInput(container).blur();
       expect(document.activeElement).not.toBe(searchInput(container));
 
-      act(() => dropdownOpenChangeSpy!(true));
+      act(() => popoverOpenChangeSpy!(true));
 
       // The focus is deferred a frame, so poll rather than racing it — a frame
       // awaited here would be scheduled before the effect's own.
       await waitFor(() => expect(document.activeElement).toBe(searchInput(container)));
     });
 
-    it("keeps focus in the input when the search row itself is clicked", () => {
-      // Clicking the magnifier, the gap or the row padding used to park focus on
-      // Radix's tabIndex={-1} content, after which typing hit the typeahead and
-      // Escape became a no-op.
-      const { container } = renderButton();
+    it("keeps focus in the input when the header around it is clicked", () => {
+      // The padding around the input parks focus on Radix's tabIndex={-1} focus
+      // scope, after which Escape dead-ends (the content vetoes the close while
+      // only the input clears the query).
+      const { container, getByTestId } = renderButton();
       const input = searchInput(container);
-      const row = input.parentElement!;
 
-      expect(fireEvent.mouseDown(row)).toBe(false);
+      expect(fireEvent.mouseDown(getByTestId("dock-launcher-header"))).toBe(false);
       expect(document.activeElement).toBe(input);
     });
 
@@ -640,25 +739,38 @@ describe("DockLaunchButton", () => {
       fireEvent.change(input, { target: { value: "review" } });
       expect(input.value).toBe("review");
 
-      act(() => dropdownOpenChangeSpy!(false));
+      act(() => popoverOpenChangeSpy!(false));
       expect(input.value).toBe("");
     });
 
-    it("mirrors pointer hover into selection without letting Radix steal focus", () => {
+    it("mirrors pointer hover into selection and keeps focus off the row", () => {
       const { container } = renderButton();
-      const input = searchInput(container);
-      fireEvent.change(input, { target: { value: "e" } });
+      fireEvent.change(searchInput(container), { target: { value: "e" } });
 
-      const rows = Array.from(
-        container.querySelectorAll<HTMLButtonElement>("button[data-selected-row]")
-      );
+      const rows = options(container);
       expect(rows.length).toBeGreaterThan(1);
 
       const second = rows[1]!;
-      const moved = fireEvent.pointerMove(second);
-      // preventDefault is what stops Radix's item-focus handler from running.
-      expect(moved).toBe(false);
-      expect(second.getAttribute("data-selected-row")).toBe("true");
+      fireEvent.pointerEnter(second);
+      expect(second.getAttribute("aria-selected")).toBe("true");
+      expect(container.querySelectorAll(SELECTED_OPTION)).toHaveLength(1);
+
+      // preventDefault on pointerdown is what stops the click focusing the row
+      // and pulling DOM focus off the search box.
+      expect(fireEvent.pointerDown(second)).toBe(false);
+    });
+
+    it("hovering an unfiltered band row also moves the selection", () => {
+      // The state the user is in the instant the launcher opens — the browse
+      // rows were the ones left unguarded against pointer focus-steal.
+      const { container } = renderButton();
+
+      const rows = options(container);
+      expect(rows.length).toBeGreaterThan(1);
+
+      fireEvent.pointerEnter(rows[1]!);
+      expect(selectedOption(container)).toBe(rows[1]);
+      expect(fireEvent.pointerDown(rows[1]!)).toBe(false);
     });
   });
 
@@ -761,25 +873,25 @@ describe("DockLaunchButton", () => {
 
   it("calls preventDefault on pointer close so the trigger does not keep its focus ring (issue #6119)", () => {
     renderButton();
-    expect(dropdownCloseAutoFocusSpy).toBeTruthy();
-    expect(dropdownPointerDownOutsideSpy).toBeTruthy();
+    expect(popoverCloseAutoFocusSpy).toBeTruthy();
+    expect(popoverPointerDownOutsideSpy).toBeTruthy();
 
     // Keyboard close (no prior pointer-down-outside) must NOT preventDefault
     // — focus restoration is required for WAI-ARIA Escape/Enter.
     const keyboardPreventDefault = vi.fn();
-    dropdownCloseAutoFocusSpy!({ preventDefault: keyboardPreventDefault });
+    popoverCloseAutoFocusSpy!({ preventDefault: keyboardPreventDefault });
     expect(keyboardPreventDefault).not.toHaveBeenCalled();
 
     // Pointer close suppresses the focus ring.
-    dropdownPointerDownOutsideSpy!();
+    popoverPointerDownOutsideSpy!();
     const pointerPreventDefault = vi.fn();
-    dropdownCloseAutoFocusSpy!({ preventDefault: pointerPreventDefault });
+    popoverCloseAutoFocusSpy!({ preventDefault: pointerPreventDefault });
     expect(pointerPreventDefault).toHaveBeenCalledTimes(1);
 
     // The pointer flag must reset after one onCloseAutoFocus or a later
     // keyboard-driven close would inherit suppression and break focus return.
     const resetPreventDefault = vi.fn();
-    dropdownCloseAutoFocusSpy!({ preventDefault: resetPreventDefault });
+    popoverCloseAutoFocusSpy!({ preventDefault: resetPreventDefault });
     expect(resetPreventDefault).not.toHaveBeenCalled();
   });
 
@@ -872,7 +984,7 @@ describe("DockLaunchButton", () => {
         agents: MANY,
       });
 
-      const labels = getAllByTestId("dock-launcher-label").map((el) => el.textContent);
+      const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
       expect(labels[0]).toBe("Recently launched");
       expect(getByText("Recently launched")).toBeTruthy();
 
@@ -932,8 +1044,8 @@ describe("DockLaunchButton", () => {
       // A launch elsewhere records MRU while this component stays mounted.
       mockMruEntries = [{ id: "agent.codex", score: 1, lastAccessedAt: 7000 }];
 
-      act(() => dropdownOpenChangeSpy!(false));
-      act(() => dropdownOpenChangeSpy!(true));
+      act(() => popoverOpenChangeSpy!(false));
+      act(() => popoverOpenChangeSpy!(true));
 
       expect(getByText("Recently launched")).toBeTruthy();
     });

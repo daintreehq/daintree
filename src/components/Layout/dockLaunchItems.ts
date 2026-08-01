@@ -45,6 +45,9 @@ const AGENT_LAUNCH_PANEL_KINDS: ReadonlySet<string> = new Set([
  * launcher's most-used entry, so it is added back explicitly here. */
 const TERMINAL_KIND_ID = "terminal";
 
+/** Row id of the "Create a recipe" cue — the one browse row with no item. */
+export const CREATE_RECIPE_ROW_KEY = "create-recipe";
+
 export type LaunchAgentIcon = React.ComponentType<{ className?: string; brandColor?: string }>;
 
 export interface DockLaunchAgent {
@@ -87,6 +90,47 @@ export interface DockLaunchRecipeItem extends DockLaunchItemBase {
 
 export type DockLaunchItem = DockLaunchAgentItem | DockLaunchPanelItem | DockLaunchRecipeItem;
 
+/** Heading a launcher row renders under. `results` is the filtered list. */
+export type DockLaunchBandId =
+  | "recent"
+  | "pinned"
+  | "other"
+  | "agents"
+  | "dock-panels"
+  | "grid-panels"
+  | "panels"
+  | "recipes"
+  | "results";
+
+export const DOCK_LAUNCH_BAND_LABELS: Record<DockLaunchBandId, string> = {
+  recent: "Recently launched",
+  pinned: "Pinned",
+  other: "Other",
+  agents: "Launch agent",
+  "dock-panels": "Open in dock",
+  "grid-panels": "Open in grid",
+  panels: "Launch panel",
+  recipes: "Launch recipe",
+  results: "Search results",
+};
+
+/**
+ * One rendered row of the `+` launcher palette. The launcher drives arrow-key
+ * navigation off a single flat row list for both the browse bands and the
+ * filtered results, so every row needs an index in the same space.
+ */
+export interface DockLaunchRow {
+  /**
+   * Unique per rendered row — NOT the item key. The recency band repeats agents
+   * that also appear under Pinned/Other, and two rows sharing an id would
+   * highlight together and break `aria-activedescendant`.
+   */
+  rowKey: string;
+  band: DockLaunchBandId;
+  /** Absent for the "Create a recipe" discovery cue, which opens the editor. */
+  item?: DockLaunchItem;
+}
+
 export interface DockLaunchModel {
   /** Capped frecency band; entries also appear in the agent groups below. */
   recentAgents: DockLaunchAgent[];
@@ -97,6 +141,12 @@ export interface DockLaunchModel {
   recipes: DockLaunchRecipeItem[];
   /** Flat, de-duplicated set fed to Fuse — the recency band is not repeated. */
   searchItems: DockLaunchItem[];
+  /**
+   * Every browse row in render order, recency duplicates included. This is the
+   * launcher's navigation space when nothing is typed; `searchItems` stays
+   * de-duplicated so a recent agent can't rank twice in the results.
+   */
+  browseRows: DockLaunchRow[];
 }
 
 /**
@@ -160,6 +210,27 @@ export function selectRecentAgents(
 }
 
 /**
+ * The "Recently launched" rows of {@link DockLaunchModel.browseRows}. Split out
+ * because `useDockLaunchModel` derives the band outside its memo (see there) and
+ * has to splice it back onto a `browseRows` built without it.
+ *
+ * The band repeats agents that are listed again under Pinned/Other. That
+ * duplication is deliberate — a quick-reach shortcut — so the rows are keyed
+ * apart rather than de-duplicated: dropping an agent from Pinned because it was
+ * recently launched would make that heading lie.
+ */
+export function buildRecentBrowseRows(
+  agentItems: ReadonlyArray<DockLaunchAgentItem>,
+  recentAgentIds: ReadonlyArray<string>
+): DockLaunchRow[] {
+  const byKey = new Map(agentItems.map((item) => [item.key, item]));
+  return recentAgentIds
+    .map((id) => byKey.get(`agent:${id}`))
+    .filter((item): item is DockLaunchAgentItem => item !== undefined)
+    .map((item) => ({ rowKey: `recent:${item.key}`, band: "recent" as const, item }));
+}
+
+/**
  * Derive every launchable entry for a launcher surface. Panels come from the
  * shared spawnable-kind selector (so the launcher can't drift from ⌘⇧P) plus
  * Terminal, partitioned by where they will actually land rather than filtered
@@ -219,13 +290,54 @@ export function buildDockLaunchModel({
     searchAliases: [agent.id, "agent"],
   }));
 
+  const showAgentGroups =
+    pinnedCount !== undefined && pinnedCount > 0 && pinnedCount < agents.length;
+  const isSplitByDestination = dockPanels.length > 0 && gridPanels.length > 0;
+
+  const browseRows: DockLaunchRow[] = [];
+  const pushRows = (band: DockLaunchBandId, items: ReadonlyArray<DockLaunchItem>) => {
+    for (const item of items) {
+      browseRows.push({ rowKey: item.key, band, item });
+    }
+  };
+
+  browseRows.push(
+    ...buildRecentBrowseRows(
+      agentItems,
+      recentAgents.map((agent) => agent.id)
+    )
+  );
+
+  if (agentItems.length > 0) {
+    if (showAgentGroups) {
+      pushRows("pinned", agentItems.slice(0, pinnedCount));
+      pushRows("other", agentItems.slice(pinnedCount));
+    } else {
+      pushRows("agents", agentItems);
+    }
+  }
+
+  if (isSplitByDestination) {
+    pushRows("dock-panels", dockPanels);
+    pushRows("grid-panels", gridPanels);
+  } else {
+    pushRows("panels", [...dockPanels, ...gridPanels]);
+  }
+
+  if (recipeItems.length > 0) {
+    pushRows("recipes", recipeItems);
+  } else {
+    browseRows.push({ rowKey: CREATE_RECIPE_ROW_KEY, band: "recipes" });
+  }
+
   return {
     recentAgents,
-    showAgentGroups: pinnedCount !== undefined && pinnedCount > 0 && pinnedCount < agents.length,
+    showAgentGroups,
     dockPanels,
     gridPanels,
     recipes: recipeItems,
     searchItems: [...agentItems, ...panelItems, ...recipeItems],
+    browseRows,
   };
 }
 
@@ -289,7 +401,39 @@ export function useDockLaunchModel(options: {
     [agents, pinnedCount, activeWorktreeId, recipes, surface, kindRegistry, definitionRegistry]
   );
 
-  return { ...stable, recentAgents: selectRecentAgents(agents, getSortedActionMruList()) };
+  const recentAgents = selectRecentAgents(agents, getSortedActionMruList());
+  // `stable` was built with an empty MRU, so its `browseRows` carry no recency
+  // band — splice it back on here. Keyed on the id signature rather than the
+  // array, which `selectRecentAgents` mints fresh on every render.
+  const recentSignature = recentAgents.map((agent) => agent.id).join(",");
+  const browseRows = useMemo(() => {
+    const agentItems = stable.searchItems.filter(
+      (item): item is DockLaunchAgentItem => item.category === "agent"
+    );
+    const recentIds = recentSignature ? recentSignature.split(",") : [];
+    return [...buildRecentBrowseRows(agentItems, recentIds), ...stable.browseRows];
+  }, [stable, recentSignature]);
+
+  return { ...stable, recentAgents, browseRows };
+}
+
+/**
+ * First-run discovery cue: route into recipes instead of hiding the section, so
+ * users who have never made one can find their way in. With an active worktree,
+ * open the editor scoped to it; without one (the common first-run case), fall
+ * back to the manager — the editor's event handler hard-requires a string
+ * worktreeId and silently no-ops on undefined, so dispatching the editor here
+ * would do nothing. Both actions are danger:"safe" and MRU-eligible.
+ */
+export function activateCreateRecipeCue(
+  activeWorktreeId: string | null,
+  source: ActionSource
+): void {
+  if (activeWorktreeId) {
+    void actionService.dispatch("recipe.editor.open", { worktreeId: activeWorktreeId }, { source });
+  } else {
+    void actionService.dispatch("recipe.manager.open", {}, { source });
+  }
 }
 
 export interface ActivateDockLaunchItemContext {

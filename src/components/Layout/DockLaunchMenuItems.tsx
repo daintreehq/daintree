@@ -4,16 +4,14 @@ import { SquareTerminal } from "lucide-react";
 import { BrandMark, Workflow } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import type { RecipeContext } from "@/utils/recipeVariables";
-import { actionService } from "@/services/ActionService";
-import { cn } from "@/lib/utils";
 import type { ActionSource } from "@shared/types";
 import { isAgentBlocked, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import {
+  activateCreateRecipeCue,
   activateDockLaunchItem,
   useDockLaunchModel,
   type DockLaunchAgent,
   type DockLaunchItem,
-  type DockLaunchModel,
   type DockLaunchPanelItem,
   type DockLaunchRecipeItem,
   type DockLaunchSurface,
@@ -27,20 +25,6 @@ export interface DockLaunchMenuComponents {
   Item: MenuComponent;
   Label: MenuComponent;
   Separator: MenuComponent;
-}
-
-/**
- * Search state owned by the `+` dropdown. Absent for the dock's right-click
- * context menu, where a text input doesn't belong — the item set is shared, the
- * search field is not.
- */
-export interface DockLaunchSearchState {
-  query: string;
-  results: ReadonlyArray<DockLaunchItem>;
-  selectedIndex: number;
-  /** DOM id for a result row, so the input can point `aria-activedescendant` at it. */
-  getOptionId: (key: string) => string;
-  onHoverIndex: (index: number) => void;
 }
 
 interface DockLaunchMenuItemsProps {
@@ -69,15 +53,14 @@ interface DockLaunchMenuItemsProps {
    * the grid, so it must not offer a dock destination it won't honour.
    */
   surface: DockLaunchSurface;
-  search?: DockLaunchSearchState;
-  /**
-   * Model built by the caller. The `+` dropdown already derives one to feed its
-   * search index and passes it down so both halves render from one snapshot;
-   * the context menu omits it and the component derives its own.
-   */
-  model?: DockLaunchModel;
 }
 
+/**
+ * The banded launcher list rendered through a caller-supplied menu primitive.
+ * Both right-click context menus (the dock's and the grid's) use it; the `+`
+ * launcher renders its own searchable palette rows instead, because a
+ * `role="option"` row and a Radix menu item have incompatible contracts.
+ */
 export function DockLaunchMenuItems({
   components: C,
   agents,
@@ -88,11 +71,8 @@ export function DockLaunchMenuItems({
   pinnedCount,
   settingsSource = "menu",
   surface,
-  search,
-  model: providedModel,
 }: DockLaunchMenuItemsProps) {
-  const derivedModel = useDockLaunchModel({ agents, pinnedCount, activeWorktreeId, surface });
-  const model = providedModel ?? derivedModel;
+  const model = useDockLaunchModel({ agents, pinnedCount, activeWorktreeId, surface });
 
   const activate = (item: DockLaunchItem) =>
     activateDockLaunchItem(item, {
@@ -152,116 +132,14 @@ export function DockLaunchMenuItems({
     </C.Item>
   );
 
-  // First-run discovery cue: route into recipes instead of hiding the section,
-  // so users who have never made one can find their way in. With an active
-  // worktree, open the editor scoped to it; without one (the common first-run
-  // case), fall back to the manager — the editor's event handler hard-requires
-  // a string worktreeId and silently no-ops on undefined, so dispatching the
-  // editor here would do nothing. Both actions are danger:"safe" and MRU-eligible.
   const renderCreateRecipeCue = () => (
-    <C.Item
-      onSelect={() => {
-        if (activeWorktreeId) {
-          void actionService.dispatch(
-            "recipe.editor.open",
-            { worktreeId: activeWorktreeId },
-            { source: settingsSource }
-          );
-        } else {
-          void actionService.dispatch("recipe.manager.open", {}, { source: settingsSource });
-        }
-      }}
-    >
+    <C.Item onSelect={() => activateCreateRecipeCue(activeWorktreeId, settingsSource)}>
       <Workflow className="w-3.5 h-3.5 mr-2" />
       Create a recipe
     </C.Item>
   );
 
-  const isFiltering = search !== undefined && search.query.trim().length > 0;
   const isSplitByDestination = model.dockPanels.length > 0 && model.gridPanels.length > 0;
-
-  if (isFiltering) {
-    if (search.results.length === 0) {
-      return (
-        <>
-          <C.Label>Search results</C.Label>
-          <C.Item disabled>Try a different search</C.Item>
-        </>
-      );
-    }
-
-    return (
-      <>
-        <C.Label>Search results</C.Label>
-        {search.results.map((item, index) => {
-          const isSelected = index === search.selectedIndex;
-          // A filtered row must carry the same warnings as its unfiltered twin:
-          // a blocked agent that silently opens Settings, or a shadowed recipe
-          // that resolves to a different winner, is worse when the row looks
-          // ordinary.
-          const isDimmed =
-            item.category === "agent"
-              ? !isAgentLaunchable(item.agent.availability)
-              : item.category === "recipe" && item.isShadowed;
-          const rowTitle =
-            item.category === "agent" && !isAgentLaunchable(item.agent.availability)
-              ? isAgentBlocked(item.agent.availability)
-                ? `${item.name} is blocked by endpoint security. Click to configure.`
-                : `${item.name} needs setup. Click to configure.`
-              : undefined;
-          return (
-            <C.Item
-              key={item.key}
-              id={search.getOptionId(item.key)}
-              title={rowTitle}
-              data-selected-row={isSelected ? "true" : "false"}
-              // Radix focuses a menu item on pointer move unless the event is
-              // prevented, which would yank DOM focus off the search input the
-              // moment the pointer crosses a row. Keep focus on the input and
-              // mirror the hover into the visual selection instead.
-              onPointerMove={(event: React.PointerEvent) => {
-                event.preventDefault();
-                search.onHoverIndex(index);
-              }}
-              className={cn(
-                "relative",
-                isDimmed && "opacity-70",
-                isSelected &&
-                  "bg-overlay-raised before:absolute before:left-0 before:top-1 before:bottom-1 before:w-[2px] before:bg-daintree-accent before:content-['']"
-              )}
-              onSelect={() => activate(item)}
-            >
-              {item.category === "agent" ? (
-                item.agent.icon ? (
-                  <BrandMark brandColor={item.agent.brandColor} className="w-3.5 h-3.5 mr-2">
-                    <item.agent.icon className="w-3.5 h-3.5" brandColor={item.agent.brandColor} />
-                  </BrandMark>
-                ) : (
-                  <SquareTerminal className="w-3.5 h-3.5 mr-2" />
-                )
-              ) : item.category === "panel" ? (
-                <PanelKindIcon iconId={item.iconId} color={item.color} size={14} className="mr-2" />
-              ) : (
-                <Workflow className="w-3.5 h-3.5 mr-2 shrink-0" />
-              )}
-              <span className="truncate">{item.name}</span>
-              <span className="ml-auto pl-2 text-[11px] text-text-muted shrink-0">
-                {item.category === "panel"
-                  ? item.location === "dock"
-                    ? "Dock"
-                    : "Grid"
-                  : item.category === "recipe"
-                    ? item.isShadowed
-                      ? `${item.scopeLabel} · Overridden by Team`
-                      : item.scopeLabel
-                    : "Agent"}
-              </span>
-            </C.Item>
-          );
-        })}
-      </>
-    );
-  }
 
   return (
     <>
