@@ -214,8 +214,18 @@ describe("CopyTreeService.getFileTree", () => {
       { includeExcluded: true }
     );
 
+    // `mtimeMs` rides along like `size` does: the verdict is applied to the raw
+    // FileTreeService nodes rather than to freshly built ones, so every field
+    // that listing reads reaches this surface. Matched loosely because it is a
+    // real filesystem timestamp.
     expect(nodes).toEqual([
-      { name: "pkg", path: "node_modules/pkg", isDirectory: true, excluded: true },
+      {
+        name: "pkg",
+        path: "node_modules/pkg",
+        isDirectory: true,
+        excluded: true,
+        mtimeMs: expect.any(Number),
+      },
     ]);
   });
 
@@ -242,7 +252,15 @@ describe("CopyTreeService.getFileTree", () => {
 
     const nodes = await copyTreeService.getFileTree(tempDir, "", {}, { includeExcluded: true });
 
-    expect(nodes).toEqual([{ name: "empty", path: "empty", isDirectory: true, excluded: true }]);
+    expect(nodes).toEqual([
+      {
+        name: "empty",
+        path: "empty",
+        isDirectory: true,
+        excluded: true,
+        mtimeMs: expect.any(Number),
+      },
+    ]);
   });
 
   it("preserves the raw listing's directories-first ordering while filtering", async () => {
@@ -265,7 +283,9 @@ describe("CopyTreeService.getFileTree", () => {
 
     const nodes = await copyTreeService.getFileTree(tempDir, "src");
 
-    expect(nodes).toEqual([{ name: "a.ts", path: "src/a.ts", isDirectory: false, size: 0 }]);
+    expect(nodes).toEqual([
+      { name: "a.ts", path: "src/a.ts", isDirectory: false, size: 0, mtimeMs: expect.any(Number) },
+    ]);
   });
 
   it("scans the whole root rather than scoping to the listed directory", async () => {

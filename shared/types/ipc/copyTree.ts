@@ -260,11 +260,14 @@ export interface FileTreeNode {
   size?: number;
   /**
    * Last-modified time in epoch milliseconds, read off the `lstat` the listing
-   * already performs — never its own syscall. Absent on nodes that did not come
-   * from a live directory read: a tree rehydrated from a persisted snapshot
-   * (which stores structure only) and the CopyTree context listing (which is
-   * rebuilt from the SDK manifest) both leave it undefined, so every consumer
-   * has to have an answer for "unknown" rather than treating it as 0.
+   * already performs — never its own syscall.
+   *
+   * Absent on nodes that did not come from a live directory read: a tree
+   * rehydrated from a persisted snapshot stores structure only, so every
+   * consumer needs an answer for "unknown" rather than treating it as 0. It
+   * does reach the CopyTree context listing, which applies its include/exclude
+   * verdict to the raw listing nodes rather than rebuilding them — the same
+   * route `size` already travels.
    */
   mtimeMs?: number;
   /** Children (only populated for directories if expanded) */
