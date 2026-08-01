@@ -2,7 +2,11 @@ import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { DetectedProcessCandidate } from "./types.js";
 import { getProcessToolPriority } from "../../../shared/config/processToolRegistry.js";
 import { AGENT_CLI_NAMES, PROCESS_ICON_MAP } from "./registries.js";
-import { extractCommandNameCandidates, stripCommandExecutableExtension } from "./commandParser.js";
+import {
+  executablePositionLimit,
+  extractCommandNameCandidates,
+  stripCommandExecutableExtension,
+} from "./commandParser.js";
 
 export function normalizeProcessName(name: string): string {
   const basename = name.split(/[\\/]/).pop() || name;
@@ -54,11 +58,7 @@ export function buildDetectedCandidate(
         effectiveName = candidate;
         break;
       }
-      // Only argv[0] and the token it executes can name the tool. Anything
-      // further along is an argument: `npm run docker` runs a script the user
-      // happened to call "docker", and `node server.js vite` passes "vite" to
-      // a server. Both used to report the wrong tool.
-      if (index > 1) continue;
+      if (index > executablePositionLimit(candidates)) continue;
       const candidateIcon = PROCESS_ICON_MAP[lowerCandidate];
       if (candidateIcon) {
         const priority = getProcessToolPriority(candidateIcon);

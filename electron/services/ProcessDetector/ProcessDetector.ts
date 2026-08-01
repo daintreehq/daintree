@@ -596,11 +596,15 @@ export class ProcessDetector {
 
     let bestMatch: DetectedProcessCandidate | null = null;
     let order = 0;
-    // Every node the walk reached, probed or not. Eviction diffs against this
-    // rather than against `probedPids`: a live PID we chose not to probe this
-    // pass has NOT disappeared, and evicting it would throw away a valid
-    // cached basename and re-spawn the probe on the next pass.
-    const visitedPids = new Set<number>();
+    // PIDs whose image path was read this pass. Eviction diffs against exactly
+    // this set: a PID that has dropped out of probe range is either gone or no
+    // longer shallow, and in both cases its cached basename must not survive to
+    // be served after the OS recycles the number. #8794
+    const probedPids = new Set<number>();
+    // Counts only nodes below the direct children. A wide first level must not
+    // consume the descent budget, or a PTY with many children would never look
+    // past them — the very blindness the deeper walk exists to fix.
+    let descendantCount = 0;
     // Guards against a cycle in an inconsistent `ps` snapshot and against
     // visiting the same PID twice when a node appears under two parents.
     const scheduled = new Set<number>([this.ptyPid]);
@@ -618,10 +622,10 @@ export class ProcessDetector {
       const level =
         depth === 1
           ? frontier
-          : frontier.slice(0, Math.max(0, MAX_PROCESS_TREE_NODES - visitedPids.size));
+          : frontier.slice(0, Math.max(0, MAX_PROCESS_TREE_NODES - descendantCount));
+      if (depth > 1) descendantCount += level.length;
 
       for (const proc of level) {
-        visitedPids.add(proc.pid);
         const command = proc.command || proc.comm;
         const candidate = buildDetectedCandidate(proc.comm, command, order++);
         if (candidate) {
@@ -639,6 +643,7 @@ export class ProcessDetector {
         // macOS/Windows. Deeper nodes are build tools, which don't rewrite
         // their titles, so they identify fine from comm/argv alone.
         if (this.imagePathProbe && depth <= MAX_IMAGE_PATH_PROBE_DEPTH) {
+          probedPids.add(proc.pid);
           const imageBasename = this.imagePathProbe.readBasename(proc.pid);
           if (imageBasename) {
             const imageCandidate = buildDetectedCandidate(imageBasename, command, order++);
@@ -653,7 +658,7 @@ export class ProcessDetector {
       // claude's Node worker processes when the claude parent renamed its comm.
       // The whole breadth level is still evaluated first so sibling ordering is
       // unchanged; only the descent below it is skipped.
-      if (bestMatch?.priority === 0 || visitedPids.size >= MAX_PROCESS_TREE_NODES) {
+      if (bestMatch?.priority === 0 || descendantCount >= MAX_PROCESS_TREE_NODES) {
         break;
       }
 
@@ -690,7 +695,7 @@ export class ProcessDetector {
     const primaryProcess = processes[0];
     const primaryCommand = primaryProcess?.command;
 
-    this.evictDisappearedImagePathPids(visitedPids);
+    this.evictDisappearedImagePathPids(probedPids);
 
     return this.mergeWithShellEvidence(bestMatch, {
       isBusy,
@@ -699,24 +704,26 @@ export class ProcessDetector {
   }
 
   /**
-   * Evict ImagePathProbe entries for PIDs that were reachable last pass but
-   * are absent this pass. Without this, a recycled PID could return the prior
+   * Evict ImagePathProbe entries for PIDs that were probed last pass but are
+   * not probed this pass. Without this, a recycled PID could return the prior
    * process's cached basename for up to 30s (the probe's eviction TTL) plus
    * the cache hard-max window, causing a brief misidentification before the
    * background refresh writes the new value.
    *
-   * Takes every PID the walk VISITED, not just the ones it probed: a live node
-   * below the probe depth is still alive, and evicting it would discard a good
-   * cached basename. Diffing is O(N) per pass, N bounded by the node budget.
+   * Diffs against the probed set rather than every visited PID: a successful
+   * probe entry is served indefinitely until evicted, so a PID that left probe
+   * range must drop its entry. Keeping it because the PID is still visible
+   * somewhere deeper would let an unrelated process that inherited the number
+   * answer with the old basename.
    */
-  private evictDisappearedImagePathPids(currentVisitedPids: Set<number>): void {
+  private evictDisappearedImagePathPids(currentProbedPids: Set<number>): void {
     if (!this.imagePathProbe) return;
     for (const pid of this.previouslyProbedPids) {
-      if (!currentVisitedPids.has(pid)) {
+      if (!currentProbedPids.has(pid)) {
         this.imagePathProbe.evict(pid);
       }
     }
-    this.previouslyProbedPids = currentVisitedPids;
+    this.previouslyProbedPids = currentProbedPids;
   }
 
   /**

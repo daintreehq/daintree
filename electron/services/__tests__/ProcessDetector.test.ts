@@ -665,16 +665,49 @@ describe("ProcessDetector", () => {
     );
   });
 
-  it("stops descending once the node budget is exhausted", () => {
+  it("still descends past a first level wide enough to exhaust the node budget", () => {
+    // Counting direct children against the descent budget would make a PTY
+    // with many children blind to everything below them.
     const cache = createCacheMock();
+    const siblings = Array.from({ length: 200 }, (_, i) => ({
+      pid: 1000 + i,
+      comm: "sh",
+      command: "sh -c worker",
+    }));
+    cache.setChildren(100, siblings);
+    cache.setChildren(1000, [{ pid: 9000, comm: "vite", command: "vite --host" }]);
+    const callback = vi.fn();
+
+    const detector = new ProcessDetector(
+      "terminal-wide-descend",
+      Date.now(),
+      100,
+      callback,
+      cache as never
+    );
+    detector.start();
+    cache.emitRefresh();
+
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({ detected: true, processIconId: "vite" }),
+      expect.any(Number)
+    );
+  });
+
+  it("stops descending once the descendant budget is exhausted", () => {
+    const cache = createCacheMock();
+    cache.setChildren(100, [{ pid: 200, comm: "sh", command: "sh -c fan-out" }]);
+    // A single direct child fans out past the budget at depth 2, so the walk
+    // must stop before expanding the tail of that level.
     const wide = Array.from({ length: 200 }, (_, i) => ({
       pid: 1000 + i,
       comm: "sh",
       command: "sh -c worker",
     }));
-    cache.setChildren(100, wide);
-    // Only reachable if the walk ignores its own budget.
-    cache.setChildren(1000, [{ pid: 9000, comm: "vite", command: "vite --host" }]);
+    cache.setChildren(200, wide);
+    // Hangs off the last depth-2 node, so it is only reachable if the walk
+    // ignores its own budget.
+    cache.setChildren(1199, [{ pid: 9000, comm: "vite", command: "vite --host" }]);
     const callback = vi.fn();
 
     const detector = new ProcessDetector(
@@ -687,7 +720,7 @@ describe("ProcessDetector", () => {
     detector.start();
     cache.emitRefresh();
 
-    expect(cache.getChildren).not.toHaveBeenCalledWith(1000);
+    expect(cache.getChildren).not.toHaveBeenCalledWith(1199);
     expect(callback).toHaveBeenCalledWith(
       expect.objectContaining({ detected: false, isBusy: true }),
       expect.any(Number)
@@ -2098,6 +2131,16 @@ describe("extractScriptBasenameFromCommand", () => {
     expect(detectCommandIdentity("npm run docker")).toMatchObject({
       processIconId: "npm",
       processName: "npm",
+    });
+  });
+
+  it("looks past an exec subcommand, which names a binary rather than a script", () => {
+    expect(detectCommandIdentity("pnpm exec vitest --watch")).toMatchObject({
+      processIconId: "vitest",
+      processName: "vitest",
+    });
+    expect(detectCommandIdentity("pnpm dlx prisma migrate dev")).toMatchObject({
+      processIconId: "prisma",
     });
   });
 

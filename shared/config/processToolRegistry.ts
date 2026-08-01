@@ -34,15 +34,14 @@ export const PROCESS_TOOL_REGISTRY = {
   npm: { label: "npm", commands: ["npm", "npx"], tier: "package-manager" },
   yarn: { label: "Yarn", commands: ["yarn"], tier: "package-manager" },
   pnpm: { label: "pnpm", commands: ["pnpm"], tier: "package-manager" },
+  // `bun run x` is launcher usage like the rest of this tier, so it yields to
+  // whatever it starts. When nothing identifiable runs below it, Bun wins.
+  bun: { label: "Bun", commands: ["bun", "bunx"], tier: "package-manager" },
   composer: { label: "Composer", commands: ["composer"], tier: "package-manager" },
   uv: { label: "uv", commands: ["uv", "uvx"], tier: "package-manager" },
   poetry: { label: "Poetry", commands: ["poetry"], tier: "package-manager" },
 
-  // Language runtimes — generic hosts, outranked by whatever they run.
-  // Bun sits here rather than with the package managers because `bun run
-  // server.ts` IS the long-running process; as a launcher it still loses to
-  // the named tool it starts, which is all the package-manager tier bought.
-  bun: { label: "Bun", commands: ["bun", "bunx"], tier: "runtime" },
+  // Language runtimes — generic hosts, outranked by whatever they run
   node: { label: "Node.js", commands: ["node", "tsx"], tier: "runtime" },
   python: { label: "Python", commands: ["python", "python3", "uvicorn"], tier: "runtime" },
   ruby: { label: "Ruby", commands: ["ruby", "rails", "bundle"], tier: "runtime" },

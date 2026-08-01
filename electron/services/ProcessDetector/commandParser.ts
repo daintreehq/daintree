@@ -113,6 +113,24 @@ export function redactArgv(command: string | undefined): string {
   return JSON.stringify(basename);
 }
 
+// Package-manager subcommands whose next argument is a real binary rather than
+// a user-defined script name. `run` is deliberately absent: `npm run docker`
+// runs whatever the "docker" script says, which is usually not Docker.
+const BINARY_EXEC_SUBCOMMANDS = new Set(["exec", "dlx", "x"]);
+
+/**
+ * Highest candidate index that can still name the tool being run. Normally
+ * argv[0] and the token it executes; a package manager's exec subcommand
+ * shifts that one further right (`pnpm exec vitest`).
+ *
+ * This is positional, not a full argv grammar — a flag that takes a value
+ * (`node --require ts-node/register app.js`) still consumes a slot, so the
+ * process-tree walk remains the primary signal.
+ */
+export function executablePositionLimit(candidates: string[]): number {
+  return candidates[1] && BINARY_EXEC_SUBCOMMANDS.has(candidates[1].toLowerCase()) ? 2 : 1;
+}
+
 /**
  * Best-effort identity resolution from a shell command line.
  *
@@ -136,9 +154,8 @@ export function detectCommandIdentity(command: string | undefined): CommandIdent
       };
     }
 
-    // Same executable-position rule as the process-tree path: only argv[0] and
-    // the token it runs can name the tool, so `npm run docker` stays npm.
-    if (index > 1) continue;
+    // Same executable-position rule as the process-tree path.
+    if (index > executablePositionLimit(candidates)) continue;
     const candidateIcon = PROCESS_ICON_MAP[lowerCandidate];
     if (candidateIcon) {
       // Tier preference, so a typed `npx vitest` reports Vitest rather than

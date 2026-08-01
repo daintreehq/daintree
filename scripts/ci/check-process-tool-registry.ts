@@ -120,7 +120,11 @@ const barrel = readFileSync(BARREL_FILE, "utf8");
 for (const [iconId, file] of brandIconIds) {
   const componentName = file.replace(/\.tsx$/, "");
 
-  if (!/^export default \w+;?$/m.test(readFileSync(path.join(BRANDS_DIR, file), "utf8"))) {
+  // Line-anchored so a mention inside a block comment or string does not
+  // count, and permissive about the form (identifier, function, or wrapper
+  // call) so a valid future component is not rejected.
+  const DEFAULT_EXPORT_RE = /^export default (?:function\s+)?\w+/m;
+  if (!DEFAULT_EXPORT_RE.test(readFileSync(path.join(BRANDS_DIR, file), "utf8"))) {
     fail(
       path.join(BRANDS_DIR, file),
       `${componentName} has no default export. The brands glob imports defaults, so ` +
