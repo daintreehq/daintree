@@ -1,6 +1,7 @@
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { DetectedProcessCandidate } from "./types.js";
-import { AGENT_CLI_NAMES, PROCESS_ICON_MAP, PACKAGE_MANAGER_ICON_IDS } from "./registries.js";
+import { getProcessToolPriority } from "../../../shared/config/processToolRegistry.js";
+import { AGENT_CLI_NAMES, PROCESS_ICON_MAP } from "./registries.js";
 import { extractCommandNameCandidates, stripCommandExecutableExtension } from "./commandParser.js";
 
 export function normalizeProcessName(name: string): string {
@@ -8,16 +9,16 @@ export function normalizeProcessName(name: string): string {
   return stripCommandExecutableExtension(basename);
 }
 
+/**
+ * Lower wins. Agents outrank everything; below them the registry tier decides,
+ * so a package manager only survives when nothing more specific was found.
+ */
 export function getDetectionPriority(agentType?: BuiltInAgentId, processIconId?: string): number {
   if (agentType) {
     return 0;
   }
 
-  if (processIconId && PACKAGE_MANAGER_ICON_IDS.has(processIconId)) {
-    return 1;
-  }
-
-  return 2;
+  return getProcessToolPriority(processIconId);
 }
 
 export function buildDetectedCandidate(
@@ -34,7 +35,16 @@ export function buildDetectedCandidate(
 
   if (!agentType && processCommand) {
     const candidates = extractCommandNameCandidates(processCommand);
-    let iconMatch: { name: string; icon: string } | null = null;
+    // Seed from the `comm` match so an argv name only displaces it by ranking
+    // strictly better. That is what turns `node /path/to/vite.js` into Vite
+    // while leaving `npm run dev` — whose argv names nothing registered — npm.
+    let iconMatch: { name: string; icon: string; priority: number } | null = processIconId
+      ? {
+          name: effectiveName,
+          icon: processIconId,
+          priority: getProcessToolPriority(processIconId),
+        }
+      : null;
     for (const candidate of candidates) {
       const lowerCandidate = candidate.toLowerCase();
       const candidateAgent = AGENT_CLI_NAMES[lowerCandidate];
@@ -44,12 +54,16 @@ export function buildDetectedCandidate(
         effectiveName = candidate;
         break;
       }
-      if (!iconMatch) {
-        const candidateIcon = PROCESS_ICON_MAP[lowerCandidate];
-        if (candidateIcon) iconMatch = { name: candidate, icon: candidateIcon };
+      const candidateIcon = PROCESS_ICON_MAP[lowerCandidate];
+      if (candidateIcon) {
+        const priority = getProcessToolPriority(candidateIcon);
+        // Strict `<` keeps the leftmost argv name on ties, matching argv order.
+        if (!iconMatch || priority < iconMatch.priority) {
+          iconMatch = { name: candidate, icon: candidateIcon, priority };
+        }
       }
     }
-    if (!agentType && !processIconId && iconMatch) {
+    if (!agentType && iconMatch) {
       processIconId = iconMatch.icon;
       effectiveName = iconMatch.name;
     }

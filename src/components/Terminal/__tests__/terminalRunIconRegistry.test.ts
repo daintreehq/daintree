@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveTerminalRunIcon, TERMINAL_RUN_ICON_MAP } from "../terminalRunIconRegistry";
+import { PROCESS_TOOL_REGISTRY } from "@shared/config/processToolRegistry";
 import { getAgentConfig } from "@/config/agents";
 
 describe("resolveTerminalRunIcon", () => {
@@ -28,6 +29,16 @@ describe("resolveTerminalRunIcon", () => {
     expect(resolveTerminalRunIcon("daintree-assistant")).toBe(
       TERMINAL_RUN_ICON_MAP[config!.iconId]
     );
+  });
+
+  it("resolves a component for every process tool in the registry", () => {
+    // The brand glob is the only icon source now that PROCESS_RUN_ICON_MAP is
+    // gone, so a registry key with no matching brand file would silently fall
+    // back to the generic terminal glyph.
+    const unresolved = Object.keys(PROCESS_TOOL_REGISTRY).filter(
+      (iconId) => resolveTerminalRunIcon(iconId) === undefined
+    );
+    expect(unresolved).toEqual([]);
   });
 
   it("resolves every built-in agent by both its registry id and its icon id", () => {

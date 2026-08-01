@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
+import { PROCESS_TOOL_REGISTRY } from "@shared/config/processToolRegistry";
 import {
   deriveTerminalChrome,
   deriveTerminalRuntimeIdentity,
@@ -79,6 +80,19 @@ describe("deriveTerminalRuntimeIdentity", () => {
 });
 
 describe("deriveTerminalChrome", () => {
+  it("labels every process tool from the registry rather than echoing its icon id", () => {
+    // A missing label used to surface the raw icon id as the tab's text.
+    const echoed = Object.keys(PROCESS_TOOL_REGISTRY).filter(
+      (iconId) => deriveTerminalChrome({ detectedProcessId: iconId }).label === iconId
+    );
+    // `npm`, `tmux` and friends legitimately label themselves lowercase, so
+    // compare against the registry rather than asserting they always differ.
+    const expected = Object.entries(PROCESS_TOOL_REGISTRY)
+      .filter(([iconId, config]) => config.label === iconId)
+      .map(([iconId]) => iconId);
+    expect(echoed.sort()).toEqual(expected.sort());
+  });
+
   it("returns generic terminal chrome for empty runtime state", () => {
     expect(deriveTerminalChrome()).toMatchObject({
       iconId: null,

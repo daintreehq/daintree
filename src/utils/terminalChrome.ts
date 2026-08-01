@@ -2,6 +2,7 @@ import type { AgentId, AgentState } from "@shared/types/agent";
 import type { PanelKind } from "@/types";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 import { getPanelKindColor, getPanelKindConfig } from "@shared/config/panelKindRegistry";
+import { getProcessToolConfig } from "@shared/config/processToolRegistry";
 import { getAgentConfig } from "@/config/agents";
 
 export interface TerminalChromeInput {
@@ -34,29 +35,6 @@ export interface TerminalChromeDescriptor {
    */
   hasExited: boolean;
 }
-
-const PROCESS_LABELS: Record<string, string> = {
-  npm: "npm",
-  yarn: "Yarn",
-  pnpm: "pnpm",
-  bun: "Bun",
-  python: "Python",
-  composer: "Composer",
-  docker: "Docker",
-  rust: "Rust",
-  go: "Go",
-  ruby: "Ruby",
-  node: "Node.js",
-  deno: "Deno",
-  gradle: "Gradle",
-  php: "PHP",
-  vite: "Vite",
-  webpack: "webpack",
-  kotlin: "Kotlin",
-  swift: "Swift",
-  terraform: "Terraform",
-  elixir: "Elixir",
-};
 
 function normalizeProcessId(processId: string | undefined): string | undefined {
   const trimmed = processId?.trim();
@@ -238,7 +216,7 @@ export function deriveTerminalChrome(input: TerminalChromeInput = {}): TerminalC
     return {
       iconId: identity.iconId,
       color: config?.color ?? getPanelKindColor(kind),
-      label: config?.name ?? PROCESS_LABELS[identity.iconId] ?? identity.iconId,
+      label: config?.name ?? getProcessToolConfig(identity.iconId)?.label ?? identity.iconId,
       isAgent: false,
       agentId: null,
       processId: identity.processId ?? identity.id,

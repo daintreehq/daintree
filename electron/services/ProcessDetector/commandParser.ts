@@ -1,4 +1,5 @@
 import type { CommandIdentity } from "./types.js";
+import { getProcessToolPriority } from "../../../shared/config/processToolRegistry.js";
 import { AGENT_CLI_NAMES, PROCESS_ICON_MAP } from "./registries.js";
 
 const WINDOWS_LAUNCHER_EXTENSION_PATTERN = /\.(?:exe|cmd|bat|com|ps1)$/i;
@@ -122,7 +123,7 @@ export function redactArgv(command: string | undefined): string {
  */
 export function detectCommandIdentity(command: string | undefined): CommandIdentity | null {
   const candidates = extractCommandNameCandidates(command);
-  let iconMatch: { name: string; icon: string } | null = null;
+  let iconMatch: { name: string; icon: string; priority: number } | null = null;
 
   for (const candidate of candidates) {
     const lowerCandidate = candidate.toLowerCase();
@@ -135,10 +136,13 @@ export function detectCommandIdentity(command: string | undefined): CommandIdent
       };
     }
 
-    if (!iconMatch) {
-      const candidateIcon = PROCESS_ICON_MAP[lowerCandidate];
-      if (candidateIcon) {
-        iconMatch = { name: candidate, icon: candidateIcon };
+    const candidateIcon = PROCESS_ICON_MAP[lowerCandidate];
+    if (candidateIcon) {
+      // Same tier preference as the process-tree path, so a typed `npx vitest`
+      // reports Vitest rather than npm. Strict `<` keeps argv order on ties.
+      const priority = getProcessToolPriority(candidateIcon);
+      if (!iconMatch || priority < iconMatch.priority) {
+        iconMatch = { name: candidate, icon: candidateIcon, priority };
       }
     }
   }

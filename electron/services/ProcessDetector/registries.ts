@@ -1,5 +1,6 @@
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import { AGENT_REGISTRY } from "../../../shared/config/agentRegistry.js";
+import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../../shared/config/processToolRegistry.js";
 
 function packageTail(pkg: string | undefined): string | undefined {
   if (!pkg) return undefined;
@@ -29,8 +30,13 @@ export const AGENT_CLI_NAMES: Record<string, BuiltInAgentId> = Object.fromEntrie
   })
 );
 
+/**
+ * Command name → icon id for every recognized process. Tools come from the
+ * shared registry; agent entries are derived from `AGENT_REGISTRY` and spread
+ * last so a command shared with a tool still resolves to the agent.
+ */
 export const PROCESS_ICON_MAP: Record<string, string> = {
-  // AI agents (derived from registry)
+  ...PROCESS_TOOL_ICON_BY_COMMAND,
   ...Object.fromEntries(
     Object.entries(AGENT_REGISTRY).flatMap(([id, config]) => {
       const entries: [string, string][] = [[id, config.iconId]];
@@ -44,43 +50,4 @@ export const PROCESS_ICON_MAP: Record<string, string> = {
       return entries;
     })
   ),
-  // Package managers
-  npm: "npm",
-  npx: "npm",
-  bunx: "bun",
-  yarn: "yarn",
-  pnpm: "pnpm",
-  bun: "bun",
-  composer: "composer",
-  // Language runtimes
-  python: "python",
-  python3: "python",
-  node: "node",
-  tsx: "node",
-  deno: "deno",
-  ruby: "ruby",
-  rails: "ruby",
-  bundle: "ruby",
-  go: "go",
-  cargo: "rust",
-  rustc: "rust",
-  php: "php",
-  kotlin: "kotlin",
-  kotlinc: "kotlin",
-  swift: "swift",
-  swiftc: "swift",
-  elixir: "elixir",
-  mix: "elixir",
-  iex: "elixir",
-  // Build tools
-  gradle: "gradle",
-  gradlew: "gradle",
-  webpack: "webpack",
-  vite: "vite",
-  // Infrastructure
-  docker: "docker",
-  terraform: "terraform",
-  tofu: "terraform",
 };
-
-export const PACKAGE_MANAGER_ICON_IDS = new Set(["npm", "yarn", "pnpm", "bun", "composer"]);
