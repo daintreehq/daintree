@@ -412,6 +412,82 @@ describe("FileTreeView context-menu interactions", () => {
   });
 });
 
+describe("FileTreeView row icons", () => {
+  // One row per visibly different kind of file, plus a folder and an
+  // unclassifiable name.
+  const MIXED = [
+    row("src", true),
+    row("clip.mp4"),
+    row("index.json"),
+    row("logo.png"),
+    row("bundle.zip"),
+    row("main.ts"),
+    row("mystery.qqq"),
+  ];
+
+  /** The row's icon: the direct <svg> child, past the chevron gutter if present. */
+  function iconOf(element: Element): SVGElement {
+    const svg = element.querySelector(":scope > svg");
+    expect(svg).toBeTruthy();
+    return svg as SVGElement;
+  }
+
+  it("gives each file kind its own glyph", () => {
+    const { getByRole } = renderTree({ rows: MIXED, rowContextMenu: undefined });
+
+    const shapes = ["clip.mp4", "index.json", "logo.png", "bundle.zip", "main.ts"].map(
+      (name) => iconOf(getByRole("treeitem", { name })).innerHTML
+    );
+
+    // The bug this fixes was every row drawing the same glyph.
+    expect(new Set(shapes).size).toBe(shapes.length);
+  });
+
+  it("keeps every entry icon decorative and unwrapped", () => {
+    const { getByRole } = renderTree({ rows: MIXED, rowContextMenu: undefined });
+
+    for (const entry of MIXED) {
+      // Wrapping the icon would break the tree's first-child layout contract
+      // asserted above, so assert the direct-child relationship per row.
+      const icon = iconOf(getByRole("treeitem", { name: entry.name }));
+      // The row already announces the filename; a second spoken label would
+      // just repeat the extension on every arrow-key move.
+      expect(icon.getAttribute("aria-hidden")).toBe("true");
+    }
+  });
+
+  it("tints classified files and leaves folders and unknowns neutral", () => {
+    const { getByRole } = renderTree({ rows: MIXED, rowContextMenu: undefined });
+
+    // Lucide stamps its own `lucide-<name>` class on every icon, so compare the
+    // color utilities rather than the whole class attribute.
+    const colorsOf = (name: string) =>
+      iconOf(getByRole("treeitem", { name }))
+        .getAttribute("class")
+        ?.match(/\btext-[a-z][a-z0-9-]*\b/g) ?? [];
+
+    for (const name of ["clip.mp4", "index.json", "logo.png", "bundle.zip", "main.ts"]) {
+      expect(colorsOf(name).some((token) => token.startsWith("text-category-"))).toBe(true);
+    }
+    // A folder is one shape for the whole tree, so a hue on it sorts nothing —
+    // it shares the unclassified file's neutral.
+    expect(colorsOf("src")).toEqual(colorsOf("mystery.qqq"));
+    expect(colorsOf("src").some((token) => token.startsWith("text-category-"))).toBe(false);
+  });
+
+  it("never dims an entry icon into invisibility or reaches for the accent", () => {
+    const { getByRole } = renderTree({ rows: MIXED, rowContextMenu: undefined });
+
+    for (const entry of MIXED) {
+      const className = iconOf(getByRole("treeitem", { name: entry.name })).getAttribute("class");
+      // The `/30`-`/40` alpha is exactly the "near invisible" complaint.
+      expect(className).not.toMatch(/text-[a-z-]+\/\d/);
+      // Accent restraint: never dozens of rows at once.
+      expect(className).not.toMatch(/accent/);
+    }
+  });
+});
+
 describe("FileTreeView folder-load spinner", () => {
   afterEach(() => {
     vi.useRealTimers();

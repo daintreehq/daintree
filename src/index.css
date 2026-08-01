@@ -2768,6 +2768,22 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-color: var(--color-daintree-text);
   }
 
+  /* File-browser type icons (issue #11596). The tree tints file icons with the
+   * category-* hues so types separate at a glance, but those hues are chosen
+   * for restrained chroma, not for maximum contrast. Under Increase Contrast
+   * the hue is the expendable half of the signal — the glyph shapes already
+   * carry the type — so repaint every entry icon with the solid text token.
+   * !important for the same reason as the rule above: the Tailwind
+   * `text-category-*` utility has equal specificity (0,1,0) and wins on source
+   * order.
+   *
+   * There is deliberately no `forced-colors: active` counterpart: these icons
+   * paint from `currentColor`, and that mode already forces `color` to a
+   * system keyword, so the same flattening happens with no rule at all. */
+  .file-tree-entry-icon {
+    color: var(--color-daintree-text) !important;
+  }
+
   /* Diff-viewer increased-contrast rules live in src/components/Worktree/DiffViewer.css
      (component-owned: the stylesheet rides the lazy diff chunk). */
 }
