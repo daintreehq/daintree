@@ -26,6 +26,7 @@ export const MCP_SURFACE_MANIFEST_VERSION = 1;
 /** JSON Schema keywords whose value is itself a schema. */
 const SCHEMA_VALUED_KEYS = new Set([
   "items",
+  "additionalItems",
   "additionalProperties",
   "unevaluatedItems",
   "unevaluatedProperties",
@@ -62,8 +63,15 @@ const SCHEMA_PROSE_KEYS = new Set(["description", "title", "$comment", "examples
  * Walks by keyword rather than blindly deleting every key named `description`,
  * because a schema is free to declare a *property* called `description` — that
  * one is part of the contract, and only the annotation slot beside it is prose.
- * Unrecognised keywords are copied verbatim, so a constraint this function has
- * never heard of is kept rather than silently dropped from the digest.
+ *
+ * Unrecognised keywords are copied verbatim rather than traversed, which errs
+ * deliberately toward over-sensitivity: a constraint this function has never
+ * heard of stays in the digest, and the cost is that prose buried under such a
+ * keyword can still move the hash. That direction is the safe one — a spurious
+ * change costs a client one re-read, while a dropped constraint would hide a
+ * real incompatibility forever. The classified sets cover everything Zod v4
+ * emits; a plugin shipping a hand-written draft-07 schema is the case that can
+ * land in the verbatim branch.
  *
  * `required` is sorted: it is a set in JSON Schema semantics, so its emitted
  * order is an artifact of the generator, not a contract. Every other array

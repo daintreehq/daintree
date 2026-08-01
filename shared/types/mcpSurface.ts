@@ -67,7 +67,16 @@ export interface McpSurfaceManifest {
   manifestVersion: number;
   /** The running Daintree build, so a captured response is diagnosable alone. */
   appVersion: string;
-  /** The authorization tier this session is on. */
+  /**
+   * The authorization tier this call was admitted at, and the tier the rest of
+   * the response describes. Not a live reading: an in-app tier can elevate or
+   * decay at any moment, so by the time a response is delivered the session may
+   * already be on another one. That is what `notifications/tools/list_changed`
+   * is for — it fires on every tier change, and a client that re-reads on the
+   * notification converges. Reporting the admitting tier keeps this response
+   * internally consistent: every tool listed below really was reachable under
+   * the authorization that let the call through.
+   */
   tier: McpSurfaceTier;
   /**
    * Lowercase hex SHA-256 over the canonical form of the surface. Changes iff
@@ -95,7 +104,7 @@ export const McpSurfaceResultSchema = z.object({
     .positive()
     .describe("Shape version of this payload, bumped when its fields change meaning"),
   appVersion: z.string().describe("The running Daintree build"),
-  tier: z.enum(TIER_VALUES).describe("The authorization tier this session is on"),
+  tier: z.enum(TIER_VALUES).describe("The authorization tier this call was admitted at"),
   hash: z
     .string()
     .regex(/^[0-9a-f]{64}$/)

@@ -389,7 +389,12 @@ describe("hash", () => {
       }),
     ];
 
-    // Guard against over-normalising: sorting every array would erase this.
+    // A deliberate conservative choice, not an oversight. `enum` validates as a
+    // set, so sorting it would arguably be defensible — but normalising is the
+    // dangerous direction: an over-sensitive hash costs a client one re-read,
+    // while an over-normalised one hides a real change permanently. `required`
+    // is normalised because its order is purely a generator artifact; `enum`
+    // order is authored, reaches the model verbatim, and stays significant.
     expect(hashOf(withEnum(["a", "b"]))).not.toBe(hashOf(withEnum(["b", "a"])));
   });
 
