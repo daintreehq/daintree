@@ -26,6 +26,13 @@ export interface MarkdownViewerProps {
   initialLine?: number;
   /** Source-mode only: soft-wrap long lines */
   wrapLines?: boolean;
+  /**
+   * Rendered-mode only: cache-busting token for local images. Without it a
+   * rewritten image keeps a byte-identical daintree-file:// src and Chromium
+   * never refetches it (#11587). Source mode renders raw text, so there is no
+   * image to bust — hosts only pass this where they render the document.
+   */
+  cacheBust?: string;
   className?: string;
   /**
    * Rendered-mode only: fired once the rendered document has committed. Hosts
@@ -42,7 +49,17 @@ export interface MarkdownViewerProps {
  */
 export const MarkdownViewer = forwardRef<MarkdownViewerHandle, MarkdownViewerProps>(
   function MarkdownViewer(
-    { content, filePath, rootPath, viewMode, initialLine, wrapLines, className, onRendered },
+    {
+      content,
+      filePath,
+      rootPath,
+      viewMode,
+      initialLine,
+      wrapLines,
+      cacheBust,
+      className,
+      onRendered,
+    },
     ref
   ) {
     const codeViewerRef = useRef<CodeViewerHandle>(null);
@@ -82,6 +99,7 @@ export const MarkdownViewer = forwardRef<MarkdownViewerHandle, MarkdownViewerPro
           content={content}
           filePath={filePath}
           rootPath={rootPath}
+          cacheBust={cacheBust}
           className={cn("px-6 py-5", className)}
           onRendered={onRendered}
         />

@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { render, act, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Type-only: erased before the vi.mock factory runs, so it cannot pull the real
+// module in ahead of its own mock.
+import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
 
 // FileBrowserViewer is the read-only preview beside the tree. #11319 adds a
 // Source/Rendered toggle for markdown, mirroring FilePane. Mock the heavy leaf
@@ -18,12 +21,17 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));
 
-// A real MarkdownViewer lazy-loads its renderer, hiding the prop under test.
+// A real MarkdownViewer lazy-loads its renderer, hiding the props under test.
 // The mock surfaces viewMode as a data attribute so the toggle wiring is
 // observable — without it the mode plumbing could be deleted and stay green.
+// cacheBust rides along for the same reason (#11587).
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({
-  MarkdownViewer: (props: { viewMode: string }) => (
-    <div data-testid="markdown-viewer-mock" data-view-mode={props.viewMode} />
+  MarkdownViewer: (props: Pick<MarkdownViewerProps, "viewMode" | "cacheBust">) => (
+    <div
+      data-testid="markdown-viewer-mock"
+      data-view-mode={props.viewMode}
+      data-cache-bust={props.cacheBust ?? ""}
+    />
   ),
 }));
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
@@ -94,6 +102,10 @@ async function clickMode(label: "Source" | "Rendered") {
 
 function currentViewMode(): string | null {
   return screen.getByTestId("markdown-viewer-mock").getAttribute("data-view-mode");
+}
+
+function currentCacheBust(): string | null {
+  return screen.getByTestId("markdown-viewer-mock").getAttribute("data-cache-bust");
 }
 
 beforeEach(() => {
@@ -167,6 +179,20 @@ describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
     expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
     expect(screen.queryByTestId("markdown-viewer-mock")).toBeNull();
+  });
+});
+
+describe("FileBrowserViewer rendered-markdown image freshness (#11587)", () => {
+  it("hands the refresh revision to the rendered document as its cache token", async () => {
+    // Embedded images resolve to daintree-file:// URLs built from path + root, so
+    // a rewritten image is invisible unless something in the URL moves. This is
+    // the same freshness choice the image branch already makes with ZoomableImage.
+    const { rerender } = renderViewer("/repo/docs/spec.md", { revision: "r1" });
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+    expect(currentCacheBust()).toBe("r1");
+
+    rerender(viewerJsx("/repo/docs/spec.md", { revision: "r2" }));
+    await waitFor(() => expect(currentCacheBust()).toBe("r2"));
   });
 });
 

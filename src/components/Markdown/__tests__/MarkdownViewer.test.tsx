@@ -38,6 +38,23 @@ describe("MarkdownViewer", () => {
     await waitFor(() => expect(onRendered).toHaveBeenCalledTimes(1));
   });
 
+  // #11587: the token has to survive the lazy() boundary. The document itself is
+  // covered in MarkdownDocument.test.tsx; what this pins is the forwarding, which
+  // could be deleted with every document-level test still green.
+  it("forwards the cache token across the lazy boundary to local images", async () => {
+    render(
+      <MarkdownViewer
+        {...FIXTURE_PROPS}
+        content={"![diagram](./img/arch.png)"}
+        viewMode="rendered"
+        cacheBust="rev-7"
+      />
+    );
+
+    const img = await screen.findByRole("img", { name: "diagram" });
+    expect(new URL(img.getAttribute("src") ?? "").searchParams.get("v")).toBe("rev-7");
+  });
+
   it("stays silent in source mode, which has no chunk to wait on", () => {
     const onRendered = vi.fn();
     render(<MarkdownViewer {...FIXTURE_PROPS} viewMode="source" onRendered={onRendered} />);

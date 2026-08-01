@@ -618,11 +618,17 @@ export function FileBrowserViewer({
             {/* min-h-full, never h-full: a floor lets a tall document grow past
                 the wrapper and scroll it, while a short one still fills the
                 preview. h-full would clamp it and silently restore the bug. */}
+            {/* `cacheBust` rather than a new `key`, for the same reason as the
+                image branch above: remounting would throw away the reader's
+                scroll position, while changing the image srcs reloads the
+                bytes in place. Unlike video/audio/pdf there is no playback to
+                interrupt (#11587). */}
             <MarkdownViewer
               content={state.content}
               filePath={filePath}
               rootPath={rootPath}
               viewMode={markdownMode}
+              cacheBust={revision}
               className="min-h-full"
             />
           </div>
