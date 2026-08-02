@@ -117,6 +117,12 @@ describe("TerminalResizeController", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    // clearAllMocks resets calls but NOT implementations, and both of these are
+    // module-hoisted and shared by every test in the file. Without an explicit
+    // reset, one test's `mockImplementation`/`mockReturnValue` silently governs
+    // every test that runs after it, making the suite order-dependent.
+    resizeMock.mockReset();
+    getEffectiveAgentConfigMock.mockReset();
     postTaskCallbacks = [];
 
     vi.stubGlobal("scheduler", {
@@ -216,7 +222,12 @@ describe("TerminalResizeController", () => {
     expect(dataBuffer.resetForTerminal).toHaveBeenCalledWith("term-1");
     // The flush succeeded, so ingest is already drained — no resume needed.
     expect(dataBuffer.resumeFlush).not.toHaveBeenCalled();
+    // Exact counts alongside `order`: the one-shot implementations above only
+    // record the FIRST call each, so a duplicate commit would slip past the
+    // ordering assertion on its own.
+    expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
     expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1600), 40);
+    expect(resizeMock).toHaveBeenCalledTimes(1);
     expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
     // Reflow mutates ybase/ydisp without firing onScroll, so a bottom-following
     // pane needs the explicit re-pin.
@@ -270,8 +281,90 @@ describe("TerminalResizeController", () => {
 
     expect(controller.resize("term-1", 1600, 800)).toEqual({ cols: colsFor(1600), rows: 40 });
     expect(order).toEqual(["xterm", "pty"]);
+    expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
     expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1600), 40);
+    expect(resizeMock).toHaveBeenCalledTimes(1);
     expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+  });
+
+  it("background-tier resize parks the xterm half while a serialized restore replays", () => {
+    // The one sanctioned exception to the atomicity contract: during a restore
+    // xterm is deliberately held at the snapshot's capture width so the payload
+    // decodes, and live output is deferred for the same window — so the PTY may
+    // lead. The obligation has to be RECORDED though; the old PTY-only path
+    // never did, which is why the grid never caught up.
+    const managed = createManagedTerminal();
+    managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+    managed.isFocused = false;
+    managed.isVisible = false;
+    managed.isSerializedRestoreInProgress = true;
+    Object.assign(managed.terminal, {
+      _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+    });
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      } as any,
+    });
+
+    expect(controller.resize("term-1", 1600, 800)).toEqual({ cols: colsFor(1600), rows: 40 });
+    expect(managed.terminal.resize).not.toHaveBeenCalled();
+    expect(managed.pendingRestoreGeometry).toEqual({ cols: colsFor(1600), rows: 40 });
+    // The PTY still gets the real geometry so the agent keeps producing output
+    // sized for the grid the user will see once the replay normalizes.
+    expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+  });
+
+  it("background-tier resize leaves an over-budget ingest backlog queued and resumes it", () => {
+    // Above RESIZE_FLUSH_SYNC_BUDGET_BYTES the backlog is too big to parse
+    // inline at the outgoing grid, so it stays queued and is resumed after the
+    // commit for watermarked draining — the grids still move together.
+    const managed = createManagedTerminal();
+    managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+    managed.isFocused = false;
+    managed.isVisible = false;
+    Object.assign(managed.terminal, {
+      _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+    });
+
+    const order: string[] = [];
+    managed.terminal.resize.mockImplementationOnce(function (
+      this: { cols: number; rows: number },
+      cols: number,
+      rows: number
+    ) {
+      order.push("xterm");
+      this.cols = cols;
+      this.rows = rows;
+    });
+    resizeMock.mockImplementationOnce(() => {
+      order.push("pty");
+    });
+
+    const dataBuffer = {
+      flushForTerminal: vi.fn(),
+      resetForTerminal: vi.fn(),
+      getQueuedBytes: vi.fn(() => RESIZE_FLUSH_SYNC_BUDGET_BYTES + 1),
+      resumeFlush: vi.fn(() => {
+        order.push("resume");
+      }),
+    };
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: dataBuffer as any,
+    });
+
+    expect(controller.resize("term-1", 1600, 800)).toEqual({ cols: colsFor(1600), rows: 40 });
+    // Never flushed at the outgoing grid — that is the whole point of the budget.
+    expect(dataBuffer.flushForTerminal).not.toHaveBeenCalled();
+    expect(dataBuffer.resetForTerminal).not.toHaveBeenCalled();
+    expect(order).toEqual(["xterm", "pty", "resume"]);
   });
 
   it("background-tier resize returns null when cell dims are unavailable", () => {
@@ -856,15 +949,21 @@ describe("TerminalResizeController", () => {
       } as any,
     });
 
-    // Background resize arms the settled timer with dims 120x35.
+    // A resize observed while the pane is genuinely hidden arms the settled
+    // timer. isVisible must be false too, or this takes the measured path and
+    // never exercises the hidden branch the comment claims.
     managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
     managed.isFocused = false;
+    managed.isVisible = false;
     controller.resize("term-1", 1200, 700);
     expect(resizeMock).not.toHaveBeenCalled();
+    expect(managed.terminal.resize).not.toHaveBeenCalled();
 
-    // Wake fires applyDeferredResize before the timer would have run.
+    // Wake fires applyDeferredResize before the timer would have run: the
+    // reveal owns the commit, and the superseded timer must not fire behind it.
     managed.lastAppliedTier = TerminalRefreshTier.FOCUSED;
     managed.isFocused = true;
+    managed.isVisible = true;
     controller.applyDeferredResize("term-1");
 
     expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
@@ -1977,7 +2076,12 @@ describe("TerminalResizeController", () => {
       expect(resizeMock).toHaveBeenCalledTimes(1);
     });
 
-    it("reasserts a pending settled target when the PTY-only box is redundant", () => {
+    it("commits a cancelled settled target to both grids when the box is redundant", () => {
+      // latestCols/latestRows here describe the target the cancelled settled job
+      // was going to apply, NOT the grid xterm currently holds — it is still at
+      // the pre-resize size. Reasserting only the PTY half would background the
+      // pane into exactly the split #11628 is about, so the cancelled work is
+      // committed rather than discarded.
       const managed = createManagedTerminal();
       managed.launchAgentId = "codex";
       managed.runtimeAgentId = "codex";
@@ -1992,14 +2096,33 @@ describe("TerminalResizeController", () => {
       controller.resize("term-1", 1600, 800);
       expect(controller.hasPendingResize("term-1")).toBe(true);
       expect(resizeMock).not.toHaveBeenCalled();
+      // The settled job has not fired, so xterm is still on the old grid.
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+
+      const order: string[] = [];
+      managed.terminal.resize.mockImplementationOnce(function (
+        this: { cols: number; rows: number },
+        cols: number,
+        rows: number
+      ) {
+        order.push("xterm");
+        this.cols = cols;
+        this.rows = rows;
+      });
+      resizeMock.mockImplementationOnce(() => {
+        order.push("pty");
+      });
 
       expect(controller.applyBackgroundResize("term-1", 1600, 800)).toBeNull();
 
       expect(controller.hasPendingResize("term-1")).toBe(false);
-      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(order).toEqual(["xterm", "pty"]);
+      expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1600), 40);
       expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
 
       vi.advanceTimersByTime(500);
+      expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
       expect(resizeMock).toHaveBeenCalledTimes(1);
     });
 

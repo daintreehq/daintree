@@ -286,13 +286,13 @@ export class TerminalResizeController {
 
     const currentTier =
       managed.lastAppliedTier ?? managed.getRefreshTier?.() ?? TerminalRefreshTier.FOCUSED;
-    // Defer the xterm reflow only when the terminal is genuinely hidden
-    // (offscreen / content-visibility:hidden). A freshly prewarmed terminal
-    // carries a stale lastAppliedTier === BACKGROUND — seeded by
+    // Take the no-DOM-measurement path only when the terminal is genuinely
+    // hidden (offscreen / content-visibility:hidden). A freshly prewarmed
+    // terminal carries a stale lastAppliedTier === BACKGROUND — seeded by
     // prewarmTerminal — until XtermAdapter's applyRendererPolicy effect
-    // promotes it, yet by then it may already be attached and visible.
-    // Skipping terminal.resize() for a *visible* terminal strands xterm's grid
-    // at the 80x24 open() default while the PTY runs at the real size. isVisible
+    // promotes it, yet by then it may already be attached and visible. Routing
+    // a *visible* terminal through the hidden path would let it settle for
+    // metric-derived dimensions when it has real layout to measure. isVisible
     // is set synchronously by setVisible(true) during attach, before the first
     // fit, so it is a reliable discriminator here.
     const isBackgroundUnfocused =
@@ -307,11 +307,12 @@ export class TerminalResizeController {
 
     if (isBackgroundUnfocused) {
       // Background-tier path: a ResizeObserver fired while the host element is
-      // inside a content-visibility:hidden container. fitAddon.fit() would read
-      // 0x0 from the DOM, so the ONLY thing this branch changes is where the
-      // grid comes from — cached cell metrics instead of a live measurement.
-      // The commit itself goes through the normal strategy pipeline, so both
-      // grids move together and at the same cadence a visible pane would use.
+      // inside a content-visibility:hidden container, which reports 0x0. The
+      // measured path below would fall back to fitAddon.proposeDimensions() on
+      // that box and bail, so this branch derives the grid from cached cell
+      // metrics alone and commits it without the debounce/idle deferral the
+      // measured path applies. The commit itself is the ordinary one: both
+      // grids move together, at the PTY cadence this path already used.
       //
       // It did not always: this branch used to send the PTY resize alone and
       // leave xterm for wake reconciliation, on the theory that a paused pane
@@ -463,9 +464,13 @@ export class TerminalResizeController {
     if (isRedundantResize(managed, width, height)) {
       // A foreground debounce/settled request updates the pixel and grid
       // caches before it commits. If backgrounding then supplies that same
-      // box, cancelling the queued xterm work must not also discard the PTY
-      // half of the resize. Reassert the cached target directly — the grid
-      // caches already describe this box, so xterm needs no further work.
+      // box, cancelling the queued work must not discard the resize with it.
+      // Commit the cached target rather than asserting it to the PTY alone:
+      // `latestCols`/`latestRows` describe the target the cancelled job was
+      // going to apply, NOT the grid xterm currently holds, so a bare
+      // terminalClient.resize here reproduces the very split this path exists
+      // to prevent (#11628). commitResize is a no-op for the xterm half when
+      // the grid already matches, so the common case costs nothing.
       if (
         hadPendingResize &&
         Number.isInteger(managed.latestCols) &&
@@ -473,7 +478,7 @@ export class TerminalResizeController {
         managed.latestCols > 0 &&
         managed.latestRows > 0
       ) {
-        terminalClient.resize(id, managed.latestCols, managed.latestRows);
+        this.commitResize(id, managed.latestCols, managed.latestRows);
       }
       return null;
     }
@@ -493,11 +498,13 @@ export class TerminalResizeController {
 
   // Computes cols/rows from cached cell metrics with no DOM reads — a hidden or
   // detached view has no live layout to measure. Pure computation + state
-  // update; the caller decides how to apply the grid. Both callers move xterm
-  // and the PTY together and differ only in cadence: `applyBackgroundResize`
-  // commits directly (its burst was already debounced in Main), while
-  // `resize`'s background-unfocused branch goes through `applyResize` to keep
-  // the per-agent resize strategy that the live ResizeObserver path relies on.
+  // update; the caller owns the commit policy, and the two callers differ in
+  // more than timing. `applyBackgroundResize` refuses alt-screen panes, stashes
+  // under a resize lock, and commits directly (its burst was already debounced
+  // in Main); `resize`'s background-unfocused branch has no such exclusions and
+  // goes through `applyResize` to keep the per-agent resize strategy the live
+  // ResizeObserver path relies on. What they share is the invariant that
+  // matters: whenever either applies a grid, xterm adopts it before the PTY.
   private resizeGridFromCachedCellMetrics(
     managed: ManagedTerminal,
     width: number,

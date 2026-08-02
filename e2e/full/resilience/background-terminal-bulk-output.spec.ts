@@ -136,10 +136,12 @@ test.describe
     await window.waitForTimeout(T_SETTLE);
 
     // Simulate a ResizeObserver firing for a substantially smaller container
-    // (e.g. window or split divider shrunk while the panel is in the hidden
-    // tab). Pre-fix, this call was silently dropped by the BACKGROUND guard
-    // in TerminalResizeController.resize() and the dims would never reach
-    // xterm or the PTY.
+    // (e.g. window or split divider shrunk while the panel is in a background
+    // tab). NOTE: applyTier only moves the refresh tier — it does not clear
+    // isFocused/isVisible — so this drives the measured resize path, not
+    // resize()'s hidden-pane branch. The atomicity of that branch is pinned by
+    // the ordering assertions in TerminalResizeController.test.ts; what this
+    // covers is that a tier downgrade never strands the observed geometry.
     const targetWidth = 400;
     const targetHeight = 240;
     const observed = await simulateResize(window, panelId, targetWidth, targetHeight);
@@ -159,9 +161,9 @@ test.describe
     expect(restored.applied).toBe(true);
 
     // The wake transition must leave xterm at a coherent geometry. On Linux
-    // CI, the real foreground ResizeObserver can supersede the deferred
+    // CI, the real foreground ResizeObserver can supersede the observed
     // background size before the test bridge reads dimensions, so accept
-    // either the captured background size or a larger foreground remeasure.
+    // either that size or a larger foreground remeasure.
     expect(restored.dims).not.toBeNull();
     expect(restored.dims!.cols).toBeGreaterThanOrEqual(observed!.cols);
     expect(restored.dims!.rows).toBeGreaterThanOrEqual(observed!.rows);
@@ -215,10 +217,10 @@ test.describe
     // proves the visibility transition didn't drop or corrupt PTY data.
     await waitForTerminalText(terminalPanel, "BG_DONE", T_LONG);
 
-    // The narrower geometry captured during background must have reached the
-    // wake path. A real foreground ResizeObserver can supersede that deferred
-    // size before the test bridge reads dimensions, so accept the captured
-    // size or a larger foreground remeasure.
+    // The narrower geometry observed during background must have survived the
+    // visibility cycle. A real foreground ResizeObserver can supersede it
+    // before the test bridge reads dimensions, so accept that size or a larger
+    // foreground remeasure.
     await expect
       .poll(async () => (await getTerminalDimensions(terminalPanel))?.cols, { timeout: T_LONG })
       .toBeGreaterThanOrEqual(resized!.cols);
