@@ -760,6 +760,8 @@ export function PilotView() {
     if (!isOpen) {
       setQuery("");
       setBandFilter("all");
+      // Closing takes focus with it without a blur ever reaching the bar.
+      setIsFilterFocused(false);
     }
   }, [isOpen]);
 
@@ -868,12 +870,6 @@ export function PilotView() {
               ? `Nothing needs you · ${agentCount(fleet.total)}`
               : "";
 
-  // Every selectable row is an agent now, so the verb never changes.
-  // Dropped while a filter segment holds focus: on a segment those keys drive
-  // the filter, not the list, so the hints would be naming keys that do
-  // something else.
-  const actionLabel = selectedRow === null || isFilterFocused ? null : "Open";
-
   const hasTree = renderGroups.length > 0;
   // Stale counts as well as live: retained runs are real rows, so a query that
   // matches none of them is a true statement about the query rather than a claim
@@ -894,6 +890,23 @@ export function PilotView() {
    */
   const showFilterBar =
     (status.kind === "live" || status.kind === "stale") && stableGroups.length > 0;
+
+  // Removing a focused element does not reliably fire a blur, so a bar that
+  // vanishes under the cursor — the fleet drains, or the host stops answering
+  // — would leave the flag stuck true and the footer's hints suppressed for
+  // the rest of the opening, including after the fleet comes back.
+  useEffect(() => {
+    if (!showFilterBar) setIsFilterFocused(false);
+  }, [showFilterBar]);
+
+  // Every selectable row is an agent now, so the verb never changes.
+  //
+  // Dropped while a filter segment holds focus: on a segment those keys drive
+  // the filter, not the list, so the hints would be naming keys that do
+  // something else. Gated on the bar still being here as well, because a bar
+  // that unmounts while focused — the fleet drains, or the dialog closes —
+  // never gets its blur, and the flag alone would suppress the hints for good.
+  const actionLabel = selectedRow === null || (isFilterFocused && showFilterBar) ? null : "Open";
 
   return (
     <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="All agents">

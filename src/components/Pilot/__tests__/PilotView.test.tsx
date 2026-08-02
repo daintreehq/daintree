@@ -1029,6 +1029,58 @@ describe("PilotView", () => {
       fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "" } });
 
       expect(screen.getByText("No matches with Finished selected")).toBeTruthy();
+      // Not merely "the new title exists" — the quoted one must no longer be
+      // PRESENTED, or a deleted query goes on being quoted back at the user.
+      // `EmptyState` cross-fades, so the old title may still be in the DOM;
+      // what it may not be is visible to anyone, which is what its exit cell's
+      // `aria-hidden` + `inert` pair guarantees.
+      for (const stale of screen.queryAllByText(/No matches for/)) {
+        expect(stale.closest('[aria-hidden="true"],[inert]')).not.toBeNull();
+      }
+    });
+
+    it("keeps the footer honest about whose keys are whose", () => {
+      // The hints describe the LIST's keys. On a filter segment those keys move
+      // between segments instead, so leaving "↵ Open" up is the same false
+      // promise the footer already drops over an empty list.
+      seedMixedFleet();
+      render(<PilotView />);
+      expect(screen.getByText("Open")).toBeTruthy();
+
+      act(() => {
+        segment(/^All/).focus();
+      });
+      expect(screen.queryByText("Open")).toBeNull();
+
+      act(() => {
+        screen.getByTestId("pilot-search").focus();
+      });
+      expect(screen.getByText("Open")).toBeTruthy();
+    });
+
+    it("restores the hints after the bar disappears under the cursor", () => {
+      // Removing a focused element fires no reliable blur, so a fleet that
+      // drains while a segment holds focus would leave the flag stuck and the
+      // hints suppressed for the rest of the opening.
+      seedMixedFleet();
+      const view = render(<PilotView />);
+      act(() => {
+        segment(/^All/).focus();
+      });
+      expect(screen.queryByText("Open")).toBeNull();
+
+      act(() => {
+        seed([]);
+      });
+      view.rerender(<PilotView />);
+      expect(screen.queryByTestId("pilot-filter-bar")).toBeNull();
+
+      act(() => {
+        seedMixedFleet();
+      });
+      view.rerender(<PilotView />);
+
+      expect(screen.getByText("Open")).toBeTruthy();
     });
 
     it("hands focus back when the clear control removes itself", () => {
@@ -1074,8 +1126,12 @@ describe("PilotView", () => {
         ]);
       });
       fireEvent.click(screen.getByRole("radio", { name: /Needs you/ }));
-      fireEvent.click(screen.getByRole("radio", { name: /^All/ }));
+      // Asserted WHILE narrowed, not only after returning to All: a filter that
+      // re-derived the order would be invisible if the check waited until the
+      // pinned order had been restored anyway.
+      expect(titles()).toEqual(opening);
 
+      fireEvent.click(screen.getByRole("radio", { name: /^All/ }));
       expect(titles()).toEqual(opening);
     });
 
@@ -1178,6 +1234,21 @@ describe("PilotView", () => {
 
       expect(screen.getByTestId("pilot-summary").textContent).toBe("Ready for review");
       expect(screen.queryByTestId("pilot-demand-action")).toBeNull();
+    });
+
+    it("is named by the sentence it shows, not by a second phrasing of it", () => {
+      // An action-phrased label ("Show 2 agents that need you") does not
+      // contain the visible text, which is a label-in-name failure for anyone
+      // driving the app by voice — and its singular read "1 agent that need
+      // you". The visible sentence has to BE the name.
+      seed([
+        run({ runId: "a", agentState: "waiting", title: "one", since: NOW - 60_000 }),
+        run({ runId: "b", agentState: "waiting", title: "two", since: NOW - 30_000 }),
+      ]);
+      render(<PilotView />);
+
+      const action = screen.getByTestId("pilot-demand-action");
+      expect(screen.getByRole("button", { name: action.textContent ?? "" })).toBe(action);
     });
 
     it("leaves the summary inert when there is no demand to isolate", () => {
