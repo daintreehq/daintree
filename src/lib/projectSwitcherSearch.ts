@@ -6,30 +6,19 @@ import type {
 
 const NAME_WEIGHT = 4;
 
+/**
+ * One surviving word boundary: the {@link scoreField} boundary bonus (90) plus
+ * the base score for the character that landed on it (10). Below that, a query
+ * reached the end of the field without ever anchoring to the start of a word —
+ * it scavenged its characters out of the middle of unrelated ones.
+ */
+const MIN_FILTER_MATCH_SCORE = 100;
+
 function isBoundary(str: string, index: number): boolean {
   if (index === 0) return true;
   const prev = str[index - 1] ?? "";
   const curr = str[index] ?? "";
   return /[/\\\-._\s]/.test(prev) || (/[a-z]/.test(prev) && /[A-Z]/.test(curr));
-}
-
-/**
- * The palette's matching rule: every query character appears in `field`, in
- * order, not necessarily adjacent. So "fltsnp" finds "fleet snapshot".
- *
- * The same acceptance test {@link scoreField} applies before scoring — it is
- * separated here for surfaces that need to know *whether* something matched
- * without ranking on *how well*. Both must stay in step: a palette that accepts
- * a query one way and rejects it another teaches nothing transferable.
- */
-export function isSubsequenceMatch(query: string, field: string): boolean {
-  const lowerQuery = query.toLowerCase();
-  const lowerField = field.toLowerCase();
-  let qi = 0;
-  for (let fi = 0; fi < lowerField.length && qi < lowerQuery.length; fi++) {
-    if (lowerField[fi] === lowerQuery[qi]) qi++;
-  }
-  return qi === lowerQuery.length;
 }
 
 function scoreField(query: string, field: string): number {
@@ -88,6 +77,32 @@ function scoreField(query: string, field: string): number {
   }
 
   return Math.max(0, score);
+}
+
+/**
+ * Whether `field` matches `query` well enough to survive a filter that will not
+ * rank the result afterwards.
+ *
+ * The palette can afford a bare subsequence test — "fltsnp" finds "fleet
+ * snapshot", and anything scraped together out of unrelated words sinks to the
+ * bottom on score. A surface that only filters has no such backstop: every
+ * survivor is presented as an equal answer, so "rust" pulling in "Research file
+ * browser folder selection usability" (a legal subsequence worth 5 points) reads
+ * as a result rather than as noise.
+ *
+ * The floor applies only to scattered matches. Anything the user typed
+ * contiguously is a substring and collects that 500-point bonus outright, so
+ * incremental typing — "d", "da", "dai" — never trips it, down to a single
+ * character. What has to clear {@link MIN_FILTER_MATCH_SCORE} is a query whose
+ * characters came from more than one word, and the ask is modest: land on one
+ * word boundary and survive the gap penalties getting there.
+ */
+export function isFilterMatch(query: string, field: string): boolean {
+  // An empty query is a substring of every field, so it would collect the
+  // substring bonus and match everything. Callers filtering on a blank query
+  // want all rows, but that is their short-circuit to make, not this one's.
+  if (!query) return false;
+  return scoreField(query, field) >= MIN_FILTER_MATCH_SCORE;
 }
 
 export function scoreProjectQuery(query: string, name: string, path: string): number {

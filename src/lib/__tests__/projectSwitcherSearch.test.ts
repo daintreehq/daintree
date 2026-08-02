@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isFilterMatch,
   scoreProjectQuery,
   scoreScratchQuery,
   rankSwitcherMatches,
@@ -47,6 +48,42 @@ function makeProject(
     ...overrides,
   };
 }
+
+describe("isFilterMatch", () => {
+  const RESEARCH_TITLE = "Research file browser folder selection usability";
+
+  it("rejects an empty query rather than matching every field", () => {
+    // An empty string is a substring of anything, so the substring bonus alone
+    // would clear the floor.
+    expect(isFilterMatch("", RESEARCH_TITLE)).toBe(false);
+  });
+
+  it("rejects a subsequence scavenged out of mid-word characters", () => {
+    // The #11625 case: every character is present in order, none of them where
+    // a reader would look for them.
+    expect(isFilterMatch("rust", RESEARCH_TITLE)).toBe(false);
+    expect(isFilterMatch("sv", "fleet snapshot service")).toBe(false);
+    expect(isFilterMatch("ate", "Daintree")).toBe(false);
+  });
+
+  it("accepts an acronym built from word starts", () => {
+    expect(isFilterMatch("fltsnp", "fleet snapshot service")).toBe(true);
+    expect(isFilterMatch("fs", "fleet snapshot service")).toBe(true);
+  });
+
+  it("accepts anything typed contiguously, down to a single character", () => {
+    // Incremental typing is always a substring, so the floor never interrupts
+    // it — including a character sitting mid-word, which scores nothing on its
+    // own and rides the substring bonus alone.
+    expect(isFilterMatch("d", "Daintree")).toBe(true);
+    expect(isFilterMatch("i", "Daintree")).toBe(true);
+    expect(isFilterMatch("brow", RESEARCH_TITLE)).toBe(true);
+  });
+
+  it("rejects a query whose characters are not all present", () => {
+    expect(isFilterMatch("zzzz", "fleet snapshot service")).toBe(false);
+  });
+});
 
 describe("scoreProjectQuery", () => {
   it("returns 0 for empty query", () => {

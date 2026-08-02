@@ -390,12 +390,34 @@ describe("filterPilotGroups", () => {
       ctx()
     );
 
-  it("accepts an ordered subsequence, matching how the switcher searches", () => {
+  it("accepts an acronym spanning words, matching how the switcher searches", () => {
     // Typing "fltsnp" for "fleet snapshot" works in the project switcher, so it
     // has to work here — a palette that accepts a query one way and rejects it
-    // another teaches nothing transferable.
+    // another teaches nothing transferable. The quality floor is for characters
+    // scavenged out of mid-word, not for an acronym landing on word starts.
     const [group] = filterPilotGroups(groups(), "fltsnp");
     expect(group!.rows.map((r) => r.run.runId)).toEqual(["a"]);
+  });
+
+  it("drops a row the query only reaches by scavenging mid-word characters", () => {
+    // "rust" is a legal ordered subsequence of the research title, scraped out
+    // of four unrelated words. Unranked filtering has no bottom of the list to
+    // put that in, so it would read as an answer beside the real one (#11625).
+    const filtered = filterPilotGroups(
+      buildPilotGroups(
+        [
+          run({
+            runId: "loose",
+            agentState: "working",
+            title: "Research file browser folder selection usability",
+          }),
+          run({ runId: "exact", agentState: "working", title: "Rust migration" }),
+        ],
+        ctx()
+      ),
+      "rust"
+    );
+    expect(filtered[0]!.rows.map((r) => r.run.runId)).toEqual(["exact"]);
   });
 
   it("drops a group left with no matching rows", () => {
@@ -404,6 +426,12 @@ describe("filterPilotGroups", () => {
 
   it("keeps every row when the project name itself matches", () => {
     expect(filterPilotGroups(groups(), "daintree")[0]!.rows).toHaveLength(2);
+  });
+
+  it("does not admit a whole project on a loose project-name match", () => {
+    // A match on the group name short-circuits every row beneath it, so "ate"
+    // scraped out of "daintree" would surface the project's entire run list.
+    expect(filterPilotGroups(groups(), "ate")).toEqual([]);
   });
 
   it("recounts demands against the filtered rows", () => {

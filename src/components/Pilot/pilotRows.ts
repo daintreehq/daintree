@@ -10,7 +10,7 @@ import {
   isDemandBand,
 } from "@/lib/fleetAttention";
 import { formatWaitAge, type ProjectRowTone } from "@/lib/projectRowStatus";
-import { isSubsequenceMatch } from "@/lib/projectSwitcherSearch";
+import { isFilterMatch } from "@/lib/projectSwitcherSearch";
 import { composeTitledPanel } from "@/utils/terminalTitleDisplay";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 
@@ -227,6 +227,12 @@ export function buildPilotGroups(
  * quality because one of its rows is the destination, whereas here the ranking
  * IS the answer — demoting a blocked agent because a fresher one matched the
  * query better would defeat the surface.
+ *
+ * That is exactly why the fields are gated on {@link isFilterMatch} rather than
+ * a bare subsequence test. Keeping band order means a weak match is not sorted
+ * away from a strong one, it is interleaved with it, so match quality has to be
+ * settled here or not at all — and a loose hit on `group.name` is worse still,
+ * since it admits every row in the project (#11625).
  */
 export function filterPilotGroups(
   groups: readonly PilotProjectGroup[],
@@ -237,15 +243,15 @@ export function filterPilotGroups(
 
   const out: PilotProjectGroup[] = [];
   for (const group of groups) {
-    const projectMatches = isSubsequenceMatch(needle, group.name);
+    const projectMatches = isFilterMatch(needle, group.name);
     const rows = group.rows.filter(
       (row) =>
         projectMatches ||
-        isSubsequenceMatch(needle, row.title) ||
-        (row.worktreeLabel !== null && isSubsequenceMatch(needle, row.worktreeLabel)) ||
+        isFilterMatch(needle, row.title) ||
+        (row.worktreeLabel !== null && isFilterMatch(needle, row.worktreeLabel)) ||
         // The agent's name is on the row as an icon rather than as text, but
         // "codex" is still a plausible thing to type when looking for one.
-        isSubsequenceMatch(needle, row.chrome.label)
+        isFilterMatch(needle, row.chrome.label)
     );
     if (rows.length === 0) continue;
     out.push({
