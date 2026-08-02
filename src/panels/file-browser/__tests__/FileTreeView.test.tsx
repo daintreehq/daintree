@@ -66,7 +66,7 @@ function renderTree(overrides: Partial<Parameters<typeof FileTreeView>[0]> = {})
   const utils = render(
     <FileTreeView
       rows={ROWS}
-      selectedPath={null}
+      cursorPath={null}
       onSelect={onSelect}
       onToggleExpanded={vi.fn()}
       rowContextMenu={() => <div />}
@@ -89,7 +89,7 @@ describe("FileTreeView context-menu interactions", () => {
     const { getByRole, findByRole } = render(
       <FileTreeView
         rows={ROWS}
-        selectedPath="README.md"
+        cursorPath="README.md"
         onSelect={onSelect}
         onToggleExpanded={vi.fn()}
         rowContextMenu={(clicked) => <ContextMenuItem>Act on {clicked.name}</ContextMenuItem>}
@@ -114,11 +114,11 @@ describe("FileTreeView context-menu interactions", () => {
 
     fireEvent.click(getByRole("treeitem", { name: "README.md" }));
 
-    expect(onSelect).toHaveBeenCalledWith("README.md");
+    expect(onSelect).toHaveBeenCalledWith("README.md", false);
   });
 
   it("replays the ContextMenu key as a contextmenu event on the selected row", () => {
-    const { getByRole } = renderTree({ selectedPath: "README.md" });
+    const { getByRole } = renderTree({ cursorPath: "README.md" });
     const contextMenuSpy = vi.fn();
     getByRole("treeitem", { name: "README.md" }).addEventListener("contextmenu", contextMenuSpy);
 
@@ -131,7 +131,7 @@ describe("FileTreeView context-menu interactions", () => {
   });
 
   it("replays Shift+F10 but leaves plain F10 alone", () => {
-    const { getByRole } = renderTree({ selectedPath: "src" });
+    const { getByRole } = renderTree({ cursorPath: "src" });
     const contextMenuSpy = vi.fn();
     getByRole("treeitem", { name: "src" }).addEventListener("contextmenu", contextMenuSpy);
 
@@ -148,7 +148,7 @@ describe("FileTreeView context-menu interactions", () => {
   it("hands the selected row to the agent on the platform's insert shortcut", () => {
     const onInsertFileReference = vi.fn();
     const { getByRole } = renderTree({
-      selectedPath: "README.md",
+      cursorPath: "README.md",
       onInsertFileReference,
       canInsertFileReference: true,
     });
@@ -172,7 +172,7 @@ describe("FileTreeView context-menu interactions", () => {
     isMacMock.mockReturnValue(false);
     const onInsertFileReference = vi.fn();
     const { getByRole } = renderTree({
-      selectedPath: "README.md",
+      cursorPath: "README.md",
       onInsertFileReference,
       canInsertFileReference: true,
     });
@@ -190,7 +190,7 @@ describe("FileTreeView context-menu interactions", () => {
   it("leaves the bare letter and the inject combo to their own handlers", () => {
     const onInsertFileReference = vi.fn();
     const { getByRole } = renderTree({
-      selectedPath: "README.md",
+      cursorPath: "README.md",
       onInsertFileReference,
       canInsertFileReference: true,
     });
@@ -208,7 +208,7 @@ describe("FileTreeView context-menu interactions", () => {
     const { getByRole, rerender } = render(
       <FileTreeView
         rows={ROWS}
-        selectedPath={null}
+        cursorPath={null}
         onSelect={vi.fn()}
         onToggleExpanded={vi.fn()}
         rowContextMenu={() => <div />}
@@ -227,7 +227,7 @@ describe("FileTreeView context-menu interactions", () => {
     rerender(
       <FileTreeView
         rows={ROWS}
-        selectedPath="README.md"
+        cursorPath="README.md"
         onSelect={vi.fn()}
         onToggleExpanded={vi.fn()}
         rowContextMenu={() => <div />}
@@ -248,7 +248,7 @@ describe("FileTreeView context-menu interactions", () => {
     // see and that aria-activedescendant has already disowned.
     const onInsertFileReference = vi.fn();
     const { getByRole } = renderTree({
-      selectedPath: "some/pruned/path",
+      cursorPath: "some/pruned/path",
       onInsertFileReference,
       canInsertFileReference: true,
     });
@@ -265,7 +265,7 @@ describe("FileTreeView context-menu interactions", () => {
     // and let every repeat fall through to here — a genuine wrong action.
     const onInsertFileReference = vi.fn();
     const { getByRole } = renderTree({
-      selectedPath: "README.md",
+      cursorPath: "README.md",
       onInsertFileReference,
       canInsertFileReference: true,
     });
@@ -289,7 +289,7 @@ describe("FileTreeView context-menu interactions", () => {
     const { getByRole, findByRole } = render(
       <FileTreeView
         rows={ROWS}
-        selectedPath="README.md"
+        cursorPath="README.md"
         onSelect={onSelect}
         onToggleExpanded={vi.fn()}
         onActivate={onActivate}
@@ -316,7 +316,7 @@ describe("FileTreeView context-menu interactions", () => {
     const { getByRole, rerender } = render(
       <FileTreeView
         rows={ROWS}
-        selectedPath="README.md"
+        cursorPath="README.md"
         onSelect={vi.fn()}
         onToggleExpanded={vi.fn()}
         onInsertFileReference={vi.fn()}
@@ -330,7 +330,7 @@ describe("FileTreeView context-menu interactions", () => {
     rerender(
       <FileTreeView
         rows={ROWS}
-        selectedPath="README.md"
+        cursorPath="README.md"
         onSelect={vi.fn()}
         onToggleExpanded={vi.fn()}
         onInsertFileReference={vi.fn()}
@@ -342,26 +342,22 @@ describe("FileTreeView context-menu interactions", () => {
     expect(getByRole("tree").hasAttribute("aria-keyshortcuts")).toBe(false);
   });
 
-  it("routes double-click by row kind: folders re-root, files activate", () => {
-    // Both callbacks supplied, so the assertion is that each row picks the right
-    // one — not merely that the unwired branch does nothing (#11496).
-    const onRootFolder = vi.fn();
+  it("routes double-click to activate for both row kinds", () => {
+    // One command for folders and files alike, and the same one Enter runs.
+    // Folders used to re-root from here instead (#11496), which spent the
+    // universal "activate this" gesture on a structural jump.
     const onActivate = vi.fn();
-    const { getByRole } = renderTree({ onRootFolder, onActivate });
+    const { getByRole } = renderTree({ onActivate });
 
     fireEvent.doubleClick(getByRole("treeitem", { name: "src" }));
-    expect(onRootFolder.mock.calls).toEqual([["src"]]);
-    expect(onActivate).not.toHaveBeenCalled();
-
     fireEvent.doubleClick(getByRole("treeitem", { name: "README.md" }));
-    expect(onActivate.mock.calls).toEqual([["README.md"]]);
-    // The folder gesture never re-fires: a file double-click must not re-root.
-    expect(onRootFolder.mock.calls).toEqual([["src"]]);
+
+    expect(onActivate.mock.calls).toEqual([["src"], ["README.md"]]);
   });
 
   it("activates the selected row on Enter and consumes the key", () => {
     const onActivate = vi.fn();
-    const { getByRole } = renderTree({ selectedPath: "README.md", onActivate });
+    const { getByRole } = renderTree({ cursorPath: "README.md", onActivate });
 
     const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
     act(() => {
@@ -373,28 +369,96 @@ describe("FileTreeView context-menu interactions", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
-  it("reports Enter on a folder to the same handler, leaving the file check to it", () => {
+  it("reports Enter on a folder to the same handler, leaving the routing to it", () => {
     // The key resolver is row-kind agnostic, so a directory reaches onActivate
-    // too. Pinned here because the pane's handler is what filters it — if this
-    // ever stopped firing, that guard would look dead and get removed.
+    // too. Pinned here because Enter is now a folder's ONLY keyboard route to
+    // the viewer — clicking one is pure navigation — so if this stopped firing
+    // the folder listing would become unreachable from the keyboard entirely.
     const onActivate = vi.fn();
-    const { getByRole } = renderTree({ selectedPath: "src", onActivate });
+    const { getByRole } = renderTree({ cursorPath: "src", onActivate });
 
     fireEvent.keyDown(getByRole("tree"), { key: "Enter" });
 
     expect(onActivate.mock.calls).toEqual([["src"]]);
   });
 
-  it("does not re-root from a double-click on the chevron", () => {
+  // The tree reports WHICH KIND of row the cursor landed on, and the pane uses
+  // that to decide whether the viewer column moves with it. Without the kind
+  // travelling on the callback the pane would have to re-derive it from a
+  // listings cache that does not answer for every path, which is exactly the
+  // coupling this split removes.
+  it("marks the open row apart from the cursor row", () => {
+    // Once the two can differ, aria-selected alone says nothing about which row
+    // the viewer belongs to — a screen-reader user would have no way to
+    // perceive it. They ride separate attributes on purpose.
+    const { getByRole } = renderTree({ cursorPath: "src", openPath: "README.md" });
+
+    const cursorRow = getByRole("treeitem", { name: "src" });
+    const openRow = getByRole("treeitem", { name: "README.md" });
+
+    expect(cursorRow.getAttribute("aria-selected")).toBe("true");
+    expect(cursorRow.getAttribute("aria-current")).toBeNull();
+    expect(openRow.getAttribute("aria-current")).toBe("true");
+    expect(openRow.getAttribute("aria-selected")).toBe("false");
+  });
+
+  it("marks nothing current when the viewer is showing no row", () => {
+    const { getByRole } = renderTree({ cursorPath: "src" });
+
+    expect(getByRole("treeitem", { name: "src" }).getAttribute("aria-current")).toBeNull();
+    expect(getByRole("treeitem", { name: "README.md" }).getAttribute("aria-current")).toBeNull();
+  });
+
+  it("carries the row kind on a click so the pane can route it", () => {
+    const { onSelect, getByRole } = renderTree();
+
+    fireEvent.click(getByRole("treeitem", { name: "src" }));
+    fireEvent.click(getByRole("treeitem", { name: "README.md" }));
+
+    expect(onSelect.mock.calls).toEqual([
+      ["src", true],
+      ["README.md", false],
+    ]);
+  });
+
+  it("carries the row kind when the cursor moves by keyboard", () => {
+    // Arrowing is navigation too: landing on a folder must be reported as one
+    // so a held ArrowDown cannot walk the viewer through every directory it
+    // passes.
+    const { onSelect, getByRole, rerender } = renderTree();
+
+    fireEvent.keyDown(getByRole("tree"), { key: "ArrowDown" });
+    expect(onSelect.mock.calls).toEqual([["src", true]]);
+
+    rerender(
+      <FileTreeView
+        rows={ROWS}
+        cursorPath="src"
+        onSelect={onSelect}
+        onToggleExpanded={vi.fn()}
+        rowContextMenu={() => <div />}
+        basePath={BASE_PATH}
+        label="Files"
+      />
+    );
+    fireEvent.keyDown(getByRole("tree"), { key: "ArrowDown" });
+
+    expect(onSelect.mock.calls).toEqual([
+      ["src", true],
+      ["README.md", false],
+    ]);
+  });
+
+  it("does not activate from a double-click on the chevron", () => {
     // The chevron is the double-click's near-miss zone: a fast expand-collapse
-    // there must not yank the user into a new root.
-    const onRootFolder = vi.fn();
-    const { getByRole } = renderTree({ onRootFolder });
+    // there must not move the viewer the user never asked to move.
+    const onActivate = vi.fn();
+    const { getByRole } = renderTree({ onActivate });
 
     const chevron = getByRole("treeitem", { name: "src" }).firstElementChild!;
     fireEvent.doubleClick(chevron);
 
-    expect(onRootFolder).not.toHaveBeenCalled();
+    expect(onActivate).not.toHaveBeenCalled();
   });
 
   it("drops the chevron gutter when the listing holds no folders at all", () => {
@@ -551,7 +615,7 @@ describe("FileTreeView folder-load spinner", () => {
     rerender(
       <FileTreeView
         rows={[row("src", true)]}
-        selectedPath={null}
+        cursorPath={null}
         onSelect={vi.fn()}
         onToggleExpanded={vi.fn()}
         basePath={BASE_PATH}
@@ -672,7 +736,7 @@ describe("FileTreeView menu contract", () => {
     const { getByRole } = render(
       <FileTreeView
         rows={ROWS}
-        selectedPath={null}
+        cursorPath={null}
         onSelect={vi.fn()}
         onToggleExpanded={vi.fn()}
         basePath={BASE_PATH}
@@ -776,7 +840,7 @@ describe("FileTreeView git status markers", () => {
     rerender(
       <FileTreeView
         rows={NESTED_ROWS}
-        selectedPath={null}
+        cursorPath={null}
         onSelect={vi.fn()}
         onToggleExpanded={vi.fn()}
         rowContextMenu={() => <div />}

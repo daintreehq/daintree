@@ -20,17 +20,45 @@ export interface FileTreeViewProps {
   // Mutable rather than `readonly`: this is exactly what the tree hook returns,
   // and widening it here would force a cast at the Virtuoso boundary.
   rows: FlatTreeRow[];
-  selectedPath: string | null;
-  onSelect: (path: string) => void;
+  /**
+   * The row the tree itself is on — its highlight, its `aria-activedescendant`
+   * and what its row-scoped commands target. Deliberately NOT "what the viewer
+   * shows": moving through the tree is navigation, and navigation must not
+   * re-target the viewer column behind the user (#11620 follow-up).
+   */
+  cursorPath: string | null;
+  /**
+   * What the viewer column is currently showing, when it is one of these rows.
+   * Marked `aria-current` and given full-strength text — NOT a second selection
+   * highlight. Once the cursor can sit somewhere else, this is the only thing
+   * saying which row the other column belongs to, and without it a screen
+   * reader has no way to perceive that at all.
+   *
+   * Two channels on purpose: the cursor owns the surface lift, the open row
+   * owns text weight. Painting both as fills would just move the confusion the
+   * split was meant to remove — and the accent is spoken for elsewhere.
+   */
+  openPath?: string | null;
+  /**
+   * The cursor landed on `path`. `isDirectory` travels with it because the
+   * caller decides from the row's kind whether this also re-targets the viewer
+   * — files do, folders never do.
+   */
+  onSelect: (path: string, isDirectory: boolean) => void;
   onToggleExpanded: (path: string, expand: boolean) => void;
   /**
-   * Fired by Enter or a double-click on a file row. Directory rows also reach
-   * this on Enter (the key resolver is row-kind agnostic), so the handler owns
-   * the file check.
+   * Fired by Enter and by double-click, on rows of either kind — the tree's one
+   * "act on this" gesture, and the only way a folder reaches the viewer column.
+   *
+   * The two gestures are deliberately the same command. Every platform that
+   * says anything about it (WinUI, GNOME HIG, the ARIA APG's treeitem pattern)
+   * treats Enter and double-click as dual triggers for a row's default action,
+   * and double-click is what people reach for as a faster Enter. Folders used
+   * to re-root the tree here instead (#11496); re-rooting now lives only in the
+   * row menu's "Set as root", which is where Visual Studio ("Scope to This")
+   * and Eclipse ("Go Into") both keep the same command.
    */
   onActivate?: (path: string) => void;
-  /** Fired by double-clicking a directory row: re-root the tree there. */
-  onRootFolder?: (path: string) => void;
   /**
    * Menu items for a row's right-click menu; return null for no menu. The
    * view owns the Radix wiring (and lifts the row while its menu is open so
@@ -101,11 +129,11 @@ const ROW_HEIGHT_PX = 24;
  */
 export function FileTreeView({
   rows,
-  selectedPath,
+  cursorPath,
+  openPath = null,
   onSelect,
   onToggleExpanded,
   onActivate,
-  onRootFolder,
   rowContextMenu,
   onInsertFileReference,
   canInsertFileReference = false,
@@ -120,9 +148,9 @@ export function FileTreeView({
   // `aria-activedescendant` ambiguous.
   const instanceId = useId();
 
-  const selectedIndex = useMemo(
-    () => (selectedPath === null ? -1 : rows.findIndex((row) => row.path === selectedPath)),
-    [rows, selectedPath]
+  const cursorIndex = useMemo(
+    () => (cursorPath === null ? -1 : rows.findIndex((row) => row.path === cursorPath)),
+    [rows, cursorPath]
   );
 
   // The rows array changes identity on every listing update, so the handler is
@@ -132,13 +160,13 @@ export function FileTreeView({
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       // A row's context menu portals out of this container but still bubbles
       // its keys through the React tree, so every branch below would otherwise
-      // act on the *selected* row while the user is driving a menu opened on a
+      // act on the *cursor* row while the user is driving a menu opened on a
       // different one — Enter activating the wrong file, arrows moving the
-      // selection behind the open menu. Radix owns those keys while its menu
+      // cursor behind the open menu. Radix owns those keys while its menu
       // is up; the tree only handles what actually happened inside it.
       if (!isEventInsideTree(event, containerRef.current)) return;
 
-      // Shift+F10 / the ContextMenu key open the selected row's menu — the
+      // Shift+F10 / the ContextMenu key open the cursor row's menu — the
       // rows never take focus, so without this the row menu would be
       // mouse-only. Replayed as a synthetic contextmenu on the row's DOM node
       // because Radix's ContextMenu has no imperative open. preventDefault
@@ -151,8 +179,8 @@ export function FileTreeView({
           !event.ctrlKey &&
           !event.metaKey &&
           !event.altKey);
-      if (isMenuKey && rowContextMenu && selectedPath !== null) {
-        const rowElement = document.getElementById(rowDomId(instanceId, selectedPath));
+      if (isMenuKey && rowContextMenu && cursorPath !== null) {
+        const rowElement = document.getElementById(rowDomId(instanceId, cursorPath));
         if (rowElement) {
           event.preventDefault();
           event.stopPropagation();
@@ -174,11 +202,11 @@ export function FileTreeView({
       // a bare switch over the navigation keys and never claims a letter, so
       // plain `I` (and any future typeahead) stays untouched.
       //
-      // Gated on the selection resolving to a *rendered* row, not merely on a
-      // non-null path: re-rooting the tree leaves `browserSelectedPath` naming
-      // the old root, which no longer appears in `rows`. Firing then would
-      // reference a row the user cannot see and that `aria-activedescendant`
-      // has already disowned.
+      // Gated on the cursor resolving to a *rendered* row, not merely on a
+      // non-null path: re-rooting the tree leaves the cursor naming the old
+      // root, which no longer appears in `rows`. Firing then would reference a
+      // row the user cannot see and that `aria-activedescendant` has already
+      // disowned.
       //
       // Auto-repeat is dropped: holding the combo would append the same token
       // over and over. It also keeps a user-rebound global Cmd+I from turning
@@ -187,25 +215,31 @@ export function FileTreeView({
       if (
         onInsertFileReference &&
         canInsertFileReference &&
-        selectedPath !== null &&
-        selectedIndex >= 0 &&
+        cursorPath !== null &&
+        cursorIndex >= 0 &&
         !event.repeat &&
         matchesInsertFileReferenceCombo(event.nativeEvent, isMac())
       ) {
         event.preventDefault();
         event.stopPropagation();
-        onInsertFileReference(selectedPath);
+        onInsertFileReference(cursorPath);
         return;
       }
 
-      const intent = resolveTreeKey(event.key, rows, selectedPath);
+      const intent = resolveTreeKey(event.key, rows, cursorPath);
       if (!intent) return;
       event.preventDefault();
 
       switch (intent.type) {
-        case "select":
-          onSelect(intent.path);
+        // Arrowing is navigation, so it moves the cursor and nothing else for a
+        // folder. Landing on a *file* still opens it in the viewer — that is
+        // selection-follows-focus for leaves only, the same asymmetry a click
+        // has, and it is what keeps arrow-browsing a set of files useful.
+        case "select": {
+          const target = rows.find((candidate) => candidate.path === intent.path);
+          onSelect(intent.path, target?.isDirectory === true);
           break;
+        }
         case "expand":
           onToggleExpanded(intent.path, true);
           break;
@@ -219,8 +253,8 @@ export function FileTreeView({
     },
     [
       rows,
-      selectedPath,
-      selectedIndex,
+      cursorPath,
+      cursorIndex,
       onSelect,
       onToggleExpanded,
       onActivate,
@@ -231,18 +265,18 @@ export function FileTreeView({
     ]
   );
 
-  // Keep the selection on screen when it moves by keyboard. Runs after commit,
+  // Keep the cursor on screen when it moves by keyboard. Runs after commit,
   // never during render: an abandoned concurrent render would otherwise scroll
   // for state that never committed, and suppress the scroll on the render that
   // did. `auto` only scrolls when the row is actually outside the viewport, so
   // clicking a visible row never yanks the list.
   //
-  // Keyed on the path as well as the index so a restored selection scrolls on
+  // Keyed on the path as well as the index so a restored cursor scrolls on
   // mount, and so a live update that shifts a row's index re-reveals it.
   useEffect(() => {
-    if (selectedIndex < 0) return;
-    virtuosoRef.current?.scrollIntoView({ index: selectedIndex, behavior: "auto" });
-  }, [selectedIndex, selectedPath]);
+    if (cursorIndex < 0) return;
+    virtuosoRef.current?.scrollIntoView({ index: cursorIndex, behavior: "auto" });
+  }, [cursorIndex, cursorPath]);
 
   // Clicking a row selects it but can't focus it — rows are not focusable, by
   // design, because virtualization unmounts them. Pull focus to the container
@@ -257,11 +291,11 @@ export function FileTreeView({
 
   const context: TreeContext = useMemo(
     () => ({
-      selectedPath,
+      cursorPath,
+      openPath,
       onSelect,
       onToggleExpanded,
       onActivate,
-      onRootFolder,
       rowContextMenu,
       hasDirectories,
       instanceId,
@@ -269,11 +303,11 @@ export function FileTreeView({
       gitStatusIndex,
     }),
     [
-      selectedPath,
+      cursorPath,
+      openPath,
       onSelect,
       onToggleExpanded,
       onActivate,
-      onRootFolder,
       rowContextMenu,
       hasDirectories,
       instanceId,
@@ -282,17 +316,17 @@ export function FileTreeView({
     ]
   );
 
-  // Only advertise an active descendant that is actually rendered. A selection
+  // Only advertise an active descendant that is actually rendered. A cursor
   // scrolled out of the virtualized window — or deleted by a live update — has
   // no DOM node, and pointing at a missing id is worse than pointing at none.
   const activeDescendant =
-    selectedPath !== null && selectedIndex >= 0 ? rowDomId(instanceId, selectedPath) : undefined;
+    cursorPath !== null && cursorIndex >= 0 ? rowDomId(instanceId, cursorPath) : undefined;
 
   // Only advertised while the shortcut would actually do something — announcing
-  // Cmd+I with no reachable agent, or with a selection that no longer resolves
+  // Cmd+I with no reachable agent, or with a cursor that no longer resolves
   // to a row, would be promising a no-op. Matches the handler's own gate.
   const insertKeyshortcuts =
-    onInsertFileReference && canInsertFileReference && selectedIndex >= 0
+    onInsertFileReference && canInsertFileReference && cursorIndex >= 0
       ? comboToAriaKeyshortcuts(INSERT_FILE_REFERENCE_COMBO, isMac())
       : undefined;
 
@@ -330,11 +364,11 @@ export function FileTreeView({
 }
 
 interface TreeContext {
-  selectedPath: string | null;
-  onSelect: (path: string) => void;
+  cursorPath: string | null;
+  openPath: string | null;
+  onSelect: (path: string, isDirectory: boolean) => void;
   onToggleExpanded: (path: string, expand: boolean) => void;
   onActivate?: ((path: string) => void) | undefined;
-  onRootFolder?: ((path: string) => void) | undefined;
   rowContextMenu?: ((row: FileEntryLike) => React.ReactNode) | undefined;
   hasDirectories: boolean;
   instanceId: string;
@@ -360,18 +394,20 @@ function rowDomId(instanceId: string, path: string): string {
 }
 
 function renderRow(_index: number, row: FlatTreeRow, context: TreeContext) {
-  const isSelected = context.selectedPath === row.path;
-  return <FileTreeRow row={row} isSelected={isSelected} context={context} />;
+  const isSelected = context.cursorPath === row.path;
+  const isOpen = context.openPath === row.path;
+  return <FileTreeRow row={row} isSelected={isSelected} isOpen={isOpen} context={context} />;
 }
 
 interface FileTreeRowProps {
   row: FlatTreeRow;
   isSelected: boolean;
+  isOpen: boolean;
   context: TreeContext;
 }
 
-function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
-  const { onSelect, onToggleExpanded, onActivate, onRootFolder } = context;
+function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
+  const { onSelect, onToggleExpanded, onActivate } = context;
 
   // Defer the folder-load spinner past the anti-flicker gate so a fast
   // expansion flashes nothing. Drives only the indicator — the tree's content
@@ -380,37 +416,49 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
   // row scrolls out of view and back; harmless (the fetch itself keeps running).
   const showLoadingSpinner = useDeferredLoading(row.isLoading, UI_INLINE_LOADING_GATE_MS);
 
+  // A folder click is navigation and only navigation: it moves the cursor here
+  // and opens the branch. It deliberately does NOT re-target the viewer column,
+  // because expanding a folder to look for something else is the single most
+  // common gesture in this tree, and having it replace whatever file the user
+  // was reading made the viewer unusable as a place to keep something open.
+  //
+  // That rule already existed one handler down — the chevron has always refused
+  // to move the selection — and the row click was the odd one out. Files still
+  // re-target the viewer on a single click: a leaf has nothing to navigate into,
+  // so opening it is the only thing the gesture could mean.
   const handleClick = () => {
-    onSelect(row.path);
+    onSelect(row.path, row.isDirectory);
     if (row.isDirectory) onToggleExpanded(row.path, !row.isExpanded);
   };
 
-  // Double-click re-roots a folder and opens a file in its own panel (#11496) —
-  // the gesture keeps its "go deeper into this" meaning either way. On a folder
-  // the two single clicks it contains toggle expansion twice (a net no-op), and
-  // on a file they only re-select the row, so in both cases the double-click's
-  // own effect is the only observable one.
-  const handleDoubleClick = row.isDirectory
-    ? onRootFolder
-      ? () => {
-          onRootFolder(row.path);
-        }
-      : undefined
-    : onActivate
-      ? () => {
-          onActivate(row.path);
-        }
-      : undefined;
+  // One command for both kinds, and the same one Enter runs: show a folder in
+  // the viewer, open a file as its own panel (#11496). A folder used to re-root
+  // the tree from here, which spent the one gesture everyone reads as "activate
+  // this" on a structural jump nobody else binds to it — Eclipse is the only
+  // IDE that offers re-root-on-double-click at all, and ships it off by default.
+  //
+  // The two single clicks a double-click contains toggle expansion twice (a net
+  // no-op) and leave the viewer alone; on a file they only re-select the row. So
+  // the double-click's own effect is the only observable one either way.
+  const handleDoubleClick = onActivate
+    ? () => {
+        onActivate(row.path);
+      }
+    : undefined;
 
   const handleChevronClick = (event: React.MouseEvent) => {
-    // Toggling from the chevron must not move the selection: it is the
-    // "peek inside without leaving where I am" affordance.
+    // Toggling from the chevron must not move the cursor either: it is the
+    // "peek inside without leaving where I am" affordance. Now that the row
+    // click has stopped re-targeting the viewer, this is the only thing still
+    // separating the two — the chevron leaves the tree's own highlight where it
+    // was, which is what keeps a row-scoped command (Cmd+I, the menu key)
+    // pointed at the file the user picked while they open folders around it.
     event.stopPropagation();
     onToggleExpanded(row.path, !row.isExpanded);
   };
 
-  // The chevron is the double-click's near-miss zone; rooting from it would
-  // punish a fast expand-collapse.
+  // The chevron is the double-click's near-miss zone; activating from it would
+  // punish a fast expand-collapse with a viewer the user never asked to move.
   const handleChevronDoubleClick = (event: React.MouseEvent) => {
     event.stopPropagation();
   };
@@ -479,6 +527,11 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
       {...(gitMarkerId && { "aria-describedby": gitMarkerId })}
       aria-level={row.depth + 1}
       aria-selected={isSelected}
+      // "The viewer is showing this one" — a different question from which row
+      // the tree's cursor is on, and the only channel that answers it once the
+      // two diverge. `true` rather than `page`: the viewer is a companion
+      // column, not a navigation destination.
+      {...(isOpen && { "aria-current": true })}
       {...(row.isDirectory && { "aria-expanded": row.isExpanded })}
       // Deliberately no `cursor-grab`: clicking to select or expand is what
       // nearly every row interaction is, and advertising the drag on all of
@@ -495,7 +548,13 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
         // hover, selection and container focus all live at once, and the accent
         // is reserved for a single load-bearing signal per focus region.
         "transition-colors duration-150 ease-out",
-        isSelected ? "bg-overlay-subtle text-daintree-text" : "text-daintree-text/70",
+        isSelected
+          ? "bg-overlay-subtle text-daintree-text"
+          : // Full-strength text, no fill: enough to find the open row at a
+            // glance without reading as a second selection.
+            isOpen
+            ? "text-daintree-text"
+            : "text-daintree-text/70",
         !isSelected && "hover:bg-tint/5",
         // The row whose context menu is open lifts to a distinct neutral tier
         // (raised, not the selection's subtle) so it reads as "the menu targets

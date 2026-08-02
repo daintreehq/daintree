@@ -96,6 +96,9 @@ interface MockPanel {
 }
 
 const mockPanel: MockPanel = { id: "fb-1", kind: "file-browser" };
+// A second browser panel, for the case where a tab group reuses one component
+// instance across two of them.
+const mockPanelTwo: MockPanel = { id: "fb-2", kind: "file-browser" };
 
 // Mutable so a dock test can make this panel the active dock panel (or not) —
 // the pane defers its reveal refresh while parked offscreen (#11588).
@@ -104,7 +107,7 @@ const dockState = { activeDockTerminalId: null as string | null };
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: (selector: (state: unknown) => unknown) =>
     selector({
-      panelsById: { "fb-1": mockPanel },
+      panelsById: { "fb-1": mockPanel, "fb-2": mockPanelTwo },
       setFileBrowserView: setFileBrowserViewMock,
       activeDockTerminalId: dockState.activeDockTerminalId,
     }),
@@ -223,6 +226,10 @@ const { treeProps } = vi.hoisted(() => ({
     onInsertFileReference: undefined as ((path: string) => void) | undefined,
     canInsertFileReference: undefined as boolean | undefined,
     basePath: undefined as string | undefined,
+    onSelect: undefined as ((path: string, isDirectory: boolean) => void) | undefined,
+    onToggleExpanded: undefined as ((path: string, expand: boolean) => void) | undefined,
+    cursorPath: undefined as string | null | undefined,
+    openPath: undefined as string | null | undefined,
     // The derived git model the pane hands the tree. Captured rather than
     // rendered: what this suite owns is the derivation and the join, while how a
     // marker is drawn belongs to FileTreeView's own suite.
@@ -232,19 +239,31 @@ const { treeProps } = vi.hoisted(() => ({
 vi.mock("../FileTreeView", () => ({
   FileTreeView: ({
     rowContextMenu,
+    onSelect,
+    onToggleExpanded,
     onActivate,
     onInsertFileReference,
     canInsertFileReference,
     basePath,
+    cursorPath,
+    openPath,
     gitStatusIndex,
   }: {
     rowContextMenu?: (row: unknown) => React.ReactNode;
+    onSelect?: (path: string, isDirectory: boolean) => void;
+    onToggleExpanded?: (path: string, expand: boolean) => void;
     onActivate?: (path: string) => void;
     onInsertFileReference?: (path: string) => void;
     canInsertFileReference?: boolean;
     basePath?: string;
+    cursorPath?: string | null;
+    openPath?: string | null;
     gitStatusIndex?: FileBrowserGitStatusIndex | null;
   }) => {
+    treeProps.onSelect = onSelect;
+    treeProps.onToggleExpanded = onToggleExpanded;
+    treeProps.cursorPath = cursorPath;
+    treeProps.openPath = openPath;
     treeProps.onActivate = onActivate;
     treeProps.onInsertFileReference = onInsertFileReference;
     treeProps.canInsertFileReference = canInsertFileReference;
@@ -2573,5 +2592,188 @@ describe("a selection the dotfile filter hides (#11620)", () => {
     mockPanel.browserHideDotfiles = true;
     renderPane();
     expect(screen.getByText("Nothing selected")).toBeTruthy();
+  });
+});
+
+// The tree navigates; the viewer only moves when asked. Folder-click used to do
+// both at once, so opening a branch to look for something else threw away the
+// file the user was reading. These pin the split from the pane's side — the
+// tree's own suite proves the row kind reaches this handler at all.
+describe("FileBrowserPane tree navigation vs the viewer", () => {
+  /** Did anything ask the viewer to move? */
+  function viewerWrites(): unknown[] {
+    return setFileBrowserViewMock.mock.calls
+      .filter(([, patch]) => "browserSelectedPath" in (patch as object))
+      .map(([, patch]) => (patch as { browserSelectedPath: string }).browserSelectedPath);
+  }
+
+  it("leaves the viewer alone when the cursor lands on a folder", () => {
+    mockPanel.browserSelectedPath = "src/app.ts";
+    renderPane();
+
+    act(() => {
+      treeProps.onSelect?.("src", true);
+    });
+
+    // The whole point: the open file survives navigating past a folder.
+    expect(viewerWrites()).toEqual([]);
+  });
+
+  it("moves the viewer when the cursor lands on a file", () => {
+    renderPane();
+
+    act(() => {
+      treeProps.onSelect?.("src/app.ts", false);
+    });
+
+    // A leaf has nothing to navigate into, so opening it is the only thing the
+    // gesture could mean — the asymmetry that keeps single-click browsing.
+    expect(viewerWrites()).toEqual(["src/app.ts"]);
+  });
+
+  it("moves the tree cursor for both kinds, viewer or no viewer", () => {
+    renderPane();
+
+    act(() => {
+      treeProps.onSelect?.("src", true);
+    });
+    expect(treeProps.cursorPath).toBe("src");
+
+    act(() => {
+      treeProps.onSelect?.("src/app.ts", false);
+    });
+    expect(treeProps.cursorPath).toBe("src/app.ts");
+  });
+
+  it("opens a folder in the viewer on activate, the deliberate half of the split", () => {
+    renderPane();
+
+    act(() => {
+      treeProps.onActivate?.("src");
+    });
+
+    // Enter is a folder's only keyboard route to the listing now that clicking
+    // one is pure navigation. It must not also try to open a file panel.
+    expect(viewerWrites()).toEqual(["src"]);
+    // Not "wasn't called with these exact options" — a dispatch with slightly
+    // different options would slip through that. Nothing should dispatch here.
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("gives the mouse the same route through the row menu", () => {
+    // Without this item the folder listing would be keyboard-only, which would
+    // read as the feature having been removed rather than made deliberate.
+    renderPane();
+
+    act(() => {
+      screen.getByText("Show contents").click();
+    });
+
+    expect(viewerWrites()).toEqual([FOLDER_ROW.path]);
+  });
+
+  it("tells the tree which row the viewer is on, so it can be marked", () => {
+    // The cursor and the open row are different questions once they diverge;
+    // the tree needs both to answer either.
+    mockPanel.browserSelectedPath = "src/app.ts";
+    renderPane();
+
+    act(() => {
+      treeProps.onSelect?.("src", true);
+    });
+
+    expect(treeProps.cursorPath).toBe("src");
+    expect(treeProps.openPath).toBe("src/app.ts");
+  });
+
+  it("rehomes a cursor stranded inside a branch the user collapsed", () => {
+    // Collapsing takes every descendant row with it. A cursor left naming one
+    // of them resolves to nothing, and every key that reads it goes dead —
+    // Enter and the arrows included. The viewer's reveal strip can't rescue it
+    // because collapsing never touched the viewer.
+    renderPane();
+    act(() => {
+      treeProps.onSelect?.("src/app.ts", false);
+    });
+    expect(treeProps.cursorPath).toBe("src/app.ts");
+
+    act(() => {
+      treeProps.onToggleExpanded?.("src", false);
+    });
+
+    expect(treeProps.cursorPath).toBe("src");
+  });
+
+  it("leaves a cursor outside the collapsed branch alone", () => {
+    // Prefix matching has to be path-segment honest: collapsing "src" must not
+    // capture a cursor on a sibling that merely starts with the same letters.
+    renderPane();
+    act(() => {
+      treeProps.onSelect?.("srcache/note.md", false);
+    });
+
+    act(() => {
+      treeProps.onToggleExpanded?.("src", false);
+    });
+
+    expect(treeProps.cursorPath).toBe("srcache/note.md");
+  });
+
+  it("does not carry one panel's cursor into another", () => {
+    // A tab group renders one unkeyed GridPanel for whichever tab is active, so
+    // this component is reused rather than remounted when the user switches
+    // between two file browsers. Keying the sync on the path alone would leak
+    // the cursor whenever both panels' viewers agreed — including when both are
+    // empty, which is every freshly opened pair.
+    const { rerender } = render(
+      <TooltipProvider>
+        <FileBrowserPane
+          id="fb-1"
+          title="Files"
+          worktreeId="wt-1"
+          isFocused
+          location="grid"
+          onFocus={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+    act(() => {
+      treeProps.onSelect?.("src", true);
+    });
+    expect(treeProps.cursorPath).toBe("src");
+
+    rerender(
+      <TooltipProvider>
+        <FileBrowserPane
+          id="fb-2"
+          title="Files"
+          worktreeId="wt-1"
+          isFocused
+          location="grid"
+          onFocus={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+
+    expect(treeProps.cursorPath).toBeNull();
+  });
+
+  it("re-points the cursor when the viewer is moved from outside the tree", () => {
+    // `worktree.openFileBrowser` reveals a path this panel never clicked, and a
+    // restored panel arrives the same way. The tree has to follow, or its
+    // aria-activedescendant names a row that is no longer the subject.
+    mockPanel.browserSelectedPath = "src/app.ts";
+    const { rerender } = renderPane();
+    act(() => {
+      treeProps.onSelect?.("src", true);
+    });
+    expect(treeProps.cursorPath).toBe("src");
+
+    mockPanel.browserSelectedPath = "src/other.ts";
+    rerender(paneJsx({ worktreeId: "wt-1" }));
+
+    expect(treeProps.cursorPath).toBe("src/other.ts");
   });
 });
