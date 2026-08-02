@@ -1321,3 +1321,48 @@ describe("AppDialog layering over a dock popover", () => {
     expect(renderDialogAt()).not.toBe(promoted);
   });
 });
+
+describe("AppDialog.Body className placement", () => {
+  beforeEach(() => {
+    mockPrevOpen = false;
+    _resetForTests();
+    vi.useRealTimers();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    _resetForTests();
+  });
+
+  // Callers pass sibling-spacing utilities (`space-y-*`), which only reach the
+  // fields when they land on their direct parent. ScrollShadow's outer wrapper
+  // is two overlays plus the scroll box, so styling it silently spaced nothing.
+  it("puts the caller's class on the element that parents the body content", () => {
+    renderDialog({
+      children: (
+        <AppDialog.Body className="dialog-body-spacing">
+          <span data-testid="field-a">A</span>
+          <span data-testid="field-b">B</span>
+        </AppDialog.Body>
+      ),
+    });
+
+    const parent = screen.getByTestId("field-a").parentElement;
+    expect(parent).toBe(screen.getByTestId("field-b").parentElement);
+    expect(parent?.classList.contains("dialog-body-spacing")).toBe(true);
+  });
+
+  it("leaves the scroll wrapper unstyled by the caller", () => {
+    renderDialog({
+      children: (
+        <AppDialog.Body className="dialog-body-spacing">
+          <span data-testid="field-a">A</span>
+        </AppDialog.Body>
+      ),
+    });
+
+    const wrapper = screen.getByTestId("field-a").parentElement?.parentElement;
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.classList.contains("dialog-body-spacing")).toBe(false);
+  });
+});
