@@ -73,8 +73,28 @@ describe("SidebarContent shortcut labels — issue #5843", () => {
       expect(source).not.toMatch(/formatButtonTitle\("Select terminals to arm",/);
     });
 
-    it("uses formatButtonTitle for Refresh sidebar title", () => {
-      expect(source).toContain('formatButtonTitle("Refresh sidebar", refreshShortcut)');
+    it("renders the Refresh sidebar label through the app Tooltip, not a native title", () => {
+      // The refresh control uses the shared Tooltip so the label is styled and
+      // appears without the native title's delay (#11633). The shortcut still
+      // has to reach the user, so it rides createTooltipContent's chord pill
+      // rather than a string suffix.
+      // One contiguous Tooltip block that contains the refresh handler, with no
+      // nested <Tooltip> opening in between — so the content below is proven to
+      // belong to THIS button rather than matching a sibling control elsewhere
+      // in the header (several still carry native titles of their own).
+      const refreshTooltip = source.match(
+        /<Tooltip>(?:(?!<Tooltip>)[\s\S])*?onClick=\{handleRefreshAll\}[\s\S]*?<\/Tooltip>/
+      );
+      expect(refreshTooltip).not.toBeNull();
+      const block = refreshTooltip![0];
+
+      // A leftover native title would double up with the tooltip.
+      expect(block.match(/<button[^>]*>/)![0]).not.toMatch(/\btitle=/);
+      // The shortcut still has to reach the user — it rides createTooltipContent's
+      // chord pill instead of formatButtonTitle's string suffix.
+      expect(block).toMatch(
+        /<TooltipContent side="bottom">\s*\{createTooltipContent\("Refresh sidebar", refreshShortcut\)\}/
+      );
     });
 
     it("uses formatButtonTitle for Create new worktree title", () => {

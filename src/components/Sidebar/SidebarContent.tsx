@@ -39,6 +39,7 @@ import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -1695,17 +1696,23 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             >
               <Zap className="w-3.5 h-3.5" />
             </button>
-            <button
-              type="button"
-              onClick={handleRefreshAll}
-              aria-disabled={isRefreshing || undefined}
-              className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-daintree-text/40"
-              aria-label="Refresh sidebar"
-              aria-keyshortcuts={refreshAriaShortcut}
-              title={formatButtonTitle("Refresh sidebar", refreshShortcut)}
-            >
-              <SpinningIcon icon={RefreshCw} active={isRefreshing} className="w-3.5 h-3.5" />
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleRefreshAll}
+                  aria-disabled={isRefreshing || undefined}
+                  className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-daintree-text/40"
+                  aria-label="Refresh sidebar"
+                  aria-keyshortcuts={refreshAriaShortcut}
+                >
+                  <SpinningIcon icon={RefreshCw} active={isRefreshing} className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {createTooltipContent("Refresh sidebar", refreshShortcut)}
+              </TooltipContent>
+            </Tooltip>
           </div>
           <button
             type="button"
