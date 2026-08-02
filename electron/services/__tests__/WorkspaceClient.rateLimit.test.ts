@@ -38,11 +38,15 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
 
     send = vi.fn(() => true);
 
-    sendWithResponse = vi.fn(<T>(request: { requestId: string; type: string }): Promise<T> => {
-      return new Promise<T>((resolve) => {
-        this.responseHandlers.set(request.requestId, resolve);
-      });
-    });
+    // Second parameter mirrors the real sendWithResponse(request, timeoutMs?)
+    // so callers passing an explicit timeout type-check against this double.
+    sendWithResponse = vi.fn(
+      <T>(request: { requestId: string; type: string }, _timeoutMs?: number): Promise<T> => {
+        return new Promise<T>((resolve) => {
+          this.responseHandlers.set(request.requestId, resolve);
+        });
+      }
+    );
 
     pauseHealthCheck = vi.fn();
     resumeHealthCheck = vi.fn();
@@ -227,7 +231,7 @@ describe("WorkspaceClient.refreshPullRequests", () => {
     // A manual refresh now awaits CI enrichment on top of provider
     // re-resolution and PR re-detection, so it must not inherit the host's
     // default per-request budget.
-    const timeoutMs = h(0).sendWithResponse.mock.calls[0][1] as number | undefined;
+    const timeoutMs = h(0).sendWithResponse.mock.calls[0][1];
     expect(timeoutMs).toBeDefined();
     expect(timeoutMs).toBeGreaterThan(30_000);
 
