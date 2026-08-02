@@ -510,7 +510,12 @@ interface AppDialogBodyProps {
 
 AppDialog.Body = function AppDialogBody({ children, className }: AppDialogBodyProps) {
   return (
-    <ScrollShadow className={cn("flex-1 min-h-0", className)} scrollClassName="p-6">
+    // `className` belongs on the padded scroll box, not on ScrollShadow's outer
+    // wrapper — the wrapper's children are the two absolute edge overlays plus
+    // the scroll box, so a caller's `space-y-*` there styled the overlays and
+    // hung a stray margin off the scroll box while the actual fields got no
+    // spacing at all. Matches where `BodyScroll` puts it.
+    <ScrollShadow className="flex-1 min-h-0" scrollClassName={cn("p-6", className)}>
       {children}
     </ScrollShadow>
   );
