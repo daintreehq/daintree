@@ -449,7 +449,12 @@ AppPaletteDialog.Body = function AppPaletteBody({
       onKeyDown={handleKeyDown}
       className={cn(
         maxHeight,
-        "min-h-32 transition-[height] motion-reduce:transition-none palette-body-height",
+        // Floor sized off the row rhythm, not a round number: `p-2` (16) + a
+        // section label (19) + three 34px rows is 137px, so the old 128px floor
+        // seated two rows and then grew the surface by 9px on the third — which
+        // is the launcher's most common result count. 144 seats three rows in
+        // the reserved space, so typing through a narrowing list holds still.
+        "min-h-36 transition-[height] motion-reduce:transition-none palette-body-height",
         className
       )}
       style={{
