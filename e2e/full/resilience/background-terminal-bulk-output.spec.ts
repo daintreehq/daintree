@@ -147,15 +147,14 @@ test.describe
     expect(observed!.cols).toBeGreaterThan(2);
     expect(observed!.cols).toBeLessThan(initial!.cols);
 
-    // While still BACKGROUND, xterm's internal grid intentionally stays at
-    // the old geometry — paint is paused and reflow is deferred until wake.
-    // The captured latestCols/latestRows is what matters on the wake path.
+    // The observed geometry is committed to xterm and the PTY together at the
+    // moment it lands, not deferred to wake (#11628) — a hidden pane keeps
+    // parsing output, so a grid that lags the PTY corrupts rows irrecoverably.
     const beforeRestore = await getTerminalDimensions(terminalPanel);
     expect(beforeRestore).not.toBeNull();
 
-    // Restore to FOCUSED. applyDeferredResize on the wake path must reconcile
-    // xterm's grid with the dims captured during background, before refresh
-    // repaints into the buffer.
+    // Restore to FOCUSED. The wake path must leave xterm consistent with the
+    // dims observed during background — reconciling them if anything drifted.
     const restored = await applyTierAndReadDimensions(window, panelId, "FOCUSED");
     expect(restored.applied).toBe(true);
 
@@ -207,8 +206,8 @@ test.describe
     expect(resized).not.toBeNull();
     expect(resized!.cols).toBeLessThan(initial!.cols);
 
-    // Restore visibility — the wake path runs applyDeferredResize before
-    // refresh, so the final repaint targets the narrower grid.
+    // Restore visibility — the narrower grid was already committed to both
+    // xterm and the PTY while hidden, so the repaint targets it directly.
     expect(await applyTier(window, panelId, "FOCUSED")).toBe(true);
     await window.waitForTimeout(T_SETTLE);
 
