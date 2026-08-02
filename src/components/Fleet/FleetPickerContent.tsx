@@ -110,7 +110,7 @@ export function FleetPickerContent({
           mounts inside the fleet-count popover, which has no palette header of
           its own. Padding and rule token track the palette header so the two
           hosts still read as the same surface. */}
-      <div className="px-3 pt-2 pb-1 border-b border-border-strong shrink-0">
+      <div className="px-3 pt-2 pb-2 border-b border-border-strong shrink-0">
         <AppPaletteDialog.Input
           inputPrefix={
             <Search className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />
