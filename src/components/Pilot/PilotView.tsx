@@ -36,10 +36,6 @@ import { useEffectiveCombo } from "@/hooks/useKeybinding";
 // Leaf import, not the `@/hooks` barrel: palette suites routinely mock that
 // barrel and throw on an export they don't list.
 import { useOverlayClaim } from "@/hooks/useOverlayState";
-
-/** Matches the project switcher, which this opens from and sits beside. */
-const PALETTE_WIDTH = "w-[484px] max-w-[calc(100vw-2rem)]";
-const PALETTE_MAX_HEIGHT = "max-h-[60vh]";
 const LIST_ID = "pilot-agent-list";
 
 /** Ages are minute-grained, so a 30s tick keeps them honest without churn. */
@@ -687,15 +683,9 @@ export function PilotView() {
   const showSkeleton = useDeferredLoading(status.kind === "loading", UI_DOHERTY_THRESHOLD);
 
   return (
-    <AppPaletteDialog
-      isOpen={isOpen}
-      onClose={close}
-      ariaLabel="All agents"
-      className={PALETTE_WIDTH}
-    >
-      <AppPaletteDialog.Header label="All agents" shortcut={pilotShortcut} className="pb-2">
+    <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="All agents">
+      <AppPaletteDialog.Header label="All agents" shortcut={pilotShortcut}>
         <AppPaletteDialog.Input
-          className="bg-overlay-soft border-[var(--border-overlay)]"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={navigation.handleInputKeyDown}
@@ -716,7 +706,6 @@ export function PilotView() {
       </AppPaletteDialog.Header>
 
       <AppPaletteDialog.Body
-        maxHeight={PALETTE_MAX_HEIGHT}
         className="p-0"
         ariaLabel="Agents"
         activeDescendant={activeDescendantId}
@@ -831,9 +820,17 @@ export function PilotView() {
         </div>
       </AppPaletteDialog.Body>
 
-      <AppPaletteDialog.Footer>
-        <PilotFooter actionLabel={actionLabel} summary={summary} />
-      </AppPaletteDialog.Footer>
+      {/*
+        An empty fleet has no row to act on and nothing to summarise, so both
+        halves of the footer go quiet — and the bar collapses to a bare ruled
+        strip under the empty state. Drop the whole footer instead of shipping a
+        divider with nothing beneath it.
+      */}
+      {(actionLabel !== null || summary !== "") && (
+        <AppPaletteDialog.Footer>
+          <PilotFooter actionLabel={actionLabel} summary={summary} />
+        </AppPaletteDialog.Footer>
+      )}
     </AppPaletteDialog>
   );
 }

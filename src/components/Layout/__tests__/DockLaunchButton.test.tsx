@@ -203,7 +203,7 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
       <div data-testid="dock-launcher-empty">{query.trim() ? "no matches" : "nothing"}</div>
     ),
   };
-  return { AppPaletteDialog };
+  return { AppPaletteDialog, PALETTE_SURFACE_WIDTH: "w-[484px]" };
 });
 
 import { DockLaunchButton } from "../DockLaunchButton";

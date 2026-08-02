@@ -154,13 +154,23 @@ function ActionPaletteItemInner({
           !item.enabled && "cursor-not-allowed"
         )}
       >
-        <span
-          className={cn(
-            "shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium leading-tight",
-            categoryColor
-          )}
-        >
-          {item.category}
+        {/* Fixed-width COLUMN holding a natural-width chip. Category names run
+            from "git" to "preferences", so an auto-width badge started every
+            title at a different x and the list read as a ragged left edge. The
+            wrapper reserves the column so titles align; the chip inside stays
+            its own size, because a 3-letter category stretched to 80px reads as
+            a button rather than a label. */}
+        <span className="w-20 shrink-0">
+          <span
+            className={cn(
+              // Natural width inside the fixed column, not stretched to fill it:
+              // a 3-letter category in an 80px pill reads as a stretched button.
+              "inline-block max-w-full truncate rounded px-1.5 py-0.5 text-[10px] font-medium leading-tight",
+              categoryColor
+            )}
+          >
+            {item.category}
+          </span>
         </span>
 
         <div className="flex-1 min-w-0">

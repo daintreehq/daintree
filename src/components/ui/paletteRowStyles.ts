@@ -31,3 +31,15 @@ export const PALETTE_ROW_CLASS = cn(
   "before:bg-daintree-accent before:opacity-0 before:transition-opacity before:content-['']",
   "aria-selected:before:opacity-100"
 );
+
+/**
+ * The label that names a band of rows ("Pinned", "Scratch", "Recent").
+ *
+ * Same drift as the row treatment: most palettes drew it as a 10px tracked
+ * uppercase whisper, while the dock launcher used 11px sentence case — so the
+ * same structural element read as two different things depending on which
+ * palette you opened. Padding stays out of it where a palette's list inset
+ * differs; the type treatment is what has to match.
+ */
+export const PALETTE_SECTION_LABEL_CLASS =
+  "text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none";

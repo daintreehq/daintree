@@ -24,7 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
-import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { KbdChord } from "@/components/ui/Kbd";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import {
@@ -556,7 +556,10 @@ function OtherProjectsHeader({
       <ContextMenuTrigger asChild>
         <div
           role="presentation"
-          className="flex items-center justify-between px-3 py-1 text-[10px] font-medium text-daintree-text/40 select-none"
+          className={cn(
+            PALETTE_SECTION_LABEL_CLASS,
+            "flex items-center justify-between px-3 py-1 normal-case tracking-normal"
+          )}
         >
           <div id={headerId} className="tracking-wider uppercase">
             {label}
@@ -773,7 +776,7 @@ function ProjectListContent({
             // owned by the listbox (an unnamed `group` is an ARIA violation).
             return (
               <div key={section.key} role="presentation">
-                {sectionIdx > 0 && <div className="h-[3px] bg-tint/[0.08]" />}
+                {sectionIdx > 0 && <AppPaletteDialog.Divider />}
                 <div
                   role={section.label ? "group" : "presentation"}
                   aria-labelledby={section.label ? headerId : undefined}
@@ -793,10 +796,7 @@ function ProjectListContent({
                         onReturnFocus={onReturnFocus}
                       />
                     ) : (
-                      <div
-                        id={headerId}
-                        className="px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none"
-                      >
+                      <div id={headerId} className={cn(PALETTE_SECTION_LABEL_CLASS, "px-3 py-1")}>
                         {section.label}
                       </div>
                     ))}
@@ -1030,7 +1030,10 @@ function ScratchSection({
           <button
             type="button"
             onClick={() => setCollapsed((v) => !v)}
-            className="w-full flex items-center justify-between px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none hover:text-daintree-text/60 transition-colors"
+            className={cn(
+              PALETTE_SECTION_LABEL_CLASS,
+              "w-full flex items-center justify-between px-3 py-1 hover:text-daintree-text/60 transition-colors"
+            )}
             aria-expanded={!collapsed}
             aria-controls="scratch-section-list"
           >
@@ -1265,9 +1268,6 @@ function ProjectSwitcherFooter({
   );
 }
 
-const PALETTE_WIDTH = "w-[484px] max-w-[calc(100vw-2rem)]";
-const PALETTE_MAX_HEIGHT = "max-h-[60vh]";
-
 interface ProjectPaletteInnerProps {
   inputRef: React.RefObject<HTMLInputElement | null>;
   listRef: React.RefObject<HTMLDivElement | null>;
@@ -1439,13 +1439,8 @@ function ProjectPaletteInner({
 
   return (
     <>
-      <AppPaletteDialog.Header
-        label="Switch Project"
-        shortcut={projectSwitcherShortcut}
-        className="pb-2"
-      >
+      <AppPaletteDialog.Header label="Switch project" shortcut={projectSwitcherShortcut}>
         <AppPaletteDialog.Input
-          className="bg-overlay-soft border-[var(--border-overlay)]"
           inputRef={inputRef}
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
@@ -1461,7 +1456,6 @@ function ProjectPaletteInner({
       </AppPaletteDialog.Header>
 
       <AppPaletteDialog.Body
-        maxHeight={PALETTE_MAX_HEIGHT}
         className="p-0"
         ariaLabel="Workspaces"
         activeDescendant={activeDescendant}
@@ -1488,7 +1482,7 @@ function ProjectPaletteInner({
         />
         {(onCreateScratch || (scratchResults && scratchResults.length > 0)) && (
           <>
-            <div className="h-[3px] bg-tint/[0.08]" hidden={isRankedSearch} />
+            <AppPaletteDialog.Divider hidden={isRankedSearch} />
             <ScratchSection
               scratches={scratchResults ?? []}
               isSearching={isRankedSearch}
@@ -1505,7 +1499,7 @@ function ProjectPaletteInner({
 
       {(onOpenProjectSettings || onAddProject || onCloneRepo || onCreateFolder) && (
         <>
-          <div className="h-[3px] bg-tint/[0.08]" />
+          <AppPaletteDialog.Divider />
           <div className="px-2 pt-1 pb-2">
             {onOpenProjectSettings && (
               <button
@@ -1597,12 +1591,7 @@ function ModalContent({
   const listRef = useRef<HTMLDivElement>(null);
 
   return (
-    <AppPaletteDialog
-      isOpen={isOpen}
-      onClose={onClose}
-      ariaLabel="Project switcher"
-      className={PALETTE_WIDTH}
-    >
+    <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Project switcher">
       <ProjectPaletteInner
         inputRef={inputRef}
         listRef={listRef}
@@ -1687,7 +1676,9 @@ function DropdownContent({
         // better behaviour and worth adopting — but as its own change, not
         // folded silently into an extraction.
         restoreFocusOnPointerDismiss
-        className={cn(PALETTE_WIDTH, "p-0")}
+        // Width comes from the shell, so the dropdown and the ⌘P modal of this
+        // same palette resolve to one surface.
+        className="p-0"
         data-testid="project-switcher-palette"
         align={dropdownAlign}
         sideOffset={8}

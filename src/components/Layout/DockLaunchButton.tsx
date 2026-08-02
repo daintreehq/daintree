@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
-import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { BrandMark, Workflow } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import { cn } from "@/lib/utils";
@@ -291,7 +291,10 @@ export function DockLaunchButton({
         side="top"
         align="start"
         sideOffset={4}
-        className="w-[22rem] p-0"
+        // Width comes from the shell — one `PALETTE_SURFACE_WIDTH` for the whole
+        // family, so the launcher can't drift away from the palettes it sits next
+        // to in the same keyboard reflex.
+        className="p-0"
         // Catch-all behind the input's own handler, for the frame before the
         // shell's refocus lands and for focus legitimately sitting on the
         // results region. Bubble phase, so the input and body still get first
@@ -322,11 +325,6 @@ export function DockLaunchButton({
             aria-activedescendant={activeDescendant}
             autoComplete="off"
             spellCheck={false}
-            // The focus indicator is deliberately neutral: the selected row
-            // owns this region's single accent anchor, and the input holds
-            // focus the whole time the launcher is open, so an accent ring
-            // here would be a permanently competing signal.
-            className="focus:border-daintree-border focus:ring-daintree-border/30"
           />
         </AppPaletteDialog.Header>
 
@@ -401,7 +399,7 @@ function DockLaunchOption({
           // own trailing label, and an extra child would break option counting.
           aria-hidden="true"
           data-testid="dock-launcher-band"
-          className="px-2 pt-2 pb-1 text-[11px] text-text-muted select-none first:pt-0"
+          className={cn(PALETTE_SECTION_LABEL_CLASS, "px-2 pt-2 pb-1 first:pt-0")}
         >
           {DOCK_LAUNCH_BAND_LABELS[row.band]}
         </div>

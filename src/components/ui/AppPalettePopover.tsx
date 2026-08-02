@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PALETTE_HEADER_ATTR } from "@/components/ui/paletteHeaderAttr";
+import { PALETTE_SURFACE_WIDTH } from "@/components/ui/AppPaletteDialog";
+import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
 
 /**
@@ -170,6 +172,7 @@ function AppPalettePopoverContent({
   onInteractOutside,
   onFocus,
   onMouseDown,
+  className,
   children,
   ...props
 }: AppPalettePopoverContentProps) {
@@ -316,6 +319,12 @@ function AppPalettePopoverContent({
     // names and data attributes still come through untouched.
     <PopoverContent
       {...props}
+      // The family's one width, carried by the shell rather than restated at
+      // each anchor — an anchored palette and the modal form of the same
+      // palette (the project switcher renders both) have to resolve to the same
+      // surface. `cn` merges, so a palette that genuinely needs another width
+      // can still pass one.
+      className={cn(PALETTE_SURFACE_WIDTH, className)}
       aria-label={ariaLabel}
       // Radix does not set this itself. `aria-modal="false"` is noise, so the
       // non-modal form carries nothing rather than a negation.

@@ -84,10 +84,12 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
   Dialog.Input = Input;
   Dialog.Body = Body;
   Dialog.Footer = Footer;
+  Dialog.Divider = (props: React.HTMLAttributes<HTMLDivElement>) => <div {...props} />;
 
   return {
     AppPaletteDialog: Dialog,
     KBD_CLASS: "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60",
+    PALETTE_SURFACE_WIDTH: "w-[484px]",
   };
 });
 
