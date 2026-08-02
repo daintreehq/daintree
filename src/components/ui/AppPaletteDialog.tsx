@@ -634,12 +634,24 @@ interface AppPaletteEmptyProps {
   noMatchMessage?: string;
   noMatchContent?: React.ReactNode;
   children?: React.ReactNode;
+  /**
+   * Name of a narrowing control, other than the query, that is also excluding
+   * rows — supplied only while that control is actually active.
+   *
+   * Without it the zero-data branch claims the surface itself is empty when a
+   * filter the user set is what emptied it: the ghost-filter dead end, where
+   * someone hits no results and cannot see why. Naming BOTH constraints is the
+   * point, so the default title states the filter and the query together rather
+   * than whichever one the caller happened to think of. Pair it with a
+   * `noMatchContent` action that clears the filter.
+   */
+  filterLabel?: string;
 }
 
 const NO_MATCH_QUERY_MAX = 40;
 const EMPTY_ANNOUNCEMENT_DEBOUNCE_MS = 600;
 
-function defaultNoMatchTitle(trimmedQuery: string) {
+function defaultNoMatchTitle(trimmedQuery: string, filterLabel: string | undefined) {
   // Iterate by codepoint (Array.from handles surrogate pairs) so we never
   // truncate inside an astral-plane character like an emoji.
   const codepoints = Array.from(trimmedQuery);
@@ -647,7 +659,15 @@ function defaultNoMatchTitle(trimmedQuery: string) {
     codepoints.length > NO_MATCH_QUERY_MAX
       ? `${codepoints.slice(0, NO_MATCH_QUERY_MAX).join("")}…`
       : trimmedQuery;
-  return `No matches for "${display}"`;
+
+  // "with X selected" rather than "in X": the point of naming the filter is to
+  // explain why the list is empty, and only the causal phrasing does that.
+  // Generic noun throughout — this component serves every palette, and only the
+  // caller knows whether its rows are agents, projects or commands.
+  if (!trimmedQuery) return `No matches with ${filterLabel} selected`;
+  return filterLabel === undefined
+    ? `No matches for "${display}"`
+    : `No matches for "${display}" with ${filterLabel} selected`;
 }
 
 AppPaletteDialog.Empty = function AppPaletteEmpty({
@@ -656,6 +676,7 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
   noMatchMessage,
   noMatchContent,
   children,
+  filterLabel,
 }: AppPaletteEmptyProps) {
   const trimmedQuery = query.trim();
   // Defer the *displayed* query so the title doesn't redraw every keystroke
@@ -675,8 +696,19 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
   // doesn't suppress repeated identical announcements.
   const srTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [srAnnouncement, setSrAnnouncement] = useState("");
-  const displayQuery = deferredTrimmedQuery || trimmedQuery;
-  const title = trimmedQuery ? (noMatchMessage ?? defaultNoMatchTitle(displayQuery)) : emptyMessage;
+  // Forced empty the instant the real query is, never merely deferred to it.
+  // A filter keeps the narrowed branch mounted after the box is cleared, so a
+  // lagging deferred value would go on rendering `No matches for "docs"` over a
+  // query the user had already deleted — the stale flash the immediate-branch
+  // decision above exists to prevent.
+  const displayQuery = trimmedQuery ? deferredTrimmedQuery || trimmedQuery : "";
+  // A filter narrows the population exactly as a query does, so it takes the
+  // same branch. The branch decision stays on the immediate values; only the
+  // rendered query text is deferred.
+  const isNarrowed = trimmedQuery.length > 0 || filterLabel !== undefined;
+  const title = isNarrowed
+    ? (noMatchMessage ?? defaultNoMatchTitle(displayQuery, filterLabel))
+    : emptyMessage;
 
   useEffect(() => {
     return () => {
@@ -695,7 +727,7 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
     };
   }, [title, trimmedQuery]);
 
-  if (trimmedQuery) {
+  if (isNarrowed) {
     return (
       <>
         <EmptyState
