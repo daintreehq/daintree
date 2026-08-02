@@ -7,18 +7,46 @@ import type {
 const NAME_WEIGHT = 4;
 
 /**
- * One surviving word boundary: the {@link scoreField} boundary bonus (90) plus
- * the base score for the character that landed on it (10). Below that, a query
- * reached the end of the field without ever anchoring to the start of a word —
- * it scavenged its characters out of the middle of unrelated ones.
+ * What one word boundary is worth in {@link scoreField}: the boundary bonus
+ * (90) plus the base score of the character that landed on it (10).
+ *
+ * It is a floor on the TOTAL, not proof that a boundary was hit — a query can
+ * land on two of them and still come in under, because the gap penalties for
+ * travelling between them outweigh what they paid. That is the intent: a match
+ * has to be anchored to the words it came from AND stay near them.
  */
 const MIN_FILTER_MATCH_SCORE = 100;
+
+const SEPARATOR = /[/\\\-._\s]/;
 
 function isBoundary(str: string, index: number): boolean {
   if (index === 0) return true;
   const prev = str[index - 1] ?? "";
   const curr = str[index] ?? "";
-  return /[/\\\-._\s]/.test(prev) || (/[a-z]/.test(prev) && /[A-Z]/.test(curr));
+  return SEPARATOR.test(prev) || (/[a-z]/.test(prev) && /[A-Z]/.test(curr));
+}
+
+/**
+ * The first character of every word, in order: "issue-11518-scratch-rows"
+ * reduces to "i1sr" and "OpenCode" to "oc". Word starts are {@link isBoundary}'s
+ * definition, so this stays in step with what the scorer rewards.
+ */
+function fieldInitials(field: string): string {
+  let initials = "";
+  for (let i = 0; i < field.length; i++) {
+    const char = field[i] ?? "";
+    if (SEPARATOR.test(char)) continue;
+    if (isBoundary(field, i)) initials += char;
+  }
+  return initials.toLowerCase();
+}
+
+function isSubsequenceOf(query: string, field: string): boolean {
+  let qi = 0;
+  for (let fi = 0; fi < field.length && qi < query.length; fi++) {
+    if (field[fi] === query[qi]) qi++;
+  }
+  return qi === query.length;
 }
 
 function scoreField(query: string, field: string): number {
@@ -83,26 +111,33 @@ function scoreField(query: string, field: string): number {
  * Whether `field` matches `query` well enough to survive a filter that will not
  * rank the result afterwards.
  *
- * The palette can afford a bare subsequence test — "fltsnp" finds "fleet
- * snapshot", and anything scraped together out of unrelated words sinks to the
- * bottom on score. A surface that only filters has no such backstop: every
- * survivor is presented as an equal answer, so "rust" pulling in "Research file
- * browser folder selection usability" (a legal subsequence worth 5 points) reads
- * as a result rather than as noise.
+ * The palette can afford a bare subsequence test — anything scraped together
+ * out of unrelated words still sinks to the bottom on score. A surface that
+ * only filters has no such backstop: every survivor is presented as an equal
+ * answer, so "rust" pulling in "Research file browser folder selection
+ * usability" (a legal subsequence worth 5 points) reads as a result rather than
+ * as noise.
  *
- * The floor applies only to scattered matches. Anything the user typed
- * contiguously is a substring and collects that 500-point bonus outright, so
- * incremental typing — "d", "da", "dai" — never trips it, down to a single
- * character. What has to clear {@link MIN_FILTER_MATCH_SCORE} is a query whose
- * characters came from more than one word, and the ask is modest: land on one
- * word boundary and survive the gap penalties getting there.
+ * Two ways through, because {@link scoreField} alone rejects abbreviations it
+ * should keep. Its walk is greedy — it takes the first character it can rather
+ * than the best one — so "sr" against "issue-11518-scratch-rows" spends itself
+ * on the "s" in "issue" and never reaches "scratch rows", scoring 0 for what a
+ * reader would call an obvious hit. Matching {@link fieldInitials} covers that
+ * class directly, and is no looser than the score path: initials are one
+ * character per word, so there is nothing mid-word left to scavenge.
+ *
+ * Neither path constrains contiguous typing. Anything typed straight through is
+ * a substring and collects that 500-point bonus outright, so incremental typing
+ * — "d", "da", "dai" — never trips the floor, down to a single character.
  */
 export function isFilterMatch(query: string, field: string): boolean {
-  // An empty query is a substring of every field, so it would collect the
-  // substring bonus and match everything. Callers filtering on a blank query
-  // want all rows, but that is their short-circuit to make, not this one's.
-  if (!query) return false;
-  return scoreField(query, field) >= MIN_FILTER_MATCH_SCORE;
+  // Trimmed here rather than trusted from the caller: whitespace is a substring
+  // of every field, so a blank query would collect the substring bonus and
+  // match everything. Callers that want all rows short-circuit on their own.
+  const trimmed = query.trim();
+  if (!trimmed) return false;
+  if (scoreField(trimmed, field) >= MIN_FILTER_MATCH_SCORE) return true;
+  return isSubsequenceOf(trimmed.toLowerCase(), fieldInitials(field));
 }
 
 export function scoreProjectQuery(query: string, name: string, path: string): number {

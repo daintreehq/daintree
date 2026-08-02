@@ -52,32 +52,46 @@ function makeProject(
 describe("isFilterMatch", () => {
   const RESEARCH_TITLE = "Research file browser folder selection usability";
 
-  it("rejects an empty query rather than matching every field", () => {
-    // An empty string is a substring of anything, so the substring bonus alone
-    // would clear the floor.
+  it("rejects a blank query rather than matching every field", () => {
+    // Whitespace is a substring of anything, so the substring bonus alone would
+    // clear the floor.
     expect(isFilterMatch("", RESEARCH_TITLE)).toBe(false);
+    expect(isFilterMatch("   ", RESEARCH_TITLE)).toBe(false);
   });
 
-  it("rejects a subsequence scavenged out of mid-word characters", () => {
-    // The #11625 case: every character is present in order, none of them where
-    // a reader would look for them.
+  it("rejects a subsequence whose characters are too far apart to pay for", () => {
+    // The #11625 case: every character is present in order, none of them near
+    // enough to the words they came from to read as a match.
     expect(isFilterMatch("rust", RESEARCH_TITLE)).toBe(false);
     expect(isFilterMatch("sv", "fleet snapshot service")).toBe(false);
     expect(isFilterMatch("ate", "Daintree")).toBe(false);
   });
 
-  it("accepts an acronym built from word starts", () => {
+  it("accepts an abbreviation anchored to the words it came from", () => {
     expect(isFilterMatch("fltsnp", "fleet snapshot service")).toBe(true);
     expect(isFilterMatch("fs", "fleet snapshot service")).toBe(true);
   });
 
+  it("accepts word initials the scorer's greedy walk cannot reach", () => {
+    // The scorer takes the first character it can rather than the best one, so
+    // "sr" spends its "s" inside "issue" and never arrives at "scratch rows".
+    // Initials are one character per word, so reading them costs no looseness.
+    expect(isFilterMatch("sr", "issue-11518-scratch-rows")).toBe(true);
+    expect(isFilterMatch("isr", "issue-11518-scratch-rows")).toBe(true);
+    expect(isFilterMatch("oc", "OpenCode")).toBe(true);
+  });
+
   it("accepts anything typed contiguously, down to a single character", () => {
     // Incremental typing is always a substring, so the floor never interrupts
-    // it — including a character sitting mid-word, which scores nothing on its
-    // own and rides the substring bonus alone.
+    // it — including a character sitting mid-word, which earns no boundary or
+    // start bonus and clears the floor on the substring bonus alone.
     expect(isFilterMatch("d", "Daintree")).toBe(true);
     expect(isFilterMatch("i", "Daintree")).toBe(true);
     expect(isFilterMatch("brow", RESEARCH_TITLE)).toBe(true);
+  });
+
+  it("ignores whitespace the caller did not trim", () => {
+    expect(isFilterMatch("  fltsnp  ", "fleet snapshot service")).toBe(true);
   });
 
   it("rejects a query whose characters are not all present", () => {
