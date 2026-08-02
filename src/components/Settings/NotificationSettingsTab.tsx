@@ -95,7 +95,7 @@ function SoundFileSelect({
           id={id}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="flex-1 px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent focus:outline-hidden transition-colors"
+          className="flex-1 px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
         >
           {AVAILABLE_SOUNDS.map(({ file, label: soundLabel }) => (
             <option key={file} value={file}>
@@ -293,7 +293,7 @@ export function NotificationSettingsTab() {
                       id={escalationDelayId}
                       value={settings.waitingEscalationDelayMs}
                       onChange={(e) => update({ waitingEscalationDelayMs: Number(e.target.value) })}
-                      className="px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent focus:outline-hidden transition-colors"
+                      className="px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
                     >
                       {ESCALATION_DELAY_OPTIONS.map(({ value, label }) => (
                         <option key={value} value={value}>
@@ -470,7 +470,7 @@ function QuietHoursTimeRow({
 }) {
   const { hour, minute } = splitMinutes(totalMinutes);
   const selectClass =
-    "px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent focus:outline-hidden transition-colors";
+    "px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent/40 focus:outline-hidden transition-colors";
   return (
     <div className="space-y-1">
       <span className="text-sm font-medium text-daintree-text block">{label}</span>

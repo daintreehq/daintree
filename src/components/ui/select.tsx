@@ -103,7 +103,7 @@ const SelectTrigger = React.forwardRef<
         ref={ref as React.Ref<HTMLButtonElement>}
         className={cn(
           "flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text transition-colors",
-          "focus:outline-hidden focus:border-daintree-accent",
+          "focus:outline-hidden focus:border-daintree-accent/40",
           "disabled:opacity-50 disabled:cursor-not-allowed",
           className
         )}
@@ -124,7 +124,7 @@ const SelectTrigger = React.forwardRef<
       ref={ref}
       className={cn(
         "flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text transition-colors",
-        "focus:outline-hidden focus:border-daintree-accent",
+        "focus:outline-hidden focus:border-daintree-accent/40",
         "disabled:opacity-50 disabled:cursor-not-allowed",
         "data-[placeholder]:text-text-muted",
         "[&>span]:line-clamp-1 [&>span]:text-left",

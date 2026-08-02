@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
-import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
+import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
@@ -127,10 +127,9 @@ export function PanelPalette({
           else itemsRef.current.delete(kind.id);
         }}
         className={cn(
-          "relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
-          index === selectedIndex
-            ? "bg-overlay-raised border-overlay text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:bg-daintree-accent before:content-['']"
-            : "border-transparent text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text",
+          PALETTE_ROW_CLASS,
+          "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
+          "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text",
           isUnavailable && "opacity-50"
         )}
         onClick={() => onSelect(kind)}

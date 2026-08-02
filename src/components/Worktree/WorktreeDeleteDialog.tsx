@@ -435,7 +435,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               type="checkbox"
               checked={closeTerminals}
               onChange={(e) => setCloseTerminals(e.target.checked)}
-              className="rounded border-border-strong bg-daintree-bg text-daintree-accent focus:ring-daintree-accent"
+              className="rounded border-border-strong bg-daintree-bg text-daintree-accent focus:ring-daintree-accent/30"
             />
             <span className="text-sm text-daintree-text">
               Close all terminals{hasTerminals ? ` (${terminalCounts.total})` : ""}

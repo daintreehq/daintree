@@ -249,7 +249,7 @@ export function DiagnosticsReviewDialog({
             aria-label="Log time window"
             className={cn(
               "h-8 text-xs w-full px-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg",
-              "text-daintree-text focus:outline-hidden focus:border-daintree-accent"
+              "text-daintree-text focus:outline-hidden focus:border-daintree-accent/40"
             )}
           >
             {TIME_WINDOW_OPTIONS.map((opt) => (
@@ -317,7 +317,7 @@ export function DiagnosticsReviewDialog({
                   className={cn(
                     "h-7 text-xs flex-1 px-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg",
                     "text-daintree-text placeholder:text-text-placeholder",
-                    "focus:outline-hidden focus:border-daintree-accent"
+                    "focus:outline-hidden focus:border-daintree-accent/40"
                   )}
                 />
                 <span className="text-daintree-text/40 text-xs">→</span>
@@ -329,7 +329,7 @@ export function DiagnosticsReviewDialog({
                   className={cn(
                     "h-7 text-xs flex-1 px-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg",
                     "text-daintree-text placeholder:text-text-placeholder",
-                    "focus:outline-hidden focus:border-daintree-accent"
+                    "focus:outline-hidden focus:border-daintree-accent/40"
                   )}
                 />
                 {replacements.length > 1 && (

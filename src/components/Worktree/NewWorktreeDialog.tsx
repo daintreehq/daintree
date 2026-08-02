@@ -1029,7 +1029,7 @@ export function NewWorktreeDialog({
                     baseBranchTouchedRef.current = true;
                     setFromRemote(e.target.checked);
                   }}
-                  className="rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent"
+                  className="rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent/30"
                 />
                 <label htmlFor="from-remote" className="text-sm text-daintree-text select-none">
                   Create from remote branch

@@ -597,7 +597,7 @@ function ApiKeyRow({
               }
             }}
             placeholder={value ? "Enter new key to replace" : placeholder}
-            className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent transition-colors"
+            className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
             autoComplete="new-password"
             spellCheck={false}
             disabled={validation === "testing"}
@@ -691,7 +691,7 @@ function AdvancedSection({
               onBlur={(e) => update({ organizationId: e.target.value.trim() })}
               placeholder={isLegacyKey ? "org-..." : ""}
               disabled={!isLegacyKey}
-              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent transition-colors disabled:opacity-50"
+              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors disabled:opacity-50"
               autoComplete="off"
               spellCheck={false}
             />
@@ -708,7 +708,7 @@ function AdvancedSection({
               onBlur={(e) => update({ projectId: e.target.value.trim() })}
               placeholder={isLegacyKey ? "proj_..." : ""}
               disabled={!isLegacyKey}
-              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent transition-colors disabled:opacity-50"
+              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors disabled:opacity-50"
               autoComplete="off"
               spellCheck={false}
             />
@@ -1001,7 +1001,7 @@ function DictionarySection({
             }
           }}
           placeholder="Add term…"
-          className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent transition-colors"
+          className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
         />
         <Button
           onClick={onAdd}

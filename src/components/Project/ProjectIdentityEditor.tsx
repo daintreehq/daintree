@@ -230,7 +230,7 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
                   setIsOpen(false);
                 }
               }}
-              className="w-[280px] rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+              className="w-[280px] rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
               placeholder={project.name}
             />
             {suggestion && (

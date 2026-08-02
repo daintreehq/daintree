@@ -24,7 +24,14 @@ export const PALETTE_ROW_CLASS = cn(
   // `relative` is the rail's containing block; the transparent border reserves
   // the selected border's width so the row cannot shift when it arrives.
   "relative border border-transparent transition-colors",
-  "aria-selected:bg-overlay-raised aria-selected:border-overlay aria-selected:text-daintree-text",
+  // The outline is the rail's own colour at /40 — one anchor drawn twice, not
+  // two signals. It shares that /40 with the palette input's focus border
+  // (`AppPaletteDialog`), so both land on the same rendered green and the
+  // surface reads as one treatment rather than two strengths; change them
+  // together. /25 was tried and sat inside the noise of the neutral border it
+  // replaced. Every theme's accent drives it, so the outline and the rail can
+  // never disagree about what colour "selected" is.
+  "aria-selected:bg-overlay-raised aria-selected:border-daintree-accent/40 aria-selected:text-daintree-text",
   // The rail is always laid out and only its opacity changes. Toggling
   // `content` instead gave the pseudo-element nothing to transition from.
   "before:absolute before:top-2 before:bottom-2 before:left-0 before:w-[2px] before:rounded-r",

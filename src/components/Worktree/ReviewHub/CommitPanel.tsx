@@ -365,7 +365,7 @@ export function CommitPanel({
         <div
           ref={detachedHeadRef}
           tabIndex={-1}
-          className="text-xs text-status-warning bg-status-warning/10 rounded px-2 py-1.5 outline-hidden focus:ring-2 focus:ring-daintree-accent"
+          className="text-xs text-status-warning bg-status-warning/10 rounded px-2 py-1.5 outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
         >
           Detached HEAD — commits are not allowed in this state.
         </div>
@@ -400,7 +400,7 @@ export function CommitPanel({
           "w-full resize-none rounded-md border border-divider bg-[var(--review-commit-input-bg,var(--color-daintree-bg))] px-3 py-2 text-xs font-mono",
           "min-h-[calc(2lh+1rem)] max-h-[calc(6lh+1rem)] overflow-y-auto",
           "placeholder:text-text-placeholder text-daintree-text",
-          "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent focus:border-transparent",
+          "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30 focus:border-transparent",
           "disabled:opacity-50 disabled:cursor-not-allowed"
         )}
       />

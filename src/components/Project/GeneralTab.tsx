@@ -371,7 +371,7 @@ export function GeneralTab({
                 type="text"
                 value={name}
                 onChange={(e) => onNameChange(e.target.value)}
-                className="w-full bg-transparent border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition-[border-color,box-shadow] placeholder:text-text-placeholder"
+                className="w-full bg-transparent border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30 transition-[border-color,box-shadow] placeholder:text-text-placeholder"
                 placeholder="My Awesome Project"
               />
             </div>
@@ -458,7 +458,7 @@ export function GeneralTab({
                 "w-28 bg-daintree-bg border rounded px-3 py-1.5 text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-1 transition placeholder:text-text-placeholder",
                 hexInput && !isValidHexColor(hexInput)
                   ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
-                  : "border-daintree-border focus:border-daintree-accent focus:ring-daintree-accent/30"
+                  : "border-daintree-border focus:border-daintree-accent/40 focus:ring-daintree-accent/30"
               )}
             />
             {color && (
@@ -514,7 +514,7 @@ export function GeneralTab({
           type="text"
           value={devServerCommand}
           onChange={(e) => onDevServerCommandChange(e.target.value)}
-          className="w-full bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-placeholder"
+          className="w-full bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-placeholder"
           placeholder="npm run dev"
           spellCheck={false}
           autoCapitalize="off"
@@ -544,7 +544,7 @@ export function GeneralTab({
                 onDevServerLoadTimeoutChange(num);
               }
             }}
-            className="w-28 bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-placeholder"
+            className="w-28 bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-placeholder"
             placeholder="30"
             aria-label="Dev server load timeout in seconds"
           />

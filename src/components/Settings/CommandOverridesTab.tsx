@@ -272,7 +272,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             disabled={isLoading}
-            className="w-full pl-9 pr-3 py-2 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent disabled:opacity-60 disabled:cursor-not-allowed"
+            className="w-full pl-9 pr-3 py-2 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 disabled:opacity-60 disabled:cursor-not-allowed"
             aria-label="Search commands"
           />
         </div>
@@ -483,7 +483,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                                   onChange={(e) =>
                                     updateDefault(command.id, arg.name, e.target.value)
                                   }
-                                  className="w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1.5 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+                                  className="w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1.5 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
                                   placeholder={
                                     arg.default ? `Default: ${arg.default}` : `Enter ${arg.name}`
                                   }
@@ -598,7 +598,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
             "w-full bg-daintree-sidebar border rounded px-2 py-1.5 text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-1 min-h-[120px] resize-y",
             validation && !validation.valid
               ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
-              : "border-border-strong focus:border-daintree-accent focus:ring-daintree-accent/30"
+              : "border-border-strong focus:border-daintree-accent/40 focus:ring-daintree-accent/30"
           )}
           placeholder={`Example: Work on issue {issueNumber}...\n\nUse {variableName} to include argument values.`}
         />

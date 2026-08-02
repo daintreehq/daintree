@@ -62,7 +62,7 @@ export function NewBranchInput({
               onChange={(e) => onChange(e.target.value)}
               onKeyDown={onPrefixKeyDown}
               placeholder="feature/add-user-auth"
-              className="w-full px-3 pr-10 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent font-mono text-sm"
+              className="w-full px-3 pr-10 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30 font-mono text-sm"
               disabled={isPending}
               aria-invalid={errorField === "new-branch" ? true : undefined}
               aria-describedby={

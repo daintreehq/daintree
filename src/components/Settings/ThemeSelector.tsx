@@ -156,7 +156,7 @@ export function ThemeSelector<T extends { id: string }>({
             }}
             placeholder="Filter themes..."
             aria-label="Filter themes"
-            className="w-full pl-7 pr-2 py-1.5 text-xs rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent"
+            className="w-full pl-7 pr-2 py-1.5 text-xs rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40"
           />
         </div>
       </div>

@@ -1160,7 +1160,7 @@ export function FilePane({
             />
             {pickerRoot && (
               <div className="w-full max-w-md flex flex-col gap-1 min-h-0">
-                <div className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-daintree-border bg-daintree-sidebar focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20">
+                <div className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-daintree-border bg-daintree-sidebar focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20">
                   <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                   <input
                     value={pickerQuery}

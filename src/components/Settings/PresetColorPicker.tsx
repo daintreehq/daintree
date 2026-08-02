@@ -165,7 +165,7 @@ export function PresetColorPicker({
             color={draftColor}
             onChange={setDraftColor}
             prefixed
-            className="w-20 rounded border border-daintree-border/60 bg-daintree-bg px-1.5 py-0.5 text-[11px] font-mono uppercase text-daintree-text focus:outline-hidden focus:border-daintree-accent"
+            className="w-20 rounded border border-daintree-border/60 bg-daintree-bg px-1.5 py-0.5 text-[11px] font-mono uppercase text-daintree-text focus:outline-hidden focus:border-daintree-accent/40"
             aria-label="Hex color"
             data-testid="preset-color-hex-input"
           />

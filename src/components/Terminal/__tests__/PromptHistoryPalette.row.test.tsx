@@ -87,21 +87,6 @@ describe("PromptHistoryRow", () => {
     );
   });
 
-  it("does NOT include before:rounded-r on the accent stripe", () => {
-    const { container } = render(
-      <PromptHistoryRow
-        item={makeEntry()}
-        index={0}
-        isSelected={true}
-        onSelect={vi.fn()}
-        onHoverIndex={vi.fn()}
-      />
-    );
-
-    const className = container.querySelector("button")?.className ?? "";
-    expect(className).not.toContain("rounded-r");
-  });
-
   it("calls onHoverIndex with the row's index on pointer move", () => {
     const onHoverIndex = vi.fn();
     const { container } = render(

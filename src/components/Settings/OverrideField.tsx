@@ -89,7 +89,7 @@ export function OverrideField({
         aria-invalid={error ? true : undefined}
         className={cn(
           "w-full bg-daintree-bg border rounded px-3 py-2 text-sm text-daintree-text font-mono",
-          "focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30",
+          "focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30",
           "transition-colors placeholder:text-text-placeholder disabled:opacity-50 disabled:cursor-not-allowed",
           isOverriding ? "border-status-info/40" : "border-daintree-border",
           error && "border-status-error",

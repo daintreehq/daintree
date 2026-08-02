@@ -216,7 +216,7 @@ export function PortalSettingsTab() {
             type="text"
             value={editName}
             onChange={(e) => setEditName(e.target.value)}
-            className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text w-32 focus:border-daintree-accent focus:outline-hidden"
+            className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text w-32 focus:border-daintree-accent/40 focus:outline-hidden"
             placeholder="e.g. My portal"
             aria-label="Edit link name"
           />
@@ -224,7 +224,7 @@ export function PortalSettingsTab() {
             type="text"
             value={editUrl}
             onChange={(e) => setEditUrl(e.target.value)}
-            className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text flex-1 focus:border-daintree-accent focus:outline-hidden"
+            className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text flex-1 focus:border-daintree-accent/40 focus:outline-hidden"
             placeholder="e.g. https://github.com/owner/repo"
             aria-label="Edit link URL"
           />
@@ -359,7 +359,7 @@ export function PortalSettingsTab() {
                   setCustomDefaultUrl(e.target.value);
                   setCustomUrlError("");
                 }}
-                className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:border-daintree-accent focus:outline-hidden transition-colors"
+                className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleCustomUrlSave();
                   if (e.key === "Escape") handleCustomUrlCancel();
@@ -428,7 +428,7 @@ export function PortalSettingsTab() {
                 setNewLinkName(e.target.value);
                 setUrlError("");
               }}
-              className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text w-32 focus:border-daintree-accent focus:outline-hidden transition-colors"
+              className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text w-32 focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
               aria-label="New link name"
             />
             <input
@@ -439,7 +439,7 @@ export function PortalSettingsTab() {
                 setNewLinkUrl(e.target.value);
                 setUrlError("");
               }}
-              className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text flex-1 focus:border-daintree-accent focus:outline-hidden transition-colors"
+              className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text flex-1 focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleAddLink();
               }}

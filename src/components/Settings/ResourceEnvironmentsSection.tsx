@@ -106,7 +106,7 @@ function CommandList({
               onChange={(e) => updateCommand(index, e.target.value)}
               placeholder={placeholder}
               spellCheck={false}
-              className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+              className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
             />
             <div className="flex flex-col">
               <button
@@ -306,7 +306,7 @@ export function ResourceEnvironmentsSection({
             value={currentEnvName}
             onChange={(e) => handleSelectEnv(e.target.value)}
             aria-label="Select environment"
-            className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+            className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
           >
             {envKeys.map((name) => (
               <option key={name} value={name}>
@@ -388,7 +388,7 @@ export function ResourceEnvironmentsSection({
               autoFocus
               spellCheck={false}
               placeholder="docker-local"
-              className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+              className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
             />
             <Button type="button" size="sm" onClick={handleAddEnv}>
               Add
@@ -501,7 +501,7 @@ export function ResourceEnvironmentsSection({
               onChange={(e) => updateEnv({ status: e.target.value || undefined })}
               placeholder="e.g. docker compose ps --format json"
               spellCheck={false}
-              className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+              className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
             />
             <p className="text-xs text-text-muted mt-1">
               Must output JSON with {'{ "status": "<string>" }'}
@@ -517,7 +517,7 @@ export function ResourceEnvironmentsSection({
               onChange={(e) => updateEnv({ connect: e.target.value || undefined })}
               placeholder="e.g. docker exec -it container /bin/bash"
               spellCheck={false}
-              className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+              className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
             />
             <p className="text-xs text-text-muted mt-1">
               Shell command for connecting (ssh, docker exec, kubectl exec)

@@ -274,7 +274,7 @@ export function RecipeEditor({
               value={recipeName}
               onChange={(e) => setRecipeName(e.target.value)}
               placeholder="e.g., Full Stack Dev"
-              className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
+              className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
             />
           </div>
 
@@ -296,7 +296,7 @@ export function RecipeEditor({
                 id="recipe-scope"
                 value={scope}
                 onChange={(e) => setScope(e.target.value as "global" | "project")}
-                className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
+                className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
               >
                 <option value="project">Project (current project only)</option>
                 <option value="global">Global (all projects)</option>
@@ -312,7 +312,7 @@ export function RecipeEditor({
                 checked={showInEmptyState}
                 onChange={(e) => setShowInEmptyState(e.target.checked)}
                 aria-describedby="show-in-empty-state-help"
-                className="w-4 h-4 rounded border-daintree-border bg-daintree-bg checked:bg-daintree-accent checked:border-daintree-accent focus:ring-2 focus:ring-daintree-accent"
+                className="w-4 h-4 rounded border-daintree-border bg-daintree-bg checked:bg-daintree-accent checked:border-daintree-accent focus:ring-2 focus:ring-daintree-accent/30"
               />
               <span className="text-sm font-medium text-daintree-text">Show in Empty State</span>
             </label>
@@ -336,7 +336,7 @@ export function RecipeEditor({
               value={autoAssign}
               onChange={(e) => setAutoAssign(e.target.value as "always" | "never" | "prompt")}
               aria-describedby="auto-assign-help"
-              className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
+              className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
             >
               <option value="always">Always assign to me</option>
               <option value="prompt">Ask before assigning</option>

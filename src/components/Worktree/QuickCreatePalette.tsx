@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { cn } from "@/lib/utils";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import type { QuickCreateItem, UseQuickCreatePaletteReturn } from "@/hooks/useQuickCreatePalette";
@@ -46,11 +47,11 @@ function RecipeListItem({
         id={`quick-create-option-${item.id}`}
         onClick={onClick}
         className={cn(
-          "relative w-full text-left px-3 py-2 rounded-[var(--radius-lg)] border flex items-center gap-2",
-          "border-daintree-border/40 hover:border-daintree-border/60",
-          "bg-daintree-bg hover:bg-surface transition-colors",
-          isSelected &&
-            "border-overlay bg-overlay-raised text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
+          // Was a hand-rolled copy of the shared row, so it kept the neutral
+          // selected border after the family moved to the accent one.
+          PALETTE_ROW_CLASS,
+          "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex items-center gap-2",
+          "bg-daintree-bg hover:bg-surface"
         )}
         aria-selected={isSelected}
         role="option"
@@ -73,11 +74,9 @@ function RecipeListItem({
       id={`quick-create-option-${recipe.id}`}
       onClick={onClick}
       className={cn(
-        "relative w-full text-left px-3 py-2 rounded-[var(--radius-lg)] border flex flex-col gap-0.5",
-        "border-daintree-border/40 hover:border-daintree-border/60",
-        "bg-daintree-bg hover:bg-surface transition-colors",
-        isSelected &&
-          "border-overlay bg-overlay-raised text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']",
+        PALETTE_ROW_CLASS,
+        "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5",
+        "bg-daintree-bg hover:bg-surface",
         recipe.shadowedBy && "opacity-60"
       )}
       aria-selected={isSelected}
