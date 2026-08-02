@@ -37,11 +37,30 @@ import { usePRTooltip, useIssueTooltip, invalidateForgeTooltipCaches } from "../
 const CWD = "/repo/worktree";
 
 function makePR(title: string): PRTooltipData {
-  return { title, state: "open", author: "octocat" } as PRTooltipData;
+  return {
+    number: 42,
+    title,
+    bodyExcerpt: "",
+    state: "open",
+    rawState: "OPEN",
+    isDraft: false,
+    createdAt: 0,
+    assignees: [],
+    labels: [],
+  };
 }
 
 function makeIssue(title: string): IssueTooltipData {
-  return { title, state: "open" } as IssueTooltipData;
+  return {
+    number: 7,
+    title,
+    bodyExcerpt: "",
+    state: "open",
+    rawState: "OPEN",
+    createdAt: 0,
+    assignees: [],
+    labels: [],
+  };
 }
 
 beforeEach(() => {

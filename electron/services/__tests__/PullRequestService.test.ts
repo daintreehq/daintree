@@ -2925,7 +2925,9 @@ describe("PullRequestService", () => {
         // boost null no matter what, so only a pending result actually
         // exercises the ambient gate on updateBoostFromDetectedPRs.
         resolveCi(
-          new Map([[7, { state: "pending", total: 1, passed: 0, failed: 0, pending: 1, rawData: null }]])
+          new Map([
+            [7, { state: "pending", total: 1, passed: 0, failed: 0, pending: 1, rawData: null }],
+          ])
         );
         await refresh;
 
