@@ -183,6 +183,12 @@ class PullRequestService {
   // declaration time so it's correct before the singleton's first checkForPRs.
   private ciEnrichmentEnabled: boolean = process.env.DAINTREE_INSTANCE_ROLE !== "worker";
   private refreshInFlight: Promise<void> | null = null;
+  // Bumped when something a refresh depends on changes underneath it (forge
+  // settings, a service reset). An in-flight pass stamped with an older epoch
+  // resolved against the previous configuration, so a caller arriving after the
+  // change must not be handed its result.
+  private refreshEpoch = 0;
+  private refreshInFlightEpoch = -1;
   private lastCheckAt: number = Number.NEGATIVE_INFINITY;
   // Separate from `lastCheckAt`: that one throttles PR *detection*, and reusing
   // it would let a recent detection poll suppress the focus CI catch-up (they
@@ -433,6 +439,9 @@ class PullRequestService {
     this.forgeProviderOverride = args.forgeProviderOverride;
     this.globalDefaultProviderId = args.forgeDefaultProviderId;
     this.forgeRemote = args.forgeRemote ?? null;
+    // Supersede any in-flight refresh: it resolved the provider these settings
+    // just replaced, so the caller that follows this change needs its own pass.
+    this.refreshEpoch += 1;
     this.invalidateProvider();
   }
 
@@ -784,12 +793,23 @@ class PullRequestService {
    */
   public refresh(): Promise<void> {
     const existing = this.refreshInFlight;
-    if (existing) return existing;
-    const run = this.performRefresh().finally(() => {
-      // Identity-guarded so a settled older pass can't clear a newer one.
-      if (this.refreshInFlight === run) this.refreshInFlight = null;
-    });
+    // Join only a pass that still reflects the current configuration. Without
+    // the epoch check, `updateForgeSettings()`'s follow-up refresh would be
+    // handed a pass that resolved the PREVIOUS provider, and the new one would
+    // never get a detection cycle.
+    if (existing && this.refreshInFlightEpoch === this.refreshEpoch) return existing;
+    const epoch = this.refreshEpoch;
+    // A superseded pass is chained after, not run alongside: two overlapping
+    // passes are exactly the disposal race this single-flight exists to remove.
+    const run = (existing ?? Promise.resolve())
+      .catch(() => {})
+      .then(() => this.performRefresh())
+      .finally(() => {
+        // Identity-guarded so a settled older pass can't clear a newer one.
+        if (this.refreshInFlight === run) this.refreshInFlight = null;
+      });
     this.refreshInFlight = run;
+    this.refreshInFlightEpoch = epoch;
     return run;
   }
 
@@ -855,6 +875,9 @@ class PullRequestService {
     this.detectedPRs.clear();
     this.consecutiveErrors = 0;
     this.nextRetryAt = 0;
+    // A pass from the previous project/token must not satisfy a refresh
+    // requested after the reset.
+    this.refreshEpoch += 1;
     // reset() runs on project switch, service teardown, and token removal
     // (updateToken(null) → reset()). Token removal does NOT re-attach the
     // worktree port, so a silent clear would strand a tripped glyph in the
@@ -2007,11 +2030,12 @@ class PullRequestService {
    * with the enriched CI status so the renderer can update the badge.
    *
    * `force` marks an explicitly user-initiated pass (manual refresh). It rides
-   * the call instead of the shared `ciEnrichmentEnabled` flag so a blurred or
-   * worker-role instance can still serve one deliberate refresh without the
-   * disable sweep tearing down the result. Returned promise is best-effort and
-   * never rejects; forced callers await it, ambient ones drop it on the floor
-   * to keep the batch coalescing described below.
+   * the call instead of the shared `ciEnrichmentEnabled` flag so a blurred
+   * instance can still serve one deliberate refresh without the disable sweep
+   * tearing down the result. It overrides window focus only — worker-role
+   * instances stay clamped off, gated by the caller in `checkForPRs`. Returned
+   * promise is best-effort and never rejects; forced callers await it, ambient
+   * ones drop it on the floor to keep the batch coalescing described below.
    */
   private enrichPRWithCIStatus(pr: InternalLinkedPR, repo: RepoRef, force = false): Promise<void> {
     if (!force && !this.ciEnrichmentEnabled) return Promise.resolve();

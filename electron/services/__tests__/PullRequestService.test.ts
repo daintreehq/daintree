@@ -2695,6 +2695,57 @@ describe("PullRequestService", () => {
       });
     });
 
+    it("does not hand a post-settings-change refresh a pass that resolved the old provider", async () => {
+      await withRole(undefined, async () => {
+        let releaseFirst: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+        let batchCalls = 0;
+        const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+          batchCalls += 1;
+          // Hold the first pass open so the settings change lands mid-flight.
+          if (batchCalls === 1) await gate;
+          const map = new Map<string, ForgePR | null>();
+          for (const branch of branches)
+            map.set(branch, makeMockForgePR({ number: 7, headRef: branch }));
+          return map;
+        });
+        mockForgeProviderResolved(undefined, batchSpy);
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const { events } = await import("../events.js");
+
+        pullRequestService.initialize("/repo", "test-project-id");
+        events.emit(
+          "sys:worktree:update",
+          makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+        );
+
+        const first = pullRequestService.refresh();
+
+        // updateForgeSettings() does exactly this: change the settings, then
+        // refresh. Joining the in-flight pass would resolve the provider the
+        // settings just replaced, and the new one would never get a cycle.
+        pullRequestService.setForgeSettings({
+          forgeProviderOverride: "other.forge",
+          forgeDefaultProviderId: null,
+          forgeRemote: null,
+        });
+        const second = pullRequestService.refresh();
+        expect(second).not.toBe(first);
+
+        releaseFirst();
+        await Promise.all([first, second]);
+
+        // The superseded pass is chained, not run alongside, so the second
+        // caller still gets its own detection cycle.
+        expect(batchSpy).toHaveBeenCalledTimes(2);
+
+        pullRequestService.destroy();
+      });
+    });
+
     it("clears in-flight CI and collapses the boost when enrichment is disabled", async () => {
       await withRole(undefined, async () => {
         mockForgeProviderResolved();
@@ -2870,12 +2921,17 @@ describe("PullRequestService", () => {
         expect(getCIStatuses).toHaveBeenCalledTimes(1);
 
         pullRequestService.setCIEnrichmentEnabled(false);
-        resolveCi(new Map([[7, makeMockCIStatus()]]));
+        // Resolve as PENDING specifically: a terminal state would leave the
+        // boost null no matter what, so only a pending result actually
+        // exercises the ambient gate on updateBoostFromDetectedPRs.
+        resolveCi(
+          new Map([[7, { state: "pending", total: 1, passed: 0, failed: 0, pending: 1, rawData: null }]])
+        );
         await refresh;
 
-        expect(svc.detectedPRs.get("wt-1")?.ciStatus).toBe("success");
-        // …but the collapsed boost stays collapsed: there is no ambient fetch
-        // behind it to resolve a pending state (#6149).
+        expect(svc.detectedPRs.get("wt-1")?.ciStatus).toBe("pending");
+        // …but the collapsed boost stays collapsed: arming the 30s cadence here
+        // would keep re-arming with no ambient fetch behind it (#6149).
         expect(svc.boostExpiresAt).toBeNull();
 
         pullRequestService.destroy();

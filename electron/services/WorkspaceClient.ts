@@ -42,8 +42,10 @@ const STATES_INFLIGHT_COALESCE_WINDOW_MS = 150;
 
 // Manual PR refresh re-resolves the forge provider, re-detects every PR, and
 // now awaits the CI-status batch on top, so it needs more than the host's 30s
-// default per-request budget. Raised only for this request type — the default
-// still governs every other call.
+// default per-request budget. Matches HOST_REFRESH_TIMEOUT_MS (WorkspaceService),
+// the watchdog the port-driven refresh already bounds the same work with, so
+// both entry points give up at the same point instead of one reporting failure
+// while the other is still waiting. Raised only for this request type.
 const REFRESH_PRS_TIMEOUT_MS = 45_000;
 
 // Upper bound on how long a worktree-state read waits for the host to finish

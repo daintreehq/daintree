@@ -78,17 +78,22 @@ describe("SidebarContent shortcut labels — issue #5843", () => {
       // appears without the native title's delay (#11633). The shortcut still
       // has to reach the user, so it rides createTooltipContent's chord pill
       // rather than a string suffix.
-      // Scoped to the button's own opening tag: a wider window would sweep in
-      // the sibling controls, which still carry native titles of their own.
-      const refreshButton = source.match(/<button[^>]*onClick=\{handleRefreshAll\}[^>]*>/);
-      expect(refreshButton).not.toBeNull();
-      // A leftover native title would double up with the tooltip.
-      expect(refreshButton![0]).not.toMatch(/\btitle=/);
+      // One contiguous Tooltip block that contains the refresh handler, with no
+      // nested <Tooltip> opening in between — so the content below is proven to
+      // belong to THIS button rather than matching a sibling control elsewhere
+      // in the header (several still carry native titles of their own).
+      const refreshTooltip = source.match(
+        /<Tooltip>(?:(?!<Tooltip>)[\s\S])*?onClick=\{handleRefreshAll\}[\s\S]*?<\/Tooltip>/
+      );
+      expect(refreshTooltip).not.toBeNull();
+      const block = refreshTooltip![0];
 
+      // A leftover native title would double up with the tooltip.
+      expect(block.match(/<button[^>]*>/)![0]).not.toMatch(/\btitle=/);
       // The shortcut still has to reach the user — it rides createTooltipContent's
       // chord pill instead of formatButtonTitle's string suffix.
-      expect(source).toMatch(
-        /<TooltipContent side="bottom">\s*\{createTooltipContent\("Refresh sidebar", refreshShortcut\)\}\s*<\/TooltipContent>/
+      expect(block).toMatch(
+        /<TooltipContent side="bottom">\s*\{createTooltipContent\("Refresh sidebar", refreshShortcut\)\}/
       );
     });
 

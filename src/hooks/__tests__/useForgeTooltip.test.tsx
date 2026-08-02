@@ -134,6 +134,43 @@ describe("usePRTooltip caching", () => {
     expect(getPRTooltipMock).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(result.current.data?.title).toBe("Fresh title"));
   });
+
+  it("does not let a pre-refresh response overwrite a newer one that already resolved", async () => {
+    // Ordering matters: the stale request resolves LAST. Fencing only the cache
+    // write would still let its setState repaint the open tooltip over the
+    // fresh data — and forge badge tooltips do not auto-dismiss, so it would
+    // stay wrong on screen.
+    let resolveStale: (value: PRTooltipData) => void = () => {};
+    getPRTooltipMock.mockReturnValueOnce(
+      new Promise<PRTooltipData>((resolve) => {
+        resolveStale = resolve;
+      })
+    );
+
+    const { result } = renderHook(() => usePRTooltip(CWD, 42));
+
+    let stalePending: Promise<void> = Promise.resolve();
+    act(() => {
+      stalePending = result.current.fetchTooltip();
+    });
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
+    });
+
+    getPRTooltipMock.mockResolvedValue(makePR("Fresh title"));
+    await act(async () => {
+      await result.current.fetchTooltip();
+    });
+    await waitFor(() => expect(result.current.data?.title).toBe("Fresh title"));
+
+    await act(async () => {
+      resolveStale(makePR("Stale title"));
+      await stalePending;
+    });
+
+    expect(result.current.data?.title).toBe("Fresh title");
+  });
 });
 
 describe("useIssueTooltip caching", () => {

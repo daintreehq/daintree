@@ -105,17 +105,18 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
 
     const inFlight = inFlightIssues.get(cacheKey);
     if (inFlight) {
+      const joinedGeneration = cacheGeneration;
       setState((prev) => ({ ...prev, loading: true, error: false }));
       try {
         const data = await inFlight;
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || joinedGeneration !== cacheGeneration) return;
         if (data) {
           setState({ data, loading: false, error: false });
         } else {
           setState({ data: null, loading: false, error: true });
         }
       } catch {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || joinedGeneration !== cacheGeneration) return;
         setState({ data: null, loading: false, error: true });
       }
       return;
@@ -145,14 +146,18 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
 
     try {
       const data = await promise;
-      if (!mountedRef.current) return;
+      // Same fence as the cache write: a response from before the refresh must
+      // not paint pre-refresh detail into an open tooltip, and must not
+      // overwrite a newer request that already resolved. The tooltip re-fetches
+      // on its next open rather than committing data the refresh invalidated.
+      if (!mountedRef.current || generation !== cacheGeneration) return;
       if (data) {
         setState({ data, loading: false, error: false });
       } else {
         setState({ data: null, loading: false, error: true });
       }
     } catch {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || generation !== cacheGeneration) return;
       setState({ data: null, loading: false, error: true });
     }
   }, [cwd, issueNumber, providerResolved, missingCredential]);
@@ -194,17 +199,18 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
 
     const inFlight = inFlightPRs.get(cacheKey);
     if (inFlight) {
+      const joinedGeneration = cacheGeneration;
       setState((prev) => ({ ...prev, loading: true, error: false }));
       try {
         const data = await inFlight;
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || joinedGeneration !== cacheGeneration) return;
         if (data) {
           setState({ data, loading: false, error: false });
         } else {
           setState({ data: null, loading: false, error: true });
         }
       } catch {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || joinedGeneration !== cacheGeneration) return;
         setState({ data: null, loading: false, error: true });
       }
       return;
@@ -231,14 +237,16 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
 
     try {
       const data = await promise;
-      if (!mountedRef.current) return;
+      // See useIssueTooltip: a pre-refresh response neither paints nor
+      // overwrites a newer one.
+      if (!mountedRef.current || generation !== cacheGeneration) return;
       if (data) {
         setState({ data, loading: false, error: false });
       } else {
         setState({ data: null, loading: false, error: true });
       }
     } catch {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || generation !== cacheGeneration) return;
       setState({ data: null, loading: false, error: true });
     }
   }, [cwd, prNumber, providerResolved, missingCredential]);
