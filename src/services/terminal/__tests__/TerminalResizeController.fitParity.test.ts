@@ -409,7 +409,7 @@ describe("TerminalResizeController ↔ FitAddon column parity (#11095)", () => {
     });
   });
 
-  it("keeps the PTY-only (backgrounded) path in agreement with FitAddon", () => {
+  it("keeps the backgrounded-view resize path in agreement with FitAddon", () => {
     const { managed, fitAddon } = buildPane();
     const controller = makeController(managed);
 
