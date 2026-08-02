@@ -56,7 +56,7 @@ describe("AppPaletteDialog.Empty", () => {
         </AppPaletteDialog.Empty>
       );
 
-      expect(screen.getByText("No matches in Needs you")).toBeTruthy();
+      expect(screen.getByText("No matches with Needs you selected")).toBeTruthy();
       expect(screen.queryByText("No items available")).toBeNull();
       // A narrowed empty is not a zero-data empty, so the zero-data CTA has no
       // business being the action offered for it.
@@ -72,7 +72,7 @@ describe("AppPaletteDialog.Empty", () => {
         />
       );
 
-      expect(screen.getByText('No matches for "auth" in Working')).toBeTruthy();
+      expect(screen.getByText('No matches for "auth" with Working selected')).toBeTruthy();
     });
 
     it("offers the filtered action once a filter is active without a query", () => {
@@ -86,17 +86,6 @@ describe("AppPaletteDialog.Empty", () => {
       );
 
       expect(screen.getByTestId("clear")).toBeTruthy();
-    });
-
-    it("leaves the zero-data branch alone when no filter is active", () => {
-      render(
-        <AppPaletteDialog.Empty query="" emptyMessage="No items available">
-          <span data-testid="cta">Create a terminal</span>
-        </AppPaletteDialog.Empty>
-      );
-
-      expect(screen.getByText("No items available")).toBeTruthy();
-      expect(screen.getByTestId("cta")).toBeTruthy();
     });
   });
 

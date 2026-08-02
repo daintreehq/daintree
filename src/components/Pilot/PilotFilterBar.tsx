@@ -3,11 +3,17 @@ import type { ComponentType, KeyboardEvent } from "react";
 import { cn } from "@/lib/utils";
 import { BAND_GLYPH } from "./PilotRunState";
 import {
+  bandFilterHasDemand,
   PILOT_BAND_FILTER_LABEL,
   PILOT_BAND_FILTERS,
   type PilotBandFilter,
   type PilotBandFilterCounts,
 } from "./pilotRows";
+import type { FleetBandCounts } from "@/lib/fleetAttention";
+
+/** The tone a segment falls back to when it holds no demand. */
+const NEUTRAL_TONE = "text-text-secondary";
+const NEUTRAL_TONE_FADED = "text-text-secondary/40";
 
 /**
  * Tone per segment, in complete class literals.
@@ -16,10 +22,11 @@ import {
  * the faded variant is spelled out rather than derived — the same constraint
  * `QuickStateFilterBar` documents.
  *
- * `working` is neutral because its rows are: colour is spent only where there
- * is a demand, and a hued Working segment would put back one of the competing
- * signals this surface exists to remove. The other two keep the hue of the
- * worst band they admit, which is what ties a segment to the rows it reveals.
+ * `working` has no demand tone at all because its rows have none: colour is
+ * spent only where there is something to act on, and a hued Working segment
+ * would put back one of the competing signals this surface exists to remove.
+ * The other two carry the hue of the demand they can reveal, and only while
+ * they are actually holding one — see `bandFilterHasDemand`.
  */
 const SEGMENT_TONE: Record<
   Exclude<PilotBandFilter, "all">,
@@ -32,8 +39,8 @@ const SEGMENT_TONE: Record<
   },
   working: {
     Icon: BAND_GLYPH.running,
-    tone: "text-text-secondary",
-    toneFaded: "text-text-secondary/40",
+    tone: NEUTRAL_TONE,
+    toneFaded: NEUTRAL_TONE_FADED,
   },
   finished: {
     Icon: BAND_GLYPH.review,
@@ -48,7 +55,19 @@ export interface PilotFilterBarProps {
   value: PilotBandFilter;
   /** Rows per segment in the query-filtered fleet, so a count matches the list. */
   counts: Readonly<PilotBandFilterCounts>;
+  /**
+   * Per-band counts over the same population, which is what decides whether a
+   * mixed segment has earned its hue. A count alone can't: "Finished" holding
+   * three acknowledged runs and "Finished" holding three waiting to be reviewed
+   * are the same number and opposite situations.
+   */
+  bands: Readonly<FleetBandCounts>;
   onChange: (value: PilotBandFilter) => void;
+  /**
+   * Fired as real focus enters and leaves the bar, so the palette can stop
+   * advertising the list's keys while they belong to these segments instead.
+   */
+  onFocusChange?: (focused: boolean) => void;
 }
 
 /**
@@ -74,7 +93,13 @@ export interface PilotFilterBarProps {
  * and reversible, so making the user arrow then confirm would charge two
  * keystrokes for a decision they can see the result of.
  */
-export function PilotFilterBar({ value, counts, onChange }: PilotFilterBarProps) {
+export function PilotFilterBar({
+  value,
+  counts,
+  bands,
+  onChange,
+  onFocusChange,
+}: PilotFilterBarProps) {
   const refs = useRef(new Map<PilotBandFilter, HTMLButtonElement | null>());
 
   const move = useCallback(
@@ -126,6 +151,13 @@ export function PilotFilterBar({ value, counts, onChange }: PilotFilterBarProps)
       aria-label="Filter agents by state"
       data-testid="pilot-filter-bar"
       onKeyDown={handleKeyDown}
+      onFocus={() => onFocusChange?.(true)}
+      // Arrowing between segments blurs one and focuses the next, so a bare
+      // handler would report the bar as vacated for a moment on every keypress.
+      // Only a move that leaves the group entirely counts as leaving it.
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) onFocusChange?.(false);
+      }}
       className="flex"
     >
       {SEGMENTS.map((segment, idx) => {
@@ -133,10 +165,16 @@ export function PilotFilterBar({ value, counts, onChange }: PilotFilterBarProps)
         const count = counts[segment];
         const visual = segment === "all" ? null : SEGMENT_TONE[segment];
         const label = PILOT_BAND_FILTER_LABEL[segment];
-        // An empty bucket keeps its glyph and its "0" but mutes the glyph, so
-        // the zero registers without having to be read.
         const Icon = visual?.Icon;
         const isSpinning = segment === "working" && count > 0;
+        // Hued only while the segment actually holds a demand; otherwise it
+        // falls back to neutral like the rows it would reveal.
+        const tone = bandFilterHasDemand(bands, segment) ? visual?.tone : NEUTRAL_TONE;
+        // An empty bucket keeps its glyph and its "0" but mutes the glyph, so
+        // the zero registers without having to be read.
+        const fadedTone = bandFilterHasDemand(bands, segment)
+          ? visual?.toneFaded
+          : NEUTRAL_TONE_FADED;
 
         return (
           <button
@@ -170,7 +208,7 @@ export function PilotFilterBar({ value, counts, onChange }: PilotFilterBarProps)
                 aria-hidden="true"
                 className={cn(
                   "h-3 w-3 shrink-0 transition-colors",
-                  count === 0 ? visual.toneFaded : visual.tone,
+                  count === 0 ? fadedTone : tone,
                   isSpinning && "animate-spin-slow motion-reduce:animate-none"
                 )}
               />

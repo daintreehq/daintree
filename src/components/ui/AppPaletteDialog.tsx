@@ -660,12 +660,14 @@ function defaultNoMatchTitle(trimmedQuery: string, filterLabel: string | undefin
       ? `${codepoints.slice(0, NO_MATCH_QUERY_MAX).join("")}…`
       : trimmedQuery;
 
-  // Generic noun: this component serves every palette, and only the caller
-  // knows whether its rows are agents, projects or commands.
-  if (!trimmedQuery) return `No matches in ${filterLabel}`;
+  // "with X selected" rather than "in X": the point of naming the filter is to
+  // explain why the list is empty, and only the causal phrasing does that.
+  // Generic noun throughout — this component serves every palette, and only the
+  // caller knows whether its rows are agents, projects or commands.
+  if (!trimmedQuery) return `No matches with ${filterLabel} selected`;
   return filterLabel === undefined
     ? `No matches for "${display}"`
-    : `No matches for "${display}" in ${filterLabel}`;
+    : `No matches for "${display}" with ${filterLabel} selected`;
 }
 
 AppPaletteDialog.Empty = function AppPaletteEmpty({
@@ -694,7 +696,12 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
   // doesn't suppress repeated identical announcements.
   const srTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [srAnnouncement, setSrAnnouncement] = useState("");
-  const displayQuery = deferredTrimmedQuery || trimmedQuery;
+  // Forced empty the instant the real query is, never merely deferred to it.
+  // A filter keeps the narrowed branch mounted after the box is cleared, so a
+  // lagging deferred value would go on rendering `No matches for "docs"` over a
+  // query the user had already deleted — the stale flash the immediate-branch
+  // decision above exists to prevent.
+  const displayQuery = trimmedQuery ? deferredTrimmedQuery || trimmedQuery : "";
   // A filter narrows the population exactly as a query does, so it takes the
   // same branch. The branch decision stays on the immediate values; only the
   // rendered query text is deferred.

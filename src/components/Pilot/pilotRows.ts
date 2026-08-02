@@ -131,10 +131,15 @@ function narrowGroup(group: PilotProjectGroup, rows: PilotRow[]): PilotProjectGr
 /**
  * Oldest still-outstanding demand in a project, or undefined when it has none.
  *
- * This is the group-level twin of {@link compareWithinBand}'s row rule, which
- * is the point: the two levels finally agree about what "most urgent" means,
- * and a project whose block has been standing for forty minutes stops being
- * displaced by one that only just started asking.
+ * The group-level counterpart of {@link compareWithinBand}'s anti-starvation
+ * rule, which is the point: a project whose block has been standing for forty
+ * minutes stops being displaced by one that only just started asking.
+ *
+ * Not identical to it, deliberately. `compareWithinBand` ranks rows inside ONE
+ * band; this takes the oldest demand of ANY kind, so a long-unread completion
+ * can date a project whose worst band is a fresh question. That is the right
+ * reading of "oldest outstanding demand" — a review nobody has looked at in two
+ * hours is outstanding — but it does mean the two are not the same function.
  *
  * A demand with no `since` contributes nothing rather than counting as
  * infinitely old — an unknown age is not evidence of urgency.
@@ -404,6 +409,27 @@ export function countPilotBands(groups: readonly PilotProjectGroup[]): PilotBand
 }
 
 /**
+ * Whether a segment currently holds anything that is a demand on the user.
+ *
+ * "Finished" is the reason this exists: it admits `review`, which is a demand,
+ * alongside `done`, which is not. Colouring the segment on membership alone
+ * would paint a project whose every completion has been acknowledged in the
+ * hue reserved for work still waiting to be looked at — putting back one of the
+ * false signals this surface exists to remove. "Needs you" holds only demands,
+ * so it is hued whenever it holds anything at all, which this returns for free.
+ */
+export function bandFilterHasDemand(
+  bands: Readonly<FleetBandCounts>,
+  filter: PilotBandFilter
+): boolean {
+  if (filter === "all") return false;
+  for (const band of BAND_FILTER_SETS[filter]) {
+    if (isDemandBand(band) && bands[band] > 0) return true;
+  }
+  return false;
+}
+
+/**
  * Filter groups to the rows one segment admits, dropping groups left empty.
  *
  * Composes with {@link filterPilotGroups} rather than replacing it — the query
@@ -435,8 +461,13 @@ export interface PilotSummary {
 }
 
 /**
- * Fleet totals for the footer, counted from the same rows the list renders so
- * the summary and the group chips can never disagree.
+ * Fleet totals for the footer.
+ *
+ * Counted over whatever population the caller hands it. The fleet overview
+ * passes the QUERY-filtered groups — before the band filter — so the footer
+ * describes, and its demand control acts on, the same set the segment counts
+ * report. Passing the band-filtered groups instead would make the footer
+ * describe only what the current segment already shows.
  */
 export function summarizePilotGroups(groups: readonly PilotProjectGroup[]): PilotSummary {
   const bands = emptyBandCounts();

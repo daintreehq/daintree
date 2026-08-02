@@ -1,20 +1,57 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { PilotFilterBar } from "../PilotFilterBar";
 import type { PilotBandFilter, PilotBandFilterCounts } from "../pilotRows";
+import { emptyBandCounts, type FleetBandCounts } from "@/lib/fleetAttention";
 
 function counts(overrides: Partial<PilotBandFilterCounts> = {}): PilotBandFilterCounts {
   return { all: 0, "needs-you": 0, working: 0, finished: 0, ...overrides };
 }
 
+function bands(overrides: Partial<FleetBandCounts> = {}): FleetBandCounts {
+  return { ...emptyBandCounts(), ...overrides };
+}
+
 function renderBar(
   value: PilotBandFilter = "all",
-  bandCounts: PilotBandFilterCounts = counts({ all: 3, "needs-you": 1, working: 2 })
+  bandCounts: PilotBandFilterCounts = counts({ all: 3, "needs-you": 1, working: 2 }),
+  perBand: FleetBandCounts = bands({ "needs-you": 1, running: 2 })
 ) {
   const onChange = vi.fn();
-  render(<PilotFilterBar value={value} counts={bandCounts} onChange={onChange} />);
+  render(<PilotFilterBar value={value} counts={bandCounts} bands={perBand} onChange={onChange} />);
   return { onChange };
+}
+
+/**
+ * The bar wired to real state, which is what a keyboard test actually needs.
+ *
+ * With a fixed `value` prop, pressing an arrow calls `onChange` and nothing
+ * moves — so the NEXT key is still computed from the original segment, and a
+ * component that never called `.focus()` at all would look identical.
+ */
+function StatefulBar({ initial = "all" }: { initial?: PilotBandFilter }) {
+  const [value, setValue] = useState<PilotBandFilter>(initial);
+  return (
+    <PilotFilterBar
+      value={value}
+      counts={counts({ all: 3, "needs-you": 1, working: 2 })}
+      bands={bands({ "needs-you": 1, running: 2 })}
+      onChange={setValue}
+    />
+  );
+}
+
+/** Checked segment, its tab stop and where focus actually is, as one reading. */
+function liveState(): { checked: string; tabbable: string; focused: string } {
+  const radios = screen.getAllByRole("radio");
+  const name = (el: Element | null) => el?.getAttribute("aria-label")?.split(",")[0] ?? "none";
+  return {
+    checked: name(radios.find((el) => el.getAttribute("aria-checked") === "true") ?? null),
+    tabbable: name(radios.find((el) => el.getAttribute("tabindex") === "0") ?? null),
+    focused: name(document.activeElement),
+  };
 }
 
 /** The bar's segments, in rendered order, by accessible name. */
@@ -90,54 +127,85 @@ describe("PilotFilterBar", () => {
       fireEvent.keyDown(screen.getByRole("radiogroup"), { key });
     }
 
-    it("moves selection with the arrows, in both directions", () => {
+    it("moves the checked segment, its tab stop and focus together", () => {
       // Selection follows focus: the filter is instant and reversible, so
       // charging a second keystroke to confirm would be a toll for nothing.
-      const { onChange } = renderBar("needs-you");
+      // All three have to move as one, or Tab returns somewhere unexpected.
+      render(<StatefulBar initial="needs-you" />);
 
       press("ArrowRight");
-      expect(onChange).toHaveBeenLastCalledWith("working");
+      expect(liveState()).toEqual({
+        checked: "Working",
+        tabbable: "Working",
+        focused: "Working",
+      });
 
       press("ArrowLeft");
-      expect(onChange).toHaveBeenLastCalledWith("all");
+      expect(liveState()).toEqual({
+        checked: "Needs you",
+        tabbable: "Needs you",
+        focused: "Needs you",
+      });
     });
 
     it("wraps backwards off the first segment", () => {
-      const { onChange } = renderBar("all");
+      render(<StatefulBar initial="all" />);
 
       press("ArrowLeft");
 
-      expect(onChange).toHaveBeenLastCalledWith("finished");
+      expect(liveState().checked).toBe("Finished");
     });
 
     it("wraps forwards off the last segment", () => {
-      const { onChange } = renderBar("finished");
+      render(<StatefulBar initial="finished" />);
 
       press("ArrowRight");
 
-      expect(onChange).toHaveBeenLastCalledWith("all");
+      expect(liveState().checked).toBe("All");
     });
 
     it("jumps to the ends with Home and End", () => {
-      const { onChange } = renderBar("working");
+      render(<StatefulBar initial="working" />);
 
       press("Home");
-      expect(onChange).toHaveBeenLastCalledWith("all");
+      expect(liveState().checked).toBe("All");
 
       press("End");
-      expect(onChange).toHaveBeenLastCalledWith("finished");
+      expect(liveState().checked).toBe("Finished");
     });
 
-    it("claims only the keys it handles", () => {
+    it("keeps exactly one tab stop through every move", () => {
+      render(<StatefulBar initial="all" />);
+
+      for (const key of ["ArrowRight", "ArrowRight", "End", "Home", "ArrowLeft"]) {
+        press(key);
+        const tabbable = screen
+          .getAllByRole("radio")
+          .filter((el) => el.getAttribute("tabindex") === "0");
+        expect(tabbable).toHaveLength(1);
+      }
+    });
+
+    it("claims only the keys it handles, and keeps them off the palette", () => {
       // The dialog and the browser still have a use for everything else —
       // cancelling indiscriminately from a control inside a palette is how a
       // surface eats Escape or Enter from the components around it.
-      renderBar();
+      const outer = vi.fn();
+      render(
+        <div onKeyDown={outer}>
+          <StatefulBar />
+        </div>
+      );
       const group = screen.getByRole("radiogroup");
 
       expect(fireEvent.keyDown(group, { key: "ArrowRight" })).toBe(false);
+      // Its own arrows must not also reach the palette's tree navigation.
+      expect(outer).not.toHaveBeenCalled();
+
       expect(fireEvent.keyDown(group, { key: "Escape" })).toBe(true);
       expect(fireEvent.keyDown(group, { key: "a" })).toBe(true);
+      // ...but everything else still bubbles, so Escape still closes.
+      expect(outer).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -160,17 +228,37 @@ describe("PilotFilterBar", () => {
     });
 
     it("mutes the glyph of an empty bucket and not of a populated one", () => {
-      // The zero has to register without being read. Compared against the
-      // populated segment rather than asserted as a colour literal — the
-      // invariant is that the two differ, not what either one spells.
-      renderBar("all", counts({ all: 2, working: 2 }));
-
+      // The SAME segment at zero and at one. Comparing two different segments
+      // proved nothing — their base tones already differ, so deleting the fade
+      // rule entirely would still have passed.
+      renderBar("all", counts({ all: 0 }), bands());
       const empty = glyphOf(/Needs you/)?.getAttribute("class") ?? "";
-      const populated = glyphOf(/Working/)?.getAttribute("class") ?? "";
+
+      cleanup();
+
+      renderBar("all", counts({ all: 1, "needs-you": 1 }), bands({ "needs-you": 1 }));
+      const populated = glyphOf(/Needs you/)?.getAttribute("class") ?? "";
 
       expect(empty).not.toBe("");
-      expect(populated).not.toBe("");
       expect(empty).not.toBe(populated);
+    });
+
+    it("keeps a mixed segment neutral until it actually holds a demand", () => {
+      // Finished admits `review`, which is a demand, alongside `done`, which
+      // is not. A count alone can't tell them apart, so hueing on membership
+      // would paint a project whose completions have all been acknowledged in
+      // the colour reserved for work still waiting to be looked at.
+      renderBar("all", counts({ all: 2, finished: 2 }), bands({ done: 2 }));
+      const acknowledged = glyphOf(/Finished/)?.getAttribute("class") ?? "";
+
+      cleanup();
+
+      renderBar("all", counts({ all: 2, finished: 2 }), bands({ review: 2 }));
+      const awaitingReview = glyphOf(/Finished/)?.getAttribute("class") ?? "";
+
+      // Same segment, same count — only the bands underneath differ.
+      expect(acknowledged).not.toBe("");
+      expect(acknowledged).not.toBe(awaitingReview);
     });
 
     it("only spins the working glyph when something is actually working", () => {

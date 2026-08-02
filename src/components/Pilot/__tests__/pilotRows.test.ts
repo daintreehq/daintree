@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bandFilterHasDemand,
   buildPilotGroups,
   countPilotBands,
   filterPilotBands,
@@ -8,7 +9,7 @@ import {
   type PilotRowContext,
 } from "../pilotRows";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
-import { FLEET_BANDS, type FleetBand } from "@/lib/fleetAttention";
+import { emptyBandCounts, FLEET_BANDS, type FleetBand } from "@/lib/fleetAttention";
 
 const NOW = 1_700_000_000_000;
 
@@ -777,6 +778,34 @@ describe("countPilotBands", () => {
 
     expect(countPilotBands(built)["needs-you"]).toBe(2);
     expect(countPilotBands(filterPilotGroups(built, "auth"))["needs-you"]).toBe(1);
+  });
+});
+
+describe("bandFilterHasDemand", () => {
+  const bands = (overrides: Partial<Record<FleetBand, number>> = {}) => ({
+    ...emptyBandCounts(),
+    ...overrides,
+  });
+
+  it("separates a Finished segment awaiting review from one already acknowledged", () => {
+    // The whole reason this exists: both are "2 finished", and only one of them
+    // is still asking to be looked at.
+    expect(bandFilterHasDemand(bands({ review: 2 }), "finished")).toBe(true);
+    expect(bandFilterHasDemand(bands({ done: 2 }), "finished")).toBe(false);
+  });
+
+  it("treats any populated Needs-you segment as a demand", () => {
+    // Every band it admits is a demand, so membership alone settles it.
+    expect(bandFilterHasDemand(bands({ blocked: 1 }), "needs-you")).toBe(true);
+    expect(bandFilterHasDemand(bands({ "needs-you": 1 }), "needs-you")).toBe(true);
+    expect(bandFilterHasDemand(bands(), "needs-you")).toBe(false);
+  });
+
+  it("never reports a demand for Working or All", () => {
+    // Working holds none by definition; All is the null option and colouring it
+    // would hue the bar whenever the fleet held anything at all.
+    expect(bandFilterHasDemand(bands({ running: 5 }), "working")).toBe(false);
+    expect(bandFilterHasDemand(bands({ blocked: 5 }), "all")).toBe(false);
   });
 });
 

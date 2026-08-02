@@ -197,6 +197,35 @@ describe("PilotView", () => {
     expect(screen.getByRole("option", { name: /Idle/ }).textContent).toContain("two");
   });
 
+  it("names a row as a sentence rather than a run of jammed-together facts", () => {
+    // Left to the name-from-content computation these inline spans concatenate
+    // with no separators — "Fix authWorkingfeature-x2m". Naming the parts is
+    // what keeps the row a phrase, and what lets the age be read as an age.
+    seed([
+      run({
+        runId: "a",
+        agentState: "waiting",
+        title: "Fix auth",
+        cwd: "/repo/feature-x",
+        since: NOW - 120_000,
+      }),
+    ]);
+    render(<PilotView />);
+
+    expect(screen.getByTestId("pilot-row").getAttribute("aria-label")).toBe(
+      "Fix auth, Needs you, feature-x, 2m ago"
+    );
+  });
+
+  it("leaves no dangling separator when a run has no age to report", () => {
+    seed([run({ runId: "a", agentState: "working", title: "Fix auth", cwd: "/repo/feature-x" })]);
+    render(<PilotView />);
+
+    expect(screen.getByTestId("pilot-row").getAttribute("aria-label")).toBe(
+      "Fix auth, Working, feature-x"
+    );
+  });
+
   it("spends colour only on the agents that are actually asking for something", () => {
     // The whole point of the surface. One blocked agent among six working ones
     // has to be the only status word on screen — six green labels beside one
@@ -219,13 +248,12 @@ describe("PilotView", () => {
     const rows = screen.getAllByTestId("pilot-row");
     expect(rows).toHaveLength(7);
 
-    // A status word the eye can see is one that isn't screen-reader-only.
-    const visibleStatuses = rows.flatMap((row) =>
-      Array.from(row.querySelectorAll("span")).filter(
-        (el) => el.textContent === "Blocked" && !el.classList.contains("sr-only")
-      )
-    );
-    expect(visibleStatuses).toHaveLength(1);
+    // Rendered text is what the eye sees, and only the demand row spends a
+    // word on its state — the six working rows say nothing visible about
+    // theirs.
+    const withVisibleStatus = rows.filter((row) => /Blocked|Working/.test(row.textContent ?? ""));
+    expect(withVisibleStatus).toHaveLength(1);
+    expect(withVisibleStatus[0]!.textContent).toContain("Blocked");
 
     // ...and every one of the seven still says what it is doing, in text.
     expect(screen.getAllByRole("option", { name: /Working/ })).toHaveLength(6);
@@ -776,7 +804,7 @@ describe("PilotView", () => {
   });
 
   describe("state filter", () => {
-    /** Blocked + needs-you in one project, working + done in another. */
+    /** Blocked + needs-you in one project, working + an exited shell in another. */
     function seedMixedFleet(): void {
       seed([
         run({
@@ -873,6 +901,24 @@ describe("PilotView", () => {
       );
     });
 
+    it("sorts review into Finished and out of Needs you", () => {
+      // The asymmetry worth pinning: `review` IS a demand band, so it counts
+      // toward `demandCount`, but the Needs-you segment is blocked + needs-you
+      // only. A review row must land in exactly one of the two segments.
+      seed([
+        run({ runId: "r", agentState: "completed", title: "handed back", since: NOW - 30_000 }),
+        run({ runId: "w", agentState: "waiting", title: "asking", since: NOW - 30_000 }),
+      ]);
+      render(<PilotView />);
+
+      expect(segment(/Needs you/).getAttribute("aria-label")).toBe("Needs you, 1 agent");
+      expect(segment(/Finished/).getAttribute("aria-label")).toBe("Finished, 1 agent");
+
+      fireEvent.click(segment(/Finished/));
+      expect(rowTitles()).toHaveLength(1);
+      expect(rowTitles()[0]).toContain("handed back");
+    });
+
     it("leaves an exited run in All and in nothing else", () => {
       seedMixedFleet();
       render(<PilotView />);
@@ -957,7 +1003,7 @@ describe("PilotView", () => {
       fireEvent.click(segment(/Working/));
       fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "docs" } });
 
-      expect(screen.getByText('No matches for "docs" in Working')).toBeTruthy();
+      expect(screen.getByText('No matches for "docs" with Working selected')).toBeTruthy();
       expect(screen.getByTestId("pilot-clear-filter")).toBeTruthy();
     });
 
@@ -967,7 +1013,70 @@ describe("PilotView", () => {
 
       fireEvent.click(segment(/Finished/));
 
-      expect(screen.getByText("No matches in Finished")).toBeTruthy();
+      expect(screen.getByText("No matches with Finished selected")).toBeTruthy();
+    });
+
+    it("stops naming a query the moment it is cleared", () => {
+      // The filter keeps the narrowed branch mounted after the box empties, so
+      // a deferred query value would go on being quoted over text the user has
+      // already deleted.
+      seedMixedFleet();
+      render(<PilotView />);
+      fireEvent.click(segment(/Finished/));
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "docs" } });
+      expect(screen.getByText('No matches for "docs" with Finished selected')).toBeTruthy();
+
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "" } });
+
+      expect(screen.getByText("No matches with Finished selected")).toBeTruthy();
+    });
+
+    it("hands focus back when the clear control removes itself", () => {
+      // The button unmounts on click, and with an unmatched query left behind
+      // there is no row to arrow to either — so focus has to be placed, not
+      // dropped on the document.
+      seedMixedFleet();
+      render(<PilotView />);
+      fireEvent.click(segment(/Working/));
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "zzzz" } });
+
+      fireEvent.click(screen.getByTestId("pilot-clear-filter"));
+
+      expect(document.activeElement).toBe(screen.getByTestId("pilot-search"));
+    });
+
+    it("holds the opening order while a filter comes and goes", () => {
+      // `frozenOrder` pins position for the whole opening. A filter must narrow
+      // that order, never re-derive one — every row here is a click target.
+      seed([
+        run({ runId: "a", agentState: "waiting", title: "alpha", since: NOW - 10_000 }),
+        run({ runId: "b", agentState: "waiting", title: "bravo", since: NOW - 5_000 }),
+      ]);
+      render(<PilotView />);
+      // Titles, not full text: "bravo" changes band below, so its visible
+      // status word legitimately changes. Position is what must not.
+      const titles = () =>
+        screen.getAllByTestId("pilot-row").map((r) => r.getAttribute("aria-label")?.split(",")[0]);
+      const opening = titles();
+
+      // "bravo" becomes the more urgent of the two, which would reorder them
+      // on a fresh sort.
+      act(() => {
+        seed([
+          run({ runId: "a", agentState: "waiting", title: "alpha", since: NOW - 10_000 }),
+          run({
+            runId: "b",
+            agentState: "waiting",
+            waitingReason: "error",
+            title: "bravo",
+            since: NOW,
+          }),
+        ]);
+      });
+      fireEvent.click(screen.getByRole("radio", { name: /Needs you/ }));
+      fireEvent.click(screen.getByRole("radio", { name: /^All/ }));
+
+      expect(titles()).toEqual(opening);
     });
 
     it("clears the filter without discarding the query", () => {
@@ -1024,6 +1133,25 @@ describe("PilotView", () => {
 
       // The sentence stated a demand the surface gave no way to act on. As a
       // control it has to deliver the number it advertised.
+      expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
+    });
+
+    it("delivers its count even when its filter is already the active one", () => {
+      // With the filter already on Needs you, setting it again is a no-op, so
+      // nothing clears a collapse the user made — and the button would go on
+      // advertising agents while showing none of them.
+      seed([
+        run({ runId: "a", agentState: "waiting", title: "one", since: NOW - 60_000 }),
+        run({ runId: "b", agentState: "waiting", title: "two", since: NOW - 30_000 }),
+      ]);
+      render(<PilotView />);
+
+      fireEvent.click(screen.getByRole("radio", { name: /Needs you/ }));
+      fireEvent.click(screen.getByTestId("pilot-group-toggle"));
+      expect(screen.queryAllByTestId("pilot-row")).toHaveLength(0);
+
+      fireEvent.click(screen.getByTestId("pilot-demand-action"));
+
       expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
     });
 

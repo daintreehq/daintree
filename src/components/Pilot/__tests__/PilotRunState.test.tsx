@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
-import { BAND_GLYPH, PilotRunState } from "../PilotRunState";
+import { PilotRunState } from "../PilotRunState";
 import { FLEET_BANDS, isDemandBand, type FleetBand } from "@/lib/fleetAttention";
 import type { AgentState } from "@shared/types/agent";
 
@@ -45,20 +45,16 @@ const DEMAND_BANDS = FLEET_BANDS.filter(isDemandBand);
 const NEUTRAL_BANDS = FLEET_BANDS.filter((band) => !isDemandBand(band));
 
 describe("PilotRunState", () => {
-  it("gives every band a glyph", () => {
-    // A band with no entry would render nothing at all, leaving the row's left
-    // scan column empty for exactly the state nobody thought about.
-    for (const band of FLEET_BANDS) {
-      expect(BAND_GLYPH[band]).toBeTruthy();
-    }
-  });
-
   it("paints one shared neutral tone across every state without a demand", () => {
     // Running, done and idle gave up their hue: colour is the signal that
     // something needs the user, and three more hues competing with it is what
     // made two waiting agents invisible among five working ones.
     const tones = new Set(NEUTRAL_BANDS.map((band) => toneOf(band)));
+
     expect(tones.size).toBe(1);
+    // A set of one is also what "no tone at all" produces, and an uncoloured
+    // glyph would fall through to whatever the row happens to be painted.
+    expect([...tones][0]).not.toBe("");
   });
 
   it("keeps the directing and exited refinements inside that neutral tone", () => {

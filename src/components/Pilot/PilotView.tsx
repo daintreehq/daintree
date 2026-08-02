@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
@@ -305,11 +305,30 @@ function RunRow({
   // text, so it moves into the option's accessible name instead of vanishing.
   const isDemand = isDemandBand(row.band);
 
+  /**
+   * Spelled out rather than left to the name-from-content computation.
+   *
+   * Those spans are inline, so a computed name concatenates them with no
+   * separators at all: "Fix authWorkingfeature-x2m". Naming the parts here is
+   * what turns the row back into a sentence, and it lets the age be announced
+   * as an age ("2m ago") instead of a bare token a screen reader reads as
+   * "two em".
+   */
+  const accessibleName = [
+    row.title,
+    row.statusLabel,
+    row.worktreeLabel,
+    row.age !== null ? agoPhrase(row.age) : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(", ");
+
   return (
     <div
       id={domId}
       role="option"
       aria-selected={isSelected}
+      aria-label={accessibleName}
       data-testid="pilot-row"
       onClick={onActivate}
       // One line, ~32px. Two-line rows made 8 agents into 16 lines of identical
@@ -350,15 +369,22 @@ function RunRow({
         {row.title}
       </span>
 
-      {/* Never truncates and never wraps: this is the column the eye runs down. */}
-      <span className="flex shrink-0 items-center gap-2 text-[11px] leading-none">
-        {isDemand ? (
-          <span className={ROW_TONE_CLASS[row.tone]}>{row.statusLabel}</span>
-        ) : (
-          <span className="sr-only">{row.statusLabel}</span>
+      {/*
+        The scan column. Everything here is `aria-hidden` — the row's own label
+        above says all of it, in order and with separators, so announcing these
+        as well would read each row's facts twice.
+
+        The group may shrink, but only into the worktree: the status word and
+        the age are short and bounded, while an untruncatable 10rem worktree
+        beside a 3.5rem age floor could push the title out of a narrow palette
+        entirely and give the list a horizontal scrollbar.
+      */}
+      <span aria-hidden="true" className="flex min-w-0 items-center gap-2 text-[11px] leading-none">
+        {isDemand && (
+          <span className={cn("shrink-0", ROW_TONE_CLASS[row.tone])}>{row.statusLabel}</span>
         )}
         {row.worktreeLabel !== null && (
-          <span className="max-w-[10rem] truncate text-daintree-text/40">{row.worktreeLabel}</span>
+          <span className="max-w-[8rem] truncate text-daintree-text/40">{row.worktreeLabel}</span>
         )}
         {/*
           Right-aligned, tabular, and given a floor width so "just now" and
@@ -367,7 +393,7 @@ function RunRow({
           being eight separate reads instead of one scan.
         */}
         {row.age !== null && (
-          <span className="min-w-[3.5rem] text-right tabular-nums text-daintree-text/50">
+          <span className="min-w-[3.5rem] shrink-0 text-right tabular-nums text-daintree-text/50">
             {row.age}
           </span>
         )}
@@ -420,10 +446,12 @@ function PilotFooter({
             type="button"
             onClick={onShowDemand}
             data-testid="pilot-demand-action"
-            // The visible text stays the sentence; the accessible name says
-            // what pressing it does, because "2 agents need you" names a
-            // situation rather than an action.
-            aria-label={`Show ${demandCount} ${demandCount === 1 ? "agent" : "agents"} that need you`}
+            // No `aria-label`. An action-phrased one ("Show 2 agents that need
+            // you") would not contain the visible sentence, which is a
+            // label-in-name failure for anyone driving the app by voice — and
+            // its singular came out as "Show 1 agent that need you". The
+            // button role already says it is actionable; the sentence says
+            // what it is about.
             className={cn(
               "truncate rounded-[var(--radius-sm)] px-1.5 py-0.5 text-daintree-text/70 transition-colors",
               "hover:bg-overlay-subtle hover:text-daintree-text",
@@ -474,6 +502,17 @@ export function PilotView() {
    * when the query cleared.
    */
   const [narrowingCollapsed, setNarrowingCollapsed] = useState<readonly string[]>([]);
+  /**
+   * True while real focus sits on a filter segment.
+   *
+   * The footer advertises the LIST's keys, and on a segment those keys mean
+   * something else entirely — Enter reselects the filter, the arrows move
+   * between segments. Leaving "↵ Open" up while focus is there is the same
+   * false promise the footer already drops over an empty list.
+   */
+  const [isFilterFocused, setIsFilterFocused] = useState(false);
+  /** So a control that removes itself can hand focus back somewhere useful. */
+  const searchRef = useRef<HTMLInputElement>(null);
 
   // The clock is state, not a bare tick counter, and it is a real dependency of
   // the row build below. A `setTick(n => n + 1)` that nothing reads is a no-op
@@ -830,7 +869,10 @@ export function PilotView() {
               : "";
 
   // Every selectable row is an agent now, so the verb never changes.
-  const actionLabel = selectedRow === null ? null : "Open";
+  // Dropped while a filter segment holds focus: on a segment those keys drive
+  // the filter, not the list, so the hints would be naming keys that do
+  // something else.
+  const actionLabel = selectedRow === null || isFilterFocused ? null : "Open";
 
   const hasTree = renderGroups.length > 0;
   // Stale counts as well as live: retained runs are real rows, so a query that
@@ -857,6 +899,7 @@ export function PilotView() {
     <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="All agents">
       <AppPaletteDialog.Header label="All agents" shortcut={pilotShortcut}>
         <AppPaletteDialog.Input
+          inputRef={searchRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={navigation.handleInputKeyDown}
@@ -884,7 +927,13 @@ export function PilotView() {
         */}
         {showFilterBar && (
           <div className="-mx-3 -mb-2 mt-2 border-t border-border-default">
-            <PilotFilterBar value={bandFilter} counts={filterCounts} onChange={setBandFilter} />
+            <PilotFilterBar
+              value={bandFilter}
+              counts={filterCounts}
+              bands={fleet.bands}
+              onChange={setBandFilter}
+              onFocusChange={setIsFilterFocused}
+            />
           </div>
         )}
       </AppPaletteDialog.Header>
@@ -972,6 +1021,11 @@ export function PilotView() {
                   data-testid="pilot-clear-filter"
                   onClick={() => {
                     setBandFilter("all");
+                    // This button is about to unmount itself. Without handing
+                    // focus back, a keyboard user is left on the document body
+                    // — and if the retained query still matches nothing there
+                    // is no row to arrow to either.
+                    searchRef.current?.focus();
                   }}
                   className={cn(
                     "rounded-[var(--radius-sm)] px-2 py-1 text-xs text-daintree-text/70 transition-colors",
@@ -1046,6 +1100,12 @@ export function PilotView() {
             demandCount={needsYou}
             onShowDemand={() => {
               setBandFilter("needs-you");
+              // Cleared explicitly, not left to the narrowing effect. With the
+              // filter ALREADY on needs-you the state set is a no-op, the
+              // effect never re-runs, and a group the user had collapsed stays
+              // collapsed — leaving the button advertising agents it then
+              // failed to put on screen.
+              setNarrowingCollapsed([]);
             }}
           />
         </AppPaletteDialog.Footer>
