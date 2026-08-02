@@ -83,10 +83,21 @@ describe("isFilterMatch", () => {
   it("accepts anything typed contiguously, down to a single character", () => {
     // Incremental typing is always a substring, so the floor never interrupts
     // it — including a character sitting mid-word, which earns no boundary or
-    // start bonus and clears the floor on the substring bonus alone.
+    // start bonus and survives on the substring short-circuit alone.
     expect(isFilterMatch("d", "Daintree")).toBe(true);
     expect(isFilterMatch("i", "Daintree")).toBe(true);
     expect(isFilterMatch("brow", RESEARCH_TITLE)).toBe(true);
+  });
+
+  it("accepts a contiguous match in a field long enough to outrun the score", () => {
+    // Short fields hide the problem. The substring bonus feeds the same total
+    // the gap penalties drain, so a short query far enough into a long field
+    // scores under the floor even though it is literally the field's last word
+    // — and agent-set titles, which this length is taken from, have no cap.
+    const LONG_TITLE =
+      "Reviewing the destructive-action safeguard audit and filing the missing confirm dialogs now";
+    expect(LONG_TITLE.length).toBeGreaterThan(85);
+    expect(isFilterMatch("now", LONG_TITLE)).toBe(true);
   });
 
   it("ignores whitespace the caller did not trim", () => {

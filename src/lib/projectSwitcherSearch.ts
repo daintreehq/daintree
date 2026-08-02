@@ -93,10 +93,14 @@ function scoreField(query: string, field: string): number {
  * usability" (a legal subsequence worth 5 points) reads as a result rather than
  * as noise.
  *
- * The floor does not constrain contiguous typing. Anything typed straight
- * through is a substring and collects that 500-point bonus outright, so
- * incremental typing — "d", "da", "dai" — never trips it, down to a single
- * character. What has to clear it is a query assembled from pieces.
+ * The floor does not constrain contiguous typing: a literal substring is taken
+ * before the score is consulted at all. The 500-point substring bonus cannot
+ * carry that on its own, because {@link scoreField} adds it to the same running
+ * total the greedy walk's gap penalties drain — past roughly 85 characters of
+ * field a query that is literally the field's last word lands under 100, and
+ * agent-set titles do reach that length. So incremental typing — "d", "da",
+ * "dai" — never trips the floor, down to a single character. What has to clear
+ * it is a query assembled from pieces.
  *
  * It inherits one flaw from {@link scoreField}: the walk is greedy, taking the
  * first character it can rather than the best one, so "sr" against
@@ -114,6 +118,9 @@ export function isFilterMatch(query: string, field: string): boolean {
   // match everything. Callers that want all rows short-circuit on their own.
   const trimmed = query.trim();
   if (!trimmed) return false;
+  // Case-folded the way scoreField folds it, so the two agree on what counts as
+  // contiguous.
+  if (field.toLowerCase().includes(trimmed.toLowerCase())) return true;
   return scoreField(trimmed, field) >= MIN_FILTER_MATCH_SCORE;
 }
 
