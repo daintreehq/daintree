@@ -498,10 +498,11 @@ export function FileBrowserPane({
 
   // Point the viewer column at a path — the one write that changes what the
   // right-hand side shows, and the only place `browserSelectedPath` moves for a
-  // user gesture. Every route to the viewer goes through here (a file click, a
-  // folder's Enter, its "Show contents" menu item, any folder-listing row) so
-  // they cannot drift apart. The tree's cursor needs no handling: the
-  // render-time sync above pulls it along with any viewer change.
+  // user gesture. A file click and any folder-listing row land here; the
+  // explicit folder gestures go through `showFolderContents` below, which is
+  // this write plus the one thing they additionally need. The tree's cursor
+  // needs no handling: the render-time sync above pulls it along with any
+  // viewer change.
   //
   // The folder listing hands this straight to its rows, folders included. That
   // surface lives *inside* the viewer, so drilling into a folder there is the
@@ -510,6 +511,22 @@ export function FileBrowserPane({
   const showInViewer = useCallback(
     (path: string) => {
       setFileBrowserView(id, { browserSelectedPath: path });
+    },
+    [id, setFileBrowserView]
+  );
+
+  // The explicit "show me this folder" gestures: Enter, double-click, and the
+  // row menu's "Show contents". They clear a collapsed viewer as well as moving
+  // it, because they are a folder's *only* routes to the listing and the viewer
+  // column unmounts entirely while collapsed — without this the gesture would
+  // write a selection nobody can see, and tree-only mode would lose folder
+  // viewing outright. Deliberately not folded into `showInViewer`: that also
+  // serves plain file clicks and folder-listing rows, where popping the column
+  // back open would fight a collapse the user chose. One patch rather than two
+  // writes, so no intermediate state is rendered or persisted.
+  const showFolderContents = useCallback(
+    (path: string) => {
+      setFileBrowserView(id, { browserSelectedPath: path, browserViewerCollapsed: false });
     },
     [id, setFileBrowserView]
   );
@@ -565,7 +582,7 @@ export function FileBrowserPane({
     (path: string) => {
       const row = rows.find((candidate) => candidate.path === path);
       if (row?.isDirectory === true) {
-        showInViewer(path);
+        showFolderContents(path);
         return;
       }
       // The base-path half is defensive rather than reachable: an unresolved
@@ -594,7 +611,7 @@ export function FileBrowserPane({
         if (location === "dialog") onClose?.();
       })();
     },
-    [location, onClose, basePath, rows, showInViewer]
+    [location, onClose, basePath, rows, showFolderContents]
   );
 
   // The foreground half of the refresh signal, counted apart from the ambient
@@ -983,8 +1000,10 @@ export function FileBrowserPane({
                 only from the keyboard, which would make the whole surface look
                 like it had been removed rather than made deliberate. Carries no
                 shortcut hint — Enter acts on the tree's cursor row, which is not
-                necessarily the row this menu was opened on. */}
-            <ContextMenuItem onSelect={() => showInViewer(row.path)}>
+                necessarily the row this menu was opened on. Routed through the
+                same handler as Enter so the label stays honest with the viewer
+                collapsed: an item that promises contents must not no-op. */}
+            <ContextMenuItem onSelect={() => showFolderContents(row.path)}>
               <PanelRightOpen className="w-3.5 h-3.5 mr-2" />
               Show contents
             </ContextMenuItem>
@@ -1042,7 +1061,7 @@ export function FileBrowserPane({
     ),
     [
       isWorktreeSource,
-      showInViewer,
+      showFolderContents,
       handleSetRoot,
       handleCopyFolderContext,
       handleInsertFileReference,

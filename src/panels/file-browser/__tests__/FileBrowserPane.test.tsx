@@ -467,6 +467,10 @@ beforeEach(() => {
   treeProps.onInsertFileReference = undefined;
   treeProps.canInsertFileReference = undefined;
   treeProps.basePath = undefined;
+  treeProps.onSelect = undefined;
+  treeProps.onToggleExpanded = undefined;
+  treeProps.cursorPath = undefined;
+  treeProps.openPath = undefined;
   insertFileReferenceMock.mockClear();
   canInsertRef.current = true;
   dispatchMock.mockReset();
@@ -2670,6 +2674,31 @@ describe("FileBrowserPane tree navigation vs the viewer", () => {
     });
 
     expect(viewerWrites()).toEqual([FOLDER_ROW.path]);
+  });
+
+  it("reveals a collapsed viewer for both explicit folder routes", () => {
+    // The viewer column unmounts while collapsed, and these two gestures are a
+    // folder's only routes to the listing — so on their own they would write a
+    // selection nobody can see and tree-only mode would lose folder viewing
+    // outright. One handler serves both, hence one test.
+    mockPanel.browserViewerCollapsed = true;
+    renderPane();
+
+    act(() => {
+      treeProps.onActivate?.("src");
+    });
+    act(() => {
+      screen.getByText("Show contents").click();
+    });
+
+    expect(
+      setFileBrowserViewMock.mock.calls
+        .map(([, patch]) => patch as Record<string, unknown>)
+        .filter((patch) => "browserSelectedPath" in patch)
+    ).toEqual([
+      { browserSelectedPath: "src", browserViewerCollapsed: false },
+      { browserSelectedPath: FOLDER_ROW.path, browserViewerCollapsed: false },
+    ]);
   });
 
   it("tells the tree which row the viewer is on, so it can be marked", () => {
