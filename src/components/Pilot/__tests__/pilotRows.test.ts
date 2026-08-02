@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPilotGroups,
+  countPilotBands,
+  filterPilotBands,
   filterPilotGroups,
   summarizePilotGroups,
   type PilotRowContext,
@@ -242,6 +244,188 @@ describe("buildPilotGroups", () => {
     );
 
     expect(groups.map((g) => g.name)).toEqual(["alpha", "beta"]);
+  });
+
+  it("does not let activity times reorder two equally quiet projects", () => {
+    // The tiebreak used to be recency, so the order changed between every
+    // opening and spatial memory never formed. Same fleet, only the timestamps
+    // swapped: the order has to be the same both times.
+    const quiet = (aSince: number, bSince: number) =>
+      buildPilotGroups(
+        [
+          run({ runId: "a", workspaceId: "p1", agentState: "working", since: aSince }),
+          run({ runId: "b", workspaceId: "p2", agentState: "working", since: bSince }),
+        ],
+        ctx({
+          workspaces: new Map([
+            ["p1", { kind: "project", name: "beta" }],
+            ["p2", { kind: "project", name: "alpha" }],
+          ]),
+        })
+      ).map((g) => g.name);
+
+    expect(quiet(NOW - 600_000, NOW)).toEqual(quiet(NOW, NOW - 600_000));
+  });
+
+  it("puts the longest-standing demand first among equally urgent projects", () => {
+    // The anti-starvation rule the rows already follow, now applied a level up:
+    // a stream of fresh blocks must never bury the one stuck for forty minutes.
+    const groups = buildPilotGroups(
+      [
+        run({
+          runId: "fresh",
+          workspaceId: "p1",
+          agentState: "waiting",
+          waitingReason: "error",
+          since: NOW - 60_000,
+        }),
+        run({
+          runId: "stale",
+          workspaceId: "p2",
+          agentState: "waiting",
+          waitingReason: "error",
+          since: NOW - 40 * 60_000,
+        }),
+      ],
+      ctx({
+        workspaces: new Map([
+          // Named so alphabetical order would give the opposite answer.
+          ["p1", { kind: "project", name: "aaa" }],
+          ["p2", { kind: "project", name: "zzz" }],
+        ]),
+      })
+    );
+
+    expect(groups.map((g) => g.name)).toEqual(["zzz", "aaa"]);
+  });
+
+  it("dates a project by its oldest demand, not by its oldest run", () => {
+    // A project whose blocked agent is fresh must not inherit urgency from a
+    // long-running working agent sitting beside it.
+    const groups = buildPilotGroups(
+      [
+        run({
+          runId: "old-work",
+          workspaceId: "p1",
+          agentState: "working",
+          since: NOW - 3_600_000,
+        }),
+        run({
+          runId: "fresh-block",
+          workspaceId: "p1",
+          agentState: "waiting",
+          waitingReason: "error",
+          since: NOW - 1_000,
+        }),
+        run({
+          runId: "older-block",
+          workspaceId: "p2",
+          agentState: "waiting",
+          waitingReason: "error",
+          since: NOW - 60_000,
+        }),
+      ],
+      ctx({
+        workspaces: new Map([
+          ["p1", { kind: "project", name: "aaa" }],
+          ["p2", { kind: "project", name: "zzz" }],
+        ]),
+      })
+    );
+
+    expect(groups.map((g) => g.name)).toEqual(["zzz", "aaa"]);
+  });
+
+  it("sorts a demand of unknown age behind one it can actually date", () => {
+    // An unknown age is not evidence of urgency — treating it as infinitely old
+    // would let a pre-detection boot window outrank a genuine wait.
+    const groups = buildPilotGroups(
+      [
+        run({ runId: "undated", workspaceId: "p1", agentState: "waiting" }),
+        run({ runId: "dated", workspaceId: "p2", agentState: "waiting", since: NOW - 1_000 }),
+      ],
+      ctx({
+        workspaces: new Map([
+          ["p1", { kind: "project", name: "aaa" }],
+          ["p2", { kind: "project", name: "zzz" }],
+        ]),
+      })
+    );
+
+    expect(groups.map((g) => g.name)).toEqual(["zzz", "aaa"]);
+  });
+
+  it("gives the current workspace primacy only among equally quiet projects", () => {
+    const groups = buildPilotGroups(
+      [
+        run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW }),
+        run({ runId: "b", workspaceId: "p2", agentState: "working", since: NOW }),
+      ],
+      ctx({
+        currentWorkspaceId: "p2",
+        workspaces: new Map([
+          ["p1", { kind: "project", name: "alpha" }],
+          ["p2", { kind: "project", name: "zeta" }],
+        ]),
+      })
+    );
+
+    // Alphabetically last, but it is the workspace this view already owns and
+    // neither project has anything urgent to say.
+    expect(groups.map((g) => g.name)).toEqual(["zeta", "alpha"]);
+  });
+
+  it("never lets the current workspace outrank another project's demand", () => {
+    // Context above severity would bury a blocked agent somewhere else, which is
+    // the exact failure the band ordering exists to prevent.
+    const groups = buildPilotGroups(
+      [
+        run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW }),
+        run({
+          runId: "b",
+          workspaceId: "p2",
+          agentState: "waiting",
+          waitingReason: "error",
+          since: NOW,
+        }),
+      ],
+      ctx({
+        currentWorkspaceId: "p1",
+        workspaces: new Map([
+          ["p1", { kind: "project", name: "here" }],
+          ["p2", { kind: "project", name: "elsewhere" }],
+        ]),
+      })
+    );
+
+    expect(groups.map((g) => g.name)).toEqual(["elsewhere", "here"]);
+  });
+
+  it("orders two identically named projects the same way whatever order they arrive in", () => {
+    // Two checkouts of one repo, or a scratch sharing a project's name, is
+    // ordinary. Without a final tiebreak the comparator stops being a total
+    // order and "the same fleet opens the same way" quietly becomes false.
+    const named = (runs: Parameters<typeof buildPilotGroups>[0]) =>
+      buildPilotGroups(
+        runs,
+        ctx({
+          workspaces: new Map([
+            ["p1", { kind: "project", name: "same" }],
+            ["p2", { kind: "project", name: "same" }],
+          ]),
+        })
+      ).map((g) => g.workspaceId);
+
+    const forward = named([
+      run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW }),
+      run({ runId: "b", workspaceId: "p2", agentState: "working", since: NOW }),
+    ]);
+    const backward = named([
+      run({ runId: "b", workspaceId: "p2", agentState: "working", since: NOW }),
+      run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW }),
+    ]);
+
+    expect(forward).toEqual(backward);
   });
 
   it("orders rows inside a project worst-first, then oldest-first", () => {
@@ -525,6 +709,163 @@ describe("filterPilotGroups", () => {
     expect(severity(filtered!.topBand)).toBeGreaterThan(severity(unfiltered[0]!.topBand));
     // The band is whatever the worst surviving row is, never a remembered one.
     expect(filtered!.topBand).toBe(filtered!.rows[0]!.band);
+  });
+});
+
+describe("countPilotBands", () => {
+  /** One run in each of the six bands, spread over two projects. */
+  const wholeFleet = () =>
+    buildPilotGroups(
+      [
+        run({
+          runId: "blocked",
+          workspaceId: "p1",
+          agentState: "waiting",
+          waitingReason: "error",
+          since: NOW,
+        }),
+        run({ runId: "needs", workspaceId: "p1", agentState: "waiting", since: NOW }),
+        run({ runId: "review", workspaceId: "p1", agentState: "completed", since: NOW }),
+        run({ runId: "running", workspaceId: "p2", agentState: "working", since: NOW }),
+        run({
+          runId: "done",
+          workspaceId: "p2",
+          agentState: "completed",
+          since: NOW - 120_000,
+        }),
+        run({ runId: "idle", workspaceId: "p2", agentState: "exited", since: NOW }),
+      ],
+      ctx({
+        workspaces: new Map([
+          ["p1", { kind: "project", name: "one" }],
+          // Acknowledged after `done` finished but before `review` did, so the
+          // two completions land in different bands.
+          ["p2", { kind: "project", name: "two", lastCompletionSeenAt: NOW - 60_000 }],
+        ]),
+      })
+    );
+
+  it("maps all six bands onto the four segments", () => {
+    const counts = countPilotBands(wholeFleet());
+
+    expect(counts.all).toBe(6);
+    // Blocked and needs-you are one demand; review is a hand-back, not a block.
+    expect(counts["needs-you"]).toBe(2);
+    expect(counts.working).toBe(1);
+    expect(counts.finished).toBe(2);
+  });
+
+  it("leaves an exited run out of every segment but All", () => {
+    // An exited terminal isn't working, isn't finished, and isn't asking for
+    // anything — putting it in a bucket would make that bucket lie.
+    const counts = countPilotBands(
+      buildPilotGroups([run({ runId: "gone", agentState: "exited", since: NOW })], ctx())
+    );
+
+    expect(counts.all).toBe(1);
+    expect(counts["needs-you"] + counts.working + counts.finished).toBe(0);
+  });
+
+  it("counts the population it was handed, so a query narrows the segments", () => {
+    const built = buildPilotGroups(
+      [
+        run({ runId: "a", agentState: "waiting", title: "auth refactor", since: NOW }),
+        run({ runId: "b", agentState: "waiting", title: "docs pass", since: NOW }),
+      ],
+      ctx()
+    );
+
+    expect(countPilotBands(built)["needs-you"]).toBe(2);
+    expect(countPilotBands(filterPilotGroups(built, "auth"))["needs-you"]).toBe(1);
+  });
+});
+
+describe("filterPilotBands", () => {
+  const mixed = () =>
+    buildPilotGroups(
+      [
+        run({
+          runId: "blocked",
+          workspaceId: "p1",
+          agentState: "waiting",
+          waitingReason: "error",
+          since: NOW,
+        }),
+        run({ runId: "working", workspaceId: "p1", agentState: "working", since: NOW }),
+        run({ runId: "idle", workspaceId: "p2", agentState: "exited", since: NOW }),
+      ],
+      ctx({
+        workspaces: new Map([
+          ["p1", { kind: "project", name: "one" }],
+          ["p2", { kind: "project", name: "two" }],
+        ]),
+      })
+    );
+
+  it("returns every row untouched for All", () => {
+    const all = filterPilotBands(mixed(), "all");
+    expect(all.flatMap((g) => g.rows.map((r) => r.run.runId))).toEqual([
+      "blocked",
+      "working",
+      "idle",
+    ]);
+  });
+
+  it("drops a group the segment leaves empty", () => {
+    const filtered = filterPilotBands(mixed(), "needs-you");
+
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0]!.rows.map((r) => r.run.runId)).toEqual(["blocked"]);
+  });
+
+  it("recounts the demand tally against the surviving rows", () => {
+    const [group] = filterPilotBands(mixed(), "working");
+
+    // "working" survives in a project whose blocked run the segment removed —
+    // an inherited tally would report a demand no longer on screen.
+    expect(group!.demandCount).toBe(0);
+    expect(group!.topBand).toBe("running");
+  });
+
+  it("finds the worst surviving band by rank, not by whichever row is first", () => {
+    // Rows reaching a filter have been through `frozenOrder`, which pins the
+    // order captured when the dialog opened — so once a run changes state the
+    // first row is no longer the worst one present. Reading the band off row
+    // zero would put a header's summary and its pip cluster at odds with the
+    // rows directly underneath.
+    const [built] = buildPilotGroups(
+      [
+        run({ runId: "urgent", agentState: "waiting", waitingReason: "error", since: NOW }),
+        run({ runId: "asking", agentState: "waiting", since: NOW }),
+        run({ runId: "calm", agentState: "working", since: NOW }),
+      ],
+      ctx()
+    );
+    const frozen = { ...built!, rows: [...built!.rows].reverse() };
+
+    const [narrowed] = filterPilotBands([frozen], "needs-you");
+
+    // Both demand rows survive, in the pinned order that puts the milder one
+    // first — the band still has to come back as the worse of the two.
+    expect(narrowed!.rows.map((r) => r.run.runId)).toEqual(["asking", "urgent"]);
+    expect(narrowed!.rows[0]!.band).toBe("needs-you");
+    expect(narrowed!.topBand).toBe("blocked");
+  });
+
+  it("intersects with a query rather than replacing it", () => {
+    const built = buildPilotGroups(
+      [
+        run({ runId: "a", agentState: "waiting", title: "auth refactor", since: NOW }),
+        run({ runId: "b", agentState: "working", title: "auth rewrite", since: NOW }),
+        run({ runId: "c", agentState: "waiting", title: "docs pass", since: NOW }),
+      ],
+      ctx()
+    );
+
+    const both = filterPilotBands(filterPilotGroups(built, "auth"), "needs-you");
+
+    // Only the row satisfying BOTH constraints survives.
+    expect(both.flatMap((g) => g.rows.map((r) => r.run.runId))).toEqual(["a"]);
   });
 });
 

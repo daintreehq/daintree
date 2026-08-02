@@ -46,6 +46,60 @@ describe("AppPaletteDialog.Empty", () => {
     expect(screen.getByText('No matches for "foo"')).toBeTruthy();
   });
 
+  describe("filterLabel", () => {
+    it("names the filter when it is the only thing excluding rows", () => {
+      // Without this the zero-data branch claims the surface is empty while a
+      // filter the user set is what emptied it — the ghost-filter dead end.
+      render(
+        <AppPaletteDialog.Empty query="" emptyMessage="No items available" filterLabel="Needs you">
+          <span data-testid="cta">Create a terminal</span>
+        </AppPaletteDialog.Empty>
+      );
+
+      expect(screen.getByText("No matches in Needs you")).toBeTruthy();
+      expect(screen.queryByText("No items available")).toBeNull();
+      // A narrowed empty is not a zero-data empty, so the zero-data CTA has no
+      // business being the action offered for it.
+      expect(screen.queryByTestId("cta")).toBeNull();
+    });
+
+    it("names both constraints when a query and a filter are active together", () => {
+      render(
+        <AppPaletteDialog.Empty
+          query="auth"
+          emptyMessage="No items available"
+          filterLabel="Working"
+        />
+      );
+
+      expect(screen.getByText('No matches for "auth" in Working')).toBeTruthy();
+    });
+
+    it("offers the filtered action once a filter is active without a query", () => {
+      render(
+        <AppPaletteDialog.Empty
+          query=""
+          emptyMessage="No items available"
+          filterLabel="Working"
+          noMatchContent={<span data-testid="clear">Clear filter</span>}
+        />
+      );
+
+      expect(screen.getByTestId("clear")).toBeTruthy();
+    });
+
+    it("leaves the zero-data branch alone when no filter is active", () => {
+      render(
+        <AppPaletteDialog.Empty query="" emptyMessage="No items available">
+          <span data-testid="cta">Create a terminal</span>
+        </AppPaletteDialog.Empty>
+      );
+
+      expect(screen.getByText("No items available")).toBeTruthy();
+      expect(screen.getByTestId("cta")).toBeTruthy();
+    });
+  });
+
   it("renders noMatchContent when query has text (no-match state)", () => {
     render(
       <AppPaletteDialog.Empty

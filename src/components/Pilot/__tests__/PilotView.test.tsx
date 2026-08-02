@@ -183,19 +183,53 @@ describe("PilotView", () => {
     expect(new Set(iconIds).size).toBe(2);
   });
 
-  it("writes the run's state out in words, not just a coloured glyph", () => {
-    // Waiting and idle are both hollow circles; hue is the only thing between
-    // them. The switcher never encodes status by colour alone and neither may
-    // this — the sentence beside the glyph carries the meaning.
+  it("makes every run's state available as text, not just as a glyph", () => {
+    // Waiting and idle are both hollow circles; shape alone cannot separate
+    // them. The neutral states gave up their visible word, so the word has to
+    // survive in the option's accessible name — never colour or shape alone.
     seed([
       run({ runId: "a", agentState: "waiting", title: "one", since: NOW - 60_000 }),
       run({ runId: "b", agentState: "idle", title: "two", since: NOW - 60_000 }),
     ]);
     render(<PilotView />);
 
-    const rows = screen.getAllByTestId("pilot-row").map((r) => r.textContent ?? "");
-    expect(rows[0]).toContain("Needs you");
-    expect(rows[1]).toContain("Idle");
+    expect(screen.getByRole("option", { name: /Needs you/ }).textContent).toContain("one");
+    expect(screen.getByRole("option", { name: /Idle/ }).textContent).toContain("two");
+  });
+
+  it("spends colour only on the agents that are actually asking for something", () => {
+    // The whole point of the surface. One blocked agent among six working ones
+    // has to be the only status word on screen — six green labels beside one
+    // amber one is the wall this replaced, where nothing stood out because
+    // everything was shouting.
+    seed([
+      run({
+        runId: "blocked",
+        agentState: "waiting",
+        waitingReason: "error",
+        title: "stuck",
+        since: NOW - 60_000,
+      }),
+      ...Array.from({ length: 6 }, (_, i) =>
+        run({ runId: `w${i}`, agentState: "working", title: `work ${i}`, since: NOW - 60_000 })
+      ),
+    ]);
+    render(<PilotView />);
+
+    const rows = screen.getAllByTestId("pilot-row");
+    expect(rows).toHaveLength(7);
+
+    // A status word the eye can see is one that isn't screen-reader-only.
+    const visibleStatuses = rows.flatMap((row) =>
+      Array.from(row.querySelectorAll("span")).filter(
+        (el) => el.textContent === "Blocked" && !el.classList.contains("sr-only")
+      )
+    );
+    expect(visibleStatuses).toHaveLength(1);
+
+    // ...and every one of the seven still says what it is doing, in text.
+    expect(screen.getAllByRole("option", { name: /Working/ })).toHaveLength(6);
+    expect(screen.getAllByRole("option", { name: /Blocked/ })).toHaveLength(1);
   });
 
   it("marks the workspace this view already owns", () => {
@@ -738,6 +772,343 @@ describe("PilotView", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(selected().text).toContain("bravo");
+    });
+  });
+
+  describe("state filter", () => {
+    /** Blocked + needs-you in one project, working + done in another. */
+    function seedMixedFleet(): void {
+      seed([
+        run({
+          runId: "blocked",
+          workspaceId: "p1",
+          agentState: "waiting",
+          waitingReason: "error",
+          title: "auth blocked",
+          since: NOW - 60_000,
+        }),
+        run({
+          runId: "asking",
+          workspaceId: "p1",
+          agentState: "waiting",
+          title: "docs asking",
+          since: NOW - 30_000,
+        }),
+        run({
+          runId: "working",
+          workspaceId: "s1",
+          agentState: "working",
+          title: "auth working",
+          since: NOW - 10_000,
+        }),
+        run({
+          runId: "idle",
+          workspaceId: "s1",
+          agentState: "exited",
+          title: "old shell",
+          since: NOW - 10_000,
+        }),
+      ]);
+    }
+
+    function segment(name: RegExp): HTMLElement {
+      return screen.getByRole("radio", { name });
+    }
+
+    function rowTitles(): string[] {
+      return screen.queryAllByTestId("pilot-row").map((r) => r.textContent ?? "");
+    }
+
+    it("narrows the list to one band without touching the query", () => {
+      seedMixedFleet();
+      render(<PilotView />);
+      expect(rowTitles()).toHaveLength(4);
+
+      fireEvent.click(segment(/Needs you/));
+
+      expect(rowTitles()).toHaveLength(2);
+      expect(rowTitles().join(" ")).toContain("auth blocked");
+      expect(rowTitles().join(" ")).not.toContain("auth working");
+    });
+
+    it("intersects with the query instead of replacing it", () => {
+      // Two constraints, one question — "the blocked agents in this repo".
+      seedMixedFleet();
+      render(<PilotView />);
+
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
+      expect(rowTitles()).toHaveLength(2);
+
+      fireEvent.click(segment(/Needs you/));
+
+      expect(rowTitles()).toHaveLength(1);
+      expect(rowTitles()[0]).toContain("auth blocked");
+    });
+
+    it("counts the query-filtered population, not the whole fleet", () => {
+      // Counted after the query and before the segment. Count the other way and
+      // every segment reports the length of the list already on screen.
+      seedMixedFleet();
+      render(<PilotView />);
+      expect(segment(/^All/).getAttribute("aria-label")).toBe("All, 4 agents");
+
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
+
+      expect(segment(/^All/).getAttribute("aria-label")).toBe("All, 2 agents");
+      expect(segment(/Needs you/).getAttribute("aria-label")).toBe("Needs you, 1 agent");
+      expect(segment(/Working/).getAttribute("aria-label")).toBe("Working, 1 agent");
+    });
+
+    it("holds the counts still while the segment changes", () => {
+      // Selecting a segment must not rewrite the numbers next to the others, or
+      // the bar stops being a map of the fleet and becomes a mirror of itself.
+      seedMixedFleet();
+      render(<PilotView />);
+      const before = screen.getAllByRole("radio").map((el) => el.getAttribute("aria-label"));
+
+      fireEvent.click(segment(/Needs you/));
+
+      expect(screen.getAllByRole("radio").map((el) => el.getAttribute("aria-label"))).toEqual(
+        before
+      );
+    });
+
+    it("leaves an exited run in All and in nothing else", () => {
+      seedMixedFleet();
+      render(<PilotView />);
+
+      expect(segment(/Finished/).getAttribute("aria-label")).toBe("Finished, 0 agents");
+      fireEvent.click(segment(/Working/));
+
+      expect(rowTitles().join(" ")).not.toContain("old shell");
+    });
+
+    it("moves the highlight off a row the filter removes", () => {
+      seedMixedFleet();
+      render(<PilotView />);
+      expect(document.querySelector('[aria-selected="true"]')?.textContent).toContain(
+        "auth blocked"
+      );
+
+      fireEvent.click(segment(/Working/));
+
+      // Enter committing a row that is no longer listed is the bug this guards.
+      const selected = document.querySelector('[aria-selected="true"]');
+      expect(selected?.textContent).toContain("auth working");
+    });
+
+    it("opens a persistently collapsed group that the filter matches", () => {
+      seedMixedFleet();
+      usePilotStore.setState({ isOpen: true, collapsedWorkspaceIds: ["p1"] });
+      render(<PilotView />);
+      expect(rowTitles().join(" ")).not.toContain("auth blocked");
+
+      fireEvent.click(segment(/Needs you/));
+
+      // Same rule the query already follows: making someone click to reveal
+      // what they just filtered for is the narrowing failing to do its job.
+      expect(rowTitles().join(" ")).toContain("auth blocked");
+    });
+
+    it("scopes a collapse made under a filter to that filter", () => {
+      seedMixedFleet();
+      render(<PilotView />);
+      fireEvent.click(segment(/Needs you/));
+
+      fireEvent.click(screen.getAllByTestId("pilot-group-toggle")[0]!);
+      expect(rowTitles()).toHaveLength(0);
+      // It must not leak into the persisted set, or the group would stay
+      // collapsed long after the filter was cleared.
+      expect(usePilotStore.getState().collapsedWorkspaceIds).toEqual([]);
+
+      fireEvent.click(segment(/^All/));
+      expect(rowTitles()).toHaveLength(4);
+    });
+
+    it("keeps the bar reachable when the narrowing leaves nothing", () => {
+      seedMixedFleet();
+      render(<PilotView />);
+
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "zzzz" } });
+
+      // The moment the list is empty is exactly when the bar is the way back.
+      expect(screen.getByTestId("pilot-filter-bar")).toBeTruthy();
+    });
+
+    it("says nothing about states before the fleet has been read", () => {
+      // Four zero segments over an unknown fleet is a claim the surface cannot
+      // support, and over a genuinely empty one it is chrome competing with the
+      // sentence telling the user what to do.
+      seed(null);
+      const view = render(<PilotView />);
+      expect(screen.queryByTestId("pilot-filter-bar")).toBeNull();
+
+      seed([]);
+      view.rerender(<PilotView />);
+      expect(screen.queryByTestId("pilot-filter-bar")).toBeNull();
+    });
+
+    it("names both constraints when the two of them empty the list", () => {
+      // The ghost-filter dead end: hitting zero results with no way to see that
+      // a filter you set is the reason.
+      seedMixedFleet();
+      render(<PilotView />);
+
+      fireEvent.click(segment(/Working/));
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "docs" } });
+
+      expect(screen.getByText('No matches for "docs" in Working')).toBeTruthy();
+      expect(screen.getByTestId("pilot-clear-filter")).toBeTruthy();
+    });
+
+    it("names the filter alone when it is the only thing excluding rows", () => {
+      seedMixedFleet();
+      render(<PilotView />);
+
+      fireEvent.click(segment(/Finished/));
+
+      expect(screen.getByText("No matches in Finished")).toBeTruthy();
+    });
+
+    it("clears the filter without discarding the query", () => {
+      // A targeted correction, not a reset — throwing away the typing as well
+      // would make the user retype what was never the problem.
+      seedMixedFleet();
+      render(<PilotView />);
+      fireEvent.click(segment(/Working/));
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "docs" } });
+
+      fireEvent.click(screen.getByTestId("pilot-clear-filter"));
+
+      expect(screen.getByDisplayValue("docs")).toBeTruthy();
+      expect(rowTitles()).toHaveLength(1);
+      expect(rowTitles()[0]).toContain("docs asking");
+    });
+
+    it("starts every opening back at All", () => {
+      seedMixedFleet();
+      const view = render(<PilotView />);
+      fireEvent.click(segment(/Needs you/));
+      expect(rowTitles()).toHaveLength(2);
+
+      usePilotStore.setState({ isOpen: false });
+      view.rerender(<PilotView />);
+      usePilotStore.setState({ isOpen: true });
+      view.rerender(<PilotView />);
+
+      // A filter that persisted would reopen the surface already hiding agents,
+      // with the reason two openings in the past.
+      expect(rowTitles()).toHaveLength(4);
+    });
+  });
+
+  describe("footer demand", () => {
+    it("isolates exactly the agents it counted", () => {
+      seed([
+        run({
+          runId: "a",
+          agentState: "waiting",
+          waitingReason: "error",
+          title: "one",
+          since: NOW - 60_000,
+        }),
+        run({ runId: "b", agentState: "waiting", title: "two", since: NOW - 30_000 }),
+        run({ runId: "c", agentState: "working", title: "three", since: NOW - 10_000 }),
+      ]);
+      render(<PilotView />);
+
+      const action = screen.getByTestId("pilot-demand-action");
+      expect(action.textContent).toBe("2 agents need you");
+
+      fireEvent.click(action);
+
+      // The sentence stated a demand the surface gave no way to act on. As a
+      // control it has to deliver the number it advertised.
+      expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
+    });
+
+    it("does not count work awaiting review as a demand it can isolate", () => {
+      // `review` is a demand band but NOT part of the Needs-you segment, so
+      // counting it here would promise agents the button then failed to show.
+      seed([
+        run({ runId: "a", agentState: "waiting", title: "one", since: NOW - 60_000 }),
+        run({ runId: "b", agentState: "completed", title: "two", since: NOW - 30_000 }),
+      ]);
+      render(<PilotView />);
+
+      expect(screen.getByTestId("pilot-demand-action").textContent).toBe("Agent needs you");
+
+      fireEvent.click(screen.getByTestId("pilot-demand-action"));
+      expect(screen.getAllByTestId("pilot-row")).toHaveLength(1);
+    });
+
+    it("still reports finished work when nothing else is asking", () => {
+      // Dropping review from the demand count must not make a hand-back
+      // disappear into "nothing needs you".
+      seed([run({ runId: "a", agentState: "completed", title: "one", since: NOW - 30_000 })]);
+      render(<PilotView />);
+
+      expect(screen.getByTestId("pilot-summary").textContent).toBe("Ready for review");
+      expect(screen.queryByTestId("pilot-demand-action")).toBeNull();
+    });
+
+    it("leaves the summary inert when there is no demand to isolate", () => {
+      seed([run({ agentState: "working", since: NOW - 60_000 })]);
+      render(<PilotView />);
+
+      expect(screen.getByText(/Nothing needs you/)).toBeTruthy();
+      expect(screen.queryByTestId("pilot-demand-action")).toBeNull();
+    });
+  });
+
+  describe("group headers", () => {
+    it("summarises a project only once its rows are gone", () => {
+      // Expanded, the rows ARE the summary; a sentence restating them is a
+      // third thing to read for facts already on screen.
+      seed([
+        run({
+          runId: "a",
+          agentState: "waiting",
+          waitingReason: "error",
+          title: "one",
+          since: NOW - 60_000,
+        }),
+        run({ runId: "b", agentState: "working", title: "two", since: NOW - 60_000 }),
+      ]);
+      render(<PilotView />);
+
+      const header = () => screen.getByTestId("pilot-group-header").textContent ?? "";
+      // Expanded, the header is structure and nothing else — no prose summary,
+      // no counts.
+      expect(header()).not.toContain("Agent blocked");
+      expect(header()).not.toMatch(/\d/);
+
+      fireEvent.click(screen.getByTestId("pilot-group-toggle"));
+
+      // Collapsed, something has to stop a project hiding a blocked agent
+      // behind a chevron — one pip per band present, each with its count.
+      expect(header()).toMatch(/\d/);
+    });
+
+    it("reports a collapsed project's blocked agent through the toggle's name", () => {
+      seed([
+        run({
+          runId: "a",
+          agentState: "waiting",
+          waitingReason: "error",
+          title: "one",
+          since: NOW - 60_000,
+        }),
+        run({ runId: "b", agentState: "working", title: "two", since: NOW - 60_000 }),
+      ]);
+      usePilotStore.setState({ isOpen: true, collapsedWorkspaceIds: ["p1"] });
+      render(<PilotView />);
+
+      // The pips are decorative; the accessible account is the toggle's label,
+      // and it has to carry the demand in both states.
+      const label = screen.getByTestId("pilot-group-toggle").getAttribute("aria-label") ?? "";
+      expect(label).toContain("daintree");
+      expect(label).toContain("Agent blocked");
     });
   });
 

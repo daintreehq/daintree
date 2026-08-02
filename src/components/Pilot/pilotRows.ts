@@ -100,11 +100,54 @@ function rank(band: FleetBand): number {
   return BAND_RANK.get(band) ?? FLEET_BANDS.length;
 }
 
-/** Most recent state transition in a project, for the severity tiebreak. */
-function latestActivity(runs: readonly FleetRunRow[]): number {
-  let latest = 0;
-  for (const run of runs) if (run.since !== undefined && run.since > latest) latest = run.since;
-  return latest;
+/**
+ * A group restricted to a subset of its own rows, with both derived fields
+ * recomputed rather than inherited.
+ *
+ * `topBand` is found by RANK across the survivors rather than read off
+ * `rows[0]`. Rows reaching a filter have already been through `frozenOrder`,
+ * which pins the order captured when the dialog opened — so once a run changes
+ * state the first row is no longer guaranteed to be the worst one present.
+ * Inheriting either field would put a header's summary and its collapsed pip
+ * cluster at odds with the rows directly underneath it.
+ */
+function narrowGroup(group: PilotProjectGroup, rows: PilotRow[]): PilotProjectGroup {
+  let topBand: FleetBand = "idle";
+  // Annotated: `FLEET_BANDS` is a const tuple, so its `length` narrows to the
+  // literal 6 and the accumulator would refuse every rank assigned below it.
+  let best: number = FLEET_BANDS.length;
+  let demandCount = 0;
+  for (const row of rows) {
+    const rowRank = rank(row.band);
+    if (rowRank < best) {
+      best = rowRank;
+      topBand = row.band;
+    }
+    if (isDemandBand(row.band)) demandCount++;
+  }
+  return { ...group, rows, demandCount, topBand };
+}
+
+/**
+ * Oldest still-outstanding demand in a project, or undefined when it has none.
+ *
+ * This is the group-level twin of {@link compareWithinBand}'s row rule, which
+ * is the point: the two levels finally agree about what "most urgent" means,
+ * and a project whose block has been standing for forty minutes stops being
+ * displaced by one that only just started asking.
+ *
+ * A demand with no `since` contributes nothing rather than counting as
+ * infinitely old — an unknown age is not evidence of urgency.
+ */
+function oldestDemand(rows: readonly PilotRow[]): number | undefined {
+  let oldest: number | undefined;
+  for (const row of rows) {
+    if (!isDemandBand(row.band)) continue;
+    const since = row.run.since;
+    if (since === undefined) continue;
+    if (oldest === undefined || since < oldest) oldest = since;
+  }
+  return oldest;
 }
 
 /**
@@ -115,8 +158,19 @@ function latestActivity(runs: readonly FleetRunRow[]): number {
  * running eight idle agents would otherwise bury one holding a single blocked
  * agent, which is the documented failure mode of count-based ranking in
  * operator tools. Volume is reported as a count on the header instead, where it
- * informs without competing for position. Projects tied on severity fall back
- * to most-recent activity, then to name, so the order is always explainable.
+ * informs without competing for position.
+ *
+ * Ties break on the oldest outstanding demand, NOT on recency. Recency changed
+ * between every single opening, so the group order was never the same twice and
+ * spatial memory never formed — and it inverted the anti-starvation rule the
+ * rows themselves already follow. Quiet projects, which have no demand to date,
+ * fall back to the workspace this view already owns and then to name, so their
+ * order is fixed for as long as they stay quiet and only genuinely demanding
+ * projects float.
+ *
+ * The current workspace is deliberately NOT pinned above severity: putting
+ * context first would bury a blocked agent in another project, which is the
+ * exact failure the band ordering exists to prevent.
  */
 export function buildPilotGroups(
   runs: readonly FleetRunRow[],
@@ -129,7 +183,7 @@ export function buildPilotGroups(
     else byWorkspace.set(run.workspaceId, [run]);
   }
 
-  const groups: Array<PilotProjectGroup & { latestActivity: number }> = [];
+  const groups: Array<PilotProjectGroup & { oldestDemand: number | undefined }> = [];
   for (const [workspaceId, workspaceRuns] of byWorkspace) {
     const meta = ctx.workspaces.get(workspaceId);
     // A run whose workspace has been removed from the store still has to render
@@ -198,19 +252,39 @@ export function buildPilotGroups(
       rows,
       demandCount: rows.filter((r) => isDemandBand(r.band)).length,
       topBand: rows[0]?.band ?? "idle",
-      latestActivity: latestActivity(workspaceRuns),
+      oldestDemand: oldestDemand(rows),
     });
   }
 
   groups.sort((a, b) => {
     const byBand = rank(a.topBand) - rank(b.topBand);
     if (byBand !== 0) return byBand;
-    const byRecency = b.latestActivity - a.latestActivity;
-    if (byRecency !== 0) return byRecency;
-    return a.name.localeCompare(b.name);
+
+    // Both sides share a top band here, so testing either one answers for the
+    // pair. A demand band ranks by how long it has been outstanding; anything
+    // else has no urgency to compare and gives primacy to the workspace this
+    // view is already in, where opening a run costs no switch.
+    if (isDemandBand(a.topBand)) {
+      const ao = a.oldestDemand;
+      const bo = b.oldestDemand;
+      if (ao !== undefined && bo !== undefined && ao !== bo) return ao - bo;
+      if (ao === undefined && bo !== undefined) return 1;
+      if (bo === undefined && ao !== undefined) return -1;
+    } else if (a.isCurrent !== b.isCurrent) {
+      return a.isCurrent ? -1 : 1;
+    }
+
+    const byName = a.name.localeCompare(b.name);
+    if (byName !== 0) return byName;
+    // Workspace id last, so the comparator is a TRUE total order. Two projects
+    // sharing a name is ordinary (a scratch and a project, or two checkouts),
+    // and leaving them to `sort`'s arbitrary decision would make "the same
+    // fleet opens in the same order" false exactly where it is hardest to see.
+    if (a.workspaceId === b.workspaceId) return 0;
+    return a.workspaceId < b.workspaceId ? -1 : 1;
   });
 
-  return groups.map(({ latestActivity: _latest, ...group }) => group);
+  return groups.map(({ oldestDemand: _oldest, ...group }) => group);
 }
 
 /**
@@ -254,17 +328,102 @@ export function filterPilotGroups(
         isFilterMatch(needle, row.chrome.label)
     );
     if (rows.length === 0) continue;
-    out.push({
-      ...group,
-      rows,
-      demandCount: rows.filter((r) => isDemandBand(r.band)).length,
-      // Recomputed, never inherited: a query that filters the blocked run out of
-      // a project leaves a group whose header would otherwise still announce
-      // "0 agents blocked" in danger red over a row that is merely running.
-      // `filter` preserves the band-sorted order, so the first survivor is still
-      // the worst one left.
-      topBand: rows[0]?.band ?? "idle",
-    });
+    // Recomputed, never inherited: a query that filters the blocked run out of
+    // a project leaves a group whose header would otherwise still announce
+    // "0 agents blocked" over a row that is merely running.
+    out.push(narrowGroup(group, rows));
+  }
+  return out;
+}
+
+/**
+ * The state filter's vocabulary, declared beside the bands so a segment and the
+ * count under it can never drift apart.
+ */
+export type PilotBandFilter = "all" | "needs-you" | "working" | "finished";
+
+/**
+ * Which bands each segment admits.
+ *
+ * `idle` is deliberately in no bucket but All: an exited terminal isn't
+ * working, isn't finished, and isn't asking for anything, so putting it
+ * anywhere else would make that segment lie about what it holds.
+ *
+ * "Needs you" is `blocked` + `needs-you` and NOT `review`, even though
+ * `isDemandBand` counts review as a demand. Review is a hand-back, not a
+ * block — folding it in would make the footer's demand count promise more
+ * agents than applying the filter actually reveals.
+ */
+const BAND_FILTER_SETS: Record<Exclude<PilotBandFilter, "all">, ReadonlySet<FleetBand>> = {
+  "needs-you": new Set<FleetBand>(["blocked", "needs-you"]),
+  working: new Set<FleetBand>(["running"]),
+  finished: new Set<FleetBand>(["review", "done"]),
+};
+
+/** The narrowing segments, in the order the bar renders them after All. */
+export const PILOT_BAND_FILTERS: readonly Exclude<PilotBandFilter, "all">[] = [
+  "needs-you",
+  "working",
+  "finished",
+];
+
+/**
+ * A segment's name, declared here rather than in the bar because two surfaces
+ * say it: the segment itself, and the empty state that has to name which filter
+ * produced no rows.
+ */
+export const PILOT_BAND_FILTER_LABEL: Record<PilotBandFilter, string> = {
+  all: "All",
+  "needs-you": "Needs you",
+  working: "Working",
+  finished: "Finished",
+};
+
+export type PilotBandFilterCounts = Record<PilotBandFilter, number>;
+
+/**
+ * Rows per segment.
+ *
+ * Counted BEFORE the band filter runs, which is the whole reason this is a
+ * separate pass: each segment has to report the query-intersected population.
+ * Counting afterwards would give every segment its own filtered total, which is
+ * always the length of the list already on screen and therefore tells the user
+ * nothing they can't see.
+ */
+export function countPilotBands(groups: readonly PilotProjectGroup[]): PilotBandFilterCounts {
+  const counts: PilotBandFilterCounts = { all: 0, "needs-you": 0, working: 0, finished: 0 };
+  for (const group of groups) {
+    for (const row of group.rows) {
+      counts.all++;
+      for (const filter of PILOT_BAND_FILTERS) {
+        if (BAND_FILTER_SETS[filter].has(row.band)) counts[filter]++;
+      }
+    }
+  }
+  return counts;
+}
+
+/**
+ * Filter groups to the rows one segment admits, dropping groups left empty.
+ *
+ * Composes with {@link filterPilotGroups} rather than replacing it — the query
+ * and the segment intersect with AND, so "show me the blocked agents in this
+ * repo" is one question rather than two mutually exclusive ones. Input order is
+ * preserved: ordering is decided once, upstream, and a filter that re-sorted
+ * would move rows under the cursor.
+ */
+export function filterPilotBands(
+  groups: readonly PilotProjectGroup[],
+  filter: PilotBandFilter
+): PilotProjectGroup[] {
+  if (filter === "all") return [...groups];
+
+  const bands = BAND_FILTER_SETS[filter];
+  const out: PilotProjectGroup[] = [];
+  for (const group of groups) {
+    const rows = group.rows.filter((row) => bands.has(row.band));
+    if (rows.length === 0) continue;
+    out.push(narrowGroup(group, rows));
   }
   return out;
 }
