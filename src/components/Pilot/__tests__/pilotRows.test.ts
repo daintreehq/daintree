@@ -390,12 +390,35 @@ describe("filterPilotGroups", () => {
       ctx()
     );
 
-  it("accepts an ordered subsequence, matching how the switcher searches", () => {
-    // Typing "fltsnp" for "fleet snapshot" works in the project switcher, so it
-    // has to work here — a palette that accepts a query one way and rejects it
-    // another teaches nothing transferable.
+  it("accepts an abbreviation anchored to the words it came from", () => {
+    // Typing "fltsnp" for "fleet snapshot" works in the project switcher, and a
+    // query that abbreviates by word has to keep working here too. The floors
+    // themselves differ on purpose — the switcher can afford a weak match
+    // because it ranks one, and this surface cannot because it does not.
     const [group] = filterPilotGroups(groups(), "fltsnp");
     expect(group!.rows.map((r) => r.run.runId)).toEqual(["a"]);
+  });
+
+  it("drops a row the query only reaches as a scattered subsequence", () => {
+    // "rust" is a legal ordered subsequence of the research title, but its
+    // characters are so far apart that the words it does land on cannot pay for
+    // the distance. Unranked filtering has no bottom of the list to put that in,
+    // so it would read as an answer beside the real one (#11625).
+    const filtered = filterPilotGroups(
+      buildPilotGroups(
+        [
+          run({
+            runId: "loose",
+            agentState: "working",
+            title: "Research file browser folder selection usability",
+          }),
+          run({ runId: "exact", agentState: "working", title: "Rust migration" }),
+        ],
+        ctx()
+      ),
+      "rust"
+    );
+    expect(filtered[0]!.rows.map((r) => r.run.runId)).toEqual(["exact"]);
   });
 
   it("drops a group left with no matching rows", () => {
@@ -404,6 +427,65 @@ describe("filterPilotGroups", () => {
 
   it("keeps every row when the project name itself matches", () => {
     expect(filterPilotGroups(groups(), "daintree")[0]!.rows).toHaveLength(2);
+  });
+
+  it("keeps every row when the project name matches without being typed whole", () => {
+    // The short-circuit has to survive on match quality, not on the query
+    // happening to be a substring: "fs" is neither contiguous in "fleet
+    // snapshot" nor present in any row's own fields, so these rows are here
+    // only because their project matched.
+    const filtered = filterPilotGroups(
+      buildPilotGroups(
+        [
+          run({ runId: "a", agentState: "working", title: "billing" }),
+          run({ runId: "b", agentState: "working", title: "docs pass" }),
+        ],
+        ctx({
+          workspaces: new Map([["p1", { kind: "project", name: "fleet snapshot", emoji: "🌳" }]]),
+        })
+      ),
+      "fs"
+    );
+    expect(filtered[0]!.rows).toHaveLength(2);
+  });
+
+  it("does not admit a whole project on a loose project-name match", () => {
+    // A match on the group name short-circuits every row beneath it, so "ate"
+    // scraped out of "daintree" would surface the project's entire run list.
+    // These titles cannot match "ate" themselves, so the group name is the only
+    // thing under test.
+    const filtered = filterPilotGroups(
+      buildPilotGroups(
+        [
+          run({ runId: "a", agentState: "working", title: "billing" }),
+          run({ runId: "b", agentState: "working", title: "docs pass" }),
+        ],
+        ctx()
+      ),
+      "ate"
+    );
+    expect(filtered).toEqual([]);
+  });
+
+  it("matches on the worktree when nothing else on the row does", () => {
+    const filtered = filterPilotGroups(
+      buildPilotGroups([run({ runId: "a", agentState: "working", title: "billing" })], ctx()),
+      "scratch"
+    );
+    expect(filtered[0]!.rows.map((r) => r.run.runId)).toEqual(["a"]);
+  });
+
+  it("matches on the agent when nothing else on the row does", () => {
+    // The agent rides the row as an icon, so its name is only ever reachable
+    // through the query.
+    const filtered = filterPilotGroups(
+      buildPilotGroups(
+        [run({ runId: "a", agentState: "working", agentId: "codex", title: "billing" })],
+        ctx()
+      ),
+      "codex"
+    );
+    expect(filtered[0]!.rows.map((r) => r.run.runId)).toEqual(["a"]);
   });
 
   it("recounts demands against the filtered rows", () => {

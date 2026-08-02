@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isFilterMatch,
   scoreProjectQuery,
   scoreScratchQuery,
   rankSwitcherMatches,
@@ -47,6 +48,66 @@ function makeProject(
     ...overrides,
   };
 }
+
+describe("isFilterMatch", () => {
+  const RESEARCH_TITLE = "Research file browser folder selection usability";
+
+  it("rejects a blank query rather than matching every field", () => {
+    // Whitespace is a substring of anything, so the substring bonus alone would
+    // clear the floor.
+    expect(isFilterMatch("", RESEARCH_TITLE)).toBe(false);
+    expect(isFilterMatch("   ", RESEARCH_TITLE)).toBe(false);
+  });
+
+  it("rejects a subsequence whose characters are too far apart to pay for", () => {
+    // The #11625 case: every character is present in order, none of them near
+    // enough to the words they came from to read as a match.
+    expect(isFilterMatch("rust", RESEARCH_TITLE)).toBe(false);
+    expect(isFilterMatch("sv", "fleet snapshot service")).toBe(false);
+    expect(isFilterMatch("ate", "Daintree")).toBe(false);
+  });
+
+  it("accepts an abbreviation anchored to the words it came from", () => {
+    expect(isFilterMatch("fltsnp", "fleet snapshot service")).toBe(true);
+    expect(isFilterMatch("fs", "fleet snapshot service")).toBe(true);
+  });
+
+  it("rejects a query spread across the words of a long title", () => {
+    // Reading word initials instead of characters would let this through: the
+    // initials spell "ctetsf1t2", and a query is free to skip as many words as
+    // it likes on the way through them.
+    expect(isFilterMatch("test", "cut the external tool surface from 100 to 24")).toBe(false);
+    expect(isFilterMatch("ru", RESEARCH_TITLE)).toBe(false);
+  });
+
+  it("accepts anything typed contiguously, down to a single character", () => {
+    // Incremental typing is always a substring, so the floor never interrupts
+    // it — including a character sitting mid-word, which earns no boundary or
+    // start bonus and survives on the substring short-circuit alone.
+    expect(isFilterMatch("d", "Daintree")).toBe(true);
+    expect(isFilterMatch("i", "Daintree")).toBe(true);
+    expect(isFilterMatch("brow", RESEARCH_TITLE)).toBe(true);
+  });
+
+  it("accepts a contiguous match in a field long enough to outrun the score", () => {
+    // Short fields hide the problem. The substring bonus feeds the same total
+    // the gap penalties drain, so a short query far enough into a long field
+    // scores under the floor even though it is literally the field's last word
+    // — and agent-set titles, which this length is taken from, have no cap.
+    const LONG_TITLE =
+      "Reviewing the destructive-action safeguard audit and filing the missing confirm dialogs now";
+    expect(LONG_TITLE.length).toBeGreaterThan(85);
+    expect(isFilterMatch("now", LONG_TITLE)).toBe(true);
+  });
+
+  it("ignores whitespace the caller did not trim", () => {
+    expect(isFilterMatch("  fltsnp  ", "fleet snapshot service")).toBe(true);
+  });
+
+  it("rejects a query whose characters are not all present", () => {
+    expect(isFilterMatch("zzzz", "fleet snapshot service")).toBe(false);
+  });
+});
 
 describe("scoreProjectQuery", () => {
   it("returns 0 for empty query", () => {

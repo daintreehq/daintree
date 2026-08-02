@@ -6,30 +6,22 @@ import type {
 
 const NAME_WEIGHT = 4;
 
+/**
+ * What one word boundary is worth in {@link scoreField}: the boundary bonus
+ * (90) plus the base score of the character that landed on it (10).
+ *
+ * It is a floor on the TOTAL, not proof that a boundary was hit — a query can
+ * land on two of them and still come in under, because the gap penalties for
+ * travelling between them outweigh what they paid. That is the intent: a match
+ * has to be anchored to the words it came from AND stay near them.
+ */
+const MIN_FILTER_MATCH_SCORE = 100;
+
 function isBoundary(str: string, index: number): boolean {
   if (index === 0) return true;
   const prev = str[index - 1] ?? "";
   const curr = str[index] ?? "";
   return /[/\\\-._\s]/.test(prev) || (/[a-z]/.test(prev) && /[A-Z]/.test(curr));
-}
-
-/**
- * The palette's matching rule: every query character appears in `field`, in
- * order, not necessarily adjacent. So "fltsnp" finds "fleet snapshot".
- *
- * The same acceptance test {@link scoreField} applies before scoring — it is
- * separated here for surfaces that need to know *whether* something matched
- * without ranking on *how well*. Both must stay in step: a palette that accepts
- * a query one way and rejects it another teaches nothing transferable.
- */
-export function isSubsequenceMatch(query: string, field: string): boolean {
-  const lowerQuery = query.toLowerCase();
-  const lowerField = field.toLowerCase();
-  let qi = 0;
-  for (let fi = 0; fi < lowerField.length && qi < lowerQuery.length; fi++) {
-    if (lowerField[fi] === lowerQuery[qi]) qi++;
-  }
-  return qi === lowerQuery.length;
 }
 
 function scoreField(query: string, field: string): number {
@@ -88,6 +80,48 @@ function scoreField(query: string, field: string): number {
   }
 
   return Math.max(0, score);
+}
+
+/**
+ * Whether `field` matches `query` well enough to survive a filter that will not
+ * rank the result afterwards.
+ *
+ * The palette can afford a bare subsequence test — anything scraped together
+ * out of unrelated words still sinks to the bottom on score. A surface that
+ * only filters has no such backstop: every survivor is presented as an equal
+ * answer, so "rust" pulling in "Research file browser folder selection
+ * usability" (a legal subsequence worth 5 points) reads as a result rather than
+ * as noise.
+ *
+ * The floor does not constrain contiguous typing: a literal substring is taken
+ * before the score is consulted at all. The 500-point substring bonus cannot
+ * carry that on its own, because {@link scoreField} adds it to the same running
+ * total the greedy walk's gap penalties drain — past roughly 85 characters of
+ * field a query that is literally the field's last word lands under 100, and
+ * agent-set titles do reach that length. So incremental typing — "d", "da",
+ * "dai" — never trips the floor, down to a single character. What has to clear
+ * it is a query assembled from pieces.
+ *
+ * It inherits one flaw from {@link scoreField}: the walk is greedy, taking the
+ * first character it can rather than the best one, so "sr" against
+ * "issue-11518-scratch-rows" spends its "s" inside "issue", never reaches
+ * "scratch rows", and scores 0. Reading word initials instead would recover
+ * that case, but initials put no bound on the distance between the words they
+ * come from — "test" would match "cut the external tool surface from 100 to
+ * 24" — which is the bug this floor exists to close. Scoring the best
+ * alignment rather than the first is the real fix, and it belongs in
+ * {@link scoreField}, where the switcher's ranking would feel it too.
+ */
+export function isFilterMatch(query: string, field: string): boolean {
+  // Trimmed here rather than trusted from the caller: whitespace is a substring
+  // of every field, so a blank query would collect the substring bonus and
+  // match everything. Callers that want all rows short-circuit on their own.
+  const trimmed = query.trim();
+  if (!trimmed) return false;
+  // Case-folded the way scoreField folds it, so the two agree on what counts as
+  // contiguous.
+  if (field.toLowerCase().includes(trimmed.toLowerCase())) return true;
+  return scoreField(trimmed, field) >= MIN_FILTER_MATCH_SCORE;
 }
 
 export function scoreProjectQuery(query: string, name: string, path: string): number {
