@@ -475,16 +475,16 @@ export type TreeKeyIntent =
 export function resolveTreeKey(
   key: string,
   rows: readonly FlatTreeRow[],
-  selectedPath: string | null
+  cursorPath: string | null
 ): TreeKeyIntent | null {
   if (rows.length === 0) return null;
 
-  const index = selectedPath === null ? -1 : rows.findIndex((row) => row.path === selectedPath);
+  const index = cursorPath === null ? -1 : rows.findIndex((row) => row.path === cursorPath);
   const current = index >= 0 ? rows[index] : undefined;
 
   switch (key) {
     case "ArrowDown": {
-      // No selection yet starts at the top rather than doing nothing, so the
+      // No cursor yet starts at the top rather than doing nothing, so the
       // first arrow press after focusing the tree is never a no-op.
       const next = rows[Math.min(index + 1, rows.length - 1)];
       return next ? { type: "select", path: next.path } : null;

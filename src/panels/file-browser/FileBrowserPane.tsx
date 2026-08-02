@@ -97,6 +97,10 @@ export function FileBrowserPane({
 }: FileBrowserPaneProps) {
   const setFileBrowserView = usePanelStore((state) => state.setFileBrowserView);
 
+  // What the VIEWER column is showing. The name is historical (#11620 named the
+  // persisted field); everything downstream of it — the hook's kind resolution,
+  // the listing target, the file reader — is viewer state, and this is the only
+  // thing that decides what the right-hand column renders.
   const selectedPath = usePanelStore(
     useCallback(
       (state) => {
@@ -106,6 +110,37 @@ export function FileBrowserPane({
       [id]
     )
   );
+
+  // Where the TREE's own highlight sits, which is a different question from
+  // what the viewer shows. Splitting the two is what lets a folder click be
+  // pure navigation: the cursor lands on the folder, and the viewer keeps
+  // whatever it already had open.
+  //
+  // Component state rather than a persisted field. It is ephemeral navigation
+  // position, and on restore the right place for the tree to be pointing is at
+  // the file the viewer is showing — which the sync below produces for free.
+  const [cursorPath, setCursorPath] = useState<string | null>(selectedPath);
+  const [cursorSync, setCursorSync] = useState({ id, viewerPath: selectedPath });
+  // Snap the cursor whenever the viewer target changes from anywhere — a file
+  // click, a folder activation, or an external reveal (`worktree.openFileBrowser`
+  // selects a path this panel never clicked). Adjusting state during render is
+  // React's documented alternative to an effect for exactly this: it re-renders
+  // before paint instead of after, so the tree never flashes the stale row.
+  //
+  // Guarded on the *previous* viewer path rather than on inequality with the
+  // cursor, which is the whole trick: once the user moves the cursor off onto a
+  // folder, the viewer path has not changed, so nothing drags the cursor back.
+  //
+  // The panel id rides the sentinel because this component is not remounted per
+  // panel: a tab group renders one unkeyed `GridPanel` for whichever tab is
+  // active, so switching between two file browsers reuses this instance. Keying
+  // only on the path would let panel A's cursor become panel B's whenever both
+  // happen to have the same viewer target — including the very common case of
+  // both having none.
+  if (cursorSync.id !== id || cursorSync.viewerPath !== selectedPath) {
+    setCursorSync({ id, viewerPath: selectedPath });
+    setCursorPath(selectedPath);
+  }
   const expandedPaths = usePanelStore(
     useCallback(
       (state) => {
@@ -445,17 +480,68 @@ export function FileBrowserPane({
         for (const candidate of current) {
           if (candidate.startsWith(prefix)) current.delete(candidate);
         }
+        // Rehome a cursor that was inside the branch onto the branch itself.
+        // Without this the tree keeps a cursor naming a row that no longer
+        // exists, and every key that reads it goes dead: Enter and the arrows
+        // resolve nothing, ArrowDown restarts at row 0, and the row menu can't
+        // replay. The viewer's own reveal strip can't rescue it — that guards
+        // the viewer path, which collapsing did not touch.
+        //
+        // Functional rather than reading `cursorPath` so this callback doesn't
+        // have to be rebuilt on every cursor move.
+        setCursorPath((cursor) => (cursor?.startsWith(prefix) === true ? path : cursor));
       }
       setFileBrowserView(id, { browserExpandedPaths: [...current].sort() });
     },
     [id, stableExpandedPaths, setFileBrowserView, ensureLoaded]
   );
 
-  const handleSelect = useCallback(
+  // Point the viewer column at a path — the one write that changes what the
+  // right-hand side shows, and the only place `browserSelectedPath` moves for a
+  // user gesture. A file click and any folder-listing row land here; the
+  // explicit folder gestures go through `showFolderContents` below, which is
+  // this write plus the one thing they additionally need. The tree's cursor
+  // needs no handling: the render-time sync above pulls it along with any
+  // viewer change.
+  //
+  // The folder listing hands this straight to its rows, folders included. That
+  // surface lives *inside* the viewer, so drilling into a folder there is the
+  // user asking this column to move rather than navigating past it — the exact
+  // opposite of the tree, and the reason the tree gets its own handler below.
+  const showInViewer = useCallback(
     (path: string) => {
       setFileBrowserView(id, { browserSelectedPath: path });
     },
     [id, setFileBrowserView]
+  );
+
+  // The explicit "show me this folder" gestures: Enter, double-click, and the
+  // row menu's "Show contents". They clear a collapsed viewer as well as moving
+  // it, because they are a folder's *only* routes to the listing and the viewer
+  // column unmounts entirely while collapsed — without this the gesture would
+  // write a selection nobody can see, and tree-only mode would lose folder
+  // viewing outright. Deliberately not folded into `showInViewer`: that also
+  // serves plain file clicks and folder-listing rows, where popping the column
+  // back open would fight a collapse the user chose. One patch rather than two
+  // writes, so no intermediate state is rendered or persisted.
+  const showFolderContents = useCallback(
+    (path: string) => {
+      setFileBrowserView(id, { browserSelectedPath: path, browserViewerCollapsed: false });
+    },
+    [id, setFileBrowserView]
+  );
+
+  // The tree's cursor moved. A file re-targets the viewer with it (a leaf has
+  // nothing to navigate into, so opening it is the only thing the gesture can
+  // mean); a folder moves the cursor and stops there, leaving the viewer on
+  // whatever the user last opened. Enter — `handleActivate` — is how a folder
+  // reaches the viewer deliberately.
+  const handleTreeSelect = useCallback(
+    (path: string, isDirectory: boolean) => {
+      setCursorPath(path);
+      if (!isDirectory) showInViewer(path);
+    },
+    [showInViewer]
   );
 
   // Picking a file from the changed-files summary also opens its ancestors, so
@@ -484,13 +570,21 @@ export function FileBrowserPane({
   // already showing the same file, so repeating the gesture activates that panel
   // rather than piling up duplicates.
   //
-  // Positively a file, matching the viewer's own check: the key resolver returns
-  // `activate` for whatever row is selected, so directories arrive here too and
-  // are deliberately dropped — a folder's Enter does nothing, and re-rooting is
-  // the double-click's job.
+  // Enter on a *folder* used to be dead, back when a folder click already sent
+  // it to the viewer and there was nothing left for the key to do. Now that
+  // navigating past a folder deliberately leaves the viewer alone, this is the
+  // gesture that asks for it — the explicit half of the split, and the standard
+  // meaning of Enter on a tree node (WAI-ARIA APG: activate the focused node).
+  // Double-click runs the same command, so the mouse has the natural route and
+  // the row menu's "Show contents" is the redundant accelerator a context menu
+  // is supposed to be, rather than the only way in.
   const handleActivate = useCallback(
     (path: string) => {
       const row = rows.find((candidate) => candidate.path === path);
+      if (row?.isDirectory === true) {
+        showFolderContents(path);
+        return;
+      }
       // The base-path half is defensive rather than reachable: an unresolved
       // source renders no tree at all, so nothing can activate a row. It stays
       // because joining against "" would silently produce a wrong absolute path.
@@ -517,7 +611,7 @@ export function FileBrowserPane({
         if (location === "dialog") onClose?.();
       })();
     },
-    [location, onClose, basePath, rows]
+    [location, onClose, basePath, rows, showFolderContents]
   );
 
   // The foreground half of the refresh signal, counted apart from the ambient
@@ -900,6 +994,19 @@ export function FileBrowserPane({
       <>
         {row.isDirectory && (
           <>
+            {/* The mouse's way to what Enter does on a tree row. It has to exist
+                as an explicit item now that clicking a folder no longer sends it
+                to the viewer: without it the folder listing would be reachable
+                only from the keyboard, which would make the whole surface look
+                like it had been removed rather than made deliberate. Carries no
+                shortcut hint — Enter acts on the tree's cursor row, which is not
+                necessarily the row this menu was opened on. Routed through the
+                same handler as Enter so the label stays honest with the viewer
+                collapsed: an item that promises contents must not no-op. */}
+            <ContextMenuItem onSelect={() => showFolderContents(row.path)}>
+              <PanelRightOpen className="w-3.5 h-3.5 mr-2" />
+              Show contents
+            </ContextMenuItem>
             <ContextMenuItem onSelect={() => handleSetRoot(row.path)}>
               <FolderRoot className="w-3.5 h-3.5 mr-2" />
               Set as root
@@ -954,6 +1061,7 @@ export function FileBrowserPane({
     ),
     [
       isWorktreeSource,
+      showFolderContents,
       handleSetRoot,
       handleCopyFolderContext,
       handleInsertFileReference,
@@ -1260,7 +1368,7 @@ export function FileBrowserPane({
               folderStatus={listingStatus}
               folderHasHiddenDotfiles={hideDotfiles && listingHasHiddenDotfiles}
               onShowDotfiles={handleShowDotfiles}
-              onSelectEntry={handleSelect}
+              onSelectEntry={showInViewer}
               rowContextMenu={rowContextMenu}
               basePath={basePath}
               sort={sort}
@@ -1385,11 +1493,13 @@ export function FileBrowserPane({
         )}
         <FileTreeView
           rows={rows}
-          selectedPath={selectedPath}
-          onSelect={handleSelect}
+          cursorPath={cursorPath}
+          // What the other column is showing, so the tree can mark it. Only
+          // meaningful now that it can differ from the cursor.
+          openPath={selectedPath}
+          onSelect={handleTreeSelect}
           onToggleExpanded={handleToggleExpanded}
           onActivate={handleActivate}
-          onRootFolder={handleSetRoot}
           rowContextMenu={rowContextMenu}
           onInsertFileReference={handleInsertFileReference}
           canInsertFileReference={canInsertFileReference}

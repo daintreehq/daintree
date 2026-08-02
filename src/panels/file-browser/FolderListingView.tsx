@@ -26,13 +26,19 @@ export interface FolderListingViewProps {
    * Selecting an entry, which is this surface's whole click contract: a folder
    * re-points the listing at itself, a file opens in the viewer.
    *
+   * Unlike the tree's callback, a folder here DOES re-target the viewer, and
+   * that asymmetry is the point: this surface is already inside the viewer, so
+   * drilling into a folder is what the user came here to do. The tree's job is
+   * to navigate without disturbing the viewer; this one's job is to drive it.
+   * `isDirectory` still travels so the caller never has to re-derive the kind.
+   *
    * Deliberately no double-click counterpart to the tree's (#11496). Selecting
    * is what replaces the listing's contents, so the first click of any
    * double-click unmounts the row before the second arrives — a dblclick
    * handler here could never fire. Re-rooting a folder from this surface lives
    * in the row's context menu ("Set as root"), which is reachable.
    */
-  onSelect: (path: string) => void;
+  onSelect: (path: string, isDirectory: boolean) => void;
   /** Same callback the tree uses, so both surfaces offer the identical menu. */
   rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
   /**
@@ -116,7 +122,7 @@ export function FolderListingView({
 }
 
 interface ListingContext {
-  onSelect: (path: string) => void;
+  onSelect: (path: string, isDirectory: boolean) => void;
   rowContextMenu?: ((row: FileEntryLike) => React.ReactNode) | undefined;
   basePath: string;
 }
@@ -148,8 +154,8 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
   // the listing's contents change, which is why there is no double-click
   // counterpart — see the note on `onSelect` in the props above.
   const handleClick = useCallback(() => {
-    onSelect(row.path);
-  }, [onSelect, row.path]);
+    onSelect(row.path, row.isDirectory);
+  }, [onSelect, row.path, row.isDirectory]);
 
   // Byte-for-byte the tree's drag contract (#11576), down to the single MIME
   // type and the absent `text/plain`: a row dragged from either column has to

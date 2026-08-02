@@ -121,7 +121,7 @@ describe("FolderListingView", () => {
     const onSelect = vi.fn();
     renderListing([row("src/a.ts")], { onSelect });
     fireEvent.click(screen.getByLabelText("a.ts"));
-    expect(onSelect).toHaveBeenCalledWith("src/a.ts");
+    expect(onSelect).toHaveBeenCalledWith("src/a.ts", false);
   });
 
   it("makes rows draggable when a base path resolves", () => {
@@ -175,7 +175,10 @@ describe("FolderListingView has no double-click gesture", () => {
     fireEvent.click(rowEl);
     fireEvent.click(rowEl);
     fireEvent.doubleClick(rowEl);
-    expect(onSelect.mock.calls).toEqual([["src/a.ts"], ["src/a.ts"]]);
+    expect(onSelect.mock.calls).toEqual([
+      ["src/a.ts", false],
+      ["src/a.ts", false],
+    ]);
   });
 
   it("re-points on a single click, which is what makes a second click land elsewhere", () => {
@@ -185,7 +188,9 @@ describe("FolderListingView has no double-click gesture", () => {
     // One selection per click; the pane re-points the listing off the back of
     // it, which is the behaviour that rules a double-click out.
     expect(onSelect).toHaveBeenCalledTimes(1);
-    expect(onSelect).toHaveBeenCalledWith("src/pkg");
+    // The kind travels for signature parity with the tree's callback; unlike
+    // the tree, this surface's caller drives the viewer for folders too.
+    expect(onSelect).toHaveBeenCalledWith("src/pkg", true);
   });
 });
 
