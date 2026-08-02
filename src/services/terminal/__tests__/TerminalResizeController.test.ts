@@ -487,17 +487,21 @@ describe("TerminalResizeController", () => {
     // A freshly prewarmed terminal carries lastAppliedTier === BACKGROUND until
     // applyRendererPolicy promotes it, but it can already be attached and
     // visible on screen. Both branches now move xterm and the PTY together, so
-    // what this guards is the measurement source: a visible terminal has real
-    // layout and must use it, never the cached-cell-metric path meant for
-    // containers that report 0x0. Regression guard for the two-pane split
+    // the difference this guards is what happens when cell metrics are absent:
+    // the measured path falls back to fitAddon.proposeDimensions(), while the
+    // hidden branch has no fallback and bails with null (asserted directly by
+    // "background-tier resize returns null when cell dims are unavailable").
+    // Withholding _core is therefore what makes this test able to tell the two
+    // branches apart at all. Regression guard for the two-pane split
     // second-panel sizing bug.
     const managed = createManagedTerminal();
     managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
     managed.isFocused = false;
     managed.isVisible = true;
-    Object.assign(managed.terminal, {
-      _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
-    });
+    // No _core: cell metrics are unavailable, so only the measured path can
+    // produce a grid here.
+    const proposal = { cols: 137, rows: 42 };
+    managed.fitAddon.proposeDimensions = vi.fn(() => proposal);
 
     const controller = new TerminalResizeController({
       getInstance: vi.fn(() => managed),
@@ -510,9 +514,12 @@ describe("TerminalResizeController", () => {
     });
 
     const result = controller.resize("term-1", 1600, 800, { immediate: true });
-    expect(result).toEqual({ cols: colsFor(1600), rows: 40 });
-    expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1600), 40);
-    expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+    // Had the stale BACKGROUND tier diverted this to the hidden branch, the
+    // missing cell metrics would have produced null and touched nothing.
+    expect(result).toEqual(proposal);
+    expect(managed.fitAddon.proposeDimensions).toHaveBeenCalled();
+    expect(managed.terminal.resize).toHaveBeenCalledWith(proposal.cols, proposal.rows);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", proposal.cols, proposal.rows);
   });
 
   it("flushes and resets ingest buffers before applying resize", () => {

@@ -286,15 +286,16 @@ export class TerminalResizeController {
 
     const currentTier =
       managed.lastAppliedTier ?? managed.getRefreshTier?.() ?? TerminalRefreshTier.FOCUSED;
-    // Take the no-DOM-measurement path only when the terminal is genuinely
-    // hidden (offscreen / content-visibility:hidden). A freshly prewarmed
-    // terminal carries a stale lastAppliedTier === BACKGROUND — seeded by
-    // prewarmTerminal — until XtermAdapter's applyRendererPolicy effect
-    // promotes it, yet by then it may already be attached and visible. Routing
-    // a *visible* terminal through the hidden path would let it settle for
-    // metric-derived dimensions when it has real layout to measure. isVisible
-    // is set synchronously by setVisible(true) during attach, before the first
-    // fit, so it is a reliable discriminator here.
+    // Take the fallback-free, undeferred path only when the terminal is
+    // genuinely hidden (offscreen / content-visibility:hidden). A freshly
+    // prewarmed terminal carries a stale lastAppliedTier === BACKGROUND —
+    // seeded by prewarmTerminal — until XtermAdapter's applyRendererPolicy
+    // effect promotes it, yet by then it may already be attached and visible.
+    // Routing a *visible* terminal down that branch would strand it whenever
+    // cell metrics are briefly unavailable, since it has no proposeDimensions
+    // fallback to recover with. isVisible is set synchronously by
+    // setVisible(true) during attach, before the first fit, so it is a reliable
+    // discriminator here.
     const isBackgroundUnfocused =
       currentTier === TerminalRefreshTier.BACKGROUND && !managed.isFocused && !managed.isVisible;
 
@@ -307,12 +308,15 @@ export class TerminalResizeController {
 
     if (isBackgroundUnfocused) {
       // Background-tier path: a ResizeObserver fired while the host element is
-      // inside a content-visibility:hidden container, which reports 0x0. The
-      // measured path below would fall back to fitAddon.proposeDimensions() on
-      // that box and bail, so this branch derives the grid from cached cell
-      // metrics alone and commits it without the debounce/idle deferral the
-      // measured path applies. The commit itself is the ordinary one: both
-      // grids move together, at the PTY cadence this path already used.
+      // inside a content-visibility:hidden container. Both paths derive the
+      // grid from cached cell metrics first; what differs is the fallback and
+      // the cadence. The measured path below falls back to
+      // fitAddon.proposeDimensions() when metrics are missing — a DOM read that
+      // returns 0x0 for a hidden box — and defers large-buffer work through
+      // debounce/idle scheduling. This branch has neither: no fallback (a
+      // missing metric bails), and no deferral. The commit itself is the
+      // ordinary one: both grids move together, at the PTY cadence this path
+      // already used.
       //
       // It did not always: this branch used to send the PTY resize alone and
       // leave xterm for wake reconciliation, on the theory that a paused pane
