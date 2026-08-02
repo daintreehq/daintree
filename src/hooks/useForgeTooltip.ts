@@ -17,6 +17,11 @@ const TOOLTIP_CACHE_TTL = 300_000; // 5 minutes, matching backend TTL
 const issueCache = new TtlCache<string, IssueTooltipData>(TOOLTIP_CACHE_MAX, TOOLTIP_CACHE_TTL);
 const prCache = new TtlCache<string, PRTooltipData>(TOOLTIP_CACHE_MAX, TOOLTIP_CACHE_TTL);
 
+// Bumped by invalidateForgeTooltipCaches (see bottom of file). Each fetch
+// captures the generation it started in so a response that predates a refresh
+// can't repopulate a cache that refresh just cleared.
+let cacheGeneration = 0;
+
 // Per-provider credential presence. Short TTL: a token saved in Settings
 // becomes visible to badges within this window (the forge credential surface
 // has no push event, so a bounded poll-on-mount is the trade-off).
@@ -118,23 +123,25 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
 
     setState((prev) => ({ ...prev, loading: true, error: false }));
 
+    const generation = cacheGeneration;
     const promise = (async () => {
       const data = await forgeClient.getIssueTooltip(cwd, issueNumber);
-      if (data) {
+      // A sidebar refresh landed while this was in flight: the response predates
+      // the invalidation, so writing it back would re-poison the cache the
+      // refresh just cleared and the next hover would serve pre-refresh data.
+      if (data && generation === cacheGeneration) {
         issueCache.set(cacheKey, data);
       }
       return data;
     })();
 
     inFlightIssues.set(cacheKey, promise);
-    promise.then(
-      () => {
-        inFlightIssues.delete(cacheKey);
-      },
-      () => {
-        inFlightIssues.delete(cacheKey);
-      }
-    );
+    // Identity-checked so a settled pre-refresh promise can't evict the newer
+    // request that replaced it under the same key.
+    const clearInFlight = () => {
+      if (inFlightIssues.get(cacheKey) === promise) inFlightIssues.delete(cacheKey);
+    };
+    promise.then(clearInFlight, clearInFlight);
 
     try {
       const data = await promise;
@@ -205,23 +212,22 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
 
     setState((prev) => ({ ...prev, loading: true, error: false }));
 
+    const generation = cacheGeneration;
     const promise = (async () => {
       const data = await forgeClient.getPRTooltip(cwd, prNumber);
-      if (data) {
+      // See useIssueTooltip: a response that predates a refresh must not
+      // repopulate the cache the refresh cleared.
+      if (data && generation === cacheGeneration) {
         prCache.set(cacheKey, data);
       }
       return data;
     })();
 
     inFlightPRs.set(cacheKey, promise);
-    promise.then(
-      () => {
-        inFlightPRs.delete(cacheKey);
-      },
-      () => {
-        inFlightPRs.delete(cacheKey);
-      }
-    );
+    const clearInFlight = () => {
+      if (inFlightPRs.get(cacheKey) === promise) inFlightPRs.delete(cacheKey);
+    };
+    promise.then(clearInFlight, clearInFlight);
 
     try {
       const data = await promise;
@@ -242,4 +248,32 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
   }, []);
 
   return { ...state, missingCredential, providerId, fetchTooltip, reset };
+}
+
+/**
+ * Drop the hover-detail caches so a manual sidebar refresh re-reads PR and issue
+ * metadata from the provider instead of serving pre-refresh data until the 5min
+ * TTL lapses. Registered once at module scope because the caches themselves are
+ * module-level: clearing has to happen even when no badge is mounted, which is
+ * the common case (the user clicks refresh first, then hovers).
+ *
+ * The credential cache is deliberately left alone — a refresh is not a
+ * credential change, and its 30s TTL already re-reads promptly.
+ */
+export function invalidateForgeTooltipCaches(): void {
+  cacheGeneration += 1;
+  issueCache.clear();
+  prCache.clear();
+  // In-flight entries resolve into the previous generation and are fenced out of
+  // the caches, so leaving them mapped would make the next hover await a promise
+  // whose result is already discarded.
+  inFlightIssues.clear();
+  inFlightPRs.clear();
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("daintree:refresh-sidebar", invalidateForgeTooltipCaches);
+  import.meta.hot?.dispose(() => {
+    window.removeEventListener("daintree:refresh-sidebar", invalidateForgeTooltipCaches);
+  });
 }

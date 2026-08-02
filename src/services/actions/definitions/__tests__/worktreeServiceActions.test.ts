@@ -94,6 +94,19 @@ describe("worktree service action definitions", () => {
     expect(payload.message).toBe("Refresh watchdog tripped");
   });
 
+  it("worktree.refresh drives both the active host and the pool-wide PR fan-out", async () => {
+    const def = registry.get("worktree.refresh")!();
+    await def.run!(undefined as never, undefined as never);
+
+    // These reach different hosts and are NOT interchangeable: the worktree
+    // port is bound to this view's project alone, while refreshPullRequests
+    // fans out across every pooled project. Dropping either as a "duplicate"
+    // silently narrows what a refresh actually covers — the duplicate work it
+    // used to cause is coalesced host-side instead (#11633).
+    expect(mockRequest).toHaveBeenCalledWith("refresh");
+    expect(mockRefreshPullRequests).toHaveBeenCalledTimes(1);
+  });
+
   it("worktree.refresh does not let a PR-refresh failure surface as a refresh error", async () => {
     mockRefreshPullRequests.mockRejectedValueOnce(new Error("rate limited"));
 

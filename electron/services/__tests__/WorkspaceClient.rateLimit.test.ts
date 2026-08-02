@@ -164,3 +164,91 @@ describe("WorkspaceClient.relayFetchThrottle", () => {
     expect(() => client.relayFetchThrottle(2)).not.toThrow();
   });
 });
+
+describe("WorkspaceClient.refreshPullRequests", () => {
+  let client: WorkspaceClient;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockHosts.length = 0;
+    client = new WorkspaceClient({
+      maxRestartAttempts: 3,
+      showCrashDialog: false,
+      healthCheckIntervalMs: 1000,
+    });
+  });
+
+  afterEach(() => {
+    client.dispose();
+    vi.useRealTimers();
+  });
+
+  function h(index: number): MockHost {
+    return mockHosts[index];
+  }
+
+  async function loadProject(projectPath: string, hostIndex: number, windowId: number) {
+    const load = client.loadProject(projectPath, windowId);
+    h(hostIndex).simulateReady();
+    await vi.advanceTimersByTimeAsync(0);
+    const req = h(hostIndex).getLastRequest()!;
+    h(hostIndex).resolveRequest(req.requestId);
+    await vi.advanceTimersByTimeAsync(0);
+    await load;
+  }
+
+  it("dispatches to every pooled host before any of them has responded", async () => {
+    await loadProject("/project-a", 0, 1);
+    await loadProject("/project-b", 1, 2);
+    h(0).sendWithResponse.mockClear();
+    h(1).sendWithResponse.mockClear();
+
+    const refresh = client.refreshPullRequests();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Neither host has responded yet. A sequential fan-out would leave the
+    // second host untouched until the first resolved, so both requests being
+    // in flight at once is what proves the walk is concurrent.
+    expect(h(0).getLastRequest()?.type).toBe("refresh-prs");
+    expect(h(1).getLastRequest()?.type).toBe("refresh-prs");
+
+    h(0).resolveRequest(h(0).getLastRequest()!.requestId);
+    h(1).resolveRequest(h(1).getLastRequest()!.requestId);
+    await refresh;
+  });
+
+  it("gives the refresh more response headroom than the host default", async () => {
+    await loadProject("/project-a", 0, 1);
+    h(0).sendWithResponse.mockClear();
+
+    const refresh = client.refreshPullRequests();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // A manual refresh now awaits CI enrichment on top of provider
+    // re-resolution and PR re-detection, so it must not inherit the host's
+    // default per-request budget.
+    const timeoutMs = h(0).sendWithResponse.mock.calls[0][1] as number | undefined;
+    expect(timeoutMs).toBeDefined();
+    expect(timeoutMs).toBeGreaterThan(30_000);
+
+    h(0).resolveRequest(h(0).getLastRequest()!.requestId);
+    await refresh;
+  });
+
+  it("refreshes the surviving host when another host fails", async () => {
+    await loadProject("/project-a", 0, 1);
+    await loadProject("/project-b", 1, 2);
+    h(0).sendWithResponse.mockClear();
+    h(1).sendWithResponse.mockClear();
+    h(0).sendWithResponse.mockRejectedValueOnce(new Error("host crashed"));
+
+    const refresh = client.refreshPullRequests();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(h(1).getLastRequest()?.type).toBe("refresh-prs");
+    h(1).resolveRequest(h(1).getLastRequest()!.requestId);
+
+    // A crashed host must not reject the whole fan-out.
+    await expect(refresh).resolves.toBeUndefined();
+  });
+});

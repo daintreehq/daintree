@@ -40,6 +40,12 @@ import type { GitFileDiffResult } from "../../shared/types/ipc/git.js";
 
 const STATES_INFLIGHT_COALESCE_WINDOW_MS = 150;
 
+// Manual PR refresh re-resolves the forge provider, re-detects every PR, and
+// now awaits the CI-status batch on top, so it needs more than the host's 30s
+// default per-request budget. Raised only for this request type — the default
+// still governs every other call.
+const REFRESH_PRS_TIMEOUT_MS = 45_000;
+
 // Upper bound on how long a worktree-state read waits for the host to finish
 // (re)populating its monitor map before giving up and reporting "unknown" ([]).
 //
@@ -220,17 +226,29 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   async refreshPullRequests(): Promise<void> {
-    for (const entry of this.pool.entries.values()) {
-      try {
-        const requestId = entry.host.generateRequestId();
-        await entry.host.sendWithResponse({
-          type: "refresh-prs",
-          requestId,
-        });
-      } catch {
-        // Host may be crashed
-      }
-    }
+    // Fan out concurrently (matching refreshOnWake above): hosts are
+    // independent projects, so awaiting them in sequence made a multi-project
+    // refresh walk them one at a time for no quota benefit — each provider
+    // owns its own transport limits.
+    await Promise.allSettled(
+      Array.from(this.pool.entries.values()).map(async (entry) => {
+        try {
+          const requestId = entry.host.generateRequestId();
+          // A manual refresh now awaits CI enrichment on top of provider
+          // re-resolution and PR re-detection, so the default 30s response
+          // budget is tight for the extra round trip.
+          await entry.host.sendWithResponse(
+            {
+              type: "refresh-prs",
+              requestId,
+            },
+            REFRESH_PRS_TIMEOUT_MS
+          );
+        } catch {
+          // Host may be crashed
+        }
+      })
+    );
   }
 
   // ── Fan-out: PR / polling / config ──

@@ -182,6 +182,7 @@ class PullRequestService {
   // "unknown" (undefined), never success (#6240). Initialized at field-
   // declaration time so it's correct before the singleton's first checkForPRs.
   private ciEnrichmentEnabled: boolean = process.env.DAINTREE_INSTANCE_ROLE !== "worker";
+  private refreshInFlight: Promise<void> | null = null;
   private lastCheckAt: number = Number.NEGATIVE_INFINITY;
   // Separate from `lastCheckAt`: that one throttles PR *detection*, and reusing
   // it would let a recent detection poll suppress the focus CI catch-up (they
@@ -772,7 +773,27 @@ class PullRequestService {
     logDebug("PullRequestService stopped");
   }
 
-  public async refresh(): Promise<void> {
+  /**
+   * Manual "give me fresh data now" pass. One sidebar click reaches this same
+   * host twice — once via the view's worktree port (WorkspaceService.refresh)
+   * and once via the pool-wide `refresh-prs` fan-out — so the two are coalesced
+   * onto a single pass. Without that, the second caller's `invalidateProvider()`
+   * disposes the first's in-flight coalescers mid-cycle and
+   * `resolvePRsForBranches()` absorbs the disposal as `null`, silently skipping
+   * those branches on the very click that promised fresh data.
+   */
+  public refresh(): Promise<void> {
+    const existing = this.refreshInFlight;
+    if (existing) return existing;
+    const run = this.performRefresh().finally(() => {
+      // Identity-guarded so a settled older pass can't clear a newer one.
+      if (this.refreshInFlight === run) this.refreshInFlight = null;
+    });
+    this.refreshInFlight = run;
+    return run;
+  }
+
+  private async performRefresh(): Promise<void> {
     if (!this.cwd) {
       return;
     }
@@ -810,7 +831,13 @@ class PullRequestService {
     // Manual refresh is an explicit "I want fresh data now" — bypass the 5s
     // floor by clearing the throttle clock before the direct checkForPRs().
     this.lastCheckAt = Number.NEGATIVE_INFINITY;
-    await this.checkForPRs();
+    // Force CI enrichment for this pass. `ciEnrichmentEnabled` tracks window
+    // focus (and is clamped off for worker instances), so an unforced refresh
+    // dispatched while blurred completes with no CI fetched at all and the
+    // badges never move. The force rides the call rather than the shared flag:
+    // flipping the flag would run the disable sweep on restore and discard the
+    // very result this pass fetched.
+    await this.checkForPRs({ forceCiEnrichment: true });
 
     if (this.isPolling) {
       if (this.hasUnresolvedCandidates()) {
@@ -1174,9 +1201,13 @@ class PullRequestService {
   // a failed batch leaves the prior state alone so a transient error doesn't
   // accidentally cancel a live boost.
   private updateBoostFromDetectedPRs(): void {
-    const hasPendingCi = Array.from(this.detectedPRs.values()).some(
-      (pr) => pr.ciStatus === "pending"
-    );
+    // Gated on ambient enrichment: a forced (manual-refresh) `pending` result
+    // can land while the flag is off, and arming the 30s boost then would keep
+    // re-arming a revalidation cadence with no ambient CI fetch behind it
+    // (#6149) — exactly what the disable sweep exists to collapse.
+    const hasPendingCi =
+      this.ciEnrichmentEnabled &&
+      Array.from(this.detectedPRs.values()).some((pr) => pr.ciStatus === "pending");
     this.boostExpiresAt = hasPendingCi
       ? Date.now() + RESOLVED_REVALIDATION_BOOST_DURATION_MS
       : null;
@@ -1602,7 +1633,17 @@ class PullRequestService {
     }
   }
 
-  private async checkForPRs(): Promise<void> {
+  private async checkForPRs(options?: { forceCiEnrichment?: boolean }): Promise<void> {
+    // A forced pass (manual refresh) fetches CI regardless of the ambient
+    // focus-driven flag, and awaits the result so the refresh resolves only
+    // once the badges have actually been re-emitted.
+    // The force overrides the focus-driven flag only. A worker instance still
+    // never fetches CI: the env role is the authoritative quota invariant, and
+    // there is no user at the keyboard there to have asked for a refresh.
+    const forceCi =
+      options?.forceCiEnrichment === true && process.env.DAINTREE_INSTANCE_ROLE !== "worker";
+    const shouldEnrichCi = forceCi || this.ciEnrichmentEnabled;
+    const forcedCiEnrichments: Array<Promise<void>> = [];
     const activeCandidates: Array<{
       worktreeId: string;
       issueNumber?: number;
@@ -1859,7 +1900,7 @@ class PullRequestService {
             // enrichment is disabled there is no phase-2 emit coming, so omit
             // the flag entirely (`|| undefined` → absent, not false) — a held
             // "loading" with no resolution would spin forever (#6240).
-            isCiStatusLoading: this.ciEnrichmentEnabled || undefined,
+            isCiStatusLoading: shouldEnrichCi || undefined,
             prTitle: pr.title,
             issueNumber,
             branchName: lookupBranch,
@@ -1874,9 +1915,17 @@ class PullRequestService {
         // Fire-and-forget CI status enrichment (skipped on unattended
         // instances; enrichPRWithCIStatus also self-guards, but skipping here
         // avoids the needless call).
-        if (this.ciEnrichmentEnabled) {
-          this.enrichPRWithCIStatus(internalPR, repo);
+        if (shouldEnrichCi) {
+          const enrichment = this.enrichPRWithCIStatus(internalPR, repo, forceCi);
+          if (forceCi) forcedCiEnrichments.push(enrichment);
         }
+      }
+
+      // Every load enqueued above coalesced into one getCIStatuses batch in the
+      // same tick; only now is it safe to await. Draining before the boost
+      // update also lets it read the freshly-landed CI status.
+      if (forcedCiEnrichments.length > 0) {
+        await Promise.allSettled(forcedCiEnrichments);
       }
 
       this.updateBoostFromDetectedPRs();
@@ -1956,11 +2005,18 @@ class PullRequestService {
    * Fire CI status lookup as a non-blocking tail after PR detection.
    * On success, updates the detectedPRs entry and re-emits sys:pr:detected
    * with the enriched CI status so the renderer can update the badge.
+   *
+   * `force` marks an explicitly user-initiated pass (manual refresh). It rides
+   * the call instead of the shared `ciEnrichmentEnabled` flag so a blurred or
+   * worker-role instance can still serve one deliberate refresh without the
+   * disable sweep tearing down the result. Returned promise is best-effort and
+   * never rejects; forced callers await it, ambient ones drop it on the floor
+   * to keep the batch coalescing described below.
    */
-  private enrichPRWithCIStatus(pr: InternalLinkedPR, repo: RepoRef): void {
-    if (!this.ciEnrichmentEnabled) return;
+  private enrichPRWithCIStatus(pr: InternalLinkedPR, repo: RepoRef, force = false): Promise<void> {
+    if (!force && !this.ciEnrichmentEnabled) return Promise.resolve();
     const loader = this.ciStatusLoader;
-    if (!loader) return;
+    if (!loader) return Promise.resolve();
     // Synchronous `load()` here: enrichPRWithCIStatus is called fire-and-forget
     // in a `for` loop per detected PR, so all loads enqueue in the same tick and
     // coalesce into one `getCIStatuses` batch. Do NOT add an `await` before this
@@ -1970,13 +2026,15 @@ class PullRequestService {
     // pace the slow terminal re-check, and pacing on resolve would retry every
     // tick for as long as the provider keeps rejecting.
     pr.lastCiCheckAt = Date.now();
-    loader
+    return loader
       .load(pr.number)
       .then((ciStatus) => {
         // Enrichment may have been disabled (window blur) while this batch was
         // in flight — discard the result rather than write a CI status back and
-        // re-arm the boost the sweep just collapsed.
-        if (!this.ciEnrichmentEnabled) return;
+        // re-arm the boost the sweep just collapsed. A forced pass keeps its
+        // result: the user asked for it, and the boost stays collapsed because
+        // updateBoostFromDetectedPRs only arms while ambient enrichment is on.
+        if (!force && !this.ciEnrichmentEnabled) return;
         const prevCiStatus = pr.ciStatus;
         // A resolved value is authoritative: the batch contract surfaces a
         // transient miss as a rejection (→ .catch below), so a `null` here is a
