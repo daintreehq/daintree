@@ -72,13 +72,12 @@ describe("isFilterMatch", () => {
     expect(isFilterMatch("fs", "fleet snapshot service")).toBe(true);
   });
 
-  it("accepts word initials the scorer's greedy walk cannot reach", () => {
-    // The scorer takes the first character it can rather than the best one, so
-    // "sr" spends its "s" inside "issue" and never arrives at "scratch rows".
-    // Initials are one character per word, so reading them costs no looseness.
-    expect(isFilterMatch("sr", "issue-11518-scratch-rows")).toBe(true);
-    expect(isFilterMatch("isr", "issue-11518-scratch-rows")).toBe(true);
-    expect(isFilterMatch("oc", "OpenCode")).toBe(true);
+  it("rejects a query spread across the words of a long title", () => {
+    // Reading word initials instead of characters would let this through: the
+    // initials spell "ctetsf1t2", and a query is free to skip as many words as
+    // it likes on the way through them.
+    expect(isFilterMatch("test", "cut the external tool surface from 100 to 24")).toBe(false);
+    expect(isFilterMatch("ru", RESEARCH_TITLE)).toBe(false);
   });
 
   it("accepts anything typed contiguously, down to a single character", () => {

@@ -17,36 +17,11 @@ const NAME_WEIGHT = 4;
  */
 const MIN_FILTER_MATCH_SCORE = 100;
 
-const SEPARATOR = /[/\\\-._\s]/;
-
 function isBoundary(str: string, index: number): boolean {
   if (index === 0) return true;
   const prev = str[index - 1] ?? "";
   const curr = str[index] ?? "";
-  return SEPARATOR.test(prev) || (/[a-z]/.test(prev) && /[A-Z]/.test(curr));
-}
-
-/**
- * The first character of every word, in order: "issue-11518-scratch-rows"
- * reduces to "i1sr" and "OpenCode" to "oc". Word starts are {@link isBoundary}'s
- * definition, so this stays in step with what the scorer rewards.
- */
-function fieldInitials(field: string): string {
-  let initials = "";
-  for (let i = 0; i < field.length; i++) {
-    const char = field[i] ?? "";
-    if (SEPARATOR.test(char)) continue;
-    if (isBoundary(field, i)) initials += char;
-  }
-  return initials.toLowerCase();
-}
-
-function isSubsequenceOf(query: string, field: string): boolean {
-  let qi = 0;
-  for (let fi = 0; fi < field.length && qi < query.length; fi++) {
-    if (field[fi] === query[qi]) qi++;
-  }
-  return qi === query.length;
+  return /[/\\\-._\s]/.test(prev) || (/[a-z]/.test(prev) && /[A-Z]/.test(curr));
 }
 
 function scoreField(query: string, field: string): number {
@@ -118,17 +93,20 @@ function scoreField(query: string, field: string): number {
  * usability" (a legal subsequence worth 5 points) reads as a result rather than
  * as noise.
  *
- * Two ways through, because {@link scoreField} alone rejects abbreviations it
- * should keep. Its walk is greedy — it takes the first character it can rather
- * than the best one — so "sr" against "issue-11518-scratch-rows" spends itself
- * on the "s" in "issue" and never reaches "scratch rows", scoring 0 for what a
- * reader would call an obvious hit. Matching {@link fieldInitials} covers that
- * class directly, and is no looser than the score path: initials are one
- * character per word, so there is nothing mid-word left to scavenge.
+ * The floor does not constrain contiguous typing. Anything typed straight
+ * through is a substring and collects that 500-point bonus outright, so
+ * incremental typing — "d", "da", "dai" — never trips it, down to a single
+ * character. What has to clear it is a query assembled from pieces.
  *
- * Neither path constrains contiguous typing. Anything typed straight through is
- * a substring and collects that 500-point bonus outright, so incremental typing
- * — "d", "da", "dai" — never trips the floor, down to a single character.
+ * It inherits one flaw from {@link scoreField}: the walk is greedy, taking the
+ * first character it can rather than the best one, so "sr" against
+ * "issue-11518-scratch-rows" spends its "s" inside "issue", never reaches
+ * "scratch rows", and scores 0. Reading word initials instead would recover
+ * that case, but initials put no bound on the distance between the words they
+ * come from — "test" would match "cut the external tool surface from 100 to
+ * 24" — which is the bug this floor exists to close. Scoring the best
+ * alignment rather than the first is the real fix, and it belongs in
+ * {@link scoreField}, where the switcher's ranking would feel it too.
  */
 export function isFilterMatch(query: string, field: string): boolean {
   // Trimmed here rather than trusted from the caller: whitespace is a substring
@@ -136,8 +114,7 @@ export function isFilterMatch(query: string, field: string): boolean {
   // match everything. Callers that want all rows short-circuit on their own.
   const trimmed = query.trim();
   if (!trimmed) return false;
-  if (scoreField(trimmed, field) >= MIN_FILTER_MATCH_SCORE) return true;
-  return isSubsequenceOf(trimmed.toLowerCase(), fieldInitials(field));
+  return scoreField(trimmed, field) >= MIN_FILTER_MATCH_SCORE;
 }
 
 export function scoreProjectQuery(query: string, name: string, path: string): number {
