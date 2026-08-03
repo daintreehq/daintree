@@ -136,8 +136,27 @@ describe("worktreeRevealCoordinator", () => {
     coordinator.notifyAttached("a");
     await settle();
 
-    // REVEAL_CONFIRM_PAINTS — a single unstuck paint must not retire it.
+    // Drives the full revealUntilStable loop, not a single bare repaint: one
+    // unstuck paint can be undone by the compositor swap or xterm's own
+    // observers re-firing, which is why the confirm pass exists. Swapping the
+    // loop for a lone repaintForReveal call would land exactly one.
     expect(repaintForRevealMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps the obligation armed when the document hides mid-reveal", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get");
+    visibility.mockReturnValue("hidden");
+
+    const coordinator = createWorktreeRevealCoordinator();
+    coordinator.replace(1, ["a"]);
+    coordinator.notifyAttached("a");
+    await settle();
+
+    // Repainting a hidden surface is pointless, but abandoning the obligation
+    // would strand the pane garbled once the window comes back.
+    expect(coordinator.pendingIds()).toEqual(["a"]);
+
+    visibility.mockRestore();
   });
 
   it("never routes through revealTerminal, which reports true for a missing instance", async () => {
@@ -212,6 +231,30 @@ describe("worktreeRevealCoordinator", () => {
 
     expect(repaintForRevealMock).toHaveBeenCalledWith("a");
     expect(coordinator.pendingIds()).toEqual([]);
+  });
+
+  it("keeps the obligation when a remount lands after the final confirm paint", async () => {
+    // revealUntilStable yields one more frame AFTER its last confirm paint and
+    // returns without another abort check. A remount arriving in that gap has
+    // its notification swallowed by the inFlight guard, so retiring the
+    // obligation on object identity alone would lose it permanently.
+    let paints = 0;
+    const coordinator = createWorktreeRevealCoordinator();
+    repaintForRevealMock.mockImplementation(() => {
+      paints++;
+      // Fire the remount as the second (final) confirm paint lands, so the
+      // notification falls inside revealUntilStable's trailing frame yield.
+      if (paints === 2) coordinator.notifyAttached("a");
+      return true;
+    });
+
+    coordinator.replace(1, ["a"]);
+    coordinator.notifyAttached("a");
+    await settle();
+
+    // The newer mount still owes a reveal, so the entry must survive and be
+    // re-driven rather than retired by the superseded pass.
+    expect(waitForAttachSettledMock.mock.calls.length).toBeGreaterThan(1);
   });
 
   it("drops obligations for terminals the next policy pass no longer targets", () => {

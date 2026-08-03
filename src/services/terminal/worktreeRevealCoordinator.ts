@@ -144,7 +144,15 @@ export function createWorktreeRevealCoordinator(): WorktreeRevealCoordinator {
         // Discharge only on a confirmed paint. A false return (frame budget spent
         // on an unpaintable host, or the document went hidden) leaves the
         // obligation armed for the next mount.
-        if (painted && pending.get(obligation.id) === obligation) {
+        //
+        // Re-check staleness rather than object identity alone: revealUntilStable
+        // yields one more frame AFTER its final confirm paint and returns without
+        // another abort check, so a remount can land in that gap. Its
+        // notification is swallowed by the inFlight guard, so deleting here on
+        // identity alone would retire an obligation the newer mount still needs
+        // and leave `finally` with nothing to re-drive. Nothing can interleave
+        // between this synchronous check and the delete.
+        if (painted && !isStale()) {
           pending.delete(obligation.id);
         }
       } finally {
