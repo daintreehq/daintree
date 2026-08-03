@@ -49,7 +49,9 @@ function createMockWebContents(options?: MockWebContentsOptions) {
         // legacy-mock escape hatch, and most of this suite relies on it to keep
         // the bootstrap check neutral.
         return Promise.resolve(
-          bootstrapProjectId === undefined ? undefined : { projectId: bootstrapProjectId, hasAppRoot }
+          bootstrapProjectId === undefined
+            ? undefined
+            : { projectId: bootstrapProjectId, hasAppRoot }
         );
       }
       return Promise.resolve();

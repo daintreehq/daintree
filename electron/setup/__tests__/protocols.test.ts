@@ -3271,25 +3271,37 @@ describe("createAppProtocolHandler — direct disk read", () => {
     // bare body with nothing in the log, so a production report could not say
     // which read actually failed — and losing index.html this way still
     // commits a document that looks like a successful navigation.
+    /**
+     * The single diagnostic for the request just served. Asserting there is
+     * exactly one keeps a later branch from quietly adding a second,
+     * contradictory line for the same 404.
+     */
     async function notFoundLog(): Promise<Record<string, unknown> | undefined> {
       const { logWarn } = await import("../../utils/logger.js");
-      const call = vi
+      const calls = vi
         .mocked(logWarn)
-        .mock.calls.find(([event]) => event === "app.protocol.not-found");
-      return call?.[1] as Record<string, unknown> | undefined;
+        .mock.calls.filter(([event]) => event === "app.protocol.not-found");
+      expect(calls).toHaveLength(1);
+      return calls[0]?.[1] as Record<string, unknown> | undefined;
     }
 
     it("distinguishes the stat failure from the other 404 branches", async () => {
       const fs = await import("fs/promises");
-      vi.mocked(fs.stat).mockRejectedValue(Object.assign(new Error("nope"), { code: "ENOENT" }));
+      vi.mocked(fs.stat).mockRejectedValue(
+        Object.assign(new Error("nope"), { code: "ENOENT", errno: -2 })
+      );
 
       const handler = await captureHandler();
-      await handler(makeRequest());
+      await handler(makeRequest("/assets/vanished.js"));
 
       expect(await notFoundLog()).toMatchObject({
         stage: "stat",
+        // The requested URL and the path it resolved to are both needed: the
+        // report has to name the asset that went missing, not just the stage.
+        url: "app://daintree/assets/vanished.js",
         filePath: "/tmp/dist/assets/index-abc123.js",
         code: "ENOENT",
+        errno: -2,
       });
     });
 

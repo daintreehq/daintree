@@ -394,9 +394,21 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       const err = await rejection;
 
       expect(err.message).toContain("View never painted");
-      // The healthy outgoing view is still the attached, active one.
+      expect((err as { context?: Record<string, unknown> }).context).toMatchObject({
+        phase: "paint",
+        projectId: "proj-b",
+      });
+      // The healthy outgoing view is still the attached, active one — and it
+      // was never detached in the first place. Asserting only that it ends up
+      // attached would also pass if the branch detached it and the rollback put
+      // it back, which still fires the cache/throttle/freeze side effects and
+      // flashes the blank frame this whole path exists to prevent.
       expect(manager.getActiveProjectId()).toBe("proj-a");
-      expect(win.contentView.children).toContain(manager.getActiveView());
+      const outgoing = manager.getActiveView();
+      expect(win.contentView.removeChildView).not.toHaveBeenCalledWith(outgoing);
+      expect(initialWc.send).not.toHaveBeenCalledWith(CHANNELS.APP_VIEW_CACHED);
+      // The failed view is gone rather than left stacked behind the outgoing one.
+      expect(win.contentView.children).toEqual([outgoing]);
       expect(slowWc.close).toHaveBeenCalled();
       expect(
         vi
@@ -1169,6 +1181,47 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     const registerCalls = vi.mocked(registerAppView).mock.calls;
     const lastCall = registerCalls[registerCalls.length - 1];
     expect(lastCall?.[1]).toBe(welcomeView);
+  });
+
+  it("keeps the unbound welcome view when the first project view never paints", async () => {
+    // Same abandon policy on the first-run window, where the outgoing view is
+    // the welcome view rather than a project entry: it is closed for good once
+    // detached, so committing a view that never painted would leave the window
+    // with nothing recoverable on screen.
+    manager.dispose();
+    vi.useFakeTimers();
+    try {
+      win = createMockWindow();
+      manager = new ProjectViewManager(win as never, {
+        dirname: "/test",
+        paintGateTimeoutMs: 50,
+        paintGateHardTimeoutMs: 150,
+        cachedProjectViews: 3,
+      });
+
+      const welcomeWc = createMockWebContents();
+      const welcomeView = { webContents: welcomeWc, setBounds: vi.fn() };
+      win.contentView.addChildView(welcomeView);
+
+      const slowWc = createMockWebContents();
+      wcQueue.push(slowWc);
+      vi.mocked(registerAppView).mockClear();
+
+      const rejection = expectRejection(manager.switchTo("proj-first", "/path/first"));
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(200);
+      await rejection;
+
+      expect(win.contentView.removeChildView).not.toHaveBeenCalledWith(welcomeView);
+      expect(welcomeWc.close).not.toHaveBeenCalled();
+      expect(slowWc.close).toHaveBeenCalled();
+      expect(manager.getActiveProjectId()).toBeNull();
+
+      const registerCalls = vi.mocked(registerAppView).mock.calls;
+      expect(registerCalls[registerCalls.length - 1]?.[1]).toBe(welcomeView);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("dispose() while paint gate is pending settles the wait without throwing", async () => {
