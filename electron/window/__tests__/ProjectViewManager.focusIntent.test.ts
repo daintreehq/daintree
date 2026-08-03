@@ -199,6 +199,10 @@ function createMockWindow() {
     contentView: {
       children,
       addChildView: vi.fn((view: unknown, index?: number) => {
+        // Re-adding a view whose parent is unchanged reorders it rather than
+        // duplicating it — the rollback path re-attaches through activateView.
+        const existing = children.indexOf(view);
+        if (existing >= 0) children.splice(existing, 1);
         if (typeof index === "number") {
           children.splice(index, 0, view);
         } else {
@@ -272,12 +276,20 @@ describe("ProjectViewManager — pending focus intent", () => {
 
       manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
       const switchPromise = manager.switchTo("proj-b", "/path/b");
+      // Handler attached in the same tick: the hard timeout abandons the
+      // switch (#11635), so this promise rejects rather than resolving.
+      const rejection = switchPromise.then(
+        () => {
+          throw new Error("Expected the switch to reject");
+        },
+        (err: unknown) => err as Error
+      );
       await vi.advanceTimersByTimeAsync(0);
 
       // Past hard bound (150 ms). The soft bound at 50 ms only warns —
       // intent is dropped on hard fall-through, not on soft warning.
       await vi.advanceTimersByTimeAsync(200);
-      await switchPromise;
+      await rejection;
 
       const focusSends = slowWc.send.mock.calls.filter(
         ([channel]) => channel === CHANNELS.PROJECT_FOCUS_ON_ACTIVATE

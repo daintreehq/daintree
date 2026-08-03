@@ -13,6 +13,7 @@ import {
   registerProjectView,
 } from "./webContentsRegistry.js";
 import { notifyError } from "../ipc/errorHandlers.js";
+import { AppError } from "../utils/errorTypes.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { unfreezeWebContents } from "../utils/webContentsLifecycle.js";
@@ -364,8 +365,9 @@ export async function performSwitch(
     // (React committed its first structural paint after a double-rAF in
     // `notifyViewPainted`, channel `"painted"`), and `signalViewPainted` is
     // the fallback for both. Two-phase: the soft timeout above is observable
-    // but never user-visible; only the hard timeout below detaches the
-    // outgoing view as a last resort when the renderer is stuck or crashed.
+    // but never user-visible; the hard timeout below abandons the switch and
+    // rolls back to the outgoing view, which is never detached without a
+    // signal.
     const gateResult = await paintGatePromise;
     visibleAt = performance.now();
     if (gateResult === "hard-timeout") {
@@ -373,12 +375,35 @@ export async function performSwitch(
         projectId,
         waitedMs: hardMs,
       });
+      // Abandon rather than commit. Both release signals are document-owned
+      // (APP_SKELETON_PARSED from a script tag in index.html, APP_VIEW_PAINTED
+      // from React), so exhausting the budget without either means this view
+      // gave no evidence it can render — including having committed the wrong
+      // document entirely (#11635). Detaching the outgoing view here strands
+      // the user on that frame with no in-app recovery, while rolling back
+      // keeps a known-good view on screen and stays retryable. Thrown BEFORE
+      // any detach so the rollback restores an attached view. #11462 still
+      // holds where it applies: the soft timeout keeps waiting and "slow but
+      // succeeding" lands via the signal — only "never painted" reaches here.
+      //
+      // Logged here, not in the catch: this is the failure the gate exists to
+      // measure, and the timing locals are only live in this scope.
+      logInfo("projectview.coldstart.rejected", {
+        projectId,
+        durationMs: Math.round(visibleAt - coldStartAt),
+        loadToGateMs: Math.round(visibleAt - loadFinishedAt),
+        paintGateOutcome: gateResult,
+        gateChannel: coldReleaseChannel,
+        rollbackProjectId: previousProjectId,
+      });
+      throw new AppError({
+        code: "INTERNAL",
+        message: "View never painted: project view abandoned after paint gate hard timeout",
+        context: { phase: "paint", projectId, waitedMs: hardMs },
+      });
     }
 
-    // Paint signal received (or hard timeout reached) — detach the
-    // outgoing view. On hard timeout the incoming frame may be blank,
-    // but the renderer has had its full grace period and holding the
-    // outgoing view longer can't recover a stuck renderer.
+    // Paint signal received — detach the outgoing view.
     if (previousEntry && host.activeProjectId === projectId) {
       deactivateEntry(host, previousEntry);
     } else if (unboundOutgoingView && host.activeProjectId === projectId) {
@@ -464,20 +489,19 @@ export async function performSwitch(
 
     host.activeProjectId = previousProjectId;
     if (previousEntry && !previousEntry.view.webContents.isDestroyed()) {
-      // Restore app-view registration so getAppWebContents() resolves back
-      // to the still-visible previous project view instead of falling
-      // through to the bare BrowserWindow's webContents.
-      registerAppView(host.win, previousEntry.view);
-      // If the failure landed after the outgoing view was already
-      // deactivated (which now marks it invisible), restore its visibility
-      // so the rolled-back active view is composited again.
-      try {
-        previousEntry.view.setVisible(true);
-      } catch {
-        // non-critical
-      }
-      previousEntry.state = "active";
-      previousEntry.lastUsed = Date.now();
+      // Full reactivation, not a hand-rolled subset. This previously did only
+      // `registerAppView` + `setVisible(true)`, which is registry bookkeeping
+      // plus a flag: `deactivateEntry` does a real `removeChildView`, and
+      // `setVisible(true)` on a view that is no longer in the tree composites
+      // nothing, so a failure landing after the detach rolled back to a blank
+      // window (#11635). `activateView` owns the matching `addChildView` and
+      // is the path every other reactivation already takes — re-adding a view
+      // whose parent is unchanged reorders it rather than duplicating it, so
+      // this is also correct on the common path where nothing was detached.
+      // Set BEFORE this call as well as inside it: activateView assigns the
+      // same id, but doing it first keeps getActiveView() and the prune sweep
+      // below consistent even if activation throws partway.
+      activateView(host, previousEntry);
       // If the failure landed after deactivateEntry, this view already received
       // APP_VIEW_CACHED and demoted its periodic terminal work (watchdog sweep,
       // reflow heartbeat, activity markers — #11212). It is about to be the

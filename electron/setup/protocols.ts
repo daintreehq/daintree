@@ -38,6 +38,7 @@ import { stripPluginViewGeneration } from "../../shared/utils/pluginViewUrl.js";
 import { getWebviewDialogService } from "../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { logWarn } from "../utils/logger.js";
 
 export type GetPluginDir = (pluginId: string) => string | undefined;
 
@@ -49,6 +50,37 @@ let cachedGetPluginDir: GetPluginDir | null = null;
 /**
  * Create the app:// protocol handler function for a given distPath.
  */
+/**
+ * Which read stage produced a 404. Every app:// URL is an application-owned
+ * dist asset, so a miss always means the packaged tree is damaged or
+ * unreadable — never a routine lookup. It matters because losing index.html
+ * this way still commits a document that fires did-finish-load and carries the
+ * preload (#11635), and the stage is the only thing that tells the otherwise
+ * identical branches apart in a production log.
+ */
+type AppNotFoundStage = "resolve" | "stat" | "not-a-file" | "open" | "read";
+
+function appNotFound(
+  stage: AppNotFoundStage,
+  url: string,
+  filePath?: string,
+  cause?: unknown
+): Response {
+  const errno = cause as NodeJS.ErrnoException | undefined;
+  logWarn("app.protocol.not-found", {
+    stage,
+    url,
+    ...(filePath ? { filePath } : {}),
+    ...(typeof cause === "string" ? { reason: cause } : {}),
+    ...(errno?.code ? { code: errno.code } : {}),
+    ...(errno?.errno !== undefined ? { errno: errno.errno } : {}),
+  });
+  return new Response("Not Found", {
+    status: 404,
+    headers: buildHeaders("text/plain"),
+  });
+}
+
 function createAppProtocolHandler(distPath: string) {
   return async (request: GlobalRequest) => {
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -63,11 +95,7 @@ function createAppProtocolHandler(distPath: string) {
     });
 
     if (error || !filePath) {
-      console.error("[MAIN] App protocol error:", error);
-      return new Response("Not Found", {
-        status: 404,
-        headers: buildHeaders("text/plain"),
-      });
+      return appNotFound("resolve", request.url, undefined, error);
     }
 
     // V8 code cache in Chromium 146 won't persist bytecode without both a
@@ -78,21 +106,15 @@ function createAppProtocolHandler(distPath: string) {
     let stats: Awaited<ReturnType<typeof fs.stat>>;
     try {
       stats = await fs.stat(filePath);
-    } catch {
-      return new Response("Not Found", {
-        status: 404,
-        headers: buildHeaders("text/plain"),
-      });
+    } catch (err) {
+      return appNotFound("stat", request.url, filePath, err);
     }
 
     // stat() succeeds on directories, so guard before the 304 short-circuit:
     // without this a directory URL carrying If-Modified-Since would return 304
     // instead of falling through to the open/read 404 path.
     if (!stats.isFile()) {
-      return new Response("Not Found", {
-        status: 404,
-        headers: buildHeaders("text/plain"),
-      });
+      return appNotFound("not-a-file", request.url, filePath);
     }
 
     const ifModifiedSince = request.headers.get("If-Modified-Since");
@@ -117,10 +139,7 @@ function createAppProtocolHandler(distPath: string) {
     } catch (err) {
       const errCode = (err as NodeJS.ErrnoException).code;
       if (errCode === "ENOENT" || errCode === "EISDIR") {
-        return new Response("Not Found", {
-          status: 404,
-          headers: buildHeaders("text/plain"),
-        });
+        return appNotFound("open", request.url, filePath, err);
       }
       console.error("[MAIN] Error serving file:", filePath, err);
       return new Response("Internal Server Error", {
@@ -140,10 +159,7 @@ function createAppProtocolHandler(distPath: string) {
       // here at readFile. Map it to 404 like the open path so a directory URL
       // never returns a 500.
       if ((err as NodeJS.ErrnoException).code === "EISDIR") {
-        return new Response("Not Found", {
-          status: 404,
-          headers: buildHeaders("text/plain"),
-        });
+        return appNotFound("read", request.url, filePath, err);
       }
       console.error("[MAIN] Error serving file:", filePath, err);
       return new Response("Internal Server Error", {

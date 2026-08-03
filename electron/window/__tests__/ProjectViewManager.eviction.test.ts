@@ -220,6 +220,11 @@ beforeEach(() => {
   resetAppMetricsSnapshotForTesting();
   mockGetAllWebContents.mockReset();
   mockGetAllWebContents.mockReturnValue([]);
+  // This suite tests eviction, not paint-gate policy, and drives cold switches
+  // through a zero-length gate. A cold hard timeout now abandons the switch
+  // (#11635), so release every gate with the signal these fixtures are standing
+  // in for rather than relying on the timeout to wave switches through.
+  vi.spyOn(ProjectViewManager.prototype, "waitForPaint").mockResolvedValue("signal");
 });
 
 const flushImmediates = () => new Promise<void>((resolve) => setImmediate(resolve));

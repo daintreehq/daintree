@@ -29,12 +29,15 @@ interface MockWc {
 function createMockWebContents(opts?: {
   autoFinishLoad?: boolean;
   bootstrapProjectId?: string | null;
+  /** `false` models a committed non-application document (the app:// 404). */
+  hasAppRoot?: boolean;
 }): MockWc {
   const id = nextWebContentsId++;
   const handlers = new Map<string, Handler[]>();
   const persistentHandlers = new Map<string, Handler[]>();
   const autoFinish = opts?.autoFinishLoad ?? true;
   const bootstrapProjectId = opts?.bootstrapProjectId ?? null;
+  const hasAppRoot = opts?.hasAppRoot ?? true;
 
   // Electron 42: `close()` tears the native object down synchronously and
   // fires `destroyed` inside the call. Modelled here so teardown-during-load
@@ -46,7 +49,7 @@ function createMockWebContents(opts?: {
     isDestroyed: vi.fn(() => destroyed),
     executeJavaScript: vi.fn((code?: string) =>
       String(code ?? "").includes("__DAINTREE_INITIAL_PROJECT__")
-        ? Promise.resolve(bootstrapProjectId)
+        ? Promise.resolve({ projectId: bootstrapProjectId, hasAppRoot })
         : Promise.resolve()
     ),
     loadURL: vi.fn(() => Promise.resolve()),
@@ -281,6 +284,14 @@ describe("ProjectViewManager — switch failure rollback", () => {
       viewLoadTimeoutMs: LOAD_SOFT_MS,
       viewLoadHardTimeoutMs: LOAD_HARD_MS,
     });
+    // This suite exercises load failure and rollback, not paint-gate policy,
+    // and drives its switches through a zero-length gate. A cold hard timeout
+    // now abandons the switch (#11635), so release the gate with the signal
+    // these fixtures stand in for — otherwise every test that expects the load
+    // to land fails on the gate instead. The managers built inside individual
+    // tests keep their real gates; `startBridgedSwitch` depends on one.
+    (manager as unknown as { waitForPaint: () => Promise<string> }).waitForPaint = () =>
+      Promise.resolve("signal");
 
     initialWc = createMockWebContents();
     const initialView = { webContents: initialWc, setBounds: vi.fn() };
@@ -524,11 +535,16 @@ describe("ProjectViewManager — switch failure rollback", () => {
     // still the painted frame.
     expect(bridgeManager.getOutgoingBridgeProjectId()).toBe(whileGateOpen);
 
-    // Only once the load settles is the bridge genuinely gone.
+    // Only once the load settles is the bridge genuinely gone. The already-
+    // expired gate abandons this switch the moment the load resolves (#11635),
+    // so the bridge clears via the rollback rather than via a commit — either
+    // way no view is left reported as on screen.
+    const rejection = expectRejection(switchPromise);
     slowWc._fireOnce("did-finish-load");
     await vi.advanceTimersByTimeAsync(1);
-    await switchPromise;
+    await rejection;
     expect(bridgeManager.getOutgoingBridgeProjectId()).toBeNull();
+    expect(bridgeManager.getActiveProjectId()).toBe("bridge-a");
   });
 
   it("stops reporting an outgoing bridge once the manager is disposed", async () => {
@@ -851,6 +867,36 @@ describe("ProjectViewManager — switch failure rollback", () => {
     expect(err.message).toContain("Project view loaded without project bootstrap");
     expect(manager.getActiveProjectId()).toBe("proj-a");
     expect(wrongPageWc.close).toHaveBeenCalled();
+    expect(notifyError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ source: "project-switch" })
+    );
+  });
+
+  it("rejects a committed non-application document even when the preload id matches", async () => {
+    // The app:// 404 regression (#11635). A `Response` with status 404 is a
+    // transport-complete navigation: it commits, fires did-finish-load, never
+    // fires did-fail-load, and still carries the preload — so the bootstrap id
+    // is exactly the one requested. Only the document itself can disprove it.
+    const notFoundPageWc = createMockWebContents({
+      autoFinishLoad: false,
+      bootstrapProjectId: "proj-b",
+      hasAppRoot: false,
+    });
+    wcQueue.push(notFoundPageWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    notFoundPageWc._fireOnce("did-finish-load");
+
+    const err = await errPromise;
+    // Attributed to the document, not to the project plumbing — the id matched.
+    expect(err.message).toContain("non-application document");
+    expect(err.message).not.toContain("without project bootstrap");
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(notFoundPageWc.close).toHaveBeenCalled();
     expect(notifyError).toHaveBeenCalledWith(
       expect.any(Error),
       expect.objectContaining({ source: "project-switch" })
