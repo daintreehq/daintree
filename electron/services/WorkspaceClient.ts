@@ -987,6 +987,7 @@ export class WorkspaceClient extends EventEmitter {
     this.copyTree.dispose();
     this.pool.dispose();
     this._statesInflight.clear();
+    this._statesWithGitBackedInflight.clear();
     this.removeAllListeners();
   }
 }

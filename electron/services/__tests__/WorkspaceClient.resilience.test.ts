@@ -642,6 +642,38 @@ describe("WorkspaceClient multi-process manager", () => {
             .filter((r: any) => r.type === "get-all-states")
         ).toHaveLength(0);
       });
+
+      // #11650's guard reads the verdict, so the gate has to give up into
+      // "unknown" here rather than "no repository". A `false` would tell
+      // hydration a real repository has no worktrees every time its host was
+      // merely slow — exactly the #11234 regression the empty list above is
+      // shaped to avoid, but arriving through the new field instead.
+      it("gives up into the unknown verdict, never a false one, when the host never posts ready", async () => {
+        const load = client.loadProject("/project-a", 1);
+        void load.catch(() => {});
+        expect(mockHosts).toHaveLength(1);
+
+        const resultPromise = client.getAllStatesWithGitBackedForProjectAsync(
+          "/project-a",
+          idFor("/project-a")
+        );
+        let resolved: any = undefined;
+        void resultPromise.then((r) => {
+          resolved = r;
+        });
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(resolved).toBeUndefined();
+
+        await vi.advanceTimersByTimeAsync(GATE_OBSERVATION_WINDOW_MS);
+
+        expect(await resultPromise).toEqual({ states: [], gitBacked: null });
+        expect(
+          h(0)
+            .getAllRequests()
+            .filter((r: any) => r.type === "get-all-states")
+        ).toHaveLength(0);
+      });
     });
 
     it("normalizes the path before keying — equivalent spellings share one request", async () => {

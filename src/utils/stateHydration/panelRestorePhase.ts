@@ -291,6 +291,13 @@ export interface PanelRestoreContext {
    */
   prefetchedReconnectResults?: Record<string, TerminalReconnectResult>;
   terminalSizes: Record<string, { cols: number; rows: number }>;
+  /**
+   * The saved selection exactly as persisted — one app-global field shared by
+   * every workspace, so in a worktree-less view it names another project's
+   * worktree. Read `effectiveActiveWorktreeId` inside the phase, never this:
+   * that local folds in {@link workspaceHasWorktreesPromise} once, so no
+   * consumer can forget the gate.
+   */
   activeWorktreeId: string | null;
   /**
    * Whether the workspace being restored can have git worktrees at all. `false`
@@ -388,6 +395,24 @@ export async function restorePanelsPhase(
     logHydrationInfo,
   } = ctx;
 
+  // Resolved once, up front, and folded straight into the active id every
+  // consumer below reads. Per-consumer gating was the alternative and it is a
+  // trap: the raw app-global id also feeds the restore-ordering comparison at
+  // `isActiveWorktree`, where forgetting the gate silently changes which panels
+  // restore first rather than failing loudly. One derived value cannot be
+  // read past.
+  //
+  // Near-free rather than free: the PTY paths (through
+  // `resolveRestoredWorktreeId`) and the orphan phase already await
+  // `worktreesPromise`, which settles from the same fetch, so the usual restore
+  // already carried this wait. What it does add is a wait for a workspace whose
+  // panels are ALL non-PTY, which previously recreated without touching the
+  // list. Accepted: those panels are cheap to recreate, hydration awaits the
+  // same fetch before it finishes regardless, and the alternative is attributing
+  // them to another project's worktree.
+  const workspaceHasWorktrees = await workspaceHasWorktreesPromise;
+  const effectiveActiveWorktreeId = workspaceHasWorktrees ? activeWorktreeId : null;
+
   const restoreTasks: TerminalRestoreTask[] = [];
   const savedIdToRestoredId = new Map<string, string>();
   // Adaptive staggered-restore params scaled to the machine's resource
@@ -434,7 +459,7 @@ export async function restorePanelsPhase(
     // workspace's worktree, and a saved id could only be one a buggy earlier run
     // stamped on. Normalize to none — the worktree-less bucket the grid renders
     // when nothing is selected.
-    if (!(await workspaceHasWorktreesPromise)) return undefined;
+    if (!workspaceHasWorktrees) return undefined;
     const known = await getKnownWorktreeIds();
     // Only re-home onto the active worktree when it is itself live. With a
     // complete, authoritative list (#11387) an activeWorktreeId absent from
@@ -445,8 +470,8 @@ export async function restorePanelsPhase(
     // against, so preserve the prior behavior of trusting activeWorktreeId
     // (#11234). This closes PR #11235's own unaddressed follow-up.
     const rehomeTarget =
-      activeWorktreeId !== null && (known === null || known.has(activeWorktreeId))
-        ? activeWorktreeId
+      effectiveActiveWorktreeId !== null && (known === null || known.has(effectiveActiveWorktreeId))
+        ? effectiveActiveWorktreeId
         : undefined;
     // No saved worktree (undefined, or a corrupt empty string): fall to the
     // validated active worktree, or leave it unset rather than guess onto a
@@ -543,7 +568,7 @@ export async function restorePanelsPhase(
       }
 
       const savedWorktreeId = saved.worktreeId ?? null;
-      const isActiveWorktree = savedWorktreeId === activeWorktreeId;
+      const isActiveWorktree = savedWorktreeId === effectiveActiveWorktreeId;
       // A non-active worktree's last-focused panel earns priority restore so
       // each worktree's last active panel reactivates quickly on return.
       const isMostRecentInOtherWorktree =
@@ -793,20 +818,20 @@ export async function restorePanelsPhase(
                 return;
               }
               logHydrationInfo(`Recreating ${kind} panel: ${saved.id}`);
-              const hasWorktrees = await workspaceHasWorktreesPromise;
               const nonPtyArgs = buildArgsForNonPtyRecreation(
                 saved,
                 kind,
                 projectRoot || "",
-                // The builder falls back to this when the panel has no saved id
-                // of its own, so a worktree-less workspace has to withhold it
-                // here rather than only clear the result below.
-                hasWorktrees ? activeWorktreeId : null
+                // The builder falls back to this when rescuing a non-dockable
+                // dock panel that saved no worktree of its own. The clear below
+                // already covers that today; passing the gated id keeps the two
+                // from having to agree.
+                effectiveActiveWorktreeId
               );
               // Same normalization the PTY paths get from
               // `resolveRestoredWorktreeId`: this builder keeps `saved.worktreeId`
               // untouched, so a worktree-less workspace needs it cleared here too.
-              if (!hasWorktrees) nonPtyArgs.worktreeId = undefined;
+              if (!workspaceHasWorktrees) nonPtyArgs.worktreeId = undefined;
               const nonPtyId = await addPanel(nonPtyArgs);
               restoredIdsByIndex.set(capturedIndex, nonPtyId);
             }
@@ -949,7 +974,6 @@ export async function restorePanelsPhase(
     // is awaited once; if it resolves to null or hasn't loaded, orphans fall
     // back to activeWorktreeId so they still appear in the grid.
     const worktreesForInfer = await worktreesPromise;
-    const workspaceHasWorktrees = await workspaceHasWorktreesPromise;
 
     const restoreOrphan = async (terminal: (typeof orphanedTerminals)[number]): Promise<void> => {
       try {
@@ -971,8 +995,8 @@ export async function restorePanelsPhase(
         if (inferred) {
           orphanArgs.worktreeId = inferred;
           orphanArgs.worktreeIdSource = "inferred";
-        } else if (workspaceHasWorktrees && activeWorktreeId) {
-          orphanArgs.worktreeId = activeWorktreeId;
+        } else if (effectiveActiveWorktreeId) {
+          orphanArgs.worktreeId = effectiveActiveWorktreeId;
           orphanArgs.worktreeIdSource = "inferred";
         }
         const restoredTerminalId = await addPanel(orphanArgs);

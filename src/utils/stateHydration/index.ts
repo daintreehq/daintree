@@ -290,10 +290,9 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     const worktreesPromise = statusPromise.then((status) => status?.worktrees ?? null);
 
     // Resolved rather than synchronous, because the host is the only party that
-    // can distinguish "no repository" from "not reported yet". Costs nothing:
-    // every consumer already sits behind an await of the same fetch (see the
-    // call sites in panelRestorePhase and the selection block below), so this
-    // does not serialize panel restore behind worktree enumeration.
+    // can distinguish "no repository" from "not reported yet". `restorePanelsPhase`
+    // folds it into one derived active id up front — see the note there for why
+    // that costs the usual restore nothing.
     //
     // Unknown stays permissive. A host that never became ready, a failed fetch
     // and a host predating the field all answer `gitBacked: null`, and reading

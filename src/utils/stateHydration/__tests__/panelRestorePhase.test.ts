@@ -552,20 +552,29 @@ describe("restorePanelsPhase — worktree re-home validation (#11387)", () => {
       expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: undefined });
     });
 
-    // The non-PTY builder falls back to `activeWorktreeId` when the panel saved
-    // none of its own, so stripping its *result* is not enough — the foreign id
-    // has to be withheld from the builder as well. Distinct from the case above,
-    // where the panel carried a saved id and the fallback never ran.
-    it("does not let a non-PTY panel with no saved worktree inherit the foreign active id", async () => {
+    // Restore ordering keys off "is this panel on the active worktree", which
+    // reads the same app-global id. Ungated, the foreign id makes a panel an
+    // earlier run wrongly stamped with it restore FIRST, while the correctly
+    // unattributed panel drops to the background tier — another project's
+    // selection steering this one's restore order. Saved order here is the
+    // reverse of the expectation, so echoing the input cannot pass this.
+    it("does not let the foreign active id steer restore priority", async () => {
       const ctx = makeContext({
         workspaceHasWorktreesPromise: Promise.resolve(false),
         activeWorktreeId: "/other/project/main",
         worktreesPromise: Promise.resolve([]),
       });
-      await restorePanelsPhase([panel("b1", { kind: "browser", worktreeId: undefined })], ctx);
-      expect(ctx.addPanel).toHaveBeenCalledTimes(1);
-      const args = ctx.addPanel.mock.calls[0]![0] as { worktreeId?: string };
-      expect(args.worktreeId).toBeUndefined();
+      ctx.backendTerminalMap.set("fw", backend("fw"));
+      ctx.backendTerminalMap.set("nw", backend("nw"));
+      await restorePanelsPhase(
+        [
+          panel("fw", { worktreeId: "/other/project/main" }),
+          panel("nw", { worktreeId: undefined }),
+        ],
+        ctx
+      );
+      const ids = ctx.addPanel.mock.calls.map((c) => (c[0] as { existingId?: string }).existingId);
+      expect(ids).toEqual(["nw", "fw"]);
     });
 
     it("leaves an orphan PTY worktree-less even when a foreign worktree matches its cwd", async () => {
