@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   selectionState: {
     activeWorktreeId: null as string | null,
     selectWorktree: vi.fn(),
+    setActiveWorktree: vi.fn(),
     deletedWorktrees: new Map<string, unknown>(),
   },
   projectState: {
@@ -43,6 +44,13 @@ vi.mock("@/hooks/app/useHomeDir", () => ({
   useHomeDir: () => ({ homeDir: "/home" }),
 }));
 
+// Any case that starts from a live selection reaches the sync effect, which
+// pushes the active worktree over the port. jsdom aliases globalThis to window,
+// so stubbing the global satisfies the hook's `window.electron` read.
+vi.stubGlobal("electron", {
+  worktreePort: { request: vi.fn(() => Promise.resolve()) },
+});
+
 const featureWorktree = {
   id: "feature",
   name: "feature/test-branch",
@@ -61,6 +69,7 @@ describe("useActiveWorktreeSync initialization", () => {
   beforeEach(() => {
     mocks.selectionState.activeWorktreeId = null;
     mocks.selectionState.selectWorktree.mockReset();
+    mocks.selectionState.setActiveWorktree.mockReset();
     mocks.selectionState.deletedWorktrees = new Map();
     mocks.useWorktrees.mockReset();
     mocks.projectState.currentProject = { id: "project-1", path: "/repo" };
@@ -110,5 +119,97 @@ describe("useActiveWorktreeSync initialization", () => {
     rerender();
 
     expect(mocks.selectionState.selectWorktree).toHaveBeenCalledExactlyOnceWith(mainWorktree.id);
+  });
+});
+
+/**
+ * A worktree-less workspace (a plain folder, or a repo opened without one) gets
+ * an authoritative empty snapshot, not a pending one. Before #11654 the effect
+ * bailed on the empty list and left whatever id the previous project had
+ * selected, which then failed every agent launch against a worktree that does
+ * not exist here.
+ */
+describe("useActiveWorktreeSync on a worktree-less workspace", () => {
+  beforeEach(() => {
+    mocks.selectionState.activeWorktreeId = null;
+    mocks.selectionState.selectWorktree.mockReset();
+    mocks.selectionState.setActiveWorktree.mockReset();
+    mocks.selectionState.deletedWorktrees = new Map();
+    mocks.useWorktrees.mockReset();
+    mocks.projectState.currentProject = { id: "project-1", path: "/plain-folder" };
+    mocks.scratchState.currentScratch = null;
+  });
+
+  it("clears an inherited selection only once the empty snapshot is authoritative", () => {
+    mocks.selectionState.activeWorktreeId = featureWorktree.id;
+    mocks.useWorktrees.mockReturnValue({ worktrees: [], isInitialized: false });
+
+    const { rerender } = renderHook(() => useActiveWorktreeSync());
+
+    // Empty-and-loading is indistinguishable from empty-and-real without the
+    // flag, so nothing may be cleared yet.
+    expect(mocks.selectionState.setActiveWorktree).not.toHaveBeenCalled();
+
+    mocks.useWorktrees.mockReturnValue({ worktrees: [], isInitialized: true });
+    rerender();
+
+    // `persist: false` is load-bearing: the persisted `activeWorktreeId` slot is
+    // app-global, so a plain clear here would drop the saved selection of the
+    // git-backed project that left this id behind.
+    expect(mocks.selectionState.setActiveWorktree).toHaveBeenCalledExactlyOnceWith(null, {
+      persist: false,
+    });
+    // There is no worktree to snap to — reaching for one would read past the
+    // end of the empty list.
+    expect(mocks.selectionState.selectWorktree).not.toHaveBeenCalled();
+  });
+
+  it("leaves an already-cleared selection alone across repeated snapshots", () => {
+    mocks.useWorktrees.mockReturnValue({ worktrees: [], isInitialized: true });
+
+    const { rerender } = renderHook(() => useActiveWorktreeSync());
+    // A distinct array, so the dep list changes and the effect genuinely reruns
+    // rather than being skipped.
+    mocks.useWorktrees.mockReturnValue({ worktrees: [], isInitialized: true });
+    rerender();
+
+    // setActiveWorktree persists and re-runs terminal policy on every call, so
+    // clearing a selection that is already null is a write for no reason.
+    expect(mocks.selectionState.setActiveWorktree).not.toHaveBeenCalled();
+  });
+
+  it("clears the selection when the last live worktree disappears", () => {
+    // The other direction into empty: the workspace was authoritative and
+    // populated all along, so nothing about initialization changes here.
+    mocks.selectionState.activeWorktreeId = featureWorktree.id;
+    mocks.useWorktrees.mockReturnValue({
+      worktrees: [featureWorktree],
+      isInitialized: true,
+    });
+
+    const { rerender } = renderHook(() => useActiveWorktreeSync());
+    expect(mocks.selectionState.setActiveWorktree).not.toHaveBeenCalled();
+
+    mocks.useWorktrees.mockReturnValue({ worktrees: [], isInitialized: true });
+    rerender();
+
+    expect(mocks.selectionState.setActiveWorktree).toHaveBeenCalledExactlyOnceWith(null, {
+      persist: false,
+    });
+    expect(mocks.selectionState.selectWorktree).not.toHaveBeenCalled();
+  });
+
+  it("keeps a deleted row selected when it outlives the last live worktree", () => {
+    // pruneDeletedWorktrees retains a row while it still owns a terminal, so a
+    // deleted row can be the active selection with nothing live left. The user
+    // is looking at its surviving terminals.
+    mocks.selectionState.activeWorktreeId = "ghost";
+    mocks.selectionState.deletedWorktrees = new Map([["ghost", {}]]);
+    mocks.useWorktrees.mockReturnValue({ worktrees: [], isInitialized: true });
+
+    renderHook(() => useActiveWorktreeSync());
+
+    expect(mocks.selectionState.setActiveWorktree).not.toHaveBeenCalled();
+    expect(mocks.selectionState.selectWorktree).not.toHaveBeenCalled();
   });
 });
