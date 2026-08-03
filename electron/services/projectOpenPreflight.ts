@@ -147,6 +147,11 @@ const inFlightMarkerProbes = new Map<string, Promise<boolean>>();
  * ENOENT/ENOTDIR are the only proofs of absence; every other errno, and the
  * timeout, answer `"unknown"` so the caller leaves the row alone.
  *
+ * `lstat`, not `stat`: the question is whether the entry is there, not whether
+ * it resolves. `stat` follows symlinks, so a `.git` symlinked onto a detached
+ * volume would report ENOENT — "missing" for a marker plainly sitting in the
+ * folder, which is precisely the false positive this tri-state exists to avoid.
+ *
  * This is a cheap pre-gate, not a classifier: `"missing"` only earns the caller
  * the right to run the real classification, never a decision on its own.
  */
@@ -158,7 +163,7 @@ export async function probeGitMarker(projectRoot: string): Promise<GitMarkerProb
   let pending = inFlightMarkerProbes.get(markerPath);
   if (!pending) {
     const started = fs
-      .stat(markerPath)
+      .lstat(markerPath)
       .then(() => true)
       .finally(() => {
         if (inFlightMarkerProbes.get(markerPath) === started) {

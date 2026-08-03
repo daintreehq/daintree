@@ -480,8 +480,8 @@ export class ProjectStore {
    * identity never implies a mode.
    */
   async addProject(projectPath: string, options?: ProjectAddOptions): Promise<Project> {
-    const creationIdentity = options?.identity;
     const classification = await this.classifyGitBacking(projectPath);
+    const creationIdentity = options?.identity;
 
     if (!classification.gitBacked) {
       // The folder has no repository. Adopt it as a lightweight workspace when

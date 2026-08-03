@@ -3,11 +3,13 @@ import { constants as fsConstants, type Stats } from "fs";
 import path from "path";
 
 const statMock = vi.hoisted(() => vi.fn<(path: string) => Promise<Stats>>());
+const lstatMock = vi.hoisted(() => vi.fn<(path: string) => Promise<Stats>>());
 const accessMock = vi.hoisted(() => vi.fn<(path: string, mode?: number) => Promise<void>>());
 
 vi.mock("fs/promises", () => ({
-  default: { stat: statMock, access: accessMock },
+  default: { stat: statMock, lstat: lstatMock, access: accessMock },
   stat: statMock,
+  lstat: lstatMock,
   access: accessMock,
 }));
 
@@ -136,17 +138,27 @@ describe("probeGitMarker", () => {
   });
 
   it("reads the .git entry inside the project root", async () => {
-    statMock.mockResolvedValue(statsFor(true));
+    lstatMock.mockResolvedValue(statsFor(true));
 
     await probeGitMarker(FOLDER);
 
-    expect(statMock).toHaveBeenCalledWith(path.join(FOLDER, ".git"));
+    expect(lstatMock).toHaveBeenCalledWith(path.join(FOLDER, ".git"));
+  });
+
+  it("asks about the entry itself, not what it resolves to", async () => {
+    // `stat` follows symlinks, so a `.git` symlinked onto a detached volume
+    // would answer ENOENT for a marker plainly sitting in the folder — a false
+    // "missing" that would route the project straight at the demotion dialog.
+    lstatMock.mockResolvedValue(statsFor(false));
+
+    await expect(probeGitMarker(FOLDER)).resolves.toBe("present");
+    expect(statMock).not.toHaveBeenCalled();
   });
 
   it("accepts a .git file as readily as a .git directory", async () => {
     // A linked worktree and a submodule both carry `.git` as a file. Requiring a
     // directory would report every one of them as having lost its repository.
-    statMock.mockResolvedValue(statsFor(false));
+    lstatMock.mockResolvedValue(statsFor(false));
 
     await expect(probeGitMarker(FOLDER)).resolves.toBe("present");
   });
@@ -163,15 +175,32 @@ describe("probeGitMarker", () => {
     ["ESTALE", "unknown"],
     ["ELOOP", "unknown"],
   ])("answers %s with %s", async (errno, expected) => {
-    statMock.mockRejectedValue(errnoError(errno));
+    lstatMock.mockRejectedValue(errnoError(errno));
 
     await expect(probeGitMarker(FOLDER)).resolves.toBe(expected);
   });
 
   it("treats an errno-less failure as inconclusive rather than absent", async () => {
-    statMock.mockRejectedValue(new Error("something opaque"));
+    lstatMock.mockRejectedValue(new Error("something opaque"));
 
     await expect(probeGitMarker(FOLDER)).resolves.toBe("unknown");
+  });
+
+  it("re-reads the folder on the next probe rather than caching a verdict", async () => {
+    // The dedup map exists to share one syscall between *concurrent* callers,
+    // never to remember an answer. A cached "present" would recreate the very
+    // bug this guard fixes once `.git` was deleted mid-session; a cached
+    // "missing" would spawn git on every healthy switch thereafter.
+    lstatMock.mockResolvedValue(statsFor(true));
+    await expect(probeGitMarker(FOLDER)).resolves.toBe("present");
+
+    lstatMock.mockRejectedValue(errnoError("ENOENT"));
+    await expect(probeGitMarker(FOLDER)).resolves.toBe("missing");
+
+    lstatMock.mockResolvedValue(statsFor(true));
+    await expect(probeGitMarker(FOLDER)).resolves.toBe("present");
+
+    expect(lstatMock).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -188,7 +217,7 @@ describe("probeGitMarker under a hung filesystem", () => {
   it("gives up on a stat that never settles without claiming the marker is gone", async () => {
     // A dead mount blocks stat in the kernel. Reporting "missing" here would
     // route an unplugged drive straight into the demotion prompt.
-    statMock.mockReturnValue(new Promise<Stats>(() => {}));
+    lstatMock.mockReturnValue(new Promise<Stats>(() => {}));
 
     const pending = probeGitMarker(FOLDER);
     const assertion = expect(pending).resolves.toBe("unknown");
@@ -206,28 +235,28 @@ describe("probeGitMarker under a hung filesystem", () => {
   });
 
   it("shares one syscall across concurrent probes of the same root", async () => {
-    statMock.mockReturnValue(new Promise<Stats>(() => {}));
+    lstatMock.mockReturnValue(new Promise<Stats>(() => {}));
 
     const both = Promise.all([probeGitMarker(FOLDER), probeGitMarker(FOLDER)]);
 
     await vi.advanceTimersByTimeAsync(GIT_MARKER_STAT_TIMEOUT_MS + 1);
 
     expect(await both).toEqual(["unknown", "unknown"]);
-    expect(statMock).toHaveBeenCalledTimes(1);
+    expect(lstatMock).toHaveBeenCalledTimes(1);
   });
 
   it("lets a remounted drive be probed again after a timeout", async () => {
     // Holding the timed-out probe would pin every later switch to the same
     // doomed promise, so remounting the volume would never take effect.
-    statMock.mockReturnValue(new Promise<Stats>(() => {}));
+    lstatMock.mockReturnValue(new Promise<Stats>(() => {}));
     const first = probeGitMarker(FOLDER);
     await vi.advanceTimersByTimeAsync(GIT_MARKER_STAT_TIMEOUT_MS + 1);
     expect(await first).toBe("unknown");
 
-    statMock.mockResolvedValue(statsFor(true));
+    lstatMock.mockResolvedValue(statsFor(true));
 
     await expect(probeGitMarker(FOLDER)).resolves.toBe("present");
-    expect(statMock).toHaveBeenCalledTimes(2);
+    expect(lstatMock).toHaveBeenCalledTimes(2);
   });
 });
 

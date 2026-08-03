@@ -54,11 +54,15 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       throw new Error(`Project not found: ${projectId}`);
     }
 
-    // Ahead of the capture: everything from here on has side effects the sender
-    // can't undo if the target turns out to have lost its repository.
+    const operation = captureSwitchOperation(deps, ctx, projectId, "project:switch");
+
+    // After the capture but before anything acts on it. The capture is a pure
+    // synchronous snapshot and has to stay one: read after an await, the
+    // sender's view→project binding can be moved by a concurrent switch in the
+    // same window. Throwing here simply discards it, and everything with a side
+    // effect the sender couldn't undo still lies further down.
     await assertProjectRepositoryIntact(project);
 
-    const operation = captureSwitchOperation(deps, ctx, projectId, "project:switch");
     const { outgoingProjectId, projectViewManager: pvm } = operation;
 
     // Started concurrently with the view swap — the incoming view never reads
@@ -140,9 +144,10 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       );
     }
 
+    const operation = captureSwitchOperation(deps, ctx, projectId, "project:reopen");
+
     await assertProjectRepositoryIntact(project);
 
-    const operation = captureSwitchOperation(deps, ctx, projectId, "project:reopen");
     const { outgoingProjectId, projectViewManager: pvm } = operation;
 
     // Sender-scoped no-op check: skip the persist only when THIS window is
